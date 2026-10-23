@@ -1,0 +1,49 @@
+name: "🏛️ Delphi Mission / Spec Proposal"
+description: "Initiate a Spec-Driven feature, architectural change, or research mission for the Pantheon"
+title: "[Mission]: "
+labels: ["mission", "triage-athena"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: "1. Objective & User Intent (Chaos)"
+      description: "What outcome are we trying to achieve and why?"
+      placeholder: "Describe the problem or goal..."
+    validations:
+      required: true
+
+  - type: input
+    id: target_spec
+    attributes:
+      label: "2. Target Specification Path (Daedalus)"
+      description: "Which spec in `specs/` governs or will govern this work?"
+      placeholder: "specs/NNN-feature-name.md"
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: "3. Explicit Non-Goals & Scope Bounds (Odysseus — The Siren Protocol)"
+      description: "What is strictly OUT of scope for this mission to prevent rabbit holes?"
+      placeholder: "- Do not..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: security_trust
+    attributes:
+      label: "4. Security, Taint & Trust Boundaries (Ares)"
+      description: "Does this touch external untrusted inputs, outbound APIs (Hermes), or Zone 1/2/3 boundaries?"
+      placeholder: "- Input taint tier:\n- Tool permissions required:"
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: "5. Deterministic Verification Criteria (Hephaestus)"
+      description: "How will we mechanically verify success before merge?"
+      placeholder: "- Failing-to-passing test cases:\n- Benchmark target:"
+    validations:
+      required: true
