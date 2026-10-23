@@ -17,7 +17,7 @@ use crate::mission::{LiveRedactor, EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
 use crate::probe::ProjectProbe;
 use crate::recovery::{self, Call, NodeStatus, Recovered};
-use crate::tools::{self, classify, ToolCtx};
+use crate::tools::{self, ToolCtx};
 use crate::workspace::{AgentManifest, WorkspacePaths};
 use delphi_adapter::blocks::{ContentBlock, Turn};
 use delphi_adapter::claude::{compile, Compiled, CompileOptions, Completed, StreamEvent, Target, ToolDef};
@@ -126,6 +126,8 @@ pub struct Engine {
     pub projects: Vec<(String, PathBuf)>,
     pub rules: OriginRules,
     pub clock: Arc<dyn Fn() -> String + Send + Sync>,
+    /// The tools offered to agents (`tools::Registry`).
+    pub tools: Arc<tools::Registry>,
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -335,7 +337,7 @@ impl Engine {
                 reminder: Some(handoff.reminder_text()),
                 nonce,
             };
-            let mut defs = tools::tool_defs(!sc.manifest.write.is_empty());
+            let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
                 defs.push(dispatch_def());
             }
@@ -601,7 +603,7 @@ impl Engine {
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
         }
-        let c = match classify(name, args) {
+        let c = match self.tools.classify(name, args) {
             Ok(c) => c,
             Err(e) => return Ok(tool_result_error(e.0)),
         };
@@ -622,7 +624,7 @@ impl Engine {
             let mut idx = sc.m.index.lock().unwrap();
             let now = self.now();
             let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![] };
-            let r = tools::run(&mut ctx, name, args);
+            let r = self.tools.run(&mut ctx, name, args);
             (r, std::mem::take(&mut ctx.stamps))
         };
         let mut events: Vec<EventEnvelope> = stamps.iter().map(|s| sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(s.zone, &s.path, &s.blake3, s.tier))).collect();

@@ -278,6 +278,8 @@ pub enum Action {
     /// `gh`, network, agent-to-agent calls.
     Outbound,
     DispatchAgent,
+    /// A write through a connector (`specs/010` §6): sends, posts, shares, invites, deletes.
+    ConnectorWrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,11 +316,22 @@ pub fn gate(ceiling: Tier, action: Action) -> Gate {
                 Gate::Allow
             }
         }
+        // Never `Deny`: reading a thread and replying to it is the point of a connector. The control is the
+        // operator's synchronous approval of the exact payload, at every taint level (specs/001 §5.2 note).
+        Action::ConnectorWrite => Gate::Red,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connector_writes_are_red_at_every_taint_level_and_never_denied() {
+        for t in [Tier::L0, Tier::L1, Tier::L2, Tier::L3, Tier::L4, Tier::L5] {
+            assert_eq!(gate(t, Action::ConnectorWrite), Gate::Red, "{}", t);
+        }
+        assert_eq!(gate(Tier::L0, Action::Outbound), Gate::Deny, "ordinary outbound stays denied when tainted");
+    }
+
     use super::*;
     use serde_json::json;
 
