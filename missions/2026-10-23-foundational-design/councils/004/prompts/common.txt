@@ -1,0 +1,20 @@
+Delphi Council 004 — Stage 1 review of the remaining material roadmap STEP 2 depends on (workspace = current directory, spec-only repo at commit 6867f1a). READ-ONLY: do not edit, create or delete files. Use only file-reading tools; do NOT run shell commands (blocked in this headless session; they abort your run).
+
+Under review (all draft):
+1. specs/005-console-and-narrator-tui.md: §2.1 (except the socket-auth bullet, already approved), §2.2 EventEnvelope, §2.3 Durability, §3 Console (operator deck, slash commands, approval modal).
+2. specs/002-adapter-and-routing.md: §2 IPR + §2.1 Claude/Gemini dialect passes + §2.2 compat pass, §3 ContentBlock state & cross-provider failover, §4 model scaler. (§5 harness is governed by approved spec 009 — out of scope.)
+3. specs/003-collaboration-and-council.md: §2 escalation ladder and §3 orchestration (§3.1 invariants, merge gates, §3.2 unified retry ladder & budget with pre-dispatch reservation). (§4 Council Mode is Step 4 — out of scope.)
+4. specs/004-memory-and-coaching.md: §2 (frozen boot snapshot, Rule of 25 caps, CAS writes) and §4.1 context circuit breaker.
+
+Context to read first: GOVERNANCE.md, REVIEW.md (§1 severities, §6 output contract), OVERVIEW.md, missions/2026-10-23-foundational-design/decisions.md (D-01..D-21 RATIFIED — don't re-litigate decisions; DO flag spec text that implements one unsafely), roadmap.md (Step 2 Definition of Done), and the APPROVED specs 001, 006, 009 plus approved sections of 004 (§5) and 005 (§1.1, §2.1 socket auth, §2.4, §2.5, §4). Prior verdicts: missions/.../councils/00{1,2,3}-verdict.md — don't re-report fixed issues.
+
+Question: can each item be approved for implementation in Step 2 (or its stated later step)? If not, exactly what must change. Pay special attention to contradictions between these drafts and the already-approved specs.
+
+ROUND 1 is BLIND.
+
+Output contract (Markdown, ≤1,300 words):
+1. Findings — each: **[P0|P1|P2]** `path#Lx-Ly` — title; **Failure mode:** concrete, falsifiable; **Remediation:** exact change. Verify every claim against the file text; cite real line numbers.
+2. Checked and sound (max 8 lines).
+3. Per item 1–4: `approve` | `approve-with-fixes` (which findings) | `reject`.
+4. `concur: true|false` (true only if no unresolved P0).
+No style nits. No praise.

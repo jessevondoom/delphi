@@ -22,21 +22,27 @@ name = "greek"                 # display names, window labels and persona voice 
 auto_spawn_narrator = false   # Set true for automatic dual-window on launch
 frame_rate_hz = 60
 
-[providers.anthropic]
-enabled = true
-api_key_env = "ANTHROPIC_API_KEY"
-frontier_model = "claude-opus-4-6"
-workhorse_model = "claude-sonnet-4-6"
-fast_model = "claude-haiku-4-5"
-enable_ephemeral_cache = true
+# Model tiers per family, and per-model limits and prices (specs/002 §4). The access path and
+# credentials for each family are [[endpoints]] (specs/009, below). Fill in current model IDs and prices.
+[models.claude]
+fast = "<claude fast model id>"
+workhorse = "<claude workhorse model id>"
+frontier = "<claude frontier model id>"
 
-[providers.google]
-enabled = true
-api_key_env = "GEMINI_API_KEY"
-frontier_model = "gemini-3-pro"
-workhorse_model = "gemini-3-flash"
-fast_model = "gemini-3-flash-lite"
-enable_context_cache = false        # Explicit cachedContents is billed per hour of storage; deferred (D-06)
+[models.gemini]
+fast = "<gemini fast model id>"
+workhorse = "<gemini workhorse model id>"
+frontier = "<gemini frontier model id>"
+
+# [models.catalog."<model id>"]
+# max_output_tokens = 64000
+# min_thinking_budget = 1024
+# max_thinking_budget = 32000
+# thinking_in_max_tokens = true      # Claude: true; Gemini: false
+# input_usd_per_mtok = 0.0
+# cache_read_usd_per_mtok = 0.0
+# cache_write_usd_per_mtok = 0.0
+# output_usd_per_mtok = 0.0          # thinking is billed at the output rate
 
 [agents]
 enabled = ["orchestrator", "architect", "builder", "red-team", "strategist"]   # D-07 v1 roster

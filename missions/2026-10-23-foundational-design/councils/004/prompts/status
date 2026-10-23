@@ -1,0 +1,4 @@
+strategist r1 exit=0
+red-team r1 exit=0
+strategist r2 exit=0
+red-team r2 exit=0

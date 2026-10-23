@@ -10,7 +10,7 @@ source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "§1.1, §2.1 socket auth, §2.4, §2.5, §4 (operator, 2026-10-23, after Council 003); other sections remain draft"
+approved_sections: "§1.1, §2.1–§2.5, §3, §4 (operator: Council 003 + Council 004, 2026-10-23); §5 remains draft"
 ---
 
 # Spec 005: Console, Narrator Window & UDS Event-Bus Daemon
@@ -25,10 +25,10 @@ This specification defines the dual-window terminal interface and local client-d
 ### 1.1 Phase Mapping
 | Roadmap step | Delivers |
 | :--- | :--- |
-| **2** | §2.1–§2.4 (daemon, socket auth, events, durability, usage ledger); §3 console core (`/usage`, `/budget`, `/permissions`, approvals); §2.5 core recovery (log replay, whole-turn retry of interrupted calls, re-raised approvals, `status.md`, budget reconciliation); tests 1, 3–8, 11, 12 |
-| **3** | §2.5 recovery for worktree checkpoints, `action.intent`/`action.result` reconciliation, and harness subprocesses |
+| **2** | §2.1–§2.4 (daemon, token-authenticated socket, versioned events, segmented durable log, usage ledger); §3 console (root handoff, `/usage`, `/budget`, `/permissions`, `/ratify`, approval cards); §2.5 core recovery (log replay, whole-turn retry, re-raised approvals, `status.md`, budget reconciliation); tests 1, 3–8, 13, 15 (single agent) |
+| **3** | §2.5 recovery for worktree checkpoints, `action.intent`/`action.result` reconciliation, and harness subprocesses; tests 11, 12 |
 | **4** | §2.5 Council recovery (Round 1 and Round 2 rows) |
-| **5** | §4 narrator agents pane and the four views; §5 `tmux` and manual attach; tests 2, 9, 10 (full recovery matrix) |
+| **5** | §4 narrator agents pane and the four views; §5 `tmux` and manual attach; `delphi gc` compaction; tests 2, 9, 10 (full recovery matrix) |
 
 ### 1.2 Simpler Alternative Considered
 - **Alternative:** A monolithic single-process TUI where the agent runtime and terminal UI run in the same process without a Unix Domain Socket daemon, using log file tailing (`tail -f`) for a second window.
@@ -66,54 +66,67 @@ flowchart LR
 ```
 
 ### 2.1 Daemon Auto-Spawn & Socket Security Invariants
-1. **Zero-Config Auto-Spawn (race-free):** Running `delphi` computes `<workspace-hash>` from the *canonical* workspace path (`realpath`, so symlinks and `..` resolve to the same daemon) and connects to `~/.delphi/run/<workspace-hash>.sock`. If the connect fails, the client:
-   1. Takes an exclusive `flock` on `~/.delphi/run/<workspace-hash>.lock`, which serializes concurrent launches.
+1. **Zero-Config Auto-Spawn (race-free):** Running `delphi` computes `<workspace-hash>` from the *canonical* workspace path (`realpath`) and connects to `$DELPHI_HOME/run/<workspace-hash>.sock`. If the connect fails, the client:
+   1. Takes an exclusive `flock` on `$DELPHI_HOME/run/<workspace-hash>.lock`, which serializes concurrent launches.
    2. Retries the connect; a daemon may have started while it waited.
-   3. Treats a socket as stale only if the PID in `<workspace-hash>.pid` is dead. Only then does it unlink the socket.
-   4. Spawns `delphi-core --daemon --workspace <path> --ready-fd N` and blocks until the daemon writes one byte to the readiness pipe, which happens after bind, migrations, and manifest load. The timeout is 5 s; on timeout the client shows the daemon's stderr log.
-   The daemon holds the lock for its lifetime, so a second daemon can never start for the same workspace.
+   3. Since it now holds the lock *and* the connect failed, no live daemon exists, because a live daemon holds that lock. It unlinks any stale socket. PID files are informational only and never trusted, so a recycled PID can't wedge startup.
+   4. Spawns `delphi-core --daemon --workspace <path> --ready-fd N --lock-fd M`, **passing the locked file descriptor across `exec`**. The daemon inherits the lock and never re-locks by path, so it can't deadlock against its parent. The client closes its own copy and blocks until the daemon writes one byte to the readiness pipe (after bind, migrations and manifest load). Timeout is 5 s, after which the daemon's stderr log is shown.
+   The daemon holds the inherited lock for its lifetime, so a second daemon can never start for the same workspace.
 2. **File Permissions:** The socket directory `$DELPHI_HOME/run/` is created with mode `0700` and socket files with `0600` so no other OS user or browser process can connect. The daemon also verifies `SO_PEERCRED` / `getpeereid` equals its own UID.
    - **Same UID is not enough.** Unsandboxed test runs, scripts and harnesses also run as the operator, so a UID check can't separate the operator from their own processes. Three further layers apply:
      - Every sandbox profile denies `$DELPHI_HOME/run/**` entirely: no read, no write, no Unix-socket connect (`specs/008` §4, `specs/009` §7).
-     - **Privileged RPCs** (`approval.resolve`, `/budget`, `/permissions`, ratification, `/rewind`) require a **console capability token**. The daemon issues it only to a console client attached to an interactive TTY, passing it over the spawn pipe or a TTY challenge, never through the environment or a file. Without the token, a connection is read-only.
-     - **Narrator connections are read-only** until Step 5 controls exist, and then may only pause and inspect.
-   - While an unsandboxed (Amber) command is running, a **new** console attachment needs confirmation from an already-attached console.
+     - **Every connection needs a capability token**; the daemon closes any connection that presents none. Tokens are issued only to clients attached to an interactive TTY, over the spawn pipe or a TTY challenge, never through the environment or a file. There are two scopes:
+       - `console` scope: privileged RPCs (`approval.resolve`, `/budget`, `/permissions`, ratification, `/rewind`) plus reading.
+       - `narrator` scope: read-only, plus pause and inspect from Step 5.
+     - No token means no events, no snapshot and no Round 1 streams: an untrusted local process learns nothing.
+     - New narrator attachments, like new console attachments, need confirmation from an attached console while an unsandboxed (Amber) command runs.
    - After a daemon restart, the token is re-issued when the console reattaches through the TTY, so recovered approvals remain answerable (§2.5).
 3. **Protocol Handshake:** The first JSON-RPC call is `hello {protocol_version, binary_version}`. If the major versions differ, the client refuses to attach and tells the operator to run `delphi daemon restart`. This happens, for example, after `delphi update` swaps the binary under a running daemon.
-4. **60Hz Frame Coalescing (`[REV-TRAP-03]`):** When 3–5 Council specialists stream tokens concurrently (emitting 300+ token deltas/sec), `delphi-core` buffers `agent.thinking.delta` and `agent.text.delta` events per span and flushes coalesced frames every **16ms (60Hz)** to connected TUI clients, preventing terminal stdout saturation and layout thrashing. Each frame carries `seq_from`..`seq_to`, so "no dropped sequence numbers" is checkable even though deltas are merged.
+4. **60Hz Frame Coalescing (`[REV-TRAP-03]`):** When 3–5 Council specialists stream tokens concurrently (emitting 300+ token deltas/sec), `delphi-core` buffers `agent.thinking.delta` and `agent.text.delta` events per span and flushes coalesced frames every **16ms (60Hz)** to connected TUI clients, preventing terminal stdout saturation and layout thrashing. Live delta frames carry their own per-client `frame_seq` (`frame_from`..`frame_to`), which is never persisted. The durable `seq` is assigned only when an event is appended to the log (§2.3), so the two numbering systems can't interleave or reorder.
 5. **Slow-Client Backpressure:** Each client has a bounded outbound queue (default 1,024 frames). On overflow, the daemon drops that client's queued frames and sends `resync_required`; the client then re-fetches `SessionSnapshot`. A stalled `Narrator`, for example over a laggy SSH link, never grows daemon memory or slows other clients.
 
 ### 2.2 Canonical `EventEnvelope` Wire Schema
-Every state transition, token delta, tool call, model upscale, and approval request is serialized as an `EventEnvelope`:
+Every persisted event is an `EventEnvelope`. Live delta frames (§2.1) are not envelopes and are never persisted.
 ```json
 {
+  "v": 1,
   "seq": 2048,
   "timestamp": "2026-10-23T07:51:10.120Z",
   "mission_id": "2026-10-23-federated-sync",
+  "task_id": "t_0042",
   "trace_id": "tr_0192b",
   "span_id": "sp_red_team_r2",
   "parent_span_id": "sp_orchestrator_council_01",
   "agent": "red-team",
-  "provider": "google",
-  "model_id": "gemini-3-pro",
-  "thinking_budget": 16384,
+  "endpoint_id": "bedrock-us",
+  "access_path": "cloud",
+  "model_tier": "frontier",
+  "model_id": "<resolved model id>",
+  "attempt": 1,
   "mode": "council",
   "round": 2,
-  "type": "agent.thinking.delta",
-  "payload": {
-    "delta": "Inspecting Integrator capability token expiry under clock skew..."
-  }
+  "type": "agent.block.complete",
+  "payload": { "block": { "type": "text", "text": "…" } }
 }
 ```
-
+- **Versioning:** `v` is the schema major version. Readers ignore unknown fields and **refuse unknown majors**, which is what makes rollback's newer-schema check (`specs/006` §4) possible.
+- **Required fields:** `v`, `seq`, `timestamp`, `mission_id`, `type` and `payload` on every event. `agent`, `span_id`, `task_id`, `endpoint_id`, `access_path`, `model_tier`, `model_id` and `attempt` are also required on `agent.*` events. `endpoint_id`, `model_id` and `agent` always carry canonical IDs and resolved values, never theme names.
+- **Payload schemas (v1):**
+  - `agent.block.complete {block: ContentBlock}`: `specs/002` §3, including `provider_meta` and the `replayable` flag.
+  - `agent.usage {input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, thinking_tokens, cost_usd, reserved_usd, usage_source, cost_model, outcome}`: everything §2.4 needs, so the ledger rebuilds from the log alone.
+  - `SessionSnapshot` is not an event. It is an RPC response (`session.snapshot`) built from `state.db` (Epic state, open approvals, the agents pane) and is never persisted.
 
 ### 2.3 Durability & Single Source of Truth
-- `missions/<id>/events.jsonl` is the **only source of truth**. `.delphi/state.db` is a derived index that can be rebuilt (`specs/004` §3.1). The daemon is the **single writer** of both.
-- **Write order:** append the event line → `fsync` (every lifecycle and approval event immediately; content events batched at ≤250 ms) → update SQLite. On startup, the daemon truncates a torn final line and replays any events past SQLite's `last_applied_seq`.
-- **What is persisted:** per-token deltas are *not* persisted. Each completed block (text, thinking, tool call, tool result) is persisted once as `agent.block.complete`. Live deltas exist only in the coalescer and a per-span in-memory ring buffer used for reconnects.
-- **Council Round 1 buffering:** during Round 1, each seat's `agent.block.complete` events are held in daemon memory and written to `events.jsonl` only when the barrier releases (`specs/003` §4.1). Live Round 1 streams go to operator clients (Narrator's Council Chamber), never to agents. Agents cannot read `events.jsonl` at all (`specs/001` §2.2).
-- **Redaction:** before any event reaches disk or a client, a deterministic redactor masks known secret formats (provider API keys, `gh` tokens, PEM blocks, `.env`-style `KEY=value` pairs for configured key names).
-- **Reasoning retention (D-16, ratified 2026-10-23):** completed thinking blocks are persisted, redacted, for 30 days. After that, `delphi gc` compacts them to signatures and metadata only. Provider signatures needed to resume an open task are never dropped while the task is open.
+- **The log is the only source of truth.** It's split into **segments**: `local/missions/<id>/events/NNNNNN.jsonl`, rotated at 64 MB, with `missions/<id>/events.jsonl` meaning the whole segmented log. `local/state.db` is a derived index that can be rebuilt (`specs/004` §3.1). The daemon is the **single writer** of both.
+- **Write order:** assign `seq`, append, `fsync`, *then* update SQLite or act on the event. Every event is fsync'd before anything depends on it. Only events that nothing depends on until mission close (narration text) may be batched within 250 ms. `agent.block.complete`, `agent.usage`, approvals and `action.*` are always fsync'd immediately. A new segment also fsyncs its directory. On startup the daemon truncates a torn final line and replays events past SQLite's `last_applied_seq`.
+- **What is persisted:** per-token deltas are *not* persisted. Each completed block (text, thinking, tool call, tool result) is persisted once as `agent.block.complete`. Live deltas exist only in the coalescer and a per-span in-memory ring buffer for reconnects.
+- **Council Round 1 buffering:** during Round 1, each seat's `agent.block.complete` events are held in daemon memory and appended only when the barrier releases (`specs/003` §4.1). They get `seq` values at that point, in one fsync'd batch. Live Round 1 streams go only to clients holding a token (§2.1), never to agents. Agents can't read the log at all (`specs/001` §2.2).
+- **Redaction:** before any event reaches disk or a client, a deterministic redactor masks known secret formats (provider API keys, `gh` tokens, PEM blocks, `.env`-style `KEY=value` pairs for configured names) **and every runtime-resolved credential literal** registered by `specs/009` §4.2. Literals are matched in raw, base64 and URL-encoded forms; literals shorter than 12 characters are matched only in key/value context, to avoid false positives.
+- **Redaction and signed reasoning (`[H-003]`):** a signed reasoning block is never altered while keeping its signature. Three cases:
+  - **Live tool loop:** the daemon keeps the **exact** signed blocks of the open loop in memory and replays only those.
+  - **Persisted copy:** if redaction changes a signed block, the persisted copy drops its signature, gets `replayable: false` and `signature_dropped_reason: "redacted"`, and is only ever replayed as an unsigned `<prior_reasoning_note>` (`specs/002` §3.1). Recovery restarts any open tool loop whose persisted signed blocks aren't replayable from the user turn that opened it (§2.5).
+  - **Provider-redacted reasoning** (opaque `data`) contains no plaintext and is persisted and echoed byte-for-byte.
+- **Reasoning retention (D-16):** `delphi gc` (Step 5) touches **closed** missions only. After 30 days it writes a *new* segment in which reasoning blocks become `{compacted: true, thought_blake3}`, without text or signature. It then appends `log.compacted {replaced_segments, digest}` and only after that deletes the old segments. `seq` values never change.
 
 ### 2.4 Usage Ledger (D-18)
 Every model call produces one `agent.usage` event. It is a lifecycle event, so it is fsync'd immediately. The daemon derives the `usage_ledger` table in `state.db` from these events, which makes the ledger rebuildable like the rest of `state.db`. The budget enforcer (`specs/003` §3.2), the narrator's agents pane (§4.1), `/usage`, and future efficiency tooling all read this one ledger.
@@ -205,20 +218,27 @@ Every outbound action must declare an **idempotency key** or a **post-hoc check*
 Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is the operator's instrument, not an agent. Its window label comes from the active theme.
 
 ### 3.1 Core Operator Capabilities
-- **Conversational Stream:** Displays **Orchestrator's** high-signal syntheses, Council Verdicts (with collapsible **Minority Reports**), and clickable `file:///path#L10-L20` artifact links.
-- **Direct Specialist Invocation:** Prefixing a prompt with `@<role>` (e.g., `@investigator benchmark the SQLite FTS5 query latency` or `@writer clean up README.md`) routes directly to that specialist while logging the interaction in the mission trace.
-- **Slash Command Palette:**
-  - `/council "<topic>"`: Convenes a 3-round Council debate.
-  - `/narrator`: Spawns or focuses Window 2 (`Narrator`).
-  - `/scale <agent> <tier|model>`: Manually overrides **Orchestrator's** dynamic model selection for an agent.
-  - `/retro`: Triggers **Orchestrator's** 4-channel coaching pass, then presents every staged proposal (heuristics, `REVIEW.md` §4/§5, scripts) as one batched ratification list.
-  - `/permissions`: Cycles approval mode (`default`, `accept-edits`, `mission-auto`). The modes change only how Amber-tier actions are handled ([`specs/008`](008-ambient-watch-and-rewind.md) §4). **No mode ever auto-approves a Red-tier action.**
-  - `/budget`: Shows and adjusts the mission cost ceiling (`specs/003` §3.2).
-  - `/usage [mission|task|role]`: Prints token and cost totals from the usage ledger (§2.4), the same numbers as the narrator's agents pane. Available from Step 2.
-- **Synchronous HITL Approval Modal:** Whenever **Builder** or **Integrator** hits a Destructive/Outbound Action Gate (`GOVERNANCE.md` §5.4), `Console` renders an inline keyboard-driven approval card (`[y] Approve Once`, `[a] Allow for Mission`, `[n] Reject & Redirect`, `[d] View Diff`). `[a]` is unavailable on Red-tier cards.
-  - Every approval has an `approval_id`, and the daemon accepts the **first** answer. When several `Console` clients are attached, the others see the card resolve, with who answered and how.
-  - With no `Console` client attached, the request waits up to `approval_timeout` (default 10 min), then resolves to **deny**. The agent receives a structured denial and does not hang.
-
+- **Conversational Stream:** Displays **Orchestrator's** syntheses, Council verdicts (with collapsible **Minority Reports**), and clickable workspace-relative `path#L10-L20` artifact links.
+- **Root handoff:** each console prompt becomes a root `HandoffEnvelope` with `caller_agent: "operator"` (`specs/002` §2), so every task, even a direct one, has a contract, pointers and taint accounting.
+- **Direct Specialist Invocation:** `@<role>` or `@<theme-name>` (e.g. `@architect draft a spec for the retry ladder`, `@red-team review specs/007`) routes directly to that role, if it's enabled (D-07), and logs the interaction.
+- **Slash Command Palette** (roadmap step in brackets):
+  - `/usage [mission|task|role]` [2]: token and cost totals from the usage ledger (§2.4).
+  - `/budget` [2]: shows and adjusts the mission cost ceiling (`specs/003` §3.2).
+  - `/permissions` [2]: sets the approval mode. **No mode ever auto-approves a Red-tier action, unsandboxed execution, or an unbridged harness diff:**
+    - `default`: every Amber action asks.
+    - `accept-edits`: auto-approves Amber *worktree file and branch edits* only.
+    - `mission-auto`: additionally auto-approves dependency installs pinned in a committed lockfile.
+  - `/ratify` [2]: reviews pending proposals from `ratified.lock` drift (config endpoint and access changes, manifests, constitution, specs, theme). Each one shows its diff and is ratified or rejected individually (Red-tier, `specs/006` §3.1, `specs/009` §5). The console announces new pending proposals on attach.
+  - `/scale <role> <tier>` [2]: overrides the scaler's choice for a role. It can't leave `allowed_endpoints`.
+  - `/council "<topic>"` [4]: convenes a Council.
+  - `/narrator` [5]: spawns or focuses Window 2.
+  - `/retro` [6]: the coaching pass, then one batched ratification list.
+- **Approval Cards (every role, every gate):** taint-gated dispatches, Amber and Red actions, and ratifications all use the same keyboard-driven card: `[y]` approve once, `[a]` allow similar, `[n]` reject and redirect, `[d]` view diff.
+  - **Focus guard:** a card never captures keystrokes typed into the prompt. Answering requires an explicit focus switch (`Tab` or `Alt+Y`), and keys are ignored for 300 ms after a card renders.
+  - **Bound answers:** `approval.resolve` carries `(approval_id, payload_blake3)` for the exact payload shown. A changed payload is a new approval.
+  - **`[a]` "allow similar" is narrow:** it covers only `(task_id, tool, the normalized argument pattern shown on the card, worktree)` for the rest of that **task**. It is never mission-wide, never covers Red-tier actions or unsandboxed execution, and is listed by `/permissions`.
+  - **First answer wins** by `approval_id`. Other attached consoles see who answered and how.
+  - **Timeout always denies:** after `approval_timeout` (default 10 min) the request resolves to **deny**, whether or not a console is attached. The agent receives a structured denial and doesn't hang.
 ---
 
 ## 4. Window 2: `Narrator` (`delphi narrator`) — Live Narration & Telemetry Window
@@ -290,3 +310,7 @@ A footer row shows mission totals: tokens by type, total cost against budget, th
 13. **Socket Self-Approval Test:** an unsandboxed process running as the operator's UID connects to the socket and sends `approval.resolve` for a pending Red action. It is refused (no console token), and no state changes.
 14. **Council Chimera Test:** kill the daemon (a) before Round 1 release, (b) mid-Round 2. In (a), Round 1 reruns and no Round 2 output survives. In (b), Round 1 is kept and only unfinished Round 2 seats rerun.
 15. **Crash-Loop Test:** a deterministic mid-stream crash on the same turn is retried twice and then escalates. Each interrupted call is charged its reservation.
+16. **Unauthenticated Attach Test:** a same-UID process that connects without a token gets its connection closed before any event, snapshot or Round 1 stream is sent.
+17. **Signed-Redaction Test:** a thinking block containing a registered credential literal is persisted redacted, `replayable: false` and without a signature. The live loop still replays the exact in-memory block. After a crash, the loop restarts from its opening user turn, and no signature is ever sent with altered text.
+18. **Approval Binding Test:** an `approval.resolve` whose `payload_blake3` doesn't match the shown payload is rejected. Keys typed into the prompt while a card renders don't answer it. `[a]` doesn't cover a second command that differs from the shown pattern.
+19. **Segment Test:** rotation at the size limit keeps `seq` contiguous, and an unknown `v` major is refused on replay.

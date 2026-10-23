@@ -135,6 +135,12 @@ $DELPHI_HOME/                     # default ~/.delphi (override with DELPHI_HOME
 > - **Step 1:** `delphi init` creates this directory if absent: empty `profile.md` and `heuristics.md`, `ratified.lock` and `ratified/` seeded from the release, and `base/`. `doctor` checks 3, 4 and 8 and `delphi lint` validate it from Step 1 on, which keeps the Step 1 definition of done passable.
 > - **Updates:** `delphi update` merges `operator/core/` against `operator/base/` (§4 step 4), and its ratify-before-swap step covers operator files. `delphi rollback` restores `operator/base/` and `operator/ratified/` too.
 > - **Post-v1:** `delphi operator export|import` moves this directory between machines as an encrypted bundle.
+
+### 3.3 Amendment 006-A2: Scope Files & Ratified Specs (Council 004; approved under the operator's pre-authorization 2026-10-23)
+> This amendment is part of the approved spec.
+> - **Heuristics by scope** (`specs/004` §2.1): the release heuristics `context/heuristics.md` move to **Zone 1** (`base/context/heuristics.md`, release-ratified). `init` creates an empty team file `team/context/team-heuristics.md` and an empty workspace file `local/heuristics.md`, each with frontmatter and `active_rules: 0`.
+> - **`ratified.lock` also pins:** every `memory/agents/*/lessons.md`, both new heuristics files, and **every operator-approved spec** (`team/specs/**` or, for Delphi's own design repo, `specs/**`), keyed by the spec's exact content hash. An approved spec whose hash no longer matches is reported by `doctor` check 3 as needing re-approval.
+
 ---
 
 ## 4. `delphi update` State Machine

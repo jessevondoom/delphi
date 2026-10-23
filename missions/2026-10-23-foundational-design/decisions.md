@@ -260,3 +260,11 @@ Supporting rules:
   - amendments 001-A1 and 006-A1 (now part of the approved specs 001 and 006);
   - D-21 (option A).
 - **2026-10-23:** the operator ratified heuristic `[H-008]` (no author-family self-review), with the condition that it **never blocks** a Council when only one model family is available. It degrades to a `homogeneous` verdict instead, and as best practice its critics use a *different model within the same family* (another tier or version) than the author's.
+- **2026-10-24:** under the operator's pre-authorization ("follow council recommendations and approve them"), Council 004's fixes were applied. Approved:
+  - spec 005 §2.1–2.3 and §3;
+  - spec 002 §1.2 and §2–4;
+  - spec 003 §1.2, §2 and §3;
+  - spec 004 §2 and §4.1;
+  - amendments 001-A2 (`@project/**` read root, per-scope heuristics, protected approval fields) and 006-A2 (scope files, ratified specs).
+
+  With these, every section roadmap Step 2 depends on is approved. Step 2's scope is narrowed to L1 and read-only L2.

@@ -1,0 +1,14 @@
+Delphi Council 004 — ROUND 2 (cross-examination). READ-ONLY: do not edit files. Use only file-reading tools; do NOT run shell commands.
+Read the three Round 1 reviews: missions/2026-10-23-foundational-design/councils/004/round1-builder.md (Claude; its family authored the drafts), round1-red-team.md and round1-strategist.md (Gemini). Verify claims against the spec files.
+
+Your task:
+1. For EACH finding in the OTHER two reviews: one line — `agree` | `disagree` | `adjust severity to Px` — with a one-clause reason.
+2. Resolve explicitly:
+   (a) Where should critics load REVIEW.md/GOVERNANCE.md now that user project repos contain no Delphi files (D-03)? (Strategist proposes local/ratified/ copies, base branch only when the target repo itself tracks them.)
+   (b) Spec self-approval: Red-Team proposes that only operator ratification (an L5 provenance/ratified.lock entry for the spec's exact hash) satisfies the spec gate. Agree or refine.
+   (c) Step 2 Go/No-Go scope: Strategist proposes Step 2 = L1 and read-only L2 only. Agree or refine.
+   (d) Redaction vs signed reasoning: drop signature and downgrade, or something else?
+3. Anything ALL THREE missed that blocks approval (only if real; max 3).
+4. Final deduplicated MUST-FIX list per item (005 §2.1–2.3/§3; 002 §2–4; 003 §2–3; 004 §2/§4.1) and what defers via phase mapping.
+5. `concur_after_fixes: true|false`.
+≤1,000 words. No praise.

@@ -10,7 +10,7 @@ source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "§5, plus the §2.1 lock and §3 retrieval amendments (operator, 2026-10-23, after Council 003); other sections remain draft"
+approved_sections: "§2, §4.1, §5, plus the §3.4 role-filter rule (operator: Council 003 + Council 004, 2026-10-23); §3 schema and §4.2 remain draft"
 ---
 
 # Spec 004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop
@@ -59,15 +59,39 @@ flowchart TD
     ExpeL -->|2-Strike Rules -> Scripts| Skills["skills/*/scripts/"]
 ```
 
+### 2.0 Phase Mapping (§§2–4)
+| Roadmap step | Delivers |
+| :--- | :--- |
+| **2** | §2 ratified four-scope snapshot with per-scope budgets (§5.2), oldest-first trimming, scoped CAS locks; §3.4 role-filtered retrieval rule |
+| **3** | §4.1 context circuit breaker (it needs Builder and the retry ladder) |
+| **5** | §3 FTS5 knowledge-base search |
+| **6** | §4.2 `/retro` distillation, `rule_stats`, vectors (once D-01's reopen trigger fires) |
+
+§5.8 covers the §5 rows.
+
 ### 2.1 The Frozen Boot-Snapshot Invariant (Prompt Cache Hygiene)
 Inspired by Nous Research's `hermes-agent` snapshot pattern:
-- When a task starts, `delphi-core` loads `context/heuristics.md` and `memory/agents/<role>/lessons.md` into an **immutable in-memory prefix snapshot** pinned with Anthropic `cache_control: {"type": "ephemeral"}` or Gemini `cachedContents`.
-- If **Orchestrator** or a user command writes a new lesson to disk mid-session, the disk file is updated atomically (`[REV-TRAP-02]`), **but the active agent's in-memory system prompt prefix is NOT mutated mid-turn**. This prevents invalidating the provider's KV cache mid-loop (saving 5x–10x in latency and token costs); the new snapshot takes effect on the next spawned task.
-- **No lost updates:** every change to `heuristics.md`, `lessons.md` or `REVIEW.md` (from the daemon, `delphi sync`, `delphi update`, or the user's `$EDITOR` via `delphi`) carries the `expected_blake3` of the version it was **derived from**, captured when the proposal or edit was first prepared. The writer takes an advisory `flock` on the lock file **of the scope that owns the file**: `.delphi/locks/<path>.lock` for workspace and team files, and `$DELPHI_HOME/operator/locks/<path>.lock` for operator files, so two workspaces' daemons can't race on shared operator memory. It then checks `blake3(disk) == expected_blake3`, writes a temp file, and renames it. On a mismatch it rebases (re-derives the change against the current file) or reports a conflict; it never overwrites blindly.
+- **What loads (§5.2 order).** When a task starts, `delphi-core` reads these files **only from their ratified copies** and assembles them into an **immutable in-memory prefix snapshot** (IPR blocks 3–4, `specs/002` §2):
+
+  | Scope | Heuristics | Lessons (this role) | Ratified copy |
+  | :--- | :--- | :--- | :--- |
+  | Release | `context/heuristics.md` (`[H-…]`) | — | `base/context/heuristics.md`, verified against `base/manifest.lock` |
+  | Team | `context/team-heuristics.md` (`[T-…]`) | — | `local/ratified/team/context/team-heuristics.md` |
+  | Operator | `heuristics.md` (`[O-…]`), plus `profile.md` | `memory/agents/<role>/lessons.md` | `$DELPHI_HOME/operator/ratified/…` |
+  | Workspace | `heuristics.md` (`[W-…]`) | `memory/agents/<role>/lessons.md` | `local/ratified/local/…` |
+
+  Live files that differ from their ratified copy are pending proposals (`specs/006` §3.1) and are never loaded. Caching is the provider's automatic prefix caching plus the Anthropic breakpoints of `specs/002` §2. Explicit Gemini `cachedContents` is deferred (D-06).
+- **Nothing is written mid-session.** Agents and Orchestrator never write heuristics or lessons directly. Every change is a proposal ratified at `/retro` (D-11, §4.2, §5.4). Ratification updates the live file, its ratified copy and `ratified.lock` atomically, and the new snapshot applies from the **next** task. An active task's prefix is never changed mid-turn, which keeps the provider's cache valid.
+- **No lost updates (CAS).** Every change to a heuristics, lessons or `REVIEW.md` file (from the daemon applying a ratified proposal, `delphi sync` or `delphi update`) carries the `expected_blake3` of the version it was derived from. The writer:
+  - takes an advisory `flock` on the lock file **of the scope that owns the file**: `.delphi/locks/<path>.lock` for workspace and team files, `$DELPHI_HOME/operator/locks/<path>.lock` for operator files;
+  - checks `blake3(disk) == expected_blake3`;
+  - then, still holding the lock, writes the live file, the ratified copy and the `ratified.lock` entry, each by temp file and rename.
+
+  On a mismatch it may rebase **only** when the change touches rule IDs disjoint from everything that changed meanwhile *and* the result still passes the §2.2 caps and the §5.2 no-relaxation linter. Otherwise it reports a conflict for the operator. It never overwrites blindly, and a rebase never changes ratified text the operator didn't see.
 
 ### 2.2 Hard Dual-Cap Invariant: The Rule of 25 + 6 KB Byte Ceiling
 To prevent long-rule prose inflation:
-- `context/heuristics.md` and every `memory/agents/<role>/lessons.md` are strictly capped at:
+- **Every** heuristics file (release, team, operator, workspace) and every lessons file (operator, workspace) is capped at:
   1. **Max 25 active rules**, AND
   2. **Max 6,144 bytes (6 KB / ~1,500 tokens)** total file size, with each individual rule $\le 350$ characters.
 - **Caps kept (D-09, ratified 2026-10-23):** rule bodies hold only Trigger / Directive / Falsification lines. Rationale and citations live in `context/domains/`. The 7 seed rules were rewritten to this format (2.5 KB total, ≤241 characters each).
@@ -174,9 +198,10 @@ Results return **at most 10 `path#Lstart-Lend` pointers + 3-line previews** (`<1
 ### 4.1 The Two-Strike Context Circuit Breaker (Mid-Mission Coaching)
 When **Builder** fails the same test or build verification twice in a row inside a worktree session, the failed reasoning trace itself poisons subsequent turns. This breaker is step 3 of the unified retry ladder ([`specs/003`](003-collaboration-and-council.md) §3.2); it is not a separate policy. If the reset attempt also fails, the node escalates to the **operator**.
 - **Invariant:** On Strike 2, `delphi-core` (not Orchestrator's judgment) trips the **Context Circuit Breaker**:
-  1. Distills a 5-line diagnostic summary of the failure.
-  2. Clears **Builder's** polluted conversation history.
-  3. Respawns a **fresh Builder context** with an **upscaled model/thinking budget (`[H-007]`)** and the failure constraint injected into the `HandoffEnvelope`.
+  1. Builds a **deterministic** diagnostic (no model call): the failing check's command, its exit code, and the first 3 error lines of its output, at most 500 bytes in total. It is tainted at the tier of that output.
+  2. Clears **Builder's** conversation history.
+  3. Respawns a **fresh Builder context** on a different model family. With a single family, it uses a different model of the same family (`homogeneous_retry: true`, `[H-008]`; `specs/003` §3.2). The diagnostic is injected into the `HandoffEnvelope`.
+  4. **Carries the taint ceiling forward.** The fresh span starts with the `external_ceiling` of attempts 1–2, because the worktree still contains their output. Resetting the conversation must not reset trust.
 
 ### 4.2 Post-Mission ExpeL Contrastive Distillation
 At mission close, **Orchestrator** executes `review-md-distillation` and `lesson-promotion`:
