@@ -76,9 +76,9 @@ Inspired by Nous Research's `hermes-agent` snapshot pattern:
   | Scope | Heuristics | Lessons (this role) | Ratified copy |
   | :--- | :--- | :--- | :--- |
   | Release | `context/heuristics.md` (`[H-…]`) | — | `base/context/heuristics.md`, verified against `base/manifest.lock` |
-  | Team | `context/team-heuristics.md` (`[T-…]`) | — | `local/ratified/team/context/team-heuristics.md` |
+  | Team | `context/team-heuristics.md` (`[T-…]`) | — | `local/ratified/context/team-heuristics.md` |
   | Operator | `heuristics.md` (`[O-…]`), plus `profile.md` | `memory/agents/<role>/lessons.md` | `$DELPHI_HOME/operator/ratified/…` |
-  | Workspace | `heuristics.md` (`[W-…]`) | `memory/agents/<role>/lessons.md` | `local/ratified/local/…` |
+  | Workspace | `heuristics.md` (`[W-…]`) | `memory/agents/<role>/lessons.md` | `local/ratified/heuristics.md`, `local/ratified/memory/agents/<role>/lessons.md` |
 
   Live files that differ from their ratified copy are pending proposals (`specs/006` §3.1) and are never loaded. Caching is the provider's automatic prefix caching plus the Anthropic breakpoints of `specs/002` §2. Explicit Gemini `cachedContents` is deferred (D-06).
 - **Nothing is written mid-session.** Agents and Orchestrator never write heuristics or lessons directly. Every change is a proposal ratified at `/retro` (D-11, §4.2, §5.4). Ratification updates the live file, its ratified copy and `ratified.lock` atomically, and the new snapshot applies from the **next** task. An active task's prefix is never changed mid-turn, which keeps the provider's cache valid.

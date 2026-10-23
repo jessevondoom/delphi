@@ -31,7 +31,9 @@ Branch `step-2-single-agent-loop`. This records what the code does against `spec
 
 **Not done here, by nature:** the Go/No-Go ("3 real L1 or read-only L2 tasks on a real project") needs real credentials and a real project. Bedrock and Vertex request formats were built from the providers' documented shapes and are exercised only against mocks, so the first real call on each is the true test.
 
-## 2. Clarifications and deviations (each needs an amendment or a code change)
+## 2. Clarifications and deviations
+
+**Status (2026-10-24, operator: ratify the Council suggestions):** items 1, 2, 4 and 6 are now written into specs 005 and 004 (amendment 005-A5). Items 3, 5, 7 and 8 describe behavior the specs left open and stand as implemented. D-22 / 009-A2 is *not* ratified: it still needs its Council.
 
 1. **Test 15 wording.** `specs/005` §6 test 15 says a turn is "retried twice and then escalates"; §2.5 says "after 2 consecutive interruptions … the node escalates instead of retrying". The code follows §2.5: the second consecutive interruption escalates. Suggest rewording test 15.
 2. **Ratified-copy paths.** `specs/004` §2.1's table puts the team and workspace heuristics at `local/ratified/team/context/…` and `local/ratified/local/…`. `init` and the path guard use the logical path under `local/ratified/` (`context/team-heuristics.md`, `heuristics.md`). The code is consistent with itself and with `ratified.lock` keys; the table should follow it.
