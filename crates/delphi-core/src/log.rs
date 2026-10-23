@@ -206,11 +206,18 @@ impl EventLog {
     /// Append several events in order with a single fsync at the end (plus one per segment rotation).
     /// Used where events must become durable together, such as Council Round 1 release.
     pub fn append_batch(&mut self, events: Vec<EventEnvelope>) -> Result<Vec<u64>, LogError> {
+        Ok(self.append_batch_stored(events)?.into_iter().map(|e| e.seq).collect())
+    }
+
+    /// As [`EventLog::append_batch`], returning the events exactly as persisted (stamped and
+    /// redacted): what may be sent to clients and applied to the derived indexes.
+    pub fn append_batch_stored(&mut self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, LogError> {
         if self.poisoned {
             return Err(LogError::Poisoned);
         }
         // Validate and serialize everything first so a bad event can't leave a partial batch.
         let mut lines = Vec::with_capacity(events.len());
+        let mut stored = Vec::with_capacity(events.len());
         let mut seq = self.next_seq;
         for mut e in events {
             e.v = crate::event::SCHEMA_MAJOR;
@@ -223,13 +230,14 @@ impl EventLog {
             let mut line = serde_json::to_string(&e).map_err(|err| LogError::Invalid(err.to_string()))?;
             line.push('\n');
             lines.push((seq, line));
+            stored.push(e);
             seq += 1;
         }
         let result = self.write_lines(&lines);
         match result {
             Ok(()) => {
                 self.next_seq = seq;
-                Ok(lines.iter().map(|(s, _)| *s).collect())
+                Ok(stored)
             }
             Err(e) => {
                 self.poisoned = true;

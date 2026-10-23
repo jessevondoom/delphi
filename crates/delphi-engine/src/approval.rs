@@ -290,6 +290,11 @@ impl Broker {
         Ok(resolution)
     }
 
+    /// A pending request by id.
+    pub fn get(&self, approval_id: &str) -> Option<Request> {
+        self.state.lock().unwrap().pending.get(approval_id).map(|p| p.req.clone())
+    }
+
     /// Cards awaiting an answer, oldest first (shown on attach).
     pub fn pending(&self) -> Vec<Request> {
         self.state.lock().unwrap().pending.values().map(|p| p.req.clone()).collect()

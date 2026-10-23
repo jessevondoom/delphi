@@ -227,6 +227,35 @@ fn tier_note(t: Tier) -> String {
     }
 }
 
+/// Resolve a `HandoffEnvelope` pointer (`path` or `path#Lstart-Lend`) **as the target role**, through its
+/// read guard, recording the tier of what was read. Returns the slice text and its tier.
+pub fn read_pointer(ctx: &mut ToolCtx, uri: &str) -> Result<(String, Tier), String> {
+    let (path, range) = match uri.split_once("#L") {
+        Some((p, r)) => (p, Some(r)),
+        None => (uri, None),
+    };
+    let (bytes, _) = ctx.guard.read_file(path, MAX_READ_BYTES).map_err(|d| denied(d).content)?;
+    if bytes.contains(&0) {
+        return Err("binary file".into());
+    }
+    let tier = observe(ctx, path, &bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text.lines().collect();
+    let (start, end) = match range {
+        None => (1, lines.len().min(400)),
+        Some(r) => {
+            let mut it = r.split("-L");
+            let a: usize = it.next().and_then(|x| x.parse().ok()).ok_or("bad line range")?;
+            let b: usize = it.next().and_then(|x| x.parse().ok()).unwrap_or(a);
+            (a.max(1), b.min(lines.len()).min(a.max(1) + 399))
+        }
+    };
+    if start > lines.len() {
+        return Err(format!("line {} is past the end of the file ({} lines)", start, lines.len()));
+    }
+    Ok((lines[start - 1..end.max(start)].join("\n"), tier))
+}
+
 pub fn run(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
     match tool {
         "read_file" => read_file(ctx, args),
@@ -396,25 +425,34 @@ fn with_provenance_header(content: &str, role: &str, mission: &str, now: &str, p
     Ok(format!("---\n{}---\n{}", yaml, body.trim_start_matches('\n')))
 }
 
-fn write_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+/// Everything that can refuse a write *without touching the filesystem*: size, the role's scope and the
+/// deny lists, the provenance gate, and the header rules. Run before asking the operator, so a card is
+/// only ever raised for an action that would otherwise succeed. Returns the final content to write.
+pub fn precheck_write(guard: &Guard, ceiling: Tier, role: &str, mission_id: &str, now: &str, args: &Value) -> Result<String, ToolResult> {
     let (path, content) = match (str_arg(args, "path"), str_arg(args, "content")) {
         (Ok(p), Ok(c)) => (p, c),
-        (Err(e), _) | (_, Err(e)) => return ToolResult::err(e.0),
+        (Err(e), _) | (_, Err(e)) => return Err(ToolResult::err(e.0)),
     };
     if content.len() > MAX_WRITE_BYTES {
-        return ToolResult::err(format!("content is {} bytes; the limit is {}", content.len(), MAX_WRITE_BYTES));
+        return Err(ToolResult::err(format!("content is {} bytes; the limit is {}", content.len(), MAX_WRITE_BYTES)));
     }
-    if let Err(g) = gate_write(path, ctx.span.ceiling()) {
-        return ToolResult::err(g.to_string());
-    }
-    let is_markdown = path.to_lowercase().ends_with(".md");
-    let final_content = if is_markdown {
-        match with_provenance_header(content, ctx.role, ctx.mission_id, ctx.now_rfc3339, path) {
-            Ok(c) => c,
-            Err(e) => return ToolResult::err(e),
-        }
+    guard.check_policy(path, delphi_core::pathguard::Access::Write).map_err(denied)?;
+    gate_write(path, ceiling).map_err(|g| ToolResult::err(g.to_string()))?;
+    if path.to_lowercase().ends_with(".md") {
+        with_provenance_header(content, role, mission_id, now, path).map_err(ToolResult::err)
     } else {
-        content.to_string()
+        Ok(content.to_string())
+    }
+}
+
+fn write_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let path = match str_arg(args, "path") {
+        Ok(p) => p,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let final_content = match precheck_write(ctx.guard, ctx.span.ceiling(), ctx.role, ctx.mission_id, ctx.now_rfc3339, args) {
+        Ok(c) => c,
+        Err(r) => return r,
     };
     match ctx.guard.write_atomic(path, final_content.as_bytes()) {
         Ok(created) => {

@@ -78,7 +78,7 @@ fn error_message(body: &str) -> String {
 }
 
 /// One attempt. `on_event` receives live deltas and completed blocks as they arrive.
-pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Duration, redact: &dyn Fn(&str) -> String, on_event: &mut dyn FnMut(StreamEvent)) -> Result<Completed, CallError> {
+pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Duration, redact: &(dyn Fn(&str) -> String + Sync), on_event: &mut (dyn FnMut(StreamEvent) + Send)) -> Result<Completed, CallError> {
     let mut builder = client.post(&req.url).body(req.body.clone());
     for (k, v) in &req.headers {
         builder = builder.header(k.as_str(), v.as_str());
@@ -168,7 +168,7 @@ fn jitter() -> f64 {
 }
 
 /// [`call`] with rate-limit retries. Retries only while nothing has been delivered to `on_event`.
-pub async fn call_with_retry(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Duration, policy: &RetryPolicy, redact: &dyn Fn(&str) -> String, on_event: &mut dyn FnMut(StreamEvent)) -> Result<Completed, CallError> {
+pub async fn call_with_retry(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Duration, policy: &RetryPolicy, redact: &(dyn Fn(&str) -> String + Sync), on_event: &mut (dyn FnMut(StreamEvent) + Send)) -> Result<Completed, CallError> {
     let started = Instant::now();
     let mut attempt = 0u32;
     loop {

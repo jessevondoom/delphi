@@ -262,6 +262,12 @@ impl Guard {
         }
     }
 
+    /// Policy only, no filesystem access: would this logical path be allowed for `access`? Used to refuse
+    /// an action before the operator is asked about it.
+    pub fn check_policy(&self, logical: &str, access: Access) -> Result<(), Denied> {
+        self.plan(logical, access, false).map(|_| ())
+    }
+
     /// Open a directory for reading under the same policy as [`Guard::check`].
     pub fn check_dir(&self, logical: &str) -> Result<OwnedFd, Denied> {
         let (root, inner) = self.plan(logical, Access::Read, true)?;

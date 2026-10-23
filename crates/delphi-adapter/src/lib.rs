@@ -9,3 +9,4 @@ pub mod http;
 pub mod ipr;
 pub mod platform;
 pub mod sigv4;
+pub use reqwest;
