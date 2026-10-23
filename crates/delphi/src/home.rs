@@ -8,20 +8,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Files whose content is pinned in `ratified.lock` (`specs/006` §3.1, `specs/001` §2.3, §6.4).
-/// Case-insensitive, like the path guard and macOS volumes: `SCRIPTS/x.sh` is still a script.
-pub fn is_protected(logical: &str) -> bool {
-    let l = logical.to_lowercase();
-    l == "governance.md"
-        || l == "review.md"
-        || l == "context/heuristics.md"
-        || l == "context/team-heuristics.md"
-        || l == "heuristics.md"
-        || (l.starts_with("agents/") && l.ends_with("/agent.md"))
-        || (l.starts_with("skills/") && (l.ends_with("/skill.md") || l.contains("/scripts/") || l.ends_with("/scripts")))
-        || (l.starts_with("themes/") && l.ends_with("/theme.md"))
-        || (l.starts_with("memory/agents/") && l.ends_with("/lessons.md"))
-}
+pub use delphi_core::lock::{access_blocks, is_protected};
 
 pub fn delphi_home(explicit: Option<&str>) -> PathBuf {
     if let Some(h) = explicit {
@@ -230,7 +217,11 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
     // config.toml from the template, with this workspace's name, projects and theme.
     let config = render_config(&o.workspace, &o.projects, &o.theme);
     write_new(&ws.dir.join("config.toml"), config.as_bytes())?;
-    ratified.insert("config.toml#access".into(), hash(access_blocks(&config).as_bytes()));
+    // The endpoint/access/auth blocks are pinned by hash, and their ratified copy is what the daemon
+    // trusts (`specs/009` §5): a live edit has no effect until the operator ratifies it.
+    let blocks = access_blocks(&config);
+    ratified.insert("config.toml#access".into(), hash(blocks.as_bytes()));
+    write_new(&ws.dir.join("local/ratified/config.access.toml"), blocks.as_bytes())?;
     write_lock(&ws.dir.join("local/ratified.lock"), &ratified, &[("release", version), ("ratified_by", "release".into())])?;
 
     init_operator_home(&o.home)?;
@@ -239,18 +230,6 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
 
 fn heuristics_stub(id: &str, title: &str, prefix: &str) -> String {
     format!("---\nid: {id}\ntitle: \"{title}\"\nauthor: operator\ntimestamp: 1970-01-01T00:00:00Z\nsource_type: user_ratified\nconfidence: high\nstatus: active\nmax_rules: 25\nactive_rules: 0\nsource_mission: init\ntags: [heuristics]\n---\n\n# {title} (`[{prefix}-…]`)\n")
-}
-
-/// The `[[endpoints]]`, `[access]` and `[auth.*]` blocks pinned by `specs/009` §5.
-pub fn access_blocks(config: &str) -> String {
-    let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));
-    let mut t = toml::value::Table::new();
-    for k in ["endpoints", "access", "auth"] {
-        if let Some(x) = v.get(k) {
-            t.insert(k.into(), x.clone());
-        }
-    }
-    toml::to_string(&toml::Value::Table(t)).unwrap_or_default()
 }
 
 fn render_config(name: &str, projects: &[PathBuf], theme: &str) -> String {
@@ -356,6 +335,7 @@ mod tests {
         assert_eq!(before, snapshot(&proj), "init must not modify the project repo");
         let lock = read_lock(&ws.dir.join("local/ratified.lock")).unwrap();
         assert!(lock.contains_key("agents/red-team/AGENT.md") && lock.contains_key("themes/greek/theme.md") && lock.contains_key("config.toml#access"));
+        assert_eq!(hash(&fs::read(ws.dir.join("local/ratified/config.access.toml")).unwrap()), lock["config.toml#access"], "the trusted copy matches its pin");
         assert!(lock.contains_key("context/team-heuristics.md") && lock.contains_key("heuristics.md"));
         assert!(!ws.dir.join("team/context/heuristics.md").exists(), "release heuristics belong in base/ (006-A2)");
         assert!(init(&InitOptions { home: home.clone(), workspace: "w".into(), projects: vec![], theme: "greek".into() }).is_err());

@@ -21,47 +21,47 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 
 | Invariant | Source | Enforcement point | Kind | Built |
 | :--- | :--- | :--- | :--- | :---: |
-| Write paths limited to manifest globs; no `..`/symlink escape | GOV §5.1, spec 001 §2.2 | Path guard (canonicalize + `O_NOFOLLOW`) | Daemon | ◐ path-guard library + tests (Step 1); daemon wiring Step 2 |
-| No agent writes `.git/`, `.delphi/run`, `state.db`, config | spec 001 §2.2 | Path guard + sandbox mount | Daemon | ❌ |
-| Taint is computed, never declared | GOV §4.3, spec 001 §5.1 | Span taint accounting; frontmatter stamping | Daemon | ❌ |
-| Below-L4 content never enters heuristics/REVIEW/lessons/skills | GOV §4.3 | Provenance gate on write | Daemon | ❌ |
-| L0–L1 spans get no mutating/outbound/dispatch tools | spec 001 §5.2 | Tool exposure filter per span | Daemon | ❌ |
+| Write paths limited to manifest globs; no `..`/symlink escape | GOV §5.1, spec 001 §2.2 | Path guard (canonicalize + `O_NOFOLLOW`) | Daemon | ✅ path guard behind every daemon tool (Step 2); worktree sandbox Step 3 |
+| No agent writes `.git/`, `.delphi/run`, `state.db`, config | spec 001 §2.2 | Path guard + sandbox mount | Daemon | ◐ path guard denies `.git`, `run/`, `state.db`, config (Step 2); sandbox mount Step 3 |
+| Taint is computed, never declared | GOV §4.3, spec 001 §5.1 | Span taint accounting; frontmatter stamping | Daemon | ✅ span ceilings + hash-keyed provenance index; frontmatter ignored (Step 2) |
+| Below-L4 content never enters heuristics/REVIEW/lessons/skills | GOV §4.3 | Provenance gate on write | Daemon | ✅ provenance gate + never-writable paths (Step 2) |
+| L0–L1 spans get no mutating/outbound/dispatch tools | spec 001 §5.2 | Tool exposure filter per span | Daemon | ◐ dispatch needs a Red approval at L1 or below (Step 2); worktree writes and outbound Step 3 |
 | Unknown tools default to L0 taint | Council 001 minority report | Tool registry default | Daemon | ❌ |
-| Red-tier actions need synchronous approval; timeout = deny | GOV §5.4, spec 008 §4 | Approval broker | Daemon | ❌ |
-| No `/permissions` mode auto-approves Red | spec 005 §3.1 | Approval broker | Daemon | ❌ |
+| Red-tier actions need synchronous approval; timeout = deny | GOV §5.4, spec 008 §4 | Approval broker | Daemon | ✅ approval broker, bound answers, timeout denies (Step 2) |
+| No `/permissions` mode auto-approves Red | spec 005 §3.1 | Approval broker | Daemon | ✅ approval broker (Step 2) |
 | Code execution is Green only inside an OS sandbox | GOV §5.5 | Sandbox launcher (D-04) | Daemon | ❌ |
-| Constitution changes staged and ratified | GOV §5.7, §7 | Proposal queue; write gate on those paths | Daemon | ❌ |
+| Constitution changes staged and ratified | GOV §5.7, §7 | Proposal queue; write gate on those paths | Daemon | ◐ `/ratify` with compare-and-swap (Step 2); agent-staged proposals Step 6 |
 | No Spec, No Build (`status: approved` before `IsolatedBuild`) | GOV §1.3, spec 003 §3.1 | DAG transition guard | Daemon | ❌ |
 | `Implements-Spec:` on implementation PRs | `REV-ARCH-01` | PR lint | CI | ❌ |
 | Council Round 1 blind | GOV §3.2, spec 003 §4.1 | In-memory barrier | Daemon | ❌ |
 | No agent or sandboxed process writes any `.git` (file or dir, any depth); daemon git calls hardened | spec 001 §2.2, 008 §4 | Path guard + sandbox profile + git runner | Daemon | ◐ path-guard library (Step 1); sandbox and git runner Step 3 |
 | Hard links can't bypass the path guard | spec 001 §2.2 | `st_nlink`/protected-inode check + sandbox visibility | Daemon | ◐ path-guard library + tests (Step 1) |
 | Taint tier read from the provenance index, never from frontmatter | spec 001 §5.1 | Provenance index + origin defaults | Daemon | ❌ |
-| Manifests, skills, custom scripts and theme load only from ratified copies; overrides only narrow | spec 001 §2.3, 006 §3.1 | `ratified.lock` loader + `delphi lint` | Daemon + CI | ◐ ratified.lock bootstrap + drift check + narrow-only lint (Step 1); loader Step 2 |
-| Update can't change active rules before ratification | spec 006 §4 | Ratify-before-swap; daemon loads `local/ratified/` only | Daemon | ❌ |
+| Manifests, skills, custom scripts and theme load only from ratified copies; overrides only narrow | spec 001 §2.3, 006 §3.1 | `ratified.lock` loader + `delphi lint` | Daemon + CI | ✅ loader verifies each ratified copy against its lock (Step 2) + narrow-only lint (Step 1) |
+| Update can't change active rules before ratification | spec 006 §4 | Ratify-before-swap; daemon loads `local/ratified/` only | Daemon | ◐ daemon loads `local/ratified/` only (Step 2); update flow Step 5 |
 | No memory rule in any scope relaxes governance controls | spec 004 §5.2 | Rule linter at proposal time + Red-Team review | Daemon | ❌ |
 | Operator memory never leaves the machine implicitly; contributions are scrubbed and previewed | spec 004 §5.5, §5.7 | Sync/contribute path filters + canary scan test | Daemon + CI | ❌ |
-| Privileged RPCs need the console capability token; sandboxes can't reach `run/` | spec 005 §2.1, 008 §4 | Socket auth + sandbox profile | Daemon | ❌ |
+| Privileged RPCs need the console capability token; sandboxes can't reach `run/` | spec 005 §2.1, 008 §4 | Socket auth + sandbox profile | Daemon | ◐ token on every connection, scope checks, same-UID defence (Step 2); sandbox profile Step 3 |
 | Harness runs fully contained (sandbox always, deny-default FS, egress proxy, env allowlist, taint clamp) | spec 009 §7 | Harness launcher + CONNECT proxy | Daemon | ❌ |
 | Per-span approval tokens; no span can speak for another | spec 009 §7.6 | Per-span MCP socket | Daemon | ❌ |
-| Endpoint, access and auth config changes are ratified (no helper-command or pin tampering) | spec 009 §5 | `ratified.lock` on config blocks | Daemon | ❌ |
+| Endpoint, access and auth config changes are ratified (no helper-command or pin tampering) | spec 009 §5 | `ratified.lock` on config blocks | Daemon | ✅ daemon trusts only `config.access.toml`; unratified edits ignored (Step 2) |
 | Archival search never returns another role's memory, or any operator memory | spec 004 §3.4 | Role filter in the retrieval query | Daemon | ❌ |
 | Council recovery never mixes Round 2 with a discarded Round 1 | spec 005 §2.5 | Atomic Round 1 release event | Daemon | ❌ |
 | Interrupted side effects are never retried blindly | spec 005 §2.5 | `action.intent`/`action.result` reconciliation | Daemon | ❌ |
-| Credentials never on disk outside keychain; never another tool's credentials | spec 009 §4 | Credential resolver + redactor + no-secret scan test | Daemon + CI | ❌ |
-| Endpoint failover stays within `allowed_endpoints` | spec 009 §5 | Endpoint selector | Daemon | ❌ |
-| Agents can't read `events.jsonl`; Round 1 events buffered until barrier | spec 001 §2.2, 005 §2.3 | Path guard + event writer | Daemon | ❌ |
-| Non-Markdown files carry taint (base-commit L4, untrusted paths L0, per-file map for agent writes) | spec 001 §5.1 | Taint map | Daemon | ❌ |
-| Active constitution matches `ratified.lock`; drift staged as Red proposal | spec 006 §3.1 | Startup check + loader | Daemon + doctor | ❌ |
+| Credentials never on disk outside keychain; never another tool's credentials | spec 009 §4 | Credential resolver + redactor + no-secret scan test | Daemon + CI | ✅ resolver + redactor + no-secret scan in the e2e test (Step 2); `oauth2:` Step 3 |
+| Endpoint failover stays within `allowed_endpoints` | spec 009 §5 | Endpoint selector | Daemon | ✅ endpoint selector and request builder (Step 2) |
+| Agents can't read `events.jsonl`; Round 1 events buffered until barrier | spec 001 §2.2, 005 §2.3 | Path guard + event writer | Daemon | ◐ path guard denial (Step 2); Round 1 buffering Step 4 |
+| Non-Markdown files carry taint (base-commit L4, untrusted paths L0, per-file map for agent writes) | spec 001 §5.1 | Taint map | Daemon | ◐ hash-keyed index covers every file read and written (Step 2); sandboxed execution Step 3 |
+| Active constitution matches `ratified.lock`; drift staged as Red proposal | spec 006 §3.1 | Startup check + loader | Daemon + doctor | ◐ doctor check 3 (Step 1) + loader refuses tampered copies (Step 2) |
 | Project repos contain no Delphi files | spec 006 §3.1 | `init` writes only to `$DELPHI_HOME`; doctor check 8 | Daemon + doctor | ✅ init + doctor check 8 (Step 1) |
 | Host-executed files flagged Red at merge | GOV §5.5, spec 008 §4 | Merge-gate diff classifier | Daemon | ❌ |
-| Budget can't be overshot by parallel calls | spec 003 §3.2 | Pre-dispatch cost reservation | Daemon | ❌ |
+| Budget can't be overshot by parallel calls | spec 003 §3.2 | Pre-dispatch cost reservation | Daemon | ✅ pre-dispatch reservation under a gate (Step 2) |
 | Minority Report verbatim; no invented dissent | spec 003 §4.1 | Daemon-filled section + `lint_spec` | Daemon + CI | ❌ |
 | Council deadlock escalates to the operator | spec 003 §4.1 | Deterministic P0/recommendation check | Daemon | ❌ |
 | Round cap R ≤ 3 | GOV §3.2 | Council state machine | Daemon | ❌ |
-| Retry ladder ≤ 3 attempts; mission budget | spec 003 §3.2 | Dispatcher + cost ledger | Daemon | ❌ |
+| Retry ladder ≤ 3 attempts; mission budget | spec 003 §3.2 | Dispatcher + cost ledger | Daemon | ◐ budget halt and interruption rule (Step 2); attempts 2–3 Step 3 |
 | Base-branch REVIEW/GOVERNANCE for audits | GOV §5.2, `REV-SEC-04` | Rubric loader (`git show <base>:…`) | Daemon | ❌ |
-| No secrets or home paths in Markdown/diffs | GOV §5.3, `REV-SEC-05` | Secret/path scanner; event redactor | CI + Daemon | ❌ |
+| No secrets or home paths in Markdown/diffs | GOV §5.3, `REV-SEC-05` | Secret/path scanner; event redactor | CI + Daemon | ◐ lint (Step 1) + event redactor (Step 2); diff scanner Step 3 |
 | Rule of 25 / byte cap | GOV §6.2, spec 004 §2.2 | `doctor` + proposal applier | CI + Daemon | ✅ lint + doctor check 4 (Step 1) |
 | Atomic + CAS memory writes | `REV-TRAP-02/04` | Locked writer | Daemon | ❌ |
 | Frozen boot snapshot per task | spec 004 §2.1 | IPR builder | Daemon | ❌ |

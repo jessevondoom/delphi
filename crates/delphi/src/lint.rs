@@ -406,7 +406,7 @@ pub fn envelope_errors(text: &str) -> Vec<String> {
                     Some(i) => (&uri[..i], &uri[i..]),
                     None => (uri, ""),
                 };
-                if crate::pathguard::canonical(file).is_err() {
+                if delphi_core::pathguard::canonical(file).is_err() {
                     errs.push(format!("context pointer `{}` is not a workspace-relative logical path", uri));
                 }
                 if !anchor.is_match(frag) {
@@ -494,7 +494,7 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
 /// True when some non-trivial segment of `glob` (anything but `*`/`**`) could match `name`. Bare
 /// `*`/`**` segments are left to the runtime guard, which denies these names on every access.
 fn names_segment(glob: &str, name: &str) -> bool {
-    glob.split('/').any(|s| s != "**" && s != "*" && crate::pathguard::glob_match(s, name))
+    glob.split('/').any(|s| s != "**" && s != "*" && delphi_core::pathguard::glob_match(s, name))
 }
 
 fn logical_glob_error(glob: &str) -> Option<&'static str> {
@@ -538,7 +538,7 @@ fn prefix_glob_error(glob: &str) -> Option<&'static str> {
     if first == "*" {
         return None;
     }
-    let m = |seg: &str, name: &str| crate::pathguard::glob_match(seg, name);
+    let m = |seg: &str, name: &str| delphi_core::pathguard::glob_match(seg, name);
     let hits = ["operator", "local", "run", "proposals"].iter().any(|d| m(first, d))
         || (m(first, "memory") && segs.get(1).map(|s| m(s, "operator")).unwrap_or(false));
     if hits {
@@ -557,7 +557,7 @@ pub fn write_glob_error(role: &str, glob: &str) -> Option<String> {
     }
     let lower = glob.to_lowercase();
     let segs: Vec<&str> = lower.split('/').collect();
-    if segs.iter().any(|s| *s != "**" && *s != "*" && crate::pathguard::glob_match(s, ".github")) {
+    if segs.iter().any(|s| *s != "**" && *s != "*" && delphi_core::pathguard::glob_match(s, ".github")) {
         return bad("CI configuration (`.github/**`) is never agent-writable");
     }
     if lower == "**" || lower == "*" || lower.starts_with("**/") || lower.starts_with("*/") {
@@ -612,7 +612,7 @@ pub fn override_widening(builtin: &Mapping, ovr: &Mapping, attachable: &dyn Fn(&
     };
     // `g` is within `b` when `b` matches it as a path and `b`'s only wildcards are `**` (so a `*` in
     // `g` can only meet a `**` in `b`, never a narrower pattern).
-    let within = |b: &str, g: &str| b == g || (b.split('/').all(|s| s == "**" || !s.contains(['*', '?'])) && crate::pathguard::glob_match(b, g));
+    let within = |b: &str, g: &str| b == g || (b.split('/').all(|s| s == "**" || !s.contains(['*', '?'])) && delphi_core::pathguard::glob_match(b, g));
     for k in ["read", "write", "execute"] {
         let base = scope(builtin, k);
         for g in scope(ovr, k) {

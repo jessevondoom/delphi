@@ -279,3 +279,4 @@ Supporting rules:
   - amendment **006-A3**: release signing moves from Step 1 to Step 5; dev builds are unsigned and `doctor` warns;
   - an editorial change to approved spec 005 §4 (the agents-pane example no longer names a theme character), required by the stricter canonical-name check;
   - drafting amendment 009-A2 (D-22) for Council review.
+- **2026-10-24:** implementing Step 2 milestone 2 found that spec 005 §2.4 keyed `usage_ledger` on `seq` alone, but `seq` is per mission, so two missions would collide. Clarified in the spec: primary key `(mission_id, seq)`, plus an `applied` position table; `agent.usage` gains `provider` and `reservation_id`, and the `budget.reserve` / `budget.release` payloads are defined. **Ratified by the operator 2026-10-24** (an edit to approved §2.4; no behavior change beyond the fix).

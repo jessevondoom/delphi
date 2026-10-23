@@ -1,0 +1,28 @@
+[package]
+name = "delphi-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Delphi daemon core: events, redaction and the durable segmented log (roadmap Step 2)"
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.9"
+base64 = "0.22"
+libc = "0.2"
+unicode-normalization = "0.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+blake3 = "1.8.7"
+toml = "0.8"
+
+[features]
+# Test-only: lets in-process tests skip the interactive-terminal check on token issuance.
+test-support = []
+
+[dev-dependencies]
+delphi-core = { path = ".", features = ["test-support"] }
+tempfile = "3.8"

@@ -282,7 +282,14 @@ fn verify_copies(lock: &BTreeMap<String, String>, dir: &Path, label: &str, r: &m
     let mut broken = 0;
     for e in walkdir::WalkDir::new(dir).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
         let rel = e.path().strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
-        if !lock.contains_key(&rel) {
+        // `config.access.toml` is the ratified copy of the pinned endpoint blocks (`config.toml#access`).
+        if rel == "config.access.toml" {
+            let ok = lock.get("config.toml#access").map(|h| fs::read(e.path()).map(|b| hash(&b) == *h).unwrap_or(false)).unwrap_or(false);
+            if !ok {
+                broken += 1;
+                r.fail("3 taint-audit", format!("{}/{}", label, rel), "ratified endpoint config does not match its pin (tampered or planted)");
+            }
+        } else if !lock.contains_key(&rel) {
             broken += 1;
             r.fail("3 taint-audit", format!("{}/{}", label, rel), "file in the ratified directory has no lock entry (planted)");
         }
@@ -459,7 +466,7 @@ mod tests {
         let r = run(&home, &ws, &Options::default());
         let drift: Vec<_> = r.findings.iter().filter(|f| f.check.starts_with("3") && f.level == Level::Warn).map(|f| f.location.clone()).collect();
         assert!(drift.contains(&"REVIEW.md".to_string()) && drift.contains(&"agents/builder/AGENT.md".to_string()), "{:?}", drift);
-        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/REVIEW.md")).unwrap().len() > 100, true);
+        assert!(fs::read_to_string(ws.dir.join("local/ratified/REVIEW.md")).unwrap().len() > 100);
     }
 
     // specs/006 §6 test 10
