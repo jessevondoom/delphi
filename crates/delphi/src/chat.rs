@@ -33,6 +33,8 @@ pub enum Input {
     Permissions(Option<String>),
     Ratify(Vec<String>),
     Mission,
+    Resume(Vec<String>),
+    Pause,
     Answer(Decision),
     Prompt { target: Option<String>, text: String },
     Unknown(String),
@@ -58,6 +60,8 @@ pub fn parse_input(line: &str) -> Input {
             "permissions" | "perm" => Input::Permissions(rest.first().map(|s| s.to_string())),
             "ratify" => Input::Ratify(rest.iter().map(|s| s.to_string()).collect()),
             "mission" => Input::Mission,
+            "resume" => Input::Resume(rest.iter().map(|s| s.to_string()).collect()),
+            "pause" => Input::Pause,
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
             "n" | "no" => Input::Answer(Decision::Deny),
@@ -89,6 +93,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /permissions [default|accept-edits|mission-auto]
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
+  /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
   /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
   /quit";
 
@@ -217,6 +222,28 @@ impl Renderer {
             _ => None,
         }
     }
+}
+
+/// What the console shows on attach when the daemon recovered unfinished work.
+pub fn render_recovery(r: &Value) -> Option<String> {
+    let tasks = r["tasks"].as_array()?;
+    if tasks.is_empty() {
+        return None;
+    }
+    let mut s = String::from("Recovered after a restart; nothing has resumed yet:\n");
+    for t in tasks {
+        s.push_str(&format!("  {} ({}): {}\n", t["task_id"].as_str().unwrap_or("?"), t["role"].as_str().unwrap_or("?"), t["action"].as_str().unwrap_or("")));
+    }
+    let charged = r["charged_usd"].as_f64().unwrap_or(0.0);
+    if charged > 0.0 {
+        s.push_str(&format!("  ${:.4} was charged for calls the restart interrupted (their full reservations).\n", charged));
+    }
+    let expired = r["expired_approvals"].as_array().map(|a| a.len()).unwrap_or(0);
+    if expired > 0 {
+        s.push_str(&format!("  {} approval card(s) expired with the daemon; those actions will be asked about again.\n", expired));
+    }
+    s.push_str("/resume to continue them · /pause to leave them\n");
+    Some(s)
 }
 
 pub fn render_usage(v: &Value) -> String {
@@ -363,6 +390,7 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
         }
     };
     let mission_id = opened["mission_id"].as_str().unwrap_or("").to_string();
+    let recovery_note = render_recovery(&opened["recovery"]);
     let mut ev = match Client::connect(&attached.sock).map_err(ClientError::from).and_then(|mut c| c.hello(&attached.token).map(|_| c)) {
         Ok(c) => c,
         Err(e) => {
@@ -384,6 +412,9 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
         }
     }
 
+    if let Some(note) = recovery_note {
+        say(&note);
+    }
     // The console announces pending proposals and config notices on attach.
     if let Ok(snap) = cmd.call("session.snapshot", json!({"mission_id": mission_id})) {
         for n in snap["notices"].as_array().cloned().unwrap_or_default() {
@@ -412,6 +443,18 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
             Input::Help => say(&format!("{}\n", HELP)),
             Input::Unknown(m) => say(&format!("{}\n", m)),
             Input::Mission => say(&format!("mission {}\n", mission_id)),
+            Input::Resume(tasks) => match cmd.call("recovery.resume", json!({"mission_id": mission_id, "tasks": if tasks.is_empty() { Value::Null } else { json!(tasks) }})) {
+                Ok(v) => {
+                    let n = v["resumed"].as_array().map(|a| a.len()).unwrap_or(0);
+                    shared.running.fetch_add(n, Ordering::SeqCst);
+                    say(&if n == 0 { "nothing to resume\n".to_string() } else { format!("resuming {} task(s)…\n", n) });
+                }
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
+            Input::Pause => match cmd.call("recovery.pause", json!({})) {
+                Ok(_) => say("left as they are; they will be offered again after the next restart\n"),
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
             Input::Usage(group) => match cmd.call("usage.get", json!({"mission_id": mission_id, "group": group.unwrap_or_else(|| "role".into())})) {
                 Ok(v) => say(&format!("{}\n", render_usage(&v))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
@@ -583,6 +626,9 @@ mod tests {
         assert_eq!(parse_input("/budget $7.5"), Input::Budget(Some(7.5)));
         assert!(matches!(parse_input("/budget lots"), Input::Unknown(_)));
         assert_eq!(parse_input("/permissions accept-edits"), Input::Permissions(Some("accept-edits".into())));
+        assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
+        assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
+        assert_eq!(parse_input("/pause"), Input::Pause);
         assert_eq!(parse_input("/y"), Input::Answer(Decision::Allow));
         assert_eq!(parse_input("/a"), Input::Answer(Decision::AllowSimilar));
         assert_eq!(parse_input("/approve n"), Input::Answer(Decision::Deny));
@@ -642,6 +688,15 @@ mod tests {
         assert!(r.event(&json!({"type": "endpoint.reauth_required", "payload": {"endpoint_id": "bedrock-us"}})).unwrap().contains("re-authenticate bedrock-us"));
         assert!(r.event(&json!({"type": "approval.resolved", "payload": {"approval_id": "ap_1", "resolution": "approved", "by": "console-3"}})).unwrap().contains("approved (by console-3)"));
         assert!(r.event(&json!({"type": "budget.reserve", "payload": {}})).is_none());
+    }
+
+    #[test]
+    fn the_recovery_summary_says_what_will_happen_and_what_it_cost() {
+        let r = json!({"tasks": [{"task_id": "t_0001", "role": "architect", "action": "architect retries its interrupted turn"}], "charged_usd": 0.0225, "expired_approvals": ["ap_1"]});
+        let s = render_recovery(&r).unwrap();
+        assert!(s.contains("nothing has resumed yet") && s.contains("t_0001 (architect): architect retries") && s.contains("$0.0225 was charged") && s.contains("1 approval card(s) expired") && s.contains("/resume"), "{}", s);
+        assert_eq!(render_recovery(&json!({"tasks": []})), None);
+        assert_eq!(render_recovery(&json!({})), None);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! authenticated the connection; this layer decides what each scope may do.
 
 use crate::approval::{Answer, Mode, ResolveError};
-use crate::engine::Engine;
+use crate::engine::{Engine, RecoveryPlan};
 use crate::mission::{EngineError, MissionState};
 use delphi_core::event::EventEnvelope;
 use delphi_core::ledger::GroupBy;
@@ -28,6 +28,15 @@ pub struct EngineService {
     missions: Mutex<HashMap<String, Arc<MissionState>>>,
     running: Arc<Mutex<HashMap<String, Running>>>,
     notices: Mutex<Vec<String>>,
+    /// Serializes opening a mission (and planning its recovery).
+    open_gate: tokio::sync::Mutex<()>,
+    /// Recovery plans awaiting the operator's decision, by mission.
+    recovery: Mutex<HashMap<String, PlanState>>,
+}
+
+struct PlanState {
+    plan: Arc<RecoveryPlan>,
+    resumed: std::collections::HashSet<String>,
 }
 
 fn err(code: i64, message: impl Into<String>) -> RpcError {
@@ -56,7 +65,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()) })
+        Arc::new(EngineService { engine, default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()) })
     }
 
     pub fn set_notices(&self, n: Vec<String>) {
@@ -69,19 +78,64 @@ impl EngineService {
     }
 
     /// Open (or return the already open) mission.
-    pub fn mission(&self, id: Option<&str>) -> Result<Arc<MissionState>, RpcError> {
+    pub async fn mission(&self, id: Option<&str>) -> Result<Arc<MissionState>, RpcError> {
         let id = id.unwrap_or(&self.default_mission);
         if !valid_mission_id(id) {
             return Err(err(code::INVALID_PARAMS, "mission ids are lowercase letters, digits and `-`"));
         }
-        let mut open = self.missions.lock().unwrap();
-        if let Some(m) = open.get(id) {
+        let _gate = self.open_gate.lock().await;
+        if let Some(m) = self.missions.lock().unwrap().get(id) {
             return Ok(m.clone());
         }
         let e = &self.engine;
         let m = MissionState::open(&e.ws.dir.join("local/missions").join(id), id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
-        open.insert(id.to_string(), m.clone());
+        // A mission with unfinished work is planned for recovery now; nothing resumes until the operator says so.
+        if let Some(plan) = self.engine.recover_mission(&m).await.map_err(engine_err)? {
+            self.recovery.lock().unwrap().insert(id.to_string(), PlanState { plan: Arc::new(plan), resumed: Default::default() });
+        }
+        self.missions.lock().unwrap().insert(id.to_string(), m.clone());
         Ok(m)
+    }
+
+    /// Tasks of a recovery plan not yet resumed, as JSON for the console.
+    fn recovery_json(&self, mission: &str) -> Value {
+        let g = self.recovery.lock().unwrap();
+        match g.get(mission) {
+            Some(st) => {
+                let pending: Vec<Value> = st.plan.items.iter().filter(|i| !st.resumed.contains(&i.task_id)).map(|i| json!({"task_id": i.task_id, "role": i.role, "action": i.action})).collect();
+                json!({"tasks": pending, "charged_usd": st.plan.charged_usd, "expired_approvals": st.plan.expired_approvals})
+            }
+            None => json!({"tasks": [], "charged_usd": 0.0, "expired_approvals": []}),
+        }
+    }
+
+    /// `recovery.resume`: continue the chosen tasks (default: all) in the background.
+    async fn recovery_resume(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let wanted: Option<Vec<String>> = p["tasks"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+        let (rec, ids) = {
+            let mut g = self.recovery.lock().unwrap();
+            let Some(st) = g.get_mut(&m.id) else { return Ok(json!({"resumed": []})) };
+            let ids: Vec<String> = st.plan.items.iter().map(|i| i.task_id.clone()).filter(|t| !st.resumed.contains(t) && wanted.as_ref().map(|w| w.contains(t)).unwrap_or(true)).collect();
+            st.resumed.extend(ids.iter().cloned());
+            (st.plan.rec.clone(), ids)
+        };
+        for tid in &ids {
+            let (engine, running, m2, rec2, tid2) = (self.engine.clone(), self.running.clone(), m.clone(), rec.clone(), tid.clone());
+            let target = rec.tasks.get(tid).map(|t| t.target.clone()).unwrap_or_default();
+            let prompt = rec.tasks.get(tid).map(|t| t.prompt.chars().take(120).collect::<String>()).unwrap_or_default();
+            running.lock().unwrap().insert(tid.clone(), Running { target, prompt, started: Instant::now() });
+            tokio::spawn(async move {
+                if let Err(e) = engine.resume_task(&m2, &rec2, &tid2).await {
+                    let mut ev = EventEnvelope::new(&m2.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
+                    ev.task_id = Some(tid2.clone());
+                    let _ = m2.append(ev).await;
+                }
+                running.lock().unwrap().remove(&tid2);
+            });
+        }
+        Ok(json!({"resumed": ids}))
     }
 
     fn budget_json(m: &MissionState) -> Value {
@@ -95,7 +149,7 @@ impl EngineService {
 
     async fn task_submit(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
-        let m = self.mission(p["mission_id"].as_str())?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
         let target = p["target"].as_str().unwrap_or("orchestrator").to_string();
         let prompt = p["prompt"].as_str().unwrap_or("").trim().to_string();
         if prompt.is_empty() || prompt.chars().count() > 20_000 {
@@ -136,7 +190,7 @@ impl EngineService {
         }
     }
 
-    fn usage_get(&self, p: Value) -> RpcOutcome {
+    async fn usage_get(&self, p: Value) -> RpcOutcome {
         let group = match p["group"].as_str().unwrap_or("role") {
             "mission" => GroupBy::Mission,
             "role" => GroupBy::Role,
@@ -144,7 +198,7 @@ impl EngineService {
             "model" => GroupBy::Model,
             other => return Err(err(code::INVALID_PARAMS, format!("unknown group `{}` (mission, role, task or model)", other))),
         };
-        let m = self.mission(p["mission_id"].as_str())?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
         let rows = self.engine.ledger.lock().unwrap().totals(group, Some(&m.id)).map_err(|e| err(-32000, e.to_string()))?;
         Ok(json!({
             "mission_id": m.id,
@@ -155,7 +209,7 @@ impl EngineService {
 
     async fn budget_set(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
-        let m = self.mission(p["mission_id"].as_str())?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
         let usd = p["usd"].as_f64().filter(|u| u.is_finite() && *u > 0.0 && *u <= 10_000.0).ok_or_else(|| err(code::INVALID_PARAMS, "`usd` must be a number above 0 and at most 10000"))?;
         let cap = delphi_core::budget::usd_to_micro(usd);
         m.append(EventEnvelope::new(&m.id, "budget.cap", json!({"cap": cap, "usd": usd, "by": format!("console-{}", ctx.client_id)}))).await.map_err(engine_err)?;
@@ -176,7 +230,7 @@ impl EngineService {
         };
         let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
         let (idc, exc) = (id.to_string(), expected.to_string());
-        let m = self.mission(p["mission_id"].as_str())?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
         let result = tokio::task::spawn_blocking(move || if reject { crate::ratify::reject(&home, &ws, &idc, &exc).map(|_| String::new()) } else { crate::ratify::apply(&home, &ws, &idc, &exc) }).await.map_err(|e| err(-32000, e.to_string()))?;
         match result {
             Ok(pin) => {
@@ -200,14 +254,15 @@ impl EngineService {
         }
     }
 
-    fn snapshot(&self, p: Value) -> RpcOutcome {
-        let m = self.mission(p["mission_id"].as_str())?;
+    async fn snapshot(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
         let running: Vec<Value> = self.running.lock().unwrap().iter().map(|(id, r)| json!({"task_id": id, "target": r.target, "prompt": r.prompt, "seconds": r.started.elapsed().as_secs()})).collect();
         Ok(json!({
             "mission_id": m.id,
             "budget": Self::budget_json(&m),
             "mode": self.engine.broker.mode().as_str(),
             "pending_approvals": self.pending_json(),
+            "recovery": self.recovery_json(&m.id),
             "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(),
             "notices": self.notices.lock().unwrap().clone(),
             "running_tasks": running,
@@ -230,16 +285,20 @@ impl Extension for ServiceExt {
         let (svc, method) = (self.0.clone(), method.to_string());
         Box::pin(async move {
             Some(match method.as_str() {
-                "mission.open" => (|| {
+                "mission.open" => match need_console(&ctx) {
+                    Err(e) => Err(e),
+                    Ok(()) => svc.mission(params["mission_id"].as_str()).await.map(|m| json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str(), "recovery": svc.recovery_json(&m.id)})),
+                },
+                "recovery.resume" => svc.recovery_resume(params, ctx).await,
+                "recovery.pause" => (|| {
                     need_console(&ctx)?;
-                    let m = svc.mission(params["mission_id"].as_str())?;
-                    Ok(json!({"mission_id": m.id, "budget": EngineService::budget_json(&m), "mode": svc.engine.broker.mode().as_str()}))
+                    Ok(json!({"paused": true}))
                 })(),
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
-                "usage.get" => svc.usage_get(params),
-                "budget.get" => svc.mission(params["mission_id"].as_str()).map(|m| EngineService::budget_json(&m)),
+                "usage.get" => svc.usage_get(params).await,
+                "budget.get" => svc.mission(params["mission_id"].as_str()).await.map(|m| EngineService::budget_json(&m)),
                 "budget.set" => svc.budget_set(params, ctx).await,
                 "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
                 "permissions.set" => (|| {
@@ -248,7 +307,7 @@ impl Extension for ServiceExt {
                     svc.engine.broker.set_mode(mode);
                     Ok(json!({"mode": mode.as_str()}))
                 })(),
-                "session.snapshot" => svc.snapshot(params),
+                "session.snapshot" => svc.snapshot(params).await,
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
@@ -465,6 +524,66 @@ mod tests {
         assert!(ratified.contains("be thorough"));
         assert_eq!(events_of(&f, "ratify.applied").len(), 1);
         assert_eq!(events_of(&f, "provenance.stamp").last().unwrap().payload["tier"], "L5", "ratification is the path to L5");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restarted_daemon_offers_recovery_and_only_the_console_can_resume() {
+        let f = setup(vec![Step::tool("t1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Hang], 5.0, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "What is in @project/app/src/lib.rs?").await }) };
+        let model = f.model.clone();
+        for _ in 0..300 {
+            if model.requests().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        task.abort();
+        let _ = task.await;
+        let f2 = f.restart(vec![Step::text("Resumed answer.")]);
+        // A service that has not adopted the mission opens it itself, and so plans its recovery.
+        let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
+        let sock = dir.path().join("d.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
+        cfg.tty_policy = TtyPolicy::Disabled;
+        let daemon = Daemon::with_hub(cfg, f2.engine.hub.clone()).unwrap();
+        let svc = EngineService::new(f2.engine.clone(), "m1");
+        // The test kit already opened the mission in this process; hand it over rather than opening twice.
+        let m2 = f2.m.clone();
+        let plan = f2.engine.recover_mission(&m2).await.unwrap().unwrap();
+        svc.adopt(m2);
+        svc.recovery.lock().unwrap().insert("m1".into(), PlanState { plan: Arc::new(plan), resumed: Default::default() });
+        daemon.set_extension(svc.extension());
+        let (ctok, ntok) = (daemon.console_token().to_string(), daemon.narrator_token().to_string());
+        tokio::spawn(daemon.serve(listener));
+        let (sock2, sock3) = (sock.clone(), sock.clone());
+        let (snap, denied, resumed, again, out) = blocking(move || {
+            let mut nar = Client::connect(&sock2).unwrap();
+            nar.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            nar.hello(&ntok).unwrap();
+            let mut c = Client::connect(&sock3).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&ctok).unwrap();
+            c.call("events.subscribe", json!({})).unwrap();
+            let snap = c.call("session.snapshot", json!({})).unwrap();
+            let denied = rpc_code(nar.call("recovery.resume", json!({})));
+            let resumed = c.call("recovery.resume", json!({})).unwrap();
+            let again = c.call("recovery.resume", json!({})).unwrap();
+            let out = loop {
+                let n = c.next_notification().unwrap();
+                if n["method"] == "event" && n["params"]["type"] == "task.output" {
+                    break n["params"]["payload"]["text"].as_str().unwrap().to_string();
+                }
+            };
+            (snap, denied, resumed, again, out)
+        })
+        .await;
+        assert_eq!(snap["recovery"]["tasks"][0]["task_id"], "t_0001");
+        assert!(snap["recovery"]["tasks"][0]["action"].as_str().unwrap().contains("retries its interrupted turn"));
+        assert_eq!(denied, Some(code::FORBIDDEN));
+        assert_eq!(resumed["resumed"][0], "t_0001");
+        assert_eq!(again["resumed"].as_array().unwrap().len(), 0, "a task is resumed once");
+        assert_eq!(out, "Resumed answer.");
     }
 
     #[tokio::test(flavor = "multi_thread")]

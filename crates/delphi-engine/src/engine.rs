@@ -130,7 +130,7 @@ type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// How a span begins.
 enum Start {
-    Fresh { handoff: HandoffEnvelope, parent: Option<Span>, depth: u32 },
+    Fresh { handoff: Box<HandoffEnvelope>, parent: Option<Span>, depth: u32 },
     /// Continue a span rebuilt from the log; `rec` lets it resume the children it had dispatched.
     Resume { rec: Arc<Recovered>, span_id: String },
 }
@@ -254,7 +254,7 @@ impl Engine {
     }
 
     fn run_span<'a>(self: &'a Arc<Self>, m: &'a Arc<MissionState>, task_id: &'a str, handoff: HandoffEnvelope, parent: Option<Span>, depth: u32) -> BoxFut<'a, Result<SpanOutcome, EngineError>> {
-        self.drive(m, task_id, Start::Fresh { handoff, parent, depth })
+        self.drive(m, task_id, Start::Fresh { handoff: Box::new(handoff), parent, depth })
     }
 
     /// Run a span from its start, or pick it up where the log says it stopped.
@@ -264,6 +264,7 @@ impl Engine {
             let new_nonce = || delphi_core::server::random_token().map(|t| t[..12].to_string()).unwrap_or_else(|_| "nonce".into());
             let (handoff, span_id, depth, span, mut history, mut pending, mut known, mut interruptions, rec, fresh, nonce) = match start {
                 Start::Fresh { handoff, parent, depth } => {
+                    let handoff = *handoff;
                     let span_id = m.next_span_id(&handoff.target_agent);
                     let span = match &parent {
                         Some(p) => p.child(&span_id),
@@ -999,6 +1000,37 @@ mod tests {
         f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "tainted".into() }, "c").unwrap();
         assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
         assert_eq!(events_of(&f, "dag.node.added").len(), 1, "no child span was created");
+    }
+
+    // Roadmap Step 2 test: a parent cannot launder an untrusted file by passing the child only a pointer.
+    #[tokio::test]
+    async fn a_clean_parent_cannot_launder_an_untrusted_file_through_a_pointer() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Summarize it", "pointers": [{"uri": "@project/app/vendor/x.js", "reason": "to summarize"}]})),
+                Step::tool("w1", "write_file", json!({"path": "missions/m1/research/summary.md", "content": "# Summary\nof vendored code"})),
+                Step::text("child done"),
+                Step::text("parent done"),
+            ],
+            5.0,
+            |_| {},
+        );
+        let out = f.engine.run_task(&f.m, "orchestrator", "Get the architect to summarize the vendored file").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let events = f.m.replay().unwrap();
+        let parent_span = events.iter().find(|e| e.kind == "dag.node.added" && e.payload["depth"] == 0).unwrap().payload["node_id"].as_str().unwrap().to_string();
+        let child_span = events.iter().find(|e| e.kind == "dag.node.added" && e.payload["depth"] == 1).unwrap().payload["node_id"].as_str().unwrap().to_string();
+        // The parent never read the file, so it stays clean...
+        assert!(!events.iter().any(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(parent_span.as_str())));
+        // ...but the child's ceiling was clamped by the pointer before it took its first turn.
+        let taint_seq = events.iter().find(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(child_span.as_str())).map(|e| e.seq).expect("the child is tainted");
+        let first_call = events.iter().find(|e| e.kind == "budget.reserve" && e.span_id.as_deref() == Some(child_span.as_str())).unwrap().seq;
+        assert!(taint_seq < first_call, "tainted before turn 1");
+        assert_eq!(events.iter().find(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(child_span.as_str())).unwrap().payload["ceiling"], "L0");
+        // And what the child writes is stamped with that ceiling, not the L3 an unverified clean span would get.
+        assert_eq!(events_of(&f, "provenance.stamp")[0].payload["tier"], "L0");
+        // The child saw the slice labelled as untrusted.
+        assert!(f.model.requests()[1].body["messages"][0]["content"][0]["text"].as_str().unwrap().contains("tier=\"L0\""));
     }
 
     #[tokio::test]

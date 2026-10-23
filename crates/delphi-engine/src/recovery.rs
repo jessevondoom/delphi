@@ -100,7 +100,8 @@ fn tier(v: &Value) -> Option<Tier> {
 pub fn rebuild(events: &[EventEnvelope]) -> Recovered {
     let mut rec = Recovered::default();
     // (span, turn_index) → block_index → (block, endpoint, model)
-    let mut blocks: BTreeMap<(String, u32), BTreeMap<u64, (ContentBlock, String, String)>> = BTreeMap::new();
+    type Parts = BTreeMap<u64, (ContentBlock, String, String)>;
+    let mut blocks: BTreeMap<(String, u32), Parts> = BTreeMap::new();
     let mut open_approvals: BTreeSet<String> = BTreeSet::new();
     for e in events {
         let p = &e.payload;

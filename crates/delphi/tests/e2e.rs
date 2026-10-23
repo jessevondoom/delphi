@@ -105,6 +105,11 @@ fn mock(script: Vec<String>) -> Mock {
                     if sc.len() > 1 { sc.remove(0) } else { sc[0].clone() }
                 };
                 let _ = write!(s, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n");
+                if reply == "HANG" {
+                    // Accept the request and never finish: the daemon is killed while waiting.
+                    std::thread::sleep(Duration::from_secs(3600));
+                    return;
+                }
                 for chunk in reply.as_bytes().chunks(300) {
                     if s.write_all(chunk).is_err() {
                         return;
@@ -403,5 +408,59 @@ fn an_unratified_edit_to_the_endpoints_never_redirects_traffic() {
     assert!(out.contains("answer from the ratified endpoint"), "{}", out);
     assert_eq!(attacker.seen.lock().unwrap().len(), 0, "the attacker's server was never contacted");
     assert_eq!(honest.seen.lock().unwrap().len(), 1);
+    kill_daemon(pid_in(&out));
+}
+
+#[test]
+fn killing_the_daemon_mid_request_loses_nothing_and_the_operator_resumes_from_the_summary() {
+    // The provider accepts the request and never answers; then the daemon is killed with SIGKILL.
+    let m = mock(vec!["HANG".to_string(), reply_text("Resumed: the file defines `needle`.")]);
+    let e = setup(m.port);
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/ratify");
+    s.wait_for("pending proposal");
+    s.send("/ratify apply 1");
+    s.wait_for("ratified ws:config.toml#access");
+    s.send("Explain @project/proj/src/lib.rs");
+    s.wait_for("(t_0001 started)");
+    let start = Instant::now();
+    while m.seen.lock().unwrap().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(20), "the daemon never called the provider");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid = pid_in(&s.out);
+    kill_daemon(pid); // SIGKILL mid-request
+    let (_, _) = {
+        let out = s.out.clone();
+        drop(s);
+        (0, out)
+    };
+
+    // A new console finds the work, says what it will do, and waits to be told.
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("Recovered after a restart; nothing has resumed yet");
+    s.wait_for("t_0001 (orchestrator)");
+    s.wait_for("was charged for calls the restart interrupted");
+    s.send("/usage");
+    s.wait_for("total $");
+    assert_eq!(m.seen.lock().unwrap().len(), 1, "nothing resumed before the operator asked");
+    s.send("/resume");
+    s.wait_for("resuming 1 task(s)");
+    s.wait_for("✓ t_0001 done");
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("Resumed: the file defines"), "{}", out);
+    let seen = m.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].body["messages"], seen[1].body["messages"], "the retry sends exactly the request that was in flight");
+    assert_eq!(seen[0].body["system"], seen[1].body["system"], "and the cached prefix is byte-identical");
+
+    // The books: the interrupted call was charged in full, and nothing is left reserved.
+    let mission_dir = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path();
+    let log = std::fs::read_to_string(mission_dir.join("events/000001.jsonl")).unwrap();
+    assert!(log.contains("\"outcome\":\"cancelled\"") && log.contains("\"type\":\"mission.recovered\""), "{}", log.lines().count());
+    let status = std::fs::read_to_string(mission_dir.join("status.md")).unwrap();
+    assert!(status.contains("t_0001") && status.contains("done") && status.contains("## Last recovery") && !status.contains("\nnone\n"), "{}", status);
     kill_daemon(pid_in(&out));
 }
