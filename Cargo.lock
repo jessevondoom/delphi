@@ -284,6 +284,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "delphi-engine"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "delphi-adapter",
+ "delphi-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
