@@ -31,8 +31,9 @@ pub struct Tree {
 
 /// Directories never walked in a source repo.
 const SKIP_DIRS: [&str; 4] = [".git", "target", "node_modules", ".delphi"];
-/// Markdown under these logical prefixes must carry §5 provenance frontmatter.
-const GOVERNED: [&str; 6] = ["context/", "missions/", "specs/", "memory/agents/", "themes/", "operator/"];
+/// Markdown under these logical prefixes (or at these exact paths) must carry §5 provenance
+/// frontmatter. Manifests, skills and theme packs have their own schemas (§2.1, §3.1, §6.2).
+const GOVERNED: [&str; 8] = ["context/", "missions/", "specs/", "memory/agents/", "operator/memory/", "operator/profile.md", "operator/heuristics.md", "heuristics.md"];
 /// Design records that are never seeded into a workspace; links *from seeded release files* to them
 /// are `skipped` there. Links from the workspace's own files must resolve.
 const UNSEEDED: [&str; 5] = ["specs/", "missions/", "OVERVIEW.md", "README.md", "crates/"];
@@ -52,7 +53,7 @@ impl Tree {
         });
         for entry in walker {
             let entry = entry?;
-            if entry.file_type().is_file() {
+            if !entry.file_type().is_dir() {
                 let rel = entry.path().strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
                 files.insert(rel, entry.path().to_path_buf());
             }
@@ -112,7 +113,7 @@ fn theme_names(tree: &Tree, r: &mut Report) -> Vec<String> {
 
 fn check_frontmatter(tree: &Tree, r: &mut Report) {
     for path in tree.with_ext(&[".md"]) {
-        if !GOVERNED.iter().any(|g| path.starts_with(g)) {
+        if !GOVERNED.iter().any(|g| if g.ends_with('/') { path.starts_with(g) } else { path == g }) {
             continue;
         }
         let text = tree.read(path).unwrap_or_default();
@@ -554,7 +555,8 @@ pub fn write_glob_error(role: &str, glob: &str) -> Option<String> {
         return bad("project repos are read-only (001-A2)");
     }
     if lower.starts_with("skills/custom/") {
-        if !segs.contains(&"scripts") {
+        let at = segs.iter().position(|s| *s == "scripts");
+        if !at.map(|i| i >= 3 && i + 1 < segs.len()).unwrap_or(false) || names_segment(&lower, "skill.md") {
             return bad("only `skills/custom/**/scripts/**` is writable; SKILL.md changes through ratified proposals");
         }
         return only(&["builder"], "`skills/custom/**/scripts/**`");
@@ -847,6 +849,9 @@ mod tests {
         }
         assert!(write_glob_error("builder", "skills/custom/**").is_some());
         assert!(write_glob_error("builder", "skills/custom/**/scripts/**").is_none());
+        for g in ["skills/custom/scripts/**", "skills/custom/scripts/SKILL.md", "skills/custom/x/scripts", "skills/custom/x/scripts/SKILL.md"] {
+            assert!(write_glob_error("builder", g).is_some(), "{}", g);
+        }
         assert!(write_glob_error("scout", "context/domains/*heuristics*").is_some());
     }
 

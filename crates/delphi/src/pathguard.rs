@@ -71,6 +71,19 @@ fn segments(key: &str) -> impl Iterator<Item = &str> {
     key.split('/')
 }
 
+/// `skills/custom/<skill>/…/scripts/…/<file>`: a file *inside* a `scripts/` directory of a named custom
+/// skill, never the skill's `SKILL.md`. (`**` can match zero segments, so membership of a `scripts`
+/// segment alone would admit `skills/custom/scripts/SKILL.md`.) Expects a case-folded key.
+pub fn is_custom_skill_script(key: &str) -> bool {
+    let segs: Vec<&str> = key.split('/').collect();
+    segs.len() >= 5
+        && segs[0] == "skills"
+        && segs[1] == "custom"
+        && !segs[2].is_empty()
+        && segs[3..segs.len() - 1].contains(&"scripts")
+        && !key.ends_with("/skill.md")
+}
+
 /// Files whose agent-visible copy is the ratified one (`specs/006` §3.1, `specs/004` §2.1).
 fn is_ratified_kind(key: &str) -> bool {
     key == "governance.md"
@@ -79,7 +92,7 @@ fn is_ratified_kind(key: &str) -> bool {
         || key == "context/team-heuristics.md"
         || key == "heuristics.md"
         || (key.starts_with("agents/") && key.ends_with("/agent.md"))
-        || (key.starts_with("skills/") && (key.ends_with("/skill.md") || key.contains("/scripts/")))
+        || (key.starts_with("skills/") && (key.ends_with("/skill.md") || key.contains("/scripts/") || key.ends_with("/scripts")))
         || (key.starts_with("themes/") && key.ends_with("/theme.md"))
         || (key.starts_with("memory/agents/") && key.ends_with("/lessons.md"))
 }
@@ -124,7 +137,7 @@ fn never_writable(key: &str) -> Option<String> {
             return Some(format!("{} (ratified proposals only)", p.trim_end_matches('/')));
         }
     }
-    if key.starts_with("skills/") && !(key.starts_with("skills/custom/") && key.split('/').any(|s| s == "scripts")) {
+    if key.starts_with("skills/") && !is_custom_skill_script(key) {
         return Some("skills (only skills/custom/**/scripts/** is writable; SKILL.md via ratified proposals)".into());
     }
     if key.starts_with("@project/") {
@@ -432,7 +445,9 @@ mod tests {
         fs::create_dir_all(t.path().join("team/skills/custom/x/scripts")).unwrap();
         assert!(g.check("skills/custom/x/scripts/run.sh", Access::Write).is_ok());
         g.write_globs.push("skills/custom/**".into());
-        assert!(matches!(g.check("skills/custom/x/SKILL.md", Access::Write), Err(Denied::NeverWritable(_))));
+        for k in ["skills/custom/x/SKILL.md", "skills/custom/scripts/SKILL.md", "skills/custom/x/scripts/SKILL.md", "skills/custom/x/scripts"] {
+            assert!(matches!(g.check(k, Access::Write), Err(Denied::NeverWritable(_))), "{}", k);
+        }
         // Reads of a custom script come from the ratified copy, which doesn't exist yet.
         fs::write(t.path().join("team/skills/custom/x/scripts/run.sh"), "live").unwrap();
         assert_eq!(g.check("skills/custom/x/scripts/run.sh", Access::Read).unwrap_err(), Denied::NotFound);

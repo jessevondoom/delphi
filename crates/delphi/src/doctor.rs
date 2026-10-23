@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 pub fn overlay(ws: &Workspace, home: &Path) -> Tree {
     let mut files: BTreeMap<String, PathBuf> = BTreeMap::new();
     let add = |root: PathBuf, prefix: &str, files: &mut BTreeMap<String, PathBuf>| {
-        for e in walkdir::WalkDir::new(&root).into_iter().flatten().filter(|e| e.file_type().is_file()) {
+        for e in walkdir::WalkDir::new(&root).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
             let rel = e.path().strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
             if rel == "manifest.lock" {
                 continue;
@@ -77,6 +77,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     //    copies are intact, overrides are narrow-only, and the active theme is ratified.
     check_ratified(ws, home, &tree, &mut r);
     check_overrides(ws, home, &mut r);
+    check_zone_layout(ws, home, &mut r);
 
     // 4 + 5. Rule caps and links on the workspace overlay (lint checks reused).
     let lint_report = lint::run(&tree);
@@ -198,6 +199,13 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
             }
         }
     }
+    // A ratified file whose live copy vanished is drift too (the overlay can't see it).
+    for logical in lock.keys().filter(|k| !k.contains('#')) {
+        if !tree.files.contains_key(logical) {
+            drift += 1;
+            r.warn("3 taint-audit", logical.clone(), "live file is missing: pending proposal to delete it; agents keep loading the ratified copy");
+        }
+    }
     // A lock that lost entries must not pass silently: every file `init` ratified is required.
     for req in required_workspace_entries() {
         if !lock.contains_key(&req) {
@@ -293,6 +301,34 @@ fn verify_copies(lock: &BTreeMap<String, String>, dir: &Path, label: &str, r: &m
         }
     }
     broken
+}
+
+/// Zone discipline (`specs/006` §3.1): `team/` may not shadow Zone 1 release paths (overrides live in
+/// `agents/custom/` and `skills/custom/`, which get narrow-only checks), and no zone may contain
+/// symlinks, which would let a live file stand in for something outside the Delphi home.
+fn check_zone_layout(ws: &Workspace, home: &Path, r: &mut Report) {
+    let team = ws.dir.join("team");
+    for e in walkdir::WalkDir::new(&team).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
+        let rel = e.path().strip_prefix(&team).unwrap().to_string_lossy().replace('\\', "/");
+        let zone1 = rel == "GOVERNANCE.md"
+            || rel == "SPEC.md"
+            || rel == "context/heuristics.md"
+            || rel.starts_with("themes/")
+            || (rel.starts_with("agents/") && !rel.starts_with("agents/custom/"))
+            || (rel.starts_with("skills/") && !rel.starts_with("skills/custom/"));
+        if zone1 {
+            r.fail("3 zones", format!("team/{}", rel), "team/ may not shadow a release path; overrides go in agents/custom/ or skills/custom/");
+        }
+    }
+    let mut roots = vec![ws.dir.join("base"), ws.dir.join("core"), team, ws.dir.join("local"), home.join("operator"), home.join("themes")];
+    roots.retain(|p| p.exists());
+    for root in roots {
+        for e in walkdir::WalkDir::new(&root).into_iter().flatten() {
+            if e.path_is_symlink() {
+                r.fail("3 zones", e.path().display().to_string(), "symlinks are not allowed in Delphi zones");
+            }
+        }
+    }
 }
 
 /// Narrow-only (`specs/001` §2.3, 001-A1): `core/` and `operator/core/` overrides get the full manifest
@@ -493,6 +529,32 @@ mod tests {
         fs::write(ws.dir.join("team/skills/custom/evil/SKILL.md"), "---\nname: evil\ndescription: d\nauthorized_agents: [scout]\ninput_schema: {type: object}\noutput_schema: {type: object}\nrequired_permissions: [write:worktree]\n---\nb\n").unwrap();
         let r = run(&home, &ws, &Options::default());
         assert!(r.findings.iter().any(|f| f.check == "3 overrides" && f.message.contains("evil")), "{:#?}", r.findings);
+    }
+
+    #[test]
+    fn team_shadowing_symlinks_and_missing_live_files() {
+        let (_t, home, ws, _p) = setup();
+        fs::create_dir_all(ws.dir.join("team/agents/scout")).unwrap();
+        fs::copy(ws.dir.join("base/agents/scout/AGENT.md"), ws.dir.join("team/agents/scout/AGENT.md")).unwrap();
+        assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.check == "3 zones" && f.level == Level::Fail));
+        let (t, home, ws, _p) = setup();
+        fs::write(t.path().join("elsewhere.md"), "x").unwrap();
+        std::os::unix::fs::symlink(t.path().join("elsewhere.md"), ws.dir.join("team/context/link.md")).unwrap();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+        let (_t, home, ws, _p) = setup();
+        fs::remove_file(ws.dir.join("team/context/team-heuristics.md")).unwrap();
+        assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.location == "context/team-heuristics.md" && f.message.contains("missing")));
+    }
+
+    // An operator override and skill carry manifest/skill schemas, not §5 provenance frontmatter.
+    #[test]
+    fn operator_overrides_are_not_provenance_documents() {
+        let (_t, home, ws, _p) = setup();
+        let base = fs::read_to_string(ws.dir.join("base/agents/scout/AGENT.md")).unwrap();
+        fs::create_dir_all(home.join("operator/core/agents/scout")).unwrap();
+        fs::write(home.join("operator/core/agents/scout/AGENT.md"), base).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(!r.findings.iter().any(|f| f.check == "3 frontmatter"), "{:#?}", r.findings);
     }
 
     #[test]

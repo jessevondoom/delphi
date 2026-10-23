@@ -16,7 +16,7 @@ pub fn is_protected(logical: &str) -> bool {
         || logical == "context/team-heuristics.md"
         || logical == "heuristics.md"
         || (logical.starts_with("agents/") && logical.ends_with("/AGENT.md"))
-        || (logical.starts_with("skills/") && (logical.ends_with("/SKILL.md") || logical.contains("/scripts/")))
+        || (logical.starts_with("skills/") && (logical.ends_with("/SKILL.md") || logical.contains("/scripts/") || logical.ends_with("/scripts")))
         || (logical.starts_with("themes/") && logical.ends_with("/theme.md"))
         || (logical.starts_with("memory/agents/") && logical.ends_with("/lessons.md"))
 }
