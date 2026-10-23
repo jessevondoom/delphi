@@ -21,6 +21,7 @@ pub fn overlay(ws: &Workspace, home: &Path) -> Tree {
         }
     };
     add(ws.dir.join("base"), "", &mut files);
+    let builtin = files.clone();
     add(home.join("themes"), "themes/", &mut files);
     add(ws.dir.join("core"), "", &mut files);
     add(ws.dir.join("team"), "", &mut files);
@@ -42,7 +43,7 @@ pub fn overlay(ws: &Workspace, home: &Path) -> Tree {
     // Files still byte-identical to the release seed (any zone) may link to unseeded design records.
     let seed: BTreeMap<String, &[u8]> = crate::seed::files().into_iter().map(|f| (f.logical, f.bytes)).collect();
     let seeded: BTreeSet<String> = files.iter().filter(|(k, p)| seed.get(*k).map(|b| fs::read(p).map(|x| x == *b).unwrap_or(false)).unwrap_or(false)).map(|(k, _)| k.clone()).collect();
-    Tree { mode: Mode::Workspace, files, seeded }
+    Tree { mode: Mode::Workspace, files, seeded, builtin }
 }
 
 /// `doctor` options beyond the workspace.
@@ -64,8 +65,13 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         r.push(Level::Warn, "1 daemon-version", "", "socket present but the version handshake ships with the Step 2 daemon");
     }
 
-    // 2. Zone 1 manifest lock integrity.
-    check_manifest_lock(ws, &mut r);
+    // 2. Zone 1 manifest lock integrity (workspace and operator release snapshots).
+    check_manifest_lock(&ws.dir.join("base"), "base", &mut r);
+    check_manifest_lock(&home.join("operator/base"), "operator/base", &mut r);
+    match fs::read_to_string(ws.dir.join("config.toml")).map_err(|e| e.to_string()).and_then(|t| toml::from_str::<toml::Value>(&t).map_err(|e| e.to_string())) {
+        Ok(_) => {}
+        Err(e) => r.fail("3 taint-audit", "config.toml", format!("unreadable or invalid TOML: {}", e)),
+    }
 
     // 3. Taint audit: protected files match ratified.lock (drift = pending proposal), ratified
     //    copies are intact, overrides are narrow-only, and the active theme is ratified.
@@ -122,27 +128,27 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     r
 }
 
-fn check_manifest_lock(ws: &Workspace, r: &mut Report) {
-    let path = ws.dir.join("base/manifest.lock");
+fn check_manifest_lock(base: &Path, label: &str, r: &mut Report) {
+    let path = base.join("manifest.lock");
     let lock = match read_lock(&path) {
         Ok(l) => l,
-        Err(e) => return r.fail("2 manifest-lock", path.display().to_string(), e.to_string()),
+        Err(e) => return r.fail("2 manifest-lock", format!("{}/manifest.lock", label), e.to_string()),
     };
     let mut bad = 0;
     for (logical, h) in &lock {
-        match fs::read(ws.dir.join("base").join(logical)) {
+        match fs::read(base.join(logical)) {
             Ok(b) if hash(&b) == *h => {}
             Ok(_) => {
                 bad += 1;
-                r.fail("2 manifest-lock", format!("base/{}", logical), "release snapshot was modified (base/ is read-only)");
+                r.fail("2 manifest-lock", format!("{}/{}", label, logical), "release snapshot was modified (it is read-only)");
             }
             Err(_) => {
                 bad += 1;
-                r.fail("2 manifest-lock", format!("base/{}", logical), "release snapshot file is missing");
+                r.fail("2 manifest-lock", format!("{}/{}", label, logical), "release snapshot file is missing");
             }
         }
     }
-    let upstream: Vec<String> = walkdir::WalkDir::new(&ws.dir)
+    let upstream: Vec<String> = walkdir::WalkDir::new(base.parent().unwrap_or(base))
         .into_iter()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().contains(".upstream-"))
@@ -151,20 +157,19 @@ fn check_manifest_lock(ws: &Workspace, r: &mut Report) {
     for u in &upstream {
         r.warn("2 manifest-lock", u.clone(), "unresolved upstream merge");
     }
-    let base = ws.dir.join("base");
-    for e in walkdir::WalkDir::new(&base).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
-        let rel = e.path().strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
+    for e in walkdir::WalkDir::new(base).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
+        let rel = e.path().strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
         if rel != "manifest.lock" && !lock.contains_key(&rel) {
             bad += 1;
-            r.fail("2 manifest-lock", format!("base/{}", rel), "file is not part of the release snapshot");
+            r.fail("2 manifest-lock", format!("{}/{}", label, rel), "file is not part of the release snapshot");
         }
     }
     let signed = fs::read_to_string(&path).map(|t| !t.contains("unsigned-dev-build")).unwrap_or(false);
-    if !signed {
+    if !signed && label == "base" {
         r.warn("2 manifest-lock", "", "development build: release signature not present (signing ships with Step 5 packaging)");
     }
     if bad == 0 {
-        r.push(Level::Ok, "2 manifest-lock", "", format!("{} release files match base/manifest.lock", lock.len()));
+        r.push(Level::Ok, "2 manifest-lock", "", format!("{} release files match {}/manifest.lock", lock.len(), label));
     }
 }
 
@@ -191,6 +196,13 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
                 unratified += 1;
                 r.warn("3 taint-audit", logical.clone(), "not ratified: pending proposal; not loaded until the operator ratifies it");
             }
+        }
+    }
+    // A lock that lost entries must not pass silently: every file `init` ratified is required.
+    for req in required_workspace_entries() {
+        if !lock.contains_key(&req) {
+            broken += 1;
+            r.fail("3 taint-audit", format!("local/ratified.lock: {}", req), "required entry missing from the lock");
         }
     }
     // The ratified copies are what agents load: each must exist and match its lock entry.
@@ -222,6 +234,12 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
             r.fail("3 taint-audit", "operator/ratified.lock", format!("unreadable: {}", e));
         }
         Ok(op_lock) => {
+            for req in home::operator_required_entries() {
+                if !op_lock.contains_key(&req) {
+                    broken += 1;
+                    r.fail("3 taint-audit", format!("operator/ratified.lock: {}", req), "required entry missing from the lock");
+                }
+            }
             for (name, h) in &op_lock {
                 let live = fs::read(op.join(name)).map(|b| hash(&b)).unwrap_or_default();
                 if live != *h {
@@ -244,9 +262,23 @@ fn check_ratified(ws: &Workspace, home: &Path, tree: &Tree, r: &mut Report) {
     }
 }
 
-/// Every lock entry (except pinned config blocks) must have an intact copy under `dir`.
+fn required_workspace_entries() -> Vec<String> {
+    let mut v: Vec<String> = crate::seed::files().into_iter().map(|f| f.logical).filter(|l| is_protected(l)).collect();
+    v.extend(["context/team-heuristics.md", "heuristics.md", "config.toml#access"].iter().map(|s| s.to_string()));
+    v
+}
+
+/// Every lock entry (except pinned config blocks) must have an intact copy under `dir`, and `dir`
+/// must hold nothing else: the path guard serves protected files from here.
 fn verify_copies(lock: &BTreeMap<String, String>, dir: &Path, label: &str, r: &mut Report) -> usize {
     let mut broken = 0;
+    for e in walkdir::WalkDir::new(dir).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
+        let rel = e.path().strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
+        if !lock.contains_key(&rel) {
+            broken += 1;
+            r.fail("3 taint-audit", format!("{}/{}", label, rel), "file in the ratified directory has no lock entry (planted)");
+        }
+    }
     for (logical, h) in lock.iter().filter(|(k, _)| !k.contains('#')) {
         match fs::read(dir.join(logical)) {
             Ok(b) if hash(&b) == *h => {}
@@ -263,7 +295,8 @@ fn verify_copies(lock: &BTreeMap<String, String>, dir: &Path, label: &str, r: &m
     broken
 }
 
-/// Narrow-only (`specs/001` §2.3, 001-A1): `core/` and `operator/core/` overrides vs the built-in.
+/// Narrow-only (`specs/001` §2.3, 001-A1): `core/` and `operator/core/` overrides get the full manifest
+/// checks, compared against the built-in in `base/`.
 fn check_overrides(ws: &Workspace, home: &Path, r: &mut Report) {
     let tree = overlay(ws, home);
     for (root, label) in [(ws.dir.join("core/agents"), "core/agents"), (home.join("operator/core/agents"), "operator/core/agents")] {
@@ -274,16 +307,13 @@ fn check_overrides(ws: &Workspace, home: &Path, r: &mut Report) {
         for e in entries.flatten() {
             let id = e.file_name().to_string_lossy().to_string();
             let path = format!("{}/{}/AGENT.md", label, id);
-            let ovr = fs::read_to_string(e.path().join("AGENT.md")).ok().and_then(|t| crate::frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter);
-            let builtin = fs::read_to_string(ws.dir.join("base/agents").join(&id).join("AGENT.md")).ok().and_then(|t| crate::frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter);
-            match (ovr, builtin) {
-                (Some(o), Some(b)) => {
-                    for err in lint::manifest_errors(&o, &id).into_iter().chain(lint::override_widening(&b, &o, &|s| tree.files.contains_key(&format!("skills/custom/{}/SKILL.md", s)) || tree.files.contains_key(&format!("operator/skills/{}/SKILL.md", s)))) {
-                        r.fail("3 overrides", path.clone(), err);
-                    }
-                }
-                (None, _) => r.fail("3 overrides", path, "override has no parseable frontmatter"),
-                (_, None) => r.fail("3 overrides", path, format!("no built-in role `{}` to override", id)),
+            let text = fs::read_to_string(e.path().join("AGENT.md")).unwrap_or_default();
+            let (fails, warns) = lint::manifest_findings(&tree, &text, &id, Some(lint::builtin_fm(&tree, &id)));
+            for f in fails {
+                r.fail("3 overrides", path.clone(), f);
+            }
+            for w in warns {
+                r.warn("3 overrides", path.clone(), w);
             }
         }
     }
@@ -311,7 +341,7 @@ fn check_hygiene(ws: &Workspace, home: &Path, r: &mut Report) {
         if let Ok(entries) = fs::read_dir(p.join(".git/worktrees")) {
             for e in entries.flatten() {
                 let gitdir = fs::read_to_string(e.path().join("gitdir")).unwrap_or_default();
-                if !gitdir.trim().is_empty() && !Path::new(gitdir.trim()).exists() {
+                if !gitdir.trim().is_empty() && !e.path().join(gitdir.trim()).exists() {
                     problems += 1;
                     r.warn("8 hygiene", e.path().display().to_string(), "stale git worktree registration");
                 }
@@ -431,6 +461,38 @@ mod tests {
         assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.message.contains("theme is not ratified")));
         let (_t, home, ws, _p) = setup();
         assert_eq!(run(&home, &ws, &Options { require_providers: true }).exit_code(), 1);
+    }
+
+    #[test]
+    fn emptied_locks_planted_copies_and_bad_config_fail() {
+        let (_t, home, ws, _p) = setup();
+        fs::write(ws.dir.join("local/ratified.lock"), "{\"files\": {}}").unwrap();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+        let (_t, home, ws, _p) = setup();
+        fs::write(home.join("operator/ratified.lock"), "{}").unwrap();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+        let (_t, home, ws, _p) = setup();
+        fs::create_dir_all(ws.dir.join("local/ratified/agents/custom/builder")).unwrap();
+        fs::write(ws.dir.join("local/ratified/agents/custom/builder/AGENT.md"), "planted").unwrap();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+        let (_t, home, ws, _p) = setup();
+        fs::write(ws.dir.join("config.toml"), "not = [valid").unwrap();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+        let (_t, home, ws, _p) = setup();
+        fs::write(home.join("operator/base/GOVERNANCE.md"), "edited").unwrap();
+        assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+    }
+
+    #[test]
+    fn core_override_cannot_attach_out_of_scope_skill() {
+        let (_t, home, ws, _p) = setup();
+        let base = fs::read_to_string(ws.dir.join("base/agents/scout/AGENT.md")).unwrap();
+        fs::create_dir_all(ws.dir.join("core/agents/scout")).unwrap();
+        fs::write(ws.dir.join("core/agents/scout/AGENT.md"), base.replace("authorized_skills:\n", "authorized_skills:\n  - evil\n")).unwrap();
+        fs::create_dir_all(ws.dir.join("team/skills/custom/evil")).unwrap();
+        fs::write(ws.dir.join("team/skills/custom/evil/SKILL.md"), "---\nname: evil\ndescription: d\nauthorized_agents: [scout]\ninput_schema: {type: object}\noutput_schema: {type: object}\nrequired_permissions: [write:worktree]\n---\nb\n").unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "3 overrides" && f.message.contains("evil")), "{:#?}", r.findings);
     }
 
     #[test]

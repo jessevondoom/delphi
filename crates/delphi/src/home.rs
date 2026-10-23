@@ -64,12 +64,14 @@ pub fn write_lock(path: &Path, entries: &BTreeMap<String, String>, meta: &[(&str
     write_new(path, serde_json::to_string_pretty(&serde_json::Value::Object(root))?.as_bytes())
 }
 
+/// Strict: a lock without a `files` object, or with a non-string hash, is an error (fail closed).
 pub fn read_lock(path: &Path) -> Result<BTreeMap<String, String>> {
     let v: serde_json::Value = serde_json::from_slice(&fs::read(path).with_context(|| format!("reading {}", path.display()))?)?;
-    Ok(v.get("files")
-        .and_then(|f| f.as_object())
-        .map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
-        .unwrap_or_default())
+    let files = v.get("files").and_then(|f| f.as_object()).with_context(|| format!("{}: no `files` object", path.display()))?;
+    files
+        .iter()
+        .map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())).with_context(|| format!("{}: hash for `{}` is not a string", path.display(), k)))
+        .collect()
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -293,10 +295,20 @@ pub fn init_operator_home(home: &Path) -> Result<()> {
         write_new(&op.join("ratified").join(name), body.as_bytes())?;
         lock.insert(name.clone(), hash(body.as_bytes()));
     }
+    let mut manifest = BTreeMap::new();
     for f in seed::files().iter().filter(|f| f.zone == Zone::Base) {
         write_new(&op.join("base").join(&f.logical), f.bytes)?;
+        manifest.insert(f.logical.clone(), hash(f.bytes));
     }
+    write_lock(&op.join("base/manifest.lock"), &manifest, &[("release", env!("CARGO_PKG_VERSION").into()), ("signature", "unsigned-dev-build".into())])?;
     write_lock(&op.join("ratified.lock"), &lock, &[("ratified_by", "init".into())])
+}
+
+/// Entries `init_operator_home` ratifies; `doctor` fails if any goes missing.
+pub fn operator_required_entries() -> Vec<String> {
+    let mut v = vec!["profile.md".to_string(), "heuristics.md".to_string()];
+    v.extend(ROLES.iter().filter(|r| **r != "operator").map(|r| format!("memory/agents/{}/lessons.md", r)));
+    v
 }
 
 fn set_mode(p: &Path, mode: u32) {

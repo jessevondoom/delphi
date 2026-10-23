@@ -22,8 +22,11 @@ pub enum Mode {
 pub struct Tree {
     pub mode: Mode,
     pub files: BTreeMap<String, PathBuf>,
-    /// Workspace mode: logical paths that came from the release snapshot (`base/`).
+    /// Workspace mode: logical paths still byte-identical to the release seed.
     pub seeded: BTreeSet<String>,
+    /// Workspace mode: the built-in (`base/`) files, before `core/` overrides are layered on.
+    /// Narrow-only checks always compare against these (`specs/001` §2.3).
+    pub builtin: BTreeMap<String, PathBuf>,
 }
 
 /// Directories never walked in a source repo.
@@ -54,7 +57,7 @@ impl Tree {
                 files.insert(rel, entry.path().to_path_buf());
             }
         }
-        Ok(Tree { mode: Mode::Repo, files, seeded: BTreeSet::new() })
+        Ok(Tree { mode: Mode::Repo, files, seeded: BTreeSet::new(), builtin: BTreeMap::new() })
     }
 
     fn read(&self, logical: &str) -> Option<String> {
@@ -136,7 +139,6 @@ pub fn catalog_skills(tree: &Tree) -> BTreeSet<String> {
 }
 
 fn check_manifests(tree: &Tree, r: &mut Report) {
-    let catalog = catalog_skills(tree);
     let manifests: Vec<String> = tree
         .files
         .keys()
@@ -146,86 +148,107 @@ fn check_manifests(tree: &Tree, r: &mut Report) {
     for path in manifests {
         let dir = path.trim_start_matches("agents/").trim_end_matches("/AGENT.md").to_string();
         let text = tree.read(&path).unwrap_or_default();
-        let doc = match frontmatter::parse(&text) {
-            Ok(d) => d,
-            Err(e) => {
-                r.fail("manifest", path.clone(), e);
-                continue;
-            }
-        };
-        let fm = match doc.frontmatter {
-            Some(m) => m,
-            None => {
-                r.fail("manifest", path.clone(), "missing frontmatter");
-                continue;
-            }
-        };
-        for e in manifest_errors(&fm, &dir) {
+        let builtin = dir.strip_prefix("custom/").map(|id| builtin_fm(tree, id));
+        let (fails, warns) = manifest_findings(tree, &text, &dir, builtin);
+        for e in fails {
             r.fail("manifest", path.clone(), e);
         }
-        let lines = doc.body.lines().count();
-        if lines > BODY_LINE_CAP {
-            r.fail("manifest", path.clone(), format!("body is {} lines (cap {})", lines, BODY_LINE_CAP));
-        }
-        let id = get_str(&fm, "id").unwrap_or("").to_string();
-        let mut planned = 0;
-        for s in str_list(&fm, "authorized_skills") {
-            let pkg = [format!("skills/{}/SKILL.md", s), format!("skills/custom/{}/SKILL.md", s)].into_iter().find(|k| tree.files.contains_key(k));
-            if let Some(pkg) = pkg {
-                let agents = tree
-                    .read(&pkg)
-                    .and_then(|t| frontmatter::parse(&t).ok())
-                    .and_then(|d| d.frontmatter)
-                    .map(|m| str_list(&m, "authorized_agents"))
-                    .unwrap_or_default();
-                if !agents.contains(&id) {
-                    r.fail("manifest", path.clone(), format!("skill `{}` does not list `{}` in authorized_agents (specs/001 §2.3)", s, id));
-                }
-                continue;
-            }
-            if catalog.contains(&s) {
-                planned += 1;
-            } else {
-                r.fail("manifest", path.clone(), format!("authorized skill `{}` is neither packaged nor in skills/CATALOG.md", s));
-            }
-        }
-        if planned > 0 {
-            r.warn("manifest", path.clone(), format!("{} authorized skill(s) are `planned` (catalog only, no SKILL.md yet)", planned));
-        }
-        if let Some(builtin_id) = dir.strip_prefix("custom/") {
-            match load_fm(tree, &format!("agents/{}/AGENT.md", builtin_id)) {
-                Some(builtin) => {
-                    for e in override_widening(&builtin, &fm, &|s| attachable_skill(tree, &builtin, s)) {
-                        r.fail("manifest", path.clone(), e);
-                    }
-                }
-                None => r.fail("manifest", path.clone(), format!("override of `{}` has no built-in manifest", builtin_id)),
-            }
+        for w in warns {
+            r.warn("manifest", path.clone(), w);
         }
     }
+}
+
+/// The built-in manifest for `id`, from `base/` in workspace mode.
+pub fn builtin_fm(tree: &Tree, id: &str) -> Option<Mapping> {
+    let key = format!("agents/{}/AGENT.md", id);
+    let path = tree.builtin.get(&key).or_else(|| tree.files.get(&key))?;
+    fs::read_to_string(path).ok().and_then(|t| frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter)
+}
+
+/// All checks for one manifest. `dir` is `<id>` or `custom/<id>`. `builtin` is `Some` for an override
+/// (`custom/`, `core/`, `operator/core/`); its inner `None` means there is no built-in to narrow.
+/// Returns (failures, warnings).
+pub fn manifest_findings(tree: &Tree, text: &str, dir: &str, builtin: Option<Option<Mapping>>) -> (Vec<String>, Vec<String>) {
+    let mut fails = Vec::new();
+    let mut warns = Vec::new();
+    let doc = match frontmatter::parse(text) {
+        Ok(d) => d,
+        Err(e) => return (vec![e], warns),
+    };
+    let fm = match doc.frontmatter {
+        Some(m) => m,
+        None => return (vec!["missing frontmatter".into()], warns),
+    };
+    fails.extend(manifest_errors(&fm, dir));
+    let lines = doc.body.lines().count();
+    if lines > BODY_LINE_CAP {
+        fails.push(format!("body is {} lines (cap {})", lines, BODY_LINE_CAP));
+    }
+    let id = get_str(&fm, "id").unwrap_or("").to_string();
+    let catalog = catalog_skills(tree);
+    let mut planned = 0;
+    for s in str_list(&fm, "authorized_skills") {
+        if let Some(pkg) = skill_package(tree, &s) {
+            let agents = load_fm(tree, &pkg).map(|m| str_list(&m, "authorized_agents")).unwrap_or_default();
+            if !agents.contains(&id) {
+                fails.push(format!("skill `{}` does not list `{}` in authorized_agents (specs/001 §2.3)", s, id));
+            }
+        } else if catalog.contains(&s) {
+            planned += 1;
+        } else {
+            fails.push(format!("authorized skill `{}` is neither packaged nor in skills/CATALOG.md", s));
+        }
+    }
+    if planned > 0 {
+        warns.push(format!("{} authorized skill(s) are `planned` (catalog only, no SKILL.md yet)", planned));
+    }
+    match builtin {
+        None => {}
+        Some(None) => fails.push(format!("override of `{}` has no built-in manifest", id)),
+        Some(Some(b)) => fails.extend(override_widening(&b, &fm, &|s| attachable_skill(tree, &b, s))),
+    }
+    (fails, warns)
+}
+
+/// Package path for a skill, by precedence: operator, team custom, built-in.
+fn skill_package(tree: &Tree, skill: &str) -> Option<String> {
+    [format!("operator/skills/{}/SKILL.md", skill), format!("skills/custom/{}/SKILL.md", skill), format!("skills/{}/SKILL.md", skill)]
+        .into_iter()
+        .find(|k| tree.files.contains_key(k))
 }
 
 pub fn load_fm(tree: &Tree, logical: &str) -> Option<Mapping> {
     tree.read(logical).and_then(|t| frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter)
 }
 
-/// D-21: a ratified custom/operator skill may be attached when its `required_permissions` fit the
-/// built-in role's scope. (Ratification itself is checked by `doctor` against `ratified.lock`.)
-fn attachable_skill(tree: &Tree, builtin: &Mapping, skill: &str) -> bool {
-    let pkg = ["skills/custom/", "operator/skills/"].iter().map(|p| format!("{}{}/SKILL.md", p, skill)).find(|k| tree.files.contains_key(k));
+/// D-21: a ratified custom/operator skill may be attached when each of its `required_permissions`
+/// is already granted in full by the built-in role's scope. (Ratification is checked by `doctor`.)
+pub fn attachable_skill(tree: &Tree, builtin: &Mapping, skill: &str) -> bool {
+    let pkg = ["operator/skills/", "skills/custom/"].iter().map(|p| format!("{}{}/SKILL.md", p, skill)).find(|k| tree.files.contains_key(k));
     let skill_fm = match pkg.and_then(|k| load_fm(tree, &k)) {
         Some(m) => m,
         None => return false,
     };
+    let perms = match string_seq(skill_fm.get(Value::String("required_permissions".into()))) {
+        Some(p) => p,
+        None => return false,
+    };
     let scope = builtin.get(Value::String("default_access_scope".into())).and_then(|v| v.as_mapping());
-    let has = |k: &str, pred: &dyn Fn(&str) -> bool| scope.map(|s| seq_strs(s.get(Value::String(k.into()))).iter().any(|g| pred(g))).unwrap_or(false);
-    str_list(&skill_fm, "required_permissions").iter().all(|p| match p.as_str() {
-        "read:all" => has("read", &|g| g == "*"),
-        "write:worktree" => has("write", &|g| g.starts_with("@worktree/")),
-        "write:missions" => has("write", &|g| g.starts_with("missions/")),
-        "shell:scoped_scripts" => has("execute", &|_| true),
+    let has = |k: &str, want: &str| scope.map(|s| seq_strs(s.get(Value::String(k.into()))).iter().any(|g| g == want)).unwrap_or(false);
+    perms.iter().all(|p| match p.as_str() {
+        "read:all" => has("read", "*"),
+        "write:worktree" => has("write", "@worktree/**"),
+        "write:missions" => has("write", "missions/**"),
+        "shell:scoped_scripts" => has("execute", "shell-worktree-scoped"),
         _ => false,
     })
+}
+
+/// `Some(list)` when `v` is a sequence of strings; `None` when it is missing, not a list, or holds
+/// anything other than strings.
+fn string_seq(v: Option<&Value>) -> Option<Vec<String>> {
+    v?.as_sequence()?.iter().map(|x| x.as_str().map(String::from)).collect()
 }
 
 // ── skill packages (specs/001 §3.1) ─────────────────────────────────────────
@@ -289,12 +312,24 @@ pub fn skill_errors(fm: &Mapping, dir: &str, custom: bool) -> Vec<String> {
             errs.push(format!("{} must be a JSON Schema object with a `type`", k));
         }
     }
-    for p in str_list(fm, "required_permissions") {
-        if !SKILL_PERMISSIONS.contains(&p.as_str()) {
-            errs.push(format!("unknown required_permission `{}`", p));
+    match string_seq(fm.get(Value::String("required_permissions".into()))) {
+        None => errs.push("required_permissions must be a list of strings".into()),
+        Some(perms) => {
+            for p in perms {
+                if !SKILL_PERMISSIONS.contains(&p.as_str()) {
+                    errs.push(format!("unknown required_permission `{}`", p));
+                }
+            }
         }
     }
-    if let Some(scripts) = fm.get(Value::String("deterministic_scripts".into())).and_then(|v| v.as_sequence()) {
+    if string_seq(fm.get(Value::String("authorized_agents".into()))).is_none() {
+        errs.push("authorized_agents must be a list of strings".into());
+    }
+    let scripts_v = fm.get(Value::String("deterministic_scripts".into()));
+    if scripts_v.map(|v| !v.is_sequence() && !v.is_null()).unwrap_or(false) {
+        errs.push("deterministic_scripts must be a list".into());
+    }
+    if let Some(scripts) = scripts_v.and_then(|v| v.as_sequence()) {
         if !custom && !scripts.is_empty() {
             errs.push("deterministic_scripts are allowed only in custom skills (built-in checks are compiled in, D-02)".into());
         }
@@ -356,19 +391,25 @@ pub fn envelope_errors(text: &str) -> Vec<String> {
             }
         }
     }
+    let anchor = Regex::new(r"^#L\d+(-L\d+)?$").unwrap();
     match m.get(Value::String("context_pointers".into())).map(|v| v.as_sequence()) {
-        None => {}
-        Some(None) => errs.push("context_pointers must be a list".into()),
+        None | Some(None) => errs.push("context_pointers must be a list (pointer-based context, specs/001 §4)".into()),
         Some(Some(ptrs)) => {
             for p in ptrs {
                 let pm = p.as_mapping();
                 let uri = pm.and_then(|x| get_str(x, "uri")).unwrap_or("");
-                let file = uri.split('#').next().unwrap_or("");
+                let (file, frag) = match uri.find('#') {
+                    Some(i) => (&uri[..i], &uri[i..]),
+                    None => (uri, ""),
+                };
                 if crate::pathguard::canonical(file).is_err() {
                     errs.push(format!("context pointer `{}` is not a workspace-relative logical path", uri));
                 }
+                if !anchor.is_match(frag) {
+                    errs.push(format!("context pointer `{}` needs a `#Lstart[-Lend]` line anchor", uri));
+                }
                 for k in ["heading", "blake3", "reason"] {
-                    if pm.and_then(|x| get_str(x, k)).is_none() {
+                    if pm.and_then(|x| get_str(x, k)).map(|v| v.trim().is_empty()).unwrap_or(true) {
                         errs.push(format!("context pointer `{}` lacks `{}`", uri, k));
                     }
                 }
@@ -424,8 +465,8 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
         None => errs.push("missing default_access_scope".into()),
         Some(s) => {
             for k in ["read", "write", "execute"] {
-                if s.get(Value::String(k.into())).and_then(|v| v.as_sequence()).is_none() {
-                    errs.push(format!("default_access_scope.{} must be a list", k));
+                if string_seq(s.get(Value::String(k.into()))).is_none() {
+                    errs.push(format!("default_access_scope.{} must be a list of strings", k));
                 }
             }
             for g in seq_strs(s.get(Value::String("read".into()))) {
@@ -440,10 +481,16 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
             }
         }
     }
-    if fm.get(Value::String("authorized_skills".into())).and_then(|v| v.as_sequence()).is_none() {
-        errs.push("authorized_skills must be a list".into());
+    if string_seq(fm.get(Value::String("authorized_skills".into()))).is_none() {
+        errs.push("authorized_skills must be a list of strings".into());
     }
     errs
+}
+
+/// True when some non-trivial segment of `glob` (anything but `*`/`**`) could match `name`. Bare
+/// `*`/`**` segments are left to the runtime guard, which denies these names on every access.
+fn names_segment(glob: &str, name: &str) -> bool {
+    glob.split('/').any(|s| s != "**" && s != "*" && crate::pathguard::glob_match(s, name))
 }
 
 fn logical_glob_error(glob: &str) -> Option<&'static str> {
@@ -454,11 +501,16 @@ fn logical_glob_error(glob: &str) -> Option<&'static str> {
     if lower.starts_with(".delphi") || lower.split('/').any(|s| s == ".delphi") {
         return Some("physical `.delphi/` paths never appear in manifests");
     }
-    if lower.split('/').any(|s| s != "**" && s != "*" && crate::pathguard::glob_match(s, ".git")) {
+    if names_segment(&lower, ".git") {
         return Some("may never match a `.git` file or directory");
     }
-    if lower.starts_with("operator/") || lower.starts_with("run/") || lower.contains("state.db") {
-        return Some("operator home and daemon state are never agent-accessible (001-A1)");
+    if ["operator/", "run/", "local/", "proposals/"].iter().any(|p| lower.starts_with(p))
+        || ["state.db", "config.toml", "ratified", "ratified.lock", "provenance", "provenance.db"].iter().any(|n| names_segment(&lower, n) || lower.split('/').next() == Some(*n))
+    {
+        return Some("operator home, daemon state, proposals, ratification and provenance state are never agent-accessible (§2.2, 001-A1)");
+    }
+    if names_segment(&lower, "events.jsonl") || names_segment(&lower, "events") || names_segment(&lower, ".barrier") {
+        return Some("the event log and Council barrier are never agent-accessible");
     }
     None
 }
@@ -486,10 +538,8 @@ pub fn write_glob_error(role: &str, glob: &str) -> Option<String> {
     if lower == "**" || lower == "*" || lower.starts_with("**/") || lower.starts_with("*/") {
         return bad("unscoped glob");
     }
-    if lower.ends_with("events.jsonl") || segs.contains(&"events") || segs.contains(&".barrier") {
-        return bad("the event log and Council barrier are never agent-writable");
-    }
-    if lower.ends_with("heuristics.md") || lower.ends_with("lessons.md") || lower.starts_with("memory/") || lower.starts_with("agents/") {
+    let protected_name = ["heuristics.md", "team-heuristics.md", "lessons.md", "governance.md", "review.md"].iter().any(|n| names_segment(&lower, n) && !lower.starts_with("@worktree/"));
+    if protected_name || lower.starts_with("memory/") || lower.starts_with("agents/") || lower.starts_with("themes/") {
         return bad("heuristics, lessons, memory and manifests change only through ratified proposals");
     }
     let only = |roles: &[&str], zone: &str| if roles.contains(&role) { None } else { bad(&format!("only {} may write {}", roles.join(", "), zone)) };
@@ -504,7 +554,10 @@ pub fn write_glob_error(role: &str, glob: &str) -> Option<String> {
         return bad("project repos are read-only (001-A2)");
     }
     if lower.starts_with("skills/custom/") {
-        return only(&["builder"], "`skills/custom/**`");
+        if !segs.contains(&"scripts") {
+            return bad("only `skills/custom/**/scripts/**` is writable; SKILL.md changes through ratified proposals");
+        }
+        return only(&["builder"], "`skills/custom/**/scripts/**`");
     }
     if lower.starts_with("skills/") {
         return bad("built-in skills are never agent-writable");
@@ -531,10 +584,14 @@ pub fn override_widening(builtin: &Mapping, ovr: &Mapping, attachable: &dyn Fn(&
             .map(|s| seq_strs(s.get(Value::String(k.into()))).into_iter().collect())
             .unwrap_or_default()
     };
+    // `g` is within `b` when `b` matches it as a path and `b`'s only wildcards are `**` (so a `*` in
+    // `g` can only meet a `**` in `b`, never a narrower pattern).
+    let within = |b: &str, g: &str| b == g || (b.split('/').all(|s| s == "**" || !s.contains(['*', '?'])) && crate::pathguard::glob_match(b, g));
     for k in ["read", "write", "execute"] {
         let base = scope(builtin, k);
         for g in scope(ovr, k) {
-            if !base.contains(&g) && !(k == "read" && base.contains("*")) {
+            let ok = if k == "execute" { base.contains(&g) } else { base.contains("*") && k == "read" || base.iter().any(|b| within(b, &g)) };
+            if !ok {
                 errs.push(format!("override widens default_access_scope.{} with `{}` (narrow-only, specs/001 §2.3)", k, g));
             }
         }
@@ -784,6 +841,13 @@ mod tests {
         assert!(read_glob_error("operator/**").is_some());
         assert!(read_glob_error("@worktree/.git/**").is_some());
         assert!(read_glob_error("*").is_none() && read_glob_error("specs/**").is_none());
+        for g in ["missions/**/events*.jsonl", "missions/**/councils/.barrier*", "missions/**/councils/.*/x", "local/**", "config.toml", "ratified/**", "proposals/**"] {
+            assert!(read_glob_error(g).is_some(), "{}", g);
+            assert!(write_glob_error("orchestrator", g).is_some(), "{}", g);
+        }
+        assert!(write_glob_error("builder", "skills/custom/**").is_some());
+        assert!(write_glob_error("builder", "skills/custom/**/scripts/**").is_none());
+        assert!(write_glob_error("scout", "context/domains/*heuristics*").is_some());
     }
 
     // specs/001 §7 test 15 (manifest part)
@@ -839,6 +903,22 @@ mod tests {
         let f = fails(&tree, "manifest");
         assert!(f.iter().any(|e| e.contains("widens default_access_scope.write")), "{:?}", f);
         assert!(f.iter().any(|e| e.contains("widens default_access_scope.execute")), "{:?}", f);
+        // Narrowing to a sub-glob is allowed.
+        let narrow = BUILDER.replace("['@worktree/**']", "['@worktree/crates/**']");
+        let (_t, tree) = tree_of(&[("agents/builder/AGENT.md", BUILDER), ("agents/custom/builder/AGENT.md", &narrow), ("skills/tdd-execution/SKILL.md", &skill("tdd-execution", "[builder]"))]);
+        assert!(fails(&tree, "manifest").is_empty(), "{:?}", fails(&tree, "manifest"));
+    }
+
+    // D-21: a custom skill attaches only when the built-in scope already grants its permissions.
+    #[test]
+    fn custom_skill_attachment_needs_full_permissions() {
+        let ovr = BUILDER.replace("[tdd-execution]", "[tdd-execution, mine]");
+        let mine = skill("mine", "[builder]").replace("[read:all]", "[read:all, shell:scoped_scripts]");
+        let (_t, tree) = tree_of(&[("agents/builder/AGENT.md", BUILDER), ("agents/custom/builder/AGENT.md", &ovr), ("skills/tdd-execution/SKILL.md", &skill("tdd-execution", "[builder]")), ("skills/custom/mine/SKILL.md", &mine)]);
+        assert!(fails(&tree, "manifest").iter().any(|e| e.contains("`mine`")), "builder lacks shell-worktree-scoped here");
+        let no_perms = skill("mine", "[builder]").replace("required_permissions: [read:all]\n", "");
+        let (_t, tree) = tree_of(&[("agents/builder/AGENT.md", BUILDER), ("agents/custom/builder/AGENT.md", &ovr), ("skills/tdd-execution/SKILL.md", &skill("tdd-execution", "[builder]")), ("skills/custom/mine/SKILL.md", &no_perms)]);
+        assert!(fails(&tree, "manifest").iter().any(|e| e.contains("`mine`")), "missing permissions must not attach vacuously");
     }
 
     fn skill(name: &str, agents: &str) -> String {
@@ -861,6 +941,10 @@ mod tests {
         assert!(envelope_errors(good).is_empty(), "{:?}", envelope_errors(good));
         let bad = good.replace("architect", "athena").replace("specs/a.md", "/etc/passwd").replace("{model_tier: workhorse}", "{model_id: x}");
         assert_eq!(envelope_errors(&bad).len(), 4, "{:?}", envelope_errors(&bad));
+        assert_eq!(envelope_errors(&good.replace("#L1-L2", "")).len(), 1);
+        assert_eq!(envelope_errors(&good.replace("heading: h", "heading: ''")).len(), 1);
+        let no_ptrs: String = good.lines().filter(|l| !l.starts_with("context_pointers")).map(|l| format!("{}\n", l)).collect();
+        assert_eq!(envelope_errors(&no_ptrs).len(), 1);
     }
 
     // REV-ARCH-05: case-insensitive, no "theme" substring exemption, only missions/*/councils/ exempt

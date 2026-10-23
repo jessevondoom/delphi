@@ -79,7 +79,8 @@ fn is_ratified_kind(key: &str) -> bool {
         || key == "context/team-heuristics.md"
         || key == "heuristics.md"
         || (key.starts_with("agents/") && key.ends_with("/agent.md"))
-        || (key.starts_with("skills/") && key.ends_with("/skill.md"))
+        || (key.starts_with("skills/") && (key.ends_with("/skill.md") || key.contains("/scripts/")))
+        || (key.starts_with("themes/") && key.ends_with("/theme.md"))
         || (key.starts_with("memory/agents/") && key.ends_with("/lessons.md"))
 }
 
@@ -123,8 +124,8 @@ fn never_writable(key: &str) -> Option<String> {
             return Some(format!("{} (ratified proposals only)", p.trim_end_matches('/')));
         }
     }
-    if key.starts_with("skills/") && !key.starts_with("skills/custom/") {
-        return Some("built-in skills".into());
+    if key.starts_with("skills/") && !(key.starts_with("skills/custom/") && key.split('/').any(|s| s == "scripts")) {
+        return Some("skills (only skills/custom/**/scripts/** is writable; SKILL.md via ratified proposals)".into());
     }
     if key.starts_with("@project/") {
         return Some("project repos are read-only (changes happen in @worktree)".into());
@@ -181,7 +182,7 @@ pub fn glob_match(glob: &str, path: &str) -> bool {
 
 impl Guard {
     /// Map a canonical logical path to (zone root, path inside it). `key` is the case-folded form.
-    fn zone_of(&self, path: &str, key: &str) -> Option<(PathBuf, String)> {
+    fn zone_of(&self, path: &str, key: &str, access: Access) -> Option<(PathBuf, String)> {
         if key.starts_with("@worktree/") {
             return self.zones.worktree.clone().map(|w| (w, path["@worktree/".len()..].to_string()));
         }
@@ -191,13 +192,22 @@ impl Guard {
             let inner = path.splitn(3, '/').nth(2)?.to_string();
             return Some((root.clone(), inner));
         }
-        if is_ratified_kind(key) {
+        // Reads of protected files come from their ratified copies. The only writable protected
+        // kind is a custom skill script; writes go to the live team file, which then needs
+        // ratification before it loads (specs/001 §2.3).
+        if is_ratified_kind(key) && access == Access::Read {
             // Protected files are served from their ratified copies (`local/ratified/<logical>`),
             // never the live file.
             return Some((self.zones.ratified.clone(), path.to_string()));
         }
         if key.starts_with("missions/") {
             return Some((self.zones.local.clone(), path.into()));
+        }
+        if key.starts_with("memory/agents/") {
+            return Some((self.zones.local.clone(), path.into()));
+        }
+        if key == "spec.md" {
+            return Some((self.zones.base.clone(), path.into()));
         }
         if key.starts_with("context/") || key.starts_with("specs/") || key.starts_with("agents/custom/") || key.starts_with("skills/custom/") {
             return Some((self.zones.team.clone(), path.into()));
@@ -225,7 +235,7 @@ impl Guard {
         if !allowed {
             return Err(Denied::NotInScope);
         }
-        let (root, inner) = self.zone_of(&path, &key).ok_or(Denied::NoZone)?;
+        let (root, inner) = self.zone_of(&path, &key, access).ok_or(Denied::NoZone)?;
         resolve_nofollow(&root, &inner, access, &self.protected)
     }
 }
@@ -408,6 +418,24 @@ mod tests {
         let r = g.check("GOVERNANCE.md", Access::Read).unwrap();
         assert!(r.file.is_some());
         assert!(matches!(g.check("GOVERNANCE.md", Access::Write), Err(Denied::NeverWritable(_))));
+    }
+
+    #[test]
+    fn zone_table_and_custom_skills() {
+        let (t, mut g) = setup();
+        fs::write(t.path().join("base/SPEC.md"), "spec").unwrap();
+        fs::create_dir_all(t.path().join("local/memory/agents/builder")).unwrap();
+        fs::write(t.path().join("local/memory/agents/builder/notes.md"), "mine").unwrap();
+        assert!(g.check("SPEC.md", Access::Read).is_ok());
+        assert!(g.check("memory/agents/builder/notes.md", Access::Read).is_ok());
+        g.write_globs.push("skills/custom/**/scripts/**".into());
+        fs::create_dir_all(t.path().join("team/skills/custom/x/scripts")).unwrap();
+        assert!(g.check("skills/custom/x/scripts/run.sh", Access::Write).is_ok());
+        g.write_globs.push("skills/custom/**".into());
+        assert!(matches!(g.check("skills/custom/x/SKILL.md", Access::Write), Err(Denied::NeverWritable(_))));
+        // Reads of a custom script come from the ratified copy, which doesn't exist yet.
+        fs::write(t.path().join("team/skills/custom/x/scripts/run.sh"), "live").unwrap();
+        assert_eq!(g.check("skills/custom/x/scripts/run.sh", Access::Read).unwrap_err(), Denied::NotFound);
     }
 
     #[test]
