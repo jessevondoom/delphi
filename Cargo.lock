@@ -290,12 +290,14 @@ dependencies = [
  "blake3",
  "delphi-adapter",
  "delphi-core",
+ "libc",
  "regex",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
  "tokio",
+ "toml",
 ]
 
 [[package]]

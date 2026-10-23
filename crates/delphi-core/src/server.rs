@@ -129,9 +129,14 @@ async fn read_line_limited<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Opt
 
 impl Daemon {
     pub fn new(cfg: DaemonConfig) -> io::Result<Arc<Daemon>> {
+        Daemon::with_hub(cfg, Hub::new())
+    }
+
+    /// A daemon that fans out through `hub`: the engine publishes to the same hub the clients attach to.
+    pub fn with_hub(cfg: DaemonConfig, hub: Hub) -> io::Result<Arc<Daemon>> {
         Ok(Arc::new(Daemon {
             cfg,
-            hub: Hub::new(),
+            hub,
             console_token: random_token()?,
             narrator_token: random_token()?,
             amber_active: AtomicBool::new(false),

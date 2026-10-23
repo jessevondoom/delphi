@@ -4,6 +4,7 @@
 
 use delphi_core::server::{Daemon, DaemonConfig};
 use delphi_core::spawn::{ensure_run_dir, layout};
+use delphi_engine::boot;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -22,7 +23,7 @@ fn die(msg: &str) -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if !args.iter().any(|a| a == "--daemon") {
-        die("usage: delphi-core --daemon --workspace <path> --home <dir> --ready-fd N --lock-fd M");
+        die("usage: delphi-core --daemon --workspace <workspace dir> --home <dir> --ready-fd N --lock-fd M");
     }
     let workspace = PathBuf::from(arg(&args, "--workspace").unwrap_or_else(|| die("--workspace is required")));
     let home = PathBuf::from(arg(&args, "--home").unwrap_or_else(|| die("--home is required")));
@@ -45,12 +46,15 @@ fn main() {
         let listener = listener.unwrap_or_else(|e| die(&format!("bind {}: {}", l.sock.display(), e)));
         std::fs::set_permissions(&l.sock, std::fs::Permissions::from_mode(0o600)).unwrap_or_else(|e| die(&format!("chmod socket: {}", e)));
 
-        let canon = std::fs::canonicalize(&workspace).unwrap_or(workspace);
-        let daemon = Daemon::new(DaemonConfig::new(home, canon)).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
+        let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+        let daemon = Daemon::new(DaemonConfig::new(home.clone(), canon.clone())).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
+        // The engine publishes through the daemon's hub, so attached clients see its events.
+        let booted = boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
+        daemon.set_extension(booted.service.extension());
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);
-        eprintln!("delphi-core: ready on {}", l.sock.display());
+        eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
         daemon.serve(listener).await;
         let _ = std::fs::remove_file(&l.sock);
     });

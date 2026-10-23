@@ -64,9 +64,43 @@ impl Tier {
     }
 }
 
-/// `blake3` of the canonical JSON of the payload shown on the card (object keys are sorted).
+/// Compact JSON with every object's keys sorted, whatever order the map held them in.
+fn canonical_json(v: &Value, out: &mut String) {
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(k).expect("string serializes"));
+                out.push(':');
+                canonical_json(&m[k.as_str()], out);
+            }
+            out.push('}');
+        }
+        Value::Array(a) => {
+            out.push('[');
+            for (i, x) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                canonical_json(x, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&serde_json::to_string(other).expect("scalar serializes")),
+    }
+}
+
+/// `blake3` of the canonical JSON of the payload shown on the card. Canonical means sorted keys and no
+/// whitespace, so the same payload hashes the same wherever and however it was built or reloaded.
 pub fn payload_blake3(payload: &Value) -> String {
-    blake3::hash(&serde_json::to_vec(payload).expect("JSON serializes")).to_hex().to_string()
+    let mut s = String::new();
+    canonical_json(payload, &mut s);
+    blake3::hash(s.as_bytes()).to_hex().to_string()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -471,6 +505,16 @@ mod tests {
         assert_eq!(w1.wait().await, Resolution::Denied { reason: "the task ended".into() });
         assert_eq!(b.pending().len(), 1);
         drop(w2);
+    }
+
+    #[test]
+    fn the_binding_hash_ignores_key_order_and_whitespace_but_not_content() {
+        let a: Value = serde_json::from_str(r#"{"b": [1, {"y": 2, "x": 1}], "a": "s"}"#).unwrap();
+        let b: Value = serde_json::from_str("{\"a\":\"s\",\"b\":[1,{\"x\":1,\"y\":2}]}").unwrap();
+        assert_eq!(payload_blake3(&a), payload_blake3(&b));
+        let c: Value = serde_json::from_str(r#"{"a": "s", "b": [1, {"x": 1, "y": 3}]}"#).unwrap();
+        assert_ne!(payload_blake3(&a), payload_blake3(&c));
+        assert_ne!(payload_blake3(&json!([1, 2])), payload_blake3(&json!([2, 1])), "array order is content");
     }
 
     #[test]

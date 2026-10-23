@@ -100,6 +100,15 @@ impl Budget {
         Budget { unit: Unit::Tokens, cap, spent: 0, open: BTreeMap::new() }
     }
 
+    pub fn cap_micro(&self) -> u64 {
+        self.cap
+    }
+
+    /// Change the ceiling (`/budget`). Existing spend and reservations are unaffected.
+    pub fn set_cap(&mut self, cap: u64) {
+        self.cap = cap;
+    }
+
     pub fn spent(&self) -> u64 {
         self.spent
     }
@@ -162,6 +171,11 @@ impl Budget {
             "budget.reserve" => {
                 if let (Some(id), Some(amount)) = (p["reservation_id"].as_str(), p["amount"].as_u64()) {
                     self.open.insert(id.into(), amount);
+                }
+            }
+            "budget.cap" => {
+                if let Some(c) = p["cap"].as_u64() {
+                    self.cap = c;
                 }
             }
             "budget.release" => {
@@ -268,6 +282,22 @@ mod tests {
         assert_eq!(b.charge_interrupted(), vec![("r2".to_string(), 700_000)]);
         assert_eq!(b.spent(), 900_000);
         assert_eq!(b.reserved(), 0);
+    }
+
+    #[test]
+    fn the_operator_can_change_the_cap_and_a_replay_restores_the_last_one() {
+        let mut b = Budget::usd(1.0);
+        b.reserve("a", 900_000).unwrap();
+        let ev = |cap: u64| EventEnvelope::new("m1", "budget.cap", json!({"cap": cap}));
+        let mut replayed = Budget::usd(1.0);
+        replayed.apply_event(&EventEnvelope::new("m1", "budget.reserve", json!({"reservation_id": "a", "amount": 900_000})), &|_| None);
+        for e in [ev(3_000_000), ev(2_000_000)] {
+            replayed.apply_event(&e, &|_| None);
+        }
+        assert_eq!(replayed.cap_micro(), 2_000_000);
+        assert_eq!(replayed.available(), 1_100_000, "reservations carry over a cap change");
+        b.set_cap(500_000);
+        assert_eq!(b.available(), 0, "lowering below what is committed leaves nothing to reserve, never a negative");
     }
 
     #[test]
