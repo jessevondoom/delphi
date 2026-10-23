@@ -19,6 +19,31 @@ cargo run -- doctor                          # health checks, from inside a regi
 
 Requires Rust 1.85 or newer (developed on stable 1.99). Set `DELPHI_HOME` to use a Delphi home other than `~/.delphi`.
 
+## Using Delphi (roadmap Step 2: the read-only assistant)
+
+Step 2 adds the daemon (`delphi-core`) and the operator console. You can ask Orchestrator and the Architect, Red-Team and Strategist roles to read a project, plan, draft specs and review. Nothing changes your project: there are no worktrees and no code execution yet (Step 3).
+
+```sh
+cargo build --release                        # builds delphi and delphi-core; keep them in the same directory
+delphi init --project ~/code/my-project      # creates a workspace in ~/.delphi (writes nothing into the project)
+$EDITOR ~/.delphi/workspaces/<name>/config.toml
+delphi chat                                  # the console
+```
+
+In `config.toml`, fill in:
+
+- `[models.claude]` with the model IDs for your `fast`, `workhorse` and `frontier` tiers, and a `[models.catalog."<id>"]` entry with that model's prices (Delphi reserves each call's worst-case cost before making it, so a model without prices can't be used);
+- one or more `[[endpoints]]` and an `[access]` policy (`specs/009`): the Anthropic API (`path = "api"`, `credential = "keychain:anthropic"` or `"env:ANTHROPIC_API_KEY"`), AWS Bedrock (`credential = "aws:<profile>"`), Google Vertex AI (`credential = "gcloud-adc"`), or a corporate gateway (`credential = "command:[...]"`).
+
+Endpoint settings are **ratified**: editing them changes nothing until you approve the change. In the console, `/ratify` lists pending proposals with their diffs; `/ratify show 1` and `/ratify apply 1` review and approve one. Then ask:
+
+```
+› What does @project/my-project/src/lib.rs do?
+› @architect draft a spec for the retry ladder, using @specs/003-collaboration-and-council.md
+```
+
+Useful commands: `/usage` (tokens and cost by role), `/budget [dollars]`, `/permissions`, `/ratify`, `/y /a /n /d` to answer an approval card, and `/help`. If the daemon was interrupted (a crash, `kill -9`, a reboot), the next `delphi chat` shows what was in flight and waits for `/resume`. `missions/<id>/status.md` in the workspace always shows where a mission stands.
+
 ---
 
 ## Architectural Philosophy
