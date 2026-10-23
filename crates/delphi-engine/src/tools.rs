@@ -168,7 +168,7 @@ pub fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
 }
 
 /// Map a logical path to (zone, path inside the zone) for provenance.
-fn zone_of(logical: &str) -> (Zone, String) {
+pub(crate) fn zone_of(logical: &str) -> (Zone, String) {
     let l = logical.trim_start_matches("./");
     if let Some(rest) = l.strip_prefix("@project/") {
         let inner = rest.split_once('/').map(|(_, r)| r).unwrap_or("");

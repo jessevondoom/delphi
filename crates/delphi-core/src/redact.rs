@@ -55,7 +55,7 @@ impl Redactor {
             r"AIza[0-9A-Za-z_\-]{35}",
             r"gh[pousr]_[A-Za-z0-9]{20,}",
             r"github_pat_[A-Za-z0-9_]{20,}",
-            r"AKIA[0-9A-Z]{16}",
+            r"A[KS]IA[0-9A-Z]{16}",
             r"xox[baprs]-[A-Za-z0-9\-]{10,}",
             r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
         ]
@@ -175,6 +175,13 @@ impl Redactor {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn temporary_aws_access_key_ids_are_masked_too() {
+        let r = Redactor::new();
+        let (out, hit) = r.redact_str("key ASIAIOSFODNN7EXAMPLE and AKIAIOSFODNN7EXAMPLE");
+        assert!(hit && !out.contains("ASIAIOSFODNN7EXAMPLE") && !out.contains("AKIAIOSFODNN7EXAMPLE"), "{}", out);
+    }
+
     use super::*;
     use serde_json::json;
 

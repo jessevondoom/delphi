@@ -93,7 +93,6 @@ fn same_origin(t: &Turn, target: &Target) -> bool {
 /// Emit an assistant turn's blocks. With `echo_signed`, signed reasoning is replayed exactly;
 /// otherwise reasoning becomes a read-only note (text) or is dropped (opaque data).
 fn assistant_content(ipr: &Ipr, t: &Turn, echo_signed: bool, downgraded: &mut usize) -> Vec<Value> {
-    let mut notes: Vec<Value> = Vec::new();
     let mut out: Vec<Value> = Vec::new();
     for b in &t.blocks {
         match b {
@@ -106,7 +105,7 @@ fn assistant_content(ipr: &Ipr, t: &Turn, echo_signed: bool, downgraded: &mut us
             ContentBlock::Thinking { thought, .. } => {
                 *downgraded += 1;
                 if !thought.trim().is_empty() {
-                    notes.push(text_block(reasoning_note(ipr, thought)));
+                    out.push(text_block(reasoning_note(ipr, thought))); // a note stands exactly where the reasoning stood
                 }
             }
             ContentBlock::RedactedThinking { .. } => *downgraded += 1,
@@ -115,12 +114,10 @@ fn assistant_content(ipr: &Ipr, t: &Turn, echo_signed: bool, downgraded: &mut us
             ContentBlock::ToolResult { .. } => {} // never in an assistant turn
         }
     }
-    // Notes first: they stand where the reasoning stood.
-    notes.extend(out);
-    if notes.is_empty() {
-        notes.push(text_block("(no visible output)".into()));
+    if out.is_empty() {
+        out.push(text_block("(no visible output)".into()));
     }
-    notes
+    out
 }
 
 fn user_content(ipr: &Ipr, t: &Turn) -> Vec<Value> {
@@ -193,8 +190,9 @@ pub fn compile(ipr: &Ipr, history: &[Turn], target: &Target, opts: &CompileOptio
             if t.role != Role::Assistant || !t.blocks.iter().any(|b| matches!(b, ContentBlock::ToolCall { .. })) {
                 continue;
             }
-            let first_reasoning_ok = t.blocks.iter().find(|b| b.is_reasoning()).map(|b| b.is_signed_reasoning()).unwrap_or(false);
-            if !(may_echo(i, t) && first_reasoning_ok) {
+            // Every reasoning block of the turn must be echoable, not just the first.
+            let reasoning_ok = t.blocks.iter().any(|b| b.is_reasoning()) && t.blocks.iter().filter(|b| b.is_reasoning()).all(|b| b.is_signed_reasoning());
+            if !(may_echo(i, t) && reasoning_ok) {
                 disabled_reason = Some(format!("turn {} of the open tool loop has no replayable signed reasoning for this endpoint and model", t.turn_index));
                 break;
             }
@@ -236,7 +234,7 @@ pub fn compile(ipr: &Ipr, history: &[Turn], target: &Target, opts: &CompileOptio
         }
         body.insert("thinking".into(), json!({"type": "enabled", "budget_tokens": budget}));
         body.insert("temperature".into(), json!(1.0)); // required by the provider when thinking is on
-        if betas.is_empty() && !opts.tools.is_empty() {
+        if !opts.tools.is_empty() && !betas.iter().any(|b| b == INTERLEAVED_THINKING_BETA) {
             betas.push(INTERLEAVED_THINKING_BETA.into());
         }
     } else if let Some(t) = opts.temperature {
@@ -259,11 +257,25 @@ pub struct SseDecoder {
     buf: Vec<u8>,
     event: Option<String>,
     data: Vec<String>,
+    overflowed: bool,
 }
 
+/// A single SSE line longer than this is a broken or hostile stream, not a model response.
+const MAX_SSE_LINE: usize = 8 * 1024 * 1024;
+
 impl SseDecoder {
+    /// True once a line exceeded the limit; the stream must be abandoned.
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+
     pub fn push(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
         self.buf.extend_from_slice(bytes);
+        if self.buf.len() > MAX_SSE_LINE && !self.buf.contains(&b'\n') {
+            self.overflowed = true;
+            self.buf.clear();
+            return Vec::new();
+        }
         let mut out = Vec::new();
         while let Some(nl) = self.buf.iter().position(|b| *b == b'\n') {
             let mut line: Vec<u8> = self.buf.drain(..=nl).collect();
@@ -490,6 +502,15 @@ impl Assembler {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn an_unbounded_sse_line_is_rejected() {
+        let mut d = SseDecoder::default();
+        d.push(&vec![b'x'; MAX_SSE_LINE / 2]);
+        assert!(!d.overflowed());
+        d.push(&vec![b'x'; MAX_SSE_LINE / 2 + 1]);
+        assert!(d.overflowed());
+    }
+
     use super::*;
     use crate::ipr::ContextSlice;
 

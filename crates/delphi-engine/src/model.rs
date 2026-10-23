@@ -79,8 +79,9 @@ impl ModelClient for HttpModelClient {
                 Ok(done) => Ok(done),
                 Err(CallError::RateLimited { message, .. }) => Err(ModelError::Throttled(message)),
                 Err(CallError::Stream(StreamError::Incomplete)) => Err(ModelError::Interrupted("the stream ended before the message completed".into())),
+                Err(CallError::Unreachable(m)) => Err(ModelError::Throttled(m)), // nothing was sent: no charge, next endpoint
                 Err(CallError::Transport(m)) => Err(ModelError::Interrupted(m)),
-                Err(CallError::Stream(StreamError::Provider { kind, message })) if kind == "overloaded_error" => Err(ModelError::Throttled(message)),
+                Err(CallError::Stream(StreamError::Provider { kind, message })) if matches!(kind.as_str(), "overloaded_error" | "rate_limit_error" | "throttlingException" | "ThrottlingException" | "serviceUnavailableException" | "modelNotReadyException") => Err(ModelError::Throttled(message)),
                 Err(other) => Err(ModelError::Failed(other.to_string())),
             }
         })

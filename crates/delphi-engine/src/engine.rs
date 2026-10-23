@@ -13,7 +13,7 @@
 
 use crate::approval::{payload_blake3, Broker, Need, Request, Resolution, Tier as ApprovalTier};
 use crate::handoff::{pointers_from_prompt, ContextPointer, HandoffEnvelope};
-use crate::mission::{EngineError, MissionState, SecretRegistry};
+use crate::mission::{LiveRedactor, EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
 use crate::probe::ProjectProbe;
 use crate::recovery::{self, Call, NodeStatus, Recovered};
@@ -77,6 +77,8 @@ pub struct SpanOutcome {
     pub status: Status,
     pub text: String,
     pub turns: u32,
+    /// The span's taint ceiling when it finished; whoever consumes `text` inherits it.
+    pub ceiling: delphi_core::provenance::Tier,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +152,8 @@ struct SpanCtx {
     depth: u32,
     tier: String,
     thinking: u32,
+    /// Set when a dispatched child halted: the parent halts too, and the operator decides (specs/003 §3.2).
+    child_escalation: Option<String>,
 }
 
 impl SpanCtx {
@@ -285,7 +289,7 @@ impl Engine {
             let snapshot = self.ws.load_snapshot(&role)?;
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, thinking };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, thinking, child_escalation: None };
 
             if fresh {
                 let mut open = vec![
@@ -342,22 +346,22 @@ impl Engine {
                 if let Some(calls) = pending.take() {
                     let result_index = history.len() as u32 + 1;
                     let mut results = Vec::new();
-                    let mut events = Vec::new();
                     for Call { id, name, args } in calls {
                         let r = match known.remove(&id) {
                             Some((content, is_error)) => tools::ToolResult { content, is_error }, // already persisted before the interruption
                             None => {
                                 let r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
-                                events.push(sc.ev("tool.result", json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error})));
+                                // Durable before the next tool runs (or waits for an approval): a crash must not re-run a finished side effect.
+                                m.append(sc.ev("tool.result", json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error}))).await?;
                                 r
                             }
                         };
                         results.push(ContentBlock::ToolResult { tool_call_id: id, content: r.content, is_error: r.is_error });
                     }
-                    if !events.is_empty() {
-                        m.append_batch(events).await?;
-                    }
                     history.push(Turn::user(result_index, results));
+                    if let Some(why) = sc.child_escalation.take() {
+                        break Err(Escalate(why));
+                    }
                 }
                 if turns >= sc.manifest.max_turn_budget {
                     break Err(Escalate(format!("`{}` used its whole turn budget ({}) without finishing", sc.role, sc.manifest.max_turn_budget)));
@@ -390,7 +394,7 @@ impl Engine {
                 Status::Escalated(r) => json!({"node_id": sc.span_id, "state": "escalated", "reason": r}),
             };
             m.append(sc.ev("dag.node.state", state)).await?;
-            Ok(SpanOutcome { status, text, turns })
+            Ok(SpanOutcome { status, text, turns, ceiling: sc.span.ceiling() })
         })
     }
 
@@ -469,8 +473,8 @@ impl Engine {
         let st = rec.spans.get(&root).ok_or_else(|| EngineError::Invalid(format!("no recorded span `{}`", root)))?;
         let outcome = match &st.status {
             NodeStatus::Running => self.drive(m, task_id, Start::Resume { rec: rec.clone(), span_id: root }).await?,
-            NodeStatus::Done => SpanOutcome { status: Status::Done, text: st.last_text(), turns: 0 },
-            NodeStatus::Escalated(r) => SpanOutcome { status: Status::Escalated(r.clone()), text: format!("[escalated to the operator: {}]", r), turns: 0 },
+            NodeStatus::Done => SpanOutcome { status: Status::Done, text: st.last_text(), turns: 0, ceiling: st.ceiling },
+            NodeStatus::Escalated(r) => SpanOutcome { status: Status::Escalated(r.clone()), text: format!("[escalated to the operator: {}]", r), turns: 0, ceiling: st.ceiling },
         };
         self.broker.end_task(task_id);
         self.finish_task(m, task_id.to_string(), outcome).await
@@ -525,10 +529,21 @@ impl Engine {
 
                 let hub: Hub = self.hub.clone();
                 let span_id = sc.span_id.clone();
+                let secrets = sc.m.secrets();
+                // Live deltas are redacted too. A secret split across chunks is caught by holding back the tail
+                // of each stream that could still be the start of one.
+                let mut text_tail = LiveRedactor::new(secrets.clone());
+                let mut think_tail = LiveRedactor::new(secrets);
                 let mut on_event = move |e: StreamEvent| match e {
-                    StreamEvent::TextDelta { text, .. } => hub.push_delta(&span_id, DeltaKind::Text, &text),
-                    StreamEvent::ThinkingDelta { text, .. } => hub.push_delta(&span_id, DeltaKind::Thinking, &text),
-                    StreamEvent::BlockComplete { .. } => {}
+                    StreamEvent::TextDelta { text, .. } => hub.push_delta(&span_id, DeltaKind::Text, &text_tail.push(&text)),
+                    StreamEvent::ThinkingDelta { text, .. } => hub.push_delta(&span_id, DeltaKind::Thinking, &think_tail.push(&text)),
+                    StreamEvent::BlockComplete { .. } => {
+                        for (kind, tail) in [(DeltaKind::Text, text_tail.finish()), (DeltaKind::Thinking, think_tail.finish())] {
+                            if !tail.is_empty() {
+                                hub.push_delta(&span_id, kind, &tail);
+                            }
+                        }
+                    }
                 };
                 let result = self.model.call(ep, &model_id, &compiled, &mut on_event).await;
                 match result {
@@ -648,6 +663,21 @@ impl Engine {
     }
 
     async fn exec_dispatch(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+        let (result, child) = self.dispatch_child(sc, call_id, args, rec).await?;
+        if let Some((ceiling, status)) = child {
+            // What the child read is now in the parent's context: the parent inherits the child's taint.
+            if sc.span.observe_input(ceiling) {
+                sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "dispatch result"}))).await?;
+            }
+            if let NodeStatus::Escalated(r) = status {
+                sc.child_escalation = Some(format!("the dispatched `{}` halted: {}", args["role"].as_str().unwrap_or("agent"), r));
+            }
+        }
+        Ok(result)
+    }
+
+    /// Run (or recover) the child; returns its report and, if a child ran, its final ceiling and status.
+    async fn dispatch_child(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<(tools::ToolResult, Option<(delphi_core::provenance::Tier, NodeStatus)>), EngineError> {
         // Resuming: this call may already have a child (finished, or still running when the daemon stopped).
         if let Some(rec) = rec {
             if let Some(child) = rec.spans.get(&sc.span_id).and_then(|p| p.dispatches.get(call_id)).and_then(|id| rec.spans.get(id)) {
@@ -658,34 +688,34 @@ impl Engine {
                             Status::Done => NodeStatus::Done,
                             Status::Escalated(r) => NodeStatus::Escalated(r.clone()),
                         };
-                        Ok(Self::dispatch_result(&child.role, &st, &out.text))
+                        Ok((Self::dispatch_result(&child.role, &st, &out.text), Some((out.ceiling, st))))
                     }
-                    done => Ok(Self::dispatch_result(&child.role, done, &child.last_text())),
+                    done => Ok((Self::dispatch_result(&child.role, done, &child.last_text()), Some((child.ceiling, done.clone())))),
                 };
             }
         }
         let (Some(role), Some(objective)) = (args["role"].as_str(), args["objective"].as_str()) else {
-            return Ok(tool_result_error("dispatch_agent needs `role` and `objective`"));
+            return Ok((tool_result_error("dispatch_agent needs `role` and `objective`"), None));
         };
         if !self.settings.enabled_agents.iter().any(|a| a == role) {
-            return Ok(tool_result_error(format!("`{}` is not an enabled role (enabled: {})", role, self.settings.enabled_agents.join(", "))));
+            return Ok((tool_result_error(format!("`{}` is not an enabled role (enabled: {})", role, self.settings.enabled_agents.join(", "))), None));
         }
         if role == sc.role {
-            return Ok(tool_result_error("a role cannot dispatch to itself"));
+            return Ok((tool_result_error("a role cannot dispatch to itself"), None));
         }
         if sc.depth + 1 > self.settings.max_dispatch_depth {
-            return Ok(tool_result_error(format!("dispatch depth limit ({}) reached", self.settings.max_dispatch_depth)));
+            return Ok((tool_result_error(format!("dispatch depth limit ({}) reached", self.settings.max_dispatch_depth)), None));
         }
         // The taint-gated action table: a span at L1 or below needs a Red approval to dispatch (the child
         // would inherit its taint); anything else dispatches freely.
         match gate(sc.span.ceiling(), Action::DispatchAgent) {
             Gate::Allow => {}
-            Gate::Deny => return Ok(tool_result_error("dispatch is not allowed from a span at this taint level")),
+            Gate::Deny => return Ok((tool_result_error("dispatch is not allowed from a span at this taint level"), None)),
             Gate::Red => {
                 let payload = json!({"tool": "dispatch_agent", "role": role, "objective": objective, "ceiling": sc.span.ceiling().as_str()});
                 let summary = format!("dispatch `{}` from a span tainted at {} (the child inherits the taint)", role, sc.span.ceiling());
                 if let Some(denied) = self.ask(sc, ApprovalTier::Red, "dispatch_agent", "dispatch_agent", &summary, &payload).await? {
-                    return Ok(denied);
+                    return Ok((denied, None));
                 }
             }
         }
@@ -695,14 +725,14 @@ impl Engine {
         child.parent_span_id = sc.span_id.clone();
         child.caller_agent = sc.role.clone();
         if let Err(e) = child.validate() {
-            return Ok(tool_result_error(format!("invalid handoff: {}", e)));
+            return Ok((tool_result_error(format!("invalid handoff: {}", e)), None));
         }
         let out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), child, Some(sc.span.clone()), sc.depth + 1).await?;
         let st = match &out.status {
             Status::Done => NodeStatus::Done,
             Status::Escalated(r) => NodeStatus::Escalated(r.clone()),
         };
-        Ok(Self::dispatch_result(role, &st, &out.text))
+        Ok((Self::dispatch_result(role, &st, &out.text), Some((out.ceiling, st))))
     }
 }
 
@@ -1020,8 +1050,8 @@ mod tests {
         let events = f.m.replay().unwrap();
         let parent_span = events.iter().find(|e| e.kind == "dag.node.added" && e.payload["depth"] == 0).unwrap().payload["node_id"].as_str().unwrap().to_string();
         let child_span = events.iter().find(|e| e.kind == "dag.node.added" && e.payload["depth"] == 1).unwrap().payload["node_id"].as_str().unwrap().to_string();
-        // The parent never read the file, so it stays clean...
-        assert!(!events.iter().any(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(parent_span.as_str())));
+        // The parent never read the file itself: its only taint is the child's report arriving (see the next test).
+        assert!(events.iter().filter(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(parent_span.as_str())).all(|e| e.payload["cause"] == "dispatch result"));
         // ...but the child's ceiling was clamped by the pointer before it took its first turn.
         let taint_seq = events.iter().find(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(child_span.as_str())).map(|e| e.seq).expect("the child is tainted");
         let first_call = events.iter().find(|e| e.kind == "budget.reserve" && e.span_id.as_deref() == Some(child_span.as_str())).unwrap().seq;
@@ -1031,6 +1061,41 @@ mod tests {
         assert_eq!(events_of(&f, "provenance.stamp")[0].payload["tier"], "L0");
         // The child saw the slice labelled as untrusted.
         assert!(f.model.requests()[1].body["messages"][0]["content"][0]["text"].as_str().unwrap().contains("tier=\"L0\""));
+    }
+
+    // Red-team step-2 round 1: the child's taint must flow back into the parent that consumes its report.
+    #[tokio::test]
+    async fn a_child_that_read_untrusted_input_taints_the_parent_that_uses_its_report() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Summarize it", "pointers": [{"uri": "@project/app/vendor/x.js", "reason": "to summarize"}]})),
+                Step::text("child report"),
+                Step::tool("w1", "write_file", json!({"path": "missions/m1/research/summary.md", "content": "# Summary"})),
+                Step::text("parent done"),
+            ],
+            5.0,
+            |_| {},
+        );
+        f.engine.run_task(&f.m, "orchestrator", "Summarize the vendored file via the architect").await.unwrap();
+        let events = f.m.replay().unwrap();
+        let parent_span = events.iter().find(|e| e.kind == "dag.node.added" && e.payload["depth"] == 0).unwrap().payload["node_id"].as_str().unwrap().to_string();
+        let taint = events.iter().find(|e| e.kind == "span.taint" && e.span_id.as_deref() == Some(parent_span.as_str())).expect("the parent inherits the child's taint");
+        assert_eq!((taint.payload["ceiling"].as_str(), taint.payload["cause"].as_str()), (Some("L0"), Some("dispatch result")));
+        let stamp = events_of(&f, "provenance.stamp").into_iter().find(|e| e.span_id.as_deref() == Some(parent_span.as_str())).unwrap();
+        assert_eq!(stamp.payload["tier"], "L0", "what the parent writes after reading the child's report is stamped untrusted");
+    }
+
+    // Red-team step-2 round 1: a child that halts halts the parent too; the operator decides (specs/003 §3.2).
+    #[tokio::test]
+    async fn a_dispatched_child_that_halts_halts_the_parent_instead_of_being_retried() {
+        let f = setup(
+            vec![Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Draft a plan"})), Step::Fail("provider rejected the request")],
+            5.0,
+            |_| {},
+        );
+        let out = f.engine.run_task(&f.m, "orchestrator", "Plan something").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("architect") && r.contains("halted")), "{:?}", out.status);
+        assert_eq!(f.model.requests().len(), 2, "the parent made no further model call");
     }
 
     #[tokio::test]

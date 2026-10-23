@@ -238,9 +238,10 @@ impl EngineService {
                 let kind = if reject { "ratify.rejected" } else { "ratify.applied" };
                 m.append(EventEnvelope::new(&m.id, kind, json!({"id": id, "blake3": pin, "by": by}))).await.map_err(engine_err)?;
                 if !reject && !pin.is_empty() && !id.ends_with("#access") {
-                    let zone = if id.starts_with("op:") { delphi_core::provenance::Zone::Local } else { delphi_core::provenance::Zone::Team };
-                    let path = id.split_once(':').map(|x| x.1).unwrap_or(id);
-                    m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, path, &pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
+                    // Stamp under the zone a read of that file will look it up in, or the stamp never applies.
+                    let bare = id.split_once(':').map(|x| x.1).unwrap_or(id);
+                    let (zone, path) = if id.starts_with("op:") { (delphi_core::provenance::Zone::Local, bare.to_string()) } else { crate::tools::zone_of(bare) };
+                    m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, &path, &pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
                 }
                 // Newly ratified endpoints are live immediately; no restart.
                 if !reject && id.ends_with("#access") {

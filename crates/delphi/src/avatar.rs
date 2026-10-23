@@ -15,12 +15,12 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentRole {
-    Orchestrator,     // Orchestrator
-    Builder, // Builder
-    Architect,   // Architect
-    RedTeam,       // Red-Team
-    Strategist,   // Strategist
-    Scout,      // Scout
+    Orchestrator,
+    Builder,
+    Architect,
+    RedTeam,
+    Strategist,
+    Scout,
     Operator,   // Human / Console
 }
 

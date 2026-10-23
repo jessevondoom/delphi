@@ -84,6 +84,45 @@ impl SecretRegistry {
     fn snapshot(&self) -> Vec<String> {
         self.literals.lock().unwrap().clone()
     }
+
+    fn longest(&self) -> usize {
+        self.literals.lock().unwrap().iter().map(|l| l.len()).max().unwrap_or(0)
+    }
+}
+
+/// Redacts a live text stream chunk by chunk. A secret can arrive split across chunks, so the tail that
+/// could still be the beginning of one is held back until more text (or `finish`) settles it.
+pub struct LiveRedactor {
+    secrets: Arc<SecretRegistry>,
+    held: String,
+}
+
+impl LiveRedactor {
+    /// Enough to hold back the start of a credential-shaped token even when no literal is registered.
+    const MIN_HOLD: usize = 64;
+
+    pub fn new(secrets: Arc<SecretRegistry>) -> LiveRedactor {
+        LiveRedactor { secrets, held: String::new() }
+    }
+
+    /// The part of `chunk` that is safe to show now.
+    pub fn push(&mut self, chunk: &str) -> String {
+        let all = self.secrets.redact(&format!("{}{}", self.held, chunk));
+        let hold = self.secrets.longest().max(Self::MIN_HOLD) - 1;
+        let mut cut = all.len().saturating_sub(hold);
+        while !all.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        self.held = all[cut..].to_string();
+        all[..cut].to_string()
+    }
+
+    /// Whatever is still held, redacted; the stream has ended.
+    pub fn finish(&mut self) -> String {
+        let rest = self.secrets.redact(&self.held);
+        self.held.clear();
+        rest
+    }
 }
 
 pub struct MissionState {
@@ -99,6 +138,8 @@ pub struct MissionState {
     registered: AtomicU64,
     /// Serializes reserve decisions so parallel spans can't jointly overshoot the cap.
     pub reserve_gate: tokio::sync::Mutex<()>,
+    /// Persist-then-apply is one step: concurrent appenders must not apply their events to the derived state out of `seq` order.
+    append_gate: tokio::sync::Mutex<()>,
     next_task: AtomicU64,
     next_span: AtomicU64,
     next_res: AtomicU64,
@@ -110,6 +151,10 @@ fn max_suffix(events: &[EventEnvelope], pick: impl Fn(&EventEnvelope) -> Option<
 }
 
 impl MissionState {
+    pub fn secrets(&self) -> Arc<SecretRegistry> {
+        self.secrets.clone()
+    }
+
     /// Open (creating if new) the mission under `dir`, replaying its log into the derived state.
     pub fn open(dir: &Path, id: &str, hub: Hub, ledger: Arc<Mutex<Ledger>>, secrets: Arc<SecretRegistry>, budget_cap_usd: f64) -> Result<Arc<MissionState>, EngineError> {
         std::fs::create_dir_all(dir).map_err(|e| EngineError::Invalid(format!("{}: {}", dir.display(), e)))?;
@@ -139,6 +184,7 @@ impl MissionState {
             secrets,
             registered: AtomicU64::new(0),
             reserve_gate: tokio::sync::Mutex::new(()),
+            append_gate: tokio::sync::Mutex::new(()),
         }))
     }
 
@@ -161,6 +207,7 @@ impl MissionState {
 
     /// Persist several events together (one fsync), then apply and publish them in order.
     pub async fn append_batch(&self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
+        let _gate = self.append_gate.lock().await;
         let log = self.log.clone();
         let known = self.registered.load(Ordering::SeqCst) as usize;
         let literals = self.secrets.snapshot();
@@ -275,5 +322,24 @@ mod tests {
         assert_eq!(s.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2]);
         let second = MissionState::open(t.path(), "m1", Hub::new(), Arc::new(Mutex::new(Ledger::open_in_memory().unwrap())), SecretRegistry::new(), 5.0);
         assert!(matches!(second, Err(EngineError::Log(LogError::Locked(_)))));
+    }
+}
+
+#[cfg(test)]
+mod live_redactor_tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_split_across_chunks_never_reaches_the_stream() {
+        let secrets = SecretRegistry::new();
+        secrets.register("runtime-secret-token-0123456789");
+        let mut r = LiveRedactor::new(secrets);
+        let mut shown = String::new();
+        for chunk in ["The key is runtime-sec", "ret-token-01", "23456789 and then some more text to push it out of the window.", " Done."] {
+            shown.push_str(&r.push(chunk));
+        }
+        shown.push_str(&r.finish());
+        assert!(!shown.contains("runtime-sec") && !shown.contains("0123456789"), "{}", shown);
+        assert!(shown.starts_with("The key is ") && shown.ends_with("Done."), "{}", shown);
     }
 }

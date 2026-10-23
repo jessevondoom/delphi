@@ -26,6 +26,8 @@ pub enum CallError {
     Http { status: u16, message: String },
     /// A redirect to another origin was refused.
     CrossOriginRedirect { to: String },
+    /// The request never reached the provider (DNS, connect): nothing was billed and nothing was sent.
+    Unreachable(String),
     Transport(String),
     Stream(StreamError),
 }
@@ -37,6 +39,7 @@ impl std::fmt::Display for CallError {
             CallError::RateLimited { message, .. } => write!(f, "rate limited or overloaded: {}", message),
             CallError::Http { status, message } => write!(f, "HTTP {}: {}", status, message),
             CallError::CrossOriginRedirect { to } => write!(f, "refused a redirect to another origin ({})", to),
+            CallError::Unreachable(m) => write!(f, "endpoint unreachable: {}", m),
             CallError::Transport(m) => write!(f, "transport error: {}", m),
             CallError::Stream(e) => write!(f, "{}", e),
         }
@@ -86,6 +89,8 @@ pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Dur
     let resp = builder.send().await.map_err(|e| {
         if e.is_redirect() {
             CallError::CrossOriginRedirect { to: e.url().map(|u| format!("{}://{}", u.scheme(), u.authority())).unwrap_or_default() }
+        } else if e.is_connect() {
+            CallError::Unreachable(redact(&e.without_url().to_string()))
         } else {
             CallError::Transport(redact(&e.without_url().to_string()))
         }
@@ -95,7 +100,7 @@ pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Dur
         let retry = retry_after(resp.headers());
         let mut body = Vec::new();
         let mut stream = resp.bytes_stream();
-        while let Some(Ok(chunk)) = stream.next().await {
+        while let Ok(Some(Ok(chunk))) = tokio::time::timeout(idle_timeout, stream.next()).await {
             body.extend_from_slice(&chunk);
             if body.len() > MAX_ERROR_BODY {
                 break;
@@ -113,7 +118,13 @@ pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Dur
         let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| CallError::Transport(redact(&e.without_url().to_string())))?;
         let events: Vec<SseEvent> = match req.response {
-            ResponseKind::Sse => sse.push(&chunk),
+            ResponseKind::Sse => {
+                let events = sse.push(&chunk);
+                if sse.overflowed() {
+                    return Err(CallError::Stream(StreamError::Malformed("an SSE line exceeded the size limit".into())));
+                }
+                events
+            }
             ResponseKind::AwsEventStream => {
                 let mut out = Vec::new();
                 for m in aws.push(&chunk).map_err(|e| CallError::Stream(StreamError::Malformed(e)))? {

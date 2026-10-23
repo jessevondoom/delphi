@@ -341,6 +341,7 @@ impl Resolver {
                 let argv: Vec<String> = ["aws", "configure", "export-credentials", "--profile", profile, "--format", "process"].iter().map(|s| s.to_string()).collect();
                 let stdout = self.run(&argv, "`aws configure export-credentials` (run `aws sso login` if your session expired)")?;
                 let e: AwsExport = serde_json::from_str(stdout.trim()).map_err(|_| CredentialError::Failed("`aws configure export-credentials` output was not the expected JSON".into()))?;
+                (self.register)(&e.access_key_id);
                 (self.register)(&e.secret_access_key);
                 if let Some(t) = &e.session_token {
                     (self.register)(t);
@@ -518,7 +519,7 @@ mod tests {
             other => panic!("{:?}", other),
         }
         assert_eq!(f.calls.lock().unwrap()[0], ["aws", "configure", "export-credentials", "--profile", "work-sso", "--format", "process"]);
-        assert_eq!(reg.lock().unwrap().len(), 2);
+        assert_eq!(reg.lock().unwrap().len(), 3); // key id, secret key, session token
     }
 
     #[test]
