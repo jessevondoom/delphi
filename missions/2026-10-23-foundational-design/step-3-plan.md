@@ -16,16 +16,19 @@ Scope from the roadmap: Gemini (direct API, Vertex), compat gateways, `oauth2` l
 
 Ordering principle: everything that needs no OS sandbox and can be tested against mocks comes first, so it can ship and be verified without real credentials. The sandbox and worktree work, which is the riskiest, follows with a full red-team sweep before the harness paths use it.
 
+**Reordered 2026-10-24: the operator has subscription accounts (Claude, Gemini) and no API keys.** The only path to real testing without keys is harness mode (`specs/009` §7): Delphi launches the operator's own signed-in `claude` or `gemini` CLI. Delphi's `oauth2` login does not help here: it is for corporate identity providers and connectors, and subscription logins stay with the official CLIs (`specs/009` §7.1, §4.2). Both CLIs are installed on the development machine. Harness mode requires the sandbox, so the sandbox moves first.
+
 | # | Milestone | Specs | Needs from the operator |
 | :-- | :--- | :--- | :--- |
-| M1 | **Data-driven tool registry**: tools become registered descriptors (schema, class, classifier, executor) instead of a match statement. Needed by the sandbox tools and by connectors (010 §2) | 001, 010 | nothing |
-| M2 | **`oauth2` credentials**: device code, client credentials, and the loopback authorization-code flow with PKCE; token store in the OS keychain; `delphi auth login/logout/status`; re-authentication pause | 009 §4.1, 010 §4 | an IdP or gateway to test device-code against (optional; mock first) |
-| M3 | **Gemini dialect**: direct API and Vertex, thinking and signature handling, the model scaler, rate limits and backoff | 002 | a Gemini API key or Vertex project for the live probe |
-| M4 | **Compat gateway pass** (OpenAI-style) and **endpoint probing** (`doctor --probe`) | 002 §2.2, 009 §6 | optional gateway to probe |
-| M5 | **Sandbox**: `sandbox-exec` (macOS) and `bwrap` (Linux), network off by default, `.git` write-denied | 008 §4 | none; I test locally on this Mac |
-| M6 | **Worktrees and the Builder**: worktrees outside the repo, host-exec badge, unified retry ladder, the five merge gates, recovery for side effects (`action.intent`/`action.result`) | 003 §3, 008 §4 | a scratch git repo to try it on |
-| M7 | **Harness mode**: subscription CLIs under the sandbox, egress proxy, per-span approval bridge | 009 §7 | `claude` and `gemini` CLIs signed in for the live probe |
-| — | Red-team sweep after M6 and again after M7 (Gemini Flash; Claude seats as Sonnet subagents on request) | | |
+| M1 | **Data-driven tool registry** (tools as registered descriptors; needed by the sandbox tools and by connectors) | 001, 010 §2 | nothing |
+| M2 | **Sandbox**: `sandbox-exec` (macOS) and `bwrap` (Linux), deny-default filesystem, network off, `.git` write-denied | 008 §4 | nothing |
+| M3 | **Harness mode, non-builder roles first**: launch `claude -p` / `gemini` under the sandbox with CLI tools disabled and structured output only; ephemeral state dir; daemon CONNECT proxy to the provider hosts only; allowlisted environment; subscription token metering and kill-on-breach; taint clamp. This is the first real end-to-end run | 009 §7 | the `claude` and `gemini` CLIs signed in (already installed) |
+| M4 | Red-team sweep of M1 to M3 | | |
+| M5 | **Worktrees and the Builder**: worktrees outside the repo, host-exec badge, unified retry ladder, five merge gates, `action.intent`/`action.result`; harness Builder via worktree diff | 003 §3, 008 §4, 009 §7.7 | a scratch git repo |
+| M6 | **`oauth2`** (device code, client credentials, loopback PKCE), token store, `delphi auth`; **Gemini dialect** (direct, Vertex), model scaler, rate limits; **compat gateway**; **endpoint probing** | 009 §4.1, 002, 009 §6 | API keys or a gateway only when available; built against mocks meanwhile |
+| M7 | Red-team sweep of M5 and M6 | | |
+
+The Step 2 go/no-go ("3 real tasks") can be run at M3 through the `claude` harness endpoint, with Delphi's roles doing read-only work.
 
 Go/No-Go (roadmap): a Builder task completes in a sandboxed worktree with all merge gates, on a real project, with a recorded cost.
 
