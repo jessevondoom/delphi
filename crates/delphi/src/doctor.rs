@@ -459,7 +459,7 @@ mod tests {
         let r = run(&home, &ws, &Options::default());
         let drift: Vec<_> = r.findings.iter().filter(|f| f.check.starts_with("3") && f.level == Level::Warn).map(|f| f.location.clone()).collect();
         assert!(drift.contains(&"REVIEW.md".to_string()) && drift.contains(&"agents/builder/AGENT.md".to_string()), "{:?}", drift);
-        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/REVIEW.md")).unwrap().len() > 100, true);
+        assert!(fs::read_to_string(ws.dir.join("local/ratified/REVIEW.md")).unwrap().len() > 100);
     }
 
     // specs/006 §6 test 10
