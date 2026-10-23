@@ -19,6 +19,7 @@ hmac = "0.13.0"
 sha2 = "0.11.0"
 crc32fast = "1.5.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream"] }
+regex = "1.13.1"
 
 [dev-dependencies]
 tempfile = "3.8"

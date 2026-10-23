@@ -256,6 +256,7 @@ dependencies = [
  "delphi-core",
  "futures-util",
  "hmac",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
