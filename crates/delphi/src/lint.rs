@@ -48,8 +48,11 @@ const RULE_BYTES: usize = 6144;
 impl Tree {
     pub fn from_repo(root: &Path) -> std::io::Result<Tree> {
         let mut files = BTreeMap::new();
+        // `.git` is skipped at any depth; build and tooling directories only at the repo root, so a
+        // governed directory such as `context/target/` is still linted.
         let walker = walkdir::WalkDir::new(root).into_iter().filter_entry(|e| {
-            !(e.file_type().is_dir() && SKIP_DIRS.contains(&e.file_name().to_string_lossy().as_ref()))
+            let name = e.file_name().to_string_lossy();
+            !(e.file_type().is_dir() && (name == ".git" || (e.depth() == 1 && SKIP_DIRS.contains(&name.as_ref()))))
         });
         for entry in walker {
             let entry = entry?;
@@ -521,7 +524,28 @@ pub fn read_glob_error(glob: &str) -> Option<String> {
     if glob == "*" {
         return None;
     }
+    if let Some(m) = prefix_glob_error(glob) {
+        return Some(format!("read glob `{}`: {}", glob, m));
+    }
     logical_glob_error(glob).map(|m| format!("read glob `{}`: {}", glob, m))
+}
+
+/// Wildcards in the leading segments may still reach a never-readable zone (`l*/**` → `local/`).
+fn prefix_glob_error(glob: &str) -> Option<&'static str> {
+    let lower = glob.to_lowercase();
+    let segs: Vec<&str> = lower.split('/').skip_while(|s| *s == "**").collect();
+    let first = *segs.first()?;
+    if first == "*" {
+        return None;
+    }
+    let m = |seg: &str, name: &str| crate::pathguard::glob_match(seg, name);
+    let hits = ["operator", "local", "run", "proposals"].iter().any(|d| m(first, d))
+        || (m(first, "memory") && segs.get(1).map(|s| m(s, "operator")).unwrap_or(false));
+    if hits {
+        Some("may reach operator home, workspace-local state, proposals or daemon state (§2.2, 001-A1)")
+    } else {
+        None
+    }
 }
 
 /// `[REV-SEC-02]` and `specs/001` §2.2: write globs are logical, zone-scoped, never reach `.git`, and
@@ -753,8 +777,17 @@ fn check_links(tree: &Tree, r: &mut Report) {
     let re = Regex::new(r"\]\(([^)\s#]+)(#[^)\s]*)?\)").unwrap();
     for path in tree.with_ext(&[".md"]) {
         let text = strip_fences(&tree.read(path).unwrap_or_default());
-        let dir = match path.rfind('/') {
-            Some(i) => &path[..i],
+        // Operator overrides and skills are loaded as if they sat at their logical counterpart, so
+        // their relative links resolve from there.
+        let logical = if let Some(rest) = path.strip_prefix("operator/core/") {
+            rest.to_string()
+        } else if path.starts_with("operator/skills/") {
+            path.trim_start_matches("operator/").to_string()
+        } else {
+            path.clone()
+        };
+        let dir = match logical.rfind('/') {
+            Some(i) => &logical[..i],
             None => "",
         };
         let seeded = tree.seeded.contains(path);
@@ -843,6 +876,10 @@ mod tests {
         assert!(read_glob_error("operator/**").is_some());
         assert!(read_glob_error("@worktree/.git/**").is_some());
         assert!(read_glob_error("*").is_none() && read_glob_error("specs/**").is_none());
+        for g in ["l*/**", "o*/**", "prop*/x", "memory/op*/x", "r?n/x", "**/local/**"] {
+            assert!(read_glob_error(g).is_some(), "{}", g);
+        }
+        assert!(read_glob_error("lib*/x").is_none() && read_glob_error("@worktree/local/x").is_none());
         for g in ["missions/**/events*.jsonl", "missions/**/councils/.barrier*", "missions/**/councils/.*/x", "local/**", "config.toml", "ratified/**", "proposals/**"] {
             assert!(read_glob_error(g).is_some(), "{}", g);
             assert!(write_glob_error("orchestrator", g).is_some(), "{}", g);
@@ -960,6 +997,13 @@ mod tests {
         let f = fails(&tree, "canonical-names");
         assert_eq!(f.len(), 1, "{:?}", f);
         assert!(f[0].starts_with("context/a.md:2"));
+    }
+
+    #[test]
+    fn nested_target_dirs_are_still_linted() {
+        let (_t, tree) = tree_of(&[("context/target/a.md", "no frontmatter\n"), ("target/ignored.md", "x"), ("sub/.git/x.md", "x")]);
+        assert!(tree.files.contains_key("context/target/a.md") && !tree.files.contains_key("target/ignored.md") && !tree.files.contains_key("sub/.git/x.md"));
+        assert!(!fails(&tree, "frontmatter").is_empty());
     }
 
     #[test]

@@ -310,8 +310,9 @@ fn check_zone_layout(ws: &Workspace, home: &Path, r: &mut Report) {
     let team = ws.dir.join("team");
     for e in walkdir::WalkDir::new(&team).into_iter().flatten().filter(|e| !e.file_type().is_dir()) {
         let rel = e.path().strip_prefix(&team).unwrap().to_string_lossy().replace('\\', "/");
-        let zone1 = rel == "GOVERNANCE.md"
-            || rel == "SPEC.md"
+        let rel = rel.to_lowercase();
+        let zone1 = rel == "governance.md"
+            || rel == "spec.md"
             || rel == "context/heuristics.md"
             || rel.starts_with("themes/")
             || (rel.starts_with("agents/") && !rel.starts_with("agents/custom/"))
@@ -320,12 +321,18 @@ fn check_zone_layout(ws: &Workspace, home: &Path, r: &mut Report) {
             r.fail("3 zones", format!("team/{}", rel), "team/ may not shadow a release path; overrides go in agents/custom/ or skills/custom/");
         }
     }
-    let mut roots = vec![ws.dir.join("base"), ws.dir.join("core"), team, ws.dir.join("local"), home.join("operator"), home.join("themes")];
-    roots.retain(|p| p.exists());
+    let roots = [ws.dir.join("base"), ws.dir.join("core"), team, ws.dir.join("local"), home.join("operator"), home.join("themes")];
     for root in roots {
-        for e in walkdir::WalkDir::new(&root).into_iter().flatten() {
-            if e.path_is_symlink() {
-                r.fail("3 zones", e.path().display().to_string(), "symlinks are not allowed in Delphi zones");
+        // A dangling symlink at a zone root must not look like an absent zone.
+        if fs::symlink_metadata(&root).is_err() {
+            continue;
+        }
+        for e in walkdir::WalkDir::new(&root) {
+            match e {
+                Ok(e) if e.path_is_symlink() => r.fail("3 zones", e.path().display().to_string(), "symlinks are not allowed in Delphi zones"),
+                Ok(_) => {}
+                // Unreadable directories would otherwise drop their files from every check.
+                Err(err) => r.fail("3 zones", err.path().map(|p| p.display().to_string()).unwrap_or_default(), format!("cannot read: {}", err)),
             }
         }
     }
@@ -548,6 +555,22 @@ mod tests {
 
     // An operator override and skill carry manifest/skill schemas, not §5 provenance frontmatter.
     #[test]
+    fn case_variant_shadowing_and_unreadable_dirs_fail() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, home, ws, _p) = setup();
+        fs::create_dir_all(ws.dir.join("team/Agents/scout")).unwrap();
+        fs::write(ws.dir.join("team/Agents/scout/AGENT.md"), "x").unwrap();
+        assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.check == "3 zones" && f.level == Level::Fail));
+        let (_t, home, ws, _p) = setup();
+        let d = ws.dir.join("team/context/locked");
+        fs::create_dir_all(&d).unwrap();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o000)).unwrap();
+        let failed = run(&home, &ws, &Options::default()).exit_code();
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(failed, 1);
+    }
+
+    #[test]
     fn operator_overrides_are_not_provenance_documents() {
         let (_t, home, ws, _p) = setup();
         let base = fs::read_to_string(ws.dir.join("base/agents/scout/AGENT.md")).unwrap();
@@ -555,6 +578,8 @@ mod tests {
         fs::write(home.join("operator/core/agents/scout/AGENT.md"), base).unwrap();
         let r = run(&home, &ws, &Options::default());
         assert!(!r.findings.iter().any(|f| f.check == "3 frontmatter"), "{:#?}", r.findings);
+        // A faithful copy of the built-in keeps its relative links resolving (counterpart path).
+        assert!(!r.findings.iter().any(|f| f.check == "5 links" && f.level == Level::Fail), "{:#?}", r.findings);
     }
 
     #[test]

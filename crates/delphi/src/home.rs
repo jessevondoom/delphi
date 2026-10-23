@@ -9,16 +9,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Files whose content is pinned in `ratified.lock` (`specs/006` §3.1, `specs/001` §2.3, §6.4).
+/// Case-insensitive, like the path guard and macOS volumes: `SCRIPTS/x.sh` is still a script.
 pub fn is_protected(logical: &str) -> bool {
-    logical == "GOVERNANCE.md"
-        || logical == "REVIEW.md"
-        || logical == "context/heuristics.md"
-        || logical == "context/team-heuristics.md"
-        || logical == "heuristics.md"
-        || (logical.starts_with("agents/") && logical.ends_with("/AGENT.md"))
-        || (logical.starts_with("skills/") && (logical.ends_with("/SKILL.md") || logical.contains("/scripts/") || logical.ends_with("/scripts")))
-        || (logical.starts_with("themes/") && logical.ends_with("/theme.md"))
-        || (logical.starts_with("memory/agents/") && logical.ends_with("/lessons.md"))
+    let l = logical.to_lowercase();
+    l == "governance.md"
+        || l == "review.md"
+        || l == "context/heuristics.md"
+        || l == "context/team-heuristics.md"
+        || l == "heuristics.md"
+        || (l.starts_with("agents/") && l.ends_with("/agent.md"))
+        || (l.starts_with("skills/") && (l.ends_with("/skill.md") || l.contains("/scripts/") || l.ends_with("/scripts")))
+        || (l.starts_with("themes/") && l.ends_with("/theme.md"))
+        || (l.starts_with("memory/agents/") && l.ends_with("/lessons.md"))
 }
 
 pub fn delphi_home(explicit: Option<&str>) -> PathBuf {
@@ -375,6 +377,12 @@ mod tests {
         assert_eq!(resolve_workspace(&home, &proj, None), Resolve::Ambiguous(vec!["a".into(), "b".into()]));
         assert_eq!(resolve_workspace(&home, &proj, Some("b".into())), Resolve::Found("b".into()));
         assert_eq!(resolve_workspace(&home, t.path(), None), Resolve::NotInGitRepo);
+    }
+
+    #[test]
+    fn protection_is_case_insensitive() {
+        assert!(is_protected("skills/custom/s/SCRIPTS/evil.sh") && is_protected("Agents/scout/agent.MD") && is_protected("governance.md"));
+        assert!(!is_protected("context/domains/a.md"));
     }
 
     #[test]
