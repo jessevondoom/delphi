@@ -55,7 +55,7 @@ The provider-dialect **adapter** and the federation **gateway** are deterministi
    - **Expected Output Contract:** the artifact or schema expected back.
 2. **Council Mode Scaling Laws:**
    - **Agent Cap ($N = 3$ to $5$):** Councils convene 3–5 roles with orthogonal perspectives.
-   - **Heterogeneous Model Routing (`[H-001]`):** whenever multiple providers are configured, Council seats are spread across model families to break correlated biases and sycophantic collapse.
+   - **Heterogeneous Model Routing (`[H-001]`):** whenever two or more model families are configured, Council seats are spread across families to break correlated biases and sycophantic collapse, and each seat gets the model best suited to its task. A **model family** is a distinct training lineage, regardless of which provider or API serves it: the same model reached through two clouds is one family. Diversity is defined by family, never by vendor name.
    - **Blind Parallel Round 1 (anti-anchoring):** opening proposals are generated in isolated parallel calls; no seat sees a peer's stance until Round 2.
    - **Round Cap ($R \le 3$):** cross-examination is bounded to 3 rounds. If deadlocked, the trade-off escalates to the operator.
 
@@ -63,7 +63,7 @@ The provider-dialect **adapter** and the federation **gateway** are deterministi
 
 ## 4. Dual-Tier Memory & Anti-Poisoning Hygiene
 
-1. **Private Episodic Memory (`memory/agents/<role>/lessons.md`):** isolated per role; loaded only into that role's context.
+1. **Private Episodic Memory (`memory/agents/<role>/lessons.md`):** isolated per role; loaded only into that role's context. It exists at two private scopes: **operator** (follows this operator across all workspaces) and **workspace** (this project only). Together with the shared **team** and **release** scopes, these are the four memory scopes of `specs/004` §5. Learning starts in the narrowest scope and broadens only on evidence and ratification. Personal memory never leaves the operator's machine except by explicit export or a scrubbed, previewed contribution.
 2. **Central Knowledge Base (`context/` and `missions/`):** shared system truth indexed by `context/index.md`.
 3. **Information Flow Control (IFC) & Taint Tracking (`[H-004]`):**
    - Every knowledge base and memory entry carries YAML frontmatter: `author` (a canonical role or `operator`), `timestamp`, `source_type`, `confidence`, `source_mission`. `source_type` uses the single **6-tier taint lattice** in [`specs/001`](specs/001-governance-and-manifests.md) §5 (`external_untrusted` < `federated_peer` < `federated_verified` < `internal_generated` < `internal_empirical` < `user_ratified`).
@@ -95,7 +95,7 @@ The provider-dialect **adapter** and the federation **gateway** are deterministi
 
 ## 7. The Four-Channel Learning Loop
 
-On mission completion, PR merge or defect recovery, Orchestrator and Strategist run a distillation pass. Every channel produces **proposals** in `missions/<id>/proposals/`, and all four apply only when the operator ratifies them in a single batched `/retro` review (§5.7, D-11). Nothing an agent learns enters an always-loaded prompt without ratification.
+On mission completion, PR merge or defect recovery, Orchestrator and Strategist run a distillation pass. Every channel produces **proposals**, submitted through the daemon's `propose` tool and stored in daemon-only `local/proposals/<mission-id>/` (`specs/001` §2.2), and all four apply only when the operator ratifies them in a single batched `/retro` review (§5.7, D-11). Nothing an agent learns enters an always-loaded prompt without ratification.
 
 1. **Escaped bug or late-caught defect → dual update:** a constructive rule in `context/heuristics.md` (for Builder) **and** an adversarial check in [REVIEW.md](REVIEW.md) §4 (for Red-Team).
 2. **False positive or operator override → suppression:** when the operator marks a finding `by-design` or `wontfix`, record a scoped exemption in [REVIEW.md](REVIEW.md) §5.

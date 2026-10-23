@@ -1,7 +1,7 @@
 ---
 id: council-001-spec-suite-red-team
 title: "Council 001: Ares + Odysseus Review of the v0.4 Spec Suite"
-author: athena
+author: orchestrator
 timestamp: 2026-10-23T12:00:00Z
 source_type: internal_generated
 confidence: medium

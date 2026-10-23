@@ -1,9 +1,14 @@
 ---
 id: skills-catalog
-title: "Delphi agent Skills Catalog & Progressive Disclosure Spec"
+title: "Delphi Skills Catalog & Progressive Disclosure Spec"
 author: architect
 timestamp: 2026-10-23T07:35:00Z
 status: draft
+source_type: user_ratified
+confidence: medium
+source_mission: 2026-10-23-foundational-design
+tags: [skills, catalog]
+skill_status_default: planned   # every skill listed here is `planned` until skills/<name>/SKILL.md exists (specs/001 §2.3)
 ---
 
 # Delphi Skills Catalog (`skills/CATALOG.md`)

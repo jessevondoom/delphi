@@ -18,7 +18,7 @@ tags: [spec]
 This specification defines the dual-window terminal interface and local client-daemon architecture of Delphi (implemented in **Rust** using `Tokio`, `Ratatui`, and `Crossterm`):
 1. **`delphi-core` Local Daemon & Unix Domain Socket (UDS) Bus:** Event-sourced runtime engine with 60Hz frame coalescing, append-only `events.jsonl` replay, and SQLite WAL state indexing.
 2. **Window 1 — `Console` (`delphi` / `delphi chat`):** The sovereign operator interface, prompt input, slash-command palette, and synchronous Human-in-the-Loop (HITL) permission modals.
-3. **Window 2 — `Narrator` (`delphi narrator`):** Attach-anywhere secondary live narrative and telemetry window—the epic storyteller chronicling the team's actions in real time (Execution DAG, 3-column Council Chamber, Builder Forge diffs, and Model Scaling telemetry).
+3. **Window 2 — `Narrator` (`delphi narrator`):** Attach-anywhere secondary live narrative and telemetry window—the epic storyteller chronicling the team's actions in real time (agents pane with models and token spend, the Epic task graph, the Council chamber, and Builder's Forge diffs).
 4. **Multiplexer & OS Window Auto-Spawning:** Seamless dual-window launching across `tmux`, `zellij`, `WezTerm`, `Kitty`, and macOS windows, plus single-screen `Tab` toggle fallback.
 
 ### 1.1 Simpler Alternative Considered
@@ -33,8 +33,8 @@ This specification defines the dual-window terminal interface and local client-d
 ```mermaid
 flowchart LR
     subgraph Clients ["Stateless Terminal UI Clients"]
-        the operator["Window 1: CHAOS (`delphi`)\nOriginator Operator Deck & HITL Gates"]
-        Narrator["Window 2: HOMER (`delphi narrator`)\nLive Epic Narrator, DAG, Council Chamber & Forge"]
+        Console["Window 1: CONSOLE (`delphi`)\nOperator input & approval gates"]
+        Narrator["Window 2: NARRATOR (`delphi narrator`)\nLive Epic Narrator, DAG, Council Chamber & Forge"]
     end
 
     subgraph Socket ["Unix Domain Socket (`0600` perms)"]
@@ -48,7 +48,7 @@ flowchart LR
         DB[".delphi/state.db (SQLite WAL + FTS5)"]
     end
 
-    the operator <==> UDS
+    Console <==> UDS
     Narrator <==> UDS
     UDS <==> Coalescer
     Coalescer <==> Engine
@@ -68,14 +68,6 @@ flowchart LR
 4. **60Hz Frame Coalescing (`[REV-TRAP-03]`):** When 3–5 Council specialists stream tokens concurrently (emitting 300+ token deltas/sec), `delphi-core` buffers `agent.thinking.delta` and `agent.text.delta` events per span and flushes coalesced frames every **16ms (60Hz)** to connected TUI clients, preventing terminal stdout saturation and layout thrashing. Each frame carries `seq_from`..`seq_to`, so "no dropped sequence numbers" is checkable even though deltas are merged.
 5. **Slow-Client Backpressure:** Each client has a bounded outbound queue (default 1,024 frames). On overflow, the daemon drops that client's queued frames and sends `resync_required`; the client then re-fetches `SessionSnapshot`. A stalled `Narrator`, for example over a laggy SSH link, never grows daemon memory or slows other clients.
 
-### 2.3 Durability & Single Source of Truth
-- `missions/<id>/events.jsonl` is the **only source of truth**. `.delphi/state.db` is a derived index that can be rebuilt (`specs/004` §3.1). The daemon is the **single writer** of both.
-- **Write order:** append the event line → `fsync` (every lifecycle and approval event immediately; content events batched at ≤250 ms) → update SQLite. On startup, the daemon truncates a torn final line and replays any events past SQLite's `last_applied_seq`.
-- **What is persisted:** per-token deltas are *not* persisted. Each completed block (text, thinking, tool call, tool result) is persisted once as `agent.block.complete`. Live deltas exist only in the coalescer and a per-span in-memory ring buffer used for reconnects.
-- **Council Round 1 buffering:** during Round 1, each seat's `agent.block.complete` events are held in daemon memory and written to `events.jsonl` only when the barrier releases (`specs/003` §4.1). Live Round 1 streams go to operator clients (Narrator's Council Chamber), never to agents. Agents cannot read `events.jsonl` at all (`specs/001` §2.2).
-- **Redaction:** before any event reaches disk or a client, a deterministic redactor masks known secret formats (provider API keys, `gh` tokens, PEM blocks, `.env`-style `KEY=value` pairs for configured key names).
-- **Reasoning retention (D-16, ratified 2026-10-23):** completed thinking blocks are persisted, redacted, for 30 days. After that, `delphi gc` compacts them to signatures and metadata only. Provider signatures needed to resume an open task are never dropped while the task is open.
-
 ### 2.2 Canonical `EventEnvelope` Wire Schema
 Every state transition, token delta, tool call, model upscale, and approval request is serialized as an `EventEnvelope`:
 ```json
@@ -84,8 +76,8 @@ Every state transition, token delta, tool call, model upscale, and approval requ
   "timestamp": "2026-10-23T07:51:10.120Z",
   "mission_id": "2026-10-23-federated-sync",
   "trace_id": "tr_0192b",
-  "span_id": "sp_ares_r2",
-  "parent_span_id": "sp_athena_council_01",
+  "span_id": "sp_red_team_r2",
+  "parent_span_id": "sp_orchestrator_council_01",
   "agent": "red-team",
   "provider": "google",
   "model_id": "gemini-3-pro",
@@ -98,6 +90,93 @@ Every state transition, token delta, tool call, model upscale, and approval requ
   }
 }
 ```
+
+
+### 2.3 Durability & Single Source of Truth
+- `missions/<id>/events.jsonl` is the **only source of truth**. `.delphi/state.db` is a derived index that can be rebuilt (`specs/004` §3.1). The daemon is the **single writer** of both.
+- **Write order:** append the event line → `fsync` (every lifecycle and approval event immediately; content events batched at ≤250 ms) → update SQLite. On startup, the daemon truncates a torn final line and replays any events past SQLite's `last_applied_seq`.
+- **What is persisted:** per-token deltas are *not* persisted. Each completed block (text, thinking, tool call, tool result) is persisted once as `agent.block.complete`. Live deltas exist only in the coalescer and a per-span in-memory ring buffer used for reconnects.
+- **Council Round 1 buffering:** during Round 1, each seat's `agent.block.complete` events are held in daemon memory and written to `events.jsonl` only when the barrier releases (`specs/003` §4.1). Live Round 1 streams go to operator clients (Narrator's Council Chamber), never to agents. Agents cannot read `events.jsonl` at all (`specs/001` §2.2).
+- **Redaction:** before any event reaches disk or a client, a deterministic redactor masks known secret formats (provider API keys, `gh` tokens, PEM blocks, `.env`-style `KEY=value` pairs for configured key names).
+- **Reasoning retention (D-16, ratified 2026-10-23):** completed thinking blocks are persisted, redacted, for 30 days. After that, `delphi gc` compacts them to signatures and metadata only. Provider signatures needed to resume an open task are never dropped while the task is open.
+
+### 2.4 Usage Ledger (D-18)
+Every model call produces one `agent.usage` event. It is a lifecycle event, so it is fsync'd immediately. The daemon derives the `usage_ledger` table in `state.db` from these events, which makes the ledger rebuildable like the rest of `state.db`. The budget enforcer (`specs/003` §3.2), the narrator's agents pane (§4.1), `/usage`, and future efficiency tooling all read this one ledger.
+
+```sql
+CREATE TABLE IF NOT EXISTS usage_ledger (
+    seq               INTEGER PRIMARY KEY,   -- events.jsonl seq of the agent.usage event
+    ts                TEXT NOT NULL,
+    mission_id        TEXT NOT NULL,
+    task_id           TEXT NOT NULL,         -- Epic node (§4, view 1)
+    span_id           TEXT NOT NULL,
+    role              TEXT NOT NULL,         -- canonical role ID, never a theme name
+    mode              TEXT NOT NULL,         -- direct | dag | council
+    provider          TEXT NOT NULL,
+    model_tier        TEXT NOT NULL,         -- fast | workhorse | frontier
+    model_id          TEXT NOT NULL,         -- concrete model as resolved from config at call time
+    attempt           INTEGER NOT NULL,      -- retry-ladder attempt (1..3)
+    input_tokens      INTEGER NOT NULL,      -- uncached input
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens     INTEGER NOT NULL,
+    thinking_tokens   INTEGER NOT NULL DEFAULT 0,
+    cost_usd          REAL NOT NULL,         -- priced from the config price table at call time
+    reserved_usd      REAL NOT NULL,         -- pre-dispatch reservation (specs/003 §3.2), for overshoot analysis
+    endpoint_id       TEXT NOT NULL,         -- specs/009 §5
+    access_path       TEXT NOT NULL,         -- api | cloud | gateway-native | gateway-compat | harness
+    usage_source      TEXT NOT NULL,         -- reported | estimated (specs/009 §8)
+    cost_model        TEXT NOT NULL,         -- metered | subscription
+    outcome           TEXT NOT NULL          -- ok | failed_verification | rate_limited | error | cancelled
+);
+CREATE INDEX IF NOT EXISTS usage_by_mission ON usage_ledger(mission_id, role, task_id);
+```
+
+- Token counts come from the provider's usage report, never from an estimate. Calls with no usage report are recorded with `outcome = error` and the reservation as their cost.
+- **v1 scope:** record everything above, and expose totals through the agents pane and `/usage`. Efficiency analysis and optimization are **post-v1**, but they can be computed from this table without schema changes: tokens per task, cache-hit ratio, the cost of retries, and cost per verified task by tier.
+
+
+### 2.5 Crash Recovery & Mission Resumption
+**Goal:** after any interruption, Delphi rebuilds the mission from durable state, continues every node that can safely continue, and asks the operator about anything it cannot know. Interruptions include a closed terminal, a daemon crash, `SIGKILL`, a reboot or power loss. Recovery never redoes an external side effect blindly, and never loses an approved result.
+
+**1. Everything needed to resume is an event.** The daemon persists these lifecycle events (fsync'd immediately, §2.3):
+
+| Event | Carries |
+| :--- | :--- |
+| `mission.created`, `dag.node.added`, `dag.node.state` | Epic structure and each node's state, attempt number and ladder step |
+| `handoff.sent` | The full `HandoffEnvelope` (pointers, constraints, routing directive) |
+| `agent.block.complete` | Each completed `ContentBlock` (§2.3), enough to rebuild an agent's turn history, signatures included |
+| `budget.reserve` / `budget.release` / `agent.usage` | Reservations and actual usage (§2.4) |
+| `approval.requested` / `approval.resolved` | Every approval and its answer |
+| `action.intent` → `action.result` | **Write-ahead pair** around every side effect outside the daemon's own files: outbound calls, `gh` operations, merges, dependency installs, harness launches |
+| `worktree.checkpoint` | The worktree tree SHA after each tool step (`specs/008` §3) |
+| `council.round` | Round boundaries. Round 1 content is held in memory until the barrier releases (`specs/003` §4.1). |
+| `provenance.stamp`, `ratify.*` | Taint and ratification state (`specs/001` §5.1, `specs/006` §3.1) |
+
+**2. Restart procedure** (`delphi-core` start, or `delphi resume [<mission>]`):
+1. Truncate any torn final log line. Rebuild `state.db` past `last_applied_seq`.
+2. Rebuild each open mission's Epic and every node's last durable state.
+3. Reconcile each node using the table below.
+4. Write a `mission.recovered` event, then show the operator a **recovery summary** in the console before any node resumes. The summary lists what will resume, rerun or wait, and anything needing a decision. Resumption is automatic only for nodes with nothing to decide (`[r]esume all`, `[s]elect`, `[p]ause mission`).
+
+**3. Reconciliation by state at the moment of interruption:**
+
+| Node was… | On recovery |
+| :--- | :--- |
+| `pending`, `done`, `failed`, `escalated` | Unchanged |
+| Mid model call (stream not completed) | Partial output discarded; the call is retried from the last completed block with the same routing directive. Its reservation is released, it does **not** count as a retry-ladder strike, and usage is reconciled from the provider's report if the call completed server-side. |
+| Mid tool step in a worktree | Changes made after the last `worktree.checkpoint` are shown as a **recovered-changes diff**: keep (stamped with the span's tier) or discard (rewind to the checkpoint). |
+| Waiting on an approval | Approval **re-raised**: never assumed granted, and the original timeout restarts |
+| Council Round 1 | Round 1 is **rerun** for all seats; safe because no seat saw another. Completed Round 2 outputs are kept. |
+| `action.intent` without `action.result` | **Outcome unknown.** The daemon runs the action's idempotency check where one exists: look up the PR by branch, the webhook by idempotency key, the merge by commit SHA. If it can't verify, the node waits for the operator ("did this happen?"). It is **never** retried blindly. |
+| Harness subprocess (`specs/009` §7) | The process is gone. The task restarts from the last worktree checkpoint with a fresh harness session; recovered changes are handled as above. |
+| Retry ladder or budget mid-flight | Ladder step and budget come from the log. Open reservations with no matching usage are released. |
+
+Every outbound action must declare an **idempotency key** or a **post-hoc check** in its tool definition. An action that has neither is Red-tier on *every* attempt, including recovery.
+
+**4. Human-readable progress.** After every node state change, the daemon regenerates `missions/<id>/status.md` from the log: goal, Epic progress, current nodes, open approvals, decisions pending, spend against budget, and the last recovery summary. The operator or a teammate can read where a mission stands without a running daemon. It's a projection: Delphi never reads it back as truth.
+
+**5. Session context isn't the only memory.** An agent resumes from its persisted blocks, `HandoffEnvelope`, worktree and mission artifacts, never from a model-side session. For a long-running node whose history exceeds the context budget, the context circuit breaker's fresh-start path (`specs/004` §4.1) is used, with the 5-line diagnostic built from the log.
 
 ---
 
@@ -115,6 +194,7 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
   - `/retro`: Triggers **Orchestrator's** 4-channel coaching pass, then presents every staged proposal (heuristics, `REVIEW.md` §4/§5, scripts) as one batched ratification list.
   - `/permissions`: Cycles approval mode (`default`, `accept-edits`, `mission-auto`). The modes change only how Amber-tier actions are handled ([`specs/008`](008-ambient-watch-and-rewind.md) §4). **No mode ever auto-approves a Red-tier action.**
   - `/budget`: Shows and adjusts the mission cost ceiling (`specs/003` §3.2).
+  - `/usage [mission|task|role]`: Prints token and cost totals from the usage ledger (§2.4), the same numbers as the narrator's agents pane. Available from Step 2.
 - **Synchronous HITL Approval Modal:** Whenever **Builder** or **Integrator** hits a Destructive/Outbound Action Gate (`GOVERNANCE.md` §5.4), `Console` renders an inline keyboard-driven approval card (`[y] Approve Once`, `[a] Allow for Mission`, `[n] Reject & Redirect`, `[d] View Diff`). `[a]` is unavailable on Red-tier cards.
   - Every approval has an `approval_id`, and the daemon accepts the **first** answer. When several `Console` clients are attached, the others see the card resolve, with who answered and how.
   - With no `Console` client attached, the request waits up to `approval_timeout` (default 10 min), then resolves to **deny**. The agent receives a structured denial and does not hang.
@@ -123,21 +203,40 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
 
 ## 4. Window 2: `Narrator` (`delphi narrator`) — Live Narration & Telemetry Window
 
-The **Narrator** attaches to the workspace UDS socket from any second terminal window or monitor to narrate and visualize what the agent team is doing in real time across 4 switchable views (`1`–`4` hotkeys):
+The **Narrator** attaches to the workspace UDS socket from any second terminal window or monitor and shows what the agent team is doing in real time. Its screen has two parts: a persistent **agents pane** (§4.1) and one of four switchable **views** (§4.2, hotkeys `1`–`4`). The pane is always visible, and `a` toggles it to give a view the full width.
 
-1. **`[1: The Epic & agent DAG]`:**
-   - Live topological graph and real-time narrative stream of active and completed subtasks.
-   - Displays each active agent's current **Provider + Model Tier + Thinking Budget** badge (e.g., `🔨 Builder [claude-sonnet-4-6 • think:4k]` or `⬆️ Upscaled -> claude-opus-4-6 [think:16k]`), live token/cost burn rate, and worktree path.
-2. **`[2: The Council Chamber]`:**
+### 4.1 Agents Pane (always visible; D-18)
+One row per enabled role, rendered with the viewer's theme name (for example `Builder` shown as "Hephaestus"):
+
+| Column | Content |
+| :--- | :--- |
+| Agent | Role display name and status: `idle`, `running`, `waiting on you`, `retrying (n/3)`, `escalated` |
+| Working on | The current Epic node (task title) and its worktree, if any |
+| Model | Provider, tier and the **concrete model ID resolved at call time** (for example `anthropic · workhorse · <model>`), plus the thinking budget. An upscale on the retry ladder is highlighted (`⬆`). |
+| Tokens | For the current task: input, cache-read, output and thinking tokens. Cache-read is shown separately so prompt-cache efficiency is visible. |
+| Spend | Cost for the current task and the mission total, as a bar against `mission_budget_usd` that turns amber at 75% and red at 90% |
+
+A footer row shows mission totals: tokens by type, total cost against budget, the cache-hit ratio, and the number of retries. All figures come from the usage ledger (§2.4), and the pane redraws on each `agent.usage` event.
+
+### 4.2 Views
+
+1. **`[1: Epic]`:** the mission as an **epic**: Orchestrator's task DAG, laid out as a dependency graph of stories and tasks.
+   - Each node shows its role, its state (`pending`, `running`, `waiting on you`, `retrying (n/3)`, `escalated`, `halted: spec drift`, `done`, `failed`), and its token and cost total.
+   - Edges are dependencies. The critical path is highlighted, and completed branches collapse.
+   - A narrative stream beside the graph logs each state change in plain language. It is generated from events, not by a model.
+   - Selecting a node (`Enter`) shows its `HandoffEnvelope` (objective, pointers, constraints), linked spec, attempt history with the model used for each attempt, and per-attempt usage from the ledger.
+   - Large epics: nodes are grouped by phase, the view follows the active node, and `/` filters by role or state.
+2. **`[2: Council Chamber]`:**
    - Multi-column live split view during **Council Mode**.
-   - **Round 1:** Shows parallel progress bars + live blind generation streams for each summoned specialist.
-   - **Round 2:** Side-by-side view of **Red-Team's** adversarial attacks, **Strategist's** scope/ROI critique, and **Architect's** structural refinements.
-   - **Round 3:** **Orchestrator's** Verdict synthesis alongside the highlighted **Minority Report** box.
-3. **`[3: The Forge (Worktrees & Diffs)]`:**
+   - **Round 1:** parallel progress bars and live blind generation streams for each seat. Only operator clients ever see these; agents can't.
+   - **Round 2:** side-by-side view of **Red-Team's** attacks, **Strategist's** scope/ROI critique, and **Architect's** structural refinements.
+   - **Synthesis:** **Orchestrator's** verdict, with the daemon-filled **Minority Report** highlighted.
+3. **`[3: Forge (Worktrees & Diffs)]`:**
    - Live `git diff` viewer and test-runner output stream for **Builder's** isolated worktrees (`.delphi/worktrees/<task-id>/`), plus line-anchored `REVIEW.md` audit comments from **Red-Team** and **Strategist**.
-4. **`[4: The Archives (Knowledge Base & Coaching Ledger)]`:**
-   - Instant fuzzy/FTS5 browser over `context/`, `specs/`, `REVIEW.md`, and each agent's private `memory/agents/<role>/lessons.md`.
+4. **`[4: Archives (Knowledge Base & Coaching Ledger)]`:**
+   - Instant fuzzy/FTS5 browser over `context/`, `specs/`, `REVIEW.md`, and each role's private `memory/agents/<role>/lessons.md`.
 
+**Build order:** the usage ledger and `/usage` ship in roadmap Step 2, because budget enforcement already needs them. The agents pane and the Epic view ship with the narrator views in Step 5. Control actions (pause or inspect a node) come later.
 ---
 
 ## 5. Dual-Window Spawning & Single-Screen Fallback
@@ -158,3 +257,13 @@ The **Narrator** attaches to the workspace UDS socket from any second terminal w
 5. **Slow Client Test:** Pause a `Narrator` client (`SIGSTOP`) for 60 s during a 5-agent Council; daemon RSS stays bounded, other clients are unaffected, and the resumed client resyncs.
 6. **Crash Durability Test:** `SIGKILL` the daemon mid-write 100 times; every restart yields a valid log (torn line truncated) and a `state.db` consistent with it.
 7. **Version Skew Test:** A client at protocol major N+1 refuses to attach to a daemon at major N and shows the restart hint.
+8. **Usage Ledger Rebuild Test:** Delete `state.db`, replay `events.jsonl`, and verify that `usage_ledger` totals per mission, role and task match the pre-delete values exactly.
+9. **Agents Pane Accuracy Test:** In a recorded 3-agent mission, the pane's per-agent token columns and mission totals equal `SELECT SUM(...)` over the ledger at every redraw, and an upscale on attempt 2 shows the new model ID within one frame.
+10. **Recovery Matrix Test:** for each row of the §2.5 reconciliation table, `SIGKILL` the daemon at that point in a recorded mission, restart it, and verify the prescribed outcome:
+    - no duplicate `gh pr create`;
+    - re-raised approvals are not auto-granted;
+    - Round 1 reruns with zero peer leakage;
+    - discarded partial calls don't count as strikes;
+    - the recovered-changes diff equals the post-checkpoint worktree delta.
+11. **Power-Loss Test:** cut power (VM hard reset) during a 3-node DAG with a pending approval. After reboot, `delphi resume` rebuilds the Epic and the console summary lists the approval, and `status.md` matches the log.
+12. **Unknown-Outcome Test:** kill the daemon between `action.intent` and `action.result` for an action with no idempotency check. The node waits for the operator and is never retried automatically.

@@ -7,6 +7,7 @@ source_type: user_ratified
 confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)
 status: active
 tags: [architecture, pantheon, specs, bootstrap]
+source_mission: 2026-10-23-foundational-design
 ---
 
 # Mission 001: Foundational Architecture, Cosmogony & Spec Suite

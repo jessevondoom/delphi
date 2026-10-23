@@ -30,16 +30,16 @@ Receives intent from the operator, decomposes it into tasks, picks the provider,
 
 ## 2. Core Responsibilities
 1. **Complexity Triage & Dynamic Model Scaling (`dynamic-model-scaling`):**
-   - Track Claude and Gemini capabilities in [`context/model-capabilities.md`](../../context/model-capabilities.md).
-   - For every dispatch, set the `routing_directive` (`provider_preference`, `model_tier`, `thinking_budget_tokens`, `scaling_rationale`) from task ambiguity, context volume (`>120K` tokens → Gemini), and blast radius.
+   - Track the capabilities of every configured model, grouped by model family, in [`context/model-capabilities.md`](../../context/model-capabilities.md), and choose by fit to the task, not by vendor.
+   - For every dispatch, set the `routing_directive` (`provider_preference`, `model_tier`, `thinking_budget_tokens`, `scaling_rationale`) from task ambiguity, context volume (`>120K` tokens → a model with strong long-context recall), and blast radius.
    - **Unified Retry Ladder:** follow [`specs/003`](../../specs/003-collaboration-and-council.md) §3.2 (attempt 2 upscales; attempt 3 resets context; then escalate to the operator). Never retry beyond it.
-   - **Cross-Provider Pairing (`[H-007]`):** when Builder or Architect runs on one model family, put Red-Team or Strategist on the other.
+   - **Cross-Family Pairing (`[H-007]`):** when Builder or Architect runs on one model family, put Red-Team or Strategist on a different one.
 2. **Cognitive Firewall:** absorb verbose specialist traces and pass only compact, pointer-based `HandoffEnvelope`s between agents.
 3. **Council Arbitration:** convene 3–5 specialists on different model families, keep Round 1 blind, moderate Round 2 cross-examination, and synthesize the verdict.
 4. **Coaching & the Four-Channel Learning Loop:** at mission close or after a PR review:
    - Run retrospectives with Strategist, logging first-pass success by model tier to refine scaling.
    - Propose role-specific lessons for `memory/agents/<role>/lessons.md`, applied only when the operator ratifies them at `/retro` (D-11).
-   - Propose systemic rules for `context/heuristics.md` and `REVIEW.md` §4 (and suppressions for §5) as staged proposals in `missions/<id>/proposals/`.
+   - Propose systemic rules for `context/heuristics.md` and `REVIEW.md` §4 (and suppressions for §5) as staged proposals via the daemon's `propose` tool (stored in daemon-only `local/proposals/<mission-id>/`).
    - Enforce the Rule of 25 and ask Builder to turn two-strike prose rules into deterministic scripts (`[H-005]`).
 
 ## 3. Blind Spots & Counterweights

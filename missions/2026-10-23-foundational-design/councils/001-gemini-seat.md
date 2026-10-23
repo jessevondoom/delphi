@@ -1,7 +1,7 @@
 ---
 id: council-001-gemini-seat
 title: "Council 001, Round 2: Gemini Critic Seat (verbatim)"
-author: ares
+author: red-team
 timestamp: 2026-10-23T15:00:00Z
 source_type: internal_generated   # produced by gemini-4-argon-high via `agy --mode plan` at the operator's request
 confidence: medium

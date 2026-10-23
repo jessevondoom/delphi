@@ -3,13 +3,15 @@ id: kb-system-heuristics
 title: "Delphi Systemic Heuristics (ExpeL Contrastive Rule Store)"
 author: orchestrator
 timestamp: 2026-10-23T13:00:00Z
-source_type: user_ratified   # ratified by the operator 2026-10-23
+source_type: user_ratified   # ratified by the operator 2026-10-23; H-001/H-007 generalized to model families at the operator's direction
 confidence: high
 status: active
 max_rules: 25
 max_bytes: 6144
 max_rule_chars: 350
 active_rules: 7
+source_mission: 2026-10-23-foundational-design
+tags: [heuristics, always-loaded]
 ---
 
 # Systemic Heuristics (`context/heuristics.md`)
@@ -18,7 +20,7 @@ active_rules: 7
 
 ### `[H-001]` Heterogeneous Councils
 - **T:** Orchestrator convenes a Council.
-- **D:** 3–5 seats, spread across Claude and Gemini; ≤3 rounds.
+- **D:** 3–5 seats on ≥2 model families, each the best fit for its seat's task; ≤3 rounds.
 - **F:** Same-family seats converge prematurely; more than 3 rounds turns sycophantic. See `domains/mas-architecture-and-failure-modes.md`.
 
 ### `[H-002]` Pointer-Map (Scout)
@@ -46,7 +48,7 @@ active_rules: 7
 - **D:** Governance and persona at the top, the objective and output contract at the bottom; skills load at the tail.
 - **F:** Attention decays in the middle of long contexts.
 
-### `[H-007]` Cross-Provider Critic + Retry Ladder
+### `[H-007]` Cross-Family Critic + Retry Ladder
 - **T:** Dispatch, or a failed verification.
 - **D:** Put builder and critic on different model families. On failure, follow spec 003 §3.2: upscale, then reset context, then escalate.
 - **F:** Identical retries repeat the same local minimum.

@@ -131,13 +131,14 @@ See the structure map in [README.md](README.md#repository-structure). Runtime st
 
 ## 7. Modular Sub-Spec Roadmap (`specs/`)
 
-All 8 modular subsystem specifications have been drafted in `specs/`:
+The modular subsystem specifications in `specs/`:
 
 - [x] **[`specs/001-governance-and-manifests.md`](specs/001-governance-and-manifests.md):** Schemas for `AGENT.md`, progressive-disclosure `SKILL.md` packages, `HandoffEnvelope`, and 6-tier YAML provenance/taint frontmatter.
-- [x] **[`specs/002-adapter-and-routing.md`](specs/002-adapter-and-routing.md):** The **Integrator** Intermediate Prompt Representation (IPR), provider dialect passes, `ContentBlock` signature preservation, **Orchestrator's** dynamic Claude/Gemini model scaler, and CLI harness JSONL drivers.
+- [x] **[`specs/002-adapter-and-routing.md`](specs/002-adapter-and-routing.md):** The **Adapter** Intermediate Prompt Representation (IPR), provider dialect passes, `ContentBlock` signature preservation, **Orchestrator's** dynamic Claude/Gemini model scaler, and CLI harness JSONL drivers.
 - [x] **[`specs/003-collaboration-and-council.md`](specs/003-collaboration-and-council.md):** Complexity escalation ladder, Orchestrator DAG execution, 3-round sparse Council state machine, Heterogeneous Model Routing, and Minority Report synthesis.
 - [x] **[`specs/004-memory-and-coaching.md`](specs/004-memory-and-coaching.md):** Dual-tier memory engine, Frozen Boot-Snapshot cache hygiene, Two-Gear Zero-Server Hybrid RAG (`.delphi/state.db` AST breadcrumb chunking + FTS5 BM25 + `sqlite-vec` + RRF), Two-Strike Context Circuit Breaker, and ExpeL Rule-of-25 coaching loop.
 - [x] **[`specs/005-console-and-narrator-tui.md`](specs/005-console-and-narrator-tui.md):** `delphi-core` UDS daemon protocol, 60Hz event bus, `Console` operator deck, `Narrator` 4-view live narrator/telemetry window, and multiplexer auto-spawning.
 - [x] **[`specs/006-installer-and-updater.md`](specs/006-installer-and-updater.md):** Single-binary embedded-seed packaging, `delphi init` wizard, Three-Zone `delphi update` (`diff3` merge) & `delphi sync` engine, and 8-point `delphi doctor`.
 - [x] **[`specs/007-federated-mesh-and-sync.md`](specs/007-federated-mesh-and-sync.md):** Multi-instance peer federation via **Integrator** (A2A task delegation, `delphi://` Ed25519 UCAN/Biscuit capability pointers, Tailscale/SSH/mDNS transport, and transitive taint lattice firewall).
 - [x] **[`specs/008-ambient-watch-and-rewind.md`](specs/008-ambient-watch-and-rewind.md):** Zero-token "No-Agent Mode" ambient watches, coupled `/rewind` time-travel checkpoints (events + Git tree SHAs), 3-tier HITL approval batching.
+- [ ] **[`specs/009-model-access-and-auth.md`](specs/009-model-access-and-auth.md):** Access paths (direct API, Bedrock/Vertex, enterprise gateways, subscription CLIs), endpoints and failover policy, delegated credential sources, capability probing, harness mode (D-19). *Draft, pending review.*

@@ -24,19 +24,19 @@ Delphi is in its **spec-driven design phase (`v0.4`)**. This repository is the s
 
 ## The Agent Team (9 Roles)
 
-| Role ID | Manifest | Responsibility | Default tier | Blind spot → counterweight | Default theme name |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `orchestrator` | [`agents/orchestrator`](agents/orchestrator/AGENT.md) | Routing, model scaling, Council arbitration, coaching | `deep-reasoning` | Smoothing dissent → daemon-filled verbatim Minority Report | Athena |
-| `builder` | [`agents/builder`](agents/builder/AGENT.md) | Code, tests and scripts in sandboxed worktrees | `code-craft` | Silent workarounds → *No Spec, No Build*, drift halt | Hephaestus |
-| `architect` | [`agents/architect`](agents/architect/AGENT.md) | System design and specs | `deep-reasoning` | Over-abstraction → simpler-alternative rule | Daedalus |
-| `investigator` | [`agents/investigator`](agents/investigator/AGENT.md) | Bisects, benchmarks, primary sources | `fast-triage` | Target fixation → discovery-only, read-only | Artemis |
-| `scout` | [`agents/scout`](agents/scout/AGENT.md) | Broad discovery and cartography | `high-context-discovery` | Context overflow → pointer-map rule (`[H-002]`) | Argos |
-| `strategist` | [`agents/strategist`](agents/strategist/AGENT.md) | Roadmaps and scope audit | `deep-reasoning` | Scope creep → scope audit; can't waive `P0`s | Odysseus |
-| `red-team` | [`agents/red-team`](agents/red-team/AGENT.md) | Threat modeling and adversarial review | `deep-reasoning` | Endless contrarianism → falsifiable critiques, round cap | Ares |
-| `writer` | [`agents/writer`](agents/writer/AGENT.md) | User-facing docs and synthesis | `deep-reasoning` | Polish over truth → verified examples, caveats kept | Apollo |
-| `integrator` | [`agents/integrator`](agents/integrator/AGENT.md) | GitHub, external APIs, MCP | `fast-triage` | Silent mutation → Red-tier outbound gate, tainted ingress | Hermes |
+| Role ID | Manifest | Responsibility | Default tier | Blind spot → counterweight |
+| :--- | :--- | :--- | :--- | :--- |
+| `orchestrator` | [`agents/orchestrator`](agents/orchestrator/AGENT.md) | Routing, model scaling, Council arbitration, coaching | `deep-reasoning` | Smoothing dissent → daemon-filled verbatim Minority Report |
+| `builder` | [`agents/builder`](agents/builder/AGENT.md) | Code, tests and scripts in sandboxed worktrees | `code-craft` | Silent workarounds → *No Spec, No Build*, drift halt |
+| `architect` | [`agents/architect`](agents/architect/AGENT.md) | System design and specs | `deep-reasoning` | Over-abstraction → simpler-alternative rule |
+| `investigator` | [`agents/investigator`](agents/investigator/AGENT.md) | Bisects, benchmarks, primary sources | `fast-triage` | Target fixation → discovery-only, read-only |
+| `scout` | [`agents/scout`](agents/scout/AGENT.md) | Broad discovery and cartography | `high-context-discovery` | Context overflow → pointer-map rule (`[H-002]`) |
+| `strategist` | [`agents/strategist`](agents/strategist/AGENT.md) | Roadmaps and scope audit | `deep-reasoning` | Scope creep → scope audit; can't waive `P0`s |
+| `red-team` | [`agents/red-team`](agents/red-team/AGENT.md) | Threat modeling and adversarial review | `deep-reasoning` | Endless contrarianism → falsifiable critiques, round cap |
+| `writer` | [`agents/writer`](agents/writer/AGENT.md) | User-facing docs and synthesis | `deep-reasoning` | Polish over truth → verified examples, caveats kept |
+| `integrator` | [`agents/integrator`](agents/integrator/AGENT.md) | GitHub, external APIs, MCP | `fast-triage` | Silent mutation → Red-tier outbound gate, tainted ingress |
 
-v1 enables `orchestrator`, `architect`, `builder`, `red-team`, `strategist` (D-07).
+v1 enables `orchestrator`, `architect`, `builder`, `red-team`, `strategist` (D-07). Display names come from your theme; the default mapping is in [`themes/greek/theme.md`](themes/greek/theme.md).
 
 ---
 
@@ -57,7 +57,8 @@ delphi/
 │   ├── 005-console-and-narrator-tui.md
 │   ├── 006-installer-and-updater.md
 │   ├── 007-federated-mesh-and-sync.md
-│   └── 008-ambient-watch-and-rewind.md
+│   ├── 008-ambient-watch-and-rewind.md
+│   └── 009-model-access-and-auth.md
 ├── agents/<role>/AGENT.md           # Role manifests (behavior only, no theme content)
 ├── themes/greek/                    # Default theme pack (theme.md) + its research (research.md)
 ├── skills/CATALOG.md                # Taxonomy of all 42 skills
@@ -65,7 +66,7 @@ delphi/
 ├── context/                         # Seed knowledge base
 │   ├── index.md                     # Knowledge base index
 │   ├── heuristics.md                # Always-loaded systemic rules (Rule of 25, ≤ 6 KB)
-│   ├── model-capabilities.md        # Claude & Gemini capability matrix for model scaling
+│   ├── model-capabilities.md        # Model capability matrix by family (v1: Claude & Gemini)
 │   ├── invariant-enforcement.md     # Every invariant → where it is actually enforced
 │   └── domains/                     # Research & benchmark synthesis reports
 ├── memory/agents/<role>/lessons.md  # Seed templates for per-role private memory
@@ -88,3 +89,4 @@ delphi/
 6. **[006 — Installer, Layout & Updater](specs/006-installer-and-updater.md):** single-binary seed packaging, the Delphi home layout, the three-zone model, `update`, and `doctor`.
 7. **[007 — Federation & Sync](specs/007-federated-mesh-and-sync.md):** team sync via ratified proposals (A2A delegation and `delphi://` pointers deferred).
 8. **[008 — Ambient Watch, Rewind & HITL Tiers](specs/008-ambient-watch-and-rewind.md):** zero-token watches, `/rewind` checkpoints, and Green/Amber/Red approvals.
+9. **[009 — Model Access & Authentication](specs/009-model-access-and-auth.md):** direct API, cloud platforms (Bedrock, Vertex), enterprise gateways with SSO, and subscription CLIs; endpoints, failover pins and delegated credentials (D-19).

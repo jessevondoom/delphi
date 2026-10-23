@@ -8,6 +8,8 @@ confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)
 status: active
 max_rules: 25
 active_rules: 0
+source_mission: 2026-10-23-foundational-design
+tags: [lessons, orchestrator]
 ---
 
 # Orchestrator — Private Lessons Learned (`memory/agents/orchestrator/lessons.md`)

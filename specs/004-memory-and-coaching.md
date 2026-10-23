@@ -181,14 +181,89 @@ When **Builder** fails the same test or build verification twice in a row inside
 At mission close, **Orchestrator** executes `review-md-distillation` and `lesson-promotion`:
 - Candidate lessons are checked against the **6-Tier IFC Taint Lattice (`[H-004]`)**: only `user_ratified` ($L_5$) and `internal_empirical` ($L_4$) lessons may enter `context/heuristics.md`, `REVIEW.md`, `lessons.md`, or `skills/`.
 - Using rule-ID match + BM25 overlap (plus `sqlite-vec` cosine similarity $>0.82$ once vectors are enabled (D-01 reopen trigger: >50 missions **and** a logged terminology-shift miss)) via `lesson-deduper`, **Orchestrator** proposes ExpeL operations (`ADD`, `MERGE`, `DEMOTE`, or `PROMOTE` 2-strike rules to deterministic scripts in `skills/*/scripts/`).
-- Proposals are written to `missions/<id>/proposals/` and applied by `delphi-core` only after the **operator** ratifies them at `/retro` (GOVERNANCE §5.7, §7). This includes `lessons.md` (D-11, revised 2026-10-23): nothing enters an always-loaded prompt without ratification.
+- Proposals are submitted through the daemon's `propose` tool, stored in daemon-only `local/proposals/<mission-id>/`, and applied by `delphi-core` only after the **operator** ratifies them at `/retro` (GOVERNANCE §5.7, §7). This includes `lessons.md` (D-11, revised 2026-10-23): nothing enters an always-loaded prompt without ratification.
+
+## 5. Memory Scopes, Operator Customization & Evolution (D-20)
+
+Delphi learns at two levels at once. **Each operator's Delphi adapts to that person**: their preferences, tools and recurring corrections, across all their projects. **Delphi itself improves centrally**: lessons that prove generally useful flow back into the built-in processes every install receives. Neither may leak into the other without an explicit, ratified step.
+
+### 5.1 Four Scopes
+| Scope | Holds | Lives in | Visible to | Changes through |
+| :--- | :--- | :--- | :--- | :--- |
+| **Release** | Built-in governance, role manifests, skills, seed heuristics (`[H-…]`), default theme | Binary → `base/` (`specs/006` §3.1) | Everyone on that release | Delphi's own development (§5.5), delivered by `delphi update` with ratification |
+| **Team** | `REVIEW.md`, team heuristics (`[T-…]`), domain docs, team agent and skill overrides | Workspace `team/` (optionally a team-registry git clone) | The team | Ratified proposals; `delphi sync` (`specs/007` §4) |
+| **Operator** | Personal profile (preferences, tools, style), personal heuristics (`[O-…]`), per-role personal lessons, personal agent and skill customizations | `$DELPHI_HOME/operator/`, shared by all of this operator's workspaces | **Only this operator** | Ratified proposals; `delphi customize` |
+| **Workspace** | Project-specific heuristics (`[W-…]`) and per-role lessons, missions, history | Workspace `local/` | Only this operator, in this workspace | Ratified proposals |
+
+The rule-ID prefix shows a rule's scope everywhere it appears. Role isolation (GOVERNANCE §4.1) applies inside every scope: a role loads only its own lessons.
+
+### 5.2 Assembly into the Frozen Snapshot
+For each task, IPR blocks 3–4 (`specs/002` §2) are built from all four scopes, **broadest first**:
+- heuristics: release → team → operator → workspace;
+- the role's lessons: operator → workspace;
+- then the operator profile, summarized to ≤ 1 KB.
+
+More specific scopes come later in the prompt, closer to the task.
+- **Caps:** each file keeps its Rule-of-25, 6 KB and 350-character caps (§2.2). The combined always-loaded memory for one agent is capped at **12 KB**. If assembly exceeds it, the snapshot drops the lowest-scoring operator and workspace rules (§5.6), logs it, and Orchestrator proposes merges at the next `/retro`.
+- **Conflicts:** when two rules conflict on *how* to work (style, tools, conventions), the more specific scope wins. **No rule in any scope can relax governance**: approvals, taint, sandboxing, `REVIEW.md` `P0` rules or role scopes. The rule linter rejects rules that reference those controls, using the same deterministic check as theme packs (`specs/001` §6.4). Red-Team reviews every Operator- and Team-scope proposal before it is offered for ratification.
+
+### 5.3 Operator Customization
+- **Profile (`operator/profile.md`):** stated preferences such as languages, package managers, code style, review strictness, explanation depth, working hours and notification channel. It is edited directly with `delphi customize profile` (operator-authored, so $L_5$), or grown from proposals.
+- **Personal overrides** of built-in roles and skills live in `operator/core/agents/<role>/` and `operator/skills/`, and apply in every workspace. Precedence: workspace `core/` > operator `core/` > team `custom/` > release.
+  - Overrides may change instructions freely, but under `specs/001` §2.3 they may only **narrow** permissions.
+  - Widening a role's permissions by deliberate operator grant is an open question for Council 003.
+- **Survives updates:** operator overrides are 3-way merged against the release ancestor on `delphi update`, exactly like workspace `core/` (`specs/006` §4). Conflicts are staged, never overwritten.
+- **Pinned:** operator-scope files are hashed in `operator/ratified.lock` and loaded only from ratified copies, under the same rule as `specs/006` §3.1.
+
+### 5.4 Learning Routing at `/retro`
+Every proposal Orchestrator stages (§4.2) carries a **proposed scope** with a one-line rationale. The operator can change the scope when ratifying.
+- **Default is the narrowest** plausible scope (workspace), because learning broadens only on evidence.
+- **Workspace → Operator:** suggested automatically when an equivalent lesson (same rule ID, or a dedup match) has been ratified in at least 2 workspaces, or when it's about the operator's own preferences rather than the project.
+- **Operator → Team:** offered only as an explicit, Red-tier proposal through `delphi sync`. Personal memory is never shared implicitly.
+- **Any → Release:** a lesson that is general, has evidence ($L_4$ or better, measured improvement per §5.6), and isn't project-specific is marked an **upstream candidate** (§5.5).
+
+### 5.5 Evolving Delphi's Central Processes (upstream contribution)
+Improvements to Delphi's own process (built-in role manifests, skills, heuristics, `REVIEW.md` rules, governance) go back to Delphi's source repository, the install source (`specs/006` §3.1), through Delphi's own spec-first process:
+1. **`delphi contribute <proposal>`** builds a **contribution bundle**:
+   - the proposed change as a diff against the release file;
+   - its rationale;
+   - its evidence: ledger metrics before and after (first-pass success, retries, tokens per verified task), test results, and how many missions and workspaces it was observed in.
+2. **Privacy scrub:** the bundle carries no project code, file paths, mission content, prompts or memory text other than the rule itself, unless the operator adds them explicitly. The operator previews the exact bundle before anything leaves.
+3. **Submission is outbound, so it's Red-tier:** Integrator opens it as an issue or PR against the Delphi source repo, or it's exported as a file for manual submission.
+4. **Upstream review:** maintainers review contributions as Architect-authored spec amendments or REVIEW/heuristic changes, through a Council, as in this repo's own history.
+5. **Delivery:** accepted changes ship in a release and reach every install through `delphi update`. They arrive as ratification proposals, and each operator's customizations are merged, not overwritten (§5.3).
+
+### 5.6 Evidence: Is a Rule Actually Helping?
+- **`rule_stats`:** the daemon keeps a `rule_stats` table in `state.db`, derived from events:
+  - for each rule, when it was ratified and in which scope;
+  - how many tasks ran with it loaded;
+  - violations caught by deterministic checks (feeding the two-strike promotion, `[H-005]`);
+  - first-pass success, retries and tokens per verified task for its task types, compared with the window before it was introduced (from the usage ledger, `specs/005` §2.4).
+- **Rule score:** combines those signals. It ranks rules for Rule-of-25 eviction and §5.2 cap trimming, flags upstream candidates, and drives `ttl_missions` decay. A rule with no measurable effect after its TTL gets a `DEMOTE` proposal; it is never deleted silently.
+- **Not proof:** these are correlational signals, labeled as such in the `/retro` view. They inform the operator's decision, not replace it.
+
+### 5.7 Privacy & Portability
+- Operator scope never leaves the machine. It isn't synced, contributed or federated, except by an explicit `delphi operator export`, which produces an encrypted bundle for moving to a new machine (`delphi operator import`).
+- Teammates never see operator lessons, profile or customizations. Shared artifacts record only role IDs and team-scope rule IDs.
+
+### 5.8 Phase Mapping
+| Step | Delivers |
+| :--- | :--- |
+| **2** | Scope storage and snapshot assembly (release, operator, workspace), operator profile, `operator/ratified.lock` |
+| **6 (usage-gated)** | `/retro` scope routing and the workspace→operator suggestion; team scope via `delphi sync`; `rule_stats` and rule scores |
+| **Post-v1** | `delphi contribute` bundles and upstream submission; `delphi operator export/import` |
 
 ---
 
-## 5. Verification Plan
+## 6. Verification Plan
 1. **Identifier Tokenization Test:** Verify FTS5 `unicode61 tokenchars '_-.:/@#'` indexes `[H-004]`, `REV-SEC-04`, and `Part.thoughtSignature` as single exact tokens and ranks them #1 on exact queries.
 2. **Heading-Aware Chunking Test:** Index `SPEC.md` and verify every chunk in `.delphi/state.db` preserves exact 1-indexed `start_line`/`end_line` ranges and YAML frontmatter attributes.
-3. **Two-Strike Circuit Breaker Test:** Simulate 2 consecutive test failures in a `Builder` task; verify `delphi-core` resets the turn history and dispatches Attempt #3 (per the unified ladder) with a fresh context on the other provider family.
+3. **Two-Strike Circuit Breaker Test:** Simulate 2 consecutive test failures in a `Builder` task; verify `delphi-core` resets the turn history and dispatches Attempt #3 (per the unified ladder) with a fresh context on a different model family.
 4. **FTS Sync Test:** Insert, update, and delete chunks, then verify both FTS tables return exactly the live rows (`INSERT INTO kb_fts_prose(kb_fts_prose) VALUES('integrity-check')` passes).
 5. **Lost-Update Test:** `delphi sync` and a daemon retro write `heuristics.md` concurrently; both changes survive or one writer reports a CAS conflict. Neither is silently lost.
 6. **Rebuild Test:** Delete `state.db`; `delphi kb reindex` reproduces identical search results.
+7. **Scope Isolation Test:** an operator-scope lesson is loaded in both of the operator's workspaces, is absent from a teammate's install after `delphi sync`, and never appears in a `delphi contribute` bundle unless the operator adds it explicitly.
+8. **Specificity Test:** a workspace rule "use pnpm" and an operator rule "use npm" are both loaded. The workspace rule comes later in the prompt, and a recorded task follows it.
+9. **No-Relaxation Test:** a proposed operator rule "skip approval for docs changes" is rejected by the rule linter and never reaches ratification.
+10. **Update Survival Test:** an operator override of `builder`'s instructions survives `delphi update` to a release that changes the same manifest. The conflict is staged as `.upstream`, and the override is never silently replaced.
+11. **Contribution Scrub Test:** a contribution bundle generated from a mission in a private repo contains no repo paths, code or mission text by default (verified by scanning it for canaries planted in the mission).

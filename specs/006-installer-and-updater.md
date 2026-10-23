@@ -3,11 +3,11 @@ id: spec-006-installer-and-updater
 title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
-status: draft
+status: approved   # by the operator, 2026-10-23, after Council 002
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
-source_type: internal_generated
-confidence: medium
+source_type: user_ratified
+confidence: high
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
 ---
@@ -16,12 +16,21 @@ tags: [spec]
 
 ## 1. Scope & Objectives
 This specification defines how Delphi is packaged, distributed to multiple operators, initialized, and updated without ever corrupting operator-private memory or active worktrees:
-1. **Single-Binary Embedded Seed Packaging (`delphi` / `delphi-core`):** Shipping the compiled runtime with an embedded, hash-verified snapshot of built-in `GOVERNANCE.md`, `SPEC.md`, `agents/`, and `skills/`.
+1. **Single-Binary Embedded Seed Packaging (`delphi` / `delphi-core`):** Shipping the compiled runtime with an embedded, hash-verified snapshot of built-in `GOVERNANCE.md`, `SPEC.md`, `REVIEW.md`, `agents/`, `skills/`, `themes/`, `templates/`, seed `context/` and `memory/` templates.
 2. **Multi-Operator Distribution Channels:** Signed binary installer (`curl -fsSL ... | sh`), Homebrew Tap, and GitHub Releases with Ed25519 / Minisign signature verification.
 3. **The Three-Zone Ownership Model:** Strict separation between **Zone 1 (Core Upstream)**, **Zone 2 (Team-Shared Context & Specs)**, and **Zone 3 (Operator-Private Memory & Worktrees)**.
 4. **Atomic Updater (`delphi update`), Team Sync (`delphi sync`), and Health Validator (`delphi doctor`).**
 
-### 1.1 Simpler Alternative Considered
+### 1.1 Phase Mapping (what approval of this spec authorizes)
+| Roadmap step | Sections built and tested |
+| :--- | :--- |
+| **Step 1** | §2.1 embedded seed and signed `core-manifest.json`; §2.2 item 3 `delphi init` (offline, `--non-interactive`, no federation keys); §3 zones, §3.1 layout, `ratified.lock` bootstrap and pinning, workspace resolution, clean-repo rule; §5 `doctor` and `delphi lint --repo`; tests 6–10 |
+| **Step 2** | `doctor` checks that need the daemon or `state.db` start reporting (checks 1, 6) |
+| **Step 5** | §2.2 items 1–2 (bootstrap script, Homebrew); §4 `delphi update` in v1 `.upstream` mode, and `rollback`; tests 1, 3, 4, 5 |
+| **Step 6** | §4 in-memory diff3 merge; test 2; `delphi sync` (`specs/007` §4) |
+| **Step 7 / deferred** | Federation identity keypair (`specs/007`) |
+
+### 1.2 Simpler Alternative Considered
 - **Alternative:** Distribute Delphi as a `git clone` repository where operators run `git pull` to update both the engine code and their local memory/context.
 - **Why Rejected:** Mixing upstream engine updates with an operator's personal `memory/agents/*/lessons.md`, active `missions/`, and `.delphi/config.toml` causes constant Git merge conflicts and risks accidentally pushing private personal plans or local lessons to a public upstream repo. Separating the **Single Binary + Embedded Seed** (`delphi update`) from **Team Knowledge Sync** (`delphi sync`) and **Operator-Private State** guarantees zero merge friction across dozens of operators.
 
@@ -30,7 +39,7 @@ This specification defines how Delphi is packaged, distributed to multiple opera
 ## 2. Multi-Operator Packaging & Bootstrap Installer
 
 ### 2.1 Embedded Core Seed (`core-manifest.json`)
-The compiled `delphi` binary embeds the canonical read-only snapshot of all Zone 1 files alongside `core-manifest.json` (containing `blake3` hashes of every file in the release).
+The compiled `delphi` binary embeds the canonical read-only snapshot of all seed files alongside `core-manifest.json`. That manifest is signed with the release key and records each file's `blake3` hash and its provenance tier. Release files are tier $L_5$ by **release ratification**: the operator ratifies the release by installing a signature-verified build.
 - **Benefit 1:** `delphi init` works 100% offline with zero network calls. No embedding model is downloaded (D-01, ratified 2026-10-23).
 - **Benefit 2:** `delphi update` has the pristine ancestor needed for deterministic **Three-Way Merges** if an operator customized a built-in agent manifest. diff3 needs the ancestor's *content*, not just its hash. So `delphi init` and every `delphi update` write the installed release's Zone 1 files to `base/` in the workspace home (§3.1; read-only). `manifest.lock` records their `blake3` hashes so `doctor` can verify them.
 
@@ -41,12 +50,12 @@ The compiled `delphi` binary embeds the canonical read-only snapshot of all Zone
    - Verifies both SHA-256 and the **Ed25519 Minisign signature** before installing to `~/.local/bin/delphi`.
 2. **Homebrew Tap (`brew install <org>/tap/delphi`):** Installs the binary, shell completions (`zsh`, `bash`, `fish`), and manpages. If the binary lives under a Homebrew prefix, `delphi update` does not swap it. It runs the Zone 1 merge only and tells the operator to run `brew upgrade`.
 - **Platforms:** macOS and Linux only (`darwin`/`linux` × `arm64`/`x86_64`). Windows is unsupported, because Unix sockets, `flock`, and the sandbox are POSIX-specific (D-15, ratified 2026-10-23).
-3. **Interactive Onboarding Wizard (`delphi init`):**
-   - Creates the workspace home (§3.1), seeds Zones 1–3 from the binary, and registers one or more project repos by path. It writes **nothing** into any project repo.
-   - Generates the operator's Ed25519 federation identity keypair (stored in macOS Keychain / Linux Secret Service; public DID written to `.delphi/identity.json`).
-   - Offers the built-in theme packs (Greek by default) or `delphi theme new <name>` (`specs/001` §6.5), and records the choice in `config.toml` `[theme]`.
-   - Prompts for **Anthropic Claude** and **Google Gemini** API keys (or detects installed `claude` / `gemini` CLI harnesses) and runs an initial capability verification pass. Keys are stored in macOS Keychain or Linux Secret Service (falling back to `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` environment variables), **never** in `.delphi/config.toml` or any workspace file.
-
+3. **Onboarding (`delphi init [--non-interactive] [--workspace <name>] [--project <path>]`):**
+   - Creates the workspace home (§3.1), seeds it from the binary, and registers one or more project repos by path. It writes **nothing** into any project repo, and needs **no network**.
+   - **Bootstraps ratification:** writes `base/` and `base/manifest.lock` from the release, and writes `local/ratified.lock` plus `local/ratified/` from the signed `core-manifest.json`. From then on, anything that diverges from those hashes needs operator ratification.
+   - Offers the built-in theme packs (Greek by default) and records the choice in `config.toml` `[theme]`. Creating a new theme is post-v1 (`specs/001` §6.5).
+   - Configures model access per [`specs/009`](009-model-access-and-auth.md): endpoints and credential sources (cloud platform credentials, gateway SSO, credential helpers, subscription CLIs, or API keys). Access can also be configured later (`delphi endpoints add`, `delphi auth login`). `--non-interactive` skips it, and `doctor` then reports `warn: no endpoints configured`.
+   - *(Deferred to federation, Step 7: generating the Ed25519 identity keypair. It is not part of v1 `init`.)*
 ---
 
 ## 3. The Three-Zone File Ownership Architecture (`[REV-SEC-03]`)
@@ -74,7 +83,7 @@ flowchart LR
 | Zone | Paths | Owner | Updated By | Merge & Protection Invariant |
 | :--- | :--- | :--- | :--- | :--- |
 | **Zone 1 (Core)** | `GOVERNANCE.md`, `SPEC.md`, `agents/<role>/AGENT.md`, `skills/<builtin>/**` | Upstream Release | `delphi update` | **3-Way Diff3 Merge** against the ancestor content in `.delphi/base/`. Never writes raw `<<<<<<<` markers into active prompts. **Exception:** `GOVERNANCE.md` never fast-forwards silently. Even when the local copy is unmodified, the upstream diff is shown as a Red-tier approval (GOVERNANCE §5.7). |
-| **Zone 2 (Team)** | `REVIEW.md`, `context/**`, `specs/**`, `agents/custom/**`, `skills/custom/**` | Team / Repo Maintainers | `delphi sync` / `git` | **AST Rule-ID Merge + IFC Taint Gate (`[H-004]`)**. Preserved untouched during binary upgrades. Incoming changes to `REVIEW.md` and `heuristics.md` arrive as proposals ([`specs/007`](007-federated-mesh-and-sync.md) §4). Custom agents override built-ins of the same `id`, and only from `agents/custom/<id>/AGENT.md` (the single override path). |
+| **Zone 2 (Team)** | `REVIEW.md`, `context/**`, `specs/**`, `agents/custom/**`, `skills/custom/**` | Team / Repo Maintainers | `delphi sync` / `git` | **AST Rule-ID Merge + IFC Taint Gate (`[H-004]`)**. Preserved untouched during binary upgrades. Incoming changes to `REVIEW.md` and `heuristics.md` arrive as proposals ([`specs/007`](007-federated-mesh-and-sync.md) §4). Team overrides live in `team/agents/custom/<id>/AGENT.md`. Precedence is operator `core/` > team > built-in, and any override may only narrow the built-in role's scope (`specs/001` §2.3). |
 | **Zone 3 (Operator)** | `memory/agents/**`, `missions/**`, `.delphi/worktrees/**`, `.delphi/state.db`, `.delphi/config.toml` | Local Operator (the **operator**) | Local **Orchestrator** / the **operator** only | **Strict Non-Interference (`[REV-SEC-03]`):** `delphi update` and `delphi sync` are forbidden from overwriting or deleting Zone 3 files. |
 
 ### 3.1 Physical Layout: Delphi Is an Installed Tool (D-03, revised 2026-10-23)
@@ -88,50 +97,73 @@ $DELPHI_HOME/                     # default ~/.delphi (override with DELPHI_HOME
 └── workspaces/<name>/            # one per workspace; `.delphi/` in every spec means this directory
     ├── config.toml               # projects = ["/path/to/repo", …], providers, budgets
     ├── core/                     # Zone 1: operator customizations of built-ins (GOVERNANCE.md, agents/, skills/)
-    ├── base/                     # Zone 1 ancestor content for update merges (read-only)
+    ├── base/                     # Zone 1 release snapshot (read-only): ancestor for merges, source for uncustomized built-ins
+    │   └── manifest.lock         # blake3 of every file in base/
     ├── team/                     # Zone 2: REVIEW.md, context/, specs/, agents/custom/, skills/custom/
     │                             #   (optionally a git clone of a team registry, synced via `delphi sync`)
-    ├── local/                    # Zone 3: memory/, missions/ (incl. events.jsonl), state.db, proposals/, ratified.lock
+    ├── local/                    # Zone 3: memory/, missions/ (incl. events.jsonl), state.db
+    │   ├── ratified.lock         # hashes of every ratified constitutional file, manifest, skill, custom script and theme
+    │   ├── ratified/             # copies of the ratified versions (what the daemon actually loads)
+    │   └── proposals/<mission>/  # staged proposals, daemon-written only (specs/001 §2.2)
     └── worktrees/<task-id>/      # git worktrees of the project repo, outside the project checkout
 ```
 
 - **Spec shorthand:** throughout the specs, `.delphi/…` denotes the workspace home above, never a directory in the project. Agent manifests use **logical paths**, resolved by `delphi-core` (`specs/001` §2.2): `missions/**` and `memory/**` resolve to `local/`; `context/**`, `specs/**` and `REVIEW.md` to `team/`; `@worktree/**` to the task's worktree.
-- **Built-ins:** Zone 1 files with no local customization are read straight from the binary. A copy appears in `core/` only when the operator customizes one.
-- **Constitution pinning:** `local/ratified.lock` records the `blake3` of the last ratified `GOVERNANCE.md`, `REVIEW.md` and `context/heuristics.md`. At startup the daemon compares the files on disk against it. If they differ, for example after a raw `git pull` in `team/` or a hand edit, the daemon keeps loading the last ratified version (kept in `local/ratified/`) and stages the difference as a Red-tier proposal. No path, `delphi sync` included, can change active constitutional files without ratification.
+- **Built-ins:** Zone 1 files with no local customization are read from `base/` (the release snapshot written at init or update). A copy appears in `core/` only when the operator customizes one.
+- **Ratification pinning:** `local/ratified.lock` records the `blake3` of every ratified `GOVERNANCE.md`, `REVIEW.md`, `context/heuristics.md`, every `AGENT.md` and `SKILL.md` in use (built-in, `core/` or `team/`), every file under `skills/custom/**/scripts/**`, and the active theme pack. The daemon **only ever loads the copies in `local/ratified/`**. At startup it compares the live files against the lock. If they differ, for example after a raw `git pull` in `team/`, a hand edit, or a new release, it keeps loading the last ratified copy and stages the difference as a Red-tier proposal. No path, `delphi sync` and `delphi update` included, can change what agents run under without ratification.
+- **Workspace resolution:** `delphi` (and `doctor`) find the workspace by walking up from the current directory to its git root, then looking for workspaces whose `config.toml` `projects` contains that root. Exactly one match is used. With several matches, `--workspace <name>` is required (or `DELPHI_WORKSPACE`). With none, the operator is offered `delphi init --project <root>`. Outside any git repo, `--workspace` is required.
+- **Clean-repo rule (defined by provenance, not content):** a registered project is clean when it has no `.delphi/` directory, and no file in its working tree was created or modified by Delphi except through a merge the operator approved. Delphi's own source repo is therefore clean even though it contains `GOVERNANCE.md` and `agents/`.
 - **Footprint in the project's `.git/`:** worktree metadata (`.git/worktrees/`) and checkpoint refs (`refs/delphi/checkpoints/*`, which are never pushed by default) are the only traces. `delphi gc` removes both when a task's worktree is pruned.
 - **Specs for project work** live in `team/specs/`. Implementation PRs cite them as `Implements-Spec: <workspace>/specs/NNN-<slug>.md`, and the PR body links the spec text.
 - **This repository is the install source.** Its `GOVERNANCE.md`, `SPEC.md`, `agents/`, `skills/`, `templates/`, seed `context/`, and `memory/` templates are embedded in the binary at build time. `delphi init` seeds a workspace home from them, and `delphi update` merges new releases. Its `missions/` and `specs/` are Delphi's own design records and are not seeded. Building Delphi with Delphi works like any other project: an installed binary, with a workspace whose `projects` entry points at this repo.
+
+
+### 3.2 Pending Amendment 006-A1: Operator Home (D-20; *not yet approved, Council 003*)
+> If approved, `$DELPHI_HOME` gains a per-operator, cross-workspace directory (`specs/004` §5):
+> ```text
+> $DELPHI_HOME/operator/
+> ├── profile.md                 # operator preferences (operator-authored or ratified)
+> ├── heuristics.md              # [O-…] personal rules (Rule of 25 caps)
+> ├── memory/agents/<role>/lessons.md
+> ├── core/agents/<role>/        # personal overrides of built-ins (all workspaces)
+> ├── skills/                    # personal skills
+> ├── ratified.lock + ratified/  # pinned, as in local/
+> └── proposals/                 # daemon-only
+> ```
+> `delphi update` merges `operator/core/` against the release ancestor, like workspace `core/` (§4 step 4). `doctor` checks 3–4 and 8 cover operator files. `delphi operator export|import` moves this directory between machines as an encrypted bundle (post-v1).
 
 ---
 
 ## 4. `delphi update` State Machine
 
-1. **Pre-Flight Drain & Stop:** Queries `~/.delphi/run/<workspace-hash>.sock`. If any task or `.delphi/worktrees/*` build is running, it pauses and prompts the operator. Once there is no active work, it asks the daemon to drain (finish the current turn, persist, release locks) and **stops it**, so no old daemon keeps running against the new schema. The next `delphi` invocation spawns the new daemon.
-2. **Atomic Binary Replacement (`POSIX rename()`):**
-   - Downloads and verifies the new binary's Ed25519 signature.
-   - Copies the current binary to `~/.delphi/bin/delphi-prev` (enabling instant `delphi rollback`).
-   - Writes `.delphi-update.tmp` in the target directory and executes an atomic `rename()`.
-3. **Zone 1 Three-Way Manifest Merge:**
-   - For each Zone 1 file, compares `blake3(local)`, `blake3(base_lock)`, and `blake3(new_release)`:
-     - If `local == base_lock` $\rightarrow$ silently fast-forwards to `new_release`.
-     - If `local != base_lock` and `new_release == base_lock` $\rightarrow$ preserves operator's local customization untouched.
-     - **v1 (D-06, ratified 2026-10-23):** if both changed, write `<file>.upstream-vX.Y` next to the local file and prompt the **operator** (`[A]ccept upstream / [K]eep local / [M]erge in $EDITOR`); no automatic diff3. The full merge below is the post-v1 design.
-     - If both changed $\rightarrow$ runs in-memory 3-way merge. Clean merges apply automatically; overlapping line conflicts stage `.upstream-vX.Y` and prompt the **operator** (`[A]ccept upstream / [K]eep local / [M]erge in $EDITOR`).
-4. **SQLite Schema Migration & Re-Index:** Copies `state.db` to `state.db.bak-<version>` first, then runs migrations in a single transaction and incrementally re-indexes modified Markdown files. Because `state.db` is derived (`specs/004` §3.1), a failed migration falls back to a full `delphi kb reindex`.
+1. **Download & Verify:** downloads the release and verifies its Ed25519 signature and `core-manifest.json`. It refuses a version lower than the installed one unless `--allow-downgrade` is passed, which defends against downgrade attacks.
+2. **Pre-Flight Drain & Stop (all workspaces):** finds every daemon under `$DELPHI_HOME/run/*.sock`. If any task or worktree build is running, it pauses and prompts the operator. Otherwise it asks each daemon to drain (finish the current turn, persist, release locks) and **stops it**.
+3. **Ratify Before Swap:** for every workspace, it stages the new release's diffs against `local/ratified/` for constitutional files, manifests, skills and the built-in theme, and shows them as one Red-tier approval. `GOVERNANCE.md` diffs are always shown, even when unmodified locally. If the operator declines, nothing changes. If approved, `ratified.lock` and `local/ratified/` are updated. Because the daemon loads only ratified copies, swapping the binary can never change active rules by itself.
+4. **Zone 1 Merge into `base/` and `core/`:**
+   - For each Zone 1 file, it compares `blake3(local)`, `blake3(base_lock)` and `blake3(new_release)`:
+     - If `local == base_lock` → `base/` takes `new_release` (its active use was already ratified in step 3).
+     - If `local != base_lock` and `new_release == base_lock` → the operator's customization is kept untouched.
+     - **v1 (D-06):** if both changed, it writes `<file>.upstream-vX.Y` beside the local file and prompts the operator (`[A]ccept upstream / [K]eep local / [M]erge in $EDITOR`). There is no automatic diff3. The full merge below is the post-v1 design.
+     - If both changed (post-v1) → in-memory 3-way merge. Clean merges are staged for ratification; overlapping conflicts stage `.upstream-vX.Y` and prompt the operator.
+5. **Atomic Binary Replacement (`POSIX rename()`):** copies the current binary to `$DELPHI_HOME/bin/delphi-prev`, writes `.delphi-update.tmp` in the target directory, and renames it into place atomically.
+6. **SQLite Schema Migration & Re-Index:** Copies `state.db` to `state.db.bak-<version>` first, then runs migrations in a single transaction and incrementally re-indexes modified Markdown files. Because `state.db` is derived (`specs/004` §3.1), a failed migration falls back to a full `delphi kb reindex`.
+7. **Rollback (`delphi rollback`, Step 5):** restores `delphi-prev`, `state.db.bak-<version>`, and the previous `base/` and `local/ratified/` snapshots. It refuses if `events.jsonl` has gained events in a newer schema since the update.
 
 ---
 
 ## 5. `delphi doctor`: 8-Point Deterministic Health Check
 
-Running `delphi doctor` executes an instant read-only verification suite (exit code `0` = healthy, `1` = action required):
+Running `delphi doctor` executes a fast, read-only, offline verification suite. Each check reports `ok`, `warn` or `fail`, and only `fail` makes the exit code `1`. Checks that depend on something not yet present (no daemon, no `state.db`) report `skipped`.
+
+`delphi lint --repo <path>` runs the file-level checks (schema and canonical roles per `specs/001` §7 test 1, and checks 3–5 below) against a **source repository** in the flat layout, such as this repo. CI uses it.
 1. **Binary $\leftrightarrow$ Daemon Version Match** over `$DELPHI_HOME/run/<workspace-hash>.sock`. If no daemon is running, this check is skipped and reported as `not running`, not as a failure.
 2. **Zone 1 Manifest Lock Integrity** (checks `blake3` hashes and flags unresolved `.upstream-*` files).
-3. **6-Tier Taint Audit (`[H-004]`):** Verifies no entry below `internal_empirical` ($L_4$) exists inside `context/heuristics.md`, `REVIEW.md`, `memory/agents/*/lessons.md`, or `skills/`.
-4. **Rule of 25 & 6 KB Cap Audit:** Verifies `context/heuristics.md` and all 9 `memory/agents/<role>/lessons.md` files have $\le 25$ rules and $\le 6,144$ bytes.
-5. **Pointer & Link Validator:** Verifies all `path#Lstart-Lend` pointers and Markdown links across `context/`, `specs/`, `SPEC.md`, `GOVERNANCE.md`, and `REVIEW.md` resolve to existing files and line ranges. It also flags absolute local paths (`/Users/…`, `/home/…`), which violate `[REV-SEC-05]`.
-6. **Hybrid RAG Index Health:** Verifies `.delphi/state.db` WAL integrity, `fts5`, and `sqlite-vec` tables.
-7. **Provider & CLI Harness Reachability:** Verifies configured Anthropic Claude and Google Gemini credentials and optional local CLI harnesses (`claude`, `gemini`, `gh`).
-8. **Worktree, Socket & Clean-Repo Hygiene:** Checks `.delphi/worktrees/` for orphaned locks and stale `.git/worktrees/` entries. Verifies `0600` socket permissions (when a daemon runs). Confirms each registered project repo contains no Delphi files, and that the active constitution matches `ratified.lock`.
+3. **6-Tier Taint Audit (`[H-004]`):** every protected file (`context/heuristics.md`, `REVIEW.md`, `memory/agents/*/lessons.md`, manifests, skills, the theme) either matches `ratified.lock` ($L_5$ by ratification) or has a provenance-index tier ≥ $L_4$. Anything else is `fail`.
+4. **Rule of 25 & Caps Audit:** in `context/heuristics.md` and each `memory/agents/<role>/lessons.md`, every `### ` heading is one rule. Each rule must have `T`, `D` and `F` lines totaling ≤ 350 characters. Each file must have ≤ 25 rules (matching its `active_rules` frontmatter) and ≤ 6,144 bytes.
+5. **Pointer & Link Validator:** parses Markdown (excluding fenced code blocks, which hold illustrative examples) and verifies that links and `path#Lstart-Lend` pointers resolve. In workspace mode they resolve through the logical overlay (`specs/001` §2.2), and links to design records that are never seeded (`specs/`, `missions/`, `OVERVIEW.md`, `README.md` of the source repo) are `skipped`. It flags absolute home paths matching `/(Users|home)/[A-Za-z0-9._-]+/` (`[REV-SEC-05]`).
+6. **Retrieval Index Health:** verifies `state.db` WAL integrity and the FTS5 tables (`skipped` before the first daemon run). The `sqlite-vec` tables are checked only when `[rag] engine = "sqlite-hybrid"` (D-01).
+7. **Model Access (`specs/009` §6):** probes each configured endpoint (authentication, features), and checks that each subscription CLI is installed and signed in. Missing or unreachable endpoints are `warn`, never `fail`, so an offline fresh install passes. `--require-providers` makes them `fail`.
+8. **Worktree, Socket & Clean-Repo Hygiene:** orphaned worktree locks and stale `.git/worktrees/` entries; `0600` socket permissions (when a daemon runs); the clean-repo rule for every registered project (§3.1); and live files compared with `ratified.lock`, where drift is reported as a pending proposal, not silently loaded.
 
 ---
 
@@ -141,3 +173,8 @@ Running `delphi doctor` executes an instant read-only verification suite (exit c
 3. **Tampered Binary Rejection Test:** Corrupt 1 byte of a downloaded release archive or signature and verify `delphi update` aborts with a cryptographic verification error before touching `~/.local/bin/delphi`.
 4. **Constitution Gate Test:** With an unmodified local `GOVERNANCE.md` and a changed upstream version, `delphi update` must stop at a Red approval showing the diff rather than fast-forwarding.
 5. **Running-Daemon Update Test:** Run `delphi update` while an idle daemon is attached; the old daemon is stopped before migration, and the next client attaches to the new version.
+6. **Fresh Offline Init Test:** with networking disabled, `delphi init --non-interactive --project <repo>` creates `base/`, `base/manifest.lock`, `team/`, `local/ratified.lock`, `local/ratified/` and `config.toml`. `delphi doctor` then exits `0` (warnings allowed), and `<repo>` has zero new, modified or untracked files.
+7. **Drift Detection Test:** edit `team/REVIEW.md`, then `core/agents/builder/AGENT.md`, without ratifying. `doctor` reports both as pending proposals, and a daemon start keeps loading the ratified copies.
+8. **Source-Repo Lint Test:** `delphi lint --repo .` exits `0` on this repository.
+9. **Workspace Resolution Test:** with two workspaces registering the same project, `delphi` in that project refuses to guess and asks for `--workspace`. With one, it attaches. With none, it offers `init`.
+10. **Clean-Repo Test:** register this Delphi source repo as a project. `doctor` check 8 passes even though the repo contains `GOVERNANCE.md` and `agents/`. Creating `.delphi/` in it makes check 8 `fail`.

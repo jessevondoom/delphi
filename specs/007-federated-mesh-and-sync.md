@@ -64,7 +64,7 @@ flowchart TB
 ```
 
 ### 2.1 Plane 1: Agent-Team-to-Agent-Team Delegation (A2A Profile)
-Each `delphi-core` daemon exposes a signed **Agent Card** (`/.well-known/delphi-card.json`) over its authenticated peer listener advertising its public Ed25519 DID (`did:key:z6Mk...`) and high-level team capabilities (e.g., `query-domain-kb`, `request-spec-review`, `ask-argos-cartography`)—**never** exposing internal `memory/` or raw system prompts.
+Each `delphi-core` daemon exposes a signed **Agent Card** (`/.well-known/delphi-card.json`) over its authenticated peer listener advertising its public Ed25519 DID (`did:key:z6Mk...`) and high-level team capabilities (e.g., `query-domain-kb`, `request-spec-review`, `ask-scout-cartography`)—**never** exposing internal `memory/` or raw system prompts.
 - When Alice's **Orchestrator** needs insight from Bob's repository, Alice's the **Gateway** sends a structured `HandoffEnvelope` over A2A `tasks/sendSubscribe` to Bob's the **Gateway**.
 - Bob's **Orchestrator** dispatches its local **Scout**/**Investigator** and returns a pointer-based synthesis.
 - **Inbound tasks are not free.** Every inbound A2A task lands in Bob's console approval queue unless the sending peer has a standing grant (`.delphi/config.toml` `[peers.<did>] auto_accept = ["query-domain-kb"]`). Each peer also has a budget (`max_usd_per_day`, `max_concurrent_tasks`) that `delphi-core` enforces. Inbound task spans start at taint $L_1$, so the tool table in `specs/001` §5.2 applies: read-only, no outbound calls.

@@ -16,7 +16,7 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
  $DELPHI_HOME/workspaces/<name>/  ← all Delphi state; project repos stay clean (D-03)
 ```
 - **One runtime owns everything.** `delphi-core` is the only writer of the event log and index. It runs the task DAG and the Council, and it enforces every security invariant in code ([enforcement map](context/invariant-enforcement.md)). It is a small local daemon from Step 2, so the operator and Narrator can both attach and Narrator streams live (D-05).
-- **Integrator (the provider layer)** compiles portable agent and skill Markdown into each provider's native format. It keeps cryptographic reasoning signatures intact across tool loops and backs off on rate limits before failing over. Model *tiers* (`fast` / `workhorse` / `frontier`) map to concrete models in config.
+- **The Adapter (the provider layer)** compiles portable agent and skill Markdown into each provider's native format. It keeps cryptographic reasoning signatures intact across tool loops and backs off on rate limits before failing over. Model *tiers* (`fast` / `workhorse` / `frontier`) map to concrete models in config.
 - **Roles are canonical; names are a theme (D-17).** Specs, config and files refer to `orchestrator`, `builder`, `architect`, `red-team` and so on. A per-install theme pack (Greek by default: Athena, Hephaestus, …; console "Chaos", narrator "Homer") sets display names and a short voice line. You approve a theme before it loads, and it can't change behavior.
 - **Agents are data.** Each agent is an `agents/<id>/AGENT.md` with write globs and allowed tools; each skill is a `SKILL.md` that loads only when used. The v1 roster is Orchestrator, Architect, Builder, Red-Team and Strategist (D-07).
 - **Three escalation modes:**
@@ -39,15 +39,16 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
 - **Worktrees are not sandboxes.** Execution is sandboxed (D-04), and agents can never write `.git/` (no hook planting).
 
 ## The learning loop
-1. **During a mission**, a failed check climbs a fixed ladder: upscale the model, then reset the context on the other provider family, then **escalate to you**. Spending is capped: $5 per mission and $20 per Council by default (D-10).
+1. **During a mission**, a failed check climbs a fixed ladder: upscale the model, then reset the context on a different model family, then **escalate to you**. Spending is capped: $5 per mission and $20 per Council by default (D-10).
 2. **At `/retro`**, Orchestrator distills four kinds of lesson. All of them are **proposals**:
    - escaped bug → a heuristic **and** a review check;
    - your "by design" ruling → a scoped suppression;
    - a rule violated twice → a deterministic script;
    - role coaching → that agent's `lessons.md`.
 3. **You ratify** the proposals in one batch. Only `internal_empirical` (test-verified) or higher content can be promoted, and nothing, agent lessons included, enters an always-loaded prompt without your ratification (D-11).
-4. **Memory stays small.** At most 25 rules per always-loaded file, under 6 KB, at most 350 characters per rule (D-09). Overflow means merge, demote to `context/domains/`, or promote to a script.
-5. **Each task starts from a frozen snapshot** of those files, so mid-task learning never invalidates the prompt cache.
+4. **Learning has four scopes:** release (everyone), team, operator (you, across all your projects) and workspace (this project). Lessons start narrow and broaden only with evidence and your approval. Improvements to Delphi's own built-in processes go back upstream as scrubbed, previewed contributions and return to everyone through updates, without overwriting your customizations (D-20).
+5. **Memory stays small.** At most 25 rules per always-loaded file, under 6 KB, at most 350 characters per rule (D-09). Overflow means merge, demote to `context/domains/`, or promote to a script.
+6. **Each task starts from a frozen snapshot** of those files, so mid-task learning never invalidates the prompt cache.
 
 ## How you operate it
 | You want to… | You do | Delphi does |
@@ -55,6 +56,7 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
 | Ask or fix something small | Type in the operator, or `@builder …` | Direct or short DAG; diffs appear in Narrator |
 | Build a feature | Describe it | Architect drafts a spec, Red-Team/Strategist review it, **you approve**; then a sandboxed TDD build and the 5 merge gates, ending with **your** merge |
 | Settle a hard trade-off | `/council "<question>"` | Two rounds, then a verdict with Minority Report, or a structured decision for you |
+| See who's working, on which model, at what cost | Narrator agents pane, or `/usage` | Shows per-agent status, the resolved model, and tokens (input, cache, output, thinking) against budget, from the usage ledger |
 | Control cost or risk | `/budget`, `/permissions`, `/scale` | Changes ceilings, Amber handling, or model tiers. Red-tier always asks |
 | Undo agent work | `/rewind <seq>` *(Step 6)* | Forks the history and restores the worktree; refuses if external side effects would remain |
 | Improve the team | `/retro` | Shows the staged lessons for one batch ratification |

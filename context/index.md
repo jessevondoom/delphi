@@ -1,11 +1,13 @@
 ---
 id: kb-master-index
 title: "Delphi Central Knowledge Base Index"
-author: mnemosyne
+author: orchestrator
 timestamp: 2026-10-23T07:20:00Z
 source_type: internal_empirical
 confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)
 status: active
+source_mission: 2026-10-23-foundational-design
+tags: [index, knowledge-base]
 ---
 
 # Delphi Central Knowledge Base (`context/`)

@@ -18,7 +18,7 @@ tags: [spec]
 This specification defines how the 9 agent specialists collaborate under **Orchestrator's** orchestration:
 1. **Complexity Escalation & Mode Selection:** Choosing between Single-Specialist Dispatch, Orchestrator DAG Mode, and Council Mode.
 2. **Orchestrator Mode (Directed Acyclic Graph Execution):** Parallel/sequential specialist execution with Git worktree isolation and deterministic verification gates.
-3. **Council Mode (3-Round Sparse Adversarial Deliberation):** State machine enforcing blind parallel Round 1, heterogeneous model routing (`Claude` + `Gemini`), Round 2 cross-examination, and Round 3 Verdict + verbatim **Minority Report**.
+3. **Council Mode (3-Round Sparse Adversarial Deliberation):** State machine enforcing blind parallel Round 1, heterogeneous model routing (seats on ≥2 model families, each chosen for task fit), Round 2 cross-examination, and Round 3 Verdict + verbatim **Minority Report**.
 
 ### 1.1 Simpler Alternative Considered
 - **Alternative:** A flat peer-to-peer group chat where all 9 agents read a shared transcript and an LLM speaker-selector decides who talks next (e.g., legacy AutoGen `GroupChat`).
@@ -80,11 +80,11 @@ stateDiagram-v2
 | :--- | :--- | :--- |
 | 1 | Dispatch | Tier chosen by the scaler (`specs/002` §4). |
 | 2 | Attempt 1 failed verification | **Upscale** tier and thinking budget ≥2× (`[H-007]`). History kept. |
-| 3 | Attempt 2 failed | **Context Circuit Breaker** (`specs/004` §4.1): fresh context, 5-line diagnostic, other provider family. |
+| 3 | Attempt 2 failed | **Context Circuit Breaker** (`specs/004` §4.1): fresh context, 5-line diagnostic, a different model family. |
 | — | Attempt 3 failed, **or** `mission_budget_usd` reached | **Halt node → `Escalated`**; the **operator** decides. No further automatic attempts. |
 
 - "Failed verification" means a deterministic check failed. Only tests that existed before the task and that the task did not modify may be rerun once for flake detection; a pass on rerun is recorded as `flaky` and does not count as a strike. A failure of any test the task added or modified always counts. Intermittent failures are exactly how races show up.
-- The budget ceiling is enforced by `delphi-core`, not by an agent. Before each model call the daemon **reserves** that call's worst-case cost (input tokens + `max_tokens` + thinking budget, at the tier's price) against the remaining budget. The call is refused if the reservation doesn't fit, and the reservation is reconciled to actual cost when the stream ends. Parallel calls therefore cannot jointly overshoot the cap. Defaults (D-10, ratified 2026-10-23): `mission_budget_usd = 5`, `council_budget_usd = 20`, `max_parallel_agents = 4`. Hitting a ceiling halts the node and escalates; it never silently downscales.
+- The budget ceiling is enforced by `delphi-core` from the usage ledger (`specs/005` §2.4), not by an agent. Before each model call the daemon **reserves** that call's worst-case cost (input tokens + `max_tokens` + thinking budget, at the tier's price) against the remaining budget. The call is refused if the reservation doesn't fit, and the reservation is reconciled to actual cost when the stream ends. Parallel calls therefore cannot jointly overshoot the cap. Defaults (D-10, ratified 2026-10-23): `mission_budget_usd = 5`, `council_budget_usd = 20`, `max_parallel_agents = 4`. Hitting a ceiling halts the node and escalates; it never silently downscales.
 - `max_turn_budget` (`specs/001`) bounds the tool-use turns *within* one attempt.
 
 ---
@@ -104,7 +104,7 @@ sequenceDiagram
     participant Red-Team as Red-Team (Red Team - Cross-Provider)
 
     the operator->>Orchestrator: /council "How should we architect cross-instance context sharing?"
-    Orchestrator->>Orchestrator: Frame Proposition + Select 3-5 Gods + Assign Heterogeneous Models (Claude + Gemini)
+    Orchestrator->>Orchestrator: Frame Proposition + Select 3-5 roles + assign best-fit models from ≥2 families
     
     par Round 1: Blind Parallel Opening Stances (Zero Peer Visibility)
         Orchestrator->>SpecA: Dispatch Proposition (Isolated Context)
@@ -138,7 +138,7 @@ sequenceDiagram
 ### 4.1 Council Protocol Invariants
 1. **The Blind Barrier (`[REV-TRAP-01]`):** During Round 1, `delphi-core` holds each specialist's output **in daemon memory**. Nothing is written to any path an agent can read or write, `events.jsonl` included: Round 1 block events are buffered and appended only after the barrier releases (`specs/005` §2.3), and agents can never read the event log (`specs/001` §2.2). No agent can read any peer's Round 1 stance until **all** Round 1 participants have finished, or have timed out (a timed-out seat is recorded as `abstained`). This eliminates First-Speaker Anchoring Bias. The barrier is daemon state-machine code, not a script or subcommand an agent chooses to call.
    - **Framing hygiene:** Round 1 seats get only the proposition and pointers. They don't get Orchestrator's preferred answer, and they don't get prior council verdicts on the same topic unless the **operator** attaches them.
-2. **Heterogeneous Provider Assignment (`[H-001]` & `[H-007]`):** When both Anthropic (`Claude Opus/Sonnet`) and Google (`Gemini Pro`) credentials are active, `delphi-core`'s Council router automatically alternates model families across Council seats (e.g., `Architect` on Claude Opus, `Red-Team` on Gemini Pro, `Strategist` on Claude Sonnet) so the Council never suffers from single-model sycophancy.
+2. **Heterogeneous Family Assignment (`[H-001]` & `[H-007]`):** when models from two or more families are configured, the Council router assigns each seat the best-fit model for its role from the capability matrix (`specs/002` §4), subject to one constraint: seats must span at least two families, and Red-Team is never on the same family as the proposal's author (Architect). Families are training lineages, not vendors (GOVERNANCE §3.2).
 3. **the round cap (`R \le 3` Cap):** Councils are strictly capped at 3 rounds: two deliberation rounds plus synthesis. Agents cannot enter an endless polite argument loop. With only one provider configured, the verdict is labeled `homogeneous` so the **operator** knows the `[H-001]` diversity guarantee did not hold.
 4. **Mandatory Minority Report Section:** The final Council artifact (`missions/<id>/councils/NNN-<slug>.md`) is rejected by `lint_spec.py` unless it contains a `## Accepted Risks & Minority Report (Red-Team / Dissent)` section.
    - The section is filled by `delphi-core`, which copies every unresolved `P0`/`P1` item verbatim from the critics' structured Round 2 output. Orchestrator can add context but cannot edit or drop those items.
@@ -151,5 +151,5 @@ sequenceDiagram
 1. **Anti-Anchoring Barrier Test:** During Round 1, verify that no Round 1 content exists on disk or in any agent-reachable tool result. An agent with `read: ["*"]` and write access to `missions/**/councils/**` cannot observe or alter a peer stance before the state machine reaches `ROUND_2`.
 4. **Retry Ladder Test:** Three consecutive verification failures on one node produce exactly two automatic retries (upscale, then reset) followed by an `Escalated` state. A mission whose budget is exhausted halts before its next model call.
 5. **Fabricated-Dissent Test:** A verdict with an empty Minority Report and no Red-Team `concur: true` fails lint; a verdict whose Minority Report differs from Red-Team's Round 2 P0 text fails lint.
-2. **Heterogeneous Assignment Test:** Given a mock config with both `anthropic` and `google` keys, verify that a 4-seat Council assigns at least one seat to each provider family.
+2. **Heterogeneous Assignment Test:** given a mock capability matrix with three families (including two models of the same family served by different providers), verify that a 4-seat Council spans at least two *families*, never counts one family twice because it has two providers, and never puts Red-Team on Architect's family.
 3. **Minority Report Linter Test:** Verify that a Council Verdict missing the `Minority Report` heading or omitting an unresolved `P0`/`P1` objection from **Red-Team** fails validation.

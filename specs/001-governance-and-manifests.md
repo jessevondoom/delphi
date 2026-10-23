@@ -3,11 +3,11 @@ id: spec-001-governance-and-manifests
 title: "001: Governance Enforcement, Agent/Skill Manifests & Handoff Schemas"
 author: architect
 timestamp: 2026-10-23T07:48:00Z
-status: draft
+status: approved   # by the operator, 2026-10-23, after Council 002
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
-source_type: internal_generated
-confidence: medium
+source_type: user_ratified
+confidence: high
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
 ---
@@ -26,7 +26,15 @@ This specification defines the machine-validated schemas and runtime contracts t
 - Model provider wire translation and dialect compilation (covered in [`specs/002-adapter-and-routing.md`](002-adapter-and-routing.md)).
 - Multi-round Council state machine transitions (covered in [`specs/003-collaboration-and-council.md`](003-collaboration-and-council.md)).
 
-### 1.2 Simpler Alternative Considered
+### 1.2 Phase Mapping (what approval of this spec authorizes)
+| Roadmap step | Sections built and tested |
+| :--- | :--- |
+| **Step 1** | Static validation in `delphi lint` / `doctor`: §2.1 manifest schema, §2.3 override rules, §3.1 skill schema, §4 envelope schema, §5 frontmatter schema; the §2.2 path guard as a tested library; §6.1–6.4 theme schema, sanitizer and linter; tests 1, 6, 7, 9, 11, 12, 15 |
+| **Step 2** | Runtime: the §5.1 provenance model and index, §5.2 taint-gated tools, span accounting; tests 2–5, 8, 10, 13, 14 |
+| **Step 3** | Sandbox-side parts of §2.2 (git invocation hardening, sandbox write attribution) |
+| **Post-v1** | §6.5 `delphi theme new` (needs Scout enabled) |
+
+### 1.3 Simpler Alternative Considered
 - **Alternative:** Hardcode agent prompts and tool permissions directly in Go/Rust source code structs.
 - **Why Rejected:** Violates [GOVERNANCE.md](../GOVERNANCE.md) §1.2 and prevents **Orchestrator** or human operators from inspecting, auditing, or extending skills and agent rules via Git-tracked Markdown files. Keeping manifests as YAML-frontmatter Markdown files preserves human readability while enabling strict JSON-Schema validation at load time.
 
@@ -34,7 +42,7 @@ This specification defines the machine-validated schemas and runtime contracts t
 
 ## 2. Declarative Agent Manifest Schema (`agents/<role>/AGENT.md`)
 
-Every specialist in the agent team is loaded from `agents/<id>/AGENT.md` (with optional user overrides in `.delphi/agents/custom/<id>/AGENT.md`).
+Every specialist in the agent team is loaded from the first of these that exists (§2.3): `core/agents/<id>/AGENT.md` (operator customization), then `team/agents/custom/<id>/AGENT.md` (team override), then the built-in from `base/` (the release snapshot).
 
 ### 2.1 YAML Frontmatter Contract
 ```yaml
@@ -55,12 +63,29 @@ max_turn_budget: 25                     # Hard loop guard (prevents MAST FM-1.3 
 
 ### 2.2 Runtime Enforcement Invariants
 1. **Path & Tool Sandboxing (`[REV-SEC-02]`):** Before executing any file write or tool call requested by an agent, `delphi-core` validates the target path against `default_access_scope.write` and the tool name against `default_access_scope.execute`. Violations immediately abort the tool call and return a structured permission error to the agent.
-   - **Logical paths first, then containment.** Manifests contain only logical paths (`missions/**` and `memory/**` → `local/`; `context/**`, `specs/**`, `REVIEW.md` → `team/`; `@worktree/**` → the task's worktree; see `specs/006` §3.1). Physical paths never appear in manifests. The daemon (1) matches the request against the logical globs, (2) maps it to exactly one zone root, then (3) resolves it inside that root. Resolution rejects `..` and absolute paths, compares case-insensitively on case-insensitive filesystems, and opens each component with `openat` + `O_NOFOLLOW`, so symlinks and hard links cannot leave the root.
-   - **Never writable by any agent, regardless of globs:** any project repo's `.git/**` (all git operations go through `delphi-core`), and the daemon's internals: `run/`, `state.db`, `config.toml`, `base/`, `local/ratified*`, `local/proposals/` (written only by the daemon), and `missions/**/events.jsonl`.
-   - **Never readable by any agent:** `missions/**/events.jsonl` and `run/`. The event log holds every agent's raw blocks, so reading it would defeat both the Council barrier and the no-raw-context-bleed rule (`specs/003` §3.1). Agents see other agents' work only through committed Markdown artifacts and `HandoffEnvelope` pointers.
+   - **Logical paths first, then containment.** Manifests contain only logical paths; physical paths never appear in them. The daemon (1) matches the request against the logical globs, (2) maps it to exactly one zone root using the table below, then (3) resolves it inside that root.
+
+     | Logical path | Zone root (`specs/006` §3.1) | Agent access |
+     | :--- | :--- | :--- |
+     | `missions/**` | `local/missions/` | per manifest |
+     | `memory/agents/<self>/**` | `local/memory/agents/<self>/` | own role only |
+     | `context/**`, `specs/**`, `REVIEW.md`, `agents/custom/**`, `skills/custom/**` | `team/` | per manifest |
+     | `GOVERNANCE.md`, `SPEC.md`, `agents/<id>/**`, `skills/<builtin>/**` | `core/` if customized, else `base/` | read-only |
+     | `@worktree/**` | `worktrees/<task-id>/` | per manifest (Builder, Writer) |
+
+   - **Resolution rules:** reject `..` and absolute paths; NFC-normalize every component (APFS is normalization-insensitive) and compare case-insensitively on case-insensitive filesystems; open each component with `openat` + `O_NOFOLLOW`. `O_NOFOLLOW` stops symlinks **only**, so the guard also rejects any target with `st_nlink > 1`, and any `(st_dev, st_ino)` that matches a protected file. Hard links are regular files and would otherwise pass.
+   - **Never writable by any agent, regardless of globs:** any path segment named `.git` at any depth, **file or directory**. In a linked worktree `.git` is a *file* (`gitdir: …`), and rewriting it redirects the daemon's own git calls. Also never writable: the daemon's internals (`run/`, `state.db*`, `config.toml`, `base/`, `local/ratified*`, `local/proposals/`, `local/provenance*`) and `missions/**/events.jsonl`.
+   - **Never readable by any agent:** `missions/**/events.jsonl`, `run/`, `state.db*` (it indexes every role's private memory), `local/proposals/`, `local/ratified*`, and other roles' `memory/agents/<other>/**`. Within `read: ["*"]`, `*` means all logical paths minus this list. Agents see other agents' work only through committed Markdown artifacts and `HandoffEnvelope` pointers.
+   - **Proposals:** agents never write proposals as files. They call the daemon's `propose` tool, which stores the proposal in `local/proposals/<mission-id>/` (daemon-only) so no one can edit it between review and ratification.
    - Path checks govern agent file tools only. Shell and script execution is governed by the sandbox tier ([`specs/008`](008-ambient-watch-and-rewind.md) §4), because a shell can write anywhere the OS allows.
    - Write scopes are disjoint from daemon-owned state: no agent glob may match `missions/**/councils/.barrier/**` (the Council barrier lives in daemon memory, [`specs/003`](003-collaboration-and-council.md) §4.1).
 2. **Length Cap (`[REV-ARCH-03]`):** `AGENT.md` body content must not exceed **500 lines** (`<2,500` tokens) so persona instructions never crowd out task context.
+
+### 2.3 Overrides & Ratification
+- **Precedence:** `core/agents/<id>/` > `team/agents/custom/<id>/` > built-in. The same order applies to skills.
+- **Pinned:** every `AGENT.md` and `SKILL.md` in use (built-in, `core/` or `team/`), and every file under `skills/custom/**/scripts/**`, must match a hash in `local/ratified.lock`. A changed or new one is staged as a Red-tier proposal and does not load until ratified (`specs/006` §3.1).
+- **Narrow, never widen:** an override's `default_access_scope` (read, write, execute) and `authorized_skills` must be a subset of the built-in role's. `delphi lint` rejects any widening, so ratification can't approve one by accident.
+- **Skills referenced but not yet packaged:** a skill in `authorized_skills` must exist as `skills/<name>/SKILL.md`, **or** be listed in `skills/CATALOG.md` with `status: planned`, which is a lint warning rather than an error. When a package exists, its `authorized_agents` must include the role. A mismatch is an error.
 
 ---
 
@@ -96,8 +121,8 @@ required_permissions:
   - read:all
   - write:worktree
   - shell:scoped_scripts
-deterministic_scripts:
-  - path: "scripts/run_tdd_gate.py"
+deterministic_scripts:                    # skills/custom only; built-in checks are compiled into delphi-core (D-02)
+  - path: "scripts/check_example.sh"
     timeout_ms: 60000
     sandbox_mode: "worktree-isolated"   # readonly | worktree-isolated | outbound-gated
 ```
@@ -111,7 +136,7 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §3.1, agents never pass raw chat transcri
 ```yaml
 handoff_id: "ho_20261023_0042"
 mission_id: "2026-10-23-auth-refactor"
-parent_span_id: "sp_athena_01"
+parent_span_id: "sp_orchestrator_01"
 caller_agent: "orchestrator"
 target_agent: "builder"
 
@@ -166,29 +191,41 @@ Every Markdown artifact written to `context/`, `missions/`, `specs/`, or `memory
 ---
 id: string
 title: string
-author: orchestrator | builder | architect | investigator | scout | strategist | red-team | writer | integrator | operator
+author: orchestrator | builder | architect | investigator | scout | strategist | red-team | writer | integrator | operator | delphi-core
 timestamp: "2026-10-23T07:48:00Z"       # ISO-8601 UTC
 source_type: external_untrusted | federated_peer | federated_verified | internal_generated | internal_empirical | user_ratified  # Written by delphi-core, never by agents
 confidence: low | medium | high | verified  # `verified` requires a linked test/CI artifact
 status: draft | debating | approved | active | superseded
-superseded_by: string | null            # Required when status == superseded
+superseded_by: string | null            # OPTIONAL; required only when status == superseded
 source_mission: string
-ttl_missions: 10                        # Used for stale heuristic garbage collection
+ttl_missions: 10                        # OPTIONAL; stale-heuristic garbage collection
 tags: [string]
 ---
 ```
+**Required:** `id`, `title`, `author`, `timestamp`, `source_type`, `confidence`, `status`, `source_mission`, `tags`. **Optional:** `superseded_by` (required when superseded) and `ttl_missions`. The frontmatter `source_type` is a **display copy**. The authoritative tier is the provenance index (§5.1).
 
 This is the **single canonical lattice** for all specs ($L_0 < L_1 < L_2 < L_3 < L_4 < L_5$): `external_untrusted` ($L_0$), `federated_peer` ($L_1$), `federated_verified` ($L_2$), `internal_generated` ($L_3$: written locally by an agent, with no test evidence), `internal_empirical` ($L_4$: verified by a local deterministic test or script), `user_ratified` ($L_5$). Tier definitions live in [`specs/007`](007-federated-mesh-and-sync.md) §3. Promotion into always-loaded files requires $L_4$ or higher.
 
-### 5.1 Taint Propagation Invariant (`[H-004]` / `[REV-SEC-01]`)
-- **Span taint is computed by `delphi-core`, not declared.** Every span carries a `span_taint` equal to the minimum tier of everything that entered its context window: tool results, dereferenced pointers, handoff payloads, and federated slices. Taint only decreases within a span, and a child span inherits its parent's taint.
-- Every artifact a span writes gets `source_type = span_taint`, stamped by the daemon. An agent-supplied `source_type` that differs is rejected.
-- **Files without frontmatter (code, JSON, config):**
-  - Files tracked at the project's base commit read as $L_4$, except paths matching `untrusted_paths` (default `vendor/**`, `third_party/**`, `node_modules/**`), which read as $L_0$. Untracked files not written by Delphi also read as $L_0$.
-  - Any file an agent writes is recorded in the daemon's `(worktree, path) → taint` map with the writer's span taint. Later reads of that file use the recorded taint, never the default, so a low-taint span cannot launder content through a `.json` or `.rs` file.
-  - Recorded taint clears only when the operator approves the merge into the project (merge gate 5). The merged content then becomes base-commit content.
-- Agent-generated content with no test evidence is stamped `internal_generated` ($L_3$; decision D-08, ratified 2026-10-23). It can be used by tools but cannot be promoted. A passing deterministic check raises it to $L_4$; the **operator** ratification raises it to $L_5$. A span that also read lower-tier input keeps the lower tier.
-- The daemon's provenance gate (compiled into `delphi-core`, not a script agents can edit) **blocks** any write to `context/heuristics.md`, `REVIEW.md`, `GOVERNANCE.md`, `memory/agents/*/lessons.md`, or `skills/**` from a span below $L_4$.
+### 5.1 Provenance Model (`[H-004]` / `[REV-SEC-01]`)
+**Span ceiling.** Every span has an `external_ceiling`: the minimum tier of every *external or federated* input ($\le L_2$) that entered its context, starting at $L_5$. The ceiling only goes down within a span, and a child span inherits its parent's ceiling. Local inputs ($L_3$–$L_5$) never lower it, which is why verification can raise output trust without contradiction.
+
+**Stamping what a span writes:**
+- Unverified output: `min(L3, external_ceiling)` (`internal_generated`, D-08).
+- Output covered by a passing deterministic check run by the daemon: `min(L4, external_ceiling)`.
+- Ratified by the operator: `L5`. Ratification is the only path to $L_5$, and it also resets that artifact's ceiling. That is the operator's explicit decision.
+
+**Provenance index (authoritative).** The daemon keeps a persisted `(zone, path, blake3) → tier` index. It is written as `provenance.stamp` events in `events.jsonl` and indexed in `state.db`, so it is rebuildable. It covers **every** file, Markdown or not. A file's tier on read is its index entry for that exact content hash. Frontmatter is never trusted.
+
+**Files with no index entry for their current hash** (raw `git pull`, hand edits, external tools) take an **origin default**:
+- seeded release files: the tier recorded in the signed `core-manifest.json` (`specs/006` §2.1);
+- tracked project files at the base commit: $L_4$, except `untrusted_paths` (default `vendor/**`, `third_party/**`, `node_modules/**`), which are $L_0$;
+- `team/` content: $L_2$;
+- other local edits: $L_3$;
+- anything else: $L_0$.
+
+**Execution attribution.** Files a sandboxed execution step creates or modifies (detected by diffing the worktree against its pre-step checkpoint tree, `specs/008` §3) are stamped with that step's span tier, exactly as if written by a file tool.
+
+**Gate.** The daemon's provenance gate (compiled into `delphi-core`) **blocks** any write to `context/heuristics.md`, `REVIEW.md`, `GOVERNANCE.md`, `memory/agents/*/lessons.md`, `agents/**` or `skills/**` from a span below $L_4$. Those files change only through ratified proposals in any case (GOVERNANCE §5.7).
 
 ### 5.2 Taint-Gated Tools (`[H-004]` applied to actions)
 | Span taint | Read tools | Worktree writes / code execution | Outbound (`gh`, network, A2A) | Dispatch other agents |
@@ -213,10 +250,10 @@ labels:   { console: string, narrator: string, agent_team: string }   # window a
 roles:                                                              # exactly the nine canonical IDs
   <role>: { name: string, epithet: string, persona: string }         # persona: ≤ 400 chars, voice only
 ```
-A human-facing rationale (why each figure fits its role) may follow; it is never loaded. Built-in packs ship in the binary (seeded from this repo's `themes/`, Greek by default). User packs live in `$DELPHI_HOME/themes/<name>/`. Each install picks one in `config.toml` `[theme] name`. The theme is per user, not per team.
+**Field rules:** every string field rejects `<`, `>`, `&`, ASCII control characters, Unicode bidi controls and tag characters (`U+E0000`–`U+E007F`). `name`, `epithet` and each `labels.*` value are ≤ 64 characters. The nine `name` values must be unique (case-insensitive) and must not equal any canonical role ID. A human-facing rationale (why each figure fits its role) may follow; it is never loaded. Built-in packs ship in the binary (seeded from this repo's `themes/`, Greek by default). User packs live in `$DELPHI_HOME/themes/<name>/`. Each install picks one in `config.toml` `[theme] name`. The theme is per user, not per team.
 
 ### 6.3 Where Themes Appear
-- **Display only:** console and narrator labels, agent names in the TUI, `@<name>` mentions (resolved to the role ID before dispatch; `@<role>` always works), and rendered views of shared files. Shared files are stored with role IDs and rendered through the viewer's theme.
+- **Display only:** console and narrator labels, agent names in the TUI, `@<name>` mentions (resolved to the role ID before dispatch; `@<role>` always takes precedence), and rendered views of shared files. Shared files are stored with role IDs and rendered through the viewer's theme.
 - **Prompts:** one **persona slot** per agent, a single `persona` string of at most 400 characters, placed *after* governance and the role manifest in the IPR (`specs/002` §2). Governance always outranks it.
 
 ### 6.4 Safety Rules (themes are prompt input)
@@ -230,9 +267,15 @@ A human-facing rationale (why each figure fits its role) may follow; it is never
 3. **Check:** Red-Team reviews the draft for persona text that tries to change behavior, and the §6.4 linter runs.
 4. **Ratify:** the operator reviews the pack in the console (`/theme review`) and ratifies or edits it. Only then does it enter `ratified.lock` and become selectable with `delphi theme use <name>`.
 
+## 6A. Pending Amendment 001-A1: Operator Scope (D-20; *not yet approved, Council 003*)
+> The approved text above is unchanged. If Council 003 and the operator approve, this amendment adds:
+> - **§2.2 mapping rows:** `memory/operator/<self>/**` → `$DELPHI_HOME/operator/memory/agents/<self>/` (own role only, read-only for agents; loaded through the snapshot); `operator/profile.md` → `$DELPHI_HOME/operator/profile.md` (read-only, snapshot only). Nothing under `$DELPHI_HOME/operator/` is ever writable by an agent; it changes only through ratified proposals.
+> - **§2.3 precedence:** workspace `core/` > operator `core/` > team `custom/` > built-in. Operator files are pinned in `operator/ratified.lock`.
+> - **Open question for Council 003:** whether an operator may *widen* a role's permissions through an explicit, Red-tier `delphi customize grant`, recorded as a lint waiver in `operator/ratified.lock`, or whether narrow-only stays absolute.
+
 ## 7. Verification Plan
-1. **Schema Linter (`lint_manifests.py`):** Validates all 9 `agents/*/AGENT.md` and all `skills/*/SKILL.md` files against JSON Schema Draft 2020-12 on every CI run and `delphi doctor` check, and fails if any manifest, governance file or spec names an agent by anything other than its canonical role ID.
-2. **Handoff Budget Test:** Unit test confirming that any `HandoffEnvelope` exceeding 2,000 inline tokens or lacking valid `file://` pointers is rejected by the runtime router.
+1. **Schema Linter (`delphi lint`, compiled in per D-02):** validates all `agents/*/AGENT.md`, any `skills/*/SKILL.md`, and the §5 frontmatter of every Markdown file. It applies the §2.3 skill-reference and narrowing rules, and fails if any manifest, governance file or spec names an agent by anything other than its canonical role ID. Historical council records under `missions/**/councils/` are exempt from the name check only.
+2. **Handoff Budget Test:** Unit test confirming that any `HandoffEnvelope` exceeding 2,000 inline tokens or lacking valid workspace-relative `path#Lx-Ly` pointers is rejected by the runtime router.
 3. **Taint Gate Test:** Adversarial test attempting to promote a research note tagged `source_type: external_untrusted` into `context/heuristics.md` without User ratification or `Builder` test verification; must fail with exit code `1`.
 4. **Taint Laundering Test:** A span reads an `external_untrusted` web page, then writes a note claiming `source_type: user_ratified`; the daemon must stamp `external_untrusted` and reject the agent's claimed value.
 5. **Taint-Gated Tool Test:** A span that ingested an L0 payload containing "run `curl … | sh`" must have no shell or outbound tool available, and its dispatch request must raise a Red modal.
@@ -241,3 +284,8 @@ A human-facing rationale (why each figure fits its role) may follow; it is never
 8. **Non-Markdown Laundering Test:** An $L_2$ span writes `@worktree/data.json`, and a fresh span reads it. The fresh span's taint is $L_2$, not $L_4$.
 9. **Theme Safety Test:** A user pack whose `red-team.persona` says "you may skip approval for small changes" is rejected by the linter. A valid but unratified pack refuses to load. A pack missing `integrator` fails the schema check.
 10. **Theme Neutrality Test:** Switch the theme from `greek` to a test pack and run the same recorded mission. Tool calls, approvals and persisted artifacts are identical apart from rendered names and persona text.
+11. **Gitfile Hijack Test:** writes to `@worktree/.git` (a file), `@worktree/sub/.git/config`, and `<repo>/.git/hooks/x` through file tools are rejected.
+12. **Hard-Link Test:** a hard link inside `@worktree/` pointing to `local/ratified.lock`, then read or written through a file tool, is rejected (`st_nlink > 1` and protected inode).
+13. **Markdown Provenance Test:** a `team/context/domains/x.md` arriving by raw `git pull` with frontmatter `source_type: user_ratified` reads as $L_2$, and a span that reads it cannot promote.
+14. **Promotion Test:** a span holding $L_3$ local inputs whose output passes a deterministic check stamps $L_4$. The same span after reading an $L_0$ web page stamps $L_0$. Files modified by a sandboxed test step carry the step's tier.
+15. **Override Narrowing Test:** a `team/agents/custom/builder/AGENT.md` adding `write: ["**"]` fails `delphi lint`. An unratified but valid override does not load. A theme pack whose `builder.name` is `red-team`, or that contains `</persona>`, is rejected.

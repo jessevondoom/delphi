@@ -1,7 +1,7 @@
 ---
 id: kb-mythological-cosmogony-and-pantheon
 title: "Greek Mythology, Hesiodic Cosmogony & The Delphi Pantheon Systems Mapping"
-author: argos
+author: scout
 timestamp: 2026-10-23T07:15:00Z
 source_type: internal_empirical
 confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)

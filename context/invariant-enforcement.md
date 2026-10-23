@@ -34,6 +34,16 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | No Spec, No Build (`status: approved` before `IsolatedBuild`) | GOV §1.3, spec 003 §3.1 | DAG transition guard | Daemon | ❌ |
 | `Implements-Spec:` on implementation PRs | `REV-ARCH-01` | PR lint | CI | ❌ |
 | Council Round 1 blind | GOV §3.2, spec 003 §4.1 | In-memory barrier | Daemon | ❌ |
+| No agent or sandboxed process writes any `.git` (file or dir, any depth); daemon git calls hardened | spec 001 §2.2, 008 §4 | Path guard + sandbox profile + git runner | Daemon | ❌ |
+| Hard links can't bypass the path guard | spec 001 §2.2 | `st_nlink`/protected-inode check + sandbox visibility | Daemon | ❌ |
+| Taint tier read from the provenance index, never from frontmatter | spec 001 §5.1 | Provenance index + origin defaults | Daemon | ❌ |
+| Manifests, skills, custom scripts and theme load only from ratified copies; overrides only narrow | spec 001 §2.3, 006 §3.1 | `ratified.lock` loader + `delphi lint` | Daemon + CI | ❌ |
+| Update can't change active rules before ratification | spec 006 §4 | Ratify-before-swap; daemon loads `local/ratified/` only | Daemon | ❌ |
+| No memory rule in any scope relaxes governance controls | spec 004 §5.2 | Rule linter at proposal time + Red-Team review | Daemon | ❌ |
+| Operator memory never leaves the machine implicitly; contributions are scrubbed and previewed | spec 004 §5.5, §5.7 | Sync/contribute path filters + canary scan test | Daemon + CI | ❌ |
+| Interrupted side effects are never retried blindly | spec 005 §2.5 | `action.intent`/`action.result` reconciliation | Daemon | ❌ |
+| Credentials never on disk outside keychain; never another tool's credentials | spec 009 §4 | Credential resolver + redactor + no-secret scan test | Daemon + CI | ❌ |
+| Endpoint failover stays within `allowed_endpoints` | spec 009 §5 | Endpoint selector | Daemon | ❌ |
 | Agents can't read `events.jsonl`; Round 1 events buffered until barrier | spec 001 §2.2, 005 §2.3 | Path guard + event writer | Daemon | ❌ |
 | Non-Markdown files carry taint (base-commit L4, untrusted paths L0, per-file map for agent writes) | spec 001 §5.1 | Taint map | Daemon | ❌ |
 | Active constitution matches `ratified.lock`; drift staged as Red proposal | spec 006 §3.1 | Startup check + loader | Daemon + doctor | ❌ |

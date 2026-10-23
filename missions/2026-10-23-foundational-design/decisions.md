@@ -62,7 +62,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 
 **Recommendation:** accept all seven. Each one is cut from the critical path, not abandoned; the amended specs stay as the design of record.
 **Blocks:** roadmap re-sequencing (D-12).
-**Status:** ✅ RATIFIED 2026-10-23: all seven cuts accepted
+**Status:** ✅ RATIFIED 2026-10-23: all seven cuts accepted. **Partly reversed by D-19:** CLI harness drivers and the OpenAI-compatible dialect pass are back in v1.
 
 ## 🔴 D-12 — Adopt the revised critical path?
 **Context:** The current roadmap builds retrieval before any missions exist and coaching before there's anything to learn, and only reaches a usable loop at Phase 4–5.
@@ -203,3 +203,45 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 - The layers are `console`, `narrator`, `governance`, `adapter`, plus the federation `gateway`.
 - Display names, epithets and voice come from a per-install theme pack, Greek mythology by default (`themes/greek/`). New themes are researched by Scout, mapped by Architect, checked by Red-Team, and ratified by the operator (`specs/001` §6).
 **Status:** ✅ RATIFIED 2026-10-23 by the operator ("sounds good. go"); applied across all governance, specs, manifests, memory seeds, config and the knowledge base. Council 001 records keep their original names as history.
+
+## 🟢 D-18 — Epic view, agents pane and usage ledger
+**Context:** The narrator's first view was under-specified, and the "cost ledger" that budget enforcement relies on was never defined. Token efficiency will become a major focus over time, even if it is minor in v1.
+**Decision:**
+- Narrator view 1 is the **Epic**: the mission's task DAG as a graph of stories and tasks.
+- A persistent **agents pane** shows each role's status, current task, provider, tier and resolved model, tokens by type (including cache reads), and spend against budget.
+- A **usage ledger** (`specs/005` §2.4) records one row per model call, derived from `agent.usage` events. It feeds budget enforcement, the pane, `/usage`, and future efficiency analysis.
+- The ledger and `/usage` ship in Step 2; the pane and the Epic view ship in Step 5.
+
+**Status:** ✅ RATIFIED 2026-10-23 by the operator.
+
+## 🟢 D-19 — Model access paths and authentication (all required in v1)
+**Context:** The specs assumed pay-per-token API keys only. The operator noted these are the *least* common real configuration.
+**Decision:** v1 supports four access paths (spec 009):
+- **Direct API.**
+- **Cloud platforms:** AWS Bedrock and Google Vertex AI.
+- **Enterprise gateways:** native-format passthrough, plus an OpenAI-compatible compat mode with reduced fidelity.
+- **Subscription CLIs** (`claude`, `gemini`, `codex`) in sandboxed harness mode.
+
+Supporting rules:
+- **Credentials:** credential sources are delegated wherever possible (AWS SDK chain, Google ADC, OAuth device-code SSO, exec credential helpers, the CLI's own login), and Delphi never stores or reuses another tool's credentials.
+- **Endpoint policy:** endpoints are configured per model family, with ordered failover and an `allowed_endpoints` compliance pin.
+
+**Effect on D-06:** reverses the deferral of CLI harness drivers (now v1, Step 3, sandboxed, with spec 009 §7 conditions) and pulls the OpenAI-compatible dialect pass into v1 (for gateway compat and the `codex` harness). The direct OpenAI API driver stays deferred.
+**Status:** ✅ RATIFIED 2026-10-23 by the operator ("we need to include support for all 3 missing setups from v1, they aren't optional"). Spec 009 is `draft` and needs its own review.
+
+## 🟢 D-20 — Per-operator memory, customization and two-level evolution
+**Context:** The operator asked that agents evolve both Delphi's central processes and each operator's own customizations.
+**Decision:** Four memory scopes (spec 004 §5):
+- **release**, **team** and **workspace**, as before;
+- a new private, cross-workspace **operator** scope (profile, personal heuristics and lessons, personal overrides).
+
+Supporting rules:
+- **Assembly:** each snapshot loads the scopes broadest first; more specific scopes win on *how to work*, and no scope can relax governance.
+- **Routing:** each `/retro` proposal has a scope, defaulting to the narrowest; it broadens on evidence.
+- **Upstream:** central improvements flow to Delphi's source repo as scrubbed, previewed contribution bundles (Red-tier outbound), reviewed through Delphi's own Council process, and return through ratified updates that merge rather than overwrite customizations.
+- **Evidence:** `rule_stats` provides correlational effectiveness signals.
+
+**Status:** ✅ RATIFIED 2026-10-23 by the operator. Spec text is `draft` (spec 004 §5, pending amendments 001-A1 and 006-A1) → Council 003. One open question goes to Council 003: whether operators may widen role permissions by explicit grant.
+
+## ✅ Approvals
+- **2026-10-23:** the operator approved `specs/001-governance-and-manifests.md` and `specs/006-installer-and-updater.md` after Council 002. Roadmap Step 1 may begin. Pending amendments 001-A1 and 006-A1 are *not* covered by this approval.
