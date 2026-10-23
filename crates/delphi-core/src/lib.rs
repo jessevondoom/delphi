@@ -7,9 +7,15 @@
 //! * [`budget`]: pre-dispatch reservations and the halt-on-ceiling rule (`specs/003` §3.2).
 
 pub mod budget;
+pub mod client;
 pub mod event;
+pub mod hub;
 pub mod ledger;
 pub mod log;
+pub mod peer;
+pub mod proto;
 pub mod redact;
+pub mod server;
+pub mod spawn;
 pub mod time;
 pub mod usage;
