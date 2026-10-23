@@ -3,7 +3,7 @@ id: spec-010-connectors-and-tool-access
 title: "010: Native Connectors (MCP) & the Tool Access Layer"
 author: architect
 timestamp: 2026-10-24T16:00:00Z
-status: draft   # needs a Council and operator approval before any code (D-23)
+status: draft   # revised after Council 006 round 1 (2026-10-24); needs round 2 or operator approval before any code (D-23)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -28,10 +28,11 @@ agent span ──tool call──▶ tool pipeline ──▶ ConnectorHost ──
                                                                  └─ token store (OS keychain) ◀─ browser OAuth login
 ```
 1. **`ConnectorHost`** lives in `delphi-engine`. It owns one MCP client session per connected connector and the token store. It runs in the daemon, never in a sandbox or an agent's process.
-2. **Tools are namespaced** `<connector>.<tool>` (for example `slack.search_messages`) and offered to a span only if the span's role is on the connector's ratified `roles` list (§3).
+2. **Tools are namespaced** `<connector>.<tool>` (for example `slack.search_messages`) and offered to a span only if the span's role is on the connector's ratified `roles` list (§3). `Registry::register_external` enforces the namespace and refuses any name that is already registered, so a server can never shadow `read_file` or another connector's tool.
 3. **One pipeline.** Every connector call passes through the same steps as `read_file` and `write_file`: classify → taint gate → approval if needed → execute → persist. There is no second code path.
 4. **Harness bridge.** When a model runs through a harness (`specs/009` §7), connector tools reach it through the per-span MCP socket of `specs/009` §7.6. The harness sees them as Delphi's tools; its own connectors stay off (§7 item 5 stands).
 5. **Transports:** Streamable HTTP (remote servers; all five v1 connectors) and stdio (local servers, later). The client negotiates the protocol version and pins a minimum (initially the 2025-11-25 revision).
+6. **The MCP client is written in-tree**, minimal (`initialize`, `tools/list`, `tools/call`, Streamable HTTP, protocol-version negotiation) on the existing `reqwest` transport, behind a small `McpTransport` trait so an adopted crate can replace it later. Reasons: redirects, TLS, timeouts and size limits stay under Delphi's control, and none of the protocol's optional features (roots, sampling, prompts) are wanted (Council 006, red-team).
 
 ## 3. The Ratified Catalog
 Connector configuration is a Red-tier proposal and is hashed with `[access]` (`config.toml#access`; `[connectors.*]` joins `[harness.*]` in `lock::access_blocks`). Nothing is read from an unratified edit.
@@ -44,12 +45,15 @@ auth = "oauth"                       # oauth | none
 client_id = "<from the operator's Slack app>"   # optional where the server supports dynamic registration
 client_secret = "keychain:slack-client-secret"  # only if the provider requires one
 scopes = ["search:read", "channels:history"]
+account = "T01ABCDEF"                           # required: team id (Slack) or email (Google, Zoom); checked after login (§4.10)
+redirect_port = 0                               # 0 = ephemeral; a fixed port for providers that register exact redirect URIs
+max_arg_chars = 512                             # cap on any single string argument of a call (§6.2)
 roles = ["orchestrator", "strategist"]          # canonical role IDs; never a Council seat
 hosts = ["mcp.slack.com", "slack.com"]          # exact names; no wildcards
 tools = { "search_messages" = "read", "read_channel" = "read", "post_message" = "write" }
 ```
 1. **`tools` is Delphi's own allowlist and classification.** A server's tool annotations and descriptions are untrusted. A tool the server offers that is not listed is invisible to agents. A listed tool is `read` or `write`, as the operator ratified.
-2. **Definition pinning.** At ratification Delphi records a hash of each allowed tool's name, input schema and description. If the server later changes any of them (a "rug pull" or a poisoned description), the tool is disabled and `doctor` reports a pending re-ratification.
+2. **Definition pinning.** At ratification Delphi records a hash of each allowed tool's name, input schema and description. A description is an instruction to the model, so a poisoned one is an injection vector. If the server later changes any of the three, that tool (only that tool) is disabled and the console shows a **diff card** to re-ratify in one step. Cosmetic edits cost one keypress, not a blocked mission. (Council 006 split on this; the stricter position was kept.)
 3. **Descriptions are data.** Tool descriptions from servers never enter the system channel; they are shown to the model as tool metadata only after the daemon has escaped delimiter strings (`specs/002` §2).
 4. `hosts` is the connector's network allowlist. The daemon's HTTP client refuses any other host, including redirects, and logs refusals.
 
@@ -65,10 +69,12 @@ Connectors authenticate with OAuth in the operator's browser, following the MCP 
 7. **Expiry or revocation mid-task** pauses the call with `re-authenticate <connector>` and never retries with another account.
 8. **Admin approval.** Some providers need a workspace admin to approve the app (reported for Slack). `delphi auth login` explains this when the provider returns that error.
 9. Login and logout run only from the console (TTY challenge, like ratification). An agent cannot start, finish or switch a login.
+10. **Account pinning.** After the token exchange the daemon asks the provider who signed in (`auth.test`, `userinfo`, the Zoom user endpoint) and compares it with the ratified `account`. A mismatch (the wrong browser profile) discards the token and fails closed, so personal mail never lands in a work mission because the wrong account happened to be signed in.
+11. **Loopback listener hardening.** Bind `127.0.0.1` only; require the `Host` header to be `127.0.0.1:<port>`; check `state` and PKCE `S256`; accept one callback; close after success or 120 seconds. Providers that register exact redirect URIs (reported for Slack and Zoom) use the ratified `redirect_port`; if it is already in use, login stops with a clear error instead of picking another port. `delphi auth login --manual` prints the URL and accepts the pasted callback URL for headless machines and fixed-port failures.
 
 ## 5. Trust and Taint
 1. **Everything a connector returns is external content.** Results are stamped `external_untrusted` (L0) and lower the calling span's ceiling like any other untrusted read (`specs/001` §5.1). v1 never stamps connector content higher, even from the operator's own mailbox: other people wrote most of it.
-2. **Consequences follow the existing table** (`specs/001` §5.2): a span at L1 or below has no mutating, outbound or dispatch tools without a Red approval. Connector writes are outbound actions (§6).
+2. **Consequences follow the existing table** (`specs/001` §5.2), with one addition (amendment 001-A3): a connector **write** has its own gate, `Action::ConnectorWrite`, which is **Red at every taint level and never denied**. Without that, reading a thread (which taints the span to L0) would make replying to it impossible, because ordinary outbound actions are denied when tainted. The control is the operator's approval of the exact payload (§6). Worktree writes, code execution and ordinary outbound actions stay denied at L1 and below.
 3. **Promotion.** Notes written by a tainted span are L0. To use them in later work, the operator reviews the note in the console and approves it; Delphi then stamps that file's hash at L4 through the same path ratification uses for files today (`provenance.stamp`). This keeps research usable without letting a tainted span launder content into a trusted artifact.
 4. A child span inherits its parent's ceiling, and a parent inherits what its child read (Step 2 round-1 fix).
 
@@ -79,8 +85,8 @@ Connectors authenticate with OAuth in the operator's browser, following the MCP 
 | `write` that creates a private draft (for example a Gmail draft, a calendar hold with no invitees) | Amber | Shows the full payload. |
 | `write` that sends, posts, shares, invites or deletes | **Red** | Never auto-approved by any mode. The card shows the full payload, bound to its hash (`specs/005` §3.1). `[a]` is refused. |
 
-1. **Read-then-write guard.** A span that has read connector content cannot make any connector write without a Red approval, and the card shows the content that will leave. This is the exfiltration defense: the agent can't quietly post what it read.
-2. **Arguments are logged.** The exact arguments of every call are persisted (§8), so a search query carrying data out is visible after the fact.
+1. **Read-then-write guard.** Every connector write is Red (§5.2), and the card shows the destination (account, channel or recipients), the full payload and its hash. This is the exfiltration defense: the agent can't quietly post what it read.
+2. **Arguments are bounded and checked.** Read calls can also leak, by putting data in a search query. Every string argument is capped at `max_arg_chars`, and the daemon refuses a call whose arguments contain any registered secret literal or a credential-shaped string (the event-log redactor). Persisted arguments (§8) make anything else visible after the fact. Residual risk: short, non-secret fragments of workspace content can still reach the provider's search endpoint; the host is the user's own service, and the first-use card says so.
 3. **Rate and size caps** are per connector in the ratified catalog (calls per minute; results per call). Exceeding them pauses the span and escalates, never silently drops.
 
 ## 7. The Five v1 Connectors
@@ -114,8 +120,8 @@ Provider facts below come from secondary sources and must be confirmed by the pr
 - **Quality:** transcripts chunked with timestamps and speaker names, long transcripts stored as context pointers, never stuffed into one tool result.
 
 ## 8. Results, Persistence and Privacy
-1. **Large results become context pointers.** A result over the per-call cap is stored under the mission and the model receives a bounded excerpt plus a pointer (`specs/004` §3 retrieval), not the whole payload.
-2. **Event log content.** Recovery needs the result of a finished call (`specs/005` §2.5), so results are persisted in `events.jsonl` after redaction. Because they hold private mail and chat, a ratified `connector_result_retention_days` (default 30, like thinking retention, D-16) lets `gc` blank bodies of closed missions while keeping hashes and metadata.
+1. **Large results become spillover files.** A result over the per-call cap goes to the payload store (item 2); the model receives a bounded excerpt plus a pointer (payload hash and line range) that `read_file` can read in slices. This does not depend on the Step 5 retrieval index (`specs/004` §3).
+2. **Payload store, not the event log.** Raw results hold private mail and chat, so `events.jsonl` records only the call's metadata, size, truncation and blake3 hash. The redacted payload goes to `$DELPHI_HOME/workspaces/<name>/payloads/<blake3>` (mode 0600), fsynced before the event that references it, and recovery reads it by hash (`specs/005` §2.5). `gc` deletes payloads after a ratified `connector_result_retention_days` (default 7 for closed missions); the hash and metadata remain, and a replayed call whose payload expired reports `payload expired` instead of failing. Agents reach the directory only through the pointer tool (never readable by the path guard).
 3. **Events:** `connector.call` (connector, tool, class, arguments, account), `connector.result` (size, truncation, hash), `connector.denied`, `connector.reauth_required`. The usage ledger records calls per connector.
 4. **The model provider sees what the agent reads.** Content a connector returns is sent to whichever model endpoint runs the span. The first-use card for each connector says so, and `[workspace] isolated` and `allowed_endpoints` already bound where that can go.
 
@@ -124,7 +130,7 @@ Provider facts below come from secondary sources and must be confirmed by the pr
 
 ## 10. Phasing and Tests
 - **Step 3 (already planned):** `oauth2` device code and client credentials; keychain token store; tool-registry refactor so tools are data, not a match statement.
-- **Step 3b (new, before Step 4):** `ConnectorHost`, the MCP client, loopback PKCE login, the ratified catalog and pinning, the promotion card, then connectors one at a time in the order Slack, Google (Drive, Calendar, Gmail share one login), Zoom.
+- **Step 3b (new, before Step 4), in three shippable slices:** (1) `ConnectorHost`, the in-tree MCP client, loopback PKCE login, the ratified catalog and pinning, the payload store and the promotion card, with **Google** (Drive, Calendar and Gmail share one login) as the pilot; (2) **Slack**; (3) **Zoom**. Each slice has its own contract tests and live probe and can ship alone. The roles that get connectors (`orchestrator`, `strategist`) exist in v1, so no research role is needed (D-07).
 - **Tests:**
   1. An unratified `[connectors.*]` edit leaves the connector off and `doctor` reports a pending proposal.
   2. A tool absent from `tools` is unavailable; a server that adds or changes a tool disables it until re-ratified.
@@ -132,16 +138,16 @@ Provider facts below come from secondary sources and must be confirmed by the pr
   4. Connector results stamp L0; a note written afterwards stamps L0 until promoted.
   5. A callback with a wrong `state`, a second callback, or a late callback is rejected; tokens never appear in events, logs or errors.
   6. A request to a host outside `hosts`, including through a redirect, is refused and logged.
-  7. A crash between a write call's approval and its result does not repeat the write (`action.intent`/`action.result`, `specs/005` §2.5).
+  7. A crash between a write call's approval and its result does not repeat the write (`action.intent`/`action.result`, `specs/005` §2.5). Remote tools have no idempotency keys, so an unresolved write is never retried: recovery asks the operator whether it happened (a connector may supply a verification query, such as searching sent messages by subject and time, to propose an answer).
   8. Revocation mid-task pauses with `re-authenticate`; no failover to another account.
   9. Each connector passes a recorded-fixture contract test, and a separate opt-in live probe on the operator's account.
+  10. A tool name that collides with a built-in or another connector's tool is refused at registration. A call whose arguments exceed `max_arg_chars` or contain a registered secret is refused.
+  11. A login whose provider identity differs from the ratified `account` is discarded. A callback with the wrong `Host` header is refused. A fixed `redirect_port` already in use stops the login.
 
 ## 11. Future Expansion
 Other families (OpenAI, local) need only a working tool-call path. Further connectors (Microsoft 365, GitHub, Jira, Notion, Linear) are catalog entries plus a per-connector formatter. Multi-account support, an admin-managed shared catalog, MCP resources and prompts, and Delphi-as-MCP-server are post-v1.
 
-## 12. Open Questions for the Council
-1. Is a v1 limited mostly to reads, with only Slack post, Gmail send and Calendar events as Red writes, the right balance?
-2. Should connector results be persisted in the event log at all, or kept in a separate encrypted store with only hashes in the log?
-3. Is the loopback redirect acceptable for every provider's rules, or must some use a hosted redirect page (which Delphi cannot ship without running a service)?
-4. Should tool-definition pinning cover the full description text or only name and schema, given providers revise descriptions often?
-5. Build the MCP client on an existing Rust crate or write a minimal one (the surface is small: initialize, list tools, call tool, Streamable HTTP, OAuth discovery)?
+## 12. Council 006, Round 1
+Both seats (Gemini 3.8 Flash, red-team and strategist) returned `reject` on the first draft. This revision addresses every finding that held up: the taint-gate contradiction (§5.2, amendment 001-A3), the missing `[connectors.*]` pin (done in `lock::access_blocks`), tool shadowing (§2 item 2, enforced in the registry), loopback listener hardening and fixed ports (§4 item 11), account pinning (§4 item 10), argument exfiltration (§6.2), PII in the event log (§8), the dependency on Step 5 retrieval (§8 item 1), unresolved remote writes (§10 test 7) and phasing (§10). The five open questions were answered: (1) yes, read-mostly with Red writes; (2) separate payload store (§8); (3) loopback with a manual fallback and a fixed-port option, never a hosted page (§4); (4) the seats disagreed; the description stays pinned with a cheap diff card (§3); (5) a minimal in-tree client behind a trait (§2).
+
+Open for round 2: whether the diff-card compromise on description pinning is acceptable, and whether the residual search-query leak (§6.2) needs a stricter rule.
