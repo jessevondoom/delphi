@@ -17,3 +17,4 @@ Use repo-relative paths only.
 
 YOUR FOCUS AREA:
 (This is a one-shot review, not a planning task. Do NOT write a plan, do NOT ask questions, and do NOT wait for approval or create artifacts. Read the code and deliver the findings report as your final answer in this reply.)
+(Round 2: round 1 already fixed and recorded the items in missions/2026-10-23-foundational-design/councils/step-2-audit/report.md. Read that report first and do NOT repeat its fixed, rejected or deferred items; look for what round 1 missed, including regressions introduced by its fixes.)

@@ -100,6 +100,8 @@ pub struct LiveRedactor {
 impl LiveRedactor {
     /// Enough to hold back the start of a credential-shaped token even when no literal is registered.
     const MIN_HOLD: usize = 64;
+    /// The longest block held back waiting for its END marker.
+    const MAX_BLOCK: usize = 16 * 1024;
 
     pub fn new(secrets: Arc<SecretRegistry>) -> LiveRedactor {
         LiveRedactor { secrets, held: String::new() }
@@ -109,6 +111,13 @@ impl LiveRedactor {
     pub fn push(&mut self, chunk: &str) -> String {
         let all = self.secrets.redact(&format!("{}{}", self.held, chunk));
         let hold = self.secrets.longest().max(Self::MIN_HOLD) - 1;
+        // A private-key block can run for kilobytes before its END line: hold everything from an open BEGIN.
+        if let Some(begin) = all.rfind("-----BEGIN ") {
+            if !all[begin..].contains("-----END ") && all.len() - begin <= Self::MAX_BLOCK {
+                self.held = all[begin..].to_string();
+                return all[..begin].to_string();
+            }
+        }
         let mut cut = all.len().saturating_sub(hold);
         while !all.is_char_boundary(cut) {
             cut -= 1;
@@ -328,6 +337,18 @@ mod tests {
 #[cfg(test)]
 mod live_redactor_tests {
     use super::*;
+
+    #[test]
+    fn a_private_key_block_is_held_until_it_ends_then_masked() {
+        let mut r = LiveRedactor::new(SecretRegistry::new());
+        let mut shown = r.push("Here: -----BEGIN RSA PRIVATE KEY-----\n");
+        for _ in 0..40 {
+            shown.push_str(&r.push("MIIEowIBAAKCAQEAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"));
+        }
+        shown.push_str(&r.push("-----END RSA PRIVATE KEY----- done."));
+        shown.push_str(&r.finish());
+        assert!(!shown.contains("MIIEow") && shown.starts_with("Here: ") && shown.ends_with("done."), "{}", shown);
+    }
 
     #[test]
     fn a_secret_split_across_chunks_never_reaches_the_stream() {

@@ -152,7 +152,7 @@ pub fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
             }
             let lower = path.to_lowercase();
             // Markdown artifacts under missions/ are Green; everything else this tool can reach is Amber.
-            let (tier, kind) = if lower.starts_with("missions/") { (ToolTier::Green, ActionKind::MissionArtifact) } else { (ToolTier::Amber, ActionKind::SpecDraft) };
+            let (tier, kind) = if lower.starts_with("missions/") && lower.ends_with(".md") { (ToolTier::Green, ActionKind::MissionArtifact) } else { (ToolTier::Amber, ActionKind::SpecDraft) };
             let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
             Ok(Classified {
                 tool: tool.into(),
