@@ -199,6 +199,11 @@ impl Config {
                     if e.platform.as_deref() == Some("vertex") && e.project.as_deref().unwrap_or("").is_empty() {
                         errs.push(format!("endpoint `{}`: vertex endpoints need a project", e.id));
                     }
+                    if let Some(u) = &e.base_url {
+                        if !(u.starts_with("https://") || is_loopback(u)) {
+                            errs.push(format!("endpoint `{}`: base_url `{}` must be https (plain http only to loopback)", e.id, u));
+                        }
+                    }
                 }
                 AccessPath::GatewayNative | AccessPath::GatewayCompat => match e.base_url.as_deref() {
                     Some(u) if u.starts_with("https://") || is_loopback(u) => {}
@@ -319,7 +324,7 @@ impl Config {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub const SAMPLE: &str = r#"

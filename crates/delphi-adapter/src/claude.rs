@@ -489,7 +489,7 @@ impl Assembler {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ipr::ContextSlice;
 
@@ -507,11 +507,11 @@ mod tests {
         }
     }
 
-    fn target(endpoint: &str, model: &str) -> Target {
+    pub(crate) fn target(endpoint: &str, model: &str) -> Target {
         Target { provider: "anthropic".into(), endpoint_id: endpoint.into(), model_id: model.into() }
     }
 
-    fn opts(thinking: Option<u32>) -> CompileOptions {
+    pub(crate) fn opts(thinking: Option<u32>) -> CompileOptions {
         CompileOptions {
             max_tokens: 8000,
             thinking_budget: thinking,
@@ -521,7 +521,7 @@ mod tests {
         }
     }
 
-    fn sse(events: &[(&str, Value)]) -> String {
+    pub(crate) fn sse(events: &[(&str, Value)]) -> String {
         events.iter().map(|(n, d)| format!("event: {}\ndata: {}\n\n", n, d)).collect()
     }
 
@@ -630,11 +630,11 @@ mod tests {
         assert_eq!(u.to_payload(None, 0.0, None, "ok", "reported").cost_usd, 0.0);
     }
 
-    fn turn_from_stream(index: u32, endpoint: &str, model: &str) -> Turn {
+    pub(crate) fn turn_from_stream(index: u32, endpoint: &str, model: &str) -> Turn {
         Turn::assistant(index, "anthropic", endpoint, model, parse(&fixture(), 100).unwrap().blocks)
     }
 
-    fn loop_history(endpoint: &str, model: &str) -> Vec<Turn> {
+    pub(crate) fn loop_history(endpoint: &str, model: &str) -> Vec<Turn> {
         vec![
             turn_from_stream(1, endpoint, model),
             Turn::user(2, vec![ContentBlock::ToolResult { tool_call_id: "toolu_01A".into(), content: "fn main() {}".into(), is_error: false }]),

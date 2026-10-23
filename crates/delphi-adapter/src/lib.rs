@@ -4,4 +4,8 @@ pub mod blocks;
 pub mod claude;
 pub mod config;
 pub mod credential;
+pub mod eventstream;
+pub mod http;
 pub mod ipr;
+pub mod platform;
+pub mod sigv4;
