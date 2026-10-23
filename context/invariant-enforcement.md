@@ -17,11 +17,11 @@ GOVERNANCE §5.6: an invariant counts as enforced only when code enforces it. Ea
 - **CI / doctor:** a deterministic check on files.
 - **Prompt-only:** an instruction to the agent with nothing mechanical behind it. Treat these as advisory.
 
-A row moves from ❌ to ✅ when its check ships with the test named in the spec.
+A row moves from ❌ to ✅ when its check ships with the test named in the spec. ◐ means partly built, with the remainder scheduled for the step shown.
 
 | Invariant | Source | Enforcement point | Kind | Built |
 | :--- | :--- | :--- | :--- | :---: |
-| Write paths limited to manifest globs; no `..`/symlink escape | GOV §5.1, spec 001 §2.2 | Path guard (canonicalize + `O_NOFOLLOW`) | Daemon | ❌ |
+| Write paths limited to manifest globs; no `..`/symlink escape | GOV §5.1, spec 001 §2.2 | Path guard (canonicalize + `O_NOFOLLOW`) | Daemon | ◐ path-guard library + tests (Step 1); daemon wiring Step 2 |
 | No agent writes `.git/`, `.delphi/run`, `state.db`, config | spec 001 §2.2 | Path guard + sandbox mount | Daemon | ❌ |
 | Taint is computed, never declared | GOV §4.3, spec 001 §5.1 | Span taint accounting; frontmatter stamping | Daemon | ❌ |
 | Below-L4 content never enters heuristics/REVIEW/lessons/skills | GOV §4.3 | Provenance gate on write | Daemon | ❌ |
@@ -34,10 +34,10 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | No Spec, No Build (`status: approved` before `IsolatedBuild`) | GOV §1.3, spec 003 §3.1 | DAG transition guard | Daemon | ❌ |
 | `Implements-Spec:` on implementation PRs | `REV-ARCH-01` | PR lint | CI | ❌ |
 | Council Round 1 blind | GOV §3.2, spec 003 §4.1 | In-memory barrier | Daemon | ❌ |
-| No agent or sandboxed process writes any `.git` (file or dir, any depth); daemon git calls hardened | spec 001 §2.2, 008 §4 | Path guard + sandbox profile + git runner | Daemon | ❌ |
-| Hard links can't bypass the path guard | spec 001 §2.2 | `st_nlink`/protected-inode check + sandbox visibility | Daemon | ❌ |
+| No agent or sandboxed process writes any `.git` (file or dir, any depth); daemon git calls hardened | spec 001 §2.2, 008 §4 | Path guard + sandbox profile + git runner | Daemon | ◐ path-guard library (Step 1); sandbox and git runner Step 3 |
+| Hard links can't bypass the path guard | spec 001 §2.2 | `st_nlink`/protected-inode check + sandbox visibility | Daemon | ◐ path-guard library + tests (Step 1) |
 | Taint tier read from the provenance index, never from frontmatter | spec 001 §5.1 | Provenance index + origin defaults | Daemon | ❌ |
-| Manifests, skills, custom scripts and theme load only from ratified copies; overrides only narrow | spec 001 §2.3, 006 §3.1 | `ratified.lock` loader + `delphi lint` | Daemon + CI | ❌ |
+| Manifests, skills, custom scripts and theme load only from ratified copies; overrides only narrow | spec 001 §2.3, 006 §3.1 | `ratified.lock` loader + `delphi lint` | Daemon + CI | ◐ ratified.lock bootstrap + drift check + narrow-only lint (Step 1); loader Step 2 |
 | Update can't change active rules before ratification | spec 006 §4 | Ratify-before-swap; daemon loads `local/ratified/` only | Daemon | ❌ |
 | No memory rule in any scope relaxes governance controls | spec 004 §5.2 | Rule linter at proposal time + Red-Team review | Daemon | ❌ |
 | Operator memory never leaves the machine implicitly; contributions are scrubbed and previewed | spec 004 §5.5, §5.7 | Sync/contribute path filters + canary scan test | Daemon + CI | ❌ |
@@ -53,7 +53,7 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Agents can't read `events.jsonl`; Round 1 events buffered until barrier | spec 001 §2.2, 005 §2.3 | Path guard + event writer | Daemon | ❌ |
 | Non-Markdown files carry taint (base-commit L4, untrusted paths L0, per-file map for agent writes) | spec 001 §5.1 | Taint map | Daemon | ❌ |
 | Active constitution matches `ratified.lock`; drift staged as Red proposal | spec 006 §3.1 | Startup check + loader | Daemon + doctor | ❌ |
-| Project repos contain no Delphi files | spec 006 §3.1 | `init` writes only to `$DELPHI_HOME`; doctor check 8 | Daemon + doctor | ❌ |
+| Project repos contain no Delphi files | spec 006 §3.1 | `init` writes only to `$DELPHI_HOME`; doctor check 8 | Daemon + doctor | ✅ init + doctor check 8 (Step 1) |
 | Host-executed files flagged Red at merge | GOV §5.5, spec 008 §4 | Merge-gate diff classifier | Daemon | ❌ |
 | Budget can't be overshot by parallel calls | spec 003 §3.2 | Pre-dispatch cost reservation | Daemon | ❌ |
 | Minority Report verbatim; no invented dissent | spec 003 §4.1 | Daemon-filled section + `lint_spec` | Daemon + CI | ❌ |
@@ -62,14 +62,14 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Retry ladder ≤ 3 attempts; mission budget | spec 003 §3.2 | Dispatcher + cost ledger | Daemon | ❌ |
 | Base-branch REVIEW/GOVERNANCE for audits | GOV §5.2, `REV-SEC-04` | Rubric loader (`git show <base>:…`) | Daemon | ❌ |
 | No secrets or home paths in Markdown/diffs | GOV §5.3, `REV-SEC-05` | Secret/path scanner; event redactor | CI + Daemon | ❌ |
-| Rule of 25 / byte cap | GOV §6.2, spec 004 §2.2 | `doctor` + proposal applier | CI + Daemon | ❌ |
+| Rule of 25 / byte cap | GOV §6.2, spec 004 §2.2 | `doctor` + proposal applier | CI + Daemon | ✅ lint + doctor check 4 (Step 1) |
 | Atomic + CAS memory writes | `REV-TRAP-02/04` | Locked writer | Daemon | ❌ |
 | Frozen boot snapshot per task | spec 004 §2.1 | IPR builder | Daemon | ❌ |
 | Signature round-trip per provider | `[H-003]`, spec 002 §3 | Driver + replay fixtures | Daemon + CI | ❌ |
 | Zone 3 never touched by update/sync | `REV-SEC-03`, spec 006 §3 | Path allowlist in update/sync | Daemon | ❌ |
 | Federation serves allowlist only; tokens header-bound | spec 007 §2.2 | Pointer resolver | Daemon | ❌ |
-| Manifests/frontmatter valid | spec 001 §7 | `lint_manifests` | CI + doctor | ❌ |
-| Agents named only by canonical role outside `themes/` | GOV Overview, spec 001 §6.1, `REV-ARCH-05` | `lint_manifests` role-name check | CI + doctor | ❌ |
+| Manifests/frontmatter valid | spec 001 §7 | `lint_manifests` | CI + doctor | ✅ `delphi lint` (Step 1) |
+| Agents named only by canonical role outside `themes/` | GOV Overview, spec 001 §6.1, `REV-ARCH-05` | `lint_manifests` role-name check | CI + doctor | ✅ `delphi lint` (Step 1) |
 | Theme packs load only when ratified; voice only (≤400 chars, no directive language) | GOV §5.8, spec 001 §6.4 | Theme loader + deterministic linter | Daemon | ❌ |
 | Persona slot always below governance in the prompt | spec 002 §2 | IPR builder | Daemon | ❌ |
 | Agents use structured handoffs, not transcripts | GOV §3.1 | Envelope schema validation at dispatch | Daemon | ❌ |

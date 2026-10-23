@@ -1,34 +1,20 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# DELPHI THREE-ZONE GITIGNORE
-# Per specs/006-installer-and-updater.md:
-# - Zone 1 (Core System: GOVERNANCE.md, SPEC.md, agents/, skills/) -> Tracked
-# - Zone 2 (Team Shared: REVIEW.md, context/, specs/)              -> Tracked
-# - Zone 3 (Operator Private & Runtime Ephemeral State)            -> Ignored
-# ─────────────────────────────────────────────────────────────────────────────
+# Delphi source repository (the install source; D-03).
+# Delphi itself never writes into a repository: all runtime state lives in $DELPHI_HOME
+# (specs/006 §3.1), so there are no Delphi runtime paths to ignore here.
 
-# 1. Runtime Daemon Sockets, SQLite Index & Ephemeral Worktrees
-.delphi/run/
-.delphi/worktrees/
-.delphi/state.db
-.delphi/state.db-shm
-.delphi/state.db-wal
-.delphi/logs/
-.delphi/sync/quarantine/
-.delphi/sync/conflicts/
-*.upstream-*
-*.tmp
+# Rust build output
+/target/
 
-# 2. Operator Secrets & Local Credentials (NEVER commit)
+# Secrets and local credentials (never commit)
 .env
 .env.*
 !.env.example
-.delphi/config.local.toml
-.delphi/identity.private.key
 
-# 3. Operator-Private Agent Coaching Scratchpads (keep directory structure vialessons.md)
-memory/agents/*/scratchpad.md
-
-# 4. Scratch & OS Artifacts
+# Merge leftovers and scratch
+*.upstream-*
+*.tmp
 scratch/
+
+# OS artifacts
 .DS_Store
 Thumbs.db

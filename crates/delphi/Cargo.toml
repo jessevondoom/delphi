@@ -1,0 +1,26 @@
+[package]
+name = "delphi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.68"
+description = "Delphi: terminal-first multi-agent working environment (roadmap Step 1: init, doctor, lint)"
+license = "UNLICENSED"
+publish = false
+
+# Versions are pinned to releases that build on rustc 1.68 (the toolchain currently installed).
+[dependencies]
+serde = { version = "=1.0.193", features = ["derive"] }
+serde_derive = "=1.0.193"
+serde_yaml = "=0.9.25"
+serde_json = "=1.0.108"
+toml = "=0.7.8"
+blake3 = "=1.5.0"
+walkdir = "=2.4.0"
+regex = "=1.9.6"
+unicode-normalization = "=0.1.22"
+libc = "=0.2.150"
+include_dir = "=0.7.3"
+anyhow = "=1.0.75"
+
+[dev-dependencies]
+tempfile = "=3.8.1"

@@ -26,7 +26,7 @@ skills/<skill-name>/
 
 ---
 
-## 2. Core Skills Matrix by Agent (9 agent Agents / 42 Skills)
+## 2. Core Skills Matrix by Role (9 Roles / 42 Skills)
 
 ### 1. **Orchestrator** (Lead Orchestrator, Coach, Council Arbiter & Dynamic Model Scaler)
 | Skill | Purpose | Deterministic Helper (`scripts/`) |

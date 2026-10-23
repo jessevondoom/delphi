@@ -6,6 +6,19 @@
 
 Delphi is in its **spec-driven design phase (`v0.4`)**. This repository is the source of truth for Delphi's governance, agent manifests, skills catalog, seed knowledge base, theme packs and subsystem specifications. It is also the **install source**: the binary embeds the seed from this repo, and `delphi update` merges new releases into each user's Delphi home. Using Delphi never writes into a project repo, this one included (D-03).
 
+## Building (roadmap Step 1)
+
+The `delphi` binary lives in [`crates/delphi`](crates/delphi). Step 1 provides `delphi init`, `delphi doctor` and `delphi lint`.
+
+```sh
+cargo test                                   # unit tests, including the specs' Step 1 verification tests
+cargo run -- lint --repo .                   # lint this source repository (CI uses this)
+cargo run -- init --non-interactive --project /path/to/repo   # create a workspace in ~/.delphi
+cargo run -- doctor                          # health checks, from inside a registered project
+```
+
+Dependencies are pinned to versions that build on the installed toolchain (rustc 1.68). Set `DELPHI_HOME` to use a Delphi home other than `~/.delphi`.
+
 ---
 
 ## Architectural Philosophy
