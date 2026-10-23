@@ -20,7 +20,7 @@ governed_by: "GOVERNANCE.md"
 
 ```mermaid
 flowchart TD
-    Dec0["Decision Gate 0: Ratify Core Language & TUI Stack\n(Rust + Ratatui + Tokio vs. Go + BubbleTea)"] --> Phase1
+    Dec0["✅ Decision Gate 0 (RATIFIED): Rust Stack\n(Tokio + Ratatui + rusqlite + sqlite-vec + pulldown-cmark)"] --> Phase1
     
     subgraph Phase1 ["Phase 1: The Foundation (Themis + Manifests + Doctor)"]
         P1A["Spec 001: YAML/JSON Schema Validator\n(AGENT.md, SKILL.md, HandoffEnvelope, Provenance)"]
@@ -66,21 +66,15 @@ flowchart TD
 
 ---
 
-## 2. Open Pre-Build Decisions (For Second-Opinion Review)
+## 2. Pre-Build Decision Gates (1 Ratified, 2 Open for Review)
 
-Before **Hephaestus** writes line 1 of production code in Phase 1, the following three architectural choices should be explicitly stress-tested during your Claude review tomorrow:
-
-1. **Decision Gate 0 — Implementation Language & TUI Stack ([`specs/005`](file:///Users/jessevondoom/projects/work/delphi/specs/005-chaos-and-homer-tui.md)):**
-   - **Option A: Rust (`Tokio` + `Ratatui` + `rusqlite` + `sqlite-vec` + `pulldown-cmark`).**
-     - *Pros:* Unmatched 60fps cell-buffer DAG/Council rendering (`Homer`), native single-binary compilation with C-extension `sqlite-vec`, zero GC pauses during 5-agent parallel streaming.
-     - *Cons:* Slower initial UI component boilerplate than Go/Charmbracelet.
-   - **Option B: Go (`BubbleTea v2` + `Lipgloss v2` + `Huh` + `goldmark`).**
-     - *Pros:* Fastest development velocity for TUI forms (`delphi init`), clean goroutine UDS daemon orchestration.
-     - *Cons:* Requires CGo for `sqlite-vec`/`fts5` (slightly complicating cross-compilation) and requires a Committed-Block Markdown Cache to avoid `Glamour` re-render lag.
-2. **Decision Gate 1 — Local Embedding Model for `sqlite-vec` ([`specs/004`](file:///Users/jessevondoom/projects/work/delphi/specs/004-athena-memory-and-coaching.md)):**
-   - Should `.delphi/state.db` generate 384-dim vectors via an **embedded local ONNX/GGUF model** (e.g., `bge-small-en-v1.5` or `nomic-embed-text`, ~30–80MB downloaded on `delphi init` for 100% offline zero-cost indexing) OR default to **FTS5 BM25-only** until a local/API embedding model is enabled?
-3. **Decision Gate 2 — Phase 1 Scripting Language for `skills/*/scripts/`:**
-   - Should deterministic skill helper scripts (`validate_dag.py`, `council_barrier.py`, `load_base_review_rubric.sh`) be implemented as **subcommands inside the single `delphi` binary** (`delphi internal verify-dag`, `delphi internal council-barrier`) so operators don't even need a Python environment on their machine? *(Highly recommended by Odysseus & Hephaestus for zero-dependency distribution).*
+1. **✅ Decision Gate 0 — Implementation Language & TUI Stack (`RATIFIED: Rust`):**
+   - **Decision:** Delphi (`delphi` CLI/TUI + `delphi-core` daemon) will be built in **Rust** (`Tokio` + `Ratatui` + `Crossterm` + `rusqlite` with statically linked `fts5` & `sqlite-vec` + `pulldown-cmark` + `serde` + `include_dir!`).
+   - **Rationale:** Guarantees a zero-dependency ~10MB static single binary (`delphi install`), zero GC pauses during 60fps multi-agent token streaming, native cell-buffer DAG/Council rendering in **Homer**, and seamless C-extension embedding for `sqlite-vec`.
+2. **⏳ Decision Gate 1 (OPEN) — Local Embedding Model for `sqlite-vec` ([`specs/004`](file:///Users/jessevondoom/projects/work/delphi/specs/004-athena-memory-and-coaching.md)):**
+   - Should `.delphi/state.db` generate 384-dim vectors via an **embedded local ONNX/GGUF model** (e.g., `bge-small-en-v1.5` or `nomic-embed-text` via `ort`/`candle`, ~30–80MB downloaded on `delphi init` for 100% offline zero-cost indexing) OR default to **FTS5 BM25-only** until a local/API embedding model is enabled?
+3. **⏳ Decision Gate 2 (OPEN) — Phase 1 Scripting vs. Compiled Subcommands for `skills/*/scripts/`:**
+   - Should deterministic skill helper scripts (`validate_dag`, `council_barrier`, `load_base_review_rubric`) be compiled directly as **subcommands inside the single `delphi` Rust binary** (`delphi internal verify-dag`, `delphi internal council-barrier`) vs. standalone Python/Bash scripts in `skills/*/scripts/`? *(Note: Now that Rust is ratified, compiling core deterministic helpers directly into the `delphi` binary while still allowing user-authored scripts in `skills/custom/*/scripts/` is a natural option for Claude to evaluate).*
 
 ---
 

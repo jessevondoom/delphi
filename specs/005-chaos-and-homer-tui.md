@@ -11,7 +11,7 @@ review_rubric: "REVIEW.md"
 # Spec 005: Chaos Operator Deck, Homer Live Narrator Window & UDS Event-Bus Daemon
 
 ## 1. Scope & Objectives
-This specification defines the dual-window terminal interface and local client-daemon architecture of Delphi:
+This specification defines the dual-window terminal interface and local client-daemon architecture of Delphi (implemented in **Rust** using `Tokio`, `Ratatui`, and `Crossterm`):
 1. **`delphi-core` Local Daemon & Unix Domain Socket (UDS) Bus:** Event-sourced runtime engine with 60Hz frame coalescing, append-only `events.jsonl` replay, and SQLite WAL state indexing.
 2. **Window 1 — `Chaos` (`delphi` / `delphi chat`):** The sovereign operator interface, prompt input, slash-command palette, and synchronous Human-in-the-Loop (HITL) permission modals.
 3. **Window 2 — `Homer` (`delphi homer`):** Attach-anywhere secondary live narrative and telemetry window—the epic storyteller chronicling the Pantheon's actions in real time (Execution DAG, 3-column Council Chamber, Hephaestus Forge diffs, and Model Scaling telemetry).

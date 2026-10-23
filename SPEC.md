@@ -7,7 +7,7 @@
 
 ## 1. System Overview & Cosmogony
 
-**Delphi** is a terminal-first (CLI/TUI), multi-agent, Mixture-of-Experts (MoE) collaborative working environment handling software engineering, deep research, strategic architecture, and personal project planning.
+**Delphi** is a terminal-first (CLI/TUI), multi-agent, Mixture-of-Experts (MoE) collaborative working environment built in **Rust** (`Tokio` + `Ratatui` + `rusqlite`/`sqlite-vec`), handling software engineering, deep research, strategic architecture, and personal project planning.
 
 ### 1.1 The Four Systemic Layers (Cosmogonic Architecture)
 Drawing from Hesiod's *Theogony* and Aeschylus's *Eumenides* (see [`mythological-cosmogony-and-pantheon.md`](file:///Users/jessevondoom/projects/work/delphi/context/domains/mythological-cosmogony-and-pantheon.md)):
