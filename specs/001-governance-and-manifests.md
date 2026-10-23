@@ -234,6 +234,8 @@ This is the **single canonical lattice** for all specs ($L_0 < L_1 < L_2 < L_3 <
 | $L_2$–$L_3$ | ✅ | Per HITL tier | Red gate | ✅ (child inherits the parent's tier) |
 | $L_0$–$L_1$ | ✅ | ❌ | ❌ | Red gate (child inherits taint) |
 
+**Connector writes (`specs/010`; amendment 001-A3).** A write through a native connector (send, post, share, invite, delete) is a separate column: **Red gate at every taint level, never ❌.** A tainted span that has read a Slack thread must still be able to propose a reply; the control is the operator's synchronous approval of the exact payload, shown in full and bound to its hash (`specs/005` §3.1), not a refusal.
+
 Prompt-level spotlighting is defense in depth; this table is the actual control against prompt injection.
 
 ---

@@ -160,10 +160,28 @@ impl Registry {
         r
     }
 
-    /// Add a tool. A later registration under the same name replaces the earlier one.
-    pub fn register(&mut self, spec: ToolSpec) {
+    /// Add a tool. A later registration under the same name replaces the earlier one. Built-in
+    /// registration only: external tools go through [`Registry::register_external`].
+    fn register(&mut self, spec: ToolSpec) {
         self.specs.retain(|s| s.def.name != spec.def.name);
         self.specs.push(spec);
+    }
+
+    /// Add a tool that comes from outside Delphi (a connector, `specs/010`). Its name must be
+    /// `<connector>.<tool>`, and it can never replace a registered tool: a hostile server must not be able
+    /// to shadow `read_file` and bypass the path guard.
+    pub fn register_external(&mut self, connector: &str, spec: ToolSpec) -> Result<(), ToolError> {
+        let name = spec.def.name.clone();
+        let ok_part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        match name.split_once('.') {
+            Some((c, t)) if c == connector && ok_part(c) && ok_part(t) => {}
+            _ => return Err(ToolError(format!("external tool `{}` must be named `{}.<tool>`", name, connector))),
+        }
+        if self.get(&name).is_some() {
+            return Err(ToolError(format!("tool `{}` is already registered", name)));
+        }
+        self.specs.push(spec);
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolSpec> {
@@ -535,11 +553,14 @@ mod tests {
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
         }
-        r.register(ToolSpec { def: ToolDef { name: "ping".into(), description: "x".into(), input_schema: json!({"type": "object"}) }, requires_write_scope: false, classify: classify_read, exec: ToolExec::Local(ping) });
-        assert!(names(r.defs(false)).contains(&"ping".to_string()));
-        // Re-registering a name replaces it rather than duplicating it.
-        r.register(r.get("ping").unwrap().clone());
-        assert_eq!(names(r.defs(false)).iter().filter(|n| *n == "ping").count(), 1);
+        let ext = |name: &str| ToolSpec { def: ToolDef { name: name.into(), description: "x".into(), input_schema: json!({"type": "object"}) }, requires_write_scope: false, classify: classify_read, exec: ToolExec::Local(ping) };
+        r.register_external("slack", ext("slack.search")).unwrap();
+        assert!(names(r.defs(false)).contains(&"slack.search".to_string()));
+        // An external tool can't shadow a built-in, replace another tool, or live outside its connector's namespace.
+        assert!(r.register_external("slack", ext("read_file")).is_err());
+        assert!(r.register_external("slack", ext("slack.search")).is_err());
+        assert!(r.register_external("slack", ext("gmail.search")).is_err());
+        assert!(r.register_external("slack", ext("slack.")).is_err());
     }
 
     use super::*;
