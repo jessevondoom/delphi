@@ -1,0 +1,2 @@
+You are the STRATEGIST seat (agents/strategist/AGENT.md). Focus: scope and sequencing. Is each item buildable in the roadmap step it claims? Does D-19 (four access paths in v1) overload Steps 2-3 — propose a concrete sequencing if so? Gold-plating, ambiguity that stalls an implementer, missing acceptance criteria, untestable requirements, and whether the phase-mapping tables are consistent with roadmap.md.
+

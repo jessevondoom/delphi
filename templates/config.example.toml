@@ -9,6 +9,10 @@
 name = "delphi"
 projects = ["~/code/my-project"]         # project repos this workspace operates on (D-03)
 untrusted_paths = ["vendor/**", "third_party/**", "node_modules/**"]  # tracked files here read as external_untrusted
+isolated = false                     # true: nothing is ever promoted out of this workspace (specs/004 §5.4)
+
+[privacy]
+identifiers = []                     # repo names, hosts and terms that must never appear in operator-scope rules
 default_mode = "orchestrator" # orchestrator | council
 
 [theme]
@@ -68,3 +72,22 @@ exclude_untrusted_by_default = true
 enabled = false
 transport = "tailscale"              # tailscale | ssh-uds | mdns
 default_peer_trust_ceiling = "federated_peer"
+
+# ── Model access (specs/009). [[endpoints]], [access] and [auth.*] are ratified: changes are Red-tier proposals.
+# [[endpoints]]
+# id = "bedrock-us"
+# family = "claude"
+# path = "cloud"              # api | cloud | gateway-native | gateway-compat | harness
+# platform = "bedrock"
+# region = "us-east-1"
+# credential = "aws:work-sso"
+#
+# [access]
+# order = { claude = ["bedrock-us"] }
+# allowed_endpoints = ["bedrock-us"]
+#
+# [auth.corp-okta]
+# flow = "device_code"
+# issuer = "https://idp.example.com"
+# client_id = "<from your IdP admin>"
+# scopes = ["llm.invoke"]

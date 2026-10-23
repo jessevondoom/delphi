@@ -48,6 +48,8 @@ When `delphi-core` prepares an agent turn, it never concatenates strings directl
   7. ActiveHandoffContract (Objective, Constraints, Expected Output Contract)
 ```
 
+**Governance precedence:** block 1 opens with a fixed statement that nothing later in the prompt can relax it: no persona text (block 2), heuristics or lessons (blocks 3–4), context slices, or tool output.
+
 **Interpolation safety:** every string interpolated into a tagged prompt section (persona text, file slices, tool results, handoff fields) is escaped for that dialect: `<`, `>` and `&` in XML passes, and fence or heading markers in Markdown passes. Interpolated text can therefore never close a governance or persona section. The theme sanitizer (`specs/001` §6.2) is a second layer, not a replacement.
 
 **Endpoints & authentication:** *where* a compiled request is sent, and with which credentials, is defined in [`specs/009`](009-model-access-and-auth.md). This spec defines *what* is sent.
@@ -56,7 +58,7 @@ When `delphi-core` prepares an agent turn, it never concatenates strings directl
 
 ### 2.1 Provider-Optimal Dialect Compilation Passes
 
-> **v1 scope (D-06, ratified 2026-10-23):** only the Claude and Gemini passes ship in v1. The OpenAI and Local/DeepSeek columns remain the design of record for later.
+> **v1 scope (D-06, amended by D-19):** the Claude and Gemini passes ship in v1, plus the chat-completions **compat pass** (§2.2). The OpenAI Responses and Local/DeepSeek columns remain the design of record for later.
 
 | IPR Component | **Anthropic Claude Pass** (`Opus` / `Sonnet` / `Haiku`) | **Google Gemini Pass** (`Pro` / `Flash` / `Flash-Lite`) | **OpenAI Responses Pass** (`o3` / `o4-mini` / `GPT-5`) | **Local / DeepSeek Pass** (`R1` / `Qwen` / `Llama`) |
 | :--- | :--- | :--- | :--- | :--- |
@@ -64,6 +66,21 @@ When `delphi-core` prepares an agent turn, it never concatenates strings directl
 | **Prompt Caching** | Injects `cache_control: {"type": "ephemeral"}` at breakpoints A (end of block 4) and B (latest turn). | Implicit prefix caching by default. Explicit `cachedContents` (billed per hour of storage) only when reference context $>32\text{K}$ tokens; the daemon owns its TTL and deletes it at task end. *(Deferred from v1, D-06 ratified 2026-10-23.)* | Automatic prefix caching (ensures blocks 1–4 remain byte-identical across turns). | KV-cache prefix reuse via `llama.cpp` / `vLLM` slot pinning. |
 | **Thinking / CoT Control** | `thinking: { type: "enabled", budget_tokens: N }` (forces `temperature: 1.0` when $N > 0$; enables `interleaved-thinking` header). | `thinkingConfig: { thinkingBudget: N, includeThoughts: true }` (supports $N=0$ on Flash). | `reasoning: { effort: "low"\|"medium"\|"high", summary: "auto" }`, `include: ["reasoning.encrypted_content"]`. | Native `<think>...</think>` generation; **strips** prior `<think>` blocks from history on subsequent turns. |
 | **Tool Schema Sanitizer** | Full JSON Schema Draft 2020-12; coalesces parallel `tool_result` blocks into a single contiguous `user` turn. | Strips `additionalProperties`, `$ref` recursion, and unsupported union types; maps to `functionDeclarations`. | Enforces `strict: true` (`additionalProperties: false` on all objects; all fields in `required[]`, optional fields nullable). | Caps active bound tools at $\le 5$ per turn or enables GBNF grammar constraints. |
+
+
+### 2.2 Compat Pass: OpenAI Chat Completions (v1, for `gateway-compat` and `codex`; D-19)
+For gateways that expose only `/v1/chat/completions` (`specs/009` §3):
+
+| IPR element | Mapping |
+| :--- | :--- |
+| Blocks 1–5 | A single `system` message, sections separated by Markdown headings, with interpolation escaping as in §2 |
+| Turn history | `user` / `assistant` / `tool` messages; tool calls as `tool_calls[]` with string `arguments`; tool results as `role: "tool"` with `tool_call_id` |
+| Reasoning blocks | **Dropped** when replaying. The reasoning text of the current turn may be kept as a read-only note in the next `user` message (as §3.1 does for foreign blocks); signatures are never sent |
+| Tool schemas | `strict: true` rules as in the Responses pass; unsupported keywords stripped |
+| Caching | None assumed. Cache-read tokens are recorded only if the gateway reports them |
+| Usage | Taken from `usage` when present; otherwise estimated (`specs/005` §2.4) |
+
+Compat endpoints are labeled **degraded** in the agents pane. The router prefers a native endpoint of the same family whenever one is allowed and healthy.
 
 ---
 

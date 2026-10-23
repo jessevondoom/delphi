@@ -1,0 +1,13 @@
+Delphi Council 003 — ROUND 2 (cross-examination). READ-ONLY: do not edit files. Use only file-reading tools; do NOT run shell commands.
+The three Round 1 reviews are in missions/2026-10-23-foundational-design/councils/003/round1-builder.md (Claude; NOTE: this seat drafted most of the material under review), round1-red-team.md and round1-strategist.md (Gemini). Read all three, and verify claims against the spec files.
+
+Your task:
+1. For EACH finding in the OTHER two reviews: one line — `agree` | `disagree` | `adjust severity to Px` — with a one-clause reason.
+2. Resolve conflicts explicitly:
+   (a) Open question on operator permission-widening: Builder recommends allowing an explicit Red-tier grant with hard limits; Red-Team and Strategist recommend narrow-only absolute (Red-Team adds: allow attaching ratified custom/operator skills whose required_permissions fit within the role's built-in scope). Decide and justify.
+   (b) D-19 sequencing: Strategist proposes splitting spec 009 delivery across Step 2 / Step 3 / Step 3B. Agree or propose an alternative consistent with ratified D-19 (all four access paths ship in v1).
+   (c) Mid-stream crash retry accounting: Builder says charge the full reservation; Red-Team says cap crash retries at 2 then charge. Reconcile.
+3. Anything ALL THREE missed that blocks approval (only if real; max 3).
+4. Final deduplicated MUST-FIX list per item (009; 005 §2.4/§2.5/§4; 004 §5; 001-A1/006-A1), and what can be deferred via phase mapping.
+5. `concur_after_fixes: true|false`.
+≤1,000 words. No praise.

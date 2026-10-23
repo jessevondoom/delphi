@@ -1,0 +1,22 @@
+Delphi Council 003 — Stage 1 review of the following DRAFT material (workspace = current directory, a spec-only repo at commit 9e5eff0). READ-ONLY: do not edit, create or delete files. Use only file-reading tools; do NOT run shell commands (they are blocked in this headless session and will abort your run).
+
+Under review:
+1. specs/009-model-access-and-auth.md (entire; decision D-19)
+2. specs/005-console-and-narrator-tui.md §2.4 (Usage Ledger, D-18) and §2.5 (Crash Recovery & Mission Resumption), plus §4 agents pane / Epic view
+3. specs/004-memory-and-coaching.md §5 (Memory Scopes, Operator Customization & Evolution, D-20)
+4. Pending amendments specs/001-governance-and-manifests.md §6A (001-A1) and specs/006-installer-and-updater.md §3.2 (006-A1)
+5. OPEN QUESTION (decide it): may an operator WIDEN a role's permissions via an explicit Red-tier `delphi customize grant` recorded as a lint waiver, or must overrides stay narrow-only absolutely? Give a recommendation with failure modes either way.
+
+Context to read first: GOVERNANCE.md, REVIEW.md (§1 severities, §6 output contract), OVERVIEW.md, missions/2026-10-23-foundational-design/decisions.md (D-01..D-20 are RATIFIED — do not re-litigate a decision itself, but DO flag spec text that fails to implement it safely), roadmap.md, and the approved specs 001 and 006 (approved by the operator after Council 002; records in missions/.../councils/002-verdict.md — do not re-report issues already fixed there).
+
+Question: can each item be approved (status: approved) for implementation in its roadmap step? If not, exactly what must change.
+
+ROUND 1 is BLIND: you have not seen any other seat's opinion.
+
+Output contract (Markdown, ≤1,400 words):
+1. Findings — each: **[P0|P1|P2]** `path#Lx-Ly` — title; **Failure mode:** concrete, falsifiable scenario; **Remediation:** exact change. Verify every claim against the file text; cite real line numbers.
+2. Open-question recommendation (item 5).
+3. Checked and sound (one line each, max 8).
+4. Per item 1–4: `approve` | `approve-with-fixes` (which findings) | `reject`.
+5. `concur: true|false` (true only if no unresolved P0).
+No style nits. No praise.

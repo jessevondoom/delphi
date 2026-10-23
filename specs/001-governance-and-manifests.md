@@ -267,11 +267,11 @@ roles:                                                              # exactly th
 3. **Check:** Red-Team reviews the draft for persona text that tries to change behavior, and the §6.4 linter runs.
 4. **Ratify:** the operator reviews the pack in the console (`/theme review`) and ratifies or edits it. Only then does it enter `ratified.lock` and become selectable with `delphi theme use <name>`.
 
-## 6A. Pending Amendment 001-A1: Operator Scope (D-20; *not yet approved, Council 003*)
-> The approved text above is unchanged. If Council 003 and the operator approve, this amendment adds:
-> - **§2.2 mapping rows:** `memory/operator/<self>/**` → `$DELPHI_HOME/operator/memory/agents/<self>/` (own role only, read-only for agents; loaded through the snapshot); `operator/profile.md` → `$DELPHI_HOME/operator/profile.md` (read-only, snapshot only). Nothing under `$DELPHI_HOME/operator/` is ever writable by an agent; it changes only through ratified proposals.
-> - **§2.3 precedence:** workspace `core/` > operator `core/` > team `custom/` > built-in. Operator files are pinned in `operator/ratified.lock`.
-> - **Open question for Council 003:** whether an operator may *widen* a role's permissions through an explicit, Red-tier `delphi customize grant`, recorded as a lint waiver in `operator/ratified.lock`, or whether narrow-only stays absolute.
+## 6A. Amendment 001-A1: Operator Scope (D-20; approved by the operator 2026-10-23 after Council 003)
+> This amendment is part of the approved spec. It adds:
+> - **§2.2:** `$DELPHI_HOME/operator/**` is on **both** the never-readable and never-writable lists for agent file tools. Operator memory, heuristics, profile and overrides reach agents **only** through the frozen snapshot (`specs/004` §5.2), and change only through ratified proposals. Agent manifests contain no operator paths.
+> - **§2.3 precedence:** workspace `core/` > operator `core/` > team `custom/` > built-in. Every operator `AGENT.md`, `SKILL.md`, `skills/**/scripts/**` file, the profile and the heuristics are pinned in `operator/ratified.lock`.
+> - **§2.3 narrow-only stays absolute (D-21, ratified):** there is no permission-widening grant. Instead, the subset rule for `authorized_skills` is refined: an override may **add** a ratified custom skill (`team/skills/custom/`) or operator skill (`operator/skills/`) as long as that skill's `required_permissions` are within the role's **built-in** `default_access_scope`. Built-in skills keep the plain subset rule.
 
 ## 7. Verification Plan
 1. **Schema Linter (`delphi lint`, compiled in per D-02):** validates all `agents/*/AGENT.md`, any `skills/*/SKILL.md`, and the §5 frontmatter of every Markdown file. It applies the §2.3 skill-reference and narrowing rules, and fails if any manifest, governance file or spec names an agent by anything other than its canonical role ID. Historical council records under `missions/**/councils/` are exempt from the name check only.

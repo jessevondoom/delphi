@@ -10,6 +10,7 @@ source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
+approved_sections: "§1.1, §2.1 socket auth, §2.4, §2.5, §4 (operator, 2026-10-23, after Council 003); other sections remain draft"
 ---
 
 # Spec 005: Console, Narrator Window & UDS Event-Bus Daemon
@@ -21,7 +22,15 @@ This specification defines the dual-window terminal interface and local client-d
 3. **Window 2 — `Narrator` (`delphi narrator`):** Attach-anywhere secondary live narrative and telemetry window—the epic storyteller chronicling the team's actions in real time (agents pane with models and token spend, the Epic task graph, the Council chamber, and Builder's Forge diffs).
 4. **Multiplexer & OS Window Auto-Spawning:** Seamless dual-window launching across `tmux`, `zellij`, `WezTerm`, `Kitty`, and macOS windows, plus single-screen `Tab` toggle fallback.
 
-### 1.1 Simpler Alternative Considered
+### 1.1 Phase Mapping
+| Roadmap step | Delivers |
+| :--- | :--- |
+| **2** | §2.1–§2.4 (daemon, socket auth, events, durability, usage ledger); §3 console core (`/usage`, `/budget`, `/permissions`, approvals); §2.5 core recovery (log replay, whole-turn retry of interrupted calls, re-raised approvals, `status.md`, budget reconciliation); tests 1, 3–8, 11, 12 |
+| **3** | §2.5 recovery for worktree checkpoints, `action.intent`/`action.result` reconciliation, and harness subprocesses |
+| **4** | §2.5 Council recovery (Round 1 and Round 2 rows) |
+| **5** | §4 narrator agents pane and the four views; §5 `tmux` and manual attach; tests 2, 9, 10 (full recovery matrix) |
+
+### 1.2 Simpler Alternative Considered
 - **Alternative:** A monolithic single-process TUI where the agent runtime and terminal UI run in the same process without a Unix Domain Socket daemon, using log file tailing (`tail -f`) for a second window.
 - **Why Rejected:** One-way log tailing cannot support interactive multi-window control (such as pausing a runaway agent from `Narrator`, inspecting live collapsible DAG nodes, or surviving an accidental terminal window closure without killing active `Builder` builds). Auto-spawning a per-workspace UDS daemon (`~/.delphi/run/<workspace-hash>.sock` — the exact pattern used by `tmux` and `rust-analyzer`) adds minimal code while unlocking sub-15µs bidirectional multi-window sync and crash resilience.
 - **Decision D-05 (revised 2026-10-23 after the Gemini review): a minimal daemon ships in roadmap Step 2.** A single process would have broken live token streaming in Narrator (deltas aren't persisted) and meant building the runtime twice. Step 2 therefore ships `delphi-core` with the Unix socket, JSON-RPC handshake, coalescer, race-free spawn and slow-client backpressure from §2.1, plus the durability rules from §2.3. It does **not** ship multi-workspace management or remote attach. Narrator gets live control actions (pause, inspect) in Step 5.
@@ -63,7 +72,13 @@ flowchart LR
    3. Treats a socket as stale only if the PID in `<workspace-hash>.pid` is dead. Only then does it unlink the socket.
    4. Spawns `delphi-core --daemon --workspace <path> --ready-fd N` and blocks until the daemon writes one byte to the readiness pipe, which happens after bind, migrations, and manifest load. The timeout is 5 s; on timeout the client shows the daemon's stderr log.
    The daemon holds the lock for its lifetime, so a second daemon can never start for the same workspace.
-2. **File Permissions:** The socket directory `~/.delphi/run/` is created with mode `0700` and socket files with `0600` so no other OS user or browser process can connect. The daemon also verifies `SO_PEERCRED` / `getpeereid` equals its own UID.
+2. **File Permissions:** The socket directory `$DELPHI_HOME/run/` is created with mode `0700` and socket files with `0600` so no other OS user or browser process can connect. The daemon also verifies `SO_PEERCRED` / `getpeereid` equals its own UID.
+   - **Same UID is not enough.** Unsandboxed test runs, scripts and harnesses also run as the operator, so a UID check can't separate the operator from their own processes. Three further layers apply:
+     - Every sandbox profile denies `$DELPHI_HOME/run/**` entirely: no read, no write, no Unix-socket connect (`specs/008` §4, `specs/009` §7).
+     - **Privileged RPCs** (`approval.resolve`, `/budget`, `/permissions`, ratification, `/rewind`) require a **console capability token**. The daemon issues it only to a console client attached to an interactive TTY, passing it over the spawn pipe or a TTY challenge, never through the environment or a file. Without the token, a connection is read-only.
+     - **Narrator connections are read-only** until Step 5 controls exist, and then may only pause and inspect.
+   - While an unsandboxed (Amber) command is running, a **new** console attachment needs confirmation from an already-attached console.
+   - After a daemon restart, the token is re-issued when the console reattaches through the TTY, so recovered approvals remain answerable (§2.5).
 3. **Protocol Handshake:** The first JSON-RPC call is `hello {protocol_version, binary_version}`. If the major versions differ, the client refuses to attach and tells the operator to run `delphi daemon restart`. This happens, for example, after `delphi update` swaps the binary under a running daemon.
 4. **60Hz Frame Coalescing (`[REV-TRAP-03]`):** When 3–5 Council specialists stream tokens concurrently (emitting 300+ token deltas/sec), `delphi-core` buffers `agent.thinking.delta` and `agent.text.delta` events per span and flushes coalesced frames every **16ms (60Hz)** to connected TUI clients, preventing terminal stdout saturation and layout thrashing. Each frame carries `seq_from`..`seq_to`, so "no dropped sequence numbers" is checkable even though deltas are merged.
 5. **Slow-Client Backpressure:** Each client has a bounded outbound queue (default 1,024 frames). On overflow, the daemon drops that client's queued frames and sends `resync_required`; the client then re-fetches `SessionSnapshot`. A stalled `Narrator`, for example over a laggy SSH link, never grows daemon memory or slows other clients.
@@ -132,7 +147,10 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
 CREATE INDEX IF NOT EXISTS usage_by_mission ON usage_ledger(mission_id, role, task_id);
 ```
 
-- Token counts come from the provider's usage report, never from an estimate. Calls with no usage report are recorded with `outcome = error` and the reservation as their cost.
+- **Where token counts come from:**
+  - For `api`, `cloud` and `gateway-native` paths, from the provider's usage report (`usage_source = reported`). A completed stream on those paths with no usage report is recorded with `outcome = error`, `cost_usd = reserved_usd`, and tokens estimated as `ceil(utf8_bytes / 4)`.
+  - For `harness` and `gateway-compat` paths that omit usage, tokens are estimated the same way (`usage_source = estimated`, `outcome = ok`; `specs/009` §7.10).
+  - An **interrupted** call (crash or kill) whose usage can't be known is charged its full reservation (`usage_source = estimated`, `outcome = cancelled`; §2.5).
 - **v1 scope:** record everything above, and expose totals through the agents pane and `/usage`. Efficiency analysis and optimization are **post-v1**, but they can be computed from this table without schema changes: tokens per task, cache-hit ratio, the cost of retries, and cost per verified task by tier.
 
 
@@ -164,13 +182,15 @@ CREATE INDEX IF NOT EXISTS usage_by_mission ON usage_ledger(mission_id, role, ta
 | Node was… | On recovery |
 | :--- | :--- |
 | `pending`, `done`, `failed`, `escalated` | Unchanged |
-| Mid model call (stream not completed) | Partial output discarded; the call is retried from the last completed block with the same routing directive. Its reservation is released, it does **not** count as a retry-ladder strike, and usage is reconciled from the provider's report if the call completed server-side. |
-| Mid tool step in a worktree | Changes made after the last `worktree.checkpoint` are shown as a **recovered-changes diff**: keep (stamped with the span's tier) or discard (rewind to the checkpoint). |
+| Mid model call (stream not completed) | The **entire interrupted turn** is discarded, including any blocks of that turn that had completed, and the turn is retried from the last *completed turn* with the same routing directive. Reasoning providers reject partial assistant turns. The interrupted call is charged its **full reservation** (`outcome = cancelled`, `estimated`), because providers can't report usage for it afterwards. It does not count as a retry-ladder strike, but after **2 consecutive interruptions of the same turn** the node escalates instead of retrying. |
+| Mid tool step in a worktree | Changes made after the last `worktree.checkpoint` are shown as a **recovered-changes diff**. *Keep* runs every changed path through the `specs/001` §2.2 path guard (no `.git`, links or protected inodes), stamps the files `min(L3, external_ceiling)` (unverified), and writes a new `worktree.checkpoint`. *Discard* rewinds to the last checkpoint. |
 | Waiting on an approval | Approval **re-raised**: never assumed granted, and the original timeout restarts |
-| Council Round 1 | Round 1 is **rerun** for all seats; safe because no seat saw another. Completed Round 2 outputs are kept. |
-| `action.intent` without `action.result` | **Outcome unknown.** The daemon runs the action's idempotency check where one exists: look up the PR by branch, the webhook by idempotency key, the merge by commit SHA. If it can't verify, the node waits for the operator ("did this happen?"). It is **never** retried blindly. |
+| Red approval **granted** but no `action.intent` yet | The grant **expires**. The approval is raised again, so a stale grant can never be acted on after a restart. |
+| Council Round 1 (no `council.round {round: 1, state: released}` event yet) | All buffered Round 1 blocks are discarded and Round 1 is **rerun** for all seats; safe because no seat saw another. Before Round 2 dispatch, the release event and the Round 1 blocks are written atomically in one fsync'd batch. |
+| Council Round 2 (Round 1 released) | Round 1 is kept. Completed Round 2 outputs are kept. **Only unfinished Round 2 seats rerun**, against the same released Round 1, so Round 2 never critiques stances that were discarded. |
+| `action.intent` without `action.result` | **Outcome unknown.** The daemon runs the action's idempotency check where one exists: look up the PR by branch, the webhook by idempotency key, the merge by commit SHA. If the check confirms the action happened, the daemon appends and fsyncs a synthetic `action.result {verified_by: check}`, so `/rewind` and the audit trail see the side effect. If it can't verify, the node waits for the operator ("did this happen?"). It is **never** retried blindly. |
 | Harness subprocess (`specs/009` §7) | The process is gone. The task restarts from the last worktree checkpoint with a fresh harness session; recovered changes are handled as above. |
-| Retry ladder or budget mid-flight | Ladder step and budget come from the log. Open reservations with no matching usage are released. |
+| Retry ladder or budget mid-flight | Ladder step and budget come from the log. Open reservations belonging to interrupted calls are charged in full, as above. Reservations for calls that never started are released. |
 
 Every outbound action must declare an **idempotency key** or a **post-hoc check** in its tool definition. An action that has neither is Red-tier on *every* attempt, including recovery.
 
@@ -267,3 +287,6 @@ A footer row shows mission totals: tokens by type, total cost against budget, th
     - the recovered-changes diff equals the post-checkpoint worktree delta.
 11. **Power-Loss Test:** cut power (VM hard reset) during a 3-node DAG with a pending approval. After reboot, `delphi resume` rebuilds the Epic and the console summary lists the approval, and `status.md` matches the log.
 12. **Unknown-Outcome Test:** kill the daemon between `action.intent` and `action.result` for an action with no idempotency check. The node waits for the operator and is never retried automatically.
+13. **Socket Self-Approval Test:** an unsandboxed process running as the operator's UID connects to the socket and sends `approval.resolve` for a pending Red action. It is refused (no console token), and no state changes.
+14. **Council Chimera Test:** kill the daemon (a) before Round 1 release, (b) mid-Round 2. In (a), Round 1 reruns and no Round 2 output survives. In (b), Round 1 is kept and only unfinished Round 2 seats rerun.
+15. **Crash-Loop Test:** a deterministic mid-stream crash on the same turn is retried twice and then escalates. Each interrupted call is charged its reservation.

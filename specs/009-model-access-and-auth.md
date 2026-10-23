@@ -2,12 +2,12 @@
 id: spec-009-model-access-and-auth
 title: "009: Model Access Paths, Endpoints & Authentication"
 author: architect
-timestamp: 2026-10-23T18:00:00Z
-status: draft
+timestamp: 2026-10-23T21:15:00Z
+status: approved   # by the operator, 2026-10-23, after Council 003
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
-source_type: internal_generated
-confidence: medium
+source_type: user_ratified
+confidence: high
 source_mission: 2026-10-23-foundational-design
 tags: [spec, auth, providers]
 ---
@@ -18,37 +18,34 @@ tags: [spec, auth, providers]
 How Delphi reaches a model and proves it is allowed to. Decision **D-19**: every setup below is required in v1, and direct API keys are treated as the *least* common configuration, not the default.
 
 1. **Access paths:** direct API, cloud platform (AWS Bedrock, Google Vertex AI), enterprise gateway, and subscription CLI (harness).
-2. **Endpoints:** named, configured ways of reaching a model family, each with its own credential source and capabilities.
-3. **Credential sources:** delegated wherever possible, so Delphi rarely holds a secret at all.
-4. **Capability probing, endpoint selection and failover,** including data-residency pinning.
-5. **Harness mode** for subscription users, and the security conditions it runs under.
+2. **Endpoints:** named, ratified ways of reaching a model family, each with its own credential source and probed capabilities.
+3. **Credential sources:** delegated wherever possible, so Delphi rarely holds a secret.
+4. **Policy:** endpoint selection, failover and the residency pin, applied to **all** model traffic.
+5. **Harness mode** for subscription users, and the containment it runs under (§7).
 
 ### 1.1 Non-Goals
-- Dialect compilation and signature handling (`specs/002`). This spec decides *where* a request goes and *how it authenticates*. 002 decides *what* is sent.
+- Dialect compilation and signature handling (`specs/002`). This spec decides *where* a request goes and *how it authenticates*. 002 decides *what* is sent, including the compat dialect (`specs/002` §2.2).
 - Running a local model server.
 
-### 1.2 Simpler Alternative Considered
+### 1.2 Phase Mapping
+| Roadmap step | Delivers |
+| :--- | :--- |
+| **2** | §5 endpoint config, selection, failover and pinning; credential sources `keychain`, `env`, `command`, `aws`, `gcloud-adc`; Claude through **direct API, Bedrock, Vertex and native gateways**; §4 redaction; §8 ledger columns; tests 1–4, 6, 10 |
+| **3** | Gemini (direct API, Vertex); `gateway-compat` (`specs/002` §2.2); `oauth2` device-code and client credentials (`delphi auth login`); §6 active probing; then, once the Step 3 sandbox exists, §7 harness mode for `claude`, `gemini`, `codex` with the egress proxy and approval bridge; tests 5, 7–9, 11–14 |
+| **Later** | Direct OpenAI API driver; more platforms (for example Azure) as endpoint types |
+
+All four access paths ship within v1 (Steps 2–3). Step 2 already serves cloud-platform and gateway operators, because the `command:` helper and the cloud credential chains cover corporate SSO.
+
+### 1.3 Simpler Alternative Considered
 - **Alternative A: API keys only.** Rejected by the operator. Most real setups are cloud platforms, corporate gateways with SSO, or subscriptions.
-- **Alternative B: route everything through one proxy** (for example LiteLLM in OpenAI format). Rejected as the *only* path: translating to a lowest-common-denominator format drops reasoning signatures and explicit prompt caching (`[H-003]`, `specs/002` §1.1) and adds a server to run. Kept as one supported option (§3.3 compat mode).
+- **Alternative B: route everything through one proxy** (for example LiteLLM in OpenAI format). Rejected as the *only* path: it drops reasoning signatures and explicit caching (`[H-003]`) and adds a server. Kept as one supported option (`gateway-compat`).
 
 ---
 
 ## 2. Model: Family → Endpoint → Credential
-
-```mermaid
-flowchart LR
-    Fam["Model family\n(training lineage; specs/002 §4, GOVERNANCE §3.2)"] --> E1["Endpoint: anthropic-api"]
-    Fam --> E2["Endpoint: bedrock-us-east-1"]
-    Fam --> E3["Endpoint: corp-gateway"]
-    Fam --> E4["Endpoint: claude-subscription (harness)"]
-    E1 --> C1["Credential: keychain key"]
-    E2 --> C2["Credential: AWS SDK chain (SSO profile / role)"]
-    E3 --> C3["Credential: OAuth device-code SSO or credential command"]
-    E4 --> C4["Credential: owned by the official CLI"]
-```
-
 - A **model family** is reached through one or more **endpoints**. Diversity rules (`[H-001]`) count families, never endpoints: Claude through Bedrock and through Anthropic's API is one family.
-- Routing (`specs/002` §4) chooses a *model* by fit. This spec then chooses the *endpoint* for that model by policy (§5).
+- Routing (`specs/002` §4) chooses a *model* by fit. This spec chooses the *endpoint* for that model by policy (§5).
+- **Model IDs:** an endpoint's own `models` map takes precedence. The global `[models]` tier map in `config.toml` is the fallback for endpoints that omit one.
 
 ---
 
@@ -57,19 +54,19 @@ flowchart LR
 | Path | Examples | Transport & dialect | Fidelity | Credential sources (§4) |
 | :--- | :--- | :--- | :--- | :--- |
 | **Direct API** | Anthropic API, Google AI (Gemini API) | Native HTTPS, native dialect | Full | keychain, env |
-| **Cloud platform** | AWS Bedrock (Claude and other families), Google Vertex AI (Gemini, Claude) | Platform SDK/HTTPS; native model dialect inside the platform envelope | Full, subject to what the platform supports (probed, §6) | AWS SDK default chain (SSO profiles, assumed roles, instance/IRSA roles); Google ADC (gcloud user login, service account, workload identity) |
-| **Enterprise gateway, native passthrough** | Corporate LLM gateways and proxies that forward Anthropic- or Gemini-format requests unchanged | HTTPS to a custom `base_url` plus custom headers; native dialect | Full, if the probe confirms passthrough | static header (keychain), OAuth2 (device-code SSO or client credentials), credential command |
-| **Enterprise gateway, compat** | Gateways exposing only an OpenAI-compatible API | HTTPS, OpenAI-compatible dialect (`specs/002` compat pass) | **Degraded:** tool use works; reasoning signatures don't carry across turns and explicit cache breakpoints may be ignored. Shown in the agents pane. | same as above |
-| **Subscription CLI (harness)** | `claude`, `gemini` and `codex` CLIs signed in to the operator's subscription | Subprocess, the CLI's own protocol (stream-JSON) | **Delegated:** the CLI owns its prompt, caching and model calls (§7) | owned by the CLI; Delphi never sees it |
+| **Cloud platform** | AWS Bedrock, Google Vertex AI | Platform SDK/HTTPS; native model dialect inside the platform envelope | Full, as probed (§6) | AWS SDK default chain (SSO profiles, assumed roles, instance roles); Google ADC (user login, service account, workload identity) |
+| **Gateway, native passthrough** | Corporate LLM gateways forwarding Anthropic- or Gemini-format requests unchanged | HTTPS to `base_url`; native dialect | Full, if the probe confirms passthrough | keychain header, `oauth2`, `command` |
+| **Gateway, compat** | Gateways exposing only `/v1/chat/completions` | OpenAI chat-completions dialect (`specs/002` §2.2) | **Degraded:** tools work; reasoning signatures don't carry across turns; cache breakpoints may be ignored. The agents pane shows a badge. | same as above |
+| **Subscription CLI (harness)** | `claude`, `gemini`, `codex`, signed in to the operator's subscription | Subprocess, stream-JSON | **Delegated:** the CLI runs its own loop under §7 containment | owned by the CLI; Delphi never reads it |
 
-### 3.1 v1 support matrix
-| Family (v1) | Direct API | Bedrock | Vertex | Gateway (native) | Gateway (compat) | Harness |
+### 3.1 v1 Support Matrix
+| Family | Direct API | Bedrock | Vertex | Gateway (native) | Gateway (compat) | Harness |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Claude | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `claude` |
-| Gemini | ✅ | — | ✅ | ✅ | ✅ | ✅ `gemini` |
-| OpenAI (GPT/Codex) | — (deferred) | — | — | — | ✅ | ✅ `codex` |
+| Claude | ✅ (2) | ✅ (2) | ✅ (2) | ✅ (2) | ✅ (3) | ✅ `claude` (3) |
+| Gemini | ✅ (3) | — | ✅ (3) | ✅ (3) | ✅ (3) | ✅ `gemini` (3) |
+| OpenAI (GPT/Codex) | — (later) | — | — | — | ✅ (3) | ✅ `codex` (3) |
 
-Bringing the OpenAI family in through compat and harness pulls the OpenAI-compatible dialect pass into v1. The direct OpenAI API driver stays deferred (D-06).
+The number in parentheses is the roadmap step.
 
 ---
 
@@ -77,23 +74,35 @@ Bringing the OpenAI family in through compat and harness pulls the OpenAI-compat
 
 | `credential` | What Delphi stores | Notes |
 | :--- | :--- | :--- |
-| `keychain:<name>` | A static key or header value in macOS Keychain / Linux Secret Service | Static API keys and gateway tokens |
+| `keychain:<name>` | A static key or header value in macOS Keychain / Linux Secret Service | API keys and gateway tokens |
 | `env:<VAR>` | Nothing | Read at call time |
-| `aws:<profile>` | Nothing | AWS SDK default credential chain: SSO (`aws sso login`), assumed roles, instance or IRSA roles. Refresh is handled by the SDK. |
-| `gcloud-adc` / `gcloud-sa:<path-or-keychain>` | Nothing (ADC), or a keychain reference | Google Application Default Credentials, user login or workload identity |
-| `oauth2:<provider>` | The refresh token, in the keychain only | Device-code flow for SSO (`delphi auth login <endpoint>` prints a URL and code), or client credentials for service use. Access tokens live only in memory and are refreshed before expiry. |
-| `command:<argv>` | Nothing | Exec credential helper (like git or kubectl helpers). It prints `{"token": "...", "expires_at": "..."}`. It is how corporate SSO tooling plugs in without Delphi implementing every IdP. |
-| `harness-login` | Nothing | The official CLI authenticates itself (`claude login`, and so on). |
+| `aws:<profile>` | Nothing | AWS SDK default chain (`aws sso login`, assumed roles, instance roles) |
+| `gcloud-adc` / `gcloud-sa:<keychain-ref>` | Nothing, or a keychain reference | Google Application Default Credentials |
+| `oauth2:<auth-name>` | Refresh token (and any client secret), in the keychain only | Configured by an `[auth.<name>]` block (§4.1). Access tokens stay in memory and are refreshed before expiry. |
+| `command:<argv>` | Nothing | Exec credential helper that prints `{"token": "...", "expires_at": "..."}`. It plugs in corporate SSO tooling without Delphi implementing each identity provider. Its stderr is never logged raw. |
+| `harness-login` | Nothing | The official CLI authenticates itself (`claude login`, and so on) |
 
-**Credential invariants:**
-1. Delphi **never writes a credential to any file**: not `config.toml`, not logs, not `events.jsonl`. The only exceptions are keychain entries it created. The event redactor (`specs/005` §2.3) masks `Authorization` headers, bearer tokens and helper output.
-2. Delphi **never reads, copies or reuses another tool's stored credentials** (CLI session files, browser cookies, SDK caches), and never sends a subscription's credentials to anything except that subscription's official CLI.
-3. Credentials are resolved by the daemon at call time and never enter an agent's context, tool results or `HandoffEnvelope`.
-4. **Expiry mid-task:** the call pauses, and the console shows `re-authenticate <endpoint>` (for example after an SSO session expires). It never silently fails over to an endpoint the policy disallows (§5).
+### 4.1 `[auth.<name>]` Schema (OAuth2)
+```toml
+[auth.corp-okta]
+flow = "device_code"                  # device_code | client_credentials
+issuer = "https://idp.example.com"    # OIDC discovery; or token_url + device_authorization_url
+client_id = "<per-organization client id>"   # supplied by the operator's IdP admin; Delphi ships none
+scopes = ["llm.invoke"]
+audience = "llm-gateway"              # optional
+client_secret = "keychain:corp-okta-secret"  # client_credentials only; keychain reference, never inline
+```
+
+### 4.2 Credential Invariants
+1. **Never on disk.** Delphi never writes a credential to any file: not config, logs or `events.jsonl`. The only exception is keychain entries it created.
+2. **Never another tool's.** Delphi never reads, copies or reuses another tool's stored credentials (CLI session files, browser cookies, SDK caches).
+3. **Never in agent context.** Credentials are resolved by the daemon at call time and never enter an agent's context, tool results or `HandoffEnvelope`.
+4. **Literal redaction:** every *runtime-resolved* credential value (keychain, env, AWS/STS, Google tokens, OAuth access tokens, helper output, secret `headers`) is registered with the event redactor (`specs/005` §2.3) as a literal, for its lifetime. Error bodies and helper stderr are therefore masked even when the token has no recognizable format.
+5. **Expiry mid-task:** the call pauses and the console shows `re-authenticate <endpoint>`. It never fails over to an endpoint outside the policy (§5).
 
 ---
 
-## 5. Endpoint Configuration, Selection & Failover
+## 5. Endpoint Configuration, Selection & Policy
 
 ```toml
 [[endpoints]]
@@ -103,7 +112,7 @@ path = "cloud"                    # api | cloud | gateway-native | gateway-compa
 platform = "bedrock"
 region = "us-east-1"
 credential = "aws:work-sso"
-models = { workhorse = "<bedrock model id>", frontier = "<bedrock model id>" }
+models = { workhorse = "<bedrock model id>", frontier = "<bedrock model id>" }   # overrides global [models]
 
 [[endpoints]]
 id = "corp-gateway"
@@ -119,75 +128,82 @@ family = "claude"
 path = "harness"
 harness = "claude"
 credential = "harness-login"
-cost_model = "subscription"      # budget in tokens/turns, not dollars (§8)
+cost_model = "subscription"
 
 [access]
-order = { claude = ["corp-gateway", "bedrock-us", "claude-sub"], gemini = ["vertex-eu"] }
-allowed_endpoints = ["corp-gateway", "bedrock-us", "vertex-eu", "claude-sub"]   # compliance pin: nothing else, ever
+order = { claude = ["corp-gateway", "bedrock-us", "claude-sub"] }
+allowed_endpoints = ["corp-gateway", "bedrock-us", "claude-sub"]   # compliance pin
 ```
 
-- **Selection:** for the chosen model, the daemon uses the first healthy endpoint in `access.order` that serves the needed tier and features (§6).
-- **Failover:** only to the next endpoint in that same ordered list, and only among `allowed_endpoints`. This is how data residency and approved vendors are enforced, and it holds even when every allowed endpoint is down: the task then waits or escalates rather than leaving the allowed set.
-- **Signatures across endpoints:** a switch to a different endpoint, even for the same family, is treated as foreign for reasoning-signature purposes (`specs/002` §3.1). Probing (§6) may relax this per endpoint pair.
-- **Per-role overrides** (for example keeping Red-Team on a different endpoint for cost) are allowed. Family diversity rules still apply.
+- **The pin applies to all model traffic:** primary selection, failover, per-role overrides, capability probes (§6) and `doctor`. A request is sent only to an endpoint in `allowed_endpoints`. When every allowed endpoint is down, the task waits or escalates; it never leaves the allowed set.
+- **No cross-origin redirects:** HTTP redirects to a different scheme, host or port than the endpoint's `base_url` are refused, never followed with credentials attached.
+- **Configuration is ratified:** the `[[endpoints]]`, `[access]` and `[auth.*]` blocks of `config.toml` are hashed in `local/ratified.lock` (`specs/006` §3.1). Any change to a `command:` credential, `base_url`, `headers`, `allowed_endpoints`, `order` or `[auth.*]` is staged as a **Red-tier** proposal and doesn't take effect until ratified. A local process that edits the config therefore can't inject a helper command or move traffic.
+- **Signatures across endpoints:** reasoning blocks are treated as foreign when a turn moves between endpoints (`specs/002` §3.1), unless an explicit `E1 → E2` replay probe (§6) passed for that ordered pair.
 
 ---
 
 ## 6. Capability Probing
-`delphi endpoints test [id]` (also run by `doctor` and at `init`) sends minimal requests to each endpoint and records into `context/model-capabilities.md`'s machine-readable table, per endpoint × model:
-- authentication OK (and expiry, where known);
+`delphi endpoints test [id] [--probe]` sends a **minimal, capped** probe suite to allowed endpoints only. Each probe has a token cap, for example ≤ 2K tokens per endpoint. For each endpoint × model it records:
+- authentication OK and expiry;
 - tool calling;
-- extended thinking or reasoning, and whether signatures round-trip;
-- explicit prompt caching (whether cache-read tokens are reported);
-- effective context limit and output limit;
-- whether usage is reported (token counts), required for exact ledger accounting;
+- reasoning, and whether signatures round-trip within the endpoint and, for configured pairs, from `E1` to `E2`;
+- explicit caching (whether cache-read tokens are reported);
+- effective context and output limits;
+- whether usage is reported;
 - for gateways: native passthrough vs compat, detected rather than assumed.
 
-Routing uses probed features, not vendor assumptions. A probe that fails marks the endpoint `unhealthy` until the next successful probe.
+Results are stored in Zone 3 (`local/endpoint-capabilities.json`, mirrored in `state.db`) with a 24-hour TTL. They are **never** written to the team-tracked `context/model-capabilities.md`, which holds only static per-family defaults. `doctor` reads cached results and probes only with `--probe`, which keeps it offline and free by default. Routing uses probed features, not vendor assumptions.
 
 ---
 
 ## 7. Harness Mode (Subscription CLIs)
 
-The harness path exists so operators can use subscriptions they already pay for. It is **delegated execution**: the CLI runs its own agent loop. That trades away some of Delphi's controls, so it runs under these conditions:
+The harness runs its own agent loop, so Delphi can't see its internal reads or tool calls. Every condition below is mandatory; a harness that can't meet one is unavailable.
 
-1. **Official binary only, operator-owned:** Delphi launches the operator's installed `claude`, `gemini` or `codex` binary as the operator's own process. It never extracts tokens or calls subscription backends directly (§4, invariant 2). Each provider's terms govern automated use of a subscription; `doctor` shows a one-time notice pointing the operator to them.
-2. **Sandboxed:** the harness process always runs inside the OS sandbox (D-04), with network allowed **only** to its provider's hosts and writes allowed only to its worktree. If no sandbox is available, harness mode is unavailable for code-writing tasks.
-3. **Permission bridge, or tools off:**
-   - Where the CLI supports delegating permission prompts (for example a permission-prompt tool via Delphi's local MCP server), every tool request goes through Delphi's approval broker and tier rules.
-   - Where it doesn't, the harness is launched in its most restrictive tool mode, and file changes are accepted only as a worktree diff that Delphi reviews at Amber tier.
-   - The per-CLI bridge capability is probed (§6) and shown in the console.
-4. **Governance still leads:** Delphi passes governance, the role manifest, the persona slot and the `HandoffEnvelope` through the CLI's system-prompt mechanism (`specs/002` §2 order). The CLI's own built-in instructions sit outside Delphi's control. This is a documented deviation from `[REV-ARCH-02]`, accepted only on this path.
-5. **Taint:** a harness span inherits its parent's taint. Spans at L1 or lower may not dispatch to a harness at all, because Delphi can't gate the tools inside it. Harness output is stamped `internal_generated` (L3) at most.
-6. **Usage:** read from the CLI's reported usage when its output provides it (`usage_source = reported`); otherwise estimated from bytes and marked `estimated` (§8).
-7. **Councils:** a harness may hold a Council seat. The Round 1 barrier still holds, because Delphi controls what each seat receives.
-
----
-
-## 8. Usage Ledger & Budget Additions
-`usage_ledger` (`specs/005` §2.4) gains these columns: `endpoint_id`, `access_path`, `usage_source` (`reported` | `estimated`), and `cost_model` (`metered` | `subscription`).
-- Metered endpoints price calls from the config price table, with optional per-endpoint price overrides (negotiated gateway rates).
-- Subscription endpoints record tokens with `cost_usd = 0` and are budgeted with `subscription_budget_tokens` per mission, so runaway loops are still capped.
-- The agents pane shows `est.` beside estimated figures, and labels compat or harness endpoints with a fidelity badge.
-
----
-
-## 9. Phase Mapping (roadmap)
-| Step | Delivers |
-| :--- | :--- |
-| **2** | Endpoint config and selection; credential sources `keychain`, `env`, `aws`, `gcloud-adc`, `command`, `oauth2` (device-code); direct, cloud and native-gateway paths for Claude; probing; ledger columns; `delphi auth login`. |
-| **3** | Gemini on direct API and Vertex; compat gateway pass (OpenAI-compatible dialect); harness mode for `claude`, `gemini`, `codex` (requires the Step 3 sandbox). |
-| **Later** | Direct OpenAI API driver; additional platforms (for example Azure) as endpoint types. |
+1. **Official binary, operator-owned.** Delphi launches the operator's installed `claude`, `gemini` or `codex` binary as the operator's own process. It never extracts tokens or calls subscription backends directly. `doctor` shows a one-time notice that each provider's terms govern automated use of a subscription.
+2. **Always sandboxed, for every task type** (code, discovery, Council). No sandbox means no harness mode.
+3. **Filesystem (deny-by-default for reads *and* writes):**
+   - **Read and write:** only the task worktree, minus any `.git` path segment (`specs/001` §2.2), plus a fresh **ephemeral per-task state dir** used as the CLI's session and cache home.
+   - **Read-only:** the CLI's credential file(s), exposed at the path that CLI expects. Delphi itself still never reads them.
+   - **Not visible:** the operator's real `~/.claude`, `~/.gemini` or `~/.codex` directories. A harness can't plant persistent hooks, plugins or MCP servers on the host. `$DELPHI_HOME` (including `run/`, `state.db`, `operator/`) and everything else under `$HOME` (`~/.ssh`, `~/.aws`, and so on) are also hidden.
+4. **Network:** no direct egress. All traffic goes through a **daemon-run local CONNECT proxy** (`HTTPS_PROXY`). It allows only the endpoint's configured provider hosts (by CONNECT target and SNI) and logs every denied attempt. Hostname filtering is done by the proxy because the OS sandboxes can't filter by hostname.
+5. **Environment:** the process gets an explicit allowlisted environment (no inherited `AWS_*`, `GITHUB_TOKEN`, and so on). It is launched with flags that disable user-global hooks, plugins and non-Delphi MCP servers.
+6. **Approvals:** where the CLI supports a permission-prompt tool, it connects to a **per-span MCP socket** inside its ephemeral state dir. The socket carries a single-use token bound to `(span_id, role, external_ceiling)` and exposes only `request_approval`, so one span can't speak for another. Requests go through the normal approval broker and tier rules.
+7. **No bridge, or a non-builder role:**
+   - Where a CLI has no permission bridge, it runs with tools in their most restrictive mode, and its file changes come back only as a worktree diff.
+   - Council seats and non-builder roles always run with a **read-only worktree and CLI tools disabled**, and return structured output only.
+   - Every returned diff goes through the merge-gate classifier: any `.git` or `host_exec_paths` match is **Red**, the rest is Amber.
+8. **Taint clamp:** before launch, the span's `external_ceiling` is clamped to the **minimum provenance tier of every file the sandbox exposes** (`specs/001` §5.1). Launch is refused if that is $\le L_1$. Harness output is stamped `min(L3, ceiling)`. Delphi can't see what the harness read internally, so the clamp assumes it read everything it could.
+9. **Prompt injection, per harness:** a table in config (`[harness.<name>]`) records how governance, the role manifest, the persona slot and the `HandoffEnvelope` are passed: an append-system-prompt flag where available, otherwise a context file. Context files are written only to the ephemeral state dir, or are listed in the worktree's `info/exclude` and stripped from every merge diff. A test verifies that no merge diff contains them. The CLI's own built-in instructions stay outside Delphi's control; this is an accepted, documented deviation from `[REV-ARCH-02]`.
+10. **Budget, enforced live:**
+    - Harness usage comes from the CLI's reported usage when present (`usage_source = reported`); otherwise it is estimated as `ceil(utf8_bytes / 4)` of stream input and output (`estimated`).
+    - `cost_model = "subscription"` endpoints are capped by `subscription_budget_tokens` (default 500,000 per mission, 2,000,000 per Council) and by `max_turn_budget`.
+    - The daemon reserves worst-case tokens before launch, meters the stream as it runs, and **kills the subprocess** on any breach, then escalates.
 
 ---
 
-## 10. Verification Plan
-1. **No-Secret-On-Disk Test:** run init and a mission with every credential type, then scan `$DELPHI_HOME`, logs and `events.jsonl` for token material. Zero hits, apart from keychain entries.
-2. **Residency Pin Test:** with `allowed_endpoints = ["vertex-eu"]` and that endpoint returning `503`, no request reaches any other endpoint and the task escalates.
-3. **SSO Expiry Test:** an `oauth2` access token expires mid-task. The call pauses with a re-authenticate prompt, then resumes after `delphi auth login` without losing the turn.
-4. **Credential Helper Test:** a `command:` helper returning a token with a 60-second expiry is re-invoked before expiry, and its stdout never appears in any log.
-5. **Gateway Detection Test:** against a mock gateway that strips thinking blocks, the probe classifies it `gateway-compat`, the pane shows the degraded badge, and signature round-trips are not attempted.
-6. **Family-Not-Endpoint Test:** Claude through Bedrock plus Claude through Anthropic's API counts as one family for Council diversity.
-7. **Harness Containment Test:** a harness task attempting network access to a non-provider host, or a write outside its worktree, is blocked by the sandbox. Without a permission bridge, file changes arrive only as an Amber-reviewed diff.
-8. **Harness Taint Test:** a span tainted L1 attempting to dispatch to a harness endpoint is refused with a Red-tier prompt.
-9. **Subscription Budget Test:** a harness loop exceeding `subscription_budget_tokens` halts and escalates, with ledger rows marked `subscription` and `usage_source` set correctly.
+## 8. Usage Ledger & Budget
+`usage_ledger` (`specs/005` §2.4) carries `endpoint_id`, `access_path`, `usage_source` (`reported` | `estimated`) and `cost_model` (`metered` | `subscription`).
+- Metered paths price from the config price table, with optional per-endpoint overrides (negotiated gateway rates).
+- Subscription paths record tokens with `cost_usd = 0` and are capped in tokens (§7.10).
+- The agents pane shows `est.` beside estimated figures, and a fidelity badge for compat and harness endpoints.
+
+---
+
+## 9. Verification Plan
+1. **No-Secret-On-Disk Test:** run init and a mission with every credential type. Scan `$DELPHI_HOME`, logs and `events.jsonl` for token material: zero hits apart from keychain entries.
+2. **Residency Pin Test:** with `allowed_endpoints = ["vertex-eu"]` and that endpoint returning `503`, no request (failover, probe, or per-role override) reaches any other endpoint, and the task escalates.
+3. **Redirect Test:** a gateway returning `307` to another host does not receive a follow-up request, and no credential is sent cross-origin.
+4. **Config Tamper Test:** a process edits `config.toml` to change `credential = "command:…"` and `allowed_endpoints`. The daemon keeps using the ratified values and stages a Red proposal.
+5. **SSO Expiry Test:** an `oauth2` access token expires mid-task. The call pauses with a re-authenticate prompt and resumes after `delphi auth login`.
+6. **Redaction Test:** a gateway error body echoing the bearer token, and helper stderr containing it, appear masked in every log.
+7. **Gateway Detection Test:** a mock gateway that strips thinking blocks is classified `gateway-compat`, and signature round-trips are not attempted.
+8. **Family-Not-Endpoint Test:** Claude through Bedrock plus Claude through Anthropic's API counts as one family for Council diversity.
+9. **Harness Containment Test:**
+   - a harness attempting `curl example.com`, reading `~/.ssh/id_ed25519`, reading `$DELPHI_HOME/local/state.db`, connecting to `$DELPHI_HOME/run/*.sock`, writing `@worktree/.git`, or writing to the real `~/.claude/` is blocked;
+   - the proxy log records the denied connection.
+10. **Model Map Precedence Test:** an endpoint's `models` entry overrides the global `[models]` alias for that endpoint only.
+11. **Harness Taint Test:** a worktree containing an $L_1$ file causes harness launch to be refused. A worktree with `vendor/**` ($L_0$) clamps the span to $L_0$.
+12. **Approval Spoof Test:** a second sandboxed process presenting a captured MCP token gets nothing, because the token is single-use and span-bound.
+13. **Subscription Budget Test:** a harness loop exceeding `subscription_budget_tokens` mid-stream is killed and escalated, with ledger rows marked `subscription` and `estimated` where applicable.
+14. **Council-Seat Harness Test:** a Council seat on a harness has no writable worktree and no tools, and returns only structured output.

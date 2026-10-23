@@ -3,13 +3,13 @@ id: kb-system-heuristics
 title: "Delphi Systemic Heuristics (ExpeL Contrastive Rule Store)"
 author: orchestrator
 timestamp: 2026-10-23T13:00:00Z
-source_type: user_ratified   # ratified by the operator 2026-10-23; H-001/H-007 generalized to model families at the operator's direction
+source_type: user_ratified   # ratified by the operator 2026-10-23; H-001/H-007 generalized to model families; H-008 added after Council 003
 confidence: high
 status: active
 max_rules: 25
 max_bytes: 6144
 max_rule_chars: 350
-active_rules: 7
+active_rules: 8
 source_mission: 2026-10-23-foundational-design
 tags: [heuristics, always-loaded]
 ---
@@ -52,3 +52,8 @@ tags: [heuristics, always-loaded]
 - **T:** Dispatch, or a failed verification.
 - **D:** Put builder and critic on different model families. On failure, follow spec 003 §3.2: upscale, then reset context, then escalate.
 - **F:** Identical retries repeat the same local minimum.
+
+### `[H-008]` No Author-Family Self-Review
+- **T:** A Council reviews material drafted by one model family.
+- **D:** Seat ≥2 critics from other families when configured. With one family, critics use a different model (tier or version) than the author; label the verdict `homogeneous`. Never block.
+- **F:** In Council 003 the author's family found 0 of 9 P0s.

@@ -118,20 +118,23 @@ $DELPHI_HOME/                     # default ~/.delphi (override with DELPHI_HOME
 - **This repository is the install source.** Its `GOVERNANCE.md`, `SPEC.md`, `agents/`, `skills/`, `templates/`, seed `context/`, and `memory/` templates are embedded in the binary at build time. `delphi init` seeds a workspace home from them, and `delphi update` merges new releases. Its `missions/` and `specs/` are Delphi's own design records and are not seeded. Building Delphi with Delphi works like any other project: an installed binary, with a workspace whose `projects` entry points at this repo.
 
 
-### 3.2 Pending Amendment 006-A1: Operator Home (D-20; *not yet approved, Council 003*)
-> If approved, `$DELPHI_HOME` gains a per-operator, cross-workspace directory (`specs/004` §5):
+### 3.2 Amendment 006-A1: Operator Home (D-20; approved by the operator 2026-10-23 after Council 003)
+> `$DELPHI_HOME` has a per-operator, cross-workspace directory (`specs/004` §5):
 > ```text
 > $DELPHI_HOME/operator/
 > ├── profile.md                 # operator preferences (operator-authored or ratified)
 > ├── heuristics.md              # [O-…] personal rules (Rule of 25 caps)
 > ├── memory/agents/<role>/lessons.md
 > ├── core/agents/<role>/        # personal overrides of built-ins (all workspaces)
-> ├── skills/                    # personal skills
+> ├── skills/                    # personal skills (scripts pinned)
+> ├── base/                      # release ancestor for merging operator/core/
 > ├── ratified.lock + ratified/  # pinned, as in local/
-> └── proposals/                 # daemon-only
+> ├── proposals/                 # daemon-only
+> └── locks/                     # CAS locks for operator files (specs/004 §2.1)
 > ```
-> `delphi update` merges `operator/core/` against the release ancestor, like workspace `core/` (§4 step 4). `doctor` checks 3–4 and 8 cover operator files. `delphi operator export|import` moves this directory between machines as an encrypted bundle (post-v1).
-
+> - **Step 1:** `delphi init` creates this directory if absent: empty `profile.md` and `heuristics.md`, `ratified.lock` and `ratified/` seeded from the release, and `base/`. `doctor` checks 3, 4 and 8 and `delphi lint` validate it from Step 1 on, which keeps the Step 1 definition of done passable.
+> - **Updates:** `delphi update` merges `operator/core/` against `operator/base/` (§4 step 4), and its ratify-before-swap step covers operator files. `delphi rollback` restores `operator/base/` and `operator/ratified/` too.
+> - **Post-v1:** `delphi operator export|import` moves this directory between machines as an encrypted bundle.
 ---
 
 ## 4. `delphi update` State Machine

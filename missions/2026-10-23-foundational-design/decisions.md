@@ -243,5 +243,20 @@ Supporting rules:
 
 **Status:** ✅ RATIFIED 2026-10-23 by the operator. Spec text is `draft` (spec 004 §5, pending amendments 001-A1 and 006-A1) → Council 003. One open question goes to Council 003: whether operators may widen role permissions by explicit grant.
 
+## 🟢 D-21 — Operator permission widening
+**Context:** D-20 left open whether an operator may widen a role's permissions in their own overrides.
+**Council 003 recommendation (unanimous after Round 2):** keep `default_access_scope` **narrow-only, with no grants**, but let overrides **attach** ratified custom or operator skills whose `required_permissions` fit within the role's built-in scope (001-A1). The Builder seat first proposed grants with limits, then conceded. Widening a non-builder role would let code change outside `IsolatedBuild` and the merge gates, and an operator-scope waiver would apply silently in every workspace. Code-changing needs are met through `@builder` and skills.
+- **A. Narrow-only plus within-scope skill attachment** (recommended)
+- **B. Allow a Red-tier `delphi customize grant`** with hard limits (Builder's original Round 1 position)
+
+**Status:** ✅ RATIFIED 2026-10-23: **A**, narrow-only plus within-scope skill attachment.
+
 ## ✅ Approvals
 - **2026-10-23:** the operator approved `specs/001-governance-and-manifests.md` and `specs/006-installer-and-updater.md` after Council 002. Roadmap Step 1 may begin. Pending amendments 001-A1 and 006-A1 are *not* covered by this approval.
+- **2026-10-23:** after Council 003, the operator approved:
+  - `specs/009-model-access-and-auth.md` (now `approved`);
+  - spec 005 §1.1, §2.1 socket auth, §2.4, §2.5 and §4;
+  - spec 004 §5, plus its §2.1 and §3 amendments;
+  - amendments 001-A1 and 006-A1 (now part of the approved specs 001 and 006);
+  - D-21 (option A).
+- **2026-10-23:** the operator ratified heuristic `[H-008]` (no author-family self-review), with the condition that it **never blocks** a Council when only one model family is available. It degrades to a `homogeneous` verdict instead, and as best practice its critics use a *different model within the same family* (another tier or version) than the author's.

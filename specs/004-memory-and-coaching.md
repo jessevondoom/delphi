@@ -10,6 +10,7 @@ source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
+approved_sections: "§5, plus the §2.1 lock and §3 retrieval amendments (operator, 2026-10-23, after Council 003); other sections remain draft"
 ---
 
 # Spec 004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop
@@ -62,7 +63,7 @@ flowchart TD
 Inspired by Nous Research's `hermes-agent` snapshot pattern:
 - When a task starts, `delphi-core` loads `context/heuristics.md` and `memory/agents/<role>/lessons.md` into an **immutable in-memory prefix snapshot** pinned with Anthropic `cache_control: {"type": "ephemeral"}` or Gemini `cachedContents`.
 - If **Orchestrator** or a user command writes a new lesson to disk mid-session, the disk file is updated atomically (`[REV-TRAP-02]`), **but the active agent's in-memory system prompt prefix is NOT mutated mid-turn**. This prevents invalidating the provider's KV cache mid-loop (saving 5x–10x in latency and token costs); the new snapshot takes effect on the next spawned task.
-- **No lost updates:** every change to `heuristics.md`, `lessons.md` or `REVIEW.md` (from the daemon, `delphi sync`, `delphi update`, or the user's `$EDITOR` via `delphi`) carries the `expected_blake3` of the version it was **derived from**, captured when the proposal or edit was first prepared. The writer takes an advisory `flock` on `.delphi/locks/<path>.lock`, checks `blake3(disk) == expected_blake3`, writes a temp file, and renames it. On a mismatch it rebases (re-derives the change against the current file) or reports a conflict; it never overwrites blindly.
+- **No lost updates:** every change to `heuristics.md`, `lessons.md` or `REVIEW.md` (from the daemon, `delphi sync`, `delphi update`, or the user's `$EDITOR` via `delphi`) carries the `expected_blake3` of the version it was **derived from**, captured when the proposal or edit was first prepared. The writer takes an advisory `flock` on the lock file **of the scope that owns the file**: `.delphi/locks/<path>.lock` for workspace and team files, and `$DELPHI_HOME/operator/locks/<path>.lock` for operator files, so two workspaces' daemons can't race on shared operator memory. It then checks `blake3(disk) == expected_blake3`, writes a temp file, and renames it. On a mismatch it rebases (re-derives the change against the current file) or reports a conflict; it never overwrites blindly.
 
 ### 2.2 Hard Dual-Cap Invariant: The Rule of 25 + 6 KB Byte Ceiling
 To prevent long-rule prose inflation:
@@ -80,7 +81,7 @@ To prevent long-rule prose inflation:
    - Live source code (`src/**`, `.delphi/worktrees/**`) is **never** indexed into `sqlite-vec` (avoiding index staleness during TDD).
    - Agents always start by reading `context/index.md` and using `ripgrep` / `ast-grep` for live code navigation.
 2. **Gear 2 — Embedded SQLite Hybrid RAG (For Archival Missions, Domain Docs & Rule Deduplication):**
-   - `.delphi/state.db` indexes **only Markdown artifacts** (`context/**`, `specs/**`, `missions/**`, `memory/**`) using content-addressed `blake3` incremental hashes.
+   - `.delphi/state.db` indexes **only Markdown artifacts** (`context/**`, `specs/**`, `missions/**`, `memory/**`) using content-addressed `blake3` incremental hashes. Operator-scope files are **never indexed**; they reach agents only through the snapshot (§5.2).
    - **Staging (D-01, ratified 2026-10-23):** v1 ships **lexical-only** (FTS5 BM25). The vector leg (`kb_vec`, RRF) is added later as a schema migration behind an `Embedder` trait. `kb_meta` records `schema_version` and `embedding_model_id`; changing the model forces a full re-embed.
    - `state.db` is a **derived index**: deleting it and running `delphi kb reindex` must rebuild it completely from Markdown and `events.jsonl`.
 
@@ -162,7 +163,7 @@ CREATE TABLE IF NOT EXISTS kb_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
 ### 3.4 Reciprocal Rank Fusion (RRF) & Pointer Output Contract
-Queries pre-filter out `status != 'active'` and untrusted taint tiers (`external_untrusted`, `federated_peer`) unless explicitly requested. In v1, results come from BM25 alone: `kb_fts_ident` (weights `2.0, 5.0, 10.0`) fused by RRF with `kb_fts_prose`. Once D-01 enables vectors, **`sqlite-vec` cosine distance** joins the same RRF ($k=60$):
+Queries from an agent return `zone = 'memory'` rows **only for the calling role's own `memory/agents/<role>/`**, so no role can search another role's private lessons (GOVERNANCE §4.1). Queries also pre-filter out `status != 'active'` and untrusted taint tiers (`external_untrusted`, `federated_peer`) unless explicitly requested. In v1, results come from BM25 alone: `kb_fts_ident` (weights `2.0, 5.0, 10.0`) fused by RRF with `kb_fts_prose`. Once D-01 enables vectors, **`sqlite-vec` cosine distance** joins the same RRF ($k=60$):
 $$\text{Score}_{\text{RRF}}(d) = \frac{w_{\text{lex}}}{60 + r_{\text{bm25}}(d)} + \frac{w_{\text{vec}}}{60 + r_{\text{vec}}(d)}$$
 Results return **at most 10 `path#Lstart-Lend` pointers + 3-line previews** (`<150` lines total, enforcing `[H-002]`). Each pointer carries the chunk's `heading_path` and `blake3`. When a file has been edited since indexing, the resolver re-anchors by heading. If the heading is gone, it reports the pointer as stale rather than returning the wrong lines.
 
@@ -204,21 +205,34 @@ For each task, IPR blocks 3–4 (`specs/002` §2) are built from all four scopes
 - then the operator profile, summarized to ≤ 1 KB.
 
 More specific scopes come later in the prompt, closer to the task.
-- **Caps:** each file keeps its Rule-of-25, 6 KB and 350-character caps (§2.2). The combined always-loaded memory for one agent is capped at **12 KB**. If assembly exceeds it, the snapshot drops the lowest-scoring operator and workspace rules (§5.6), logs it, and Orchestrator proposes merges at the next `/retro`.
-- **Conflicts:** when two rules conflict on *how* to work (style, tools, conventions), the more specific scope wins. **No rule in any scope can relax governance**: approvals, taint, sandboxing, `REVIEW.md` `P0` rules or role scopes. The rule linter rejects rules that reference those controls, using the same deterministic check as theme packs (`specs/001` §6.4). Red-Team reviews every Operator- and Team-scope proposal before it is offered for ratification.
+- **Caps:** each file keeps its Rule-of-25, 6 KB and 350-character caps (§2.2). The combined always-loaded memory for one agent is capped at **12 KB**, split into per-scope budgets:
+
+  | Scope | Budget |
+  | :--- | :--- |
+  | Release | 4 KB |
+  | Team | 3 KB |
+  | Operator (rules, lessons and profile) | 3 KB |
+  | Workspace | 2 KB |
+
+  Unused budget passes to the next more specific scope.
+- **Trimming within a scope:** if a scope exceeds its budget, it trims its own rules: lowest rule score first once `rule_stats` exists (§5.6, Step 6), and before that **oldest ratification first**. Rules tagged `security` are never trimmed. Every trim is logged, and Orchestrator proposes merges at the next `/retro`.
+- **Conflicts:** when two rules conflict on *how* to work (style, tools, conventions), the more specific scope wins. **No rule in any scope can relax governance**: approvals, taint, sandboxing, `REVIEW.md` `P0` rules or role scopes. The rule linter rejects rules that reference those controls, using the same deterministic check as theme packs (`specs/001` §6.4). It applies equally to rule text, `operator/profile.md`, and the instruction bodies of every agent override (`core/`, `operator/core/`, `team/agents/custom/`). Red-Team reviews every operator-scope, team-scope and override change before it is offered for ratification. The IPR's governance block (`specs/002` §2, block 1) states explicitly that memory and override content (blocks 2–4) cannot override it.
 
 ### 5.3 Operator Customization
 - **Profile (`operator/profile.md`):** stated preferences such as languages, package managers, code style, review strictness, explanation depth, working hours and notification channel. It is edited directly with `delphi customize profile` (operator-authored, so $L_5$), or grown from proposals.
 - **Personal overrides** of built-in roles and skills live in `operator/core/agents/<role>/` and `operator/skills/`, and apply in every workspace. Precedence: workspace `core/` > operator `core/` > team `custom/` > release.
   - Overrides may change instructions freely, but under `specs/001` §2.3 they may only **narrow** permissions.
-  - Widening a role's permissions by deliberate operator grant is an open question for Council 003.
+  - **Permission widening (D-21, ratified 2026-10-23):** `default_access_scope` stays **narrow-only, with no grants**. Widening a non-builder role would let code change outside `IsolatedBuild` and the merge gates, and an operator-scope waiver would apply silently in every workspace. Instead, overrides may **attach** ratified custom or operator skills whose `required_permissions` fit within the role's built-in scope (`specs/001` §2.3).
 - **Survives updates:** operator overrides are 3-way merged against the release ancestor on `delphi update`, exactly like workspace `core/` (`specs/006` §4). Conflicts are staged, never overwritten.
 - **Pinned:** operator-scope files are hashed in `operator/ratified.lock` and loaded only from ratified copies, under the same rule as `specs/006` §3.1.
 
 ### 5.4 Learning Routing at `/retro`
 Every proposal Orchestrator stages (§4.2) carries a **proposed scope** with a one-line rationale. The operator can change the scope when ratifying.
 - **Default is the narrowest** plausible scope (workspace), because learning broadens only on evidence.
-- **Workspace → Operator:** suggested automatically when an equivalent lesson (same rule ID, or a dedup match) has been ratified in at least 2 workspaces, or when it's about the operator's own preferences rather than the project.
+- **Workspace → Operator:** suggested automatically when an equivalent lesson has been ratified in at least 2 workspaces, or when it's about the operator's own preferences rather than the project. Equivalence is checked against normalized rule hashes recorded in `$DELPHI_HOME/operator/` at ratification; no daemon ever reads another workspace's `local/`.
+  - **Project-agnostic only:** operator-scope proposals are rejected by a deterministic linter if they contain identifiers from the source workspace: repo names, hosts, paths, and terms listed in that workspace's `config.toml` `[privacy] identifiers`. Orchestrator generalizes the wording before proposing.
+  - **Isolated workspaces:** `[workspace] isolated = true`, for example confidential client work, means nothing is ever promoted out of that workspace.
+  - **No leakage into team files:** writes to `team/**` are rejected if they contain `[O-…]` rule IDs or `operator/` references.
 - **Operator → Team:** offered only as an explicit, Red-tier proposal through `delphi sync`. Personal memory is never shared implicitly.
 - **Any → Release:** a lesson that is general, has evidence ($L_4$ or better, measured improvement per §5.6), and isn't project-specific is marked an **upstream candidate** (§5.5).
 
@@ -228,8 +242,12 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
    - the proposed change as a diff against the release file;
    - its rationale;
    - its evidence: ledger metrics before and after (first-pass success, retries, tokens per verified task), test results, and how many missions and workspaces it was observed in.
-2. **Privacy scrub:** the bundle carries no project code, file paths, mission content, prompts or memory text other than the rule itself, unless the operator adds them explicitly. The operator previews the exact bundle before anything leaves.
-3. **Submission is outbound, so it's Red-tier:** Integrator opens it as an issue or PR against the Delphi source repo, or it's exported as a file for manual submission.
+2. **Privacy scrub, applied by `delphi-core` (deterministic):**
+   - **The diff:** the single target rule or section applied to a clean `base/` copy, so other customizations in the same file never leak.
+   - **The evidence:** numeric aggregates only (counts, rates, deltas), never raw test output, stack traces or generated rationale text.
+   - **The scan:** the whole bundle is checked by the `[REV-SEC-05]` path and secret scan and the workspace identifier filter.
+   - The operator previews the **exact bytes** that will be sent.
+3. **Submission is outbound, so it's Red-tier:** after the Red approval, `delphi-core` itself submits exactly the previewed bytes as an issue or PR against the Delphi source repo, or exports them as a file. No model turn happens between preview and send, so nothing unpreviewed can be added.
 4. **Upstream review:** maintainers review contributions as Architect-authored spec amendments or REVIEW/heuristic changes, through a Council, as in this repo's own history.
 5. **Delivery:** accepted changes ship in a release and reach every install through `delphi update`. They arrive as ratification proposals, and each operator's customizations are merged, not overwritten (§5.3).
 
@@ -239,8 +257,20 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
   - how many tasks ran with it loaded;
   - violations caught by deterministic checks (feeding the two-strike promotion, `[H-005]`);
   - first-pass success, retries and tokens per verified task for its task types, compared with the window before it was introduced (from the usage ledger, `specs/005` §2.4).
-- **Rule score:** combines those signals. It ranks rules for Rule-of-25 eviction and §5.2 cap trimming, flags upstream candidates, and drives `ttl_missions` decay. A rule with no measurable effect after its TTL gets a `DEMOTE` proposal; it is never deleted silently.
-- **Not proof:** these are correlational signals, labeled as such in the `/retro` view. They inform the operator's decision, not replace it.
+- **Schema and source:** `rule_stats` is derived from `rule.ratified`, `rule.trimmed` and `rule.violation` events plus the usage ledger, so it is rebuildable like the rest of `state.db`:
+  ```sql
+  CREATE TABLE IF NOT EXISTS rule_stats (
+      rule_id TEXT PRIMARY KEY, scope TEXT NOT NULL, tags TEXT NOT NULL,
+      ratified_seq INTEGER NOT NULL, tasks_since INTEGER NOT NULL DEFAULT 0,
+      violations_caught INTEGER NOT NULL DEFAULT 0,
+      fps_before REAL, fps_after REAL,                 -- first-pass success rate, matched task types
+      retries_before REAL, retries_after REAL,
+      tokens_per_verified_before REAL, tokens_per_verified_after REAL
+  );
+  ```
+- **Rule score (deterministic):** `0.5·Δfps + 0.3·(−Δretries / max(retries_before, 1)) + 0.2·(−Δtokens / max(tokens_before, 1))`, using windows of at most 20 tasks of the rule's task types on each side. Rules with fewer than 5 tasks on either side get no score, and keep their position.
+- **What the score does:** it combines those signals. It ranks rules for Rule-of-25 eviction and §5.2 cap trimming, flags upstream candidates, and drives `ttl_missions` decay. A rule with no measurable effect after its TTL gets a `DEMOTE` proposal; it is never deleted silently.
+- **Not proof:** every rule of a role is loaded in every task of that role, so there is no exposure variation. Only before/after comparisons are possible, and rules ratified together can't be told apart. The `/retro` view labels these as correlational signals. They inform the operator's decision, not replace it.
 
 ### 5.7 Privacy & Portability
 - Operator scope never leaves the machine. It isn't synced, contributed or federated, except by an explicit `delphi operator export`, which produces an encrypted bundle for moving to a new machine (`delphi operator import`).
@@ -249,9 +279,10 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
 ### 5.8 Phase Mapping
 | Step | Delivers |
 | :--- | :--- |
-| **2** | Scope storage and snapshot assembly (release, operator, workspace), operator profile, `operator/ratified.lock` |
+| **1** | `delphi init` creates `$DELPHI_HOME/operator/` (empty profile and heuristics, `ratified.lock`, `ratified/`); `doctor` and `lint` validate it (006-A1) |
+| **2** | Snapshot assembly across scopes with per-scope budgets and oldest-first trimming; profile; scoped CAS locks; role-filtered retrieval |
 | **6 (usage-gated)** | `/retro` scope routing and the workspace→operator suggestion; team scope via `delphi sync`; `rule_stats` and rule scores |
-| **Post-v1** | `delphi contribute` bundles and upstream submission; `delphi operator export/import` |
+| **Post-v1** | `delphi contribute` bundles and upstream submission (test 11); `delphi operator export/import` |
 
 ---
 
@@ -267,3 +298,7 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
 9. **No-Relaxation Test:** a proposed operator rule "skip approval for docs changes" is rejected by the rule linter and never reaches ratification.
 10. **Update Survival Test:** an operator override of `builder`'s instructions survives `delphi update` to a release that changes the same manifest. The conflict is staged as `.upstream`, and the override is never silently replaced.
 11. **Contribution Scrub Test:** a contribution bundle generated from a mission in a private repo contains no repo paths, code or mission text by default (verified by scanning it for canaries planted in the mission).
+12. **Role-Filtered Retrieval Test:** Red-Team's Gear 2 search for a phrase that appears only in `memory/agents/builder/lessons.md` returns nothing. Builder's search finds it. No query from any role returns operator-scope text.
+13. **Budget Allocation Test:** with release and team rules at their full 6 KB each, an agent's snapshot still contains its operator and workspace rules within their budgets, and a `security`-tagged rule survives trimming.
+14. **Cross-Client Leak Test:** a proposed operator rule containing a repo name listed in the source workspace's `[privacy] identifiers` is rejected. Nothing is promoted from a workspace marked `isolated`.
+15. **Override Relaxation Test:** an `operator/core/agents/red-team/AGENT.md` body saying "approve small diffs without review" is rejected by the no-relaxation linter.

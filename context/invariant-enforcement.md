@@ -41,6 +41,12 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Update can't change active rules before ratification | spec 006 §4 | Ratify-before-swap; daemon loads `local/ratified/` only | Daemon | ❌ |
 | No memory rule in any scope relaxes governance controls | spec 004 §5.2 | Rule linter at proposal time + Red-Team review | Daemon | ❌ |
 | Operator memory never leaves the machine implicitly; contributions are scrubbed and previewed | spec 004 §5.5, §5.7 | Sync/contribute path filters + canary scan test | Daemon + CI | ❌ |
+| Privileged RPCs need the console capability token; sandboxes can't reach `run/` | spec 005 §2.1, 008 §4 | Socket auth + sandbox profile | Daemon | ❌ |
+| Harness runs fully contained (sandbox always, deny-default FS, egress proxy, env allowlist, taint clamp) | spec 009 §7 | Harness launcher + CONNECT proxy | Daemon | ❌ |
+| Per-span approval tokens; no span can speak for another | spec 009 §7.6 | Per-span MCP socket | Daemon | ❌ |
+| Endpoint, access and auth config changes are ratified (no helper-command or pin tampering) | spec 009 §5 | `ratified.lock` on config blocks | Daemon | ❌ |
+| Archival search never returns another role's memory, or any operator memory | spec 004 §3.4 | Role filter in the retrieval query | Daemon | ❌ |
+| Council recovery never mixes Round 2 with a discarded Round 1 | spec 005 §2.5 | Atomic Round 1 release event | Daemon | ❌ |
 | Interrupted side effects are never retried blindly | spec 005 §2.5 | `action.intent`/`action.result` reconciliation | Daemon | ❌ |
 | Credentials never on disk outside keychain; never another tool's credentials | spec 009 §4 | Credential resolver + redactor + no-secret scan test | Daemon + CI | ❌ |
 | Endpoint failover stays within `allowed_endpoints` | spec 009 §5 | Endpoint selector | Daemon | ❌ |
