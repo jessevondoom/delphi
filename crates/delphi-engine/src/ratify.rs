@@ -349,6 +349,10 @@ pub fn reject(home: &Path, ws_dir: &Path, id: &str, expected_blake3: &str) -> Re
             Kind::Deleted => {
                 let copy = fs::read(l.ratified.join(&p.logical)).map_err(io)?;
                 let target = match p.scope {
+                    // Workspace-local files (heuristics, memory) and themes live outside `team/`.
+                    Scope::Workspace if p.logical == "heuristics.md" => ws_dir.join("local/heuristics.md"),
+                    Scope::Workspace if p.logical.starts_with("memory/") => ws_dir.join("local").join(&p.logical),
+                    Scope::Workspace if p.logical.starts_with("themes/") => home.join(&p.logical),
                     Scope::Workspace => ws_dir.join("team").join(&p.logical),
                     Scope::Operator => home.join("operator").join(&p.logical),
                 };

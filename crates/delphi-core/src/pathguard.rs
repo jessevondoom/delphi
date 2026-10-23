@@ -101,7 +101,8 @@ fn is_ratified_kind(key: &str) -> bool {
 /// Logical paths no agent may read (§2.2 + 001-A1): event log, Council barrier, daemon state,
 /// staged proposals, ratification and provenance state, other roles' memory, the operator home.
 fn never_readable(key: &str, role: &str) -> Option<String> {
-    if key.ends_with("events.jsonl") || segments(key).any(|s| s == "events") && key.starts_with("missions/") && key.ends_with(".jsonl") {
+    // `missions/<id>/events…` is the whole segmented log: segments, rotation files and the writer lock.
+    if key.ends_with("events.jsonl") || key.starts_with("missions/") && segments(key).nth(2) == Some("events") {
         return Some("event log".into());
     }
     if segments(key).any(|s| s == ".barrier") {
@@ -504,6 +505,14 @@ pub fn resolve_nofollow_opts(root: &Path, inner: &str, access: Access, protected
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_whole_event_log_directory_is_off_limits() {
+        for k in ["missions/m1/events/.lock", "missions/m1/events/000001.jsonl", "missions/m1/events", "missions/m1/events.jsonl"] {
+            assert!(never_readable(k, "builder").is_some() && never_writable(k).is_some(), "{}", k);
+        }
+        assert!(never_readable("missions/m1/notes/events-plan.md", "builder").is_none());
+    }
+
     use super::*;
     use std::fs;
     use std::os::unix::fs::{symlink, MetadataExt};

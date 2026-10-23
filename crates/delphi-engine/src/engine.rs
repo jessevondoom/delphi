@@ -595,6 +595,10 @@ impl Engine {
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
     async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
         if name == "dispatch_agent" {
+            // The schema is only offered to roles that may dispatch; a call from any other role is refused here too.
+            if !sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
+                return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
+            }
             return self.exec_dispatch(sc, call_id, args, rec).await;
         }
         let c = match classify(name, args) {
@@ -1096,6 +1100,16 @@ mod tests {
         let out = f.engine.run_task(&f.m, "orchestrator", "Plan something").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("architect") && r.contains("halted")), "{:?}", out.status);
         assert_eq!(f.model.requests().len(), 2, "the parent made no further model call");
+    }
+
+    // Red-team step-2 round 2: the dispatch schema is hidden from other roles, but a forged call must be refused too.
+    #[tokio::test]
+    async fn a_role_without_agent_dispatch_cannot_dispatch_by_forging_the_call() {
+        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "strategist", "objective": "Do something"})), Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "architect", "Draft a plan").await.unwrap();
+        assert_eq!(events_of(&f, "dag.node.added").len(), 1, "no child span");
+        let r = events_of(&f, "tool.result");
+        assert!(r[0].payload["is_error"] == true && r[0].payload["content"].as_str().unwrap().contains("agent-dispatch"), "{:?}", r[0].payload);
     }
 
     #[tokio::test]

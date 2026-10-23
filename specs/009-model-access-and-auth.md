@@ -137,7 +137,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us", "claude-sub"]   # compliance 
 
 - **The pin applies to all model traffic:** primary selection, failover, per-role overrides, capability probes (§6) and `doctor`. A request is sent only to an endpoint in `allowed_endpoints`. When every allowed endpoint is down, the task waits or escalates; it never leaves the allowed set.
 - **No cross-origin redirects:** HTTP redirects to a different scheme, host or port than the endpoint's `base_url` are refused, never followed with credentials attached.
-- **Configuration is ratified:** the `[[endpoints]]`, `[access]` and `[auth.*]` blocks of `config.toml` are hashed in `local/ratified.lock` (`specs/006` §3.1). Any change to a `command:` credential, `base_url`, `headers`, `allowed_endpoints`, `order` or `[auth.*]` is staged as a **Red-tier** proposal and doesn't take effect until ratified. A local process that edits the config therefore can't inject a helper command or move traffic.
+- **Configuration is ratified:** the `[[endpoints]]`, `[access]`, `[auth.*]` and `[harness.*]` blocks of `config.toml` are hashed in `local/ratified.lock` (`specs/006` §3.1). Any change to a `command:` credential, `base_url`, `headers`, `allowed_endpoints`, `order` or `[auth.*]` is staged as a **Red-tier** proposal and doesn't take effect until ratified. A local process that edits the config therefore can't inject a helper command or move traffic.
 - **Signatures across endpoints:** reasoning blocks are treated as foreign when a turn moves between endpoints (`specs/002` §3.1), unless an explicit `E1 → E2` replay probe (§6) passed for that ordered pair.
 
 ---
@@ -180,8 +180,8 @@ The harness runs its own agent loop, so Delphi can't see its internal reads or t
     - `cost_model = "subscription"` endpoints are capped by `subscription_budget_tokens` (default 500,000 per mission, 2,000,000 per Council) and by `max_turn_budget`.
     - The daemon reserves worst-case tokens before launch, meters the stream as it runs, and **kills the subprocess** on any breach, then escalates.
 
-### 7A. Amendment 009-A2 (DRAFT): Harness Connectors
-> **Status: draft.** The operator approved drafting it on 2026-10-23 (D-22). It is **not** approved and changes nothing in §7 until it passes a Council and the operator ratifies it. Until then, §7 item 5 stands: harnesses run with every non-Delphi MCP server and connector disabled.
+### 7A. Amendment 009-A2 (REJECTED): Harness Connectors
+> **Status: rejected by Council 005 (2026-10-24, D-22 Option B).** Kept for the record. Harness connectors are not available in v1: §7 item 5 stands, and harnesses run with every non-Delphi MCP server and connector disabled. The Council found that no current CLI can isolate or filter connectors, that the credential carve-out in rule 2 is impossible, that the taint rules contradict §7.8, and that an SNI-only proxy cannot enforce read-only access. The post-v1 path is a native Delphi connector layer.
 
 **Motivation.** Operators already connect their subscription CLIs to services such as Google Drive, Slack or Jira. For example, a `scout` task run through `claude` could research a team's Drive folder using that CLI's own Drive connector. Rebuilding every connector natively in Delphi is out of scope for v1. Delegating to the harness reuses the operator's existing, provider-managed logins without Delphi touching their credentials (§4.2).
 

@@ -53,7 +53,9 @@ impl GitProbe {
 
 impl ProjectProbe for GitProbe {
     fn clean_at_base(&self, root: &Path, rel: &str) -> bool {
-        let key = (root.display().to_string(), rel.to_string());
+        // A file that changed since it was probed is probed again.
+        let stamp = std::fs::metadata(root.join(rel)).ok().map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).unwrap_or_default();
+        let key = (root.display().to_string(), format!("{}\0{}", rel, stamp));
         if let Some(v) = self.cache.lock().unwrap().get(&key) {
             return *v;
         }

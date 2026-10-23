@@ -572,7 +572,7 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
             }
         },
         "stop" | "restart" => {
-            if let Ok(mut c) = connect() {
+            match connect() { Ok(mut c) => {
                 let _ = c.call("daemon.shutdown", json!({}));
                 for _ in 0..100 {
                     if Client::connect(&l.sock).is_err() {
@@ -581,9 +581,9 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 println!("daemon stopped");
-            } else if action == "stop" {
+            } _ => if action == "stop" {
                 println!("not running");
-            }
+            }}
             if action == "restart" {
                 let Some(exe) = daemon_exe() else {
                     eprintln!("cannot find the `delphi-core` daemon");

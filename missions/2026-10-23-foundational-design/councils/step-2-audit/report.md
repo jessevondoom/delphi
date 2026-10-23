@@ -43,3 +43,23 @@ Blind first round, four focus areas. Seats: Gemini 3.8 Flash (security, correctn
 - `Retry-After` as an HTTP date (P2): the backoff ladder still applies.
 - A credential-refresh race that can discard a freshly refreshed cache entry (P1 as reported, harmless in practice: the next call re-resolves): to be fixed with the Step 3 credential work.
 - Argon and Claude seats for a second round once quota resets.
+
+# Round 2 (Gemini 3.8 Flash only; the model-access seat was blocked by the provider's content filter)
+
+## Fixed (with tests)
+| Sev | Finding | Fix |
+| :-- | :-- | :-- |
+| P0 | A role without `agent-dispatch` could still dispatch by forging the tool call (the schema was only hidden) | refused at execution against the manifest |
+| P0 | The writer lock `missions/<id>/events/.lock` was writable by agents, which would defeat the single-writer guarantee | the whole `missions/<id>/events…` tree is never readable or writable |
+| P0 | Streaming redaction let a private-key block through in plaintext before its END line | blocks are held from an open `-----BEGIN` until they end (16 KiB cap) |
+| P1 | `lock::write_atomic` followed a symlink planted at its predictable temp name | temp is removed and created exclusively |
+| P1 | Rejecting a deleted workspace heuristics or memory file restored it into the git-tracked `team/` tree | restored to its real location |
+| P1 | Any file under `missions/` was Green, not only Markdown | non-Markdown writes are Amber |
+| P1 | A recorded `task.failed` was re-proposed for resumption | treated as terminal in recovery |
+| P2 | `status.md` ignored reservations; the git probe cache never noticed a changed file | both fixed |
+
+## Rejected or deferred
+- *Custom agents, skills and REVIEW.md read at L5*: reads of those paths come from their ratified copies, so L5 is right.
+- *Agent-drafted specs not listed as ratification proposals*: by design, operator approval of a spec is an edit of its status plus ratification of its hash (Council 004 (b)).
+- *`amber_active` never set*: dead flag, not a boundary; removed in Step 3 with the sandbox work.
+- *Escalated tasks cannot be resumed after a restart*: escalation hands the decision to the operator; resuming an escalated task is a Step 3 recovery feature.
