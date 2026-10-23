@@ -15,7 +15,7 @@ use std::process::exit;
 
 const USAGE: &str = "usage:
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
-  delphi doctor [--workspace <name>] [--home <dir>]
+  delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
   delphi --version";
 
@@ -144,7 +144,8 @@ fn cmd_doctor(args: &[String]) -> i32 {
         }
     };
     let ws = home::Workspace { dir: home.join("workspaces").join(&name), name };
-    let report = doctor::run(&home, &ws);
+    let opts = doctor::Options { require_providers: args.iter().any(|a| a == "--require-providers") };
+    let report = doctor::run(&home, &ws, &opts);
     report.print();
     println!("delphi doctor: workspace `{}`: {}", ws.name, report.worst());
     report.exit_code()

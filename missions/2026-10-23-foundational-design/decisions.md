@@ -197,7 +197,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 **Status:** ✅ RATIFIED 2026-10-23: A — redacted thinking blocks kept 30 days, then compacted
 
 ## 🟢 D-17 — Canonical role names and per-install theme packs
-**Context:** Governance, specs and manifests mixed behavior with mythological naming. One name ("Hermes") meant both an agent and a runtime layer, and a theme choice would have meant rewriting every file.
+**Context:** Governance, specs and manifests mixed behavior with mythological naming. One theme name meant both an agent and a runtime layer, and a theme choice would have meant rewriting every file.
 **Decision:**
 - Agents are referred to only by canonical role ID: `orchestrator`, `builder`, `architect`, `investigator`, `scout`, `strategist`, `red-team`, `writer`, `integrator`, plus `operator` for the human.
 - The layers are `console`, `narrator`, `governance`, `adapter`, plus the federation `gateway`.

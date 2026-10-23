@@ -17,7 +17,7 @@
 4. **Agent Team:** nine canonical roles (`orchestrator`, `builder`, `architect`, `investigator`, `scout`, `strategist`, `red-team`, `writer`, `integrator`), each defined in `agents/<role>/AGENT.md` with scopes, blind spots and counterweights.
 
 ### 1.2 Canonical Roles & Theme Packs (D-17)
-All governance, specs, manifests, configuration, file paths, frontmatter and event logs use **canonical role IDs** only. A per-install **theme pack** maps each role to a display name, epithet and short voice line, and labels the two windows. Greek mythology is the default (`orchestrator` → "Athena", console → "Chaos", narrator → "Homer")). Themes are rendered only at the display layer and in a bounded persona slot, so two teammates using different themes read the same shared files. Theme schema, research flow and safety rules: [`specs/001`](specs/001-governance-and-manifests.md) §6.
+All governance, specs, manifests, configuration, file paths, frontmatter and event logs use **canonical role IDs** only. A per-install **theme pack** maps each role to a display name, epithet and short voice line, and labels the two windows. Greek mythology is the default; its names are defined only in [`themes/greek/theme.md`](themes/greek/theme.md). Themes are rendered only at the display layer and in a bounded persona slot, so two teammates using different themes read the same shared files. Theme schema, research flow and safety rules: [`specs/001`](specs/001-governance-and-manifests.md) §6.
 
 ---
 
@@ -96,11 +96,11 @@ flowchart TB
 ```
 
 ### 4.1 Window 1: Console (`delphi` / `delphi chat`)
-- Persona-free. Its label comes from the active theme ("Chaos" in the Greek default).
+- Persona-free. Its label comes from the active theme.
 - Hosts the conversation with Orchestrator (or `@<role>` / `@<theme-name>` for direct invocation), the command palette (`/council`, `/spec`, `/narrator`, `/retro`, `/theme`), and synchronous approval modals.
 
 ### 4.2 Window 2: Narrator (`delphi narrator`)
-- Its label also comes from the theme ("Homer" in the Greek default).
+- Its label also comes from the theme.
 - Runs in any second terminal, or opens via `delphi --dual` / `Ctrl+W` (`tmux` in v1), with an inline `Tab` toggle for single-screen sessions.
 - Four live views: **[1: Task DAG]**, **[2: Council Chamber]** (Round 1 streams, then Round 2 Red-Team/Strategist cross-examination), **[3: Forge]** (Builder's worktree diffs and test output), **[4: Archives]** (FTS5 knowledge base browser).
 

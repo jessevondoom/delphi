@@ -22,14 +22,19 @@ pub enum Mode {
 pub struct Tree {
     pub mode: Mode,
     pub files: BTreeMap<String, PathBuf>,
+    /// Workspace mode: logical paths that came from the release snapshot (`base/`).
+    pub seeded: BTreeSet<String>,
 }
 
 /// Directories never walked in a source repo.
 const SKIP_DIRS: [&str; 4] = [".git", "target", "node_modules", ".delphi"];
 /// Markdown under these logical prefixes must carry §5 provenance frontmatter.
-const GOVERNED: [&str; 5] = ["context/", "missions/", "specs/", "memory/agents/", "themes/"];
-/// Design records that are never seeded into a workspace; links to them are `skipped` there.
+const GOVERNED: [&str; 6] = ["context/", "missions/", "specs/", "memory/agents/", "themes/", "operator/"];
+/// Design records that are never seeded into a workspace; links *from seeded release files* to them
+/// are `skipped` there. Links from the workspace's own files must resolve.
 const UNSEEDED: [&str; 5] = ["specs/", "missions/", "OVERVIEW.md", "README.md", "crates/"];
+/// Text files scanned for absolute home paths (REV-SEC-05).
+const TEXT_EXTS: [&str; 11] = [".md", ".toml", ".rs", ".sh", ".py", ".json", ".yaml", ".yml", ".txt", ".js", ".ts"];
 const COGNITIVE: [&str; 4] = ["deep-reasoning", "code-craft", "high-context-discovery", "fast-triage"];
 const BODY_LINE_CAP: usize = 500;
 const RULE_CHARS: usize = 350;
@@ -49,7 +54,7 @@ impl Tree {
                 files.insert(rel, entry.path().to_path_buf());
             }
         }
-        Ok(Tree { mode: Mode::Repo, files })
+        Ok(Tree { mode: Mode::Repo, files, seeded: BTreeSet::new() })
     }
 
     fn read(&self, logical: &str) -> Option<String> {
@@ -71,6 +76,8 @@ pub fn run(tree: &Tree) -> Report {
     let names = theme_names(tree, &mut r);
     check_frontmatter(tree, &mut r);
     check_manifests(tree, &mut r);
+    check_skills(tree, &mut r);
+    check_envelopes(tree, &mut r);
     check_names(tree, &names, &mut r);
     check_caps(tree, &mut r);
     check_links(tree, &mut r);
@@ -160,10 +167,20 @@ fn check_manifests(tree: &Tree, r: &mut Report) {
         if lines > BODY_LINE_CAP {
             r.fail("manifest", path.clone(), format!("body is {} lines (cap {})", lines, BODY_LINE_CAP));
         }
+        let id = get_str(&fm, "id").unwrap_or("").to_string();
         let mut planned = 0;
         for s in str_list(&fm, "authorized_skills") {
-            let packaged = tree.files.contains_key(&format!("skills/{}/SKILL.md", s));
-            if packaged {
+            let pkg = [format!("skills/{}/SKILL.md", s), format!("skills/custom/{}/SKILL.md", s)].into_iter().find(|k| tree.files.contains_key(k));
+            if let Some(pkg) = pkg {
+                let agents = tree
+                    .read(&pkg)
+                    .and_then(|t| frontmatter::parse(&t).ok())
+                    .and_then(|d| d.frontmatter)
+                    .map(|m| str_list(&m, "authorized_agents"))
+                    .unwrap_or_default();
+                if !agents.contains(&id) {
+                    r.fail("manifest", path.clone(), format!("skill `{}` does not list `{}` in authorized_agents (specs/001 §2.3)", s, id));
+                }
                 continue;
             }
             if catalog.contains(&s) {
@@ -175,7 +192,204 @@ fn check_manifests(tree: &Tree, r: &mut Report) {
         if planned > 0 {
             r.warn("manifest", path.clone(), format!("{} authorized skill(s) are `planned` (catalog only, no SKILL.md yet)", planned));
         }
+        if let Some(builtin_id) = dir.strip_prefix("custom/") {
+            match load_fm(tree, &format!("agents/{}/AGENT.md", builtin_id)) {
+                Some(builtin) => {
+                    for e in override_widening(&builtin, &fm, &|s| attachable_skill(tree, &builtin, s)) {
+                        r.fail("manifest", path.clone(), e);
+                    }
+                }
+                None => r.fail("manifest", path.clone(), format!("override of `{}` has no built-in manifest", builtin_id)),
+            }
+        }
     }
+}
+
+pub fn load_fm(tree: &Tree, logical: &str) -> Option<Mapping> {
+    tree.read(logical).and_then(|t| frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter)
+}
+
+/// D-21: a ratified custom/operator skill may be attached when its `required_permissions` fit the
+/// built-in role's scope. (Ratification itself is checked by `doctor` against `ratified.lock`.)
+fn attachable_skill(tree: &Tree, builtin: &Mapping, skill: &str) -> bool {
+    let pkg = ["skills/custom/", "operator/skills/"].iter().map(|p| format!("{}{}/SKILL.md", p, skill)).find(|k| tree.files.contains_key(k));
+    let skill_fm = match pkg.and_then(|k| load_fm(tree, &k)) {
+        Some(m) => m,
+        None => return false,
+    };
+    let scope = builtin.get(Value::String("default_access_scope".into())).and_then(|v| v.as_mapping());
+    let has = |k: &str, pred: &dyn Fn(&str) -> bool| scope.map(|s| seq_strs(s.get(Value::String(k.into()))).iter().any(|g| pred(g))).unwrap_or(false);
+    str_list(&skill_fm, "required_permissions").iter().all(|p| match p.as_str() {
+        "read:all" => has("read", &|g| g == "*"),
+        "write:worktree" => has("write", &|g| g.starts_with("@worktree/")),
+        "write:missions" => has("write", &|g| g.starts_with("missions/")),
+        "shell:scoped_scripts" => has("execute", &|_| true),
+        _ => false,
+    })
+}
+
+// ── skill packages (specs/001 §3.1) ─────────────────────────────────────────
+
+const SKILL_PERMISSIONS: [&str; 5] = ["read:all", "write:worktree", "write:missions", "shell:scoped_scripts", "network:gated"];
+const SANDBOX_MODES: [&str; 3] = ["readonly", "worktree-isolated", "outbound-gated"];
+
+fn check_skills(tree: &Tree, r: &mut Report) {
+    let pkgs: Vec<String> = tree.files.keys().filter(|k| (k.starts_with("skills/") || k.starts_with("operator/skills/")) && k.ends_with("/SKILL.md")).cloned().collect();
+    for path in pkgs {
+        let text = tree.read(&path).unwrap_or_default();
+        let doc = match frontmatter::parse(&text) {
+            Ok(d) => d,
+            Err(e) => {
+                r.fail("skill", path.clone(), e);
+                continue;
+            }
+        };
+        let fm = match doc.frontmatter {
+            Some(m) => m,
+            None => {
+                r.fail("skill", path.clone(), "missing frontmatter");
+                continue;
+            }
+        };
+        let custom = path.starts_with("skills/custom/") || path.starts_with("operator/skills/");
+        let dir = path.trim_end_matches("/SKILL.md").rsplit('/').next().unwrap_or("").to_string();
+        for e in skill_errors(&fm, &dir, custom) {
+            r.fail("skill", path.clone(), e);
+        }
+        let lines = doc.body.lines().count();
+        if lines > BODY_LINE_CAP {
+            r.fail("skill", path.clone(), format!("body is {} lines (cap {})", lines, BODY_LINE_CAP));
+        }
+    }
+}
+
+pub fn skill_errors(fm: &Mapping, dir: &str, custom: bool) -> Vec<String> {
+    let mut errs = Vec::new();
+    let kebab = Regex::new(r"^[a-z0-9]+(-[a-z0-9]+)*$").unwrap();
+    match get_str(fm, "name") {
+        Some(n) if n == dir && kebab.is_match(n) => {}
+        n => errs.push(format!("name `{}` must be kebab-case and match directory `{}`", n.unwrap_or(""), dir)),
+    }
+    match get_str(fm, "description") {
+        Some(d) if !d.trim().is_empty() && d.chars().count() <= 200 => {}
+        _ => errs.push("description must be 1–200 characters".into()),
+    }
+    let agents = str_list(fm, "authorized_agents");
+    if agents.is_empty() {
+        errs.push("authorized_agents must list at least one role".into());
+    }
+    for a in &agents {
+        if !ROLES.contains(&a.as_str()) || a == "operator" {
+            errs.push(format!("authorized_agents: `{}` is not an agent role", a));
+        }
+    }
+    for k in ["input_schema", "output_schema"] {
+        let ok = fm.get(Value::String(k.into())).and_then(|v| v.as_mapping()).map(|m| get_str(m, "type").is_some()).unwrap_or(false);
+        if !ok {
+            errs.push(format!("{} must be a JSON Schema object with a `type`", k));
+        }
+    }
+    for p in str_list(fm, "required_permissions") {
+        if !SKILL_PERMISSIONS.contains(&p.as_str()) {
+            errs.push(format!("unknown required_permission `{}`", p));
+        }
+    }
+    if let Some(scripts) = fm.get(Value::String("deterministic_scripts".into())).and_then(|v| v.as_sequence()) {
+        if !custom && !scripts.is_empty() {
+            errs.push("deterministic_scripts are allowed only in custom skills (built-in checks are compiled in, D-02)".into());
+        }
+        for sc in scripts {
+            let m = match sc.as_mapping() {
+                Some(m) => m,
+                None => {
+                    errs.push("deterministic_scripts entries must be mappings".into());
+                    continue;
+                }
+            };
+            let path = get_str(m, "path").unwrap_or("");
+            if !path.starts_with("scripts/") || path.split('/').any(|s| s == "..") {
+                errs.push(format!("script path `{}` must be under scripts/", path));
+            }
+            if !m.get(Value::String("timeout_ms".into())).and_then(|v| v.as_u64()).map(|n| n > 0 && n <= 600_000).unwrap_or(false) {
+                errs.push(format!("script `{}`: timeout_ms must be 1–600000", path));
+            }
+            if !get_str(m, "sandbox_mode").map(|x| SANDBOX_MODES.contains(&x)).unwrap_or(false) {
+                errs.push(format!("script `{}`: sandbox_mode must be one of {:?}", path, SANDBOX_MODES));
+            }
+        }
+    }
+    errs
+}
+
+// ── handoff envelopes (specs/001 §4) ────────────────────────────────────────
+
+const ENVELOPE_BYTES: usize = 8000; // 2,000 tokens at bytes / 4
+
+fn check_envelopes(tree: &Tree, r: &mut Report) {
+    let files: Vec<String> = tree.files.keys().filter(|k| k.starts_with("missions/") && k.contains("/handoffs/") && (k.ends_with(".yaml") || k.ends_with(".yml"))).cloned().collect();
+    for path in files {
+        let text = tree.read(&path).unwrap_or_default();
+        for e in envelope_errors(&text) {
+            r.fail("envelope", path.clone(), e);
+        }
+    }
+}
+
+pub fn envelope_errors(text: &str) -> Vec<String> {
+    let mut errs = Vec::new();
+    if text.len() > ENVELOPE_BYTES {
+        errs.push(format!("envelope is {} bytes (cap {}, ~2,000 tokens)", text.len(), ENVELOPE_BYTES));
+    }
+    let m: Mapping = match serde_yaml::from_str(text) {
+        Ok(m) => m,
+        Err(e) => return vec![format!("not a YAML mapping: {}", e)],
+    };
+    for k in ["handoff_id", "mission_id", "parent_span_id", "caller_agent", "target_agent", "objective"] {
+        if get_str(&m, k).map(|v| v.trim().is_empty()).unwrap_or(true) {
+            errs.push(format!("missing `{}`", k));
+        }
+    }
+    for k in ["caller_agent", "target_agent"] {
+        if let Some(a) = get_str(&m, k) {
+            if !ROLES.contains(&a) {
+                errs.push(format!("{} `{}` is not a canonical role", k, a));
+            }
+        }
+    }
+    match m.get(Value::String("context_pointers".into())).map(|v| v.as_sequence()) {
+        None => {}
+        Some(None) => errs.push("context_pointers must be a list".into()),
+        Some(Some(ptrs)) => {
+            for p in ptrs {
+                let pm = p.as_mapping();
+                let uri = pm.and_then(|x| get_str(x, "uri")).unwrap_or("");
+                let file = uri.split('#').next().unwrap_or("");
+                if crate::pathguard::canonical(file).is_err() {
+                    errs.push(format!("context pointer `{}` is not a workspace-relative logical path", uri));
+                }
+                for k in ["heading", "blake3", "reason"] {
+                    if pm.and_then(|x| get_str(x, k)).is_none() {
+                        errs.push(format!("context pointer `{}` lacks `{}`", uri, k));
+                    }
+                }
+            }
+        }
+    }
+    match m.get(Value::String("expected_output".into())).and_then(|v| v.as_mapping()) {
+        Some(eo) if get_str(eo, "artifact_type").is_some() => {}
+        _ => errs.push("expected_output.artifact_type is required".into()),
+    }
+    if let Some(rd) = m.get(Value::String("routing_directive".into())).and_then(|v| v.as_mapping()) {
+        if get_str(rd, "model_tier").is_none() {
+            errs.push("routing_directive.model_tier is required (tiers, never model IDs)".into());
+        }
+        for k in ["model", "model_id", "endpoint", "fallback_endpoint"] {
+            if rd.contains_key(Value::String(k.into())) {
+                errs.push(format!("routing_directive.{} is not allowed: models resolve from config tiers and failover follows ratified [access] order", k));
+            }
+        }
+    }
+    errs
 }
 
 /// Schema checks for one manifest. `dir` is `<id>` for built-ins or `custom/<id>` for overrides.
@@ -214,6 +428,11 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
                     errs.push(format!("default_access_scope.{} must be a list", k));
                 }
             }
+            for g in seq_strs(s.get(Value::String("read".into()))) {
+                if let Some(e) = read_glob_error(&g) {
+                    errs.push(e);
+                }
+            }
             for g in seq_strs(s.get(Value::String("write".into()))) {
                 if let Some(e) = write_glob_error(id, &g) {
                     errs.push(e);
@@ -227,45 +446,83 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
     errs
 }
 
-/// `[REV-SEC-02]` and `specs/001` §2.2: write globs are logical, zone-scoped, and never reach `.git`.
+fn logical_glob_error(glob: &str) -> Option<&'static str> {
+    let lower = glob.to_lowercase();
+    if glob.is_empty() || glob.starts_with('/') || glob.starts_with('~') || glob.contains('$') || glob.contains('\\') || glob.split('/').any(|s| s == "..") {
+        return Some("must be a logical path (no absolute, home, variable or `..` paths)");
+    }
+    if lower.starts_with(".delphi") || lower.split('/').any(|s| s == ".delphi") {
+        return Some("physical `.delphi/` paths never appear in manifests");
+    }
+    if lower.split('/').any(|s| s != "**" && s != "*" && crate::pathguard::glob_match(s, ".git")) {
+        return Some("may never match a `.git` file or directory");
+    }
+    if lower.starts_with("operator/") || lower.starts_with("run/") || lower.contains("state.db") {
+        return Some("operator home and daemon state are never agent-accessible (001-A1)");
+    }
+    None
+}
+
+/// Read globs are `*` or logical paths (`specs/001` §2.1).
+pub fn read_glob_error(glob: &str) -> Option<String> {
+    if glob == "*" {
+        return None;
+    }
+    logical_glob_error(glob).map(|m| format!("read glob `{}`: {}", glob, m))
+}
+
+/// `[REV-SEC-02]` and `specs/001` §2.2: write globs are logical, zone-scoped, never reach `.git`, and
+/// each zone is writable only by the roles whose duties need it.
 pub fn write_glob_error(role: &str, glob: &str) -> Option<String> {
     let bad = |m: &str| Some(format!("write glob `{}`: {}", glob, m));
-    if glob.is_empty() || glob.starts_with('/') || glob.starts_with('~') || glob.contains('$') || glob.split('/').any(|s| s == "..") {
-        return bad("must be a logical path (no absolute, home, variable or `..` paths)");
+    if let Some(m) = logical_glob_error(glob) {
+        return bad(m);
     }
-    if glob.starts_with(".delphi") {
-        return bad("physical `.delphi/` paths never appear in manifests");
-    }
-    if glob.split('/').any(|s| s == ".git" || s == "**" && false) || glob.split('/').any(|s| s.starts_with(".git") && s != ".github") {
-        return bad("may never match a `.git` file or directory");
-    }
-    if glob.split('/').any(|s| s == ".github") {
+    let lower = glob.to_lowercase();
+    let segs: Vec<&str> = lower.split('/').collect();
+    if segs.iter().any(|s| *s != "**" && *s != "*" && crate::pathguard::glob_match(s, ".github")) {
         return bad("CI configuration (`.github/**`) is never agent-writable");
     }
-    if glob == "**" || glob == "*" || glob.starts_with("**/") {
+    if lower == "**" || lower == "*" || lower.starts_with("**/") || lower.starts_with("*/") {
         return bad("unscoped glob");
     }
-    if let Some(rest) = glob.strip_prefix("@worktree/") {
+    if lower.ends_with("events.jsonl") || segs.contains(&"events") || segs.contains(&".barrier") {
+        return bad("the event log and Council barrier are never agent-writable");
+    }
+    if lower.ends_with("heuristics.md") || lower.ends_with("lessons.md") || lower.starts_with("memory/") || lower.starts_with("agents/") {
+        return bad("heuristics, lessons, memory and manifests change only through ratified proposals");
+    }
+    let only = |roles: &[&str], zone: &str| if roles.contains(&role) { None } else { bad(&format!("only {} may write {}", roles.join(", "), zone)) };
+    if let Some(rest) = lower.strip_prefix("@worktree/") {
         return match role {
             "builder" => None,
-            "writer" if rest == "README.md" || rest.starts_with("docs/") => None,
+            "writer" if rest == "readme.md" || rest.starts_with("docs/") => None,
             _ => bad("only builder (and writer, for README.md and docs/**) may write `@worktree/**`"),
         };
     }
-    if glob.starts_with("skills/") && !glob.starts_with("skills/custom/") {
+    if lower.starts_with("@project/") {
+        return bad("project repos are read-only (001-A2)");
+    }
+    if lower.starts_with("skills/custom/") {
+        return only(&["builder"], "`skills/custom/**`");
+    }
+    if lower.starts_with("skills/") {
         return bad("built-in skills are never agent-writable");
     }
-    let allowed = ["missions/", "context/", "specs/", "agents/custom/", "skills/custom/"];
-    if allowed.iter().any(|p| glob.starts_with(p)) {
-        None
-    } else {
-        bad("not under a writable logical zone (missions/, context/, specs/, agents/custom/, skills/custom/, @worktree/)")
+    if lower.starts_with("specs/") {
+        return only(&["architect"], "`specs/**`");
     }
+    if lower == "context/index.md" || lower.starts_with("context/domains/") {
+        return only(&["orchestrator", "scout", "writer"], "`context/index.md` and `context/domains/**`");
+    }
+    if lower.starts_with("missions/") {
+        return None;
+    }
+    bad("not under a writable logical zone (missions/, context/domains/, specs/, skills/custom/, @worktree/)")
 }
 
 /// `specs/001` §2.3 narrow-only rule: an override may not widen the built-in role's scope or skills,
 /// except to attach a ratified custom/operator skill whose permissions fit the built-in scope (D-21).
-#[cfg_attr(not(test), allow(dead_code))] // called by override loading in Step 2
 pub fn override_widening(builtin: &Mapping, ovr: &Mapping, attachable: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut errs = Vec::new();
     let scope = |m: &Mapping, k: &str| -> BTreeSet<String> {
@@ -308,17 +565,15 @@ fn check_names(tree: &Tree, names: &[String], r: &mut Report) {
         return;
     }
     let alternation = names.iter().map(|n| regex::escape(n)).collect::<Vec<_>>().join("|");
-    let re = Regex::new(&format!(r"\b({})\b", alternation)).unwrap();
+    let re = Regex::new(&format!(r"(?i)\b({})\b", alternation)).unwrap();
+    let council = Regex::new(r"^missions/[^/]+/councils/").unwrap();
     for path in tree.with_ext(&[".md", ".toml"]) {
-        if path.starts_with("themes/") || path.contains("/councils/") {
+        // Theme packs define the names; historical council records are verbatim (specs/001 §7).
+        if path.starts_with("themes/") || council.is_match(path) {
             continue;
         }
         let text = tree.read(path).unwrap_or_default();
         for (i, line) in text.lines().enumerate() {
-            let lower = line.to_lowercase();
-            if lower.contains("theme") {
-                continue; // explicit references to the theme (e.g. "the Greek default") are allowed
-            }
             for m in re.find_iter(line) {
                 let next = line[m.end()..].chars().next();
                 if next == Some('-') {
@@ -341,9 +596,8 @@ fn check_caps(tree: &Tree, r: &mut Report) {
         .files
         .keys()
         .filter(|k| {
-            k.as_str() == "context/heuristics.md"
-                || (k.starts_with("memory/agents/") && k.ends_with("/lessons.md"))
-                || k.as_str() == "operator/heuristics.md"
+            k.ends_with("heuristics.md") && (k.starts_with("context/") || k.as_str() == "heuristics.md" || k.starts_with("operator/"))
+                || (k.starts_with("memory/agents/") || k.starts_with("operator/memory/agents/")) && k.ends_with("/lessons.md")
         })
         .cloned()
         .collect();
@@ -364,18 +618,16 @@ pub fn cap_errors(text: &str) -> Vec<(Level, String)> {
         Ok(d) => d,
         Err(e) => return vec![(Level::Fail, e)],
     };
+    // A rule is a `### ` heading plus every non-blank line until the next `#`/`##`/`###` heading.
     let mut rules: Vec<(String, Vec<String>)> = Vec::new();
-    let mut in_fence = false;
+    let mut open = false;
     for line in doc.body.lines() {
-        if line.starts_with("```") {
-            in_fence = !in_fence;
-        }
-        if in_fence {
-            continue;
-        }
         if let Some(h) = line.strip_prefix("### ") {
             rules.push((h.to_string(), Vec::new()));
-        } else if line.starts_with("- ") {
+            open = true;
+        } else if line.starts_with('#') {
+            open = false;
+        } else if open && !line.trim().is_empty() {
             if let Some(last) = rules.last_mut() {
                 last.1.push(line.to_string());
             }
@@ -384,12 +636,10 @@ pub fn cap_errors(text: &str) -> Vec<(Level, String)> {
     if rules.len() > RULE_COUNT {
         out.push((Level::Fail, format!("{} rules exceeds the Rule of {}", rules.len(), RULE_COUNT)));
     }
-    if let Some(fm) = doc.frontmatter {
-        if let Some(n) = fm.get(Value::String("active_rules".into())).and_then(|v| v.as_u64()) {
-            if n as usize != rules.len() {
-                out.push((Level::Fail, format!("frontmatter active_rules is {} but the file has {} rules", n, rules.len())));
-            }
-        }
+    match doc.frontmatter.as_ref().and_then(|fm| fm.get(Value::String("active_rules".into()))).and_then(|v| v.as_u64()) {
+        Some(n) if n as usize == rules.len() => {}
+        Some(n) => out.push((Level::Fail, format!("frontmatter active_rules is {} but the file has {} rules", n, rules.len()))),
+        None => out.push((Level::Fail, "frontmatter must declare `active_rules`".into())),
     }
     for (head, lines) in &rules {
         let block = lines.join("\n");
@@ -448,9 +698,11 @@ fn check_links(tree: &Tree, r: &mut Report) {
             Some(i) => &path[..i],
             None => "",
         };
+        let seeded = tree.seeded.contains(path);
         for (i, line) in text.lines().enumerate() {
             for c in re.captures_iter(line) {
                 let target = &c[1];
+                let anchor = c.get(2).map(|a| a.as_str()).unwrap_or("");
                 if target.contains("://") || target.starts_with("mailto:") {
                     continue;
                 }
@@ -458,9 +710,14 @@ fn check_links(tree: &Tree, r: &mut Report) {
                 let loc = format!("{}:{}", path, i + 1);
                 match normalize(&joined) {
                     None => r.fail("links", loc, format!("link `{}` escapes the tree", target)),
-                    Some(n) if tree.exists(&n) || n.is_empty() => {}
+                    Some(n) if n.is_empty() => {}
+                    Some(n) if tree.exists(&n) => {
+                        if let Some(e) = line_anchor_error(tree, &n, anchor) {
+                            r.fail("links", loc, format!("link `{}{}`: {}", target, anchor, e));
+                        }
+                    }
                     Some(n) => {
-                        if tree.mode == Mode::Workspace && UNSEEDED.iter().any(|u| n.starts_with(u)) {
+                        if tree.mode == Mode::Workspace && seeded && UNSEEDED.iter().any(|u| n.starts_with(u)) {
                             r.push(Level::Skipped, "links", loc, format!("link to unseeded design record `{}`", n));
                         } else {
                             r.fail("links", loc, format!("broken link `{}` (resolves to `{}`)", target, n));
@@ -472,9 +729,22 @@ fn check_links(tree: &Tree, r: &mut Report) {
     }
 }
 
+/// `#Lstart-Lend` anchors must point inside the target file (`specs/006` §5 check 5).
+fn line_anchor_error(tree: &Tree, target: &str, anchor: &str) -> Option<String> {
+    let re = Regex::new(r"^#L(\d+)(?:-L(\d+))?$").unwrap();
+    let c = re.captures(anchor)?;
+    let start: usize = c[1].parse().ok()?;
+    let end: usize = c.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(start);
+    let lines = tree.read(target)?.lines().count();
+    if start == 0 || end < start || end > lines {
+        return Some(format!("line range {}-{} is outside the file ({} lines)", start, end, lines));
+    }
+    None
+}
+
 fn check_abs_paths(tree: &Tree, r: &mut Report) {
     let re = Regex::new(r"/(Users|home)/[A-Za-z0-9._-]+/").unwrap();
-    for path in tree.with_ext(&[".md", ".toml"]) {
+    for path in tree.with_ext(&TEXT_EXTS) {
         let text = tree.read(path).unwrap_or_default();
         for (i, line) in text.lines().enumerate() {
             if re.is_match(line) {
@@ -500,6 +770,20 @@ mod tests {
         assert!(write_glob_error("scout", "/etc/passwd").is_some());
         assert!(write_glob_error("scout", ".delphi/worktrees/**").is_some());
         assert!(write_glob_error("scout", "missions/**/research/**").is_none());
+        assert!(write_glob_error("builder", "@worktree/.GIT/**").is_some());
+        assert!(write_glob_error("builder", "@worktree/*git*/x").is_some());
+        assert!(write_glob_error("builder", "@worktree/.GITHUB/**").is_some());
+        assert!(write_glob_error("scout", "specs/**").is_some());
+        assert!(write_glob_error("architect", "specs/**").is_none());
+        assert!(write_glob_error("scout", "skills/custom/**").is_some());
+        assert!(write_glob_error("orchestrator", "context/heuristics.md").is_some());
+        assert!(write_glob_error("red-team", "missions/**/councils/.barrier/**").is_some());
+        assert!(write_glob_error("orchestrator", "missions/m1/events.jsonl").is_some());
+        assert!(write_glob_error("builder", "@project/app/**").is_some());
+        assert!(read_glob_error("/etc/passwd").is_some());
+        assert!(read_glob_error("operator/**").is_some());
+        assert!(read_glob_error("@worktree/.git/**").is_some());
+        assert!(read_glob_error("*").is_none() && read_glob_error("specs/**").is_none());
     }
 
     // specs/001 §7 test 15 (manifest part)
@@ -521,15 +805,86 @@ mod tests {
         assert!(!cap_errors(&long).is_empty());
         let wrong_count = ok.replace("active_rules: 1", "active_rules: 2");
         assert!(!cap_errors(&wrong_count).is_empty());
+        // Prose (not only `- ` bullets) counts toward the cap.
+        let prose = format!("{}{}\n", ok, "y".repeat(400));
+        assert!(!cap_errors(&prose).is_empty());
+        // Bullets under a later `## ` heading don't count toward the last rule.
+        let section = format!("{}## Notes\n- {}\n", ok, "z".repeat(400));
+        assert!(cap_errors(&section).is_empty(), "{:?}", cap_errors(&section));
+        assert!(!cap_errors(&ok.replace("active_rules: 1\n", "")).is_empty());
     }
 
-    // specs/006 §6 test 8: this source repository lints clean. In-progress council transcripts
-    // (`*.raw.md`, converted before commit) are ignored here.
+    fn tree_of(files: &[(&str, &str)]) -> (tempfile::TempDir, Tree) {
+        let t = tempfile::tempdir().unwrap();
+        for (k, v) in files {
+            let p = t.path().join(k);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, v).unwrap();
+        }
+        let tree = Tree::from_repo(t.path()).unwrap();
+        (t, tree)
+    }
+
+    fn fails(tree: &Tree, check: &str) -> Vec<String> {
+        run(tree).findings.into_iter().filter(|f| f.level == Level::Fail && f.check == check).map(|f| format!("{} {}", f.location, f.message)).collect()
+    }
+
+    const BUILDER: &str = "---\nid: builder\ntitle: B\nrole: b\ncognitive_profile: code-craft\nmemory_scope: memory/agents/builder/\nmax_turn_budget: 5\ndefault_access_scope: {read: ['*'], write: ['@worktree/**'], execute: ['test-runner']}\nauthorized_skills: [tdd-execution]\n---\nbody\n";
+
+    // specs/001 §7 tests 1 and 15, end to end through `lint::run`
+    #[test]
+    fn team_override_widening_fails_lint() {
+        let ovr = BUILDER.replace("['@worktree/**']", "['@worktree/**', 'specs/**']").replace("['test-runner']", "['test-runner', 'shell-host']");
+        let (_t, tree) = tree_of(&[("agents/builder/AGENT.md", BUILDER), ("agents/custom/builder/AGENT.md", &ovr), ("skills/tdd-execution/SKILL.md", &skill("tdd-execution", "[builder]"))]);
+        let f = fails(&tree, "manifest");
+        assert!(f.iter().any(|e| e.contains("widens default_access_scope.write")), "{:?}", f);
+        assert!(f.iter().any(|e| e.contains("widens default_access_scope.execute")), "{:?}", f);
+    }
+
+    fn skill(name: &str, agents: &str) -> String {
+        format!("---\nname: {}\ndescription: d\nauthorized_agents: {}\ninput_schema: {{type: object}}\noutput_schema: {{type: object}}\nrequired_permissions: [read:all]\n---\nbody\n", name, agents)
+    }
+
+    #[test]
+    fn skill_must_authorize_the_role_and_follow_schema() {
+        let (_t, tree) = tree_of(&[("agents/builder/AGENT.md", BUILDER), ("skills/tdd-execution/SKILL.md", &skill("tdd-execution", "[writer]"))]);
+        assert!(fails(&tree, "manifest").iter().any(|e| e.contains("authorized_agents")));
+        let bad = skill("wrong-name", "[builder]") .replace("---\nbody", "deterministic_scripts: [{path: scripts/x.sh, timeout_ms: 1, sandbox_mode: readonly}]\n---\nbody");
+        let (_t, tree) = tree_of(&[("skills/tdd-execution/SKILL.md", &bad)]);
+        let f = fails(&tree, "skill");
+        assert!(f.iter().any(|e| e.contains("match directory")) && f.iter().any(|e| e.contains("custom skills")), "{:?}", f);
+    }
+
+    #[test]
+    fn envelopes_validated() {
+        let good = "handoff_id: h\nmission_id: m\nparent_span_id: s\ncaller_agent: orchestrator\ntarget_agent: architect\nobjective: o\ncontext_pointers: [{uri: 'specs/a.md#L1-L2', heading: h, blake3: x, reason: r}]\nexpected_output: {artifact_type: spec}\nrouting_directive: {model_tier: workhorse}\n";
+        assert!(envelope_errors(good).is_empty(), "{:?}", envelope_errors(good));
+        let bad = good.replace("architect", "athena").replace("specs/a.md", "/etc/passwd").replace("{model_tier: workhorse}", "{model_id: x}");
+        assert_eq!(envelope_errors(&bad).len(), 4, "{:?}", envelope_errors(&bad));
+    }
+
+    // REV-ARCH-05: case-insensitive, no "theme" substring exemption, only missions/*/councils/ exempt
+    #[test]
+    fn theme_names_caught_in_any_case() {
+        let pack = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/greek/theme.md")).unwrap();
+        let (_t, tree) = tree_of(&[("themes/greek/theme.md", &pack), ("context/a.md", "x\nif the theme is greek, athena reviews\n"), ("missions/m/councils/r1.md", "Athena said")]);
+        let f = fails(&tree, "canonical-names");
+        assert_eq!(f.len(), 1, "{:?}", f);
+        assert!(f[0].starts_with("context/a.md:2"));
+    }
+
+    #[test]
+    fn line_anchors_and_abs_paths() {
+        let (_t, tree) = tree_of(&[("a.md", "[x](b.md#L2-L9)\n"), ("b.md", "1\n2\n3\n"), ("tool.py", &format!("p = '/{}/someone/x'\n", "Users"))]);
+        assert_eq!(fails(&tree, "links").len(), 1);
+        assert_eq!(fails(&tree, "abs-paths").len(), 1);
+    }
+
+    // specs/006 §6 test 8: this source repository lints clean.
     #[test]
     fn source_repo_lints_clean() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut tree = Tree::from_repo(&root).unwrap();
-        tree.files.retain(|k, _| !k.ends_with(".raw.md"));
+        let tree = Tree::from_repo(&root).unwrap();
         let r = run(&tree);
         let fails: Vec<_> = r.findings.iter().filter(|f| f.level == Level::Fail).map(|f| format!("{} {}", f.location, f.message)).collect();
         assert!(fails.is_empty(), "{:#?}", fails);

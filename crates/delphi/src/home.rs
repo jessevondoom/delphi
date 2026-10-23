@@ -13,6 +13,8 @@ pub fn is_protected(logical: &str) -> bool {
     logical == "GOVERNANCE.md"
         || logical == "REVIEW.md"
         || logical == "context/heuristics.md"
+        || logical == "context/team-heuristics.md"
+        || logical == "heuristics.md"
         || (logical.starts_with("agents/") && logical.ends_with("/AGENT.md"))
         || (logical.starts_with("skills/") && (logical.ends_with("/SKILL.md") || logical.contains("/scripts/")))
         || (logical.starts_with("themes/") && logical.ends_with("/theme.md"))
@@ -100,7 +102,7 @@ pub fn projects(ws_dir: &Path) -> Vec<PathBuf> {
     v.get("workspace")
         .and_then(|w| w.get("projects"))
         .and_then(|p| p.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str()).map(expand_home).filter_map(|p| fs::canonicalize(p).ok()).collect())
+        .map(|a| a.iter().filter_map(|x| x.as_str()).map(expand_home).map(|p| fs::canonicalize(&p).unwrap_or(p)).collect())
         .unwrap_or_default()
 }
 
@@ -166,6 +168,13 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
     if ws.dir.join("config.toml").exists() {
         bail!("workspace `{}` already exists at {}", ws.name, ws.dir.display());
     }
+    let user_theme = o.home.join("themes").join(&o.theme).join("theme.md");
+    if !seed::builtin_themes().contains(&o.theme) {
+        let text = fs::read_to_string(&user_theme).with_context(|| format!("unknown theme `{}` (built-in: {})", o.theme, seed::builtin_themes().join(", ")))?;
+        if let Err(errs) = crate::theme::parse(&text) {
+            bail!("theme `{}` is invalid: {}", o.theme, errs.join("; "));
+        }
+    }
     for d in ["core", "base", "team", "local/missions", "local/proposals", "local/ratified", "locks", "worktrees"] {
         fs::create_dir_all(ws.dir.join(d))?;
     }
@@ -194,6 +203,22 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
             write_new(&ws.dir.join("local/ratified").join(&f.logical), f.bytes)?;
         }
     }
+    // 006-A2: empty team and workspace heuristics, each its own ratified scope file.
+    for (logical, zone_dir, id, title, prefix) in [
+        ("context/team-heuristics.md", "team", "team-heuristics", "Team Heuristics", "T"),
+        ("heuristics.md", "local", "workspace-heuristics", "Workspace Heuristics", "W"),
+    ] {
+        let body = heuristics_stub(id, title, prefix);
+        write_new(&ws.dir.join(zone_dir).join(logical), body.as_bytes())?;
+        write_new(&ws.dir.join("local/ratified").join(logical), body.as_bytes())?;
+        ratified.insert(logical.into(), hash(body.as_bytes()));
+    }
+    if !seed::builtin_themes().contains(&o.theme) {
+        let bytes = fs::read(&user_theme)?;
+        let logical = format!("themes/{}/theme.md", o.theme);
+        write_new(&ws.dir.join("local/ratified").join(&logical), &bytes)?;
+        ratified.insert(logical, hash(&bytes));
+    }
     let version = env!("CARGO_PKG_VERSION").to_string();
     // Release signing lands with packaging (roadmap Step 5); a dev build records that it is unsigned.
     write_lock(&ws.dir.join("base/manifest.lock"), &manifest, &[("release", version.clone()), ("signature", "unsigned-dev-build".into())])?;
@@ -206,6 +231,10 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
 
     init_operator_home(&o.home)?;
     Ok(ws)
+}
+
+fn heuristics_stub(id: &str, title: &str, prefix: &str) -> String {
+    format!("---\nid: {id}\ntitle: \"{title}\"\nauthor: operator\ntimestamp: 1970-01-01T00:00:00Z\nsource_type: user_ratified\nconfidence: high\nstatus: active\nmax_rules: 25\nactive_rules: 0\nsource_mission: init\ntags: [heuristics]\n---\n\n# {title} (`[{prefix}-…]`)\n")
 }
 
 /// The `[[endpoints]]`, `[access]` and `[auth.*]` blocks pinned by `specs/009` §5.
@@ -254,10 +283,15 @@ pub fn init_operator_home(home: &Path) -> Result<()> {
     let profile = "---\nid: operator-profile\ntitle: \"Operator Profile\"\nauthor: operator\ntimestamp: 1970-01-01T00:00:00Z\nsource_type: user_ratified\nconfidence: high\nstatus: active\nsource_mission: init\ntags: [operator, profile]\n---\n\n# Operator Profile\n\n> Your preferences (languages, tools, style, review strictness). Edit with `delphi customize profile`.\n";
     let heur = "---\nid: operator-heuristics\ntitle: \"Operator Heuristics\"\nauthor: operator\ntimestamp: 1970-01-01T00:00:00Z\nsource_type: user_ratified\nconfidence: high\nstatus: active\nmax_rules: 25\nactive_rules: 0\nsource_mission: init\ntags: [operator, heuristics]\n---\n\n# Operator Heuristics (`[O-…]`)\n";
     let mut lock = BTreeMap::new();
-    for (name, body) in [("profile.md", profile), ("heuristics.md", heur)] {
+    let mut files: Vec<(String, String)> = vec![("profile.md".into(), profile.into()), ("heuristics.md".into(), heur.into())];
+    for r in ROLES.iter().filter(|r| **r != "operator") {
+        let lessons = format!("---\nid: operator-lessons-{r}\ntitle: \"Operator Lessons: {r}\"\nauthor: operator\ntimestamp: 1970-01-01T00:00:00Z\nsource_type: user_ratified\nconfidence: high\nstatus: active\nmax_rules: 25\nactive_rules: 0\nsource_mission: init\ntags: [operator, lessons, {r}]\n---\n\n# Operator Lessons: `{r}`\n");
+        files.push((format!("memory/agents/{}/lessons.md", r), lessons));
+    }
+    for (name, body) in &files {
         write_new(&op.join(name), body.as_bytes())?;
         write_new(&op.join("ratified").join(name), body.as_bytes())?;
-        lock.insert(name.to_string(), hash(body.as_bytes()));
+        lock.insert(name.clone(), hash(body.as_bytes()));
     }
     for f in seed::files().iter().filter(|f| f.zone == Zone::Base) {
         write_new(&op.join("base").join(&f.logical), f.bytes)?;
@@ -299,16 +333,19 @@ mod tests {
         git_repo(&proj);
         let before = snapshot(&proj);
         let ws = init(&InitOptions { home: home.clone(), workspace: "w".into(), projects: vec![proj.clone()], theme: "greek".into() }).unwrap();
-        for p in ["base/GOVERNANCE.md", "base/manifest.lock", "team/REVIEW.md", "team/context/heuristics.md", "local/ratified.lock", "local/ratified/GOVERNANCE.md", "local/memory/agents/builder/lessons.md", "config.toml"] {
+        for p in ["base/GOVERNANCE.md", "base/manifest.lock", "team/REVIEW.md", "base/context/heuristics.md", "team/context/team-heuristics.md", "local/heuristics.md", "local/ratified/heuristics.md", "local/ratified.lock", "local/ratified/GOVERNANCE.md", "local/memory/agents/builder/lessons.md", "config.toml"] {
             assert!(ws.dir.join(p).exists(), "missing {}", p);
         }
-        for p in ["operator/profile.md", "operator/heuristics.md", "operator/ratified.lock", "operator/base/agents/builder/AGENT.md"] {
+        for p in ["operator/profile.md", "operator/heuristics.md", "operator/ratified.lock", "operator/base/agents/builder/AGENT.md", "operator/memory/agents/builder/lessons.md", "operator/ratified/memory/agents/builder/lessons.md"] {
             assert!(home.join(p).exists(), "missing {}", p);
         }
         assert_eq!(before, snapshot(&proj), "init must not modify the project repo");
         let lock = read_lock(&ws.dir.join("local/ratified.lock")).unwrap();
         assert!(lock.contains_key("agents/red-team/AGENT.md") && lock.contains_key("themes/greek/theme.md") && lock.contains_key("config.toml#access"));
-        assert!(init(&InitOptions { home, workspace: "w".into(), projects: vec![], theme: "greek".into() }).is_err());
+        assert!(lock.contains_key("context/team-heuristics.md") && lock.contains_key("heuristics.md"));
+        assert!(!ws.dir.join("team/context/heuristics.md").exists(), "release heuristics belong in base/ (006-A2)");
+        assert!(init(&InitOptions { home: home.clone(), workspace: "w".into(), projects: vec![], theme: "greek".into() }).is_err());
+        assert!(init(&InitOptions { home, workspace: "x".into(), projects: vec![], theme: "nope".into() }).is_err());
     }
 
     // specs/006 §6 test 9

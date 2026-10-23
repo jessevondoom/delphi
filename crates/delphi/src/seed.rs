@@ -47,5 +47,14 @@ pub fn files() -> Vec<SeedFile> {
     collect(&THEMES, "themes", Zone::Base, &mut v);
     collect(&CONTEXT, "context", Zone::Team, &mut v);
     collect(&MEMORY, "memory", Zone::Local, &mut v);
+    // 006-A2: release heuristics are part of the release snapshot (Zone 1), not team content.
+    for f in v.iter_mut().filter(|f| f.logical == "context/heuristics.md") {
+        f.zone = Zone::Base;
+    }
     v
+}
+
+/// Built-in theme names (`themes/<name>/theme.md`).
+pub fn builtin_themes() -> Vec<String> {
+    THEMES.dirs().map(|d| d.path().to_string_lossy().to_string()).filter(|n| THEMES.get_file(format!("{}/theme.md", n)).is_some()).collect()
 }

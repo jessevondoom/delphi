@@ -246,7 +246,7 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
 The **Narrator** attaches to the workspace UDS socket from any second terminal window or monitor and shows what the agent team is doing in real time. Its screen has two parts: a persistent **agents pane** (§4.1) and one of four switchable **views** (§4.2, hotkeys `1`–`4`). The pane is always visible, and `a` toggles it to give a view the full width.
 
 ### 4.1 Agents Pane (always visible; D-18)
-One row per enabled role, rendered with the viewer's theme name (for example `Builder` shown as "Hephaestus"):
+One row per enabled role, rendered with the viewer's theme display name for that role:
 
 | Column | Content |
 | :--- | :--- |

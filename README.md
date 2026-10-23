@@ -17,7 +17,7 @@ cargo run -- init --non-interactive --project /path/to/repo   # create a workspa
 cargo run -- doctor                          # health checks, from inside a registered project
 ```
 
-Dependencies are pinned to versions that build on the installed toolchain (rustc 1.68). Set `DELPHI_HOME` to use a Delphi home other than `~/.delphi`.
+Requires Rust 1.85 or newer (developed on stable 1.99). Set `DELPHI_HOME` to use a Delphi home other than `~/.delphi`.
 
 ---
 
