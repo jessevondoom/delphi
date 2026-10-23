@@ -175,6 +175,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         projects: project_roots(&root),
         rules,
         clock: Arc::new(now_rfc3339),
+        tools: Arc::new(crate::tools::Registry::builtin()),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

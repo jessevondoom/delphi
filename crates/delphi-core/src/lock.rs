@@ -28,12 +28,12 @@ pub fn is_protected(logical: &str) -> bool {
         || (l.starts_with("memory/agents/") && l.ends_with("/lessons.md"))
 }
 
-/// The `[[endpoints]]`, `[access]`, `[auth.*]` and `[harness.*]` blocks pinned by `specs/009` §5, re-serialized
+/// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]` and `[connectors.*]` blocks pinned by `specs/009` §5, re-serialized
 /// deterministically so the hash doesn't depend on formatting or comments.
 pub fn access_blocks(config: &str) -> String {
     let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));
     let mut t = toml::value::Table::new();
-    for k in ["endpoints", "access", "auth", "harness"] {
+    for k in ["endpoints", "access", "auth", "harness", "connectors"] {
         if let Some(x) = v.get(k) {
             t.insert(k.into(), x.clone());
         }
@@ -120,8 +120,9 @@ mod tests {
         assert_eq!(access_blocks(a), access_blocks(b), "other sections and formatting don't matter");
         let c = b.replace("env:K", "command:[\"evil\"]");
         assert_ne!(hash(access_blocks(a).as_bytes()), hash(access_blocks(&c).as_bytes()));
-        let h = "[harness.claude]\nmode = \"x\"\n";
-        assert_ne!(access_blocks(a), access_blocks(&format!("{}{}", a, h)), "harness blocks are pinned");
+        for h in ["[harness.claude]\nmode = \"x\"\n", "[connectors.slack]\nurl = \"https://x\"\n"] {
+            assert_ne!(access_blocks(a), access_blocks(&format!("{}{}", a, h)), "{} is pinned", h);
+        }
     }
 
     #[test]
