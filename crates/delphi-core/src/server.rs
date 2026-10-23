@@ -12,12 +12,14 @@
 
 use crate::hub::{ClientQueue, Hub, DEFAULT_QUEUE_CAP};
 use crate::peer::controlling_tty;
-use crate::proto::{code, Request, Response, Scope, PROTOCOL_MAJOR, RESTART_HINT};
+use crate::proto::{code, Request, Response, RpcError, Scope, PROTOCOL_MAJOR, RESTART_HINT};
 use serde_json::{json, Value};
+use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -25,6 +27,22 @@ use tokio::sync::{mpsc, Notify};
 
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
+
+/// Who is calling an extension method.
+#[derive(Debug, Clone, Copy)]
+pub struct CallContext {
+    pub scope: Scope,
+    pub client_id: u64,
+}
+
+pub type RpcOutcome = Result<Value, RpcError>;
+pub type RpcFuture = Pin<Box<dyn Future<Output = Option<RpcOutcome>> + Send>>;
+
+/// Where the engine plugs in. `call` returns `None` for a method it does not handle. Scope checks for
+/// privileged methods are the extension's job; the server has already authenticated the connection.
+pub trait Extension: Send + Sync {
+    fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture;
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TtyPolicy {
@@ -67,6 +85,7 @@ pub struct Daemon {
     pub amber_active: AtomicBool,
     uid: u32,
     shutdown: Notify,
+    extension: Mutex<Option<Arc<dyn Extension>>>,
 }
 
 pub fn random_token() -> io::Result<String> {
@@ -118,7 +137,13 @@ impl Daemon {
             amber_active: AtomicBool::new(false),
             uid: unsafe { libc::geteuid() },
             shutdown: Notify::new(),
+            extension: Mutex::new(None),
         }))
+    }
+
+    /// Install the engine. Methods the server does not implement itself are offered to it.
+    pub fn set_extension(&self, ext: Arc<dyn Extension>) {
+        *self.extension.lock().unwrap() = Some(ext);
     }
 
     /// Delivered to the spawning client over the readiness pipe; never written to disk or the environment.
@@ -226,7 +251,7 @@ impl Daemon {
 
         while let Ok(Some(line)) = read_line_limited(&mut rd).await {
             let resp = match serde_json::from_str::<Request>(&line) {
-                Ok(req) => self.dispatch(req, scope, client_id),
+                Ok(req) => self.dispatch(req, scope, client_id).await,
                 Err(e) => Response::err(Value::Null, code::PARSE, &format!("parse error: {}", e)),
             };
             if resp_tx.send(resp).is_err() {
@@ -265,7 +290,25 @@ impl Daemon {
         Response::ok(req.id.clone(), json!({"token": token, "scope": scope.as_str()}))
     }
 
-    fn dispatch(&self, req: Request, scope: Scope, client_id: u64) -> Response {
+    async fn dispatch(&self, req: Request, scope: Scope, client_id: u64) -> Response {
+        let id = req.id.clone();
+        // The server's own methods first; everything else may belong to the engine.
+        if matches!(req.method.as_str(), "session.ping" | "events.subscribe" | "daemon.shutdown") {
+            return self.dispatch_builtin(req, scope, client_id);
+        }
+        let ext = self.extension.lock().unwrap().clone();
+        if let Some(ext) = ext {
+            if let Some(outcome) = ext.call(&req.method, req.params.clone(), CallContext { scope, client_id }).await {
+                return match outcome {
+                    Ok(v) => Response::ok(id, v),
+                    Err(e) => Response { jsonrpc: "2.0".into(), id, result: None, error: Some(e) },
+                };
+            }
+        }
+        self.dispatch_builtin(req, scope, client_id)
+    }
+
+    fn dispatch_builtin(&self, req: Request, scope: Scope, client_id: u64) -> Response {
         let id = req.id.clone();
         match req.method.as_str() {
             "session.ping" => Response::ok(id, json!("pong")),

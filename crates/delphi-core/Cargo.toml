@@ -22,10 +22,6 @@ blake3 = "1.8.7"
 # Test-only: lets in-process tests skip the interactive-terminal check on token issuance.
 test-support = []
 
-[[bin]]
-name = "delphi-core"
-path = "src/main.rs"
-
 [dev-dependencies]
 delphi-core = { path = ".", features = ["test-support"] }
 tempfile = "3.8"
