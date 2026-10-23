@@ -27,6 +27,7 @@ pub struct EngineService {
     default_mission: String,
     missions: Mutex<HashMap<String, Arc<MissionState>>>,
     running: Arc<Mutex<HashMap<String, Running>>>,
+    notices: Mutex<Vec<String>>,
 }
 
 fn err(code: i64, message: impl Into<String>) -> RpcError {
@@ -41,6 +42,10 @@ fn need_console(ctx: &CallContext) -> Result<(), RpcError> {
     }
 }
 
+fn result_msg(id: &str) -> String {
+    format!("`{}` changed after you reviewed it; review it again", id)
+}
+
 fn valid_mission_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') && !id.starts_with('-')
 }
@@ -51,7 +56,11 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())) })
+        Arc::new(EngineService { engine, default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()) })
+    }
+
+    pub fn set_notices(&self, n: Vec<String>) {
+        *self.notices.lock().unwrap() = n;
     }
 
     /// Register a mission that was opened elsewhere (tests, recovery).
@@ -153,6 +162,39 @@ impl EngineService {
         Ok(Self::budget_json(&m))
     }
 
+    fn ratify_list(&self) -> RpcOutcome {
+        let ps = crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir);
+        Ok(Value::Array(ps.iter().map(|p| json!({"id": p.id, "kind": p.kind.as_str(), "summary": p.summary, "live_blake3": p.live_blake3, "ratified_blake3": p.ratified_blake3, "diff": p.diff.chars().take(20_000).collect::<String>()})).collect()))
+    }
+
+    /// Ratifying and rejecting are the operator's decisions: console scope, bound to the version reviewed,
+    /// and recorded in the mission log. Ratification is the only path to L5, and it resets the artifact's ceiling.
+    async fn ratify_change(&self, p: Value, ctx: CallContext, reject: bool) -> RpcOutcome {
+        need_console(&ctx)?;
+        let (Some(id), Some(expected)) = (p["id"].as_str(), p["expected_blake3"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`id` and `expected_blake3` are required"));
+        };
+        let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
+        let (idc, exc) = (id.to_string(), expected.to_string());
+        let m = self.mission(p["mission_id"].as_str())?;
+        let result = tokio::task::spawn_blocking(move || if reject { crate::ratify::reject(&home, &ws, &idc, &exc).map(|_| String::new()) } else { crate::ratify::apply(&home, &ws, &idc, &exc) }).await.map_err(|e| err(-32000, e.to_string()))?;
+        match result {
+            Ok(pin) => {
+                let by = format!("console-{}", ctx.client_id);
+                let kind = if reject { "ratify.rejected" } else { "ratify.applied" };
+                m.append(EventEnvelope::new(&m.id, kind, json!({"id": id, "blake3": pin, "by": by}))).await.map_err(engine_err)?;
+                if !reject && !pin.is_empty() && !id.ends_with("#access") {
+                    let zone = if id.starts_with("op:") { delphi_core::provenance::Zone::Local } else { delphi_core::provenance::Zone::Team };
+                    let path = id.split_once(':').map(|x| x.1).unwrap_or(id);
+                    m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, path, &pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
+                }
+                Ok(json!({"id": id, "blake3": pin}))
+            }
+            Err(crate::ratify::RatifyError::Stale { .. }) => Err(err(code::CONFIRMATION_REQUIRED, "stale: ".to_string() + &result_msg(id))),
+            Err(e) => Err(err(code::INVALID_PARAMS, e.to_string())),
+        }
+    }
+
     fn snapshot(&self, p: Value) -> RpcOutcome {
         let m = self.mission(p["mission_id"].as_str())?;
         let running: Vec<Value> = self.running.lock().unwrap().iter().map(|(id, r)| json!({"task_id": id, "target": r.target, "prompt": r.prompt, "seconds": r.started.elapsed().as_secs()})).collect();
@@ -161,6 +203,8 @@ impl EngineService {
             "budget": Self::budget_json(&m),
             "mode": self.engine.broker.mode().as_str(),
             "pending_approvals": self.pending_json(),
+            "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(),
+            "notices": self.notices.lock().unwrap().clone(),
             "running_tasks": running,
             "enabled_agents": self.engine.settings.enabled_agents,
         }))
@@ -200,6 +244,9 @@ impl Extension for ServiceExt {
                     Ok(json!({"mode": mode.as_str()}))
                 })(),
                 "session.snapshot" => svc.snapshot(params),
+                "ratify.list" => svc.ratify_list(),
+                "ratify.apply" => svc.ratify_change(params, ctx, false).await,
+                "ratify.reject" => svc.ratify_change(params, ctx, true).await,
                 _ => return None,
             })
         })
@@ -213,6 +260,7 @@ mod tests {
     use crate::testkit::{events_of, setup, Fx};
     use delphi_core::client::{Client, ClientError};
     use delphi_core::server::{Daemon, DaemonConfig, TtyPolicy};
+    use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -373,6 +421,45 @@ mod tests {
         assert!(out["text"].as_str().unwrap().contains("mission budget"));
         assert_eq!(f.model.requests().len(), 0);
         assert_eq!(events_of(&f, "budget.cap").len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ratification_over_rpc_is_console_only_bound_to_the_reviewed_version_and_logged() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let live = f.root.join("workspaces/w/team/context/team-heuristics.md");
+        fs::write(&live, "---\nid: t\n---\n### [T-001] changed rule\n- be thorough\n").unwrap();
+        let (c_sock, c_tok, n_sock, n_tok) = (s.sock.clone(), s.console.clone(), s.sock.clone(), s.narrator.clone());
+        let (listed, narrator_denied, stale, applied, after, snap) = blocking(move || {
+            let mut nar = Client::connect(&n_sock).unwrap();
+            nar.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            nar.hello(&n_tok).unwrap();
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            let listed = c.call("ratify.list", json!({})).unwrap();
+            assert_eq!(nar.call("ratify.list", json!({})).unwrap(), listed, "the narrator can read proposals");
+            let id = listed[0]["id"].as_str().unwrap().to_string();
+            let live_hash = listed[0]["live_blake3"].as_str().unwrap().to_string();
+            let narrator_denied = rpc_code(nar.call("ratify.apply", json!({"id": id, "expected_blake3": live_hash})));
+            let stale = rpc_code(c.call("ratify.apply", json!({"id": id, "expected_blake3": "0000"})));
+            let snap = c.call("session.snapshot", json!({})).unwrap();
+            let applied = c.call("ratify.apply", json!({"id": id, "expected_blake3": live_hash}));
+            let after = c.call("ratify.list", json!({})).unwrap();
+            (listed, narrator_denied, stale, applied, after, snap)
+        })
+        .await;
+        assert_eq!((listed.as_array().unwrap().len(), listed[0]["kind"].as_str()), (1, Some("changed")));
+        assert!(listed[0]["diff"].as_str().unwrap().contains("+ - be thorough"), "{}", listed[0]["diff"]);
+        assert_eq!(narrator_denied, Some(code::FORBIDDEN));
+        assert_eq!(stale, Some(code::CONFIRMATION_REQUIRED), "a version other than the reviewed one is refused");
+        assert_eq!(snap["pending_proposals"], 1);
+        assert!(applied.is_ok());
+        assert_eq!(after.as_array().unwrap().len(), 0);
+        let ratified = fs::read_to_string(f.root.join("workspaces/w/local/ratified/context/team-heuristics.md")).unwrap();
+        assert!(ratified.contains("be thorough"));
+        assert_eq!(events_of(&f, "ratify.applied").len(), 1);
+        assert_eq!(events_of(&f, "provenance.stamp").last().unwrap().payload["tier"], "L5", "ratification is the path to L5");
     }
 
     #[tokio::test(flavor = "multi_thread")]

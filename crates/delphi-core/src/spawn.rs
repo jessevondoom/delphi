@@ -55,6 +55,9 @@ pub struct Attached {
     /// Set when this call started the daemon.
     pub spawned: bool,
     pub daemon_pid: u64,
+    /// The capability token, for opening further connections as the same console.
+    pub token: String,
+    pub sock: PathBuf,
 }
 
 pub struct SpawnOptions<'a> {
@@ -204,7 +207,7 @@ pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     let token = reply.trim().to_string();
     let mut client = Client::connect(&l.sock)?;
     let hello = client.hello(&token)?;
-    Ok(Attached { client, scope: Scope::Console, spawned: true, daemon_pid: hello["pid"].as_u64().unwrap_or(0) })
+    Ok(Attached { client, scope: Scope::Console, spawned: true, daemon_pid: hello["pid"].as_u64().unwrap_or(0), token, sock: l.sock.clone() })
 }
 
 /// Connect to a running daemon and obtain a console token through the TTY challenge.
@@ -215,5 +218,5 @@ fn try_attach(l: &Layout) -> Result<Option<Attached>, ClientError> {
     };
     let token = client.issue_token(Scope::Console)?;
     let hello = client.hello(&token)?;
-    Ok(Some(Attached { client, scope: Scope::Console, spawned: false, daemon_pid: hello["pid"].as_u64().unwrap_or(0) }))
+    Ok(Some(Attached { client, scope: Scope::Console, spawned: false, daemon_pid: hello["pid"].as_u64().unwrap_or(0), token, sock: l.sock.clone() }))
 }

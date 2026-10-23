@@ -280,6 +280,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
  "unicode-normalization",
 ]
 
@@ -298,6 +299,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "walkdir",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ pub mod handoff;
 pub mod mission;
 pub mod model;
 pub mod probe;
+pub mod ratify;
 pub mod service;
 pub mod tools;
 pub mod workspace;

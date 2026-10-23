@@ -1,9 +1,11 @@
 //! `delphi`: roadmap Step 1 commands (`specs/001`, `specs/006`).
 
+mod chat;
 mod doctor;
 mod frontmatter;
 mod home;
 mod lint;
+mod ratify_console;
 mod report;
 mod seed;
 mod theme;
@@ -15,6 +17,8 @@ const USAGE: &str = "usage:
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
+  delphi chat [--workspace <name>] [--mission <id>] [--home <dir>]
+  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi --version";
 
 fn main() {
@@ -23,6 +27,8 @@ fn main() {
         Some("lint") => cmd_lint(&args[1..]),
         Some("init") => cmd_init(&args[1..]),
         Some("doctor") => cmd_doctor(&args[1..]),
+        Some("chat") => cmd_chat(&args[1..]),
+        Some("daemon") => cmd_daemon(&args[1..]),
         Some("--version") | Some("version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
@@ -119,29 +125,68 @@ fn cmd_init(args: &[String]) -> i32 {
     }
 }
 
-fn cmd_doctor(args: &[String]) -> i32 {
+/// Find the workspace for a command: `--workspace`, `DELPHI_WORKSPACE`, or the project containing the
+/// current directory.
+fn resolve_ws(cmd: &str, args: &[String]) -> Result<(PathBuf, home::Workspace), i32> {
     let home = home::delphi_home(flag(args, "--home").as_deref());
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let name = match home::resolve_workspace(&home, &cwd, flag(args, "--workspace")) {
         home::Resolve::Found(n) => n,
         home::Resolve::Ambiguous(v) => {
-            eprintln!("delphi doctor: several workspaces register this project ({}); pass --workspace or set DELPHI_WORKSPACE", v.join(", "));
-            return 2;
+            eprintln!("delphi {}: several workspaces register this project ({}); pass --workspace or set DELPHI_WORKSPACE", cmd, v.join(", "));
+            return Err(2);
         }
         home::Resolve::NoneRegistered(root) => {
-            eprintln!("delphi doctor: no workspace registers {}; run `delphi init --project {}`", root.display(), root.display());
-            return 2;
+            eprintln!("delphi {}: no workspace registers {}; run `delphi init --project {}`", cmd, root.display(), root.display());
+            return Err(2);
         }
         home::Resolve::NotInGitRepo => {
-            eprintln!("delphi doctor: not inside a git repository; pass --workspace <name>");
-            return 2;
+            eprintln!("delphi {}: not inside a git repository; pass --workspace <name>", cmd);
+            return Err(2);
         }
         home::Resolve::NoSuchWorkspace(n) => {
-            eprintln!("delphi doctor: no workspace named `{}` in {}", n, home.display());
-            return 2;
+            eprintln!("delphi {}: no workspace named `{}` in {}", cmd, n, home.display());
+            return Err(2);
         }
     };
     let ws = home::Workspace { dir: home.join("workspaces").join(&name), name };
+    Ok((home, ws))
+}
+
+/// Display names for the active theme, from its ratified pack (display only; behavior never depends on it).
+fn theme_names(ws: &home::Workspace) -> std::collections::HashMap<String, String> {
+    let cfg = std::fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
+    let theme = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("theme").and_then(|t| t.get("name")).and_then(|n| n.as_str()).map(String::from)).unwrap_or_else(|| "greek".into());
+    let text = std::fs::read_to_string(ws.dir.join("local/ratified/themes").join(&theme).join("theme.md")).unwrap_or_default();
+    theme::parse(&text).map(|t| t.roles.into_iter().map(|(role, name, _, _)| (role, name)).collect()).unwrap_or_default()
+}
+
+fn cmd_chat(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("chat", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let names = theme_names(&ws);
+    chat::run(&home, &ws.dir, flag(args, "--mission"), names)
+}
+
+fn cmd_daemon(args: &[String]) -> i32 {
+    let Some(action) = args.first().filter(|a| !a.starts_with("--")) else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    let (home, ws) = match resolve_ws("daemon", &args[1..]) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    chat::daemon(&home, &ws.dir, action)
+}
+
+fn cmd_doctor(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("doctor", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
     let opts = doctor::Options { require_providers: args.iter().any(|a| a == "--require-providers") };
     let report = doctor::run(&home, &ws, &opts);
     report.print();

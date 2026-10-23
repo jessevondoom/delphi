@@ -340,6 +340,9 @@ fn ten_simultaneous_clients_start_exactly_one_daemon() {
     let home = dir.path().join("h");
     let ws = dir.path().join("w");
     std::fs::create_dir_all(&ws).unwrap();
+    // The real daemon boots an engine from the workspace's config.toml; an empty one is valid
+    // (no endpoints yet, which is also what an unratified workspace looks like).
+    std::fs::write(ws.join("config.toml"), "").unwrap();
 
     let mut kids = Vec::new();
     for i in 0..10 {

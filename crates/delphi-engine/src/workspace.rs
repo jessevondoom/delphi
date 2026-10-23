@@ -274,9 +274,17 @@ pub(crate) mod tests {
             fs::write(p, text).unwrap();
         };
         let mut lock = BTreeMap::new();
+        // Like `init`: every ratified file also exists live, release files in base/, team files in
+        // team/, workspace-private files in local/.
         let mut add = |logical: &str, text: &str| {
             write(ratified.join(logical), text);
             lock.insert(logical.to_string(), hash(text.as_bytes()));
+            let live = match logical {
+                "context/team-heuristics.md" => ws.dir.join("team").join(logical),
+                "heuristics.md" => ws.dir.join("local").join(logical),
+                _ => ws.dir.join("base").join(logical),
+            };
+            write(live, text);
         };
         add("GOVERNANCE.md", "# Governance\nNever exceed your role's scope.\n");
         for (role, text) in [

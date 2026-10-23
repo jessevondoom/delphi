@@ -11,6 +11,7 @@ pub mod client;
 pub mod event;
 pub mod hub;
 pub mod ledger;
+pub mod lock;
 pub mod log;
 pub mod pathguard;
 pub mod peer;
