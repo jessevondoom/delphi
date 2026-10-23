@@ -1,3 +1,15 @@
+---
+id: council-006-round2-strategist
+title: "Council 006 Round 2: strategist (gemini-3.8-flash-medium)"
+author: strategist
+timestamp: 2026-10-24T20:00:00Z
+source_type: internal_generated
+confidence: high
+status: active
+source_mission: 2026-10-23-foundational-design
+tags: [council, council-006, round2]
+---
+
 ### 1. Round 1 Findings Status
 
 **Red-Team Findings:**
