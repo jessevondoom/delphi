@@ -20,6 +20,20 @@ const MAX_SEARCH_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SEARCH_FILE_BYTES: usize = 512 * 1024;
 const MAX_SEARCH_DEPTH: usize = 12;
 
+/// What kind of action a call is, for permission modes (`specs/005` §3.1 `/permissions`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionKind {
+    Read,
+    /// Markdown under `missions/`.
+    MissionArtifact,
+    /// A draft spec outside the worktree: always asks.
+    SpecDraft,
+    /// Worktree file and branch edits (Step 3).
+    WorktreeEdit,
+    /// Dependency installs pinned in a committed lockfile (Step 3).
+    PinnedDependencyInstall,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolTier {
     /// Auto-allowed.
@@ -34,6 +48,7 @@ pub enum ToolTier {
 pub struct Classified {
     pub tool: String,
     pub tier: ToolTier,
+    pub kind: ActionKind,
     /// One line for the approval card.
     pub summary: String,
     /// What the card shows; its blake3 binds the answer (`specs/005` §3.1).
@@ -127,7 +142,7 @@ pub fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     match tool {
         "read_file" | "list_dir" | "search" => {
             let path = str_arg(args, "path")?;
-            Ok(Classified { tool: tool.into(), tier: ToolTier::Green, summary: format!("{} {}", tool, path), payload: args.clone(), pattern: format!("{} {}", tool, path) })
+            Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: format!("{} {}", tool, path), payload: args.clone(), pattern: format!("{} {}", tool, path) })
         }
         "write_file" => {
             let path = str_arg(args, "path")?;
@@ -137,11 +152,12 @@ pub fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
             }
             let lower = path.to_lowercase();
             // Markdown artifacts under missions/ are Green; everything else this tool can reach is Amber.
-            let tier = if lower.starts_with("missions/") { ToolTier::Green } else { ToolTier::Amber };
+            let (tier, kind) = if lower.starts_with("missions/") { (ToolTier::Green, ActionKind::MissionArtifact) } else { (ToolTier::Amber, ActionKind::SpecDraft) };
             let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
             Ok(Classified {
                 tool: tool.into(),
                 tier,
+                kind,
                 summary: format!("write {} ({} bytes)", path, content.len()),
                 payload: json!({"tool": tool, "path": path, "bytes": content.len(), "blake3": blake3::hash(content.as_bytes()).to_hex().to_string(), "preview": content.chars().take(2000).collect::<String>()}),
                 pattern: format!("write_file {}/*", dir),
@@ -158,8 +174,8 @@ fn zone_of(logical: &str) -> (Zone, String) {
         let inner = rest.split_once('/').map(|(_, r)| r).unwrap_or("");
         return (Zone::Project, inner.to_string());
     }
-    if l.starts_with("@worktree/") {
-        return (Zone::Worktree, l["@worktree/".len()..].to_string());
+    if let Some(rest) = l.strip_prefix("@worktree/") {
+        return (Zone::Worktree, rest.to_string());
     }
     if l.starts_with("missions/") || l.starts_with("memory/") {
         return (Zone::Local, l.to_string());
@@ -576,7 +592,7 @@ mod tests {
         let note = classify("write_file", &json!({"path": "missions/m1/n.md", "content": "hi"})).unwrap();
         assert_eq!(note.tier, ToolTier::Green);
         let spec = classify("write_file", &json!({"path": "specs/009-x.md", "content": "hello"})).unwrap();
-        assert_eq!((spec.tier, spec.pattern.as_str()), (ToolTier::Amber, "write_file specs/*"));
+        assert_eq!((spec.tier, spec.kind, spec.pattern.as_str()), (ToolTier::Amber, ActionKind::SpecDraft, "write_file specs/*"));
         assert_eq!(spec.payload["bytes"], 5);
         assert_eq!(spec.payload["blake3"], blake3::hash(b"hello").to_hex().to_string());
         assert!(classify("rm_rf", &json!({})).is_err());
