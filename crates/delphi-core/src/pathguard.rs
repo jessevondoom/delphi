@@ -7,6 +7,7 @@
 //! The caller receives open descriptors, never a path to re-open, so nothing can be swapped in between.
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::ffi::CString;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
@@ -231,6 +232,109 @@ impl Guard {
         None
     }
 
+    /// Policy shared by every operation: canonicalize, fold case, apply the deny lists and the role's
+    /// globs, and map to exactly one zone root. Returns (root, inner path in that zone).
+    fn plan(&self, logical: &str, access: Access, is_dir: bool) -> Result<(PathBuf, String), Denied> {
+        let path = canonical(logical)?;
+        let key = path.to_lowercase();
+        // The deny lists are written for paths *under* a zone (`operator/…`), so a directory is checked
+        // both as itself and with a trailing slash; otherwise `operator` alone would slip through.
+        let denied = never_readable(&key, &self.role).or_else(|| if is_dir { never_readable(&format!("{}/", key), &self.role) } else { None });
+        if let Some(why) = denied {
+            return Err(Denied::NeverReadable(why));
+        }
+        if access == Access::Write {
+            if let Some(why) = never_writable(&key) {
+                return Err(Denied::NeverWritable(why));
+            }
+        }
+        let globs = if access == Access::Write { &self.write_globs } else { &self.read_globs };
+        let allowed = globs.iter().any(|g| (g == "*" && access == Access::Read) || glob_match(&g.to_lowercase(), &key));
+        if !allowed {
+            return Err(Denied::NotInScope);
+        }
+        if is_dir {
+            // Zone lookup works on prefixes ("specs/"), so a directory is looked up with a trailing slash.
+            let (root, inner) = self.zone_of(&format!("{}/", path), &format!("{}/", key), access).ok_or(Denied::NoZone)?;
+            Ok((root, inner.trim_end_matches('/').to_string()))
+        } else {
+            self.zone_of(&path, &key, access).ok_or(Denied::NoZone)
+        }
+    }
+
+    /// Open a directory for reading under the same policy as [`Guard::check`].
+    pub fn check_dir(&self, logical: &str) -> Result<OwnedFd, Denied> {
+        let (root, inner) = self.plan(logical, Access::Read, true)?;
+        let mut dir = {
+            let c = CString::new(root.as_os_str().as_bytes()).map_err(|_| Denied::Io("root".into()))?;
+            let raw = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+            if raw < 0 {
+                return Err(Denied::Io(format!("zone root {}: {}", root.display(), std::io::Error::last_os_error())));
+            }
+            unsafe { OwnedFd::from_raw_fd(raw) }
+        };
+        use std::os::fd::AsRawFd;
+        for comp in inner.split('/').filter(|c| !c.is_empty()) {
+            dir = openat_nofollow(dir.as_raw_fd(), comp, libc::O_RDONLY | libc::O_DIRECTORY)?;
+        }
+        Ok(dir)
+    }
+
+    /// List a directory, hiding `.git` and anything the role may never read.
+    pub fn list(&self, logical: &str) -> Result<Vec<DirEntry>, Denied> {
+        use std::os::fd::AsRawFd;
+        let dir = self.check_dir(logical)?;
+        let base = canonical(logical)?;
+        Ok(list_fd(dir.as_raw_fd())?
+            .into_iter()
+            .filter(|e| e.name.to_lowercase() != ".git" && never_readable(&format!("{}/{}", base, e.name).to_lowercase(), &self.role).is_none())
+            .collect())
+    }
+
+    /// Read a file through the guard (at most `max` bytes).
+    pub fn read_file(&self, logical: &str, max: usize) -> Result<(Vec<u8>, bool), Denied> {
+        let r = self.check(logical, Access::Read)?;
+        r.read(max).map_err(|e| Denied::Io(e.to_string()))
+    }
+
+    /// Create or replace a file atomically: write a temp file in the target directory (creating missing
+    /// parents), fsync it, rename it over the target, fsync the directory. Every guard check applies.
+    /// Returns whether the file was newly created.
+    pub fn write_atomic(&self, logical: &str, bytes: &[u8]) -> Result<bool, Denied> {
+        use std::os::fd::AsRawFd;
+        let (root, inner) = self.plan(logical, Access::Write, false)?;
+        let r = resolve_nofollow_opts(&root, &inner, Access::Write, &self.protected, true)?;
+        let created = r.file.is_none();
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = format!(".{}.delphi-tmp-{}-{}", r.name, std::process::id(), COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let tmpc = CString::new(tmp.as_bytes()).map_err(|_| Denied::NotLogical("nul".into()))?;
+        let fd = unsafe { libc::openat(r.dir.as_raw_fd(), tmpc.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o644 as libc::c_uint) };
+        if fd < 0 {
+            return Err(Denied::Io(std::io::Error::last_os_error().to_string()));
+        }
+        let mut f = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+        let cleanup = |dirfd: RawFd| unsafe {
+            libc::unlinkat(dirfd, tmpc.as_ptr(), 0);
+        };
+        let write = (|| -> std::io::Result<()> {
+            f.write_all(bytes)?;
+            f.sync_all()
+        })();
+        if let Err(e) = write {
+            cleanup(r.dir.as_raw_fd());
+            return Err(Denied::Io(e.to_string()));
+        }
+        drop(f);
+        let namec = CString::new(r.name.as_bytes()).map_err(|_| Denied::NotLogical("nul".into()))?;
+        if unsafe { libc::renameat(r.dir.as_raw_fd(), tmpc.as_ptr(), r.dir.as_raw_fd(), namec.as_ptr()) } != 0 {
+            let e = std::io::Error::last_os_error();
+            cleanup(r.dir.as_raw_fd());
+            return Err(Denied::Io(e.to_string()));
+        }
+        unsafe { libc::fsync(r.dir.as_raw_fd()) };
+        Ok(created)
+    }
+
     /// Full check; on success returns open descriptors for the target.
     pub fn check(&self, logical: &str, access: Access) -> Result<Resolved, Denied> {
         let path = canonical(logical)?;
@@ -253,6 +357,67 @@ impl Guard {
     }
 }
 
+/// What a directory entry is, from `d_type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Dir,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub kind: EntryKind,
+}
+
+/// List a directory through an open descriptor (no path is re-resolved).
+fn list_fd(fd: RawFd) -> Result<Vec<DirEntry>, Denied> {
+    let dup = unsafe { libc::dup(fd) };
+    if dup < 0 {
+        return Err(Denied::Io(std::io::Error::last_os_error().to_string()));
+    }
+    let dirp = unsafe { libc::fdopendir(dup) };
+    if dirp.is_null() {
+        unsafe { libc::close(dup) };
+        return Err(Denied::Io(std::io::Error::last_os_error().to_string()));
+    }
+    let mut out = Vec::new();
+    loop {
+        let ent = unsafe { libc::readdir(dirp) };
+        if ent.is_null() {
+            break;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr((*ent).d_name.as_ptr()) }.to_string_lossy().into_owned();
+        if name == "." || name == ".." {
+            continue;
+        }
+        let kind = match unsafe { (*ent).d_type } {
+            libc::DT_REG => EntryKind::File,
+            libc::DT_DIR => EntryKind::Dir,
+            _ => EntryKind::Other, // symlinks, sockets, FIFOs: shown as unreadable
+        };
+        out.push(DirEntry { name, kind });
+    }
+    unsafe { libc::closedir(dirp) };
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+impl Resolved {
+    /// Read the opened file (at most `max` bytes; `truncated` reports whether more existed).
+    pub fn read(&self, max: usize) -> std::io::Result<(Vec<u8>, bool)> {
+        use std::io::Read;
+        let fd = self.file.as_ref().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))?;
+        let mut f = std::fs::File::from(fd.try_clone()?);
+        let mut buf = Vec::new();
+        Read::take(&mut f, max as u64 + 1).read_to_end(&mut buf)?;
+        let truncated = buf.len() > max;
+        buf.truncate(max);
+        Ok((buf, truncated))
+    }
+}
+
 fn openat_nofollow(dirfd: RawFd, name: &str, flags: libc::c_int) -> Result<OwnedFd, Denied> {
     let c = CString::new(name.as_bytes()).map_err(|_| Denied::NotLogical("nul".into()))?;
     let fd = unsafe { libc::openat(dirfd, c.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
@@ -271,6 +436,25 @@ fn openat_nofollow(dirfd: RawFd, name: &str, flags: libc::c_int) -> Result<Owned
 /// component must be a regular, singly-linked, unprotected file; it is opened non-blocking so a FIFO
 /// can't hang the daemon. For writes, a missing final component is allowed (`file: None`).
 pub fn resolve_nofollow(root: &Path, inner: &str, access: Access, protected: &HashSet<(u64, u64)>) -> Result<Resolved, Denied> {
+    resolve_nofollow_opts(root, inner, access, protected, false)
+}
+
+fn mkdirat(dirfd: RawFd, name: &str) -> Result<(), Denied> {
+    let c = CString::new(name.as_bytes()).map_err(|_| Denied::NotLogical("nul".into()))?;
+    let rc = unsafe { libc::mkdirat(dirfd, c.as_ptr(), 0o755) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EEXIST) {
+            return Err(Denied::Io(err.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// As [`resolve_nofollow`]; with `create_parents`, missing intermediate directories are created
+/// one component at a time with `mkdirat` and then opened with `O_NOFOLLOW`, so a racing symlink
+/// can't redirect the walk.
+pub fn resolve_nofollow_opts(root: &Path, inner: &str, access: Access, protected: &HashSet<(u64, u64)>, create_parents: bool) -> Result<Resolved, Denied> {
     use std::os::fd::AsRawFd;
     let root_c = CString::new(root.as_os_str().as_bytes()).map_err(|_| Denied::Io("root".into()))?;
     let raw = unsafe { libc::open(root_c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
@@ -281,7 +465,13 @@ pub fn resolve_nofollow(root: &Path, inner: &str, access: Access, protected: &Ha
     let comps: Vec<&str> = inner.split('/').collect();
     let (last, parents) = comps.split_last().ok_or(Denied::NotLogical(inner.into()))?;
     for comp in parents {
-        dir = openat_nofollow(dir.as_raw_fd(), comp, libc::O_RDONLY | libc::O_DIRECTORY)?;
+        dir = match openat_nofollow(dir.as_raw_fd(), comp, libc::O_RDONLY | libc::O_DIRECTORY) {
+            Err(Denied::NotFound) if create_parents => {
+                mkdirat(dir.as_raw_fd(), comp)?;
+                openat_nofollow(dir.as_raw_fd(), comp, libc::O_RDONLY | libc::O_DIRECTORY)?
+            }
+            other => other?,
+        };
     }
     let file = match openat_nofollow(dir.as_raw_fd(), last, libc::O_RDONLY | libc::O_NONBLOCK) {
         Ok(fd) => {
@@ -451,6 +641,55 @@ mod tests {
         // Reads of a custom script come from the ratified copy, which doesn't exist yet.
         fs::write(t.path().join("team/skills/custom/x/scripts/run.sh"), "live").unwrap();
         assert_eq!(g.check("skills/custom/x/scripts/run.sh", Access::Read).unwrap_err(), Denied::NotFound);
+    }
+
+    #[test]
+    fn directories_list_without_leaking_hidden_or_forbidden_entries() {
+        let (t, mut g) = setup();
+        fs::write(t.path().join("local/missions/m1/plan.md"), "p").unwrap();
+        let names = |l: Vec<DirEntry>| l.into_iter().map(|e| e.name).collect::<Vec<_>>();
+        // events.jsonl never appears; the councils directory does, but its .barrier is hidden inside.
+        assert_eq!(names(g.list("missions/m1").unwrap()), vec!["councils", "notes.md", "plan.md"]);
+        assert!(g.list("missions/m1/councils").unwrap().is_empty());
+        // .git is hidden even in a worktree that has one.
+        assert_eq!(names(g.list("@worktree").unwrap()), vec!["plain.txt", "src"]);
+        assert!(matches!(g.list("missions/m1/councils/.barrier"), Err(Denied::NeverReadable(_))));
+        for d in ["operator", "Operator", "local", "run", "proposals", "memory/operator"] {
+            assert!(matches!(g.list(d), Err(Denied::NeverReadable(_))), "{} must not be listable", d);
+        }
+        assert!(matches!(g.list("memory/agents/red-team"), Err(Denied::NeverReadable(_))), "another role's memory directory");
+        assert_eq!(g.list("@project/app/src").unwrap()[0].name, "main.rs");
+        g.read_globs = vec!["specs/**".into()];
+        assert!(matches!(g.list("missions/m1"), Err(Denied::NotInScope)));
+        assert!(g.list("@worktree/src/lib.rs").is_err(), "a file is not a directory");
+    }
+
+    #[test]
+    fn atomic_writes_create_parents_and_replace_files_safely() {
+        let (t, g) = setup();
+        assert!(g.write_atomic("missions/m2/deep/notes.md", b"hello").unwrap(), "created");
+        assert_eq!(fs::read_to_string(t.path().join("local/missions/m2/deep/notes.md")).unwrap(), "hello");
+        assert!(!g.write_atomic("missions/m2/deep/notes.md", b"replaced").unwrap(), "replaced");
+        assert_eq!(g.read_file("missions/m2/deep/notes.md", 100).unwrap(), (b"replaced".to_vec(), false));
+        let leftovers: Vec<_> = fs::read_dir(t.path().join("local/missions/m2/deep")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(leftovers, vec!["notes.md"], "no temp files remain");
+        // The deny lists and scopes still apply to writes.
+        assert!(matches!(g.write_atomic("missions/m1/events.jsonl", b"x"), Err(Denied::NeverReadable(_))));
+        assert!(matches!(g.write_atomic("@project/app/src/main.rs", b"x"), Err(Denied::NeverWritable(_))));
+        assert!(matches!(g.write_atomic("GOVERNANCE.md", b"x"), Err(Denied::NeverWritable(_))));
+        assert_eq!(g.write_atomic("missions/../x", b"x").unwrap_err(), Denied::Escapes);
+        // A symlinked parent is refused rather than followed.
+        symlink(t.path().join("wt"), t.path().join("local/missions/m3")).unwrap();
+        assert_eq!(g.write_atomic("missions/m3/x.md", b"x").unwrap_err(), Denied::Symlink);
+        assert!(!t.path().join("wt/x.md").exists());
+    }
+
+    #[test]
+    fn reads_are_capped_and_report_truncation() {
+        let (t, g) = setup();
+        fs::write(t.path().join("local/missions/m1/big.md"), "0123456789").unwrap();
+        assert_eq!(g.read_file("missions/m1/big.md", 4).unwrap(), (b"0123".to_vec(), true));
+        assert_eq!(g.read_file("missions/m1/big.md", 10).unwrap(), (b"0123456789".to_vec(), false));
     }
 
     #[test]

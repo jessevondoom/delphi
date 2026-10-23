@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "delphi-core",
  "include_dir",
  "libc",
  "regex",
@@ -243,7 +244,6 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "toml",
- "unicode-normalization",
  "walkdir",
 ]
 
@@ -280,6 +280,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "unicode-normalization",
 ]
 
 [[package]]

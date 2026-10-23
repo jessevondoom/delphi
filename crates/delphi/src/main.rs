@@ -4,8 +4,6 @@ mod doctor;
 mod frontmatter;
 mod home;
 mod lint;
-#[allow(dead_code)] // used by the daemon file tools from Step 2; tested now (specs/001 §1.2)
-mod pathguard;
 mod report;
 mod seed;
 mod theme;
