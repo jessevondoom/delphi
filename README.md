@@ -1,105 +1,90 @@
 # Delphi: Multi-Agent Collaborative Working Environment
 
-> *"Verily at the very first, Chaos came to be..."* — Hesiod, *Theogony* (116)  
-> *"Know Thyself (Γνῶθι σεαυτόν) • Nothing in Excess (Μηδὲν ἄγαν)"* — Maxims of the Temple of Apollo at Delphi
+**Delphi** is a terminal-first (CLI/TUI) multi-agent working environment for **software engineering**, **deep research**, **systems architecture**, and (later) **personal project planning**. *(v1 targets git code repositories on macOS/Linux, D-13.)*
 
-**Delphi** is a terminal-first (CLI/TUI), multi-agent, Mixture-of-Experts (MoE) collaborative working environment. It is designed to act as a force multiplier across **software engineering**, **deep research**, **systems architecture**, and **personal project/life planning**.
+> **Start here:** [`OVERVIEW.md`](OVERVIEW.md) is a one-page summary of the architecture, learning loop, and operating model. Operator decisions are in [`missions/2026-10-23-foundational-design/decisions.md`](missions/2026-10-23-foundational-design/decisions.md).
 
-Currently in **Spec-Driven Design Phase (`v0.4`)**, this repository serves as the central source of truth for Delphi's constitutional governance, Pantheon agent manifests, progressive-disclosure skills catalog, seeded knowledge base, and modular subsystem specifications.
-
----
-
-## 🏛️ Architectural Philosophy
-
-1. **Cosmogonic Separation of Powers:**
-   - **Chaos (`delphi` / `delphi-core`):** The non-anthropomorphic primary operator deck and deterministic runtime daemon. Chaos has no persona bias; it is the direct seat of **Human Sovereignty**.
-   - **Themis ([`GOVERNANCE.md`](file:///Users/jessevondoom/projects/work/delphi/GOVERNANCE.md) & [`REVIEW.md`](file:///Users/jessevondoom/projects/work/delphi/REVIEW.md)):** Inviolable behavioral invariants, spec-driven execution laws (*No Spec, No Build*), security trust boundaries, and base-branch adversarial PR review rubrics.
-   - **Hermes ([`specs/002`](file:///Users/jessevondoom/projects/work/delphi/specs/002-hermes-adapter-and-routing.md)):** The boundary-crossing translator—compiling portable agent/skill manifests into provider-optimal dialects across **Anthropic Claude** and **Google Gemini** (preserving cryptographic thinking signatures across tool loops) and mediating federated peer-to-peer collaboration.
-   - **The Pantheon ([`agents/`](file:///Users/jessevondoom/projects/work/delphi/agents/)):** 9 specialized cognitive agents whose mythological archetypes and blind spots are explicitly balanced against one another.
-2. **Disagreement Breeds Creativity:**
-   - Routine workflows use fast, directed orchestration (**Orchestrator Mode**).
-   - High-ambiguity architectural or strategic forks invoke **Council Mode** ([`specs/003`](file:///Users/jessevondoom/projects/work/delphi/specs/003-collaboration-and-council.md))—a 3-round sparse debate with blind parallel opening stances, heterogeneous model routing (**Claude** + **Gemini**), adversarial red-teaming (**Ares**), and a mandatory verbatim **Minority Report**.
-3. **Dual-Window Terminal Velocity (`Chaos` + `Homer`):**
-   - Decoupled via a 60Hz Unix Domain Socket event bus ([`specs/005`](file:///Users/jessevondoom/projects/work/delphi/specs/005-chaos-and-homer-tui.md)): **Window 1 (`Chaos`)** provides a clean operator chat and approval deck, while **Window 2 (`Homer`)** acts as the live epic storyteller—narrating and visualizing the Execution DAG, 3-column Council Chamber, and worktree diffs in any second terminal or monitor.
-4. **Self-Improvement Without Memory Poisoning:**
-   - **Athena** acts as Pantheon Coach—distilling post-mission lessons into isolated per-agent memory (`memory/agents/<god>/lessons.md`), systemic heuristics ([`context/heuristics.md`](file:///Users/jessevondoom/projects/work/delphi/context/heuristics.md)), and [`REVIEW.md`](file:///Users/jessevondoom/projects/work/delphi/REVIEW.md), protected by a **5-Tier Security Taint Lattice**, the **ExpeL Rule of 25 (6 KB cap)**, and **Two-Strike Promotion from Prose to Deterministic Script**.
+Delphi is in its **spec-driven design phase (`v0.4`)**. This repository is the source of truth for Delphi's governance, agent manifests, skills catalog, seed knowledge base, theme packs and subsystem specifications. It is also the **install source**: the binary embeds the seed from this repo, and `delphi update` merges new releases into each user's Delphi home. Using Delphi never writes into a project repo, this one included (D-03).
 
 ---
 
-## ⚡ The Pantheon (9 Specialist Agents)
+## Architectural Philosophy
 
-| Agent | Manifest | Role & Cognitive Domain | Default Tier | Mythological Blind Spot & Built-In Counterweight |
-| :--- | :--- | :--- | :--- | :--- |
-| **Athena** | [`agents/athena/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/athena/AGENT.md) | **Lead Orchestrator, Coach, Council Arbiter & Dynamic Model Scaler** | `deep-reasoning` | *The Arachne Trap:* Smoothing over ugly dissent.<br>**Check:** Mandatory verbatim **Minority Report**; dynamically upscales/downscales Claude & Gemini per task. |
-| **Hephaestus** | [`agents/hephaestus/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/hephaestus/AGENT.md) | **Lead Engineer, Builder & Deterministic Script Forger** | `code-craft` | *Volcanic Cave Tunnel Vision:* Silent code workarounds.<br>**Check:** *No Spec, No Build*; isolated Git worktrees; Two-Strike Context Circuit Breaker. |
-| **Daedalus** | [`agents/daedalus/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/daedalus/AGENT.md) | **Systems Architect, Creative Designer & Spec Author** | `deep-reasoning` | *The Labyrinth Trap:* Accidental complexity & over-abstraction.<br>**Check:** *Icarus Middle-Course Rule* (`Simpler Alternative Considered` required in every spec). |
-| **Artemis** | [`agents/artemis/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/artemis/AGENT.md) | **Precision Hunter, Bug Tracker (`git bisect`) & Benchmarker** | `fast-triage` | *The Actaeon Reflex:* Binary target fixation.<br>**Check:** Strictly scoped to precision discovery and empirical verification; read-only on source code. |
-| **Argos** | [`agents/argos/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/argos/AGENT.md) | **Broad Discovery, Repo Cartographer & Literature Scout** | `high-context-discovery` | *Hermes' Lullaby:* Context window overflow ("Lost in the Middle").<br>**Check:** *Anti-Lullaby Rule (`[H-002]`)* (`<300`-line pointer maps; never dumps raw transcripts). |
-| **Odysseus** | [`agents/odysseus/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/odysseus/AGENT.md) | **Long-Horizon Strategist, Sequencer & Scope Auditor** | `deep-reasoning` | *The Sirens & Polyphemus:* Scope creep or premature victory.<br>**Check:** *The Siren Protocol* (audits specs/PRs against scope creep; cannot waive `P0` security gates). |
-| **Ares** | [`agents/ares/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/ares/AGENT.md) | **Red Team, Threat Modeler & Adversarial PR Critic** | `deep-reasoning` | *Unbridled Destruction:* Nihilistic contrarianism.<br>**Check:** *Athena's Boundary Stone* (requires falsifiable repro + remediation; capped at 3 Council rounds). |
-| **Apollo** | [`agents/apollo/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/apollo/AGENT.md) | **Documentation Architect, Technical Writer & Clarity Synthesizer** | `deep-reasoning` | *Solar Gloss:* Eloquent prose hiding operational caveats.<br>**Check:** *Truth Before Harmony & Mēden Agan* (verified examples only; preserves **Ares'** caveats). |
-| **Hermes** | [`agents/hermes/AGENT.md`](file:///Users/jessevondoom/projects/work/delphi/agents/hermes/AGENT.md) | **External Integrations, GitHub Ops (`gh`), MCP & Federation Gateway** | `fast-triage` | *The Trickster:* Unchecked outbound mutations or noisy ingress.<br>**Check:** Outbound **Chaos** approval gate; 3-stage ingress sanitizer & `DelphiCap` OCap tokens. |
+1. **Separation of powers:**
+   - **Console and runtime (`delphi`, `delphi-core`):** the persona-free operator window and deterministic daemon. They are the operator's instruments, not agents.
+   - **Governance ([`GOVERNANCE.md`](GOVERNANCE.md), [`REVIEW.md`](REVIEW.md)):** behavioral invariants, *No Spec, No Build*, trust boundaries, and the base-branch PR review rubric.
+   - **Adapter ([`specs/002`](specs/002-adapter-and-routing.md)):** compiles portable agent and skill manifests into each provider's native dialect (Claude, Gemini), preserving cryptographic thinking signatures across tool loops.
+   - **Agent team ([`agents/`](agents)):** nine roles whose predictable blind spots are each checked by a counterweight.
+2. **Disagreement breeds better answers:** routine work uses directed orchestration. High-ambiguity forks go to **Council Mode** ([`specs/003`](specs/003-collaboration-and-council.md)): blind parallel opening stances, seats on different model families, adversarial review by Red-Team, and a Minority Report the daemon fills verbatim.
+3. **Two windows:** the **console** is for input and approvals; the **narrator** shows the live task graph, Council chamber and worktree diffs on a second screen ([`specs/005`](specs/005-console-and-narrator-tui.md)).
+4. **Self-improvement without memory poisoning:** Orchestrator proposes lessons and rules after each mission, and the operator ratifies them at `/retro`. Taint is computed by the runtime, always-loaded rule files stay small (Rule of 25, 6 KB), and rules violated twice become scripts.
+5. **Roles are canonical; names are a theme:** governance, specs, manifests and config use **canonical role IDs** only. Display names and voice come from a per-install **theme pack**, Greek mythology by default ([`themes/greek/`](themes/greek/theme.md), [`specs/001`](specs/001-governance-and-manifests.md) §6). A theme can change how an agent sounds, never what it may do.
 
 ---
 
-## 🗺️ Repository Structure & Source of Truth Map
+## The Agent Team (9 Roles)
+
+| Role ID | Manifest | Responsibility | Default tier | Blind spot → counterweight | Default theme name |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `orchestrator` | [`agents/orchestrator`](agents/orchestrator/AGENT.md) | Routing, model scaling, Council arbitration, coaching | `deep-reasoning` | Smoothing dissent → daemon-filled verbatim Minority Report | Athena |
+| `builder` | [`agents/builder`](agents/builder/AGENT.md) | Code, tests and scripts in sandboxed worktrees | `code-craft` | Silent workarounds → *No Spec, No Build*, drift halt | Hephaestus |
+| `architect` | [`agents/architect`](agents/architect/AGENT.md) | System design and specs | `deep-reasoning` | Over-abstraction → simpler-alternative rule | Daedalus |
+| `investigator` | [`agents/investigator`](agents/investigator/AGENT.md) | Bisects, benchmarks, primary sources | `fast-triage` | Target fixation → discovery-only, read-only | Artemis |
+| `scout` | [`agents/scout`](agents/scout/AGENT.md) | Broad discovery and cartography | `high-context-discovery` | Context overflow → pointer-map rule (`[H-002]`) | Argos |
+| `strategist` | [`agents/strategist`](agents/strategist/AGENT.md) | Roadmaps and scope audit | `deep-reasoning` | Scope creep → scope audit; can't waive `P0`s | Odysseus |
+| `red-team` | [`agents/red-team`](agents/red-team/AGENT.md) | Threat modeling and adversarial review | `deep-reasoning` | Endless contrarianism → falsifiable critiques, round cap | Ares |
+| `writer` | [`agents/writer`](agents/writer/AGENT.md) | User-facing docs and synthesis | `deep-reasoning` | Polish over truth → verified examples, caveats kept | Apollo |
+| `integrator` | [`agents/integrator`](agents/integrator/AGENT.md) | GitHub, external APIs, MCP | `fast-triage` | Silent mutation → Red-tier outbound gate, tainted ingress | Hermes |
+
+v1 enables `orchestrator`, `architect`, `builder`, `red-team`, `strategist` (D-07).
+
+---
+
+## Repository Structure
 
 ```text
 delphi/
-├── README.md                        # Project overview & navigation map (Apollo)
-├── GOVERNANCE.md                    # Tier 1 Truth: Behavioral charter & invariants (Themis)
-├── SPEC.md                          # Tier 2 Truth: Master architectural specification
-├── REVIEW.md                        # Tier 2 Truth: Base-branch adversarial PR review rubric
-├── specs/                           # Modular Subsystem Specifications (Daedalus)
+├── README.md                        # This file
+├── OVERVIEW.md                      # One-page architecture, learning loop & operating model
+├── GOVERNANCE.md                    # Tier 1: behavioral charter & invariants
+├── SPEC.md                          # Tier 2: master architectural specification
+├── REVIEW.md                        # Tier 2: base-branch adversarial PR review rubric
+├── specs/                           # Modular subsystem specifications
 │   ├── 001-governance-and-manifests.md
-│   ├── 002-hermes-adapter-and-routing.md
+│   ├── 002-adapter-and-routing.md
 │   ├── 003-collaboration-and-council.md
-│   ├── 004-athena-memory-and-coaching.md
-│   ├── 005-chaos-and-homer-tui.md
+│   ├── 004-memory-and-coaching.md
+│   ├── 005-console-and-narrator-tui.md
 │   ├── 006-installer-and-updater.md
 │   ├── 007-federated-mesh-and-sync.md
-│   └── 008-ambient-watch-and-trajectories.md
-├── agents/                          # Portable Semantic Agent Manifests (9 Pantheon Specialists)
-│   ├── athena/AGENT.md
-│   ├── hephaestus/AGENT.md
-│   ├── daedalus/AGENT.md
-│   ├── artemis/AGENT.md
-│   ├── argos/AGENT.md
-│   ├── odysseus/AGENT.md
-│   ├── ares/AGENT.md
-│   ├── apollo/AGENT.md
-│   └── hermes/AGENT.md
-├── skills/                          # Progressive-Disclosure Skill Packages (SKILL.md + scripts/)
-│   └── CATALOG.md                   # Master taxonomy of all 42 Pantheon skills
-├── context/                         # Central Knowledge Base (Zone 2 Shared Truth)
-│   ├── index.md                     # Master knowledge base index
-│   ├── heuristics.md                # Active systemic rules (ExpeL Rule of 25, <= 6 KB)
-│   ├── model-capabilities.md        # Live Claude & Gemini capability matrix for Athena scaling
-│   └── domains/                     # Foundational research & benchmark synthesis reports
-│       ├── mas-architecture-and-failure-modes.md
-│       ├── mythological-cosmogony-and-pantheon.md
-│       ├── multi-provider-and-tui-architecture.md
-│       ├── github-review-and-learning-loops.md
-│       ├── federation-rag-and-distribution.md
-│       └── framework-benchmark-and-field-practices.md
-├── memory/                          # Isolated Agent-Private Episodic Memory (Zone 3)
-│   └── agents/<god>/lessons.md      # Per-specialist coaching ledger (<= 25 rules, <= 6 KB)
-├── missions/                        # Active and archived mission logs, councils & retros
-│   └── 2026-10-23-foundational-design/
-│       ├── mission.md               # Mission 001 overview
-│       └── roadmap.md               # Odysseus 6-Phase Build Plan & Pre-Build Decision Gates
-└── .github/                         # GitHub-native Spec-First templates & PR checklists
+│   └── 008-ambient-watch-and-rewind.md
+├── agents/<role>/AGENT.md           # Role manifests (behavior only, no theme content)
+├── themes/greek/                    # Default theme pack (theme.md) + its research (research.md)
+├── skills/CATALOG.md                # Taxonomy of all 42 skills
+├── templates/config.example.toml    # Seed for a workspace's config.toml
+├── context/                         # Seed knowledge base
+│   ├── index.md                     # Knowledge base index
+│   ├── heuristics.md                # Always-loaded systemic rules (Rule of 25, ≤ 6 KB)
+│   ├── model-capabilities.md        # Claude & Gemini capability matrix for model scaling
+│   ├── invariant-enforcement.md     # Every invariant → where it is actually enforced
+│   └── domains/                     # Research & benchmark synthesis reports
+├── memory/agents/<role>/lessons.md  # Seed templates for per-role private memory
+└── missions/2026-10-23-foundational-design/
+    ├── mission.md                   # Mission 001 overview
+    ├── roadmap.md                   # Ratified 7-step build plan
+    ├── decisions.md                 # Operator decision register (D-01…D-17)
+    └── councils/                    # Council 001 verdict + Gemini seat (historical record)
 ```
 
 ---
 
-## 📐 Modular Subsystem Specifications (`specs/`)
+## Subsystem Specifications (`specs/`)
 
-1. **[Spec 001 — Governance & Manifests](file:///Users/jessevondoom/projects/work/delphi/specs/001-governance-and-manifests.md):** YAML/JSON schemas for `AGENT.md`, 3-tier progressive-disclosure `SKILL.md` packages, `HandoffEnvelope`, and 5-tier provenance/taint frontmatter.
-2. **[Spec 002 — Hermes Adapter & Dynamic Model Scaling](file:///Users/jessevondoom/projects/work/delphi/specs/002-hermes-adapter-and-routing.md):** Intermediate Prompt Representation (IPR), provider dialect compilation (Claude XML + ephemeral caching, Gemini `systemInstruction` + `cachedContents`), `ContentBlock[]` cryptographic signature preservation, **Athena's** dynamic Claude/Gemini scaler, and headless CLI harness drivers.
-3. **[Spec 003 — Collaboration & Council Protocol](file:///Users/jessevondoom/projects/work/delphi/specs/003-collaboration-and-council.md):** 4-level complexity escalation ladder, Orchestrator DAG execution, and the 3-round sparse Council state machine with blind Round 1 barrier and mandatory Minority Report.
-4. **[Spec 004 — Memory, Zero-Server Hybrid RAG & Coaching](file:///Users/jessevondoom/projects/work/delphi/specs/004-athena-memory-and-coaching.md):** Dual-tier memory, Frozen Boot-Snapshot cache hygiene, Two-Gear Hybrid RAG (`.delphi/state.db` AST breadcrumb chunking + SQLite FTS5 BM25 + `sqlite-vec` + RRF), Two-Strike Context Circuit Breaker, and ExpeL Rule-of-25 coaching.
-5. **[Spec 005 — Chaos Operator Deck & Homer Live Narrator TUI](file:///Users/jessevondoom/projects/work/delphi/specs/005-chaos-and-homer-tui.md):** Auto-spawned `delphi-core` UDS daemon, 60Hz delta frame coalescer, Window 1 (`Chaos`), Window 2 (`Homer` 4-view narrator dashboard), and multiplexer auto-spawning.
-6. **[Spec 006 — Multi-Operator Installer & Three-Zone Updater](file:///Users/jessevondoom/projects/work/delphi/specs/006-installer-and-updater.md):** Single-binary embedded-seed packaging, Ed25519 verified installer, Three-Zone file ownership model, `delphi update` (`diff3` 3-way merge), and 8-point `delphi doctor`.
-7. **[Spec 007 — Federated Multi-Instance Mesh & Sync](file:///Users/jessevondoom/projects/work/delphi/specs/007-federated-mesh-and-sync.md):** Three-plane federation via **Hermes** (Google A2A task delegation, `delphi://` Ed25519 UCAN/Biscuit capability pointers, Tailscale/SSH/mDNS transport, and 5-tier transitive taint firewall).
-8. **[Spec 008 — Zero-Token Ambient Watch & Trajectory Export](file:///Users/jessevondoom/projects/work/delphi/specs/008-ambient-watch-and-trajectories.md):** "No-Agent Mode" deterministic background watches, coupled `/rewind <seq>` time-travel checkpoints, 3-tier HITL approval batching, and DPO trajectory export.
+1. **[001 — Governance & Manifests](specs/001-governance-and-manifests.md):** schemas for `AGENT.md`, progressive-disclosure `SKILL.md`, `HandoffEnvelope`, the 6-tier taint lattice and taint-gated tools, and theme packs.
+2. **[002 — Adapter & Model Scaling](specs/002-adapter-and-routing.md):** the Intermediate Prompt Representation (IPR), provider dialect passes, `ContentBlock[]` signature preservation, the model scaler, and (deferred) CLI harness drivers.
+3. **[003 — Collaboration & Council](specs/003-collaboration-and-council.md):** escalation ladder, task DAG execution, unified retry ladder and budget, and the 3-round Council with blind Round 1 and Minority Report.
+4. **[004 — Memory, Retrieval & Coaching](specs/004-memory-and-coaching.md):** dual-tier memory, frozen boot snapshots, FTS5 retrieval (vectors later), the context circuit breaker, and the ratified learning loop.
+5. **[005 — Console & Narrator TUI](specs/005-console-and-narrator-tui.md):** the `delphi-core` daemon, 60Hz coalesced event stream, the console window and the narrator window.
+6. **[006 — Installer, Layout & Updater](specs/006-installer-and-updater.md):** single-binary seed packaging, the Delphi home layout, the three-zone model, `update`, and `doctor`.
+7. **[007 — Federation & Sync](specs/007-federated-mesh-and-sync.md):** team sync via ratified proposals (A2A delegation and `delphi://` pointers deferred).
+8. **[008 — Ambient Watch, Rewind & HITL Tiers](specs/008-ambient-watch-and-rewind.md):** zero-token watches, `/rewind` checkpoints, and Green/Amber/Red approvals.

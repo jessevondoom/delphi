@@ -1,13 +1,13 @@
 ---
 id: kb-multi-provider-and-tui-architecture
 title: "Multi-Provider Dialect Compilation, CLI Harness Bridging & Dual-Window TUI Architecture"
-author: argos
+author: scout
 timestamp: 2026-10-23T07:16:00Z
 source_type: internal_empirical
-confidence: verified
+confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)
 status: active
 source_mission: "seed-central-knowledge-base"
-tags: [multi-provider, prompt-compiler, thinking-signatures, mcp, cli-harnesses, tui, unix-domain-sockets, chaos, homer]
+tags: [multi-provider, prompt-compiler, thinking-signatures, mcp, cli-harnesses, tui, unix-domain-sockets, operator, narrator]
 ---
 
 # Multi-Provider Agent Architecture & Dual-Window TUI/Observability Engine
@@ -19,7 +19,7 @@ A naive "model-agnostic" architecture assumes you can write a single Markdown sy
 ### 1.1 The Four Pillars of Provider Divergence
 
 #### A. System Prompt Adherence & Structural Formatting Bias
-* **Anthropic (Claude):** Heavily RLHF-tuned on **XML structural tags** (`<governance>`, `<context>`, `<objective>`, `<constraints>`). Passing complex multi-document context as flat Markdown with `#` headers causes instruction bleed—confusing quoted examples or untrusted ingested research (`Argos`) with top-level system directives. Furthermore, Claude requires explicit `cache_control: {"type": "ephemeral"}` breakpoints injected into block arrays to achieve 90% cost/latency reduction on static preambles.
+* **Anthropic (Claude):** Heavily RLHF-tuned on **XML structural tags** (`<governance>`, `<context>`, `<objective>`, `<constraints>`). Passing complex multi-document context as flat Markdown with `#` headers causes instruction bleed—confusing quoted examples or untrusted ingested research (`Scout`) with top-level system directives. Furthermore, Claude requires explicit `cache_control: {"type": "ephemeral"}` breakpoints injected into block arrays to achieve 90% cost/latency reduction on static preambles.
 * **OpenAI (GPT / o-series):** Post-trained on **Markdown hierarchy and JSON schemas**. Furthermore, o-series reasoning models replace `role: "system"` with `role: "developer"`. Over-using XML tags in o-series models can trigger literal XML output when Markdown was desired.
 * **Google (Gemini):** Uses a dedicated top-level `systemInstruction` payload field separate from `contents`. Gemini is uniquely sensitive to negative constraints vs. affirmative constraints and uses explicit server-side **Context Caching APIs** (`cachedContents`) rather than inline ephemeral markers.
 * **Local / Open-Weights (DeepSeek R1/V3, Qwen, Llama):** Highly sensitive to chat template tokenization. DeepSeek R1 specifically degrades in reasoning quality when given a heavy `system` prompt; DeepSeek recommends **inlining system instructions into the first `user` turn** and avoiding few-shot CoT examples that interfere with its native RL-trained `<think>` phase.
@@ -43,13 +43,13 @@ Modern reasoning models expose or encapsulate internal Chain-of-Thought (CoT) in
    * MCP standardizes the *host-to-tool* schema, **not** the *host-to-LLM wire format*. Delphi uses MCP's schema as its canonical internal representation for `skills/` and `allowed_tools`, paired with a **Provider Schema Compiler** per backend.
 
 #### D. Context Window Degradation ("Lost in the Middle")
-* **Sandwich Prompting Rule:** The Prompt Compiler must place **invariant behavioral rules ([GOVERNANCE.md](file:///Users/jessevondoom/projects/work/delphi/GOVERNANCE.md)) and the active `Objective`/`Output Contract` at the extreme boundaries** (top of system prompt + very bottom of the final user turn), while placing reference context (`context/`, `research/`) in the middle.
+* **Sandwich Prompting Rule:** The Prompt Compiler must place **invariant behavioral rules ([GOVERNANCE.md](../../GOVERNANCE.md)) and the active `Objective`/`Output Contract` at the extreme boundaries** (top of system prompt + very bottom of the final user turn), while placing reference context (`context/`, `research/`) in the middle.
 
 ---
 
 ## 2. Architectural Solution: The Intermediate Prompt Representation (IPR) & Dialect Compiler
 
-Instead of a "Universal Prompt" string, Delphi compiles portable `AGENT.md` + `SKILL.md` + `GOVERNANCE.md` AST nodes into **Provider-Optimal Dialects** (Hermes Layer), and stores conversation turns as **Typed Content Block Arrays** preserving cryptographic `signature` / `thoughtSignature` / `encrypted_content` metadata.
+Instead of a "Universal Prompt" string, Delphi compiles portable `AGENT.md` + `SKILL.md` + `GOVERNANCE.md` AST nodes into **Provider-Optimal Dialects** (Adapter Layer), and stores conversation turns as **Typed Content Block Arrays** preserving cryptographic `signature` / `thoughtSignature` / `encrypted_content` metadata.
 
 ### 2.1 Orchestrating External CLI Harnesses Alongside Direct APIs
 Delphi supports both **Direct Native API Drivers** (Anthropic Messages, Gemini `generateContent`, OpenAI `/v1/responses`, Ollama) and **Headless JSONL CLI Harness Drivers**:
@@ -60,18 +60,18 @@ Delphi supports both **Direct Native API Drivers** (Anthropic Messages, Gemini `
 
 ---
 
-## 3. Dual-Window Terminal Architecture: `Chaos` (Operator Deck) + `Homer` (Live Epic Narrator)
+## 3. Dual-Window Terminal Architecture: `Console` (Operator Deck) + `Narrator` (Live Epic Narrator)
 
 ### 3.1 Client-Daemon Event-Sourced Architecture (`delphi-core` over Unix Domain Sockets)
-To allow Window 1 (`Chaos` — primary operator/chat interface) and Window 2 (`Homer` — live multi-agent narrator, Execution DAG, Council Chamber, and tool/diff inspector) to operate simultaneously without state loss:
+To allow Window 1 (`Console` — primary operator/chat interface) and Window 2 (`Narrator` — live multi-agent narrator, Execution DAG, Council Chamber, and tool/diff inspector) to operate simultaneously without state loss:
 1. **`delphi-core` Local Daemon:** Auto-spawned per workspace, listening on a Unix Domain Socket (`~/.delphi/run/<workspace-hash>.sock`) with ~5–15 µs IPC latency.
 2. **60Hz Frame Coalescing:** When 5 agents stream tokens in parallel during Council Mode, the daemon coalesces `*.delta` events into 16ms frames (60fps) before broadcasting to attached TUI clients.
 3. **Dual Persistence:**
    - **Append-Only `events.jsonl`:** Every event is written to `missions/<id>/events.jsonl` for crash recovery, auditability, and time-travel replay.
    - **SQLite WAL + FTS5 (`.delphi/state.db`):** Stores coarse state transitions, token/cost ledgers, and full-text search indexes over `context/` and `memory/`.
 4. **Attach-Anywhere + Multiplexer Auto-Spawn:**
-   - Users can run `delphi homer` in *any* second terminal window/monitor to attach instantly to the active session.
-   - Running `delphi --dual` (or pressing `Ctrl+W` inside `Chaos`) auto-detects `$TMUX`, `$ZELLIJ`, `WezTerm`, `Kitty`, or macOS windowing to spawn the second window automatically, with an inline `Tab` toggle fallback for single-screen laptop/SSH sessions.
+   - Users can run `delphi narrator` in *any* second terminal window/monitor to attach instantly to the active session.
+   - Running `delphi --dual` (or pressing `Ctrl+W` inside `Console`) auto-detects `$TMUX`, `$ZELLIJ`, `WezTerm`, `Kitty`, or macOS windowing to spawn the second window automatically, with an inline `Tab` toggle fallback for single-screen laptop/SSH sessions.
 
 ### 3.2 Implementation Stack Recommendation
-- **Rust (`Ratatui` + `Tokio`)** or **Go (`BubbleTea` + `Lipgloss` with Committed-Block Markdown Caching):** Both compile to zero-dependency ~10–15MB single binaries (`delphi install`), handle high-concurrency UDS/subprocess orchestration effortlessly, and avoid the Virtual-DOM layout flicker and runtime bloat of React/Ink or Python venvs.
+- **Rust (`Ratatui` + `Tokio`)** or **Go (`BubbleTea` + `Lipgloss` with Committed-Block Markdown Caching):** Both compile to zero-dependency ~10–15MB single binaries, handle high-concurrency UDS/subprocess orchestration effortlessly, and avoid the Virtual-DOM layout flicker and runtime bloat of React/Ink or Python venvs.

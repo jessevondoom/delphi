@@ -1,10 +1,10 @@
 ---
 id: kb-mas-architecture-and-failure-modes
 title: "Multi-Agent System (MAS) Empirical Failure Modes, Debate Topologies & Memory Architectures"
-author: argos
+author: scout
 timestamp: 2026-10-23T07:15:00Z
 source_type: internal_empirical
-confidence: verified
+confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)
 status: active
 source_mission: "seed-central-knowledge-base"
 tags: [mas, mast-taxonomy, multi-agent-debate, orchestrator-worker, memory-poisoning, reflexion, voyager, expel, letta]
@@ -23,19 +23,19 @@ In *"Why Do Multi-Agent LLM Systems Fail?"* (Cemri, Pan, Yang, et al., UC Berkel
 | Category | Code | Failure Mode | Technical Mechanism & Root Cause | Delphi Architectural Mitigation |
 | :--- | :--- | :--- | :--- | :--- |
 | **1. Specification & System Design Issues** | `FM-1.1` | **Disobey Task Specification** | Agents ignore explicit constraints, formatting rules, or functional requirements due to diluted system prompts or buried instructions. | **Tiered Truth Hierarchy** (`GOVERNANCE.md` > `SPEC.md` > Code) + structured handoff contracts with explicit `Constraints & Invariants`. |
-| | `FM-1.2` | **Disobey Role Specification** | Role drift / boundary violation (e.g., an orchestrator or reviewer begins writing raw implementation code, or a researcher makes architectural commitments). | **Strict Cognitive & Tool Scoping** (`SPEC.md` §2): Only `Hephaestus` holds write/exec permissions on source code; `Athena` cannot write prod code. |
+| | `FM-1.2` | **Disobey Role Specification** | Role drift / boundary violation (e.g., an orchestrator or reviewer begins writing raw implementation code, or a researcher makes architectural commitments). | **Strict Cognitive & Tool Scoping** (`SPEC.md` §2): Only `Builder` holds write/exec permissions on source code; `Orchestrator` cannot write prod code. |
 | | `FM-1.3` | **Step Repetition** | Agents repeat identical tool calls, search queries, or reasoning steps without recognizing prior execution in the trace. | **Explicit State Checkpointing** and scratchpad deduplication; deterministic loop counters in the runtime harness. |
 | | `FM-1.4` | **Loss of Conversation History** | Naive context truncation or unstructured message passing drops critical constraints or prior findings across multi-hop handoffs. | **Structured Handoffs** (`GOVERNANCE.md` §3.1) using persistent file links (`Context Pointers`) rather than ephemeral chat history dumps. |
 | | `FM-1.5` | **Unaware of Termination Conditions** | Agents lack a clear predicate for what constitutes "done," continuing to refine or converse past completion or halting arbitrarily. | **Expected Output Contracts** required on every dispatch; explicit Definition of Done in `specs/*.md`. |
-| **2. Inter-Agent Misalignment** | `FM-2.1` | **Conversation Reset** | An agent unexpectedly re-initializes the dialogue or restarts a workflow phase from scratch, discarding accumulated intermediate consensus. | **Immutable Mission Logs** (`missions/<id>/`) and state-machine phase transitions governed by `Athena`. |
+| **2. Inter-Agent Misalignment** | `FM-2.1` | **Conversation Reset** | An agent unexpectedly re-initializes the dialogue or restarts a workflow phase from scratch, discarding accumulated intermediate consensus. | **Immutable Mission Logs** (`missions/<id>/`) and state-machine phase transitions governed by `Orchestrator`. |
 | | `FM-2.2` | **Fail to Ask for Clarification** | Faced with ambiguous or underspecified user/peer instructions, agents hallucinate assumptions rather than halting to query the upstream caller. | **Drift Remediation & Escalation Gates** (`GOVERNANCE.md` §1.4, §3.5): Mandatory halt when spec and reality diverge. |
-| | `FM-2.3` | **Task Derailment** | Gradual semantic drift over multiple turns where agents latch onto a tangential sub-problem and abandon the primary user objective. | **Odysseus Alignment Audits**: Dedicated strategic verification against the root mission goal before and after implementation. |
+| | `FM-2.3` | **Task Derailment** | Gradual semantic drift over multiple turns where agents latch onto a tangential sub-problem and abandon the primary user objective. | **Strategist Alignment Audits**: Dedicated strategic verification against the root mission goal before and after implementation. |
 | | `FM-2.4` | **Information Withholding** | An agent discovers a critical constraint, error log, or edge case in its private execution trace but omits it from its summary back to peers. | **Mandatory Provenance & Artifact Persistence**: Research and red-team outputs are written to shared `missions/<id>/` files, not just returned as chat summaries. |
-| | `FM-2.5` | **Ignored Other Agent's Input** | Downstream agents acknowledge a peer's critique or specification superficially ("Great point!") but fail to incorporate the constraints into their actual output. | **Ares Adversarial Verification & Minority Reports**: Dissent cannot be silently dropped; `Athena` must record unresolved objections in the Council Verdict. |
+| | `FM-2.5` | **Ignored Other Agent's Input** | Downstream agents acknowledge a peer's critique or specification superficially ("Great point!") but fail to incorporate the constraints into their actual output. | **Red-Team Adversarial Verification & Minority Reports**: Dissent cannot be silently dropped; `Orchestrator` must record unresolved objections in the Council Verdict. |
 | | `FM-2.6` | **Reasoning-Action Mismatch** | An agent's internal Chain-of-Thought (CoT) concludes Action $A$ is required, but its actual tool call or output executes Action $B$. | **Deterministic Helper Scripts** (`skills/<name>/scripts/`) and schema-validated tool bridges. |
-| **3. Task Verification & Termination** | `FM-3.1` | **Premature Termination** | The system declares victory and exits before all requirements are met or while edge cases remain broken. | **No Spec, No Build / Verification Gate**: `Hephaestus` must run tests against `Daedalus`'s spec criteria before closing. |
-| | `FM-3.2` | **No or Incomplete Verification** | Outputs are synthesized and returned to the user without running available compilers, test suites, linters, or adversarial checks. | **Mandatory Red-Team (`Ares`) & Test Execution (`Hephaestus`)** phases in the Spec-First Lifecycle. |
-| | `FM-3.3` | **Incorrect Verification** | A verifier or critic agent uses a flawed rubric, hallucinated test assertion, or sycophantic bias to approve a broken artifact. | **Separation of Builder (`Hephaestus`) and Red-Team (`Ares`)** with distinct cognitive profiles and anti-sycophancy mandates. |
+| **3. Task Verification & Termination** | `FM-3.1` | **Premature Termination** | The system declares victory and exits before all requirements are met or while edge cases remain broken. | **No Spec, No Build / Verification Gate**: `Builder` must run tests against `Architect`'s spec criteria before closing. |
+| | `FM-3.2` | **No or Incomplete Verification** | Outputs are synthesized and returned to the user without running available compilers, test suites, linters, or adversarial checks. | **Mandatory Red-Team (`Red-Team`) & Test Execution (`Builder`)** phases in the Spec-First Lifecycle. |
+| | `FM-3.3` | **Incorrect Verification** | A verifier or critic agent uses a flawed rubric, hallucinated test assertion, or sycophantic bias to approve a broken artifact. | **Separation of Builder (`Builder`) and Red-Team (`Red-Team`)** with distinct cognitive profiles and anti-sycophancy mandates. |
 
 ### 1.2 Compounding Pathologies in Multi-Agent Topologies
 Beyond MAST's 14 atomic modes, multi-agent systems exhibit four nonlinear compounding pathologies:
@@ -92,18 +92,18 @@ Anthropic's engineering research (Schluntz & Zhang, Dec 2024) draws a sharp arch
 4. **Letta / MemGPT (Packer et al., 2023/2024 — *OS-Inspired Virtual Context Management*):** Treats the LLM context window as scarce **RAM (Core Memory)** and external files/databases as **Disk (Archival Memory)**.
 
 ### 4.2 The Threat Landscape: Memory Poisoning & Stale Heuristic Accumulation
-1. **Adversarial Memory Poisoning (AgentPoison, MINJA, MemoryGraft):** When `Argos` or `Artemis` scrapes untrusted external text containing disguised instructions, and `Mnemosyne` uncritically distills that session into `context/heuristics.md` or `lessons.md`, the untrusted observation is promoted into Tier-2 system instructions.
+1. **Adversarial Memory Poisoning (AgentPoison, MINJA, MemoryGraft):** When `Scout` or `Investigator` scrapes untrusted external text containing disguised instructions, and `Orchestrator` uncritically distills that session into `context/heuristics.md` or `lessons.md`, the untrusted observation is promoted into Tier-2 system instructions.
 2. **Stale Heuristic Accumulation (Semantic Ossification):**
    - Over-generalizing transient workarounds into permanent prohibitions.
    - Exceeding ~15–25 distinct behavioral heuristics per file, causing instruction dilution and contradiction.
    - Orphaned context pointers referencing deleted files or refactored functions.
 
 ### 4.3 Six Engineering Defenses for Delphi's Knowledge Base
-1. **Information Flow Control (IFC) & Taint Tracking via Frontmatter:** `source_type: external_untrusted` can never be promoted into `heuristics.md`, `lessons.md`, or `skills/` without deterministic verification by `Hephaestus` or explicit User ratification.
+1. **Information Flow Control (IFC) & Taint Tracking via Frontmatter:** `source_type: external_untrusted` can never be promoted into `heuristics.md`, `lessons.md`, or `skills/` without deterministic verification by `Builder` or explicit User ratification.
 2. **ExpeL-Style Contrastive Pruning & Hard Token Caps (The "Rule of 25"):** Max 25 active heuristics per `lessons.md` or `heuristics.md`. Adding a 26th requires `MERGE`, `DEMOTE` (to archival storage), or `PROMOTE` (into a deterministic script/linter test).
 3. **Mandatory Scope & Falsifiability Tags:** Every heuristic must state: **Trigger/Scope** (*When doing X...*), **Directive** (*Do Y...*), and **Falsification/Expiry Condition** (*Invalidated if Z changes*).
-4. **TTL & Staleness Garbage Collection (`Mnemosyne`):** Bounded `ttl_missions` counter on heuristics.
-5. **Semantic Injection Scanning at the Distillation Gate:** `Ares` or a deterministic scanner audits proposed lessons for privilege-escalation patterns.
+4. **TTL & Staleness Garbage Collection (`Orchestrator`):** Bounded `ttl_missions` counter on heuristics.
+5. **Semantic Injection Scanning at the Distillation Gate:** `Red-Team` or a deterministic scanner audits proposed lessons for privilege-escalation patterns.
 6. **Git-Backed Diffs for All Memory Promotions:** Every memory write produces an inspectable `git diff`.
 
 ---

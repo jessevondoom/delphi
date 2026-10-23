@@ -1,10 +1,10 @@
 ---
 id: kb-federation-rag-and-distribution
 title: "Federated Multi-Instance Mesh, Zero-Server Hybrid RAG & Multi-Operator Distribution"
-author: argos
+author: scout
 timestamp: 2026-10-23T07:54:00Z
 source_type: internal_empirical
-confidence: verified
+confidence: high   # 'verified' requires a linked test artifact (specs/001 §5)
 status: active
 source_mission: "seed-central-knowledge-base"
 tags: [federation, a2a, ucan, biscuit, hybrid-rag, sqlite-vec, fts5, rrf, three-zone-updater]
@@ -14,7 +14,7 @@ tags: [federation, a2a, ucan, biscuit, hybrid-rag, sqlite-vec, fts5, rrf, three-
 
 ## 1. Federated Multi-Instance Context Sharing (`specs/007`)
 
-To allow multiple independent Delphi installations (run by different operators or across different machines) to collaborate without exposing private `memory/agents/` or requiring a centralized cloud database, Delphi uses a **Three-Plane Federation Architecture** mediated by **Hermes**:
+To allow multiple independent Delphi installations (run by different operators or across different machines) to collaborate without exposing private `memory/agents/` or requiring a centralized cloud database, Delphi uses a **Three-Plane Federation Architecture** mediated by **Integrator**:
 
 1. **Plane 1 — Agent-Team-to-Agent-Team Delegation (Google A2A Profile):**
    - Each `delphi-core` instance exposes a signed Agent Card (`/.well-known/delphi-card.json`) with its Ed25519 DID (`did:key:z6Mk...`) and high-level team skills.
@@ -24,8 +24,8 @@ To allow multiple independent Delphi installations (run by different operators o
      `delphi://bob.tailnet/payments/context/domains/stripe.md?rev=a8f91c2&cap=<token>#L40-L120`
    - Access is governed by **Ed25519 Object-Capability (OCap) tokens** (UCAN/Biscuit profile) that cryptographically restrict the holder to an exact file path, Git commit SHA, line range (`#L40-L120`), byte limit, and expiration timestamp.
    - **Hard Chroot Allowlist:** `delphi-core` enforces a compile-time block preventing `memory/**`, `.delphi/config.toml`, `.delphi/state.db`, or `.env*` from ever being served over `delphi://`.
-3. **Plane 3 — The 5-Tier Security Taint Lattice (`[H-004]` Extension):**
-   - $L_4$ (`user_ratified`) $>$ $L_3$ (`internal_empirical`) $>$ $L_2$ (`federated_verified`) $>$ $L_1$ (`federated_peer`) $>$ $L_0$ (`external_untrusted`).
+3. **Plane 3 — The 6-Tier Security Taint Lattice (`[H-004]` Extension):**
+   - $L_5$ (`user_ratified`) $>$ $L_4$ (`internal_empirical`) $>$ $L_3$ (`internal_generated`) $>$ $L_2$ (`federated_verified`) $>$ $L_1$ (`federated_peer`) $>$ $L_0$ (`external_untrusted`).
    - **Transitive Anti-Laundering Rule:** $\text{EffectiveTaint} = \min(\text{PayloadTaint}, \text{PeerTrustCeiling})$. If a teammate ($L_2$) forwards web-scraped data ($L_0$), it remains $L_0$ (`external_untrusted`) and can never auto-promote into `heuristics.md`, `REVIEW.md`, or `lessons.md`.
 
 ---

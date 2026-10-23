@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DELPHI WORKSPACE CONFIGURATION TEMPLATE (templates/config.example.toml)
+# Seeded by `delphi init` into $DELPHI_HOME/workspaces/<name>/config.toml (never into a project repo).
+# API keys are NEVER stored here: they live in macOS Keychain / Linux Secret Service,
+# with the *_env variables below as fallback (specs/006 §2.2).
+# ─────────────────────────────────────────────────────────────────────────────
+
+[workspace]
+name = "delphi"
+projects = ["~/code/my-project"]         # project repos this workspace operates on (D-03)
+untrusted_paths = ["vendor/**", "third_party/**", "node_modules/**"]  # tracked files here read as external_untrusted
+default_mode = "orchestrator" # orchestrator | council
+
+[theme]
+name = "greek"                 # display names, window labels and persona voice only (specs/001 §6); behavior never depends on it
+
+[tui]
+auto_spawn_narrator = false   # Set true for automatic dual-window on launch
+frame_rate_hz = 60
+
+[providers.anthropic]
+enabled = true
+api_key_env = "ANTHROPIC_API_KEY"
+frontier_model = "claude-opus-4-6"
+workhorse_model = "claude-sonnet-4-6"
+fast_model = "claude-haiku-4-5"
+enable_ephemeral_cache = true
+
+[providers.google]
+enabled = true
+api_key_env = "GEMINI_API_KEY"
+frontier_model = "gemini-3-pro"
+workhorse_model = "gemini-3-flash"
+fast_model = "gemini-3-flash-lite"
+enable_context_cache = false        # Explicit cachedContents is billed per hour of storage; deferred (D-06)
+
+[agents]
+enabled = ["orchestrator", "architect", "builder", "red-team", "strategist"]   # D-07 v1 roster
+
+[events]
+thinking_retention_days = 30         # D-16
+
+[routing]
+enable_dynamic_scaling = true
+cross_provider_builder_critic = true # [H-007] Pair Claude builder with Gemini critic
+max_attempts_per_node = 3            # Unified retry ladder (specs/003 §3.2): upscale, then reset, then escalate
+max_parallel_agents = 4
+
+[budget]
+mission_budget_usd = 5.0             # D-10: L1–L3 work (enforced with pre-dispatch cost reservations)
+council_budget_usd = 20.0            # D-10: Council Mode
+on_budget_exhausted = "escalate"     # halt node and ask the operator; never silently downscale
+per_watch_max_wakes_per_day = 10
+
+[hitl]
+approval_timeout_sec = 600           # Unanswered approvals resolve to DENY
+
+[sandbox]
+mode = "auto"                        # D-04: auto = sandbox-exec (macOS) / bwrap (Linux); falls back to none => execution is Amber, not Green
+network = false
+
+[rag]
+engine = "fts5"                      # D-01: BM25-only in v1; sqlite-hybrid (FTS5 + sqlite-vec + RRF) after the reopen trigger
+max_pointer_results = 10
+exclude_untrusted_by_default = true
+
+[federation]
+enabled = false
+transport = "tailscale"              # tailscale | ssh-uds | mdns
+default_peer_trust_ceiling = "federated_peer"
