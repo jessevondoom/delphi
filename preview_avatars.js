@@ -108,8 +108,8 @@ function renderBadge(agent, face = null, isDarkMode = true) {
   const eyeColor = isDarkMode ? fg(...WHITE) : fg(...BLACK);
   const f = face || agent.badgeFace;
 
-  // Handle 3-eyes badge: ⟦···⟧, ⟦•••⟧, ⟦---⟧, ⟦●●●⟧, ⟦^^^⟧, ⟦•?•⟧, ⟦••• ⟧, ⟦ •••⟧
-  if (["···", "•••", "---", "●●●", "^^^", "•?•", "••• ", " •••"].includes(f)) {
+  // Handle 3-eyes badge: ⟦···⟧, ⟦•••⟧, ⟦---⟧, ⟦●●●⟧, ⟦^^^⟧, ⟦•?•⟧, ⟦…  ⟧, ⟦  …⟧
+  if (["···", "•••", "---", "●●●", "^^^", "•?•", "…  ", "  …"].includes(f)) {
     return `${c}⟦${eyeColor}${f}${c}⟧${RESET}`;
   }
 
@@ -258,8 +258,8 @@ console.log(`${BOLD}ARGOS 3-EYED ZERO-MOUTH SUITE (All-Seeing Scout Expressions)
 const argosStates = [
   { name: "Idle (3 Bullet Eyes)", face: "THREE_EYES_BULLET", badge: "•••", desc: "Default resting sensor state (• • •)" },
   { name: "Blink (All 3 Close)",   face: "THREE_EYES_BLINK",  badge: "---", desc: "All 3 eyes close together (- - -)" },
-  { name: "Scan Left (All Panning)",face: "ARGOS_SCAN_L",     badge: "••• ",desc: "All 3 eyes pan left across face (• • •  )" },
-  { name: "Scan Right (Panning)",   face: "ARGOS_SCAN_R",     badge: " •••",desc: "All 3 eyes pan right across face (  • • •)" },
+  { name: "Scan Left (All Panning)",face: "ARGOS_SCAN_L",     badge: "…  ", desc: "Argos eyes pan left via ellipsis (⟦…  ⟧)" },
+  { name: "Scan Right (Panning)",   face: "ARGOS_SCAN_R",     badge: "  …", desc: "Argos eyes pan right via ellipsis (⟦  …⟧)" },
   { name: "Pinpoint Research Mode", face: "ARGOS_PINPOINT",   badge: "···", desc: "3 tiny pinpoint precision dots (· · ·)" },
   { name: "Waiting on Approval",   face: "ARGOS_INQUIRY",    badge: "x?x", desc: "Spaced x eyes on mascot ( x ? x ), light tight x on badge (⟦x?x⟧)" },
   { name: "Surprise / Output!",    face: "ARGOS_SURPRISE",    badge: "●●●", desc: "All 3 eyes widen to bold circles (● ● ●)" },
@@ -323,8 +323,8 @@ if (process.argv.includes("--animate") || process.argv.includes("-a")) {
       badgeFace = ag.blinkBadge;
     } else if (ag.role === "scout") {
       // Argos stays 100% mouth-free in ALL animations!
-      if (s.face === "•• ")      { faceToRender = "ARGOS_SCAN_L";  badgeFace = "••• "; }
-      else if (s.face === " ••") { faceToRender = "ARGOS_SCAN_R";  badgeFace = " •••"; }
+      if (s.face === "•• ")      { faceToRender = "ARGOS_SCAN_L";  badgeFace = "…  "; }
+      else if (s.face === " ••") { faceToRender = "ARGOS_SCAN_R";  badgeFace = "  …"; }
       else if (s.face === "•─•") { faceToRender = "ARGOS_PINPOINT";badgeFace = "···"; }
       else if (s.face === "•?•") { faceToRender = "ARGOS_INQUIRY"; badgeFace = "•?•"; }
       else if (s.face === "●_●") { faceToRender = "ARGOS_SURPRISE";badgeFace = "●●●"; }

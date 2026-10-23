@@ -84,7 +84,7 @@ Delphi's runtime updates each agent's visual state via incoming event stream tra
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Idle** | Default resting / standby | `⟦•_•⟧` | `  •_•  ` | ` • • • ` | Calm, larger bullet eyes (`•`) |
 | **Blink** | Periodic (every 4–5 s) | `⟦-_-⟧` | `  -_-  ` *(Orchestrator: `-─-`, Builder: `-───-`)* | ` - - - ` | 150 ms eyelid closure. `red-team` blinks alert (`•_•`). |
-| **Thinking** | `agent.thinking.delta` | `⟦•• ⟧` $\leftrightarrow$ `⟦ ••⟧` | `  ••   ` $\leftrightarrow$ `   ••  ` | `• • •  ` $\leftrightarrow$ `  • • •` | Eyes pan left and right synchronously across the face. |
+| **Thinking** | `agent.thinking.delta` | `⟦•• ⟧` $\leftrightarrow$ `⟦ ••⟧` *(Scout: `⟦…  ⟧` $\leftrightarrow$ `⟦  …⟧`)* | `  ••   ` $\leftrightarrow$ `   ••  ` | `• • •  ` $\leftrightarrow$ `  • • •` | Eyes pan left and right synchronously across the face. |
 | **Working** | Tool call / worktree build | `⟦•─•⟧` | `  •─•  ` | ` · · · ` | Focused intense gaze; `scout` narrows to pinpoint sensors. |
 | **Waiting Approval**| `approval.requested` (Amber/Red) | `⟦x?x⟧` | ` x ? x ` | ` x ? x ` | **Attention state:** Spaced `x` eyes with bold question mark (`?`). 1-line badge uses tight light `x` (`⟦x?x⟧`). |
 | **Surprise** | Unexpected test/tool output | `⟦●_●⟧` | `  ●_●  ` | ` ● ● ● ` | **Bolder pupils (`●_●`)** activate for surprises. |
