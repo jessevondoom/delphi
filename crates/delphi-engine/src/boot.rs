@@ -166,7 +166,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
         cfg,
         hub,
-        broker: Broker::new("ap_"),
+        broker: Broker::new_unique(),
         model,
         secrets,
         ledger: Arc::new(Mutex::new(ledger)),

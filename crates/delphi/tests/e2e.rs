@@ -364,7 +364,7 @@ fn a_draft_spec_waits_for_the_operator_and_the_focus_guard_and_binding_hold() {
     s.send("/d");
     s.wait_for("\"preview\"");
     s.send("/y");
-    s.wait_for("approval ap_0001: approved");
+    s.wait_for(": approved");
     s.wait_for("✓ t_0001 done");
     let (code, out) = s.finish();
     assert_eq!(code, 0, "{}", out);

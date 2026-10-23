@@ -16,6 +16,7 @@ use crate::handoff::{pointers_from_prompt, ContextPointer, HandoffEnvelope};
 use crate::mission::{EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
 use crate::probe::ProjectProbe;
+use crate::recovery::{self, Call, NodeStatus, Recovered};
 use crate::tools::{self, classify, ToolCtx};
 use crate::workspace::{AgentManifest, WorkspacePaths};
 use delphi_adapter::blocks::{ContentBlock, Turn};
@@ -28,7 +29,7 @@ use delphi_core::ledger::Ledger;
 use delphi_core::pathguard::{Guard, Zones};
 use delphi_core::provenance::{gate, Action, Gate, OriginRules, Span};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -79,6 +80,30 @@ pub struct SpanOutcome {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecoveryItem {
+    pub task_id: String,
+    pub role: String,
+    pub span_id: String,
+    /// What will happen on resume, in words for the operator.
+    pub action: String,
+}
+
+pub struct RecoveryPlan {
+    pub rec: Arc<Recovered>,
+    pub items: Vec<RecoveryItem>,
+    /// Spend charged for calls interrupted by the restart (their full reservations).
+    pub charged_usd: f64,
+    pub expired_approvals: Vec<String>,
+}
+
+impl RecoveryPlan {
+    pub fn to_json(&self) -> Value {
+        json!({"tasks": self.items.iter().map(|i| json!({"task_id": i.task_id, "role": i.role, "span_id": i.span_id, "action": i.action})).collect::<Vec<_>>(),
+               "charged_usd": self.charged_usd, "expired_approvals": self.expired_approvals})
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TaskOutcome {
     pub task_id: String,
     pub status: Status,
@@ -102,6 +127,13 @@ pub struct Engine {
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// How a span begins.
+enum Start {
+    Fresh { handoff: HandoffEnvelope, parent: Option<Span>, depth: u32 },
+    /// Continue a span rebuilt from the log; `rec` lets it resume the children it had dispatched.
+    Resume { rec: Arc<Recovered>, span_id: String },
+}
 
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
 struct Escalate(String);
@@ -191,17 +223,27 @@ impl Engine {
     /// As [`Engine::run_task`] for a task id the caller already allocated (so it can be reported
     /// to the console before the task finishes).
     pub async fn run_task_with_id(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
+        self.start_task(m, task_id, target, prompt, true).await
+    }
+
+    async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool) -> Result<TaskOutcome, EngineError> {
         let handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         handoff.validate().map_err(EngineError::Invalid)?;
         if !self.settings.enabled_agents.iter().any(|a| a == target) {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
         }
-        let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt_chars": prompt.chars().count(), "target": target}));
-        created.task_id = Some(task_id.clone());
-        m.append(created).await?;
+        if announce {
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target}));
+            created.task_id = Some(task_id.clone());
+            m.append(created).await?;
+        }
         let outcome = self.run_span(m, &task_id, handoff, None, 0).await;
         self.broker.end_task(&task_id);
-        let outcome = outcome?;
+        self.finish_task(m, task_id, outcome?).await
+    }
+
+    /// Record a task's final output and completion.
+    async fn finish_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, outcome: SpanOutcome) -> Result<TaskOutcome, EngineError> {
         let mut out = EventEnvelope::new(&m.id, "task.output", json!({"status": match &outcome.status { Status::Done => "done", Status::Escalated(_) => "escalated" }, "text": outcome.text}));
         out.task_id = Some(task_id.clone());
         m.append(out).await?;
@@ -212,28 +254,49 @@ impl Engine {
     }
 
     fn run_span<'a>(self: &'a Arc<Self>, m: &'a Arc<MissionState>, task_id: &'a str, handoff: HandoffEnvelope, parent: Option<Span>, depth: u32) -> BoxFut<'a, Result<SpanOutcome, EngineError>> {
+        self.drive(m, task_id, Start::Fresh { handoff, parent, depth })
+    }
+
+    /// Run a span from its start, or pick it up where the log says it stopped.
+    fn drive<'a>(self: &'a Arc<Self>, m: &'a Arc<MissionState>, task_id: &'a str, start: Start) -> BoxFut<'a, Result<SpanOutcome, EngineError>> {
         Box::pin(async move {
+            // Who this span is, and (when resuming) what it had already done.
+            let new_nonce = || delphi_core::server::random_token().map(|t| t[..12].to_string()).unwrap_or_else(|_| "nonce".into());
+            let (handoff, span_id, depth, span, mut history, mut pending, mut known, mut interruptions, rec, fresh, nonce) = match start {
+                Start::Fresh { handoff, parent, depth } => {
+                    let span_id = m.next_span_id(&handoff.target_agent);
+                    let span = match &parent {
+                        Some(p) => p.child(&span_id),
+                        None => Span::root(&span_id),
+                    };
+                    (handoff, span_id, depth, span, Vec::new(), None, BTreeMap::new(), 0u32, None, true, new_nonce())
+                }
+                Start::Resume { rec, span_id } => {
+                    let st = rec.spans.get(&span_id).ok_or_else(|| EngineError::Invalid(format!("no recorded span `{}`", span_id)))?.clone();
+                    let handoff = st.handoff.clone().ok_or_else(|| EngineError::Invalid(format!("span `{}` has no recorded handoff", span_id)))?;
+                    let pending = if st.pending.is_empty() { None } else { Some(st.pending.clone()) };
+                    let nonce = st.nonce.clone().unwrap_or_else(new_nonce);
+                    (handoff, span_id.clone(), st.depth, Span::with_ceiling(&span_id, st.ceiling), st.history.clone(), pending, st.known_results.clone(), st.interruptions, Some(rec), false, nonce)
+                }
+            };
             let role = handoff.target_agent.clone();
             let manifest = self.ws.load_manifest(&role)?;
             let snapshot = self.ws.load_snapshot(&role)?;
-            let span_id = m.next_span_id(&role);
-            let span = match &parent {
-                Some(p) => p.child(&span_id),
-                None => Span::root(&span_id),
-            };
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, thinking };
 
-            let mut open = vec![
-                sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth})),
-                sc.ev("handoff.sent", json!({"handoff": serde_json::to_value(&handoff).expect("handoff serializes")})),
-                sc.ev("dag.node.state", json!({"node_id": span_id, "state": "running"})),
-            ];
-            for t in &snapshot.trims {
-                open.push(sc.ev("snapshot.trim", json!({"note": t})));
+            if fresh {
+                let mut open = vec![
+                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce})),
+                    sc.ev("handoff.sent", json!({"handoff": serde_json::to_value(&handoff).expect("handoff serializes")})),
+                    sc.ev("dag.node.state", json!({"node_id": span_id, "state": "running"})),
+                ];
+                for t in &snapshot.trims {
+                    open.push(sc.ev("snapshot.trim", json!({"note": t})));
+                }
+                m.append_batch(open).await?;
             }
-            m.append_batch(open).await?;
 
             // Block 5: resolve each pointer as this role; the span's ceiling is clamped before turn 1.
             let mut slices = Vec::new();
@@ -265,27 +328,48 @@ impl Engine {
                 context_slices: slices,
                 contract: handoff.contract_text(),
                 reminder: Some(handoff.reminder_text()),
-                nonce: delphi_core::server::random_token().map(|t| t[..12].to_string()).unwrap_or_else(|_| "nonce".into()),
+                nonce,
             };
             let mut defs = tools::tool_defs(!sc.manifest.write.is_empty());
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
                 defs.push(dispatch_def());
             }
 
-            let mut history: Vec<Turn> = Vec::new();
-            let mut turns = 0u32;
+            let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             let outcome = loop {
+                // Tool calls still owed a result (a fresh tool_use turn, or ones interrupted by a crash).
+                if let Some(calls) = pending.take() {
+                    let result_index = history.len() as u32 + 1;
+                    let mut results = Vec::new();
+                    let mut events = Vec::new();
+                    for Call { id, name, args } in calls {
+                        let r = match known.remove(&id) {
+                            Some((content, is_error)) => tools::ToolResult { content, is_error }, // already persisted before the interruption
+                            None => {
+                                let r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
+                                events.push(sc.ev("tool.result", json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error})));
+                                r
+                            }
+                        };
+                        results.push(ContentBlock::ToolResult { tool_call_id: id, content: r.content, is_error: r.is_error });
+                    }
+                    if !events.is_empty() {
+                        m.append_batch(events).await?;
+                    }
+                    history.push(Turn::user(result_index, results));
+                }
                 if turns >= sc.manifest.max_turn_budget {
                     break Err(Escalate(format!("`{}` used its whole turn budget ({}) without finishing", sc.role, sc.manifest.max_turn_budget)));
                 }
                 let turn_index = history.len() as u32 + 1;
-                let (done, ep, model_id) = match self.model_turn(&sc, &ipr, &history, &defs, turn_index).await? {
+                let (done, ep, model_id) = match self.model_turn(&sc, &ipr, &history, &defs, turn_index, interruptions).await? {
                     Ok(t) => t,
                     Err(esc) => break Err(esc),
                 };
+                interruptions = 0;
                 turns += 1;
                 history.push(Turn::assistant(turn_index, PROVIDER, &ep.id, &model_id, done.blocks.clone()));
-                let calls: Vec<(String, String, Value)> = done.blocks.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some((id.clone(), name.clone(), arguments.clone())) } else { None }).collect();
+                let calls: Vec<Call> = done.blocks.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some(Call { id: id.clone(), name: name.clone(), args: arguments.clone() }) } else { None }).collect();
                 if done.stop_reason.as_deref() != Some("tool_use") || calls.is_empty() {
                     let mut text = final_text(&done.blocks);
                     if done.stop_reason.as_deref() == Some("max_tokens") {
@@ -293,16 +377,7 @@ impl Engine {
                     }
                     break Ok(text);
                 }
-                let result_index = history.len() as u32 + 1;
-                let mut results = Vec::new();
-                let mut events = Vec::new();
-                for (id, name, args) in calls {
-                    let r = self.exec_tool(&mut sc, &name, &args, &handoff).await?;
-                    events.push(sc.ev("tool.result", json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error})));
-                    results.push(ContentBlock::ToolResult { tool_call_id: id, content: r.content, is_error: r.is_error });
-                }
-                m.append_batch(events).await?;
-                history.push(Turn::user(result_index, results));
+                pending = Some(calls);
             };
 
             let (status, text) = match outcome {
@@ -318,16 +393,101 @@ impl Engine {
         })
     }
 
+    // ── recovery (`specs/005` §2.5) ─────────────────────────────────────────
+
+    /// After a restart: charge the calls that died with the daemon their full reservation, close approval
+    /// cards that died with it, rebuild every open task from the log, record `mission.recovered`, and
+    /// return the plan. Nothing resumes until [`Engine::resume_task`] is called, so the operator sees the
+    /// summary first. `None` means there is nothing to recover.
+    pub async fn recover_mission(self: &Arc<Self>, m: &Arc<MissionState>) -> Result<Option<RecoveryPlan>, EngineError> {
+        let events = m.replay()?;
+        let before = recovery::rebuild(&events);
+        let open_reservations = m.budget.lock().unwrap().open_reservations();
+        let unfinished = before.tasks.values().any(|t| !t.completed);
+        if !unfinished && open_reservations.is_empty() && before.open_approvals.is_empty() {
+            return Ok(None);
+        }
+        let mut batch = Vec::new();
+        let mut charged = 0.0;
+        for (rid, amount) in open_reservations {
+            let Some(res) = events.iter().find(|e| e.kind == "budget.reserve" && e.payload["reservation_id"] == rid.as_str()) else { continue };
+            // The usage of an interrupted call can't be known: charge the whole reservation.
+            let usage = delphi_core::usage::UsagePayload {
+                provider: PROVIDER.into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+                cost_usd: amount as f64 / 1e6, reserved_usd: amount as f64 / 1e6, usage_source: "estimated".into(), cost_model: "metered".into(), outcome: "cancelled".into(), reservation_id: Some(rid.clone()),
+            };
+            let mut u = EventEnvelope::new(&m.id, "agent.usage", usage.to_value());
+            (u.task_id, u.span_id, u.agent, u.endpoint_id, u.access_path, u.model_tier, u.model_id, u.attempt, u.mode) =
+                (res.task_id.clone(), res.span_id.clone(), res.agent.clone(), res.endpoint_id.clone(), res.access_path.clone(), res.model_tier.clone(), res.model_id.clone(), res.attempt, res.mode.clone());
+            batch.push(u);
+            let mut t = EventEnvelope::new(&m.id, "turn.interrupted", json!({"turn_index": res.payload["turn_index"], "recovered": true}));
+            (t.task_id, t.span_id, t.agent) = (res.task_id.clone(), res.span_id.clone(), res.agent.clone());
+            batch.push(t);
+            charged += amount as f64 / 1e6;
+        }
+        // An approval nobody answered is not a grant: the action is asked about again after the restart.
+        for id in &before.open_approvals {
+            batch.push(EventEnvelope::new(&m.id, "approval.resolved", json!({"approval_id": id, "resolution": "expired", "by": "recovery", "reason": "the daemon restarted; the action will be asked about again"})));
+        }
+        if !batch.is_empty() {
+            m.append_batch(batch).await?;
+        }
+
+        let rec = Arc::new(recovery::rebuild(&m.replay()?));
+        let mut items = Vec::new();
+        for t in rec.tasks.values().filter(|t| !t.completed) {
+            let Some(root) = t.root_span.as_ref().and_then(|id| rec.spans.get(id)) else {
+                items.push(RecoveryItem { task_id: t.task_id.clone(), role: t.target.clone(), span_id: String::new(), action: "start again from your saved request (it had not begun)".into() });
+                continue;
+            };
+            let open: Vec<&recovery::SpanState> = rec.spans.values().filter(|s| s.task_id == t.task_id && s.is_open()).collect();
+            let action = if open.is_empty() {
+                "close it (it had already finished)".to_string()
+            } else if let Some(s) = open.iter().find(|s| s.interruptions >= self.settings.max_interruptions) {
+                format!("stop and ask you: {}'s turn was interrupted {} times in a row", s.role, s.interruptions)
+            } else {
+                open.iter().map(|s| if s.pending.is_empty() { format!("{} retries its interrupted turn", s.role) } else { format!("{} finishes {} tool call(s), then continues", s.role, s.pending.len()) }).collect::<Vec<_>>().join("; ")
+            };
+            items.push(RecoveryItem { task_id: t.task_id.clone(), role: root.role.clone(), span_id: root.span_id.clone(), action });
+        }
+        let plan = RecoveryPlan { rec, items, charged_usd: charged, expired_approvals: before.open_approvals };
+        m.append(EventEnvelope::new(&m.id, "mission.recovered", plan.to_json())).await?;
+        Ok(Some(plan))
+    }
+
+    /// Resume one task from the log.
+    pub async fn resume_task(self: &Arc<Self>, m: &Arc<MissionState>, rec: &Arc<Recovered>, task_id: &str) -> Result<TaskOutcome, EngineError> {
+        let t = rec.tasks.get(task_id).ok_or_else(|| EngineError::Invalid(format!("no recorded task `{}`", task_id)))?;
+        if t.completed {
+            return Err(EngineError::Invalid(format!("task `{}` already completed", task_id)));
+        }
+        let Some(root) = t.root_span.clone() else {
+            // It never started a span: run it from the saved request.
+            return self.start_task(m, task_id.to_string(), &t.target, &t.prompt, false).await;
+        };
+        let st = rec.spans.get(&root).ok_or_else(|| EngineError::Invalid(format!("no recorded span `{}`", root)))?;
+        let outcome = match &st.status {
+            NodeStatus::Running => self.drive(m, task_id, Start::Resume { rec: rec.clone(), span_id: root }).await?,
+            NodeStatus::Done => SpanOutcome { status: Status::Done, text: st.last_text(), turns: 0 },
+            NodeStatus::Escalated(r) => SpanOutcome { status: Status::Escalated(r.clone()), text: format!("[escalated to the operator: {}]", r), turns: 0 },
+        };
+        self.broker.end_task(task_id);
+        self.finish_task(m, task_id.to_string(), outcome).await
+    }
+
     /// One model turn: pick an endpoint from the ratified order, reserve, call, persist. `Err(Escalate)`
     /// means stop and hand to the operator; `Err(EngineError)` (outer) is a fatal storage failure.
-    async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
+    async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32, prior_interruptions: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
         let cfg = self.cfg.get();
         let endpoints: Vec<Endpoint> = cfg.endpoints_for(FAMILY).into_iter().cloned().collect();
         if endpoints.is_empty() {
             return Ok(Err(Escalate("no allowed Claude endpoint is configured (see `delphi doctor`)".into())));
         }
         let m = &sc.m;
-        let mut interruptions = 0u32;
+        let mut interruptions = prior_interruptions;
+        if interruptions >= self.settings.max_interruptions {
+            return Ok(Err(Escalate(format!("the same turn was interrupted {} times in a row", interruptions))));
+        }
         'endpoints: for ep in &endpoints {
             loop {
                 let Some(model_id) = cfg.resolve_model(ep, &sc.tier) else { continue 'endpoints };
@@ -417,9 +577,9 @@ impl Engine {
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
-    async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, name: &str, args: &Value, _handoff: &HandoffEnvelope) -> Result<tools::ToolResult, EngineError> {
+    async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
         if name == "dispatch_agent" {
-            return self.exec_dispatch(sc, args).await;
+            return self.exec_dispatch(sc, call_id, args, rec).await;
         }
         let c = match classify(name, args) {
             Ok(c) => c,
@@ -477,7 +637,32 @@ impl Engine {
         })
     }
 
-    async fn exec_dispatch(self: &Arc<Self>, sc: &mut SpanCtx, args: &Value) -> Result<tools::ToolResult, EngineError> {
+    /// A dispatched child's report as the parent's tool result.
+    fn dispatch_result(role: &str, status: &NodeStatus, text: &str) -> tools::ToolResult {
+        let mut text: String = text.chars().take(20_000).collect();
+        if let NodeStatus::Escalated(r) = status {
+            text = format!("{}\n(the {} did not finish: {})", text, role, r);
+        }
+        tools::ToolResult { content: text, is_error: matches!(status, NodeStatus::Escalated(_)) }
+    }
+
+    async fn exec_dispatch(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+        // Resuming: this call may already have a child (finished, or still running when the daemon stopped).
+        if let Some(rec) = rec {
+            if let Some(child) = rec.spans.get(&sc.span_id).and_then(|p| p.dispatches.get(call_id)).and_then(|id| rec.spans.get(id)) {
+                return match &child.status {
+                    NodeStatus::Running => {
+                        let out = self.drive(&sc.m.clone(), &sc.task_id.clone(), Start::Resume { rec: rec.clone(), span_id: child.span_id.clone() }).await?;
+                        let st = match &out.status {
+                            Status::Done => NodeStatus::Done,
+                            Status::Escalated(r) => NodeStatus::Escalated(r.clone()),
+                        };
+                        Ok(Self::dispatch_result(&child.role, &st, &out.text))
+                    }
+                    done => Ok(Self::dispatch_result(&child.role, done, &child.last_text())),
+                };
+            }
+        }
         let (Some(role), Some(objective)) = (args["role"].as_str(), args["objective"].as_str()) else {
             return Ok(tool_result_error("dispatch_agent needs `role` and `objective`"));
         };
@@ -505,18 +690,18 @@ impl Engine {
         }
         let pointers: Vec<ContextPointer> = args["pointers"].as_array().map(|a| a.iter().filter_map(|p| Some(ContextPointer { uri: p["uri"].as_str()?.to_string(), heading: String::new(), blake3: String::new(), reason: p["reason"].as_str()?.to_string() })).collect()).unwrap_or_default();
         let mut child = HandoffEnvelope::root(&sc.m.id, &sc.task_id, role, objective, pointers);
-        child.handoff_id = format!("ho_{}_{}", sc.span_id, role);
+        child.handoff_id = format!("ho_{}_{}", sc.span_id, call_id);
         child.parent_span_id = sc.span_id.clone();
         child.caller_agent = sc.role.clone();
         if let Err(e) = child.validate() {
             return Ok(tool_result_error(format!("invalid handoff: {}", e)));
         }
         let out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), child, Some(sc.span.clone()), sc.depth + 1).await?;
-        let mut text: String = out.text.chars().take(20_000).collect();
-        if let Status::Escalated(r) = &out.status {
-            text = format!("{}\n(the {} did not finish: {})", text, role, r);
-        }
-        Ok(tools::ToolResult { content: text, is_error: matches!(out.status, Status::Escalated(_)) })
+        let st = match &out.status {
+            Status::Done => NodeStatus::Done,
+            Status::Escalated(r) => NodeStatus::Escalated(r.clone()),
+        };
+        Ok(Self::dispatch_result(role, &st, &out.text))
     }
 }
 
@@ -524,6 +709,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::testkit::{events_of, kinds, setup, Fx};
+    use crate::mission::EngineError;
     use crate::approval::{Answer, Mode};
     use crate::model::Step;
     use delphi_adapter::blocks::ProviderMeta;
@@ -844,5 +1030,186 @@ mod tests {
         assert!(f.model.requests().is_empty());
         assert!(f.engine.run_task(&f.m, "builder", "hi").await.is_err(), "roles outside the v1 roster aren't enabled");
         let _ = Path::new("");
+    }
+
+    // ── recovery: every test models a real death by aborting the running task and building a new engine
+    // over the same files ──────────────────────────────────────────────────────────────────────────────
+
+    async fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+        for _ in 0..300 {
+            if cond() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting for {}", what);
+    }
+
+    async fn kill(task: tokio::task::JoinHandle<Result<TaskOutcome, EngineError>>) {
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn a_crash_mid_model_call_is_charged_in_full_and_the_identical_turn_is_retried() {
+        let f = setup(vec![Step::tool("t1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Hang], 5.0, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "What is in @project/app/src/lib.rs?").await }) };
+        let model = f.model.clone();
+        wait_until("the second call to be in flight", || model.requests().len() == 2).await;
+        kill(task).await;
+        let before = model.requests()[1].body.clone();
+
+        let f2 = f.restart(vec![Step::text("recovered answer")]);
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().expect("there is work to recover");
+        assert_eq!(plan.items.len(), 1);
+        assert!(plan.items[0].action.contains("retries its interrupted turn"), "{}", plan.items[0].action);
+        assert!(plan.charged_usd > 0.0);
+        // The interrupted call is charged its whole reservation, as an estimate, and the books balance.
+        let cancelled: Vec<_> = events_of(&f2, "agent.usage").into_iter().filter(|e| e.payload["outcome"] == "cancelled").collect();
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!((cancelled[0].payload["usage_source"].as_str(), cancelled[0].payload["cost_usd"].as_f64()), (Some("estimated"), cancelled[0].payload["reserved_usd"].as_f64()));
+        assert_eq!(f2.m.budget.lock().unwrap().reserved(), 0);
+        assert!(events_of(&f2, "mission.recovered").len() == 1);
+
+        let out = f2.engine.resume_task(&f2.m, &plan.rec, "t_0001").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "recovered answer"));
+        // The retry sends exactly the request that was in flight, with the earlier tool result intact.
+        assert_eq!(f2.model.requests()[0].body["messages"], before["messages"]);
+        assert_eq!(f2.model.requests()[0].body["system"], before["system"]);
+        assert_eq!(events_of(&f2, "tool.result").len(), 1, "the finished tool call was not run again");
+        // Ledger and budget agree once everything is settled.
+        let ledger_total = f2.engine.ledger.lock().unwrap().mission_cost_usd("m1").unwrap();
+        let spent = f2.m.budget.lock().unwrap().spent() as f64 / 1e6;
+        assert!((ledger_total - spent).abs() < 1e-6, "{} vs {}", ledger_total, spent);
+        assert_eq!(f2.m.budget.lock().unwrap().reserved(), 0);
+        // Finished work is not recovered again.
+        assert!(f2.engine.recover_mission(&f2.m).await.unwrap().is_none());
+    }
+
+    // specs/005 §6 test 15, across daemon restarts
+    #[tokio::test]
+    async fn a_turn_that_keeps_killing_the_daemon_escalates_instead_of_looping() {
+        let f = setup(vec![Step::Hang], 5.0, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "orchestrator", "hi").await }) };
+        let model = f.model.clone();
+        wait_until("the first call", || model.requests().len() == 1).await;
+        kill(task).await;
+
+        let f2 = f.restart(vec![Step::Hang]);
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().unwrap();
+        assert!(plan.items[0].action.contains("retries"), "{}", plan.items[0].action);
+        let task = { let e = f2.engine.clone(); let m = f2.m.clone(); let rec = plan.rec.clone(); tokio::spawn(async move { e.resume_task(&m, &rec, "t_0001").await }) };
+        let model = f2.model.clone();
+        wait_until("the retried call", || model.requests().len() == 1).await;
+        kill(task).await;
+
+        let f3 = f2.restart(vec![Step::text("must never be asked")]);
+        let plan = f3.engine.recover_mission(&f3.m).await.unwrap().unwrap();
+        assert!(plan.items[0].action.contains("stop and ask you") && plan.items[0].action.contains("2 times"), "{}", plan.items[0].action);
+        let out = f3.engine.resume_task(&f3.m, &plan.rec, "t_0001").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("interrupted 2 times")), "{:?}", out.status);
+        assert!(f3.model.requests().is_empty(), "no third attempt");
+        // Each interrupted call was charged its reservation; nothing is left reserved.
+        let cancelled = events_of(&f3, "agent.usage").into_iter().filter(|e| e.payload["outcome"] == "cancelled").count();
+        assert_eq!(cancelled, 2);
+        assert_eq!(f3.m.budget.lock().unwrap().reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_approval_dies_with_the_daemon_and_the_action_is_asked_about_again() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New"}))], 5.0, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let card = wait_for_card(&f).await;
+        kill(task).await;
+
+        let f2 = f.restart(vec![Step::text("Drafted.")]);
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().unwrap();
+        assert_eq!(plan.expired_approvals, vec![card.approval_id.clone()]);
+        let expired = events_of(&f2, "approval.resolved");
+        assert_eq!((expired[0].payload["resolution"].as_str(), expired[0].payload["by"].as_str()), (Some("expired"), Some("recovery")));
+        assert!(plan.items[0].action.contains("finishes 1 tool call"), "{}", plan.items[0].action);
+        assert!(!f2.root.join("workspaces/w/team/specs/009-new.md").exists(), "nothing was granted, so nothing was written");
+
+        let task = { let e = f2.engine.clone(); let m = f2.m.clone(); let rec = plan.rec.clone(); tokio::spawn(async move { e.resume_task(&m, &rec, "t_0001").await }) };
+        let again = wait_for_card(&f2).await;
+        assert_ne!(again.approval_id, card.approval_id, "a new card, not the dead one");
+        assert!(!f2.root.join("workspaces/w/team/specs/009-new.md").exists(), "still not written before an answer");
+        f2.engine.broker.resolve(&again.approval_id, &again.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(f2.root.join("workspaces/w/team/specs/009-new.md").exists());
+        // The read-only ledger of what happened: requested, expired, requested, approved.
+        let kinds: Vec<String> = f2.m.replay().unwrap().iter().filter(|e| e.kind.starts_with("approval.")).map(|e| format!("{}:{}", e.kind, e.payload["resolution"].as_str().unwrap_or(""))).collect();
+        assert_eq!(kinds, vec!["approval.requested:", "approval.resolved:expired", "approval.requested:", "approval.resolved:approved"]);
+    }
+
+    #[tokio::test]
+    async fn a_dispatched_child_is_resumed_once_and_its_report_reaches_the_parent() {
+        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Draft a plan"})), Step::Hang], 5.0, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "orchestrator", "Plan something").await }) };
+        let model = f.model.clone();
+        wait_until("the child's call", || model.requests().len() == 2).await;
+        kill(task).await;
+
+        let f2 = f.restart(vec![Step::text("child report"), Step::text("Parent final.")]);
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().unwrap();
+        assert!(plan.items[0].action.contains("architect retries its interrupted turn") && plan.items[0].action.contains("orchestrator finishes 1 tool call"), "{}", plan.items[0].action);
+        let out = f2.engine.resume_task(&f2.m, &plan.rec, "t_0001").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "Parent final."));
+        assert_eq!(events_of(&f2, "dag.node.added").len(), 2, "the child was resumed, not started a second time");
+        let parent_second = &f2.model.requests()[1].body["messages"];
+        assert_eq!(parent_second[2]["content"][0]["content"], "child report", "the child's report came back as the dispatch result");
+        assert_eq!(f2.m.budget.lock().unwrap().reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn status_md_follows_the_mission_through_a_crash_and_its_recovery() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New"}))], 5.0, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec for retries").await }) };
+        let card = wait_for_card(&f).await;
+        let path = f.root.join("workspaces/w/local/missions/m1/status.md");
+        // The card exists a moment before its `approval.requested` event is durable; the projection follows the log.
+        wait_until("status.md to show the waiting approval", || fs::read_to_string(&path).map(|t| t.contains("approval `")).unwrap_or(false)).await;
+        let waiting = fs::read_to_string(&path).unwrap();
+        assert!(waiting.contains("Draft a spec for retries") && waiting.contains("running") && waiting.contains(&format!("approval `{}` [amber]", card.approval_id)), "{}", waiting);
+        kill(task).await;
+
+        let f2 = f.restart(vec![Step::text("Drafted.")]);
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().unwrap();
+        let recovered = fs::read_to_string(&path).unwrap();
+        assert!(recovered.contains("## Last recovery") && recovered.contains("1 task(s) to resume") && recovered.contains("## Waiting on you\nnothing"), "{}", recovered);
+        let task = { let e = f2.engine.clone(); let m = f2.m.clone(); let rec = plan.rec.clone(); tokio::spawn(async move { e.resume_task(&m, &rec, "t_0001").await }) };
+        let again = wait_for_card(&f2).await;
+        f2.engine.broker.resolve(&again.approval_id, &again.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        let done = fs::read_to_string(&path).unwrap();
+        assert!(done.contains("**t_0001** → architect: done") && done.contains("(architect): done"), "{}", done);
+    }
+
+    #[tokio::test]
+    async fn a_task_that_never_started_begins_again_from_its_saved_request() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let mut created = EventEnvelope::new("m1", "task.created", json!({"prompt": "Summarize the project", "target": "orchestrator"}));
+        created.task_id = Some("t_0001".into());
+        f.m.append(created).await.unwrap();
+        let f2 = f.restart(vec![Step::text("Here is the summary.")]);
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().unwrap();
+        assert!(plan.items[0].action.contains("start again"), "{}", plan.items[0].action);
+        let out = f2.engine.resume_task(&f2.m, &plan.rec, "t_0001").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "Here is the summary."));
+        assert_eq!(events_of(&f2, "task.created").len(), 1, "no second task.created");
+        assert!(f2.model.requests()[0].body["messages"][0]["content"][0]["text"].as_str().unwrap().contains("Summarize the project"));
+    }
+
+    #[tokio::test]
+    async fn finished_and_escalated_work_is_left_alone() {
+        let f = setup(vec![Step::text("done already")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+        let f2 = f.restart(vec![Step::text("never")]);
+        assert!(f2.engine.recover_mission(&f2.m).await.unwrap().is_none());
+        let g = setup(vec![Step::text("x")], 0.0001, |_| {});
+        assert!(matches!(g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap().status, Status::Escalated(_)));
+        let g2 = g.restart(vec![Step::text("never")]);
+        assert!(g2.engine.recover_mission(&g2.m).await.unwrap().is_none(), "an escalated task is the operator's, not ours to retry");
     }
 }

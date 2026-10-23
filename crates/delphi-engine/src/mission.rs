@@ -92,6 +92,7 @@ pub struct MissionState {
     log: Arc<Mutex<EventLog>>,
     pub budget: Mutex<Budget>,
     pub index: Mutex<Index>,
+    status: Mutex<crate::status::Status>,
     hub: Hub,
     ledger: Arc<Mutex<Ledger>>,
     secrets: Arc<SecretRegistry>,
@@ -116,9 +117,11 @@ impl MissionState {
         let log = EventLog::open(dir, LogOptions::default())?;
         let mut budget = Budget::usd(budget_cap_usd);
         let mut index = Index::new();
+        let mut status = crate::status::Status::new(id);
         for e in &events {
             budget.apply_event(e, &|_| None);
             index.apply_event(e);
+            status.apply(e);
         }
         ledger.lock().unwrap().catch_up(dir)?;
         Ok(Arc::new(MissionState {
@@ -130,6 +133,7 @@ impl MissionState {
             log: Arc::new(Mutex::new(log)),
             budget: Mutex::new(budget),
             index: Mutex::new(index),
+            status: Mutex::new(status),
             hub,
             ledger,
             secrets,
@@ -171,13 +175,29 @@ impl MissionState {
         })
         .await
         .map_err(|e| EngineError::Join(e.to_string()))??;
+        let mut rewrite = false;
         for e in &stored {
             self.budget.lock().unwrap().apply_event(e, &|_| None);
             self.index.lock().unwrap().apply_event(e);
+            self.status.lock().unwrap().apply(e);
+            rewrite |= crate::status::affects_status(&e.kind);
             self.ledger.lock().unwrap().apply(e)?;
             self.hub.publish_event(&serde_json::to_value(e).expect("events serialize"));
         }
+        if rewrite {
+            self.write_status();
+        }
         Ok(stored)
+    }
+
+    /// Regenerate `status.md`. A projection: failure to write it never fails the mission.
+    pub fn write_status(&self) {
+        let (cap, spent, reserved) = {
+            let b = self.budget.lock().unwrap();
+            (b.cap_micro() as f64 / 1e6, b.spent() as f64 / 1e6, b.reserved() as f64 / 1e6)
+        };
+        let text = self.status.lock().unwrap().render(cap, spent, reserved);
+        let _ = crate::status::write_projection(&self.dir.join("status.md"), &text);
     }
 
     /// The ids of all events, as persisted: used by recovery and tests.

@@ -207,6 +207,11 @@ impl Span {
         Span { id: id.into(), ceiling: Tier::L5 }
     }
 
+    /// A span restored from the log with the ceiling it had reached.
+    pub fn with_ceiling(id: &str, ceiling: Tier) -> Span {
+        Span { id: id.into(), ceiling }
+    }
+
     pub fn ceiling(&self) -> Tier {
         self.ceiling
     }

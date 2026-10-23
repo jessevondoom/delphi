@@ -1,5 +1,6 @@
 //! `delphi`: roadmap Step 1 commands (`specs/001`, `specs/006`).
 
+mod avatar;
 mod chat;
 mod doctor;
 mod frontmatter;

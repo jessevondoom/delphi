@@ -96,6 +96,8 @@ pub enum Step {
     Throttle,
     NeedsReauth,
     Fail(&'static str),
+    /// The call never returns (the daemon is killed while waiting for the provider).
+    Hang,
 }
 
 impl Step {
@@ -159,6 +161,7 @@ impl ModelClient for ScriptedModel {
                 Step::Throttle => Err(ModelError::Throttled("slow down".into())),
                 Step::NeedsReauth => Err(ModelError::NeedsReauth { endpoint: endpoint.id.clone() }),
                 Step::Fail(m) => Err(ModelError::Failed(m.into())),
+                Step::Hang => std::future::pending().await,
             }
         })
     }

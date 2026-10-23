@@ -233,6 +233,13 @@ fn mode_from(i: u8) -> Mode {
 }
 
 impl Broker {
+    /// A broker whose ids are unique across daemon restarts (`ap_<4 hex>_<n>`), so an id in the log never
+    /// refers to two different cards.
+    pub fn new_unique() -> Arc<Broker> {
+        let tag = delphi_core::server::random_token().map(|t| t[..4].to_string()).unwrap_or_else(|_| "0000".into());
+        Broker::new(&format!("ap_{}_", tag))
+    }
+
     pub fn new(id_prefix: &str) -> Arc<Broker> {
         Arc::new(Broker { state: Mutex::new(State::default()), prefix: id_prefix.to_string() })
     }
