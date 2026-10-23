@@ -3,7 +3,7 @@
 
 use delphi_adapter::blocks::ContentBlock;
 use delphi_adapter::claude::{Completed, Compiled, StreamError, StreamEvent, Usage};
-use delphi_adapter::config::{Config, Endpoint};
+use delphi_adapter::config::{Endpoint, SharedConfig};
 use delphi_adapter::credential::{CredentialError, CredentialStore};
 use delphi_adapter::http::{call_with_retry, CallError, RetryPolicy};
 use delphi_adapter::platform::{build, BuildError, BuildInput};
@@ -48,7 +48,7 @@ pub trait ModelClient: Send + Sync {
 
 /// The real client.
 pub struct HttpModelClient {
-    pub cfg: Arc<Config>,
+    pub cfg: SharedConfig,
     pub creds: Arc<CredentialStore>,
     pub http: delphi_adapter::reqwest::Client,
     pub retry: RetryPolicy,
@@ -70,7 +70,7 @@ impl ModelClient for HttpModelClient {
                 other => ModelError::Failed((self.redact)(&other.to_string())),
             })?;
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-            let req = build(&BuildInput { cfg: &self.cfg, endpoint, model_id, compiled, creds: &resolved, now_unix: now, register: &*self.register }).map_err(|e| match e {
+            let req = build(&BuildInput { cfg: &self.cfg.get(), endpoint, model_id, compiled, creds: &resolved, now_unix: now, register: &*self.register }).map_err(|e| match e {
                 BuildError::NotAllowed(id) => ModelError::Refused(format!("endpoint `{}` is not in allowed_endpoints", id)),
                 other => ModelError::Refused(other.to_string()),
             })?;

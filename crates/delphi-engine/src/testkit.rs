@@ -6,7 +6,7 @@ use crate::mission::{MissionState, SecretRegistry};
 use crate::model::{ScriptedModel, Step};
 use crate::probe::AssumeClean;
 use crate::workspace::tests::make_workspace;
-use delphi_adapter::config::Config;
+use delphi_adapter::config::{Config, SharedConfig};
 use delphi_core::event::EventEnvelope;
 use delphi_core::hub::Hub;
 use delphi_core::ledger::Ledger;
@@ -85,7 +85,7 @@ pub(crate) fn setup(steps: Vec<Step>, budget_usd: f64, tweak: impl FnOnce(&mut S
     let m = MissionState::open(&ws.dir.join("local/missions/m1"), "m1", hub.clone(), ledger.clone(), secrets.clone(), budget_usd).unwrap();
     let engine = Arc::new(Engine {
         ws,
-        cfg: Arc::new(Config::parse(CONFIG).unwrap()),
+        cfg: SharedConfig::new(Config::parse(CONFIG).unwrap()),
         hub,
         broker: Broker::new("ap_"),
         model: model.clone(),

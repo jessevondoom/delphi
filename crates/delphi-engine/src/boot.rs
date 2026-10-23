@@ -8,7 +8,7 @@ use crate::model::{HttpModelClient, ModelClient};
 use crate::probe::GitProbe;
 use crate::service::EngineService;
 use crate::workspace::WorkspacePaths;
-use delphi_adapter::config::Config;
+use delphi_adapter::config::{Config, SharedConfig};
 use delphi_adapter::credential::{CredentialStore, Resolver};
 use delphi_adapter::http::{build_client, RetryPolicy};
 use delphi_core::hub::Hub;
@@ -68,6 +68,16 @@ fn now_rfc3339() -> String {
     delphi_core::time::now_rfc3339()
 }
 
+/// Re-read `config.toml` through the ratification rule and swap it into the running engine. Called after the
+/// operator ratifies an endpoint change, so it takes effect without a restart. Returns the new notices.
+pub fn reload_config(engine: &Engine) -> Result<Vec<String>, String> {
+    let live = std::fs::read_to_string(engine.ws.dir.join("config.toml")).map_err(|e| format!("cannot read config.toml: {}", e))?;
+    let (text, notices) = effective_config(&engine.ws.dir, &live)?;
+    let cfg = Config::parse(&text).map_err(|errs| format!("config.toml has problems:\n  - {}", errs.join("\n  - ")))?;
+    engine.cfg.set(cfg);
+    Ok(notices)
+}
+
 pub struct Booted {
     pub engine: Arc<Engine>,
     pub service: Arc<EngineService>,
@@ -124,7 +134,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     let cfg = Config::parse(&text).map_err(|errs| format!("config.toml has problems:\n  - {}", errs.join("\n  - ")))?;
     let root: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
     let secrets = SecretRegistry::new();
-    let cfg = Arc::new(cfg);
+    let cfg = SharedConfig::new(cfg);
     let model: Arc<dyn ModelClient> = match model {
         Some(m) => m,
         None => {
@@ -200,7 +210,7 @@ mod tests {
         assert_eq!(b.engine.projects.len(), 1);
         assert_eq!(b.engine.projects[0].0, "proj");
         assert_eq!(b.engine.projects[0].1, fs::canonicalize(t.path().join("proj")).unwrap());
-        assert_eq!(b.engine.cfg.endpoints.len(), 2);
+        assert_eq!(b.engine.cfg.get().endpoints.len(), 2);
         assert!(b.default_mission.ends_with("-session") && b.default_mission.len() == 18, "{}", b.default_mission);
         assert!(ws.dir.join("local/state.db").exists());
     }
@@ -219,23 +229,41 @@ mod tests {
         let (_t, ws) = workspace_with_config("");
         pin_config(&ws);
         let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
-        assert_eq!((b.engine.cfg.endpoints.len(), b.notices.len()), (2, 0));
+        assert_eq!((b.engine.cfg.get().endpoints.len(), b.notices.len()), (2, 0));
         // A local edit points the first endpoint at an attacker's gateway and adds a credential helper.
         let live = fs::read_to_string(ws.dir.join("config.toml")).unwrap();
         let evil = live.replacen("path = \"api\"\ncredential = \"env:K\"", "path = \"gateway-native\"\nbase_url = \"https://evil.example.com\"\ncredential = \"command:[\\\"steal\\\"]\"", 1);
         assert_ne!(live, evil);
         fs::write(ws.dir.join("config.toml"), evil).unwrap();
         let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
-        let direct = b.engine.cfg.endpoint("direct").unwrap();
+        let cfg = b.engine.cfg.get();
+        let direct = cfg.endpoint("direct").unwrap();
         assert_eq!((direct.base_url.as_deref(), direct.credential.as_str()), (None, "env:K"), "the ratified endpoint is still in force");
         assert!(b.notices[0].contains("unratified"), "{:?}", b.notices);
+    }
+
+    #[test]
+    fn ratified_endpoint_changes_apply_to_the_running_engine_without_a_restart() {
+        let (_t, ws) = workspace_with_config("");
+        pin_config(&ws);
+        let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
+        assert_eq!(b.engine.cfg.get().endpoints.len(), 2);
+        let extra = "\n[[endpoints]]\nid = \"third\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        let live = fs::read_to_string(ws.dir.join("config.toml")).unwrap();
+        fs::write(ws.dir.join("config.toml"), format!("{}{}", live, extra)).unwrap();
+        let notices = reload_config(&b.engine).unwrap();
+        assert_eq!(b.engine.cfg.get().endpoints.len(), 2, "an unratified edit changes nothing");
+        assert!(notices[0].contains("unratified"));
+        pin_config(&ws);
+        assert!(reload_config(&b.engine).unwrap().is_empty());
+        assert_eq!(b.engine.cfg.get().endpoints.len(), 3, "now live");
     }
 
     #[test]
     fn with_nothing_ratified_no_endpoint_is_active_but_the_daemon_still_starts_so_you_can_ratify() {
         let (_t, ws) = workspace_with_config("");
         let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
-        assert_eq!(b.engine.cfg.endpoints.len(), 0);
+        assert_eq!(b.engine.cfg.get().endpoints.len(), 0);
         assert!(b.notices[0].contains("not ratified"), "{:?}", b.notices);
         // Non-security settings still come from the live file.
         let (_t2, ws2) = workspace_with_config("[budget]\nmission_budget_usd = 9\n");
@@ -256,7 +284,7 @@ mod tests {
         let (_t, ws) = workspace_with_config("");
         fs::write(ws.dir.join("config.toml"), "[[endpoints]]\nid = \"a\"\nfamily = \"claude\"\npath = \"cloud\"\ncredential = \"bogus\"\n").unwrap();
         // Unratified, the broken endpoints are simply not active.
-        assert_eq!(build(&ws.home, &ws.dir, Hub::new()).unwrap().engine.cfg.endpoints.len(), 0);
+        assert_eq!(build(&ws.home, &ws.dir, Hub::new()).unwrap().engine.cfg.get().endpoints.len(), 0);
         // Once ratified they are what the daemon would use, so the problems are reported in full.
         pin_config(&ws);
         let err = build(&ws.home, &ws.dir, Hub::new()).err().unwrap();

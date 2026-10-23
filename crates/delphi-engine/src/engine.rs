@@ -20,7 +20,7 @@ use crate::tools::{self, classify, ToolCtx};
 use crate::workspace::{AgentManifest, WorkspacePaths};
 use delphi_adapter::blocks::{ContentBlock, Turn};
 use delphi_adapter::claude::{compile, Compiled, CompileOptions, Completed, StreamEvent, Target, ToolDef};
-use delphi_adapter::config::{Config, Endpoint};
+use delphi_adapter::config::{Endpoint, SharedConfig};
 use delphi_adapter::ipr::{ContextSlice, Ipr};
 use delphi_core::event::EventEnvelope;
 use delphi_core::hub::{DeltaKind, Hub};
@@ -87,7 +87,7 @@ pub struct TaskOutcome {
 
 pub struct Engine {
     pub ws: WorkspacePaths,
-    pub cfg: Arc<Config>,
+    pub cfg: SharedConfig,
     pub hub: Hub,
     pub broker: Arc<Broker>,
     pub model: Arc<dyn ModelClient>,
@@ -321,7 +321,8 @@ impl Engine {
     /// One model turn: pick an endpoint from the ratified order, reserve, call, persist. `Err(Escalate)`
     /// means stop and hand to the operator; `Err(EngineError)` (outer) is a fatal storage failure.
     async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
-        let endpoints: Vec<Endpoint> = self.cfg.endpoints_for(FAMILY).into_iter().cloned().collect();
+        let cfg = self.cfg.get();
+        let endpoints: Vec<Endpoint> = cfg.endpoints_for(FAMILY).into_iter().cloned().collect();
         if endpoints.is_empty() {
             return Ok(Err(Escalate("no allowed Claude endpoint is configured (see `delphi doctor`)".into())));
         }
@@ -329,15 +330,15 @@ impl Engine {
         let mut interruptions = 0u32;
         'endpoints: for ep in &endpoints {
             loop {
-                let Some(model_id) = self.cfg.resolve_model(ep, &sc.tier) else { continue 'endpoints };
-                let Some(entry) = self.cfg.catalog_entry(&model_id) else {
+                let Some(model_id) = cfg.resolve_model(ep, &sc.tier) else { continue 'endpoints };
+                let Some(entry) = cfg.catalog_entry(&model_id) else {
                     return Ok(Err(Escalate(format!("model `{}` has no [models.catalog] entry, so its cost can't be reserved", model_id))));
                 };
                 if !entry.has_prices() {
                     return Ok(Err(Escalate(format!("model `{}` has no prices, so its cost can't be reserved", model_id))));
                 }
                 let price = entry.price();
-                let thinking = self.cfg.clamp_thinking(&model_id, sc.thinking);
+                let thinking = cfg.clamp_thinking(&model_id, sc.thinking);
                 let max_tokens = self.settings.max_tokens.max(thinking.unwrap_or(0) as u64 + 2048).min(entry.max_output_tokens.max(thinking.unwrap_or(0) as u64 + 1025));
                 let opts = CompileOptions { max_tokens, thinking_budget: thinking, temperature: None, tools: defs.to_vec(), betas: ep.betas.clone() };
                 let target = Target { provider: PROVIDER.into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };

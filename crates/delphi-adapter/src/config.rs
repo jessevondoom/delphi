@@ -107,6 +107,25 @@ impl CatalogEntry {
     }
 }
 
+/// The live configuration, replaceable while the daemon runs (for example when the operator ratifies new
+/// endpoints). Readers take a snapshot with [`SharedConfig::get`] and use it for the whole operation.
+#[derive(Clone)]
+pub struct SharedConfig(std::sync::Arc<std::sync::RwLock<std::sync::Arc<Config>>>);
+
+impl SharedConfig {
+    pub fn new(c: Config) -> SharedConfig {
+        SharedConfig(std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(c))))
+    }
+
+    pub fn get(&self) -> std::sync::Arc<Config> {
+        self.0.read().unwrap().clone()
+    }
+
+    pub fn set(&self, c: Config) {
+        *self.0.write().unwrap() = std::sync::Arc::new(c);
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub endpoints: Vec<Endpoint>,

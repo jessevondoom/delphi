@@ -188,6 +188,11 @@ impl EngineService {
                     let path = id.split_once(':').map(|x| x.1).unwrap_or(id);
                     m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, path, &pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
                 }
+                // Newly ratified endpoints are live immediately; no restart.
+                if !reject && id.ends_with("#access") {
+                    let notices = crate::boot::reload_config(&self.engine).map_err(|e| err(-32000, e))?;
+                    self.set_notices(notices);
+                }
                 Ok(json!({"id": id, "blake3": pin}))
             }
             Err(crate::ratify::RatifyError::Stale { .. }) => Err(err(code::CONFIRMATION_REQUIRED, "stale: ".to_string() + &result_msg(id))),
