@@ -113,7 +113,8 @@ Every persisted event is an `EventEnvelope`. Live delta frames (§2.1) are not e
 - **Required fields:** `v`, `seq`, `timestamp`, `mission_id`, `type` and `payload` on every event. `agent`, `span_id`, `task_id`, `endpoint_id`, `access_path`, `model_tier`, `model_id` and `attempt` are also required on `agent.*` events. `endpoint_id`, `model_id` and `agent` always carry canonical IDs and resolved values, never theme names.
 - **Payload schemas (v1):**
   - `agent.block.complete {block: ContentBlock}`: `specs/002` §3, including `provider_meta` and the `replayable` flag.
-  - `agent.usage {input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, thinking_tokens, cost_usd, reserved_usd, usage_source, cost_model, outcome}`: everything §2.4 needs, so the ledger rebuilds from the log alone.
+  - `agent.usage {provider, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, thinking_tokens, cost_usd, reserved_usd, usage_source, cost_model, outcome, reservation_id?}`: everything §2.4 needs, so the ledger rebuilds from the log alone. The log rejects an `agent.usage` event whose payload is missing a field or has an out-of-range `usage_source`, `cost_model` or `outcome`.
+  - `budget.reserve {reservation_id, amount}` and `budget.release {reservation_id}`: amounts are micro-USD (metered) or tokens (subscription). `agent.usage.reservation_id` settles a reservation. The budget is rebuilt from these three event types alone (`specs/003` §3.2).
   - `SessionSnapshot` is not an event. It is an RPC response (`session.snapshot`) built from `state.db` (Epic state, open approvals, the agents pane) and is never persisted.
 
 ### 2.3 Durability & Single Source of Truth
@@ -133,9 +134,9 @@ Every model call produces one `agent.usage` event. It is a lifecycle event, so i
 
 ```sql
 CREATE TABLE IF NOT EXISTS usage_ledger (
-    seq               INTEGER PRIMARY KEY,   -- events.jsonl seq of the agent.usage event
-    ts                TEXT NOT NULL,
     mission_id        TEXT NOT NULL,
+    seq               INTEGER NOT NULL,      -- seq of the agent.usage event in that mission's log (seq is per mission)
+    ts                TEXT NOT NULL,
     task_id           TEXT NOT NULL,         -- Epic node (§4, view 1)
     span_id           TEXT NOT NULL,
     role              TEXT NOT NULL,         -- canonical role ID, never a theme name
@@ -155,8 +156,11 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     access_path       TEXT NOT NULL,         -- api | cloud | gateway-native | gateway-compat | harness
     usage_source      TEXT NOT NULL,         -- reported | estimated (specs/009 §8)
     cost_model        TEXT NOT NULL,         -- metered | subscription
-    outcome           TEXT NOT NULL          -- ok | failed_verification | rate_limited | error | cancelled
+    outcome           TEXT NOT NULL,         -- ok | failed_verification | rate_limited | error | cancelled
+    PRIMARY KEY (mission_id, seq)
 );
+-- Highest seq applied per mission; apply is idempotent and strictly in order.
+CREATE TABLE IF NOT EXISTS applied (mission_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS usage_by_mission ON usage_ledger(mission_id, role, task_id);
 ```
 

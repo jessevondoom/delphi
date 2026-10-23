@@ -101,6 +101,9 @@ impl EventEnvelope {
                 return Err(format!("{} event is missing required field(s): {}", self.kind, missing.join(", ")));
             }
         }
+        if self.kind == "agent.usage" {
+            crate::usage::UsagePayload::from_value(&self.payload)?;
+        }
         Ok(())
     }
 }
@@ -140,7 +143,7 @@ mod tests {
     use serde_json::json;
 
     fn agent_event() -> EventEnvelope {
-        let mut e = EventEnvelope::new("m1", "agent.usage", json!({}));
+        let mut e = EventEnvelope::new("m1", "agent.block.complete", json!({}));
         e.agent = Some("builder".into());
         e.span_id = Some("sp1".into());
         e.task_id = Some("t1".into());
@@ -161,6 +164,10 @@ mod tests {
         let err = e.validate().unwrap_err();
         assert!(err.contains("endpoint_id") && err.contains("attempt"), "{}", err);
         assert!(EventEnvelope::new("m1", "mission.created", json!({})).validate().is_ok());
+        // agent.usage payloads are checked too: they are what the ledger is rebuilt from.
+        let mut u = agent_event();
+        u.kind = "agent.usage".into();
+        assert!(u.validate().unwrap_err().contains("agent.usage payload"));
         assert!(EventEnvelope::new("", "mission.created", json!({})).validate().is_err());
         assert!(EventEnvelope::new("m1", "x", json!([1])).validate().is_err());
     }
