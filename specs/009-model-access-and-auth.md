@@ -180,6 +180,43 @@ The harness runs its own agent loop, so Delphi can't see its internal reads or t
     - `cost_model = "subscription"` endpoints are capped by `subscription_budget_tokens` (default 500,000 per mission, 2,000,000 per Council) and by `max_turn_budget`.
     - The daemon reserves worst-case tokens before launch, meters the stream as it runs, and **kills the subprocess** on any breach, then escalates.
 
+### 7A. Amendment 009-A2 (DRAFT): Harness Connectors
+> **Status: draft.** The operator approved drafting it on 2026-10-23 (D-22). It is **not** approved and changes nothing in §7 until it passes a Council and the operator ratifies it. Until then, §7 item 5 stands: harnesses run with every non-Delphi MCP server and connector disabled.
+
+**Motivation.** Operators already connect their subscription CLIs to services such as Google Drive, Slack or Jira. For example, a `scout` task run through `claude` could research a team's Drive folder using that CLI's own Drive connector. Rebuilding every connector natively in Delphi is out of scope for v1. Delegating to the harness reuses the operator's existing, provider-managed logins without Delphi touching their credentials (§4.2).
+
+**Proposed rules.** These are additions to §7; every other §7 condition still applies.
+1. **Ratified allowlist, per workspace and role.** Connectors are off unless listed in `config.toml`:
+   ```toml
+   [harness.claude.connectors.google-drive]
+   roles = ["scout", "investigator"]   # canonical role IDs only
+   mode = "read"                       # "read" in v1; "write" is post-v1 (rule 5)
+   ```
+   - The block is pinned with `[access]` in `ratified.lock` (`config.toml#access`, §5), so adding or widening a connector is a Red-tier proposal.
+   - Council seats never get connectors.
+2. **Only listed connectors are passed.** The daemon builds the CLI's MCP and connector configuration in the ephemeral state dir from the allowlist alone. The operator's real `~/.claude` (or equivalent) stays hidden (§7 item 3).
+   - Where a CLI can load a connector's credentials only from its global config, Delphi exposes that one entry read-only, the way §7 item 3 exposes CLI credential files. Delphi never reads it.
+   - A connector that can't be isolated this way is unavailable.
+3. **Network.** The §7 item 4 proxy allows each listed connector's hosts, declared in the allowlist entry and logged per span. Everything else stays denied.
+4. **Taint.** Any span that had a connector available is stamped `external_untrusted` ($L_0$). Delphi can't see what the connector returned, so it assumes the worst (the same reasoning as §7 item 8). The output then flows only through the existing $L_0$ rules (`specs/001` §5.1–5.2). It can inform research notes and drafts, but it can't satisfy a spec gate or trigger taint-gated tools without operator review.
+5. **Writes.** v1 connectors are read-only.
+   - The allowlist passes only a connector's read tools where the CLI exposes per-tool filtering. A connector that can't be limited to reads requires `mode = "write"`, which is post-v1.
+   - Post-v1 write mode routes each write through the per-span approval bridge (§7 item 6) as a **Red** action that is never auto-approved by any permission mode.
+6. **Exfiltration bound.** A connector span gets a read-only worktree and no other write tools (as for non-builder roles in §7 item 7). Its only output channel is its structured result, so content it read can't leave through the connector in v1.
+7. **Visibility.** The agents pane and the ledger show which connectors each span had (`connectors: ["google-drive"]`). `doctor` lists the allowlisted connectors per harness and warns if the CLI doesn't report them as signed in.
+
+**Proposed tests.**
+- An unlisted connector is unavailable in the harness.
+- A listed read-only connector can't call a write tool.
+- A connector span is stamped $L_0$, and its output can't satisfy a spec gate unreviewed.
+- Adding a connector block without ratification leaves it disabled and `doctor` reports a pending proposal.
+- A connector span's network traffic outside its declared hosts is denied and logged.
+
+**Open questions for the Council.**
+- Which CLIs support per-connector isolation and per-tool filtering today? This needs probing per harness version (§6).
+- Should connector-backed research be allowed in Step 3, when harness mode lands, or wait until after the Step 4 Council?
+- Should a native Delphi connector layer, with Delphi-owned OAuth (§4.1), replace or complement this post-v1?
+
 ---
 
 ## 8. Usage Ledger & Budget

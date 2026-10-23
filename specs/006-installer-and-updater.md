@@ -24,7 +24,7 @@ This specification defines how Delphi is packaged, distributed to multiple opera
 ### 1.1 Phase Mapping (what approval of this spec authorizes)
 | Roadmap step | Sections built and tested |
 | :--- | :--- |
-| **Step 1** | §2.1 embedded seed and signed `core-manifest.json`; §2.2 item 3 `delphi init` (offline, `--non-interactive`, no federation keys); §3 zones, §3.1 layout, `ratified.lock` bootstrap and pinning, workspace resolution, clean-repo rule; §5 `doctor` and `delphi lint --repo`; tests 6–10 |
+| **Step 1** | §2.1 embedded seed and `core-manifest.json` (unsigned dev builds; signing is Step 5, amendment 006-A3); §2.2 item 3 `delphi init` (offline, `--non-interactive`, no federation keys); §3 zones, §3.1 layout, `ratified.lock` bootstrap and pinning, workspace resolution, clean-repo rule; §5 `doctor` and `delphi lint --repo`; tests 6–10 |
 | **Step 2** | `doctor` checks that need the daemon or `state.db` start reporting (checks 1, 6) |
 | **Step 5** | §2.2 items 1–2 (bootstrap script, Homebrew); §4 `delphi update` in v1 `.upstream` mode, and `rollback`; tests 1, 3, 4, 5 |
 | **Step 6** | §4 in-memory diff3 merge; test 2; `delphi sync` (`specs/007` §4) |
@@ -140,6 +140,12 @@ $DELPHI_HOME/                     # default ~/.delphi (override with DELPHI_HOME
 > This amendment is part of the approved spec.
 > - **Heuristics by scope** (`specs/004` §2.1): the release heuristics `context/heuristics.md` move to **Zone 1** (`base/context/heuristics.md`, release-ratified). `init` creates an empty team file `team/context/team-heuristics.md` and an empty workspace file `local/heuristics.md`, each with frontmatter and `active_rules: 0`.
 > - **`ratified.lock` also pins:** every `memory/agents/*/lessons.md`, both new heuristics files, and **every operator-approved spec** (`team/specs/**` or, for Delphi's own design repo, `specs/**`), keyed by the spec's exact content hash. An approved spec whose hash no longer matches is reported by `doctor` check 3 as needing re-approval.
+
+### 3.4 Amendment 006-A3: Release Signing Moves to Step 5 (approved by the operator 2026-10-23)
+> This amendment is part of the approved spec. It resolves drift found while building Step 1 (Council 004, Builder seat).
+> - Release signing needs release keys and a CI release pipeline, which arrive with Step 5 packaging (roadmap Step 5: "signed release + Homebrew"). Step 1 therefore builds `core-manifest.json` / `base/manifest.lock` with every file hash but **no signature**, and records `signature: "unsigned-dev-build"`.
+> - `doctor` check 2 reports an unsigned build as `warn`, never `ok`. Hash verification of `base/` is unchanged and still `fail`s on any mismatch.
+> - Until Step 5, release ratification means the operator built or installed the binary from a commit they trust. From Step 5 on, `init` and `update` refuse unsigned builds unless `--allow-unsigned-dev-build` is passed, and test 3 (tampered binary) applies.
 
 ---
 

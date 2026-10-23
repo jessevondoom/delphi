@@ -251,6 +251,13 @@ Supporting rules:
 
 **Status:** ✅ RATIFIED 2026-10-23: **A**, narrow-only plus within-scope skill attachment.
 
+## 🟡 D-22 — Integrations and connectors through CLI harnesses
+**Context:** the operator expects Delphi to use integrations, for example running `scout` through `claude` with the operator's Google Drive connector. Approved spec 009 §7 currently disables every non-Delphi MCP server and connector in harness mode. A connector runs inside the harness loop that Delphi can't see, which raises unseen untrusted content, exfiltration and credential-ownership risks.
+- **A. Ratified per-workspace, per-role connector allowlist; read-only in v1; connector spans stamped $L_0$** (recommended; drafted as 009-A2)
+- **B. Keep connectors disabled until Delphi has native connectors**
+
+**Status:** 🟡 the operator approved drafting **A** (2026-10-23). Draft amendment [`009-A2`](../../specs/009-model-access-and-auth.md) needs a Council review and operator ratification before it takes effect.
+
 ## ✅ Approvals
 - **2026-10-23:** the operator approved `specs/001-governance-and-manifests.md` and `specs/006-installer-and-updater.md` after Council 002. Roadmap Step 1 may begin. Pending amendments 001-A1 and 006-A1 are *not* covered by this approval.
 - **2026-10-23:** after Council 003, the operator approved:
@@ -268,3 +275,7 @@ Supporting rules:
   - amendments 001-A2 (`@project/**` read root, per-scope heuristics, protected approval fields) and 006-A2 (scope files, ratified specs).
 
   With these, every section roadmap Step 2 depends on is approved. Step 2's scope is narrowed to L1 and read-only L2.
+- **2026-10-23:** the operator approved:
+  - amendment **006-A3**: release signing moves from Step 1 to Step 5; dev builds are unsigned and `doctor` warns;
+  - an editorial change to approved spec 005 §4 (the agents-pane example no longer names a theme character), required by the stricter canonical-name check;
+  - drafting amendment 009-A2 (D-22) for Council review.
