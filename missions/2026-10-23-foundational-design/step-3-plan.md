@@ -33,3 +33,13 @@ The Step 2 go/no-go ("3 real tasks") can be run at M3 through the `claude` harne
 Go/No-Go (roadmap): a Builder task completes in a sandboxed worktree with all merge gates, on a real project, with a recorded cost.
 
 Step 3b (after Council 006 approves spec 010): `ConnectorHost` and MCP client, then Slack, Google (Drive, Calendar, Gmail) and Zoom.
+
+## M3 findings so far (2026-10-24)
+
+- **The sandbox and egress proxy work** (M2 and M3 part 1, tested against the real `sandbox-exec`).
+- **A harness call works unsandboxed** with `claude -p --output-format stream-json --tools "" --no-session-persistence --setting-sources "" --strict-mcp-config`. The stream carries the reply, per-call `usage` and `total_cost_usd`, and a `rate_limit_event` showing the subscription window (`usage_source = reported`).
+- **On macOS the `claude` login is in the Keychain**, under an item keyed by the config directory. Two consequences:
+  1. Relocating the config directory (`CLAUDE_CONFIG_DIR`) to an ephemeral one makes even an unsandboxed CLI report "Not logged in". The sandboxed CLI therefore has to use the default `~/.claude`, which conflicts with `specs/009` §7.3 ("the operator's real `~/.claude` is not visible"). The spec needs an amendment, or a narrower rule that exposes only what a tools-disabled CLI needs.
+  2. The CLI reads the item by running `/usr/bin/security`, so the sandbox must allow the keychain daemon, the keychain files and a long tail of system services. About a dozen rounds of denials were needed and the CLI still reported "Not logged in" inside the sandbox; the exact missing grant is not yet known.
+- **Stopped here.** The next diagnostic step was to have `security` look up the login item from inside the sandbox. The session's auto-mode classifier refused that as credential exploration, and it was not worked around. The operator decides how to continue (see the session report).
+- Gemini CLI keeps its login in a file (`~/.gemini/oauth_creds.json`), which is easier to expose read-only; untested.

@@ -36,13 +36,16 @@ pub struct SandboxSpec {
     /// Read-only, and executable: the toolchain and anything else the program needs to run.
     pub read_only: Vec<PathBuf>,
     pub network: Network,
+    /// macOS Mach services the process may look up (for example the keychain daemon). Names only; each is
+    /// validated, and nothing is allowed by default. Ignored by `bwrap`, which has no such concept.
+    pub mach_services: Vec<String>,
     /// The entire environment of the process. Nothing is inherited.
     pub env: BTreeMap<String, String>,
 }
 
 impl SandboxSpec {
     pub fn new() -> SandboxSpec {
-        SandboxSpec { worktree: None, scratch: vec![], read_only: system_read_only(), network: Network::Off, env: BTreeMap::new() }
+        SandboxSpec { worktree: None, scratch: vec![], read_only: system_read_only(), network: Network::Off, mach_services: vec![], env: BTreeMap::new() }
     }
 }
 
@@ -169,6 +172,7 @@ struct Resolved {
     scratch: Vec<PathBuf>,
     read_only: Vec<PathBuf>,
     network: Network,
+    mach_services: Vec<String>,
 }
 
 fn canonical(p: &Path) -> Result<PathBuf, SandboxError> {
@@ -189,7 +193,11 @@ impl Resolved {
         let scratch = spec.scratch.iter().map(|p| canonical(p)).collect::<Result<Vec<_>, _>>()?;
         // A missing toolchain directory is not an error: it simply is not there to be read.
         let read_only = spec.read_only.iter().filter_map(|p| canonical(p).ok()).collect();
-        Ok(Resolved { worktree, scratch, read_only, network: spec.network.clone() })
+        let ok_service = |n: &str| !n.is_empty() && n.len() <= 128 && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_');
+        if let Some(bad) = spec.mach_services.iter().find(|n| !ok_service(n)) {
+            return Err(SandboxError::BadPath(format!("mach service `{}`", bad)));
+        }
+        Ok(Resolved { worktree, scratch, read_only, network: spec.network.clone(), mach_services: spec.mach_services.clone() })
     }
 
     fn writable(&self) -> impl Iterator<Item = &PathBuf> {
@@ -234,11 +242,18 @@ fn sbpl(r: &Resolved) -> String {
             cur = a.parent();
         }
     }
+    // The system symlinks (`/etc`, `/var`, `/tmp` point into `/private`), which most programs stat on startup.
+    for l in ["/etc", "/var", "/tmp", "/private", "/private/etc", "/private/var", "/private/tmp"] {
+        let _ = writeln!(s, "(allow file-read-metadata (literal \"{}\"))", l);
+    }
     for a in &ancestors {
         let _ = writeln!(s, "(allow file-read-metadata (literal {}))", sbpl_str(a));
     }
     for p in r.read_only.iter().chain(r.writable()) {
         let _ = writeln!(s, "(allow file-read-metadata (subpath {}))", sbpl_str(p));
+    }
+    for n in &r.mach_services {
+        let _ = writeln!(s, "(allow mach-lookup (global-name {}))", sbpl_str(Path::new(n)));
     }
     match r.network {
         Network::Off => {}
