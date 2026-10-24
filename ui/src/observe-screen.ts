@@ -61,17 +61,23 @@ const text = (m: OModel) => T.text(m.pal);
 
 /** The 3-line solid mascot, seven columns (spec 005a): crown in the bottom half of row one, a painted face, a flush chin. */
 export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [string, string, string] {
-  const r = info.roles[role];
-  if (!r?.crown) return [' '.repeat(7), ' '.repeat(7), ' '.repeat(7)];
-  const crownColor = r.crown_rgb ?? '#facc15';
-  const crown = [...r.crown].map((c, i) => (c !== '▄' ? ' ' : chalk.hex(role === 'builder' && i >= 1 && i <= 5 ? '#ffffff' : crownColor)('▄'))).join('');
-  let face: string;
-  if (role === 'scout') face = state === 'waiting on you' ? 'x ? x' : state === 'running' ? '· · ·' : '• • •';
-  else if (role === 'builder' && state !== 'waiting on you' && state !== 'escalated') face = '•───•';
-  else face = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? '•─•' : r.face;
-  const pad = 7 - [...face].length;
-  const painted = chalk.bgHex(r.chassis).hex('#0f172a')(' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2)));
-  return [crown, painted, chalk.hex(r.chassis)('▀▀▀▀▀▀▀')];
+  const r = info.roles[role], lib = info.avatar?.roles[role];
+  const slice = lib?.crown ?? r?.crown;
+  if (!slice) return [' '.repeat(7), ' '.repeat(7), ' '.repeat(7)];
+  const crownColor = lib?.crown_rgb ?? r?.crown_rgb ?? '#facc15';
+  const chassis = lib?.chassis ?? r!.chassis;
+  const crown = [...slice].map((c, i) => (c !== '▄' ? ' ' : chalk.hex(role === 'builder' && i >= 1 && i <= 5 ? '#ffffff' : crownColor)('▄'))).join('');
+  // The face row comes from the library's data; the built-in rows serve an older `delphi` that does not send it.
+  let row = lib?.mascot[T.ACTIVITY[state as T.AgentState] ?? 'idle'];
+  if (!row) {
+    let face: string;
+    if (role === 'scout') face = state === 'waiting on you' ? 'x ? x' : state === 'running' ? '· · ·' : '• • •';
+    else if (role === 'builder' && state !== 'waiting on you' && state !== 'escalated') face = '•───•';
+    else face = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? '•─•' : r!.face;
+    const pad = 7 - [...face].length;
+    row = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
+  }
+  return [crown, chalk.bgHex(chassis).hex('#0f172a')(row), chalk.hex(chassis)('▀▀▀▀▀▀▀')];
 }
 
 const name = (m: OModel, role: string) => T.roleName(role, m.info);
