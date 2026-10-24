@@ -299,7 +299,9 @@ impl EngineService {
             if kb.counts()?.0 == 0 {
                 kb.sync(&crate::kb::sources(&ws), "")?;
             }
-            kb.search(&query, &crate::kb::SearchOpts { role, limit: 10, include_untrusted: false })
+            let hits = kb.search(&query, &crate::kb::SearchOpts { role: role.clone(), limit: 10, include_untrusted: false })?;
+            crate::kb::log_search(&ws, &query, role.as_deref(), hits.len());
+            Ok(hits)
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?

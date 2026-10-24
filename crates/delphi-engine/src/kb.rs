@@ -515,6 +515,42 @@ pub fn resolve(ws: &Path, hit: &Hit) -> Result<(usize, usize), String> {
     chunk_markdown(&text).into_iter().find(|c| c.heading_path == hit.heading_path).map(|c| (c.start_line, c.end_line)).ok_or_else(|| format!("stale: the section `{}` of {} no longer exists", hit.heading_path, hit.rel_path))
 }
 
+// ── recorded needs (Step 6 evidence) ────────────────────────────────────────
+
+fn misses_path(ws: &Path) -> PathBuf {
+    ws.join("local/kb-misses.jsonl")
+}
+
+fn append_line(path: &Path, v: &serde_json::Value) {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{}", v);
+    }
+}
+
+/// A search that found nothing is a candidate miss; it is written down so that "vectors would have helped" can
+/// become a fact (D-01's reopen trigger needs a *confirmed* miss, which the operator records with `kb miss`).
+pub fn log_search(ws: &Path, query: &str, role: Option<&str>, results: usize) {
+    if results == 0 {
+        append_line(&misses_path(ws), &serde_json::json!({"t": now(), "query": query.chars().take(200).collect::<String>(), "role": role, "results": 0, "confirmed": false}));
+    }
+}
+
+/// The operator says a search should have found something that uses different words (`delphi kb miss`).
+pub fn confirm_miss(ws: &Path, query: &str, note: &str) {
+    append_line(&misses_path(ws), &serde_json::json!({"t": now(), "query": query.chars().take(200).collect::<String>(), "note": note.chars().take(300).collect::<String>(), "confirmed": true}));
+}
+
+/// `(candidate misses, confirmed misses)` recorded so far.
+pub fn miss_counts(ws: &Path) -> (usize, usize) {
+    let text = std::fs::read_to_string(misses_path(ws)).unwrap_or_default();
+    let rows: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    (rows.iter().filter(|r| r["confirmed"] == false).count(), rows.iter().filter(|r| r["confirmed"] == true).count())
+}
+
 // ── command line ────────────────────────────────────────────────────────────
 
 fn db_path(ws: &Path) -> PathBuf {
@@ -541,6 +577,20 @@ pub fn run(ws: &Path, args: &[String]) -> i32 {
                 println!("kb: {} document(s), {} chunk(s): {} added, {} updated, {} removed, {} unchanged", d, c, rep.added, rep.updated, rep.removed, rep.unchanged);
                 Ok(0)
             }
+            "miss" => {
+                let rest: Vec<&str> = args[1..].iter().map(String::as_str).collect();
+                let (note, query): (Vec<&str>, Vec<&str>) = match rest.iter().position(|a| *a == "--note") {
+                    Some(i) => (rest[i + 1..].to_vec(), rest[..i].to_vec()),
+                    None => (vec![], rest),
+                };
+                if query.is_empty() {
+                    eprintln!("usage: delphi kb miss <the query that should have found it> [--note <what it was actually called>]");
+                    return Ok(2);
+                }
+                confirm_miss(ws, &query.join(" "), &note.join(" "));
+                println!("recorded. (Vectors are considered when there are more than 50 missions and at least one confirmed miss: `delphi needs`.)");
+                Ok(0)
+            }
             "stats" => {
                 let kb = open()?;
                 let (d, c) = kb.counts()?;
@@ -562,6 +612,7 @@ pub fn run(ws: &Path, args: &[String]) -> i32 {
                 }
                 let opts = SearchOpts { role, limit: 10, include_untrusted: args.iter().any(|a| a == "--untrusted") };
                 let hits = kb.search(&query.join(" "), &opts)?;
+                log_search(ws, &query.join(" "), opts.role.as_deref(), hits.len());
                 if hits.is_empty() {
                     println!("no results");
                 }

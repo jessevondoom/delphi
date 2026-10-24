@@ -6,6 +6,7 @@ mod doctor;
 mod frontmatter;
 mod home;
 mod lint;
+mod needs;
 mod observer;
 mod ratify_console;
 mod report;
@@ -30,6 +31,7 @@ const USAGE: &str = "usage:
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
+  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
   delphi narrator [council|epic|forge|archives] [--once] [--workspace <name>] [--home <dir>]   (also: delphi observe)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
@@ -50,6 +52,7 @@ fn main() {
         Some("chat") => cmd_chat(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
+        Some("needs") => cmd_needs(&args[1..]),
         Some("connectors") => cmd_core("connectors", &args[1..]),
         Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
@@ -280,6 +283,42 @@ fn cmd_narrator(args: &[String]) -> i32 {
         None => None,
     };
     observer::run(&home, &ws.dir, view, theme_names(&ws), args.iter().any(|a| a == "--once"))
+}
+
+fn cmd_needs(args: &[String]) -> i32 {
+    let (_home, ws) = match resolve_ws("needs", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--workspace" || a == "--home" {
+            it.next();
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    match rest.first().map(String::as_str) {
+        None => {
+            print!("{}", needs::render(&needs::report(&ws.dir)));
+            0
+        }
+        Some("add") if rest.len() >= 2 => match needs::add(&ws.dir, &rest[1], &rest[2..].join(" ")) {
+            Ok(()) => {
+                println!("recorded in {}", ws.dir.join("local/needs.jsonl").display());
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi needs: {:#}", e);
+                2
+            }
+        },
+        _ => {
+            eprintln!("usage: delphi needs [add <item> <why>]  (items: {})", needs::item_ids().join(", "));
+            2
+        }
+    }
 }
 
 fn cmd_kb(args: &[String]) -> i32 {
