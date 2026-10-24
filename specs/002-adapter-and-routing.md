@@ -197,7 +197,7 @@ Tiers resolve to concrete model IDs only through this configuration. Thinking bu
 > **Status: v1, roadmap Step 3 (D-19 reverses the D-06 deferral).** The operating conditions are in [`specs/009`](009-model-access-and-auth.md) §7. They close the gaps originally listed here:
 > - `--permission-prompt-tool` exists only for `claude`; `gemini` and `codex` need separate, equivalent permission bridges.
 > - Harnesses compile their own prompts, bypassing the IPR (`[REV-ARCH-02]`) and the frozen boot snapshot.
-> - Harnesses run their own shells, so they must run inside the execution sandbox (D-04) with span taint enforced at the bridge.
+> - Harnesses run their own shells, so their tool use goes through the approval bridge with span taint enforced there; the OS sandbox is optional (D-24, `specs/009` §7B).
 
 When configured, **Builder** (or **Investigator**) can delegate execution to an installed CLI harness (`claude`, `gemini`, `codex`) inside an isolated Git worktree (`.delphi/worktrees/<task-id>/`):
 1. **Invocation:** Spawns subprocess in headless JSONL mode (`claude -p ... --output-format stream-json` or `gemini -p ... --output-format stream-json` or `codex app-server`).

@@ -111,7 +111,7 @@ impl OriginRules {
         OriginRules { untrusted_paths: vec!["vendor/**".into(), "third_party/**".into(), "node_modules/**".into()] }
     }
 
-    fn untrusted(&self, project_relative: &str) -> bool {
+    pub fn untrusted(&self, project_relative: &str) -> bool {
         self.untrusted_paths.iter().any(|g| glob_match(g, project_relative))
     }
 }

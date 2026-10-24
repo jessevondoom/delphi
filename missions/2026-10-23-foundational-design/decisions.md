@@ -289,4 +289,18 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 - **A. Native MCP connector layer in the daemon, ratified catalog, browser OAuth login, one tool pipeline** (recommended; drafted as `specs/010`)
 - **B. Defer all connectors to post-v1**
 
-**Status:** 🟡 draft `specs/010` written 2026-10-24; needs a Council and operator approval before any code. Proposed phasing: Step 3 builds the prerequisites (oauth2, token store, data-driven tool registry); Step 3b builds the connector layer before Step 4.
+**Status:** 🟡 draft `specs/010` written 2026-10-24 (PR #3 merged and approved by the operator 2026-10-24; the spec's frontmatter stays `draft` until it is ratified with `/ratify`); needs a Council and operator approval before any code. Proposed phasing: Step 3 builds the prerequisites (oauth2, token store, data-driven tool registry); Step 3b builds the connector layer before Step 4.
+
+---
+
+## ✅ D-24 — The OS sandbox is optional; approvals are the default control (Claude Code model)
+**Context:** D-04 made Tier 0 "Green" execution conditional on an OS sandbox and spec 009 §7 made it mandatory for every harness. The operator's view (2026-10-24): running commands, reading and writing files, and even running the harnesses without sandbox protection is now the norm among coding agents, and the majority path is Claude Code's: approvals, not confinement. Sandboxing should be evaluated later, not required now.
+- **A. Sandbox optional, off by default; approval cards and rules are the control** (chosen)
+- **B. Sandbox required** (the old D-04 A / spec 009 §7.2)
+
+**Decision (operator, 2026-10-24): A.** `[exec] sandbox = "off" | "prefer" | "required"`, default `off`. The sandbox code stays and is tested; `prefer` uses it when present (sandboxed commands are Green), `required` refuses to run anything without it. This is D-04's option C as the default, with A as an opt-in.
+- **Commands (off):** every `run_command` asks (Amber, never auto-approved by a permission mode) unless a **ratified** `allow` rule matches, the built-in read-only list covers it (like Claude Code's: `ls`, `cat`, `git status` and friends, with every path inside the worktree and no writing flags), or "allow similar" was granted for the task. `deny` rules refuse outright and win over everything. Wrappers (`sh`, `env`, `sudo`, interpreters) never match an allow rule.
+- **Things the sandbox used to guarantee and what replaces them:** `.git` hooks and config are snapshotted around every unsandboxed command and put back if changed (reported to the model and the operator); the command environment is an allowlist (no `AWS_*` or tokens); resource limits, own process group and timeout kill are applied either way; taint-gated execution (no commands from a span at L0 or L1) is unchanged; read-only commands that print vendored (`untrusted_paths`) files taint the span like `read_file`.
+- **Accepted residual risk (same as Claude Code):** an approved command runs with the operator's privileges and can touch anything the operator can, including `$DELPHI_HOME` and the ratification lock files. The approval card is the boundary. Spec 005 §2.1 already defends the daemon socket against same-UID processes (token plus TTY challenge); tamper-evidence for `ratified.lock` against a same-UID writer (a keychain-held MAC) is a candidate hardening if we want it.
+- **Harnesses:** see spec 009 §7B. The Claude CLI runs as the operator's own process with its own login and Delphi's approval bridge; this also removes the Keychain obstacle that blocked sandboxed harness runs.
+- **Supersedes:** D-04's "Green only inside a sandbox" default and the "always sandboxed" rule in spec 009 §7 item 2. Amends specs 005 §3.1 (`/permissions` wording), 008 §4, 009 §7 and 002 §5 note.

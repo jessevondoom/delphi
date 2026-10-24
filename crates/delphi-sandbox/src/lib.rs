@@ -186,45 +186,63 @@ impl Sandbox {
         cmd.args(args);
         cmd.env_clear();
         cmd.envs(&spec.env);
-        // Nothing the parent holds open may reach the child: the daemon passes its lock and readiness
-        // descriptors across its own `exec`, and a sandboxed process must not inherit any of them.
-        // SAFETY: only async-signal-safe calls (`fcntl`, `close`, `getdtablesize`) run between fork and exec.
-        let limits = spec.limits;
-        unsafe {
-            use std::os::unix::process::CommandExt;
-            cmd.pre_exec(move || {
-                // Its own session and process group: the whole tree can be signalled at once, and it has
-                // no controlling terminal to inject keystrokes into.
-                libc::setsid();
-                #[cfg(target_os = "linux")]
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                let set = |resource, soft: u64, hard: u64| {
-                    let rl = libc::rlimit { rlim_cur: soft as libc::rlim_t, rlim_max: hard as libc::rlim_t };
-                    libc::setrlimit(resource, &rl);
-                };
-                set(libc::RLIMIT_CORE, 0, 0);
-                if let Some(n) = limits.cpu_secs {
-                    set(libc::RLIMIT_CPU, n, n + 5);
-                }
-                if let Some(n) = limits.max_file_bytes {
-                    set(libc::RLIMIT_FSIZE, n, n);
-                }
-                if let Some(n) = limits.max_open_files {
-                    set(libc::RLIMIT_NOFILE, n, n);
-                }
-                let max = libc::getdtablesize().clamp(0, 65_536);
-                for fd in 3..max {
-                    let flags = libc::fcntl(fd, libc::F_GETFD);
-                    // Close-on-exec descriptors (including std's own exec-error pipe) vanish at exec anyway.
-                    if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
-                        libc::close(fd);
-                    }
-                }
-                Ok(())
-            });
-        }
+        harden_process(&mut cmd, spec.limits);
         Ok(cmd)
     }
+}
+
+/// Applied to every program Delphi starts for a task, sandboxed or not: its own session and process group
+/// (so the tree can be signalled at once, with no controlling terminal), resource limits, and no inherited
+/// descriptors (the daemon passes its lock and readiness descriptors across its own `exec`).
+fn harden_process(cmd: &mut Command, limits: Limits) {
+    // SAFETY: only async-signal-safe calls (`setsid`, `setrlimit`, `fcntl`, `close`, `prctl`) run between fork and exec.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(move || {
+            libc::setsid();
+            #[cfg(target_os = "linux")]
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            let set = |resource, soft: u64, hard: u64| {
+                let rl = libc::rlimit { rlim_cur: soft as libc::rlim_t, rlim_max: hard as libc::rlim_t };
+                libc::setrlimit(resource, &rl);
+            };
+            set(libc::RLIMIT_CORE, 0, 0);
+            if let Some(n) = limits.cpu_secs {
+                set(libc::RLIMIT_CPU, n, n + 5);
+            }
+            if let Some(n) = limits.max_file_bytes {
+                set(libc::RLIMIT_FSIZE, n, n);
+            }
+            if let Some(n) = limits.max_open_files {
+                set(libc::RLIMIT_NOFILE, n, n);
+            }
+            let max = libc::getdtablesize().clamp(0, 65_536);
+            for fd in 3..max {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                // Close-on-exec descriptors (including std's own exec-error pipe) vanish at exec anyway.
+                if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                    libc::close(fd);
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// A program run directly, **without** the OS sandbox, but with the same process hardening (own process
+/// group, limits, no inherited descriptors) and an explicit environment. Used when the operator has not
+/// enabled the sandbox; what stands between the program and the machine is then the approval card.
+pub fn plain_command<I, S>(limits: Limits, env: &BTreeMap<String, String>, program: impl AsRef<OsStr>, args: I) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd.env_clear();
+    cmd.envs(env);
+    harden_process(&mut cmd, limits);
+    cmd
 }
 
 /// The spec with every path made absolute and canonical (symlinks resolved), which is what both sandboxes

@@ -34,7 +34,7 @@ Multi-agent systems fail when roles blur (`FM-1.2`) or agents share correlated b
 | :--- | :--- | :--- | :--- |
 | `orchestrator` | Routes work, scales models, moderates Councils, coaches the team | Smoothing over dissent; promoting unverified findings | Minority Report filled verbatim by the daemon; deadlock decided deterministically; may not write production code; promotion needs ratification (`[H-004]`) |
 | `architect` | Designs systems and writes `specs/*.md` | Accidental complexity, over-abstraction | **Simpler-alternative rule:** every spec has `Simpler Alternative Considered` and survives Builder, Strategist and Red-Team review |
-| `builder` | Code, tests and helper scripts in sandboxed worktrees | Tunnel vision; silent spec workarounds | *No Spec, No Build*; drift halt; audited against base-branch REVIEW.md |
+| `builder` | Code, tests and helper scripts in isolated worktrees | Tunnel vision; silent spec workarounds | *No Spec, No Build*; drift halt; audited against base-branch REVIEW.md |
 | `scout` | Broad discovery: repos, literature, dependencies, theme research | Context overflow ("lost in the middle") | **Pointer-map rule (`[H-002]`):** `<300`-line maps with `path:line` pointers; never raw dumps |
 | `investigator` | Precision: bisects, AST paths, benchmarks, primary sources | Target fixation | Discovery and verification only; read-only on source; no trade-off decisions |
 | `strategist` | Roadmaps, sequencing, scope audit | Scope creep; premature victory | **Scope audit** of every spec and PR; cannot waive Red-Team `P0`s |
