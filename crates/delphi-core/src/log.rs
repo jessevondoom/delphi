@@ -392,7 +392,17 @@ mod tests {
         let first = open(t.path(), DEFAULT_MAX_SEGMENT_BYTES);
         assert!(matches!(EventLog::open(t.path(), LogOptions::default()), Err(LogError::Locked(_))));
         drop(first);
-        assert!(EventLog::open(t.path(), LogOptions::default()).is_ok());
+        // Other tests in this process may be between `fork` and `exec` right now, holding a copy of the
+        // lock descriptor for a moment; the lock is free as soon as they exec. Wait for that, briefly.
+        let mut reopened = false;
+        for _ in 0..200 {
+            if EventLog::open(t.path(), LogOptions::default()).is_ok() {
+                reopened = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(reopened, "the lock must be released once the first writer is dropped");
     }
 
     #[test]
