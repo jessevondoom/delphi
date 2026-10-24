@@ -25,12 +25,11 @@ Step 2 adds the daemon (`delphi-core`) and the operator console. You can ask Orc
 
 ```sh
 cargo build --release                        # one executable: target/release/delphi (the daemon is `delphi __core`)
-delphi init --project ~/code/my-project      # creates a workspace in ~/.delphi (writes nothing into the project)
-$EDITOR ~/.delphi/workspaces/<name>/config.toml
+cd ~/code/my-project && delphi setup         # detects Claude Code / agy, asks only for what it cannot find, writes and ratifies the config
 delphi chat                                  # the console
 ```
 
-In `config.toml`, fill in:
+`delphi setup` does the following for you; edit `config.toml` by hand only if you skipped it. It needs:
 
 - `[models.claude]` with the model IDs for your `fast`, `workhorse` and `frontier` tiers, and a `[models.catalog."<id>"]` entry with that model's prices (Delphi reserves each call's worst-case cost before making it, so a model without prices can't be used);
 - one or more `[[endpoints]]` and an `[access]` policy (`specs/009`): the Anthropic API (`path = "api"`, `credential = "keychain:anthropic"` or `"env:ANTHROPIC_API_KEY"`), AWS Bedrock (`credential = "aws:<profile>"`), Google Vertex AI (`credential = "gcloud-adc"`), or a corporate gateway (`credential = "command:[...]"`).
