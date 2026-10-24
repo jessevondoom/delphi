@@ -77,6 +77,7 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 fn cmd_lint(args: &[String]) -> i32 {
     let root = match flag(args, "--repo") {
         Some(p) => PathBuf::from(p),
+        None if args.iter().any(|a| a == "--repo") || args.is_empty() => PathBuf::from("."),
         None => {
             eprintln!("{}", USAGE);
             return 2;
