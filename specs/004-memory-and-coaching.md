@@ -3,14 +3,13 @@ id: spec-004-memory-and-coaching
 title: "004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
 author: architect
 timestamp: 2026-10-23T07:53:00Z
-status: draft
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "§2, §4.1, §5, plus the §3.4 role-filter rule (operator: Council 003 + Council 004, 2026-10-23); §3 schema and §4.2 remain draft"
 ---
 
 # Spec 004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop
