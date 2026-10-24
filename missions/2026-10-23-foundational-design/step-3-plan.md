@@ -59,3 +59,5 @@ Open, and why it matters:
 - Tool names with a dot (connector tools are `<connector>.<tool>`) are refused by both dialects; the connector layer needs a reversible wire-name mapping.
 - Gemini `thinkingLevel` is not yet reachable from config (the dialect supports it).
 - Next in M6: `oauth2` (device code, client credentials, loopback PKCE) with the token store and `delphi auth`; the compat gateway; endpoint probing.
+
+Also done in M6 (against a scripted identity provider): `delphi-adapter/src/oauth2.rs` with device code (pending and slow_down handled), client credentials, loopback PKCE (rebinding, forged-state and script-fetch requests refused), OIDC discovery restricted to https, single-flight refresh with rotated-token storage, the keychain writer, and `delphi auth login|status|logout` (via `delphi-core auth`). Not verified: any real provider's quirks, and the real keychain write path (the tests use an in-memory store; try `delphi auth login` against your own IdP and `security find-generic-password -s delphi -a oauth2.<name>` to confirm the entry exists, without printing it). Remaining in M6: the compat gateway and `doctor --probe`.

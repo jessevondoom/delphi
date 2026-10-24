@@ -1,7 +1,8 @@
 //! Credential sources and resolution (`specs/009` §4).
 //!
 //! Invariants enforced here:
-//! 1. **Never on disk:** nothing is written anywhere; keychain entries are only ever *read*.
+//! 1. **Never on disk:** nothing is written to a file. The only writes are Delphi's own keychain entries
+//!    for OAuth refresh tokens (`oauth2.rs`); every other keychain entry is only ever *read*.
 //! 2. **Never another tool's:** secrets come from Delphi's own keychain entries (`service=delphi`),
 //!    the environment, a configured helper, or the official `aws` / `gcloud` CLIs asked to mint a
 //!    token. Delphi never opens another tool's session or cache files.
@@ -249,6 +250,7 @@ pub struct Resolver {
     register: Arc<RegisterFn>,
     now: Arc<NowFn>,
     timeout: Duration,
+    oauth: Option<Arc<dyn crate::oauth2::OauthSource>>,
 }
 
 fn unix_now() -> i64 {
@@ -278,7 +280,17 @@ const GCLOUD_TOKEN_LIFETIME_SECS: i64 = 50 * 60;
 
 impl Resolver {
     pub fn new(runner: Arc<dyn Runner>, env: Arc<EnvFn>, register: Arc<RegisterFn>, now: Arc<NowFn>) -> Resolver {
-        Resolver { runner, env, register, now, timeout: Duration::from_secs(20) }
+        Resolver { runner, env, register, now, timeout: Duration::from_secs(20), oauth: None }
+    }
+
+    /// Serve `oauth2:<name>` credentials from this source.
+    pub fn with_oauth(mut self, oauth: Arc<dyn crate::oauth2::OauthSource>) -> Resolver {
+        self.oauth = Some(oauth);
+        self
+    }
+
+    pub fn runner(&self) -> Arc<dyn Runner> {
+        self.runner.clone()
     }
 
     /// Real process environment, real subprocesses; `register` receives every resolved secret.
@@ -359,7 +371,11 @@ impl Resolver {
                 Ok(self.secret(token, Some(self.now() + GCLOUD_TOKEN_LIFETIME_SECS)))
             }
             CredentialRef::GcloudSa(_) => Err(CredentialError::Unsupported("`gcloud-sa:` service-account keys (JWT signing) are not implemented yet; use `gcloud-adc` with GOOGLE_APPLICATION_CREDENTIALS or workload identity".into())),
-            CredentialRef::Oauth2(_) => Err(CredentialError::Unsupported("`oauth2:` credentials ship in roadmap Step 3 (specs/009 phase map)".into())),
+            CredentialRef::Oauth2(name) => {
+                let source = self.oauth.as_ref().ok_or_else(|| CredentialError::Unsupported("`oauth2:` credentials need the OAuth provider, which this process did not set up".into()))?;
+                let t = source.access_token(name)?;
+                Ok(self.secret(t.expose().to_string(), t.expires_at))
+            }
         }
     }
 }
@@ -394,6 +410,10 @@ impl CredentialStore {
                     self.cache.lock().unwrap().insert(key, fresh.clone());
                 }
                 Ok(fresh)
+            }
+            Err(CredentialError::NeedsReauth { .. }) => {
+                self.cache.lock().unwrap().remove(&key);
+                Err(CredentialError::NeedsReauth { endpoint: endpoint_id.to_string() })
             }
             // We held an expiring credential and can't renew it: the operator must sign in again.
             Err(CredentialError::Failed(_)) | Err(CredentialError::NotFound(_)) if cached.is_some() => {

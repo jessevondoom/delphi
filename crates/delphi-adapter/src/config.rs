@@ -65,6 +65,43 @@ pub struct Endpoint {
     pub betas: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum AuthFlow {
+    #[serde(rename = "device_code")]
+    DeviceCode,
+    #[serde(rename = "client_credentials")]
+    ClientCredentials,
+    /// Authorization code with PKCE, redirected to a loopback port (`specs/010` §5).
+    #[serde(rename = "loopback_pkce")]
+    LoopbackPkce,
+}
+
+/// One `[auth.<name>]` block (`specs/009` §4.1). Delphi ships no client ids: they come from the operator.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct AuthBlock {
+    pub flow: AuthFlow,
+    /// OIDC discovery root; or give the URLs below directly.
+    #[serde(default)]
+    pub issuer: Option<String>,
+    #[serde(default)]
+    pub token_url: Option<String>,
+    #[serde(default)]
+    pub device_authorization_url: Option<String>,
+    #[serde(default)]
+    pub authorization_url: Option<String>,
+    pub client_id: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// `keychain:<name>` only; never an inline secret.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Loopback PKCE: the fixed port registered with the provider (an ephemeral one when unset).
+    #[serde(default)]
+    pub redirect_port: Option<u16>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Access {
     #[serde(default)]
@@ -136,6 +173,7 @@ pub struct Config {
     /// family → tier → model ID.
     pub models: BTreeMap<String, BTreeMap<String, String>>,
     pub catalog: BTreeMap<String, CatalogEntry>,
+    pub auth: BTreeMap<String, AuthBlock>,
 }
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
@@ -163,6 +201,12 @@ impl Config {
             match a.clone().try_into::<Access>() {
                 Ok(v) => cfg.access = v,
                 Err(e) => errs.push(format!("[access]: {}", e)),
+            }
+        }
+        if let Some(a) = root.get("auth") {
+            match a.clone().try_into::<BTreeMap<String, AuthBlock>>() {
+                Ok(v) => cfg.auth = v,
+                Err(e) => errs.push(format!("[auth.*]: {}", e)),
             }
         }
         if let Some(models) = root.get("models").and_then(|m| m.as_table()) {
@@ -259,6 +303,40 @@ impl Config {
                     Some(e) if &e.family != family => errs.push(format!("[access] order.{} lists `{}`, which belongs to family `{}`", family, id, e.family)),
                     Some(_) if !allowed.contains(id) => errs.push(format!("[access] order.{} lists `{}`, which is not in allowed_endpoints", family, id)),
                     Some(_) => {}
+                }
+            }
+        }
+        for (name, a) in &self.auth {
+            let url_ok = |u: &str| u.starts_with("https://") || is_loopback(u);
+            for (field, v) in [("issuer", &a.issuer), ("token_url", &a.token_url), ("device_authorization_url", &a.device_authorization_url), ("authorization_url", &a.authorization_url)] {
+                if let Some(u) = v {
+                    if !url_ok(u) {
+                        errs.push(format!("[auth.{}] {} must be https", name, field));
+                    }
+                }
+            }
+            if a.client_id.trim().is_empty() {
+                errs.push(format!("[auth.{}] needs a client_id (Delphi ships none; your identity provider's admin issues one)", name));
+            }
+            if a.issuer.is_none() && a.token_url.is_none() {
+                errs.push(format!("[auth.{}] needs an issuer (OIDC discovery) or a token_url", name));
+            }
+            match a.flow {
+                AuthFlow::DeviceCode if a.issuer.is_none() && a.device_authorization_url.is_none() => errs.push(format!("[auth.{}] the device_code flow needs an issuer or a device_authorization_url", name)),
+                AuthFlow::LoopbackPkce if a.issuer.is_none() && a.authorization_url.is_none() => errs.push(format!("[auth.{}] the loopback_pkce flow needs an issuer or an authorization_url", name)),
+                AuthFlow::ClientCredentials if a.client_secret.is_none() => errs.push(format!("[auth.{}] the client_credentials flow needs a client_secret = \"keychain:<name>\"", name)),
+                _ => {}
+            }
+            if let Some(sec) = &a.client_secret {
+                if !matches!(CredentialRef::parse(sec), Ok(CredentialRef::Keychain(_))) {
+                    errs.push(format!("[auth.{}] client_secret must be a keychain reference (`keychain:<name>`), never an inline value", name));
+                }
+            }
+        }
+        for e in &self.endpoints {
+            if let Ok(CredentialRef::Oauth2(n)) = CredentialRef::parse(&e.credential) {
+                if !self.auth.contains_key(&n) {
+                    errs.push(format!("endpoint `{}`: credential oauth2:{} has no [auth.{}] block", e.id, n, n));
                 }
             }
         }

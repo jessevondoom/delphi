@@ -139,7 +139,13 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         Some(m) => m,
         None => {
             let reg = secrets.clone();
-            let creds = Arc::new(CredentialStore::new(Resolver::system(Arc::new(move |s| reg.register(s)))));
+            let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
+            // `oauth2:` credentials need a runtime to refresh on; the daemon always has one.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
+                resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg.clone(), store, build_client(), handle)));
+            }
+            let creds = Arc::new(CredentialStore::new(resolver));
             let (redact_secrets, register_secrets) = (secrets.clone(), secrets.clone());
             Arc::new(HttpModelClient {
                 cfg: cfg.clone(),

@@ -22,6 +22,10 @@ fn die(msg: &str) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("auth") {
+        let workspace = PathBuf::from(arg(&args, "--workspace").unwrap_or_else(|| die("--workspace is required")));
+        std::process::exit(delphi_engine::auth_cli::run(&workspace, &args[1..]));
+    }
     if !args.iter().any(|a| a == "--daemon") {
         die("usage: delphi-core --daemon --workspace <workspace dir> --home <dir> --ready-fd N --lock-fd M");
     }

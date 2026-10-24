@@ -1,6 +1,7 @@
 //! `delphi-engine`: what runs inside the daemon: tools, approvals and the agent loop.
 
 pub mod approval;
+pub mod auth_cli;
 pub mod boot;
 pub mod engine;
 pub mod handoff;

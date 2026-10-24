@@ -85,13 +85,17 @@ The number in parentheses is the roadmap step.
 ### 4.1 `[auth.<name>]` Schema (OAuth2)
 ```toml
 [auth.corp-okta]
-flow = "device_code"                  # device_code | client_credentials
+flow = "device_code"                  # device_code | client_credentials | loopback_pkce
 issuer = "https://idp.example.com"    # OIDC discovery; or token_url + device_authorization_url
 client_id = "<per-organization client id>"   # supplied by the operator's IdP admin; Delphi ships none
 scopes = ["llm.invoke"]
 audience = "llm-gateway"              # optional
-client_secret = "keychain:corp-okta-secret"  # client_credentials only; keychain reference, never inline
+client_secret = "keychain:corp-okta-secret"  # client_credentials (or a confidential PKCE client); keychain reference, never inline
+# token_url / device_authorization_url / authorization_url   # override OIDC discovery; https only
+# redirect_port = 8765                  # loopback_pkce: the fixed port registered with the provider
 ```
+
+`delphi auth login <name> [--manual]`, `delphi auth status` and `delphi auth logout <name>` read the **ratified** blocks (a local edit cannot redirect a login). Login stores one thing: the refresh token, in Delphi's own keychain entry `oauth2.<name>` (`service=delphi`), written through the system tool's standard input so it never appears on a command line. `loopback_pkce` binds `127.0.0.1`, checks `Host` and fetch metadata, requires a 256-bit `state`, and falls back to pasting the redirect URL with `--manual`. A revoked token (`invalid_grant`) removes the entry and pauses the call with `re-authenticate <endpoint>`; an unreachable provider does not.
 
 ### 4.2 Credential Invariants
 1. **Never on disk.** Delphi never writes a credential to any file: not config, logs or `events.jsonl`. The only exception is keychain entries it created.
