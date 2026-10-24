@@ -59,6 +59,18 @@ impl View {
         }
     }
 
+    /// The name `delphi-ui --observe` and `delphi observe` take.
+    pub fn name(self) -> &'static str {
+        match self {
+            View::Council => "council",
+            View::Epic => "epic",
+            View::Forge => "forge",
+            View::Agents => "agents",
+            View::Spend => "spend",
+            View::Archives => "archives",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<View> {
         match s.to_lowercase().as_str() {
             "council" | "chamber" | "1" => Some(View::Council),

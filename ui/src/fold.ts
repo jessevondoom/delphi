@@ -4,6 +4,7 @@ import { sanitize, type AgentState } from './theme.ts';
 export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string };
 export type Agent = { state: AgentState; doing: string };
 export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
+export type Act = { id: number; span: string; role: string; kind: 'thinking' | 'text' | 'tool' | 'result'; text: string };
 export type State = {
   blocks: Block[];
   live: string;
@@ -15,18 +16,29 @@ export type State = {
   lastActivity: number;
   nextId: number;
   council: boolean;
+  /** The left deck's stream: reasoning, replies and tool calls as they happen. In memory only; never written anywhere. */
+  activity: Act[];
   /** Tasks the daemon is working on, by task id. */
   running: Record<string, { since: number }>;
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {},
+  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: [],
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
 
 export function addBlock(s: State, b: Omit<Block, 'id'>): State {
   return { ...s, blocks: [...s.blocks, { ...b, id: s.nextId }], nextId: s.nextId + 1 };
+}
+
+/** Add to the stream: reasoning and text of one span run together; anything else is a line of its own. */
+function pushAct(list: Act[], span: string, role: string, kind: Act['kind'], text: string, id: number): Act[] {
+  const last = list[list.length - 1];
+  const next = last && last.span === span && last.kind === kind && (kind === 'thinking' || kind === 'text')
+    ? [...list.slice(0, -1), { ...last, text: (last.text + text).slice(-4000) }]
+    : [...list, { id, span, role, kind, text }];
+  return next.length > 300 ? next.slice(-300) : next;
 }
 
 const without = (r: Record<string, { since: number }>, id?: string) => { if (!id) return r; const { [id]: _gone, ...rest } = r; return rest; };
@@ -54,14 +66,20 @@ const spanNum = (k: string) => Number(k.split('_').pop()) || 0;
 export function fold(s: State, n: { method: string; params?: any }, now: number): State {
   const p = n.params ?? {};
   if (n.method === 'delta.frame') {
-    const spans = (p.spans ?? {}) as Record<string, { text?: string }>;
+    const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string }>;
     let add = '';
+    let activity = s.activity;
     for (const k of Object.keys(spans).sort()) {
       if (s.council && s.spans[k]) continue; // a council's round one stays blind
+      const role = s.spans[k]?.role ?? '?';
+      for (const [kind, t] of [['thinking', spans[k]?.thinking], ['text', spans[k]?.text]] as const) {
+        if (!t) continue;
+        activity = pushAct(activity, k, role, kind, sanitize(t), s.nextId + activity.length);
+      }
       add += spans[k]?.text ?? '';
     }
-    if (!add) return s;
-    return { ...s, live: (s.live + sanitize(add)).slice(-8000), tokens: s.tokens + Math.ceil(add.length / 4), lastActivity: now };
+    if (!add && activity === s.activity) return s;
+    return { ...s, activity, live: (s.live + sanitize(add)).slice(-8000), tokens: s.tokens + Math.ceil(add.length / 4), lastActivity: now };
   }
   if (n.method !== 'event') return s;
   const e = p, pl = e.payload ?? {};
@@ -97,12 +115,15 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     case 'agent.block.complete': {
       const b = pl.block;
       if (b?.type !== 'tool_call') return s;
-      return addBlock(s, { kind: 'tool', role: e.agent, text: `${b.name}(${briefArgs(b.arguments)})`, at: now, status: 'pending', ref: String(b.id ?? '') });
+      const line = `${b.name}(${briefArgs(b.arguments)})`;
+      const withAct = { ...s, activity: pushAct(s.activity, String(e.span_id ?? ''), String(e.agent ?? '?'), 'tool', sanitize(line), s.nextId + s.activity.length) };
+      return addBlock(withAct, { kind: 'tool', role: e.agent, text: line, at: now, status: 'pending', ref: String(b.id ?? '') });
     }
     case 'tool.result': {
       const ref = String(pl.tool_call_id ?? '');
       const detail = sanitize(String(pl.content ?? '')).split('\n').slice(0, 40).join('\n');
-      return { ...s, blocks: s.blocks.map((x) => (x.kind === 'tool' && x.ref === ref ? { ...x, status: pl.is_error ? 'error' : 'ok', detail } : x)) };
+      const act = pl.is_error ? pushAct(s.activity, String(e.span_id ?? ''), String(e.agent ?? '?'), 'result', '✖ ' + detail.split('\n')[0], s.nextId + s.activity.length) : s.activity;
+      return { ...s, activity: act, blocks: s.blocks.map((x) => (x.kind === 'tool' && x.ref === ref ? { ...x, status: pl.is_error ? 'error' : 'ok', detail } : x)) };
     }
     case 'task.failed': return addBlock({ ...s, live: '', running: without(s.running, e.task_id), lastActivity: now }, { kind: 'note', text: '✖ task failed: ' + sanitize(String(pl.error ?? '')), at: now });
     case 'approval.requested': {

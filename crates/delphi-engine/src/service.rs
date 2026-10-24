@@ -308,6 +308,27 @@ impl EngineService {
         Ok(json!({"mission_id": m.id, "events": events, "enabled_agents": self.engine.settings.enabled_agents, "budget": Self::budget_json(&m), "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len()}))
     }
 
+    /// `observe.state`: the Observer's folded picture of the mission (agents, DAG, councils, builds, spend), computed
+    /// here so every client shows the same thing. Live text is not in it: frames are never persisted.
+    async fn observe_state(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let mut events = m.replay().map_err(engine_err)?;
+        events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
+        let skip = events.len().saturating_sub(4000);
+        let mut st = crate::observe::ObserverState::new(&self.engine.settings.enabled_agents);
+        for e in events.into_iter().skip(skip) {
+            st.apply(&serde_json::to_value(e).expect("events serialize"));
+        }
+        st.live.clear();
+        let mut v = serde_json::to_value(&st).expect("state serializes");
+        v["cache_hit_ratio"] = json!(st.cache_hit_ratio());
+        v["default_view"] = json!(st.default_view());
+        v["mission_id"] = json!(m.id);
+        v["budget"] = Self::budget_json(&m);
+        v["pending_proposals"] = json!(crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len());
+        Ok(v)
+    }
+
     /// `observe.diff`: the live diff of a build's worktree for the Forge view (read-only).
     async fn observe_diff(&self, p: Value) -> RpcOutcome {
         let task = p["task_id"].as_str().unwrap_or("").to_string();
@@ -436,6 +457,7 @@ impl Extension for ServiceExt {
                 "council.start" => svc.council_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
+                "observe.state" => svc.observe_state(params).await,
                 "observe.diff" => svc.observe_diff(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
@@ -558,7 +580,7 @@ mod tests {
             for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
-            for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.diff"] {
+            for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff"] {
                 assert!(c.call(m, json!({})).is_ok(), "{} should be readable", m);
             }
             assert_eq!(rpc_code(c.call("no.such.method", json!({}))), Some(code::FORBIDDEN), "an unknown method is refused, not looked up");
@@ -601,7 +623,7 @@ mod tests {
         // The list is part of the contract: adding a method here is a decision, so this test names it.
         let mut listed: Vec<&str> = delphi_core::server::NARRATOR_METHODS.to_vec();
         listed.sort();
-        assert_eq!(listed, vec!["approval.list", "budget.get", "events.subscribe", "kb.search", "observe.diff", "observe.snapshot", "permissions.get", "ratify.list", "session.ping", "session.snapshot", "usage.get"]);
+        assert_eq!(listed, vec!["approval.list", "budget.get", "events.subscribe", "kb.search", "observe.diff", "observe.snapshot", "observe.state", "permissions.get", "ratify.list", "session.ping", "session.snapshot", "usage.get"]);
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
         let s = serve(&f).await;
         let (sock, tok) = (s.narrator_sock.clone(), s.narrator.clone());
@@ -692,6 +714,26 @@ mod tests {
         assert!(a.tokens.total() > 0 && late.spent_usd > 0.0 && (late.spent_usd - direct.spent_usd).abs() < 1e-12);
         assert_eq!(late.tasks["t_0001"].status, "done");
         assert!(snap["budget"]["cap_usd"].as_f64().unwrap() > 0.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_daemon_serves_the_folded_observer_state_to_a_narrator() {
+        let f = setup(vec![Step::text("The ladder has three attempts.")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Explain the retry ladder").await.unwrap();
+        let s = serve(&f).await;
+        let (sock, tok) = (s.narrator_sock.clone(), s.narrator.clone());
+        let st = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            c.call("observe.state", json!({})).unwrap()
+        })
+        .await;
+        assert_eq!(st["tasks"]["t_0001"]["status"], "done");
+        assert_eq!((st["agents"]["orchestrator"]["calls"].as_u64(), st["agents"]["orchestrator"]["state"].as_str()), (Some(1), Some("idle")));
+        assert!(st["spent_usd"].as_f64().unwrap() > 0.0 && st["tokens"]["output"].as_u64().unwrap() > 0);
+        assert!(st["live"].as_object().unwrap().is_empty(), "streamed text is never part of the persisted picture");
+        assert!(st["cache_hit_ratio"].is_number() && st["default_view"].is_string() && st["budget"]["cap_usd"].as_f64().unwrap() > 0.0);
     }
 
     #[tokio::test(flavor = "multi_thread")]

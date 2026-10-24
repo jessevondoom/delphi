@@ -50,7 +50,7 @@ jobs:
         run: npm test
       - name: Against the real daemon (pty end to end, from source)
         working-directory: .
-        run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops hands_over decision_inbox
+        run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops hands_over decision_inbox full_screen_observer
       - name: Build the executable exactly as the release does
         run: |
           v="$(awk '/^\[package\]/{f=1} f && /^version/{gsub(/"/,"",$3); print $3; exit}' ../crates/delphi/Cargo.toml)"
@@ -60,7 +60,7 @@ jobs:
         working-directory: .
         env:
           DELPHI_UI_COMPILED: ${{ github.workspace }}/ui/dist/delphi-ui
-        run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops decision_inbox
+        run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops decision_inbox full_screen_observer
 
   # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
   # namespaces (Ubuntu 24.04 restricts them by default), and require the sandbox tests to really run.

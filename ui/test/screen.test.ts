@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { frame, header, footer, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
-import { addBlock, fold, initial } from '../src/fold.ts';
+import { addBlock, fold, initial, replay } from '../src/fold.ts';
 import { badge, sanitize, type Info } from '../src/theme.ts';
 import { completions } from '../src/complete.ts';
 import { newInbox } from '../src/inbox.ts';
@@ -100,4 +100,22 @@ test('stopping ends the task, clears the spinner and says so', () => {
   assert.deepEqual(Object.keys(s.running), ['t1']);
   s = fold(s, { method: 'event', params: { type: 'task.cancelled', task_id: 't1', payload: {} } }, 2);
   assert.deepEqual([Object.keys(s.running), s.blocks.at(-1)?.text], [[], '■ stopped']);
+});
+
+test('the left deck streams reasoning, replies and tool calls per agent, never into the chat, and is not replayed', () => {
+  let s = initial(0);
+  s = fold(s, { method: 'event', params: { type: 'dag.node.added', payload: { node_id: 'n_1', role: 'architect', depth: 0 } } }, 1);
+  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'weighing the index ', text: '' } } } }, 2);
+  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'against a scan\x1b[2J', text: 'Use the index.' } } } }, 3);
+  s = fold(s, { method: 'event', params: { type: 'agent.block.complete', span_id: 'n_1', agent: 'architect', payload: { block: { type: 'tool_call', id: 'c1', name: 'read_file', arguments: { path: 'a.rs' } } } } }, 4);
+  const left = frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n');
+  assert.match(left, /⟦•─•⟧ daedalus · architect|⟦•─•⟧ daedalus/);
+  assert.match(left, /weighing the index against a scan/);
+  assert.ok(!left.includes('\x1b[2J'));
+  assert.match(left, /Use the index\./);
+  assert.match(left, /→ read_file\(a\.rs\)/);
+  assert.ok(!frame(model({ state: s, deck: 1 }), 100, 30).map(plain).join('\n').includes('weighing the index'), 'reasoning is not in the chat');
+  assert.deepEqual(replay(initial(0), [{ type: 'task.output', payload: { text: 'x' } }]).activity, [], 'nothing is replayed into the stream');
+  assert.match(frame(model(), 100, 30).map(plain).join('\n'), /^/);
+  assert.match(frame(model({ deck: 0 }), 100, 30).map(plain).join('\n'), /nothing is saved/);
 });
