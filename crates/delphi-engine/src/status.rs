@@ -16,6 +16,10 @@ pub struct Status {
     approvals: BTreeMap<String, (String, String)>,
     last_recovery: Option<String>,
     updated: String,
+    /// `endpoint/model` -> why it is out and when it returns (cleared when it recovers).
+    models_out: BTreeMap<String, String>,
+    /// The latest substitutions, confirmations and homogeneous reviews, oldest first (kept short).
+    model_notes: Vec<String>,
 }
 
 struct SpanRow {
@@ -27,7 +31,7 @@ struct SpanRow {
 
 /// Event kinds that change what the projection shows.
 pub fn affects_status(kind: &str) -> bool {
-    matches!(kind, "task.created" | "task.completed" | "task.failed" | "task.cancelled" | "dag.node.added" | "dag.node.state" | "approval.requested" | "approval.resolved" | "mission.recovered" | "budget.cap" | "budget.reserve" | "budget.release" | "agent.usage")
+    matches!(kind, "task.created" | "task.completed" | "task.failed" | "task.cancelled" | "dag.node.added" | "dag.node.state" | "approval.requested" | "approval.resolved" | "mission.recovered" | "budget.cap" | "budget.reserve" | "budget.release" | "agent.usage" | "model.exhausted" | "model.recovered" | "model.promoted" | "model.degraded_confirm" | "model.homogeneous" | "task.blocked" | "task.unblocked")
 }
 
 impl Status {
@@ -84,11 +88,52 @@ impl Status {
             "approval.resolved" => {
                 self.approvals.remove(p["approval_id"].as_str().unwrap_or(""));
             }
+            "model.exhausted" => {
+                let when = p["reset_at"].as_i64().map(|t| format!("; back at {}", delphi_core::time::format_unix_millis(t, 0).trim_end_matches(".000Z").replace('T', " "))).unwrap_or_default();
+                self.models_out.insert(format!("{}/{}", p["endpoint_id"].as_str().unwrap_or("?"), p["model_id"].as_str().unwrap_or("?")), format!("{}{}", p["reason"].as_str().unwrap_or("out of quota"), when));
+            }
+            "model.recovered" => {
+                self.models_out.remove(&format!("{}/{}", p["endpoint_id"].as_str().unwrap_or("?"), p["model_id"].as_str().unwrap_or("?")));
+            }
+            "model.promoted" => {
+                let side = |k: &str| format!("{}/{}", p[k]["endpoint_id"].as_str().unwrap_or("?"), p[k]["model_id"].as_str().unwrap_or("?"));
+                self.note(format!("{}: ran on {} instead of {} ({})", task, side("to"), side("from"), p["reason"].as_str().unwrap_or("").chars().take(120).collect::<String>()));
+            }
+            "model.degraded_confirm" => {
+                let sub = format!("{}/{}", p["substitute"]["endpoint_id"].as_str().unwrap_or("?"), p["substitute"]["model_id"].as_str().unwrap_or("?"));
+                match p["state"].as_str() {
+                    Some("confirmed") => self.note(format!("{}: you confirmed the weaker model {}", task, sub)),
+                    Some("declined") => self.note(format!("{}: you declined the weaker model {}; waiting for the target", task, sub)),
+                    _ => {}
+                }
+            }
+            "model.homogeneous" => {
+                self.note(format!("{}: no model outside {} was usable, so this review is by the same family as the author", task, p["avoided"]));
+            }
+            "task.blocked" => {
+                if let Some(t) = self.tasks.get_mut(&task) {
+                    t.1 = format!("waiting for a model: {}", p["why"].as_str().unwrap_or("").chars().take(160).collect::<String>());
+                }
+            }
+            "task.unblocked" => {
+                if let Some(t) = self.tasks.get_mut(&task) {
+                    if t.1.starts_with("waiting for a model") {
+                        t.1 = "running".into();
+                    }
+                }
+            }
             "mission.recovered" => {
                 let n = p["tasks"].as_array().map(|a| a.len()).unwrap_or(0);
                 self.last_recovery = Some(format!("{} — {} task(s) to resume; ${:.4} charged for calls interrupted by the restart; {} approval card(s) expired and will be asked again.", e.timestamp, n, p["charged_usd"].as_f64().unwrap_or(0.0), p["expired_approvals"].as_array().map(|a| a.len()).unwrap_or(0)));
             }
             _ => {}
+        }
+    }
+
+    fn note(&mut self, line: String) {
+        self.model_notes.push(line);
+        if self.model_notes.len() > 10 {
+            self.model_notes.remove(0);
         }
     }
 
@@ -109,6 +154,16 @@ impl Status {
             for (sid, row) in self.spans.iter().filter(|(_, r)| &r.task == tid) {
                 s.push_str(&format!("{}- `{}` ({}): {}\n", "  ".repeat(row.depth as usize + 1), sid, row.role, row.state));
             }
+        }
+        s.push_str("\n## Models\n");
+        if self.models_out.is_empty() && self.model_notes.is_empty() {
+            s.push_str("all configured models were available\n");
+        }
+        for (pair, why) in &self.models_out {
+            s.push_str(&format!("- out of quota: `{}` ({})\n", pair, why));
+        }
+        for note in &self.model_notes {
+            s.push_str(&format!("- {}\n", note));
         }
         s.push_str("\n## Waiting on you\n");
         if self.approvals.is_empty() {
@@ -167,6 +222,31 @@ mod tests {
         s.apply(&ev("mission.recovered", "", json!({"tasks": [{}, {}], "charged_usd": 0.25, "expired_approvals": ["ap_9"]})));
         let text = s.render(5.0, 0.25, 0.0);
         assert!(text.contains("needs you: mission budget") && text.contains("2 task(s) to resume") && text.contains("$0.2500 charged") && text.contains("1 approval card(s) expired"), "{}", text);
+    }
+
+    #[test]
+    fn the_projection_shows_which_models_are_out_what_was_substituted_and_a_task_waiting_for_a_model() {
+        let mut st = Status::new("m1");
+        st.apply(&ev("task.created", "t_0001", json!({"prompt": "Plan the change", "target": "architect"})));
+        let plain = st.render(5.0, 0.0, 0.0);
+        assert!(plain.contains("## Models\nall configured models were available"), "{}", plain);
+        st.apply(&ev("model.exhausted", "t_0001", json!({"endpoint_id": "direct", "model_id": "opus-x", "reason": "quota reached", "reset_at": 1_792_864_800})));
+        st.apply(&ev("model.promoted", "t_0001", json!({"from": {"endpoint_id": "direct", "model_id": "opus-x"}, "to": {"endpoint_id": "backup", "model_id": "opus-x"}, "reason": "exhausted: quota reached"})));
+        st.apply(&ev("model.degraded_confirm", "t_0001", json!({"state": "asked", "detail": {}})));
+        st.apply(&ev("model.degraded_confirm", "t_0001", json!({"state": "confirmed", "substitute": {"endpoint_id": "direct", "model_id": "sonnet-x"}})));
+        st.apply(&ev("task.blocked", "t_0001", json!({"reason": "no_model", "back_at": 1_792_864_800, "why": "everything is throttled"})));
+        let md = st.render(5.0, 0.0, 0.0);
+        assert!(md.contains("- out of quota: `direct/opus-x` (quota reached; back at 2026-10-24 18:00:00)"), "{}", md);
+        assert!(md.contains("t_0001: ran on backup/opus-x instead of direct/opus-x") && md.contains("t_0001: you confirmed the weaker model direct/sonnet-x"), "{}", md);
+        assert!(md.contains("**t_0001** → architect: waiting for a model: everything is throttled"), "{}", md);
+        // It all clears on its own as events say so.
+        st.apply(&ev("model.recovered", "t_0001", json!({"endpoint_id": "direct", "model_id": "opus-x"})));
+        st.apply(&ev("task.unblocked", "t_0001", json!({"resumed": true})));
+        let after = st.render(5.0, 0.0, 0.0);
+        assert!(!after.contains("out of quota:") && after.contains("architect: running") && after.contains("you confirmed the weaker model"), "{}", after);
+        for kind in ["model.exhausted", "model.recovered", "model.promoted", "model.degraded_confirm", "model.homogeneous", "task.blocked", "task.unblocked"] {
+            assert!(affects_status(kind), "{} should rewrite status.md", kind);
+        }
     }
 
     #[test]
