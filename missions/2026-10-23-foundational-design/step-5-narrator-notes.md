@@ -30,3 +30,13 @@ tags: [step-5, narrator, kb, update]
 - Not built from 005b: the Console decks, the Decision Inbox, the header badge state machine and the chromeless viewer. Those are the Console, not the Narrator.
 - No daemon-side stream filtering beyond the existing secret redaction: the Narrator sees what the console sees (Council 007 asks for this to be stated).
 - A Narrator that falls behind gets `resync_required` and reloads the snapshot; per-client queue bounds are the daemon's existing slow-client policy.
+
+## Follow-up: brought in line with `specs/005b` and `skills/tui-design` (2026-10-24)
+
+- No enclosing boxes anywhere: sections are a title over a hairline (`── Verdict ───`), Council seats are open columns.
+- Six views: Council, Epic, Forge, **Agents** (the mascot roster: a 3-line solid mascot beside three lines of model, tokens and spend), **Spend** (per-call sparkline, tokens by kind, each agent's share) and Archives (kb search). `delphi observe <view>` is the primary spelling; `narrator` still works. 005b's footer map lists four panels and its skill lists five views; six is a superset, with Archives kept because the knowledge-base search had nowhere else to live.
+- Badges follow the eye-contrast rule (bright eyes on dark terminals, deep slate on light; the red-team's alert badge has gold eyes and crimson brackets). Footer dots are bare (`○ ● ○`), never bracketed.
+- File paths in the Council verdict and in kb results are OSC 8 links (`file://`), written over the drawn text after each frame. They point at the files on disk; the chromeless viewer's `http://127.0.0.1:4242` URLs wait for the viewer.
+- Dark or light follows `DELPHI_THEME` or `COLORFGBG`; the background is never painted.
+- `/narrator tile` opens council, epic, forge and agents as tmux panes; Delphi still never splits inside a window. The spec's test of binding all four panes within 500 ms is not automated.
+- The console's own emoji-width glyphs (`⚠`, `⚖`) were replaced with plain text.
