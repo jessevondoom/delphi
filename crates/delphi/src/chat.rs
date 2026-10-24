@@ -809,6 +809,11 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
         Ok(c)
     };
     match action {
+        // For clients written in other languages: where the daemon's sockets are.
+        "where" => {
+            println!("{}", json!({"console_socket": l.sock, "narrator_socket": l.narrator_sock}));
+            0
+        }
         "status" => match connect() {
             Ok(mut c) => match c.call("session.snapshot", json!({})) {
                 Ok(s) => {
@@ -857,7 +862,7 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
             0
         }
         other => {
-            eprintln!("delphi daemon: unknown action `{}` (status, stop, restart)", other);
+            eprintln!("delphi daemon: unknown action `{}` (status, stop, restart, where)", other);
             2
         }
     }
