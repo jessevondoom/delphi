@@ -943,3 +943,68 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the_notebook() {
+    let m = mock(vec![reply_text("The ladder is described in specs/003-collaboration-and-council.md#ladder and in REVIEW.md.")]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Where is the retry ladder described?");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("orchestrator ·");
+    // Where the answer came from: the reply cites two documents.
+    c.type_keys("/sources");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Sources (2)");
+    c.wait_for("specs/003-collaboration-and-council.md#ladder");
+    c.type_keys("\x1b");
+    c.wait_for("shortcuts: ?");
+    // Search the knowledge base with Ctrl+K; Enter on a hit puts its pointer in the prompt.
+    c.type_keys("\x0b");
+    c.wait_for("Search the knowledge base");
+    c.type_keys("review");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("enter put @path in the prompt");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("p");
+    c.wait_for("pinned to the mission notebook");
+    c.type_keys("\r");
+    c.wait_for("❯ @");
+    c.type_keys("\x15"); // clear the prompt
+    // The notebook holds the pinned hit; the last reply can be pinned too.
+    c.type_keys("/pin");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.type_keys("/notes");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Mission notebook");
+    c.wait_for("search “review”");
+    let notes = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().map(|m| m.path().join("notes.md")).find(|p| p.exists()).expect("a notebook was written");
+    let text = std::fs::read_to_string(&notes).unwrap();
+    assert!(text.starts_with("---\n") && text.contains("source_type: internal_generated") && text.contains("# Notebook"), "{}", text);
+    assert!(text.contains("· athena (orchestrator)") || text.contains("· Athena (orchestrator)"), "the last reply was pinned with its speaker:\n{}", text);
+    assert!(text.contains("The ladder is described in specs/003-collaboration-and-council.md#ladder"), "{}", text);
+    c.type_keys("\x1b");
+    // Connector status comes from the CLI's own offline report.
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("/connectors");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("no connectors are configured");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}

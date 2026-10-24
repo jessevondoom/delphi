@@ -8,6 +8,9 @@ import { completions, searchHistory, type Completion, type ListDir } from './com
 import { addBlock, fold, type State } from './fold.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
+import * as P from './panel.ts';
+import { pin, previewOf, readNotes } from './research.ts';
+import { execFile } from 'node:child_process';
 import { frame, transcript, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
@@ -50,6 +53,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   const [queue, setQueue] = useState<string[]>([]);
   const [inbox, setInbox] = useState(() => I.newInbox(Date.now()));
   const [mode, setMode] = useState('default');
+  const [panel, setPanel] = useState<P.Panel | null>(null);
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -64,6 +68,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   const inboxRef = useRef(inbox);
   const deckRef = useRef<0 | 1 | 2>(1);
   deckRef.current = deck;
+  const panelRef = useRef<P.Panel | null>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const listDir = useMemo(() => listTeamDir(info), [info]);
@@ -140,7 +145,34 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
       } catch (e: any) { note('could not export: ' + e.message); }
       return;
     }
+    if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }
+    if (name === '/sources') { openPanel(P.openSources()); return; }
+    if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
+    if (name === '/pin') {
+      const arg = line.slice(name.length).trim();
+      const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
+      const text = arg || last?.text;
+      if (!text) { note('nothing to pin yet: /pin keeps the last reply, or /pin <text>'); return; }
+      try { pin(info, mission, arg ? 'typed by the operator' : `${info.roles[last!.role ?? '']?.name ?? last!.role} (${last!.role})`, text); note('pinned to the mission notebook (/notes)'); }
+      catch (e: any) { note('could not pin: ' + e.message); }
+      return;
+    }
+    if (name === '/connectors') {
+      if (!info.delphi_exe) { note('this console was not told where delphi is; run `delphi connectors status`'); return; }
+      execFile(info.delphi_exe, ['connectors', 'status', '--workspace', info.workspace_name ?? '', '--home', info.home ?? ''], { timeout: 15000 }, (err, out, errOut) => note((out || errOut || String(err?.message ?? 'no output')).trimEnd()));
+      return;
+    }
     void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note });
+  };
+
+  const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
+  const doSearch = (q: string) => {
+    cmd.call('kb.search', { query: q }).then((r: any) => {
+      const hits: P.Hit[] = (Array.isArray(r) ? r : r?.hits ?? []).map((h: any) => ({ pointer: String(h.pointer), heading: String(h.heading ?? ''), preview: String(h.preview ?? '') }));
+      const cur = panelRef.current;
+      if (cur?.kind !== 'search') return;
+      openPanel({ ...cur, editing: false, hits, sel: 0, note: hits.length ? '' : 'no matches', lines: hits[0] ? previewOf(info, hits[0].pointer.split('#')[0]!) : [] });
+    }).catch((e) => { const cur = panelRef.current; if (cur?.kind === 'search') openPanel({ ...cur, editing: false, note: String(e?.message ?? JSON.stringify(e)) }); });
   };
 
   useEffect(() => {
@@ -173,6 +205,21 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
         const order = ['default', 'accept-edits', 'mission-auto'];
         const next = order[(order.indexOf(modeRef.current) + 1) % order.length]!;
         cmd.call('permissions.set', { mode: next }).then((v: any) => { setMode(String(v?.mode ?? next)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        return;
+      }
+
+      // Ctrl+K and Ctrl+S open the research panels from the chat deck.
+      if (!panelRef.current && deckRef.current === 1 && e.t === 'ctrl' && (e.c === 'k' || e.c === 's')) { openPanel(e.c === 'k' ? P.openSearch() : P.openSources()); return; }
+      // An open panel owns the keyboard until it is closed.
+      if (panelRef.current && deckRef.current === 1 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && e.t !== 'wheel' && e.t !== 'bg') {
+        const { panel: next0, action } = P.key({ ...panelRef.current, flash: undefined } as P.Panel, e, stateRef.current.sources);
+        const next = next0;
+        panelRef.current = next; setPanel(next);
+        if (action.t === 'close') openPanel(null);
+        else if (action.t === 'search') doSearch(action.q);
+        else if (action.t === 'load') { const cur = panelRef.current; if (cur && cur.kind !== 'notes') openPanel({ ...cur, lines: previewOf(info, action.path) }); }
+        else if (action.t === 'insert') { openPanel(null); upd((c) => C.insert(c, action.text)); }
+        else if (action.t === 'pin') { try { pin(info, mission, action.from, action.text); note('pinned to the mission notebook (/notes)'); openPanel({ ...(panelRef.current as P.Panel), flash: 'pinned to the mission notebook (/notes)' }); } catch (er: any) { openPanel({ ...(panelRef.current as P.Panel), flash: 'could not pin: ' + er.message }); } }
         return;
       }
 
@@ -264,7 +311,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel };
   const lineCount = useMemo(() => transcript(base, size.w).length, [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -274,7 +321,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode]);
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>

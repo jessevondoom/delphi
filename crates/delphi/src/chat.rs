@@ -855,6 +855,11 @@ pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&s
 
 /// What the UI needs to know that only this program knows: where things are, and how roles look.
 pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: Option<String>, names: &HashMap<String, String>) -> Value {
+    // Where `delphi` itself is, and which workspace and home this is, for the few things the UI asks the CLI for
+    // (`delphi connectors status`). Paths only; nothing secret.
+    let exe = std::env::current_exe().ok().map(|p| p.display().to_string()).unwrap_or_else(|| "delphi".into());
+    let ws_name = ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let home = ws_dir.parent().and_then(|p| p.parent()).map(|p| p.display().to_string()).unwrap_or_default();
     let roles: serde_json::Map<String, Value> = crate::avatar::ROLES
         .iter()
         .map(|t| {
@@ -863,7 +868,7 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
         })
         .collect();
     let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();
-    json!({"console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles})
+    json!({"console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "delphi_exe": exe, "workspace_name": ws_name, "home": home})
 }
 
 /// `delphi daemon status|stop|restart`.
