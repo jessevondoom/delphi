@@ -1,0 +1,16 @@
+Delphi Council 008, ROUND 3 (final round; the round cap is 3). READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply. Review ONLY specs/011-xenia-trust-model.md and specs/012-xenia-record-schema.md.
+
+Round 2 (missions/2026-10-23-foundational-design/councils/008/round2-red-team.md) rejected both specs on three P0s and several P1/P2s. The specs were revised. Read both revised files in full, plus specs/001 §5 and specs/010 §5.1.
+
+What changed that you have NOT yet reviewed, so look hardest here:
+- Standing rules (a) member, (b) grandfathered, (c) endorsed orphan in specs/011 §3.3 step 2.
+- The admin-signed grandfather list (specs/011 §7.1; specs/012 §7 layout: `grandfathered_digest`, `<n>.grandfathered/<fingerprint>.txt`) used for key rotation, compromise and departures.
+- `target_hash` on endorsements (specs/012 §5.6) and the area check from the target record's tags (specs/011 §2).
+- The invite format (specs/011 §3.2), skill extraction hardening (§6.3), resolver SSRF guards and `.gitattributes` (specs/012 §4, §7), roster signature file schema (specs/012 §3), claim quota semantics.
+- Decision O-4 (invite + fingerprint).
+
+Your task:
+1. For each of your Round 2 findings (3 P0, 4 P1, 3 P2): `resolved` | `partly` | `not resolved`, one clause why, citing the revised text.
+2. NEW defects introduced by the revision (max 5, each with a falsifiable failure mode, exact remediation, severity). Specifically attack: can a stolen key still get content accepted after rotation or removal? Can a steward collude with a removed member to launder records? Is the grandfather list complete and unforgeable (what is its trust root, and can admins be tricked into listing forged records)? Does the rule leave any state where rotation silently drops or silently keeps too much? Any ambiguity two implementers would resolve differently?
+3. Verdict per spec: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0). If you answer approve-with-fixes, list the exact fixes; they will be applied and the verdict becomes final without a further round.
+At most 900 words. Repo-relative paths only. No praise.

@@ -1,0 +1,18 @@
+Delphi Council 008, ROUND 1 (BLIND). READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply.
+
+Under review: two DRAFT, post-v1 specs for "xenia", an org-level shared memory/skills layer where many operators' Delphi installs publish signed records (memory, skill, progress, request) to a shared git store and pull each other's:
+- specs/011-xenia-trust-model.md (identity, roster, trust classes mapped onto the taint lattice, pointer pinning, publish/adopt/request gates, revocation, threat table)
+- specs/012-xenia-record-schema.md (record envelope, detached signatures, kinds, pointers, limits, store layout)
+
+Question: are these sound enough to approve as the design basis for a later implementation step, and if not, exactly what must change? Both specs end with open decisions (011 §10 O-1..O-5, 012 §11 S-1..S-5): give your position on each.
+
+Read first: GOVERNANCE.md, REVIEW.md (§1 severities), specs/001 §5 (provenance, taint lattice, taint-gated tools), specs/007 (federation, lattice §3, DelphiCap, sync §4), specs/004 §5 (scopes, upstream contribution, privacy), specs/010 (connectors, Drive), context/heuristics.md. Settled decisions (missions/2026-10-23-foundational-design/decisions.md, D-01..D-27) are not to be re-litigated, but flag spec text that implements one unsafely or contradicts it. This is spec-only review: the code does not implement xenia.
+
+Check especially: contradictions with specs 001/004/007/010; cryptographic mistakes (signature scope, replay, domain separation, key lifecycle, quorum arithmetic); attacks the threat table misses; claims the spec says are enforced but that no control actually enforces.
+
+Output (Markdown, at most 1,200 words, repo-relative paths only):
+1. Findings: each `[P0|P1|P2]` `path#Lx-Ly`, title, concrete falsifiable failure mode, exact remediation. Verify every claim against the file text; cite real line numbers.
+2. Checked and sound (max 6 lines).
+3. Positions on O-1..O-5 and S-1..S-5.
+4. Verdict per spec: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0).
+No style nits. No praise.
