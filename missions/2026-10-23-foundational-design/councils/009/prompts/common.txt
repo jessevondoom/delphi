@@ -1,0 +1,18 @@
+Delphi Council 009, ROUND 1 (BLIND, fresh eyes). READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply. Do NOT read anything under missions/2026-10-23-foundational-design/councils/008* : you are an independent second opinion and must not see earlier reviewers' findings.
+
+Under review: two DRAFT, post-v1 specs for "xenia", an org-level shared memory/skills layer where many operators' Delphi installs publish signed records (memory, skill, progress, request) to a shared git store and pull each other's:
+- specs/011-xenia-trust-model.md (identity, roster chain, trust classes mapped onto the taint lattice, pointer handling, publish/adopt/request gates, revocation with a grandfather list, threat table, phase mapping)
+- specs/012-xenia-record-schema.md (record envelope, detached signatures, kinds, pointers, limits, store layout)
+
+Question: are these sound enough to approve as the design basis for a later implementation, and if not, exactly what must change? Both end with open decisions (011 §10 O-1..O-5, 012 §11 S-1..S-5): give your position on each.
+
+Read first: GOVERNANCE.md, REVIEW.md (§1 severities), specs/001 §5 (provenance, taint lattice, taint-gated tools), specs/007 (federation, lattice §3, sync §4), specs/004 §5 (scopes, privacy), specs/010 §5.1 (connector content is L0), context/heuristics.md. Settled decisions (missions/2026-10-23-foundational-design/decisions.md) are not to be re-litigated, but flag spec text that contradicts one. This is spec-only: no code implements xenia.
+
+Check especially: (1) cryptographic soundness (signature scope and domain separation, key lifecycle, roster chain, grandfather list, quorum arithmetic, replay, rollback); (2) internal contradictions between sections of 011 and 012, or with specs 001/004/007/010 (read carefully: the specs were revised several times and stale text may remain, including test numbering and cross-references); (3) attacks the threat table misses; (4) anything said to be "enforced" without a mechanism; (5) two implementers resolving an ambiguity differently.
+
+Output (Markdown, at most 1,200 words, repo-relative paths only):
+1. Findings: each `[P0|P1|P2]` `path#Lx-Ly`, title, a concrete falsifiable failure mode, exact remediation. Verify every claim against the file text; cite real line numbers.
+2. Checked and sound (max 6 lines).
+3. Positions on O-1..O-5 and S-1..S-5.
+4. Verdict per spec: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0).
+No style nits. No praise.
