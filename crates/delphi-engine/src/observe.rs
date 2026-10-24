@@ -195,6 +195,8 @@ pub struct ObserverState {
     pub tokens: Tokens,
     pub retries: u64,
     pub narrative: VecDeque<String>,
+    /// Cost of each model call, oldest first (the spend sparkline); the newest 240.
+    pub series: VecDeque<f64>,
     /// Live text per span while it streams (cleared when the node finishes).
     pub live: BTreeMap<String, String>,
 }
@@ -324,6 +326,10 @@ impl ObserverState {
                 let cost = p["cost_usd"].as_f64().unwrap_or(0.0);
                 self.spent_usd += cost;
                 self.tokens.add(p);
+                self.series.push_back(cost);
+                while self.series.len() > 240 {
+                    self.series.pop_front();
+                }
                 let (tier, model, ep) = (s(&e["model_tier"]), s(&e["model_id"]), s(&e["endpoint_id"]));
                 let span = s(&e["span_id"]);
                 if let Some(n) = self.nodes.get_mut(&span) {
@@ -527,6 +533,7 @@ mod tests {
         assert!((a.cost_usd - 0.60).abs() < 1e-9 && a.calls == 2);
         assert!(a.upscaled && a.tier == "frontier" && a.model == "frontier-model", "{:?}", a);
         assert_eq!(st.retries, 1);
+        assert_eq!(st.series.iter().copied().collect::<Vec<_>>(), vec![0.10, 0.50], "one point per call, for the sparkline");
         assert!((st.spent_usd - 0.60).abs() < 1e-9);
         assert!((st.cache_hit_ratio() - 0.75).abs() < 1e-9);
         assert_eq!(st.nodes["sp_builder_1"].tokens, 2400);

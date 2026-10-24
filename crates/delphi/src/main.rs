@@ -33,7 +33,7 @@ const USAGE: &str = "usage:
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
   delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
-  delphi narrator [council|epic|forge|archives] [--once] [--workspace <name>] [--home <dir>]   (also: delphi observe)
+  delphi observe [council|epic|forge|agents|spend|archives] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi --version";
 
@@ -277,7 +277,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge or archives)", v);
+                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge, agents, spend or archives)", v);
                 return 2;
             }
         },

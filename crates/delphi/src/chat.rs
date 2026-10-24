@@ -73,7 +73,7 @@ pub fn parse_input(line: &str) -> Input {
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
             "narrator" | "observe" | "visualize" => match rest.first() {
-                Some(v) if crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge or archives, not `{}`", v)),
+                Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge, agents, spend, archives or tile, not `{}`", v)),
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
@@ -133,7 +133,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
   /build <request>                   a Builder task: worktree, tests, audit, then your approval to merge
-  /narrator [council|epic|forge|archives]   the read-only live window (a tmux split, or the command to run in a second terminal)
+  /narrator [council|epic|forge|agents|spend|archives|tile]   the read-only live window (a tmux split, or the command to run in a second terminal)
   /council <proposition>             a blind three-round Council (architect, strategist, red-team); you decide if it deadlocks
   /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
   /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
@@ -252,7 +252,7 @@ impl Renderer {
             "council.started" => {
                 self.council = true;
                 let seats = p["seats"].as_array().map(|a| a.iter().map(|s| format!("{} ({})", self.name(s["role"].as_str().unwrap_or("?")), s["family"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", ")).unwrap_or_default();
-                Some(format!("\n⚖ Council convened — {}{}\n  Round 1 is blind: nobody sees anyone else's answer until all are in.\n", seats, if p["homogeneous"] == true { " · one model family only (homogeneous)" } else { "" }))
+                Some(format!("\nCouncil convened — {}{}\n  Round 1 is blind: nobody sees anyone else's answer until all are in.\n", seats, if p["homogeneous"] == true { " · one model family only (homogeneous)" } else { "" }))
             }
             "council.barrier.released" => Some("\n  Round 1 is in; the stances are now visible to every seat.\n".to_string()),
             "council.stance" => {
@@ -273,10 +273,10 @@ impl Renderer {
             "agent.block.complete" if p["block"]["type"] == "tool_call" => Some(format!("\n  → {}({})", p["block"]["name"].as_str().unwrap_or("?"), brief(&p["block"]["arguments"]))),
             "tool.result" if p["is_error"] == true => Some(format!("\n    ✗ {}", p["content"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(120).collect::<String>())),
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
-            "span.taint" => Some(format!("\n  ⚠ {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
-            "endpoint.throttled" => Some(format!("\n  ⚠ {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
-            "endpoint.reauth_required" => Some(format!("\n  ⚠ re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
-            "turn.interrupted" => Some("\n  ⚠ the stream was interrupted; retrying the turn\n".to_string()),
+            "span.taint" => Some(format!("\n  ! {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
+            "endpoint.throttled" => Some(format!("\n  ! {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
+            "endpoint.reauth_required" => Some(format!("\n  ! re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
+            "turn.interrupted" => Some("\n  ! the stream was interrupted; retrying the turn\n".to_string()),
             "task.failed" => Some(format!("\n✗ task failed: {}\n", p["error"].as_str().unwrap_or(""))),
             "task.output" => {
                 let root_streamed = self.streamed.iter().any(|s| self.spans.get(s).map(|(_, d)| *d == 0).unwrap_or(false));
@@ -285,7 +285,7 @@ impl Renderer {
                 self.council = false;
                 let text = p["text"].as_str().unwrap_or("");
                 Some(match p["status"].as_str() {
-                    Some("escalated") => format!("\n⚠ {} needs you: {}\n", tid, text),
+                    Some("escalated") => format!("\n! {} needs you: {}\n", tid, text),
                     _ if root_streamed => format!("\n✓ {} done\n", tid),
                     _ => {
                         // A reply that finished before any live frame arrived still says who is speaking.
@@ -492,7 +492,7 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
     // The console announces pending proposals and config notices on attach.
     if let Ok(snap) = cmd.call("session.snapshot", json!({"mission_id": mission_id})) {
         for n in snap["notices"].as_array().cloned().unwrap_or_default() {
-            say(&format!("⚠ {}\n", n.as_str().unwrap_or("")));
+            say(&format!("! {}\n", n.as_str().unwrap_or("")));
         }
         let pending = snap["pending_proposals"].as_u64().unwrap_or(0);
         if pending > 0 {
@@ -590,14 +590,20 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
             Input::Narrator(view) => {
                 let ws = ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let exe = daemon_exe().map(|p| p.display().to_string()).unwrap_or_else(|| "delphi".into());
-                let line = format!("{} narrator {} --workspace {} --home {}", exe, view.unwrap_or_default(), ws, home.display());
+                let tile = view.as_deref() == Some("tile");
+                let views: Vec<String> = if tile { ["council", "epic", "forge", "agents"].iter().map(|s| s.to_string()).collect() } else { vec![view.unwrap_or_default()] };
+                let lines: Vec<String> = views.iter().map(|v| format!("{} observe {} --workspace {} --home {}", exe, v, ws, home.display())).collect();
                 if std::env::var_os("TMUX").is_some() {
-                    match std::process::Command::new("tmux").args(["split-window", "-h", "-p", "45", &line]).status() {
-                        Ok(s) if s.success() => say("(narrator opened in a tmux split)\n"),
-                        _ => say(&format!("could not open a tmux split; run this in another terminal:\n  {}\n", line)),
+                    // One window per view, laid out by tmux: Delphi never tiles inside a window.
+                    let opened = lines.iter().enumerate().all(|(i, l)| std::process::Command::new("tmux").args(["split-window", if i % 2 == 0 { "-h" } else { "-v" }, l]).status().map(|s| s.success()).unwrap_or(false));
+                    if opened {
+                        let _ = std::process::Command::new("tmux").args(["select-layout", "tiled"]).status();
+                        say(&format!("({} observer window(s) opened in tmux)\n", lines.len()));
+                    } else {
+                        say(&format!("could not open tmux panes; run these in other terminals:\n  {}\n", lines.join("\n  ")));
                     }
                 } else {
-                    say(&format!("Run this in a second terminal window (it only watches):\n  {}\n", line));
+                    say(&format!("Run {} in another terminal (it only watches):\n  {}\n", if tile { "each of these" } else { "this" }, lines.join("\n  ")));
                 }
             }
             Input::Council { proposition, seats, author } => match cmd.call("council.start", json!({"mission_id": mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
@@ -732,6 +738,8 @@ mod tests {
         assert_eq!(parse_input("/narrator"), Input::Narrator(None));
         assert_eq!(parse_input("/observe council"), Input::Narrator(Some("council".into())));
         assert!(matches!(parse_input("/narrator nonsense"), Input::Unknown(m) if m.contains("council, epic")));
+        assert_eq!(parse_input("/narrator tile"), Input::Narrator(Some("tile".into())));
+        assert_eq!(parse_input("/observe spend"), Input::Narrator(Some("spend".into())));
         assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
         assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
         assert_eq!(parse_input("/pause"), Input::Pause);

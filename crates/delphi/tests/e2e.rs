@@ -298,9 +298,9 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     s.send("/budget");
     s.wait_for("ceiling $5.00");
     // A second window attaches read-only and draws what just happened, without a console token.
-    let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "archives");
+    let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "agents");
     assert_eq!(ncode, 0, "{}\n{}", screen, nerr);
-    for want in ["DELPHI NARRATOR", "ARCHIVES & SPEND", "Athena", "opus-t", "spend $", "/ $5.00"] {
+    for want in ["DELPHI OBSERVER", "MASCOT ROSTER", "Athena", "opus-t", "spend $", "/ $5.00"] {
         assert!(screen.contains(want), "missing `{}` in\n{}", want, screen);
     }
     let (code, out) = s.finish();
