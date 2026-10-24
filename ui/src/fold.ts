@@ -3,7 +3,7 @@ import { sanitize, type AgentState } from './theme.ts';
 
 export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string };
 export type Agent = { state: AgentState; doing: string };
-export type Approval = { id: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
+export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 export type State = {
   blocks: Block[];
   live: string;
@@ -109,7 +109,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const id = String(pl.approval_id ?? '');
       const role = String(pl.role ?? 'orchestrator');
       const secs = Number(pl.timeout_secs ?? pl.timeout_s ?? pl.expires_in_s ?? 600);
-      const card: Approval = { id, role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs };
+      const card: Approval = { id, task: String(e.task_id ?? ''), role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs };
       const next = { ...s, approvals: { ...s.approvals, [id]: card }, lastActivity: now };
       const shown = addBlock(next, { kind: 'card', role, text: [card.summary, ...card.preview.split('\n').slice(0, 6).map((l) => '  ' + l.slice(0, 100))].filter(Boolean).join('\n'), at: now, status: card.tier, ref: id });
       return setAgent({ ...shown, alert: { role, until: now + secs * 1000 } }, role, { state: 'waiting on you', doing: 'decision needed' });

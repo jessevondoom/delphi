@@ -9,6 +9,8 @@ export type Ctx = {
   post: (text: string) => void;
   /** Called after a call that starts work, so the UI can show it as running. */
   started?: () => void;
+  /** Called with the approval mode after it was changed, so the footer follows. */
+  mode?: (m: string) => void;
 };
 
 const errText = (e: any): string => (e && typeof e === 'object' && 'message' in e ? String(e.message) : String(JSON.stringify(e)));
@@ -44,6 +46,16 @@ export function parseCouncil(args: string): { proposition: string; seats: string
 /** The newest approval that is still waiting. */
 export const waiting = (s: State): Approval | undefined => Object.values(s.approvals).sort((a, b) => b.at - a.at)[0];
 
+export type Decision = 'allow' | 'allow_similar' | 'deny';
+
+/** Answer one approval card, bound to the payload hash it showed. Returns why it was not sent, or null once it was. */
+export async function answerCard(cmd: Rpc, card: Approval, d: Decision, now = Date.now()): Promise<string | null> {
+  if (d === 'allow_similar' && card.tier === 'red') return '`allow similar` never applies to a Red action; use /y to approve this once or /n';
+  if (now - card.at < 300) return 'that card only just appeared; look at it, then answer';
+  try { await cmd.call('approval.resolve', { approval_id: card.id, payload_blake3: card.blake3, decision: d }); return null; }
+  catch (e) { return errText(e); }
+}
+
 let lastRatify: any[] = [];
 
 export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promise<void> {
@@ -68,7 +80,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
         if (v) ctx.post(`mode: ${v.mode ?? '?'} · allowed similar this task: ${(v.allow_similar ?? []).map((s: any) => `${s.pattern} (${s.task_id})`).join(', ') || 'none'}`);
         return;
       }
-      const v = await call('permissions.set', { mode: rest[0] }); if (v) ctx.post(`mode is now ${v.mode ?? '?'}`); return;
+      const v = await call('permissions.set', { mode: rest[0] }); if (v) { ctx.post(`mode is now ${v.mode ?? '?'}`); if (v.mode) ctx.mode?.(v.mode); } return;
     }
     case 'resume': { const v = await call('recovery.resume', { tasks: rest.length ? rest : null }); if (v) { const n = (v.resumed ?? []).length; ctx.post(n ? `resuming ${n} task(s)…` : 'nothing to resume'); if (n) ctx.started?.(); } return; }
     case 'pause': { if (await call('recovery.pause')) ctx.post('left as they are; they will be offered again after the next restart'); return; }
@@ -94,10 +106,8 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       const card = waiting(ctx.state());
       if (!card) { ctx.post('no approval is waiting'); return; }
       if (d === 'view') { ctx.post(JSON.stringify(card.payload, null, 2)); return; }
-      if (d === 'allow_similar' && card.tier === 'red') { ctx.post('`allow similar` never applies to a Red action; use /y to approve this once or /n'); return; }
-      if (now - card.at < 300) { ctx.post('that card only just appeared; look at it, then answer'); return; }
-      try { await ctx.cmd.call('approval.resolve', { approval_id: card.id, payload_blake3: card.blake3, decision: d }); }
-      catch (e) { ctx.post(errText(e)); }
+      const refused = await answerCard(ctx.cmd, card, d, now);
+      if (refused) ctx.post(refused);
       return;
     }
     default: ctx.post(`unknown command /${name} (try /help)`);

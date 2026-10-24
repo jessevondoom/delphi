@@ -840,3 +840,55 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn the_decision_inbox_denies_a_card_and_shift_tab_toggles_the_approval_mode_in_the_full_screen_console() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Drafted.")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("@architect Draft a spec called 009-e2e");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("approval needed [amber]");
+    // Shift+Tab flips the approval mode and back.
+    c.type_keys("\x1b[Z");
+    c.wait_for("approval mode: accept-edits");
+    c.type_keys("\x1b[Z");
+    c.wait_for("approval mode: default");
+    // The inbox: open it, look at the card, then deny it from there.
+    c.type_keys("/operator");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("DECISION INBOX · 1 PENDING");
+    std::thread::sleep(Duration::from_millis(400));
+    c.type_keys("\t");
+    c.wait_for("APPROVAL REQUIRED [1 of 1]");
+    c.type_keys("n");
+    c.wait_for("NOTHING PENDING");
+    c.type_keys("\x1b");
+    c.wait_for("shortcuts: ?");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the denied action never ran");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}

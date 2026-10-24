@@ -16,6 +16,7 @@ export const COMMANDS: Command[] = [
   { name: '/pause', desc: 'Leave interrupted tasks as they are', local: false },
   { name: '/mission', desc: 'The current mission', local: false },
   { name: '/observe', desc: 'How to open the Observer in another window', local: false },
+  { name: '/operator', desc: 'Open the decision inbox (also /decide, shift+→)', local: true },
   { name: '/y', desc: 'Approve the waiting card once', local: false },
   { name: '/a', desc: 'Approve similar actions this task (Amber only)', local: false },
   { name: '/n', desc: 'Reject the waiting card', local: false },

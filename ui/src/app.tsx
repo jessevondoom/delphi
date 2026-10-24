@@ -6,7 +6,8 @@ import * as C from './composer.ts';
 import { COMMANDS } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
-import { runSlash } from './run.ts';
+import { cardsOf, inboxInit, inboxKey, type InboxUi } from './inbox.ts';
+import { answerCard, runSlash } from './run.ts';
 import { frame, transcript, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
@@ -47,6 +48,8 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   const [sel, setSel] = useState(0);
   const [expandTools, setExpandTools] = useState(false);
   const [queue, setQueue] = useState<string[]>([]);
+  const [inbox, setInbox] = useState<InboxUi>(inboxInit);
+  const [mode, setMode] = useState('default');
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -58,6 +61,10 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   stateRef.current = state;
   const queueRef = useRef<string[]>([]);
   const searchRef = useRef(search);
+  const deckRef = useRef(deck);
+  deckRef.current = deck;
+  const inboxRef = useRef(inbox);
+  const modeRef = useRef(mode);
   const listDir = useMemo(() => listTeamDir(info), [info]);
 
   useEffect(() => {
@@ -83,6 +90,24 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   }, [ev]);
 
   const note = (text: string) => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now() }));
+
+  const showInbox = (ui: InboxUi) => { inboxRef.current = ui; setInbox(ui); };
+
+  useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => { if (v?.mode) { modeRef.current = v.mode; setMode(v.mode); } }).catch(() => {}); }, [cmd]);
+
+  /** Shift+Tab: approvals <-> accept-edits. `mission-auto` widens what is skipped, so it is only reachable by name. */
+  const cycleMode = () => {
+    const next = modeRef.current === 'default' ? 'accept-edits' : 'default';
+    cmd.call('permissions.set', { mode: next }).then((v: any) => { modeRef.current = v?.mode ?? next; setMode(modeRef.current); note(`approval mode: ${modeRef.current}`); }).catch((e) => note('could not change the mode: ' + (e?.message ?? JSON.stringify(e))));
+  };
+
+  const answer = async (id: string, d: 'allow' | 'allow_similar' | 'deny') => {
+    const card = stateRef.current.approvals[id];
+    if (!card) return;
+    const refused = await answerCard(cmd, card, d);
+    if (refused) note(refused);
+  };
+  const answerAmber = async () => { for (const c of cardsOf(stateRef.current)) if (c.tier !== 'red') await answer(c.id, 'allow'); };
 
   const send = (text: string) => {
     const m = /^@(\S+)\s+([\s\S]+)$/.exec(text);
@@ -119,6 +144,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
     const name = line.split(/\s/)[0]!;
     if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
+    if (name === '/operator' || name === '/decide') { setDeck(2); return; }
     if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
     if (name === '/export') {
       try {
@@ -130,7 +156,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
       } catch (e: any) { note('could not export: ' + e.message); }
       return;
     }
-    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note });
+    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note, mode: (m) => { modeRef.current = m; setMode(m); } });
   };
 
   useEffect(() => {
@@ -158,6 +184,16 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
         return;
       }
 
+      if (deckRef.current === 2 && (e.t === 'text' || e.t === 'key' || e.t === 'paste') && !(e.t === 'key' && (e.k === 'shift-tab' || (e.shift && (e.k === 'left' || e.k === 'right'))))) {
+        if (e.t === 'paste') return;
+        const r = inboxKey(inboxRef.current, e, cardsOf(stateRef.current));
+        showInbox(r.ui);
+        if (r.act?.t === 'leave') setDeck(1);
+        else if (r.act?.t === 'answer') void answer(r.act.id, r.act.d);
+        else if (r.act?.t === 'amber-all') void answerAmber();
+        return;
+      }
+
       const m = menuNow();
       const items = m?.items ?? [];
       switch (e.t) {
@@ -178,6 +214,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
           if (e.c === 'r') { setS({ q: '', at: hist.length, match: null }); return; }
           return;
         case 'key': {
+          if (e.k === 'shift-tab') { cycleMode(); return; }
           if (e.shift && (e.k === 'left' || e.k === 'right')) { setDeck((d) => Math.max(0, Math.min(2, d + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2); return; }
           const pick = (n: number) => { selRef.current = n; setSel(n); };
           const accept = (it: { insert: string }) => upd((c) => {
@@ -230,7 +267,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode };
   const lineCount = useMemo(() => transcript(base, size.w).length, [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -240,7 +277,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search]);
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>
