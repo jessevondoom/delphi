@@ -51,6 +51,12 @@ pub struct Settings {
     /// Escalate when this many consecutive interruptions hit the same turn (`specs/005` §2.5).
     pub max_interruptions: u32,
     pub enabled_agents: Vec<String>,
+    /// The Claude CLI to launch for a harness endpoint.
+    pub harness_program: String,
+    /// Tokens (input, cache writes and output; not cache reads) one harness span may use before it is stopped.
+    pub harness_token_cap: u64,
+    /// A harness that says nothing for this long is killed.
+    pub harness_idle: Duration,
 }
 
 impl Default for Settings {
@@ -62,6 +68,9 @@ impl Default for Settings {
             mission_budget_usd: 5.0,
             max_interruptions: 2,
             enabled_agents: ["orchestrator", "architect", "builder", "red-team", "strategist"].iter().map(|s| s.to_string()).collect(),
+            harness_program: "claude".into(),
+            harness_token_cap: 500_000,
+            harness_idle: Duration::from_secs(300),
         }
     }
 }
@@ -151,28 +160,28 @@ pub(crate) struct Asker<'a> {
 }
 
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
-struct Escalate(String);
+pub(crate) struct Escalate(pub(crate) String);
 
 /// Everything one span needs while it runs.
-struct SpanCtx {
-    m: Arc<MissionState>,
-    task_id: String,
-    span_id: String,
-    role: String,
-    manifest: AgentManifest,
-    guard: Guard,
-    span: Span,
-    depth: u32,
-    tier: String,
+pub(crate) struct SpanCtx {
+    pub(crate) m: Arc<MissionState>,
+    pub(crate) task_id: String,
+    pub(crate) span_id: String,
+    pub(crate) role: String,
+    pub(crate) manifest: AgentManifest,
+    pub(crate) guard: Guard,
+    pub(crate) span: Span,
+    pub(crate) depth: u32,
+    pub(crate) tier: String,
     /// Which model family serves this span (`claude` unless the handoff says otherwise).
-    family: String,
-    thinking: u32,
+    pub(crate) family: String,
+    pub(crate) thinking: u32,
     /// Set when a dispatched child halted: the parent halts too, and the operator decides (specs/003 §3.2).
-    child_escalation: Option<String>,
+    pub(crate) child_escalation: Option<String>,
 }
 
 impl SpanCtx {
-    fn ev(&self, kind: &str, payload: Value) -> EventEnvelope {
+    pub(crate) fn ev(&self, kind: &str, payload: Value) -> EventEnvelope {
         let mut e = EventEnvelope::new(&self.m.id, kind, payload);
         e.task_id = Some(self.task_id.clone());
         e.span_id = Some(self.span_id.clone());
@@ -180,7 +189,7 @@ impl SpanCtx {
         e
     }
 
-    fn agent_ev(&self, kind: &str, payload: Value, ep: &Endpoint, model_id: &str) -> EventEnvelope {
+    pub(crate) fn agent_ev(&self, kind: &str, payload: Value, ep: &Endpoint, model_id: &str) -> EventEnvelope {
         let mut e = self.ev(kind, payload);
         e.endpoint_id = Some(ep.id.clone());
         e.access_path = Some(ep.path.as_str().to_string());
@@ -380,7 +389,11 @@ impl Engine {
             }
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
-            let outcome = loop {
+            let harness_ep = if setup_error.is_none() { self.harness_endpoint(&sc.family) } else { None };
+            let outcome = if let Some(hep) = harness_ep {
+                // The whole span runs inside the subscription CLI (`harness_run.rs`).
+                self.run_harness(&mut sc, &ipr, &hep).await?
+            } else { loop {
                 if let Some(e) = setup_error.take() {
                     break Err(Escalate(e));
                 }
@@ -425,7 +438,7 @@ impl Engine {
                     break Ok(text);
                 }
                 pending = Some(calls);
-            };
+            } };
 
             let (status, text) = match outcome {
                 Ok(text) => (Status::Done, text),
@@ -791,8 +804,8 @@ impl Engine {
         {
             let mut idx = sc.m.index.lock().unwrap();
             for rel in report.changed.iter().take(500) {
-                let Ok(bytes) = std::fs::read(wt.path.join(rel)).map(|b| if b.len() > 8 << 20 { Vec::new() } else { b }) else { continue };
-                if bytes.is_empty() {
+                let Ok(bytes) = std::fs::read(wt.path.join(rel)) else { continue };
+                if bytes.len() > 8 << 20 {
                     continue;
                 }
                 let hash = blake3::hash(&bytes).to_hex().to_string();
@@ -809,7 +822,7 @@ impl Engine {
 
     /// Raise an approval card and wait for the answer. `None` means approved; `Some(result)` is the denial
     /// the model sees.
-    async fn ask(&self, sc: &SpanCtx, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
+    pub(crate) async fn ask(&self, sc: &SpanCtx, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
         let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
         self.ask_as(&who, tier, tool, pattern, summary, payload).await
     }
