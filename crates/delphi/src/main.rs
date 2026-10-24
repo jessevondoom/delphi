@@ -12,11 +12,14 @@ mod seed;
 mod selfupdate;
 mod setup;
 mod theme;
+mod update;
 
 use std::path::PathBuf;
 use std::process::exit;
 
 const USAGE: &str = "usage:
+  delphi update [--check] [--allow-downgrade] [--workspace <name>] [--home <dir>]
+  delphi rollback [--workspace <name>] [--home <dir>]
   delphi self-update [--check] [--version vX.Y.Z] [--rollback]
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
@@ -25,6 +28,7 @@ const USAGE: &str = "usage:
   delphi chat [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
+  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi --version";
 
@@ -36,10 +40,13 @@ fn main() {
         Some("lint") => cmd_lint(&args[1..]),
         Some("setup") => cmd_setup(&args[1..]),
         Some("self-update") => cmd_self_update(&args[1..]),
+        Some("update") => cmd_update(&args[1..], false),
+        Some("rollback") => cmd_update(&args[1..], true),
         Some("init") => cmd_init(&args[1..]),
         Some("doctor") => cmd_doctor(&args[1..]),
         Some("chat") => cmd_chat(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
+        Some("kb") => cmd_kb(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
         Some("endpoints") => cmd_core("endpoints", &args[1..]),
         Some("--version") | Some("version") => {
@@ -108,6 +115,13 @@ fn cmd_self_update(args: &[String]) -> i32 {
     };
     let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
     selfupdate::run(args, &selfupdate::RealNet, &dest, &api)
+}
+
+/// `delphi update` / `delphi rollback`: refresh (or restore) the built-in Zone 1 files of the workspaces.
+fn cmd_update(args: &[String], rollback: bool) -> i32 {
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    let only = flag(args, "--workspace");
+    update::run(&home, only.as_deref(), args.iter().any(|a| a == "--check"), args.iter().any(|a| a == "--allow-downgrade"), rollback)
 }
 
 /// `delphi setup`: detect, ask, write, ratify, prove (see `setup.rs`).
@@ -242,6 +256,24 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
         "auth" => delphi_engine::auth_cli::run(&ws.dir, &rest),
         _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
+}
+
+fn cmd_kb(args: &[String]) -> i32 {
+    let (_home, ws) = match resolve_ws("kb", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    // The flags that select the workspace are not part of the query.
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--workspace" || a == "--home" {
+            it.next();
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    delphi_engine::kb::run(&ws.dir, &rest)
 }
 
 fn cmd_doctor(args: &[String]) -> i32 {

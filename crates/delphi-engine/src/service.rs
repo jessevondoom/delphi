@@ -265,6 +265,36 @@ impl EngineService {
         Ok(Self::budget_json(&m))
     }
 
+    /// `kb.search`: pointers and previews from the workspace's knowledge base (read-only). `kb.index` refreshes it.
+    async fn kb_search(&self, p: Value) -> RpcOutcome {
+        let query = p["query"].as_str().unwrap_or("").to_string();
+        if query.trim().is_empty() || query.chars().count() > 500 {
+            return Err(err(code::INVALID_PARAMS, "`query` must be 1 to 500 characters"));
+        }
+        let (ws, role) = (self.engine.ws.dir.clone(), p["role"].as_str().map(String::from));
+        let hits = tokio::task::spawn_blocking(move || -> Result<Vec<crate::kb::Hit>, crate::kb::KbError> {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+            if kb.counts()?.0 == 0 {
+                kb.sync(&crate::kb::sources(&ws), "")?;
+            }
+            kb.search(&query, &crate::kb::SearchOpts { role, limit: 10, include_untrusted: false })
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(-32000, e.to_string()))?;
+        Ok(json!(hits.iter().map(|h| json!({"pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "blake3": h.blake3})).collect::<Vec<_>>()))
+    }
+
+    async fn kb_index(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let ws = self.engine.ws.dir.clone();
+        let rep = tokio::task::spawn_blocking(move || -> Result<crate::kb::IndexReport, crate::kb::KbError> { crate::kb::Kb::open(&ws.join("local/state.db"))?.sync(&crate::kb::sources(&ws), "") })
+            .await
+            .map_err(|e| err(-32000, e.to_string()))?
+            .map_err(|e| err(-32000, e.to_string()))?;
+        Ok(json!({"added": rep.added, "updated": rep.updated, "removed": rep.removed, "unchanged": rep.unchanged}))
+    }
+
     fn ratify_list(&self) -> RpcOutcome {
         let ps = crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir);
         Ok(Value::Array(ps.iter().map(|p| json!({"id": p.id, "kind": p.kind.as_str(), "summary": p.summary, "live_blake3": p.live_blake3, "ratified_blake3": p.ratified_blake3, "diff": p.diff.chars().take(20_000).collect::<String>()})).collect()))
@@ -347,6 +377,8 @@ impl Extension for ServiceExt {
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "build.start" => svc.build_start(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
+                "kb.search" => svc.kb_search(params).await,
+                "kb.index" => svc.kb_index(ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "usage.get" => svc.usage_get(params).await,
@@ -454,7 +486,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot"] {

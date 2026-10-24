@@ -264,6 +264,7 @@ pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
         Ok(i) => {
             println!("Installed {} at {} (the old version is kept as {}; `delphi self-update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
             println!("A running daemon keeps the old version until it restarts: `delphi daemon restart`.");
+            println!("Then run `delphi update` to refresh the built-in agents, skills and themes in your workspaces.");
             0
         }
         Err(e) => {

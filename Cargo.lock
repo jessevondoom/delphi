@@ -308,6 +308,7 @@ dependencies = [
  "delphi-sandbox",
  "libc",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml_ng",
