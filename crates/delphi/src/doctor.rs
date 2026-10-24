@@ -149,6 +149,9 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
 
+    // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
+    check_pool(ws, &cfg, &mut r);
+
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
     match (delphi_sandbox::detect(), wanted.as_str()) {
@@ -195,6 +198,23 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
         }
+    }
+}
+
+fn check_pool(ws: &Workspace, cfg_text: &str, r: &mut Report) {
+    let Ok(cfg) = delphi_adapter::config::Config::parse(cfg_text) else { return }; // a bad config is reported by the checks above
+    let configured = cfg.pool_entries().len();
+    if configured == 0 {
+        r.push(Level::Skipped, "11 model pool", "", "no model is configured yet");
+        return;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let stuck: Vec<_> = delphi_engine::pool::view(&ws.dir.join("local/pool-state.json"), now).into_iter().filter(|e| e.state == delphi_engine::pool::State::Exhausted).collect();
+    if stuck.is_empty() {
+        r.push(Level::Ok, "11 model pool", "", format!("{} model slot(s) configured, none known to be out of quota", configured));
+    }
+    for e in stuck {
+        r.warn("11 model pool", format!("{}/{}", e.endpoint_id, e.model_id), delphi_engine::pool::describe(&e, now));
     }
 }
 
@@ -547,6 +567,26 @@ mod tests {
         assert_eq!(r.exit_code(), 0);
         assert!(r.findings.iter().any(|f| f.check.starts_with("3") && f.level == Level::Ok));
         assert!(r.findings.iter().any(|f| f.check.starts_with("5") && f.level == Level::Ok));
+    }
+
+    // specs/002 §4.1: doctor says which models are out of quota, from the daemon's saved pool state.
+    #[test]
+    fn an_exhausted_model_is_a_warning_and_a_fresh_pool_is_ok() {
+        let (_t, home, ws, _p) = setup();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "11 model pool" && f.level == Level::Skipped), "placeholders only: nothing configured");
+        let mut cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap();
+        cfg = cfg.replace("workhorse = \"<claude workhorse model id>\"", "workhorse = \"sonnet-x\"");
+        cfg.push_str("\n[[endpoints]]\nid = \"direct\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\n");
+        fs::write(ws.dir.join("config.toml"), cfg).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "11 model pool" && f.level == Level::Ok && f.message.contains("1 model slot")), "{:?}", r.findings.iter().filter(|f| f.check.starts_with("11")).map(|f| &f.message).collect::<Vec<_>>());
+        let until = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + 3 * 86_400;
+        fs::write(ws.dir.join("local/pool-state.json"), format!(r#"{{"entries":[{{"endpoint_id":"direct","model_id":"sonnet-x","state":"exhausted","since":1,"until":{},"reason":"quota reached","throttles":[],"probe_interval_secs":900,"next_probe_at":null}}]}}"#, until)).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        let f = r.findings.iter().find(|f| f.check == "11 model pool" && f.level == Level::Warn).expect("a warning for the exhausted pair");
+        assert!(f.location == "direct/sonnet-x" && f.message.contains("quota reached") && (f.message.contains("in 2d") || f.message.contains("in 3d")), "{:?}", f);
+        assert_eq!(r.exit_code(), 0, "a spent quota is a warning, not a failure");
     }
 
     // specs/010 §9 (offline part): a connector with no ratified tool definitions offers agents nothing, and doctor says so.

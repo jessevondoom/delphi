@@ -59,8 +59,14 @@ max_parallel_agents = 4
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
 # Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.
+# Each model expands to every allowed endpoint that serves it, and its state is kept per endpoint and
+# model. `delphi models` shows where each stands; `delphi models --probe` re-checks them.
 # [routing.pool]
 # order = ["<claude frontier model id>", "<gemini frontier model id>", "<claude workhorse model id>"]
+# throttle_attempts = 3                # this many throttles in a row ...
+# throttle_window_secs = 600           # ... over at least this long count as a spent quota
+# reprobe_first_secs = 900             # an exhausted model with no known reset time is probed after this ...
+# reprobe_max_secs = 14400             # ... then at doubling intervals up to this
 # [routing.targets]                    # optional target model per role; a similar model is substituted if it is
 # red-team = "<model id>"              # unavailable, and a weaker one needs the operator's confirmation
 

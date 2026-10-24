@@ -72,6 +72,16 @@ fn describe(e: &ModelError) -> String {
     }
 }
 
+/// The cheapest possible "is it back?" check: one capped one-word call (`specs/002` §4.1 re-probe).
+pub async fn probe_alive(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_id: &str) -> Result<(), ModelError> {
+    let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: model_id.to_string() };
+    let plain = CompileOptions { max_tokens: PLAIN_MAX_TOKENS, thinking_budget: None, temperature: None, tools: vec![], betas: ep.betas.clone() };
+    let compiled = delphi_adapter::compile_for(ep, &probe_ipr("Reply with exactly the word OK."), &[], &target, &plain).map_err(|e| ModelError::Refused(e.to_string()))?;
+    let _ = cfg;
+    let mut sink = |_e: delphi_adapter::claude::StreamEvent| {};
+    model.call(ep, model_id, &compiled, &mut sink).await.map(|_| ())
+}
+
 /// Probe one endpoint × model. Never panics and never leaves the endpoint it was given.
 pub async fn probe(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_id: &str, now: i64) -> Capability {
     let mut cap = Capability {

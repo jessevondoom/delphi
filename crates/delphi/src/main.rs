@@ -30,6 +30,7 @@ const USAGE: &str = "usage:
   delphi lint --repo <path>
   delphi chat [--plain] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
+  delphi models [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
   delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
@@ -58,6 +59,7 @@ fn main() {
         Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
         Some("endpoints") => cmd_core("endpoints", &args[1..]),
+        Some("models") => cmd_core("models", &args[1..]),
         Some("--version") | Some("version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
@@ -282,6 +284,7 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
     match sub {
         "connectors" => delphi_engine::connectors_cli::run(&ws.dir, &rest),
         "auth" => delphi_engine::auth_cli::run(&ws.dir, &rest),
+        "models" => delphi_engine::models_cli::run(&ws.dir, &rest),
         _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
 }
