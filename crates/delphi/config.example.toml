@@ -61,8 +61,8 @@ max_parallel_agents = 4
 # Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.
 # [routing.pool]
 # order = ["<claude frontier model id>", "<gemini frontier model id>", "<claude workhorse model id>"]
-# [routing.pins]                       # optional: a pinned role parks on exhaustion instead of promoting
-# red-team = "<model id>"
+# [routing.targets]                    # optional target model per role; a similar model is substituted if it is
+# red-team = "<model id>"              # unavailable, and a weaker one needs the operator's confirmation
 
 [budget]
 mission_budget_usd = 5.0             # D-10: L1–L3 work (enforced with pre-dispatch cost reservations)

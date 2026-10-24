@@ -218,9 +218,13 @@ Promotion prefers a model whose reasoning is replayable from the failed one (sam
 **Preferences degrade, constraints do not.**
 - *Preferences:* `[H-007]`/`[H-008]` family separation, the "≥2 families" Council rule, long-context routing and tier choice. If only one family or tier is left, the request degrades (a different tier of the same family, then a fresh-context pass of the same model) and the result is marked `homogeneous` or `degraded_tier`.
 - *Constraints:* taint rules, approvals, `[access]` endpoint policy, budgets, and the read-only limit of harnesses without an approval bridge (spec 009 §7B). Promotion never relaxes these.
-- If no eligible model remains, the task becomes `blocked: no_model` (reset times in the event) and resumes when one returns. It neither fails nor runs on an ineligible model.
+- If no model meets the hard requirements, the task becomes `blocked: no_model` (reset times in the event) and resumes when one returns. It neither fails nor runs on an ineligible model.
 
-**No fixed role-to-model mapping.** Neither this spec nor `context/model-capabilities.md` assigns a role to a named model; examples there are defaults. The only pins are explicit operator config (`[routing.pins]`); a pinned role parks instead of promoting.
+**Targets and confirmation.** Neither this spec nor `context/model-capabilities.md` assigns a role to a named model; examples there are defaults. Each role may have a *target model* (`[routing.targets]`, otherwise the first pool entry that is eligible). Delphi tries to satisfy the target and otherwise substitutes:
+1. **Target available:** use it.
+2. **Target unavailable, a *similar* model exists** (eligible, and at least the target's tier with no shorter context): substitute automatically and emit `model.promoted`.
+3. **Only *weaker* eligible models exist:** do not stop. Emit `model.degraded_confirm` (an approval card naming the target, the substitute and what is lost). The span runs on the substitute only after the operator confirms; declining waits for the target's reset. Confirmation covers that task, not the mission, and is recorded in the ledger. With no operator present (unattended runs) the task waits instead of assuming consent.
+4. **No eligible model:** `blocked: no_model` as above.
 
 **Tests (when implemented):**
 1. Exhaustion of the primary mid-span promotes at a turn boundary with no orphaned tool call.
@@ -229,6 +233,7 @@ Promotion prefers a model whose reasoning is replayable from the failed one (sam
 4. Promotion never selects an endpoint outside `allowed_endpoints`.
 5. With one family left a Council runs `homogeneous` instead of blocking.
 6. With no eligible model the task parks and resumes.
+6a. A similar substitute runs without a prompt; a weaker one raises `model.degraded_confirm` and does not run until confirmed, and declining waits for the target.
 7. Promotion does not consume a retry attempt.
 
 ---
