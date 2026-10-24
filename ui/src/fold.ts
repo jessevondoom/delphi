@@ -1,15 +1,16 @@
 // The event fold: daemon notifications in, the console's state out. Pure, so it is tested without a terminal.
 import { sanitize, type AgentState } from './theme.ts';
 
-export type Block = { id: number; kind: 'user' | 'reply' | 'note'; role?: string; text: string; at: number; status?: string };
+export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card'; role?: string; text: string; at: number; status?: string; ref?: string };
 export type Agent = { state: AgentState; doing: string };
+export type Approval = { id: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 export type State = {
   blocks: Block[];
   live: string;
   spans: Record<string, { role: string; depth: number }>;
   agents: Record<string, Agent>;
   tokens: number;
-  approvals: Record<string, { role: string; tool: string; at: number; tier: string }>;
+  approvals: Record<string, Approval>;
   alert: { role: string; until: number } | null;
   lastActivity: number;
   nextId: number;
@@ -24,6 +25,15 @@ const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist',
 
 export function addBlock(s: State, b: Omit<Block, 'id'>): State {
   return { ...s, blocks: [...s.blocks, { ...b, id: s.nextId }], nextId: s.nextId + 1 };
+}
+
+/** The event's own time when it has one (history), else the time it arrived. */
+const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? ''); return Number.isNaN(t) ? now : t; };
+
+/** Past events into blocks, for reopening a mission: what was said and done, not what was pending. */
+export function replay(s: State, events: any[]): State {
+  const KEEP = new Set(['task.created', 'task.output', 'task.failed', 'dag.node.added', 'council.started', 'council.barrier.released']);
+  return events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
 }
 
 const setAgent = (s: State, role: string, a: Agent): State => ({ ...s, agents: { ...s.agents, [role]: a } });
@@ -49,6 +59,10 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const next = { ...s, spans: { ...s.spans, [String(pl.node_id)]: { role, depth: Number(pl.depth ?? 0) } }, lastActivity: now };
       return setAgent(next, role, { state: 'running', doing: 'working' });
     }
+    case 'task.created': {
+      if (pl.flow === 'build' && !pl.prompt) return s;
+      return addBlock({ ...s, lastActivity: now }, { kind: 'user', text: sanitize(String(pl.prompt ?? '')), at: stamp(e, now) });
+    }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {
@@ -58,7 +72,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       for (const [r, a] of Object.entries(s.agents)) idle[r] = a.state === 'waiting on you' ? a : { state: 'idle', doing: '' };
       const escalated = pl.status === 'escalated';
       const next = addBlock({ ...s, live: '', council: false, agents: idle, lastActivity: now }, {
-        kind: 'reply', role, text: sanitize(String(pl.text ?? '')), at: now, status: escalated ? 'escalated' : 'done',
+        kind: 'reply', role, text: sanitize(String(pl.text ?? '')), at: stamp(e, now), status: escalated ? 'escalated' : 'done',
       });
       return escalated ? setAgent(next, role, { state: 'escalated', doing: '' }) : next;
     }
@@ -66,15 +80,18 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     case 'approval.requested': {
       const id = String(pl.approval_id ?? '');
       const role = String(pl.role ?? 'orchestrator');
-      const secs = Number(pl.timeout_s ?? pl.expires_in_s ?? 600);
-      const next = { ...s, approvals: { ...s.approvals, [id]: { role, tool: String(pl.tool ?? ''), at: now, tier: String(pl.tier ?? '') } }, lastActivity: now };
-      return setAgent({ ...next, alert: { role, until: now + secs * 1000 } }, role, { state: 'waiting on you', doing: 'decision needed' });
+      const secs = Number(pl.timeout_secs ?? pl.timeout_s ?? pl.expires_in_s ?? 600);
+      const card: Approval = { id, role, tool: String(pl.tool ?? ''), tier: String(pl.tier ?? 'amber'), summary: sanitize(String(pl.summary ?? '')), preview: sanitize(String(pl.payload?.preview ?? '')), blake3: String(pl.payload_blake3 ?? ''), payload: pl.payload, at: now, timeoutS: secs };
+      const next = { ...s, approvals: { ...s.approvals, [id]: card }, lastActivity: now };
+      const shown = addBlock(next, { kind: 'card', role, text: [card.summary, ...card.preview.split('\n').slice(0, 6).map((l) => '  ' + l.slice(0, 100))].filter(Boolean).join('\n'), at: now, status: card.tier, ref: id });
+      return setAgent({ ...shown, alert: { role, until: now + secs * 1000 } }, role, { state: 'waiting on you', doing: 'decision needed' });
     }
     case 'approval.resolved': {
       const { [String(pl.approval_id)]: gone, ...left } = s.approvals;
       const ids = Object.values(left);
       const alert = ids.length ? { role: ids[0]!.role, until: s.alert?.until ?? now } : null;
-      const next = { ...s, approvals: left, alert, lastActivity: now };
+      const said = addBlock({ ...s, approvals: left, alert, lastActivity: now }, { kind: 'note', text: `approval ${pl.approval_id}: ${pl.resolution ?? 'resolved'}${pl.by ? ` (by ${pl.by})` : ''}`, at: now });
+      const next = said;
       return gone && !ids.some((a) => a.role === gone.role) ? setAgent(next, gone.role, { state: 'running', doing: 'working' }) : next;
     }
     default: return s;

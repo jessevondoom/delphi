@@ -7,6 +7,7 @@ import { textOf } from './composer.ts';
 import { status, type Block, type State } from './fold.ts';
 import * as T from './theme.ts';
 import chalk from 'chalk';
+import wrapAnsi from 'wrap-ansi';
 
 export type Model = {
   info: T.Info; pal: T.Pal; state: State; now: number; deck: 0 | 1 | 2;
@@ -40,15 +41,35 @@ export function footer(m: Model, w: number): string {
   return T.spread(left, nav(m.deck), w);
 }
 
-function block(b: Block, m: Model, w: number): string[] {
+const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(10, w), { hard: true, trim: false }).split('\n');
+
+function render(b: Block, m: Model, w: number): string[] {
   if (b.kind === 'user') {
-    const lines = b.text.split('\n');
+    const lines = b.text.split('\n').flatMap((l) => wrap(l, w - 2));
     return ['', ...lines.map((l, i) => (i === 0 ? T.dim('❯ ') : '  ') + T.text(m.pal)(l))];
   }
-  if (b.kind === 'note') return ['', '  ' + T.dim(b.text)];
+  if (b.kind === 'note') return ['', ...b.text.split('\n').flatMap((l) => wrap(l, w - 2)).map((l) => '  ' + T.dim(l))];
+  if (b.kind === 'card') {
+    const red = b.status === 'red';
+    const who = T.roleName(b.role ?? 'orchestrator', m.info);
+    const head = (red ? T.crimson : T.warn)(`── approval needed [${red ? 'RED — never auto-approved' : 'amber'}]`) + T.dim(` · ${who}`);
+    const keys = T.dim(`/y approve once${red ? '' : ' · /a allow similar this task'} · /n reject · /d view all`);
+    return ['', head, ...b.text.split('\n').flatMap((l) => wrap(l, w - 2)).map((l) => '  ' + l), '  ' + keys];
+  }
   const role = b.role ?? 'orchestrator';
   const head = T.badge(role, b.status === 'escalated' ? 'escalated' : 'idle', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(` · ${role} · ${clock(b.at)}`);
   return ['', head, ...renderMarkdown(b.text, w - 2).map((l) => '  ' + l)];
+}
+
+// Finished blocks never change, so each is rendered once per width and palette. A long session stays cheap.
+const cache = new WeakMap<Block, { key: string; lines: string[] }>();
+function block(b: Block, m: Model, w: number): string[] {
+  const key = `${w}:${m.pal.dark}:${JSON.stringify(m.info.roles)}`;
+  const hit = cache.get(b);
+  if (hit && hit.key === key) return hit.lines;
+  const lines = render(b, m, w);
+  cache.set(b, { key, lines });
+  return lines;
 }
 
 /** Every transcript line, oldest first. The unfinished reply is dim at the bottom. */
@@ -64,6 +85,7 @@ const HELP = [
   '  pgup pgdn or the mouse wheel scroll · shift+← shift+→ move between decks',
   '  ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave',
   '  / opens the command menu · tab or enter completes',
+  '  answer a waiting approval with /y /a /n /d · @architect … sends to one role',
 ];
 
 function deckBody(m: Model, w: number, h: number): string[] {
@@ -92,7 +114,7 @@ export function frame(m: Model, w: number, h: number): string[] {
     const back = Math.min(m.back, maxBack);
     body = lines.slice(Math.max(0, lines.length - bodyH - back), lines.length - back);
     while (body.length < bodyH) body.unshift('');
-    if (back > 0) body[bodyH - 1] = T.spread('', chalk.hex('#facc15')(`↓ ${back} lines below · pgdn`), w);
+    if (back > 0) body[bodyH - 1] = T.spread('', chalk.hex('#facc15')(`↓ ${back} lines below · pgdn · new output waits here`), w);
     if (menu.length) {
       const shown = menu.slice(0, 4), sel = Math.min(m.menuSel, shown.length - 1);
       shown.forEach((c, i) => {
