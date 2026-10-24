@@ -111,21 +111,55 @@ fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// The `delphi` file inside a release tarball (any directory prefix; nothing else is ever extracted).
-fn binary_from_tarball(gz: &[u8]) -> Result<Vec<u8>> {
+/// One named executable inside a release tarball (any directory prefix; nothing else is ever extracted).
+fn file_from_tarball(gz: &[u8], want: &str) -> Result<Option<Vec<u8>>> {
     let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(gz));
     for entry in ar.entries()? {
         let entry = entry?;
-        if entry.header().entry_type().is_file() && entry.path()?.file_name().is_some_and(|n| n == "delphi") {
+        if entry.header().entry_type().is_file() && entry.path()?.file_name().is_some_and(|n| n == want) {
             let mut out = Vec::new();
             entry.take(MAX_BINARY + 1).read_to_end(&mut out)?;
             if out.len() as u64 > MAX_BINARY {
-                bail!("the binary in the release is implausibly large");
+                bail!("`{}` in the release is implausibly large", want);
             }
-            return Ok(out);
+            return Ok(Some(out));
         }
     }
-    bail!("the release tarball has no `delphi` file")
+    Ok(None)
+}
+
+/// The `delphi` file of a release.
+fn binary_from_tarball(gz: &[u8]) -> Result<Vec<u8>> {
+    file_from_tarball(gz, "delphi")?.ok_or_else(|| anyhow!("the release tarball has no `delphi` file"))
+}
+
+/// Write `bytes` as an executable beside `dest`, and check that it runs and reports `tag_version` as its last word.
+fn stage(dir: &Path, name: &str, bytes: &[u8], tag: &str) -> Result<PathBuf> {
+    let tmp = dir.join(format!(".{}-new-{}", name, std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let out = std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output().with_context(|| format!("the new {} does not run on this machine", name))?;
+    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let tag_version = tag.trim_start_matches('v');
+    if !out.status.success() || tag_version.is_empty() || said.split_whitespace().last() != Some(tag_version) {
+        let _ = std::fs::remove_file(&tmp);
+        bail!("the new {} reports `{}`, not {}; nothing was changed", name, said, tag);
+    }
+    Ok(tmp)
+}
+
+/// Keep `live` as `backup` for rollback unless it already is this version, and never leave a half-written backup.
+fn keep_backup(live: &Path, backup: &Path, new_version_output: &[u8]) -> Result<()> {
+    let same = std::process::Command::new(live).arg("--version").stdin(std::process::Stdio::null()).output().is_ok_and(|o| o.status.success() && o.stdout.trim_ascii() == new_version_output.trim_ascii());
+    if live.exists() && !same {
+        let part = backup.with_file_name(format!(".backup-{}", std::process::id()));
+        std::fs::copy(live, &part).context("could not keep the old version for rollback")?;
+        std::fs::rename(&part, backup).context("could not keep the old version for rollback")?;
+    }
+    Ok(())
 }
 
 /// Download, verify and swap in `rel` for `dest`.
@@ -140,35 +174,39 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
         bail!("the download does not match its checksum (wanted {}, got {}); nothing was changed", if want.is_empty() { "none".to_string() } else { want }, got);
     }
     let bin = binary_from_tarball(&tarball)?;
+    // The full-screen console ships beside `delphi` and must be the same release (it speaks to this daemon).
+    let ui = file_from_tarball(&tarball, "delphi-ui")?;
     let dir = dest.parent().ok_or_else(|| anyhow!("{} has no directory", dest.display()))?;
-    let tmp = dir.join(format!(".delphi-new-{}", std::process::id()));
+    let ui_dest = dir.join("delphi-ui");
+    let mut staged: Vec<PathBuf> = Vec::new();
     let result = (|| -> Result<Installed> {
-        std::fs::write(&tmp, &bin)?;
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-        }
-        // It must run and be the version it claims to be, before it replaces anything.
-        let out = std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output().context("the new binary does not run on this machine")?;
-        let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let tag_version = rel.tag.trim_start_matches('v');
-        if !out.status.success() || tag_version.is_empty() || said.split_whitespace().last() != Some(tag_version) {
-            bail!("the new binary reports `{}`, not {}; nothing was changed", said, rel.tag);
-        }
+        // Everything is staged and checked before anything is replaced.
+        let new = stage(dir, "delphi", &bin, &rel.tag)?;
+        staged.push(new.clone());
+        let new_ui = match &ui {
+            Some(u) => {
+                let p = stage(dir, "delphi-ui", u, &rel.tag)?;
+                staged.push(p.clone());
+                Some(p)
+            }
+            None => None,
+        };
+        let out = std::process::Command::new(&new).arg("--version").stdin(std::process::Stdio::null()).output()?;
         let backup = dir.join("delphi.prev");
-        // Keep the old version for rollback, unless it is the same version (that would replace the real fallback),
-        // and never leave a half-written backup behind.
-        let same = std::process::Command::new(dest).arg("--version").stdin(std::process::Stdio::null()).output().is_ok_and(|o| o.status.success() && o.stdout.trim_ascii() == out.stdout.trim_ascii());
-        if dest.exists() && !same {
-            let part = dir.join(format!(".delphi-prev-{}", std::process::id()));
-            std::fs::copy(dest, &part).context("could not keep the old version for rollback")?;
-            std::fs::rename(&part, &backup).context("could not keep the old version for rollback")?;
+        keep_backup(dest, &backup, &out.stdout)?;
+        if let Some(p) = &new_ui {
+            let out_ui = std::process::Command::new(p).arg("--version").stdin(std::process::Stdio::null()).output()?;
+            keep_backup(&ui_dest, &dir.join("delphi-ui.prev"), &out_ui.stdout)?;
+            std::fs::rename(p, &ui_dest).context("could not replace delphi-ui")?;
+        } else if ui_dest.exists() {
+            // An older release has no UI: leave the old one out of play so a stale console never meets a new daemon.
+            let _ = std::fs::rename(&ui_dest, dir.join("delphi-ui.prev"));
         }
-        std::fs::rename(&tmp, dest).context("could not replace the executable (is the directory writable?)")?;
+        std::fs::rename(&new, dest).context("could not replace the executable (is the directory writable?)")?;
         Ok(Installed { tag: rel.tag.clone(), backup })
     })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    for p in staged {
+        let _ = std::fs::remove_file(p);
     }
     result
 }
@@ -187,6 +225,10 @@ pub fn rollback(dest: &Path) -> Result<()> {
             bail!("the saved previous version does not run; leaving the current one in place");
         }
         std::fs::rename(&tmp, dest).context("could not restore the previous executable")?;
+        let ui_backup = dest.with_file_name("delphi-ui.prev");
+        if ui_backup.exists() {
+            let _ = std::fs::copy(&ui_backup, dest.with_file_name("delphi-ui")); // best effort: without it the inline console runs
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -289,10 +331,18 @@ mod tests {
     }
 
     fn tarball(script: &str) -> Vec<u8> {
+        tarball_with(script, None)
+    }
+
+    fn tarball_with(script: &str, ui: Option<&str>) -> Vec<u8> {
         let mut tar_bytes = Vec::new();
         {
             let mut b = tar::Builder::new(&mut tar_bytes);
-            for (name, body) in [("delphi-x/README.md", "readme".as_bytes()), ("delphi-x/delphi", script.as_bytes())] {
+            let mut files: Vec<(&str, &[u8])> = vec![("delphi-x/README.md", "readme".as_bytes()), ("delphi-x/delphi", script.as_bytes())];
+            if let Some(u) = ui {
+                files.push(("delphi-x/delphi-ui", u.as_bytes()));
+            }
+            for (name, body) in files {
                 let mut h = tar::Header::new_gnu();
                 h.set_size(body.len() as u64);
                 h.set_mode(0o755);
@@ -310,7 +360,11 @@ mod tests {
 
     /// A release server with one version whose binary is a script that prints `version`.
     fn server(tag: &str, version_printed: &str, sum_override: Option<&str>) -> (Fake, String) {
-        let tgz = tarball(&format!("#!/bin/sh\necho 'delphi {}'\n", version_printed));
+        server_with_ui(tag, version_printed, sum_override, None)
+    }
+
+    fn server_with_ui(tag: &str, version_printed: &str, sum_override: Option<&str>, ui_version: Option<&str>) -> (Fake, String) {
+        let tgz = tarball_with(&format!("#!/bin/sh\necho 'delphi {}'\n", version_printed), ui_version.map(|v| format!("#!/bin/sh\necho 'delphi-ui {}'\n", v)).as_deref());
         let name = format!("delphi-{}-{}.tar.gz", tag, T);
         let sum = sum_override.map(String::from).unwrap_or_else(|| sha256_hex(&tgz));
         let mut m = BTreeMap::new();
@@ -358,6 +412,46 @@ mod tests {
         assert!(std::fs::read_dir(d.path()).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".delphi-new")), "no temp file is left behind");
         rollback(&dest).unwrap();
         assert!(std::fs::read_to_string(&dest).unwrap().contains("0.1.0"));
+    }
+
+    fn executable(path: &Path, body: &str) {
+        std::fs::write(path, body).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn the_full_screen_console_is_updated_and_rolled_back_with_delphi_and_must_match_the_release() {
+        let d = tempfile::tempdir().unwrap();
+        let (dest, ui) = (d.path().join("delphi"), d.path().join("delphi-ui"));
+        executable(&dest, "#!/bin/sh\necho 'delphi 0.1.0'\n");
+        executable(&ui, "#!/bin/sh\necho 'delphi-ui 0.1.0'\n");
+        // A UI that reports another version is refused, and nothing changes.
+        let (net, api) = server_with_ui("v0.2.0", "0.2.0", None, Some("0.0.9"));
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        assert!(install(&net, &rel, T, &dest).unwrap_err().to_string().contains("new delphi-ui reports"));
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.1.0") && std::fs::read_to_string(&ui).unwrap().contains("0.1.0"));
+        // Matching versions: both are replaced, both backed up, both restored by rollback.
+        let (net, api) = server_with_ui("v0.2.0", "0.2.0", None, Some("0.2.0"));
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        install(&net, &rel, T, &dest).unwrap();
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.0") && std::fs::read_to_string(&ui).unwrap().contains("0.2.0"));
+        assert!(std::fs::read_to_string(d.path().join("delphi-ui.prev")).unwrap().contains("0.1.0"));
+        rollback(&dest).unwrap();
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.1.0") && std::fs::read_to_string(&ui).unwrap().contains("0.1.0"));
+        assert!(std::fs::read_dir(d.path()).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("-new-")), "no staged file is left behind");
+    }
+
+    #[test]
+    fn a_release_without_a_console_does_not_leave_an_old_one_beside_a_new_daemon() {
+        let d = tempfile::tempdir().unwrap();
+        let (dest, ui) = (d.path().join("delphi"), d.path().join("delphi-ui"));
+        executable(&dest, "#!/bin/sh\necho 'delphi 0.1.0'\n");
+        executable(&ui, "#!/bin/sh\necho 'delphi-ui 0.1.0'\n");
+        let (net, api) = server("v0.2.0", "0.2.0", None);
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        install(&net, &rel, T, &dest).unwrap();
+        assert!(!ui.exists() && d.path().join("delphi-ui.prev").exists(), "the stale console is set aside");
     }
 
     #[test]

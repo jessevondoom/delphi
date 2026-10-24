@@ -43,11 +43,26 @@ jobs:
         run: rustup target add ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p delphi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Build the full-screen console (pinned dependencies, no install scripts, one executable)
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check-deps
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) bun=bun-darwin-arm64 ;;
+            x86_64-apple-darwin) bun=bun-darwin-x64 ;;
+            x86_64-unknown-linux-gnu) bun=bun-linux-x64 ;;
+            aarch64-unknown-linux-gnu) bun=bun-linux-arm64 ;;
+          esac
+          dev/build.sh "${GITHUB_REF_NAME#v}" "$PWD/dist/delphi-ui" "$bun"
       - name: Package
         run: |
           name="delphi-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/delphi" LICENSE README.md "dist/$name/"
+          cp "target/${{ matrix.target }}/release/delphi" ui/dist/delphi-ui LICENSE README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
           rm -rf "dist/$name"
@@ -122,7 +137,7 @@ jobs:
             echo '  end'
             echo
             echo '  def install'
-            echo '    bin.install "delphi"'
+            echo '    bin.install "delphi", "delphi-ui"'
             echo '  end'
             echo
             echo '  test do'

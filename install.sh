@@ -106,6 +106,17 @@ stage="$(mktemp "$DIR/.delphi.XXXXXX")"
 trap 'rm -rf "$tmp"; rm -f "$stage"' EXIT INT TERM
 cp "$bin" "$stage" || die "could not copy the binary into $DIR"
 chmod 755 "$stage" || die "could not make the binary executable"
+# The full-screen console ships beside delphi (releases before it was added have none). It must be the same release.
+ui="$tmp/delphi-$VERSION-$target/delphi-ui"
+if tar -xzf "$tmp/$name" -C "$tmp" "delphi-$VERSION-$target/delphi-ui" 2>/dev/null && [ -f "$ui" ] && [ ! -L "$ui" ]; then
+  [ "$("$ui" --version 2>/dev/null)" = "delphi-ui ${VERSION#v}" ] || die "the downloaded delphi-ui does not run here or is not release $VERSION"
+  [ ! -L "$DIR/delphi-ui" ] || die "$DIR/delphi-ui is a symlink; remove it first"
+  ui_stage="$(mktemp "$DIR/.delphi-ui.XXXXXX")"
+  trap 'rm -rf "$tmp"; rm -f "$stage" "$ui_stage"' EXIT INT TERM
+  cp "$ui" "$ui_stage" && chmod 755 "$ui_stage" && mv -f "$ui_stage" "$DIR/delphi-ui" || die "could not install delphi-ui"
+else
+  rm -f "$DIR/delphi-ui"   # an older release: never leave a console from another version beside this one
+fi
 mv -f "$stage" "$DIR/delphi" || die "could not move the binary into place"
 say "Installed $("$DIR/delphi" --version) to $DIR/delphi"
 

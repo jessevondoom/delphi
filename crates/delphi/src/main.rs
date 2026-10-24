@@ -244,7 +244,11 @@ fn cmd_chat(args: &[String]) -> i32 {
     let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
     if on_terminal && !args.iter().any(|a| a == "--plain" || a == "--inline") {
         if let Some(ui) = ui_executable() {
-            return chat::launch_ui(&ui, &home, &ws.dir, flag(args, "--mission"), &names);
+            // Exit code 3: the console is not the same release as this program; the inline console takes over.
+            let code = chat::launch_ui(&ui, &home, &ws.dir, flag(args, "--mission"), &names);
+            if code != 3 {
+                return code;
+            }
         }
     }
     if on_terminal && !args.iter().any(|a| a == "--plain") {
