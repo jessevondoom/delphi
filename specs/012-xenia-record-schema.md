@@ -101,7 +101,7 @@ For each record `records/<kind>/<id>.md` there is a sidecar `records/<kind>/<id>
 - **Strict Ed25519 verification is mandatory** (RFC 8032 strict: reject non-canonical `S`, small-order public keys and non-canonical encodings; no batch or lenient (ZIP-215) mode for validity decisions). The repository carries test vectors, including known-bad ones (§10 test 20).
 - The verifier recomputes the hash from the bytes it has. Line endings are LF, normalized **by the publisher before hashing**; the verifier never rewrites bytes. The store's `.gitattributes` (§7) keeps checkouts byte-exact.
 - `signed_at` and `roster_epoch` are inside the signature so they cannot be altered, but the author chooses them, so **no validity, revocation or ordering decision may depend on them** (spec 011 §3.4). They exist for debugging and for explaining a rejection.
-- **Verification precedes parsing.** The verifier reads the sidecar (strict JSON, fixed fields, at most 1 KiB), checks the signer's standing in the roster, checks hash and signature over the raw bytes, and only then parses the YAML (§6).
+- **Verification precedes parsing.** The verifier reads the sidecar (strict JSON, fixed fields, at most 1 KiB), checks the hash and the strict signature over the raw bytes, then the signer's standing in the roster (the same order as spec 011 §3.4), and only then parses the YAML (§6).
 
 **Roster and freshness signatures** use the same discipline:
 - `roster/epochs/<n>.sigs.json` is `{ "epoch": <int>, "signatures": [ { "kid": "did:key:…", "sig": "base64url…" } ] }`, each `sig` over `xenia-roster/1\n<org>\n<store>\n<epoch>\n<blake3 of <n>.json>`. Signatures count per **person** (spec 011 §3.2); duplicate people count once.
@@ -180,7 +180,8 @@ note: string                              # <= 200 chars
   1. If the author has a valid tombstone, its `action` decides, **except** that a steward's `withdraw` with `reason: sensitive` can be reversed only by that steward.
   2. Otherwise, if every valid steward tombstone says the same `action`, that decides.
   3. Otherwise the status is **`contested`**: hidden like a withdrawn record, and `delphi xenia status` names the stewards so humans or admins resolve it.
-- A `withdraw` keeps effect after its signer is removed, unless admins set `voids_tombstones` on that signer's roster entry (spec 011 §7.4).
+- A `withdraw` keeps effect after its signer is no longer `active` (retired or removed), unless the signer's roster entry has `voids_tombstones` (mandatory with `rotate --compromised`); `restore` from a non-active DID has no effect (spec 011 §3.4.3, §7.4). "That steward" in the `sensitive` rule means the same **person** through the `successor` chain.
+- If two tombstone files by one signer for one target exist with different ULIDs, the smallest ULID survives and the other is quarantined as `duplicate` (spec 011 §3.4.5); this is a tie-break only and never decides effect.
 - `sensitive` should trigger the rotate-secrets reminder (spec 011 §7.1).
 
 ---
@@ -220,8 +221,9 @@ xenia-<org>/                      # a git repository (the "store")
 │   │   ├── 1.sigs.json           # { epoch, signatures:[{kid, sig}] }; epoch 1 signed by all founding admins
 │   │   ├── 2.json                # prev_hash = blake3 of 1.json; signed by a majority (per person) of epoch 1's active admins
 │   │   └── 2.sigs.json
-│   ├── freshness.json            # { org, store, epoch, epoch_hash, store_head, issued_at, expires_at }  (spec 011 §4)
-│   └── freshness.sigs.json       # one active admin of the named epoch
+│   ├── freshness.json            # { org, store, epoch, epoch_hash, store_head, issued_at, expires_at, rewrite_of? }  (spec 011 §4)
+│   │                             #   `rewrite_of` (the replaced head) is present only for a rewrite-recovery statement
+│   └── freshness.sigs.json       # one active admin of the named epoch; an admin QUORUM (per person) when `rewrite_of` is present
 ├── records/
 │   ├── memory/<id>.md            # one file per record; overwritten on a new rev (history is git's)
 │   ├── memory/<id>.sig.json
@@ -234,7 +236,7 @@ xenia-<org>/                      # a git repository (the "store")
 - **Clone location:** the store is cloned to `$DELPHI_HOME/xenia/<org>/<store>/`, outside every workspace zone, readable only by `delphi-core` (spec 011 §3.3.5). It never sits under `team/`, so it cannot take the `team/` origin default tier.
 - Writes are append-style: add a file, or overwrite a record with a higher `rev` (a valid sidecar must accompany it). **Deleting any file under `records/` or `roster/` is tampering** (spec 011 §4.2.3).
 - The store carries **no** operator-scope data, no tokens and no private keys. The roster contains public DIDs only.
-- One store = one audience (spec 011 §5.4). Each is pinned locally in `team/xenia/stores.toml`.
+- One store = one audience (spec 011 §5.4). Each is pinned locally in `$DELPHI_HOME/xenia/<org>/<store>/state/pins.toml`, never in `team/` (spec 011 §3.5).
 
 ---
 
@@ -249,7 +251,8 @@ On ingestion `delphi-core` creates a **local cache entry** (never a file in the 
 | `timestamp` | record `updated` |
 | `source_type` | computed (spec 011 §5.1): `federated_verified`, `federated_peer` or `external_untrusted` |
 | `confidence` | record `confidence`, **capped at `medium` unless a local replay makes it `verified`** |
-| `status` | active→`active`; superseded→`superseded`; withdrawn, or tombstoned or `contested`→`superseded` and hidden |
+| `status` | active→`active`; superseded, author-`withdrawn`, tombstoned or `contested`→`superseded` and hidden |
+| `superseded_by` | required when `status` is `superseded` (spec 001 §5): the local id of the superseding record if `supersedes` names one, otherwise `tombstone:<tombstone id>`, `author-withdrawn` or `contested` |
 | `source_mission` | `xenia:<org>` |
 | `tags` | record `tags` |
 | `ttl_missions` | derived from `review_by` |
@@ -271,21 +274,24 @@ The provenance index stamp is written by the daemon as a `provenance.stamp` even
 3. **Detached-signature test:** change one byte of the `.md`; change only the sidecar `hash`; use a `kid` different from `author`: each fails.
 4. **Domain-binding test:** copy a valid record and sidecar into another store of the same org; rename the files to another `id`; move them to another kind directory; present them under another `kid`: each fails signature verification.
 5. **Path/id test:** a file at `records/memory/B.md` whose frontmatter `id` is `A` is rejected, even if its signature is valid for `B`; two files can never present the same `id`.
-6. **Monotonic rev and ownership test:** a record whose `rev` is not greater than the stored one is rejected; a different member cannot reuse an existing `id`; a successor of the creator can publish the next `rev`.
+6. **Monotonic rev and ownership test:** a record whose `rev` is not greater than the stored one is rejected; a different member cannot reuse an existing `id`; a successor of the creator can publish the next `rev`; on a **fresh install** a record overwritten by a different member at a higher `rev` is detected as a takeover through the history walk (signer continuity, spec 011 §4.2.3).
 7. **Author state test:** an author's `withdrawn → active` is rejected; `active → superseded` with a valid `supersedes` is accepted.
 8. **Endorsement binding test:** an endorsement of `id@2` does not apply to `id@3`; one whose `target_hash` does not match the recomputed hash is ignored; one without `target_hash` is rejected; replacing a record's bytes at the same `rev` voids the endorsement.
 9. **Tombstone resolution test:** author beats stewards; stewards in disagreement give `contested` (hidden); a `sensitive` steward withdraw is reversed only by that steward; a far-future ULID gains no priority; a second tombstone record by the same signer for the same target is rejected unless it is a higher `rev` of the first; area coverage uses the union of tags across revisions.
 10. **Pointer rules test:** `file:`, local paths, `delphi://` URIs, userinfo URLs, signed-URL query tokens and a `drive` pointer in Phase 1 are rejected at publish and at ingest; a scheme outside the allowlist is rejected.
 11. **No-fetch test:** a run with all network access denied ingests, displays and verifies records with pointers and makes no network attempt for any pointer target.
 12. **Verify-before-parse test:** an oversized file, a bad signature and a non-`active` signer each fail with the YAML parser never invoked (instrumented parser); a file that passes steps 1–3 and then fails the schema is quarantined with the schema reason.
-13. **Roster epoch schema test:** a wrong `prev_hash`, a different `store`, a numbering gap, an entry dropped from a later epoch, or a `retired`/`removed` DID returned to `active` is rejected; overwriting an existing epoch file is detected through the next epoch's `prev_hash` and the pinned epoch hashes.
+13. **Roster epoch schema test:** a wrong `prev_hash`, a different `store`, a numbering gap, an entry dropped from a later epoch, a `retired`/`removed` DID returned to `active`, or a changed `person` for an existing DID (a `successor` must inherit its predecessor's `person` exactly) is rejected; overwriting an existing epoch file is detected through the next epoch's `prev_hash` and the pinned epoch hashes.
 14. **Roster signature test:** duplicate people count once; signatures by `retired`/`removed` DIDs are ignored; a signature over a different epoch or store fails; a signature over different bytes counts for nothing.
-15. **Freshness file test:** `freshness.json` with another org/store/epoch, a signature from a non-admin, or an expired `expires_at` is ignored; a store head that is not a descendant of `store_head`, or that has deleted a path present at `store_head`, is rejected.
+15. **Freshness file test:** `freshness.json` with another org/store/epoch, a signature from a non-admin, or an expired `expires_at` is ignored; one whose validity exceeds the local cap or whose `issued_at` is in the future is rejected; one carrying `rewrite_of` with fewer than a quorum of signers (per person) is rejected; a store head that is not a descendant of `store_head`, that has deleted a path present at `store_head`, or in which any path's `rev` decreased (or changed hash at the same `rev`) since `store_head` is rejected (spec 011 §4.2).
 16. **Line-ending test:** a store cloned with `core.autocrlf=true` still verifies every record (via `.gitattributes`); a store missing `.gitattributes` is refused with a specific reason.
 17. **Derivation test:** deleting `indexes/` and the local SQLite index and re-syncing reproduces identical tiers.
 18. **Version test:** a record with `xenia: 2` is quarantined as `unsupported-schema` and does not break the sync of other records.
 19. **Confidence cap test:** a record claiming `confidence: verified` imports as `medium` until a local replay raises it.
 20. **Strict signature vectors:** valid vectors pass; vectors with non-canonical `S`, small-order public keys and non-canonical encodings fail; the same vectors give the same results on every supported platform.
+21. **Revision revert test:** a record file replaced by its own valid older `rev` (an endorsement `withdraw` rev 2 back to `endorse` rev 1; a tombstone `restore` back to `withdraw`; a `memory` rev 3 back to rev 2) is rejected on a fresh install via the history walk and on an install with sticky state; the same `rev` with a different hash is rejected; the same `rev` with an identical hash is accepted (idempotent re-sync).
+22. **Non-active tombstone test:** a `withdraw` tombstone from a retired or removed DID still hides its target; a `restore` from the same DID does nothing; with `voids_tombstones` set, the `withdraw` has no effect.
+23. **Local mapping test:** a hidden, withdrawn, tombstoned or `contested` record maps to local `status: superseded` with a populated `superseded_by`, and passes `delphi lint`'s provenance frontmatter check.
 
 ---
 
