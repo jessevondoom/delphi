@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
+import { initial, replay } from './fold.ts';
 import type { Info } from './theme.ts';
 
 function readInfo(): Info {
@@ -17,7 +18,7 @@ function readInfo(): Info {
 }
 
 const info = readInfo();
-let cmd: Rpc, ev: Rpc, mission: string;
+let cmd: Rpc, ev: Rpc, mission: string, history = initial(Date.now());
 try {
   cmd = await Rpc.connect(info.console_socket);
   await cmd.attachAsConsole();
@@ -25,6 +26,8 @@ try {
   ev = await Rpc.connect(info.console_socket);
   await ev.attachAsConsole();
   await ev.call('events.subscribe', {});
+  const snap = await cmd.call('observe.snapshot', { mission_id: mission }).catch(() => ({ events: [] }));
+  history = replay(initial(Date.now()), snap.events ?? []);
 } catch (e: any) {
   console.error('delphi-ui: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
   process.exit(1);
@@ -38,7 +41,7 @@ await new Promise<void>((done) => {
   const t = setTimeout(done, 250);
   term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
 });
-const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} />, {
+const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} />, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
 });
 await app.waitUntilExit();

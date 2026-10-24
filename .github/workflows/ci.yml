@@ -45,6 +45,9 @@ jobs:
         run: npm run typecheck
       - name: Test
         run: npm test
+      - name: Against the real daemon (pty end to end)
+        working-directory: .
+        run: cargo test --locked -p delphi --test e2e full_screen
 
   # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
   # namespaces (Ubuntu 24.04 restricts them by default), and require the sandbox tests to really run.
