@@ -56,7 +56,7 @@ cross_provider_builder_critic = true # [H-007] Pair Claude builder with Gemini c
 max_attempts_per_node = 3            # Unified retry ladder (specs/003 §3.2): upscale, then reset, then escalate
 max_parallel_agents = 4
 
-# Model pool (specs/002 §4.1, D-26: proposed). Models in preference order; when the first eligible
+# Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
 # Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.
 # [routing.pool]

@@ -280,6 +280,7 @@ Supporting rules:
   - an editorial change to approved spec 005 §4 (the agents-pane example no longer names a theme character), required by the stricter canonical-name check;
   - drafting amendment 009-A2 (D-22) for Council review.
 - **2026-10-24:** implementing Step 2 milestone 2 found that spec 005 §2.4 keyed `usage_ledger` on `seq` alone, but `seq` is per mission, so two missions would collide. Clarified in the spec: primary key `(mission_id, seq)`, plus an `applied` position table; `agent.usage` gains `provider` and `reservation_id`, and the `budget.reserve` / `budget.release` payloads are defined. **Ratified by the operator 2026-10-24** (an edit to approved §2.4; no behavior change beyond the fix).
+- **2026-10-24:** the operator ratified D-26 (option A) and spec 002 amendment 002-A1 (§4.1 and §3.1 rule 5): roles ask for capabilities, a ranked model pool promotes the next eligible model when the primary is exhausted, a target model is replaced by a similar one automatically and by a weaker one only after confirmation, and exhausted models are re-probed after 15 minutes, doubling to 4 hours.
 
 ---
 
@@ -319,12 +320,12 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 4. **Say what this does and does not stop.** It stops UI-level and accidental escalation, not a hostile process running as the same user (same-UID processes can reach both sockets). Spec 005 §2.1 should state it plainly.
 5. **Redaction before the socket.** State in spec 005 that the Narrator sees what the console sees, with secrets redacted by the daemon before events leave it.
 
-## ⏳ D-26 — Roles ask for capabilities; the model pool promotes the next model when the primary is exhausted
+## ✅ D-26 — Roles ask for capabilities; the model pool promotes the next model when the primary is exhausted
 **Context (operator, 2026-10-24):** Delphi should not be overly prescriptive about which model does what. If the main model runs out of tokens and a second is available, the second should become primary so the work continues. Today `context/model-capabilities.md` names models per role (Builder on Sonnet, Council on "Opus + Gemini Pro", fixed upscale hops), `routing_directive` carries a static `fallback_provider`, and spec 002 §3.1 rule 4 fails over only on `429`/`529`. Nothing says what happens when a model's quota, subscription window or budget is *exhausted* rather than briefly rate-limited. Council 005 and the Step 2 audit both ran with the Claude seat out of quota, so this already happens in practice.
 - **A. Capability requests and a ranked, health-tracked model pool; exhaustion promotes the next eligible model** (recommended; drafted as spec 002 amendment 002-A1, §4.1)
 - **B. Keep per-role model names and a static fallback hint** (the current docs)
 
-**Proposed: A.**
+**Decision (operator, 2026-10-24): A.**
 1. **Roles request capabilities, not models.** A dispatch asks for a tier plus needs (tool-use reliability, long context, write tools with the approval bridge, a family other than the author's). Model names in docs and examples are defaults and illustrations; config decides.
 2. **The pool is ranked and has runtime state.** `[routing.pool]` lists configured models in preference order. Each has a state: `available`, `cooling_down` (rate limit, with a retry time) or `exhausted` (quota, subscription window or budget used up, until a known reset or a probe succeeds). The primary is the first `available` eligible model for the request; "primary" is a runtime role, not a property of a model.
 3. **Exhaustion promotes.** On exhaustion the model is marked, the next eligible model takes over at the next turn boundary, and the work continues. State carries over through the canonical `ContentBlock[]`, the worktree and the scratchpad (spec 002 §3.1 rules 2 and 3), never through the dead model's signed reasoning. Pending tool calls are completed or abandoned first, as the spec already requires.
@@ -335,4 +336,4 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 
 **Operator answers (2026-10-24):** (1) no hard pins: track target models and try to satisfy them, but issue a warning and ask for confirmation instead of stopping when no model of similar capability is available (item 4); (2) the re-probe policy for an `exhausted` model with no known reset time is accepted: a capped probe after 15 minutes, doubling to 4 hours.
 
-**Status:** ⏳ PROPOSED 2026-10-24, open questions answered, awaiting final operator ratification. Touches spec 002 §3.1 rule 4 and §4 (new §4.1, amendment 002-A1, unratified), `context/model-capabilities.md` §3 and §4, spec 005 (new event kinds, to add when implemented) and `config.example.toml`.
+**Status:** ✅ APPROVED 2026-10-24 by the operator: A, with the answers above. Touches spec 002 §3.1 rule 4 and §4 (new §4.1, amendment 002-A1, unratified), `context/model-capabilities.md` §3 and §4, spec 005 (new event kinds, to add when implemented) and `config.example.toml`.

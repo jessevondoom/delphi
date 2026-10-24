@@ -10,7 +10,7 @@ source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "(§4.1 is proposed amendment 002-A1, D-26, not approved) §1.2, §2 (incl. §2.1, §2.1.1, §2.2), §3, §4 (operator pre-authorization, Council 004, 2026-10-23); §5 is governed by approved spec 009"
+approved_sections: "§4.1 and §3.1 rule 5 (amendment 002-A1, D-26, operator 2026-10-24); §1.2, §2 (incl. §2.1, §2.1.1, §2.2), §3, §4 (operator pre-authorization, Council 004, 2026-10-23); §5 is governed by approved spec 009"
 ---
 
 # Spec 002: Adapter: Dialect Compiler, Multi-Provider Drivers & Dynamic Model Scaling
@@ -150,7 +150,7 @@ To satisfy `[H-003]` and `[REV-ARCH-02]`, every turn in an agent's execution tra
 2. **Mid-Task Cross-Provider Failover (or Retry Upscale Across Providers):** If Turn 1–2 ran on `Gemini Flash` and failed verification (or hit a `429`/`503`), and **Orchestrator** upscales Turn 3 to `Claude Opus`, the compiler **cannot** send Gemini's cryptographic `thought_signature` to Anthropic. Instead, the compiler converts foreign `thinking` blocks into read-only `<prior_reasoning_note>` text blocks **in the assistant turn**, with that tag escaped inside the text, or omits them, while preserving all `tool_call` and `tool_result` history cleanly. If a provider requires a signed reasoning block to continue an open tool loop and none is replayable, that single continuation call is sent with thinking disabled.
 3. **Per-Provider History Rebuild:** Each request is compiled fresh from the canonical `ContentBlock[]` for its target provider. Signed reasoning blocks are echoed only for the provider that produced them and only within the current unbroken tool loop. Older same-provider reasoning that precedes a foreign turn is downgraded like any foreign block. A failover can only happen at a turn boundary, after every pending `tool_call` has its `tool_result`.
 4. **Rate Limits Before Failover:** `429` and `529` responses are retried on the same provider with exponential backoff and jitter, honoring `retry-after`, up to a configured wall-clock limit. Only then does the Adapter fail over, and only to the next endpoint in the ratified `[access] order` within `allowed_endpoints` (`specs/009` §5). Agent-authored routing hints such as `routing_directive.fallback_provider` are advisory and can never select an endpoint outside that policy. Failover and backoff never count as a verification attempt in the retry ladder.
-5. **Exhaustion Is Not a Rate Limit (002-A1, proposed, D-26):** a quota, subscription-window or budget exhaustion is not retried with backoff. The model is marked `exhausted` and the pool promotes the next eligible model (§4.1).
+5. **Exhaustion Is Not a Rate Limit (002-A1, D-26):** a quota, subscription-window or budget exhaustion is not retried with backoff. The model is marked `exhausted` and the pool promotes the next eligible model (§4.1).
 
 ---
 
@@ -191,7 +191,7 @@ An endpoint's own `models` map overrides `[models.<family>]` for that endpoint (
 
 Tiers resolve to concrete model IDs only through this configuration. Thinking budgets are clamped to each model's `min_thinking_budget` and `max_thinking_budget` from the catalog. Some frontier models reject a budget of `0` (thinking cannot be disabled), so a `0` request is raised to the model's minimum rather than sent and rejected. Specs and envelopes never name model versions, so a model release doesn't make the specs stale.
 
-### 4.1 Amendment 002-A1: Model Pool & Exhaustion Promotion (D-26; **proposed, not yet ratified by the operator**)
+### 4.1 Amendment 002-A1: Model Pool & Exhaustion Promotion (D-26; ratified by the operator 2026-10-24)
 
 Roles ask for capabilities (§4); this section says what happens when the model that would serve them runs out.
 

@@ -50,7 +50,7 @@ Therefore, each `AGENT.md` defines only a **baseline default tier**, while **Orc
 
 ## 3. Orchestrator's Dynamic Upscaling & Downscaling Protocol
 
-> **Names below are examples, not assignments (D-26, proposed).** Roles request a tier and capabilities; config and the model pool (`specs/002` §4.1) decide which concrete model serves them. Wherever this section says "Builder → Sonnet" or "Council → Opus + Gemini Pro", read "a model of that tier that is currently available". If the preferred model is exhausted, the next eligible model in the pool takes over and the work continues.
+> **Names below are examples, not assignments (D-26, ratified).** Roles request a tier and capabilities; config and the model pool (`specs/002` §4.1) decide which concrete model serves them. Wherever this section says "Builder → Sonnet" or "Council → Opus + Gemini Pro", read "a model of that tier that is currently available". If the preferred model is exhausted, the next eligible model in the pool takes over and the work continues.
 
 Rather than treating model size as static, **Orchestrator** adjusts **two orthogonal knobs** on every task dispatch:
 1. **Model Class:** `fast` (`Haiku` / `Gemini Flash`) $\leftrightarrow$ `workhorse` (`Sonnet` / `Gemini Flash-Thinking`) $\leftrightarrow$ `frontier` (`Opus` / `Gemini Pro`).
