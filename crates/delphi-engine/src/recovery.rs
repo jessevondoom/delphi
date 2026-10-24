@@ -98,6 +98,13 @@ fn tier(v: &Value) -> Option<Tier> {
 }
 
 pub fn rebuild(events: &[EventEnvelope]) -> Recovered {
+    rebuild_with(events, &|_| None)
+}
+
+/// As [`rebuild`], also resolving tool results the log holds only by reference (connector results, whose text is
+/// kept in the payload store and not in `events.jsonl`, `specs/010` §8.2). A payload that has expired comes back
+/// as a plain note instead of failing the recovery.
+pub fn rebuild_with(events: &[EventEnvelope], payload: &dyn Fn(&str) -> Option<String>) -> Recovered {
     let mut rec = Recovered::default();
     // (span, turn_index) → block_index → (block, endpoint, model)
     type Parts = BTreeMap<u64, (ContentBlock, String, String)>;
@@ -180,7 +187,11 @@ pub fn rebuild(events: &[EventEnvelope]) -> Recovered {
                 let Some(s) = rec.spans.get_mut(&span) else { continue };
                 let id = p["tool_call_id"].as_str().unwrap_or("").to_string();
                 if s.pending.iter().any(|c| c.id == id) {
-                    s.known_results.insert(id, (p["content"].as_str().unwrap_or("").to_string(), p["is_error"].as_bool().unwrap_or(false)));
+                    let content = match p["content_ref"].as_str() {
+                        Some(h) => payload(h).unwrap_or_else(|| "(payload expired: the stored connector result was removed)".to_string()),
+                        None => p["content"].as_str().unwrap_or("").to_string(),
+                    };
+                    s.known_results.insert(id, (content, p["is_error"].as_bool().unwrap_or(false)));
                 }
                 if !s.pending.is_empty() && s.pending.iter().all(|c| s.known_results.contains_key(&c.id)) {
                     let results: Vec<ContentBlock> = s.pending.iter().map(|c| {
@@ -282,6 +293,22 @@ mod tests {
         assert_eq!(s.last_text(), "answer");
         assert_eq!(r.tasks["t_0001"].root_span.as_deref(), Some("sp1"));
         assert_eq!(s.history[0].endpoint_id.as_deref(), Some("direct"), "assistant turns remember where they were produced");
+    }
+
+    #[test]
+    fn a_connector_result_is_recovered_from_the_payload_store_by_its_reference() {
+        let mut l = Log::new();
+        l.ev("dag.node.added", "sp1", json!({"node_id": "sp1", "role": "orchestrator", "depth": 0}));
+        l.ev("agent.block.complete", "sp1", json!({"turn_index": 1, "role": "assistant", "block_index": 0, "block": {"type": "tool_call", "id": "c1", "name": "docs__search", "arguments": {"query": "q"}}}));
+        l.ev("agent.turn.complete", "sp1", json!({"turn_index": 1, "stop_reason": "tool_use", "blocks": 1, "provider": "anthropic"}));
+        l.ev("tool.result", "sp1", json!({"turn_index": 2, "tool_call_id": "c1", "name": "docs__search", "content": "[stored]", "content_ref": "h1", "is_error": false}));
+        let text = |rec: &Recovered| match &rec.spans["sp1"].history.last().unwrap().blocks[0] {
+            ContentBlock::ToolResult { content, .. } => content.clone(),
+            other => panic!("{:?}", other),
+        };
+        assert_eq!(text(&rebuild_with(&l.events, &|h| (h == "h1").then(|| "the private email".to_string()))), "the private email");
+        assert!(text(&rebuild_with(&l.events, &|_| None)).contains("payload expired"));
+        assert_eq!(text(&rebuild(&l.events)), "(payload expired: the stored connector result was removed)");
     }
 
     #[test]

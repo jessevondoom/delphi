@@ -66,6 +66,8 @@ pub(crate) struct Fx {
     pub m: Arc<MissionState>,
     pub model: Arc<ScriptedModel>,
     pub root: PathBuf,
+    /// The scripted connector server behind `engine.connectors` (no connector is configured until a test adds one).
+    pub connector_mock: Arc<crate::connectors::tests::Mock>,
 }
 
 pub(crate) fn setup(steps: Vec<Step>, budget_usd: f64, tweak: impl FnOnce(&mut Settings)) -> Fx {
@@ -110,9 +112,11 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         }
     }
     let m = opened.expect("the mission log lock was never released");
+    let cfg_for_connectors = SharedConfig::new(Config::parse(CONFIG).unwrap());
+    let connector_mock = crate::connectors::tests::Mock::new(vec![]);
     let engine = Arc::new(Engine {
         ws,
-        cfg: SharedConfig::new(Config::parse(CONFIG).unwrap()),
+        cfg: cfg_for_connectors.clone(),
         hub,
         broker: Broker::new_unique(),
         model: model.clone(),
@@ -126,15 +130,16 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         tools: Arc::new(crate::tools::Registry::builtin()),
         exec: Arc::new(crate::exec::ExecEnv::new(&ws_dir_for_exec, exec_cfg, delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
+        connectors: crate::connectors::ConnectorHost::new(cfg_for_connectors.clone(), &ws_dir_for_exec, Arc::new(crate::connectors::tests::FixedToken(Default::default())), Arc::new(crate::connectors::tests::MockFactory(connector_mock.clone())), Some(Arc::new(crate::connectors::tests::FixedIdentity("me@example.com".into())))),
     });
-    Fx { _t: t, engine, m, model, root }
+    Fx { _t: t, engine, m, model, root, connector_mock }
 }
 
 impl Fx {
     /// Model the daemon dying and starting again: everything in memory is gone, everything on disk stays.
     /// Tasks still running against the old engine must be aborted first so its mission lock is released.
     pub(crate) fn restart(self, steps: Vec<Step>) -> Fx {
-        let Fx { _t, engine, m, model: _, root } = self;
+        let Fx { _t, engine, m, model: _, root, connector_mock: _ } = self;
         let settings = engine.settings.clone();
         drop(engine);
         drop(m);

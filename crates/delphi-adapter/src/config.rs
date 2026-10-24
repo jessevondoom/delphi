@@ -106,6 +106,95 @@ pub struct AuthBlock {
     pub authorization_params: BTreeMap<String, String>,
 }
 
+/// What a connector tool does, as the operator ratified it (`specs/010` §3, §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ToolClass {
+    /// Reads. Amber on first use per task unless `first_use = "allow"`; always asks when a tainted span puts text in a query.
+    #[serde(rename = "read")]
+    Read,
+    /// Creates something private (a draft, a hold with no invitees). Amber, with the full payload.
+    #[serde(rename = "draft")]
+    Draft,
+    /// Sends, posts, shares, invites or deletes. Red, bound to the payload's hash, never auto-approved.
+    #[serde(rename = "write")]
+    Write,
+}
+
+impl ToolClass {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolClass::Read => "read",
+            ToolClass::Draft => "draft",
+            ToolClass::Write => "write",
+        }
+    }
+}
+
+fn default_max_arg_chars() -> usize {
+    128
+}
+
+fn default_calls_per_minute() -> u32 {
+    30
+}
+
+fn default_max_result_chars() -> usize {
+    20_000
+}
+
+fn default_transport() -> String {
+    "http".into()
+}
+
+/// One `[connectors.<name>]` block (`specs/010` §3). Pinned by hash with `[access]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Connector {
+    /// `http` (Streamable HTTP). stdio is later.
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    pub url: String,
+    /// The `[auth.<name>]` block whose login signs the operator in (`delphi auth login <name>`). `None` means the
+    /// server needs no login.
+    #[serde(default)]
+    pub login: Option<String>,
+    /// The identity the login must resolve to (an email, a Slack team id). Checked after login; a mismatch discards the token.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// Exact host names this connector may reach, redirects included. No wildcards.
+    pub hosts: Vec<String>,
+    /// Canonical role IDs offered these tools.
+    pub roles: Vec<String>,
+    /// Delphi's own allowlist and classification of the server's tools. Anything not listed is invisible.
+    pub tools: BTreeMap<String, ToolClass>,
+    #[serde(default = "default_max_arg_chars")]
+    pub max_arg_chars: usize,
+    /// `ask` (Amber once per task) or `allow` (Green) for read tools.
+    #[serde(default)]
+    pub first_use: Option<String>,
+    #[serde(default = "default_calls_per_minute")]
+    pub calls_per_minute: u32,
+    /// A tool result longer than this goes to the payload store, and the model gets an excerpt and a pointer.
+    #[serde(default = "default_max_result_chars")]
+    pub max_result_chars: usize,
+    /// How `account` is looked up after login: `google` (the OpenID userinfo email). Others arrive with their connectors.
+    #[serde(default)]
+    pub identity: Option<String>,
+}
+
+pub(crate) fn host_of(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit('@').next()?;
+    let host = if let Some(stripped) = auth.strip_prefix('[') { stripped.split(']').next()? } else { auth.split(':').next()? };
+    (!host.is_empty()).then(|| host.to_lowercase())
+}
+
+impl Connector {
+    pub fn host(&self) -> Option<String> {
+        host_of(&self.url)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Access {
     #[serde(default)]
@@ -178,6 +267,7 @@ pub struct Config {
     pub models: BTreeMap<String, BTreeMap<String, String>>,
     pub catalog: BTreeMap<String, CatalogEntry>,
     pub auth: BTreeMap<String, AuthBlock>,
+    pub connectors: BTreeMap<String, Connector>,
 }
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
@@ -211,6 +301,12 @@ impl Config {
             match a.clone().try_into::<BTreeMap<String, AuthBlock>>() {
                 Ok(v) => cfg.auth = v,
                 Err(e) => errs.push(format!("[auth.*]: {}", e)),
+            }
+        }
+        if let Some(c) = root.get("connectors") {
+            match c.clone().try_into::<BTreeMap<String, Connector>>() {
+                Ok(v) => cfg.connectors = v,
+                Err(e) => errs.push(format!("[connectors.*]: {}", e)),
             }
         }
         if let Some(models) = root.get("models").and_then(|m| m.as_table()) {
@@ -335,6 +431,64 @@ impl Config {
                 if !matches!(CredentialRef::parse(sec), Ok(CredentialRef::Keychain(_))) {
                     errs.push(format!("[auth.{}] client_secret must be a keychain reference (`keychain:<name>`), never an inline value", name));
                 }
+            }
+        }
+        for (name, c) in &self.connectors {
+            let ok_name = !name.is_empty() && name.len() <= 32 && name.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') && !name.starts_with('-');
+            if !ok_name {
+                errs.push(format!("[connectors.{}] the name must be lowercase letters, digits and `-` (it prefixes every tool name)", name));
+            }
+            if c.transport != "http" {
+                errs.push(format!("[connectors.{}] transport `{}` is not supported (only `http`)", name, c.transport));
+            }
+            if !(c.url.starts_with("https://") || is_loopback(&c.url)) {
+                errs.push(format!("[connectors.{}] url must be https (plain http only to loopback)", name));
+            }
+            match c.host() {
+                None => errs.push(format!("[connectors.{}] url has no host", name)),
+                Some(h) if !c.hosts.iter().any(|x| x.to_lowercase() == h) => errs.push(format!("[connectors.{}] hosts must include the url's own host `{}`", name, h)),
+                Some(_) => {}
+            }
+            if c.hosts.is_empty() || c.hosts.iter().any(|h| h.contains('*') || h.contains('/') || h.contains(':') || h.trim().is_empty()) {
+                errs.push(format!("[connectors.{}] hosts are exact host names: no wildcards, schemes, paths or ports", name));
+            }
+            if c.roles.is_empty() {
+                errs.push(format!("[connectors.{}] roles is empty, so no agent would be offered these tools", name));
+            }
+            if c.tools.is_empty() {
+                errs.push(format!("[connectors.{}] tools is empty: a connector offers only the tools you list", name));
+            }
+            for t in c.tools.keys() {
+                if t.is_empty() || t.len() > 48 || !t.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+                    errs.push(format!("[connectors.{}] tool name `{}` must be letters, digits, `_` and `-`", name, t));
+                }
+            }
+            if let Some(f) = &c.first_use {
+                if f != "ask" && f != "allow" {
+                    errs.push(format!("[connectors.{}] first_use must be \"ask\" or \"allow\"", name));
+                }
+            }
+            if c.max_arg_chars == 0 || c.max_arg_chars > 4096 {
+                errs.push(format!("[connectors.{}] max_arg_chars must be between 1 and 4096", name));
+            }
+            if c.identity.as_deref() == Some("google") && !c.hosts.iter().any(|h| h.eq_ignore_ascii_case("openidconnect.googleapis.com")) {
+                errs.push(format!("[connectors.{}] identity = \"google\" asks openidconnect.googleapis.com who signed in, so that host must be in `hosts`", name));
+            }
+            if let Some(i) = &c.identity {
+                if i != "google" {
+                    errs.push(format!("[connectors.{}] identity `{}` is not supported (only \"google\")", name, i));
+                }
+            }
+            if let Some(l) = &c.login {
+                if !self.auth.contains_key(l) {
+                    errs.push(format!("[connectors.{}] login names `{}`, but there is no [auth.{}] block", name, l, l));
+                }
+            }
+            if c.account.is_some() && c.identity.is_none() && c.login.is_some() {
+                errs.push(format!("[connectors.{}] `account` needs `identity` (how the signed-in identity is looked up, for example \"google\")", name));
+            }
+            if c.login.is_some() && c.account.is_none() {
+                errs.push(format!("[connectors.{}] a connector with a login needs `account`: the identity it must resolve to, so the wrong browser profile cannot sign in", name));
             }
         }
         for e in &self.endpoints {
@@ -583,5 +737,48 @@ order = { gemini = ["a"] }
         assert!(p.contains("bedrock-sonnet-x") && p.contains("no [models.catalog] entry"), "{}", p);
         let priced = SAMPLE.replace("input_usd_per_mtok = 1.0", "input_usd_per_mtok = 0.0");
         assert!(Config::parse(&priced).unwrap().problems().join("\n").contains("no prices"));
+    }
+
+    const GOOD_CONNECTOR: &str = r#"
+[auth.google]
+flow = "loopback_pkce"
+issuer = "https://accounts.google.com"
+client_id = "cid"
+[connectors.docs]
+url = "https://mcp.example.com/mcp"
+hosts = ["mcp.example.com", "openidconnect.googleapis.com"]
+login = "google"
+account = "me@example.com"
+identity = "google"
+roles = ["orchestrator"]
+tools = { search = "read", note = "draft", send = "write" }
+"#;
+
+    #[test]
+    fn a_connector_catalog_parses_with_defaults_and_classes() {
+        let c = Config::parse(GOOD_CONNECTOR).unwrap();
+        let d = &c.connectors["docs"];
+        assert_eq!((d.max_arg_chars, d.calls_per_minute, d.max_result_chars, d.transport.as_str()), (128, 30, 20_000, "http"));
+        assert_eq!(d.tools["send"], ToolClass::Write);
+        assert_eq!(d.tools["note"], ToolClass::Draft);
+        assert_eq!(d.host().as_deref(), Some("mcp.example.com"));
+    }
+
+    #[test]
+    fn a_connector_catalog_is_validated_strictly() {
+        let bad = |edit: &dyn Fn(&str) -> String| Config::parse(&edit(GOOD_CONNECTOR)).unwrap_err().join("\n");
+        assert!(bad(&|t| t.replace("https://mcp.example.com/mcp", "http://mcp.example.com/mcp")).contains("must be https"));
+        assert!(bad(&|t| t.replace("\"mcp.example.com\", ", "\"other.example.com\", ")).contains("hosts must include the url's own host"));
+        assert!(bad(&|t| t.replace(", \"openidconnect.googleapis.com\"", "")).contains("openidconnect.googleapis.com"));
+        assert!(bad(&|t| t.replace("hosts = [\"mcp.example.com\", ", "hosts = [\"*.example.com\", \"mcp.example.com\", ")).contains("no wildcards"));
+        assert!(bad(&|t| t.replace("roles = [\"orchestrator\"]", "roles = []")).contains("roles is empty"));
+        assert!(bad(&|t| t.replace("tools = { search = \"read\", note = \"draft\", send = \"write\" }", "tools = {}")).contains("tools is empty"));
+        assert!(bad(&|t| t.replace("search = \"read\"", "\"bad name\" = \"read\"")).contains("tool name"));
+        assert!(bad(&|t| t.replace("search = \"read\"", "search = \"admin\"")).contains("[connectors.*]"), "an unknown class is a parse error");
+        assert!(bad(&|t| t.replace("login = \"google\"", "login = \"nowhere\"")).contains("no [auth.nowhere] block"));
+        assert!(bad(&|t| t.replace("account = \"me@example.com\"\n", "")).contains("needs `account`"), "a login without a pinned account is refused");
+        assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.Docs_X]")).contains("lowercase"));
+        assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.docs]\nfirst_use = \"sometimes\"")).contains("first_use"));
+        assert!(bad(&|t| t.replace("[connectors.docs]", "[connectors.docs]\nmax_arg_chars = 100000")).contains("max_arg_chars"));
     }
 }
