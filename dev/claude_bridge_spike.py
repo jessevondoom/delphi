@@ -1,6 +1,6 @@
 """Spike (2026-10-24): drive `claude` through its stream-json approval bridge and log every message.
 
-usage: python3 tools/claude_bridge_spike.py <empty scratch dir OUTSIDE ~/.claude> allow|deny
+usage: python3 dev/claude_bridge_spike.py <empty scratch dir OUTSIDE ~/.claude> allow|deny
 
 Spends a few cents of subscription quota per run. Findings: specs/009 §7B.
 """

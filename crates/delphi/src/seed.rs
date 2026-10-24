@@ -7,7 +7,7 @@ static SKILLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../skills");
 static THEMES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../themes");
 static CONTEXT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../context");
 static MEMORY: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../memory");
-pub const CONFIG_TEMPLATE: &str = include_str!("../../../templates/config.example.toml");
+pub const CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
 
 /// Which zone a seed file is installed into (`specs/006` §3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

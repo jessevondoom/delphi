@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# DELPHI WORKSPACE CONFIGURATION TEMPLATE (templates/config.example.toml)
+# DELPHI WORKSPACE CONFIGURATION TEMPLATE (crates/delphi/config.example.toml)
 # Seeded by `delphi init` into $DELPHI_HOME/workspaces/<name>/config.toml (never into a project repo).
 # API keys are NEVER stored here: they live in macOS Keychain / Linux Secret Service,
 # with the *_env variables below as fallback (specs/006 §2.2).

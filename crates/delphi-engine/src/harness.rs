@@ -5,7 +5,7 @@
 //! answer permission requests, meter tokens, and make sure nothing outlives the session. The decisions
 //! (what to allow, taint, budgets, events) belong to the engine (`harness_run.rs`).
 //!
-//! Wire format verified by the 2026-10-24 spike (`tools/claude_bridge_spike.py`, spec 009 §7B): the
+//! Wire format verified by the 2026-10-24 spike (`dev/claude_bridge_spike.py`, spec 009 §7B): the
 //! bridge exists only with `--permission-prompt-tool stdio`; a `control_request` of subtype
 //! `can_use_tool` is answered with a `control_response` carrying `behavior` allow or deny.
 //! `permission_suggestions` are never echoed back: they would edit the operator's settings.

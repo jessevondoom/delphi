@@ -46,7 +46,7 @@ pub fn project_roots(root: &toml::Value) -> Vec<(String, PathBuf)> {
         .unwrap_or_default()
 }
 
-/// Operational settings from `config.toml`, with the defaults of `templates/config.example.toml`.
+/// Operational settings from `config.toml`, with the defaults of `crates/delphi/config.example.toml`.
 pub fn settings_from(root: &toml::Value) -> Settings {
     let mut s = Settings::default();
     if let Some(v) = root.get("budget").and_then(|b| b.get("mission_budget_usd")).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))) {
