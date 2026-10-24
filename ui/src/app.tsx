@@ -18,7 +18,7 @@ import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; history: State };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; themeForced?: boolean; history: State };
 
 /** Entries of a directory under the workspace's team root, for `@specs/…` completion. Read-only, names only. */
 const listTeamDir = (info: Info): ListDir => (rel) => {
@@ -38,7 +38,7 @@ export function exportMarkdown(s: State, info: Info, mission: string): string {
   return out.join('\n');
 }
 
-export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
+export function App({ cmd, ev, term, info, mission, dark, themeForced, history }: Props) {
   const { exit } = useApp();
   const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
@@ -244,7 +244,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
       const m = menuNow();
       const items = m?.items ?? [];
       switch (e.t) {
-        case 'bg': setPal({ dark: e.dark }); return;
+        case 'bg': if (!themeForced) setPal({ dark: e.dark }); return;
         case 'wheel': setBack((b) => Math.max(0, b + (e.dir === 'up' ? 3 : -3))); return;
         case 'paste': upd((c) => C.insert(c, e.s)); return;
         case 'text': setHelp(false); upd((c) => C.insert(c, e.s)); return;
