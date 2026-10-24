@@ -13,7 +13,7 @@ use crate::harness::{cli_env, Cli, Decision, Event, Launch, Permission, Session,
 use crate::mission::{EngineError, LiveRedactor};
 use crate::tools::{ActionKind, Classified, ToolTier};
 use crate::worktree::Worktree;
-use delphi_adapter::config::{AccessPath, Endpoint};
+use delphi_adapter::config::Endpoint;
 use delphi_adapter::ipr::Ipr;
 use delphi_core::hub::DeltaKind;
 use delphi_core::provenance::{gate, Action, Gate, OutputCheck, Tier, Zone};
@@ -88,21 +88,8 @@ fn harness_note(builder: bool) -> &'static str {
 }
 
 impl Engine {
-    /// The harness endpoint that serves this family, if the ratified order puts one first.
-    pub(crate) fn harness_endpoint(&self, family: &str) -> Option<Endpoint> {
-        let cfg = self.cfg.get();
-        cfg.endpoints_for(family).into_iter().next().filter(|e| e.path == AccessPath::Harness).cloned()
-    }
-
-    /// Any allowed harness endpoint of the family (the method to try when every API endpoint is down).
-    pub(crate) fn any_harness_endpoint(&self, family: &str) -> Option<Endpoint> {
-        self.cfg.get().endpoints_for(family).into_iter().find(|e| e.path == AccessPath::Harness).cloned()
-    }
-
-    /// Is there an API endpoint of the family to fall back to?
-    pub(crate) fn has_api_endpoint(&self, family: &str) -> bool {
-        self.cfg.get().endpoints_for(family).into_iter().any(|e| e.path != AccessPath::Harness)
-    }
+    // Which method serves a span (a harness, or the API turn by turn) is decided by the resolver in
+    // `engine.rs` (`route_harness`, `has_api_route`), from capabilities and the pool, not from the family.
 
     /// One tool permission request, decided by the same rules as Delphi's own tools.
     async fn harness_decide(&self, sc: &mut SpanCtx, wt: &Option<Worktree>, p: &Permission) -> Result<Decision, EngineError> {
@@ -654,7 +641,7 @@ echo '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","ste
 echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":900,"output_tokens":12}}}'
 echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.","usage":{"input_tokens":900,"output_tokens":12}}}'"#,
         );
-        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        let f = setup_with_exec(vec![crate::model::Step::text("Built on the API.")], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
         crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
         use_agy(&f);
         let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
@@ -663,13 +650,47 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
         let u = &events_of(&f, "agent.usage")[0].payload;
         assert_eq!((u["provider"].as_str(), u["cost_model"].as_str(), u["input_tokens"].as_u64()), (Some("google"), Some("subscription"), Some(900)));
         assert_eq!(events_of(&f, "harness.started")[0].payload["tools"], "none");
-        // A Builder is refused: no way to ask the operator.
+        // A Builder is never put on `agy` (it cannot ask the operator). Its usual family is Gemini and only `agy`
+        // serves it, but the family is a preference: it is served by an eligible model instead (`specs/002` §4.1).
         crate::testkit::ratify_spec(&f);
         let b = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
-        match &b.status {
-            Status::Escalated(r) => assert!(r.contains("no approval bridge"), "{}", r),
-            other => panic!("{:?}", other),
-        }
+        assert_eq!((b.status.clone(), b.text.as_str()), (Status::Done, "Built on the API."), "{}", b.text);
+        assert_eq!(events_of(&f, "harness.started").len(), 1, "agy ran for the architect only");
+        assert_eq!(f.model.requests().last().unwrap().endpoint_id, "direct", "the Builder went to an API endpoint");
+    }
+
+    /// A Gemini-family `agy` endpoint as the only allowed endpoint (no other family to fall back to).
+    fn use_agy_only(f: &Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    const AGY_EXHAUSTED: &str = r#"echo '{"event":"init","init":{"model":"gemini-4-argon-medium","tools":[]}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"error_message"}}'
+echo '{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 136h12m54s.","duration_seconds":0,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0}}}'
+exit 3"#;
+
+    /// The Gemini subscription is out of quota for days; the span moves to an eligible Claude API endpoint.
+    #[tokio::test]
+    async fn an_exhausted_agy_span_moves_to_another_family_and_the_pool_remembers() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), AGY_EXHAUSTED);
+        let f = setup_with_exec(vec![crate::model::Step::text("Answered by Claude.")], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Answered by Claude."), "{}", out.text);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("agy-sub"), Some("api")));
+        assert!(fb[0].payload["reason"].as_str().unwrap().contains("out of quota"));
+        // The next task does not launch the dead subscription at all: the pool says it is out until the reset.
+        f.model.respond_with(|_| crate::model::Step::text("Straight to the API."));
+        let again = f.engine.run_task(&f.m, "architect", "And again").await.unwrap();
+        assert_eq!(again.text, "Straight to the API.");
+        assert_eq!(events_of(&f, "harness.started").len(), 1, "agy was launched once, not again while it is exhausted");
     }
 
     /// The output the live `agy` printed with the Gemini quota used up (`tests/fixtures/quota/`).
@@ -685,7 +706,7 @@ exit 3"#,
         );
         let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
         crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
-        use_agy(&f);
+        use_agy_only(&f);
         let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
         match &out.status {
             Status::Escalated(r) => assert!(r.contains("out of quota") && r.contains("resets at"), "{}", r),

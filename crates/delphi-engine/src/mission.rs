@@ -145,6 +145,9 @@ pub struct MissionState {
     ledger: Arc<Mutex<Ledger>>,
     secrets: Arc<SecretRegistry>,
     registered: AtomicU64,
+    /// The highest `seq` applied to the derived state (budget, index, status, ledger). The log can run ahead of
+    /// it if a caller is dropped (a cancelled task) after its write landed; the next append catches it up.
+    applied: AtomicU64,
     /// Serializes reserve decisions so parallel spans can't jointly overshoot the cap.
     pub reserve_gate: tokio::sync::Mutex<()>,
     /// Persist-then-apply is one step: concurrent appenders must not apply their events to the derived state out of `seq` order.
@@ -194,6 +197,7 @@ impl MissionState {
             ledger,
             secrets,
             registered: AtomicU64::new(0),
+            applied: AtomicU64::new(events.iter().map(|e| e.seq).max().unwrap_or(0)),
             reserve_gate: tokio::sync::Mutex::new(()),
             append_gate: tokio::sync::Mutex::new(()),
             held: Mutex::new(std::collections::HashMap::new()),
@@ -270,18 +274,32 @@ impl MissionState {
         .await
         .map_err(|e| EngineError::Join(e.to_string()))??;
         let mut rewrite = false;
+        // An earlier caller dropped between its write and this point (a task cancelled mid-append) left events
+        // in the log that never reached the derived state. Apply them first, in order, from the log.
+        let applied = self.applied.load(Ordering::SeqCst);
+        if let Some(first) = stored.first().filter(|f| f.seq > applied + 1) {
+            for e in replay(&self.dir)?.into_iter().filter(|e| e.seq > applied && e.seq < first.seq) {
+                rewrite |= self.apply_stored(&e)?;
+            }
+        }
         for e in &stored {
-            self.budget.lock().unwrap().apply_event(e, &|_| None);
-            self.index.lock().unwrap().apply_event(e);
-            self.status.lock().unwrap().apply(e);
-            rewrite |= crate::status::affects_status(&e.kind);
-            self.ledger.lock().unwrap().apply(e)?;
-            self.hub.publish_event(&serde_json::to_value(e).expect("events serialize"));
+            rewrite |= self.apply_stored(e)?;
         }
         if rewrite {
             self.write_status();
         }
         Ok(stored)
+    }
+
+    /// Apply one persisted event to the derived state and publish it. Returns whether `status.md` needs rewriting.
+    fn apply_stored(&self, e: &EventEnvelope) -> Result<bool, EngineError> {
+        self.budget.lock().unwrap().apply_event(e, &|_| None);
+        self.index.lock().unwrap().apply_event(e);
+        self.status.lock().unwrap().apply(e);
+        self.ledger.lock().unwrap().apply(e)?;
+        self.applied.fetch_max(e.seq, Ordering::SeqCst);
+        self.hub.publish_event(&serde_json::to_value(e).expect("events serialize"));
+        Ok(crate::status::affects_status(&e.kind))
     }
 
     /// Regenerate `status.md`. A projection: failure to write it never fails the mission.
@@ -313,6 +331,26 @@ mod tests {
         let ledger = Arc::new(Mutex::new(Ledger::open_in_memory().unwrap()));
         let secrets = SecretRegistry::new();
         (MissionState::open(dir, "m1", Hub::new(), ledger.clone(), secrets.clone(), 5.0).unwrap(), ledger, secrets)
+    }
+
+    /// A task cancelled in the middle of an append: the write reached the log, the caller never applied it.
+    /// The next append must catch the derived state up instead of failing with a ledger gap.
+    #[tokio::test]
+    async fn an_append_dropped_after_its_write_is_caught_up_by_the_next_one() {
+        let t = tempfile::tempdir().unwrap();
+        let (m, ledger, _) = open(t.path());
+        m.append(EventEnvelope::new("m1", "mission.created", json!({}))).await.unwrap();
+        // The dropped caller's write: straight into the log, nothing applied.
+        let mut lost = EventEnvelope::new("m1", "budget.reserve", json!({"reservation_id": "r_1", "amount": 400_000}));
+        lost.task_id = Some("t_0001".into());
+        m.log.lock().unwrap().append_batch_stored(vec![lost]).unwrap();
+        assert_eq!(m.budget.lock().unwrap().reserved(), 0, "the dropped write has not been applied yet");
+        m.append(EventEnvelope::new("m1", "task.cancelled", json!({}))).await.expect("no ledger gap");
+        assert_eq!(m.budget.lock().unwrap().reserved(), 400_000, "the missed reservation was applied from the log, in order");
+        assert_eq!(ledger.lock().unwrap().last_applied("m1").unwrap(), 3);
+        // Applying twice is not a thing: a further append changes nothing about the reservation.
+        m.append(EventEnvelope::new("m1", "mission.note", json!({}))).await.unwrap();
+        assert_eq!(m.budget.lock().unwrap().reserved(), 400_000);
     }
 
     #[tokio::test]
