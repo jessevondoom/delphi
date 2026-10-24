@@ -45,4 +45,5 @@ jobs:
       - name: Sandbox tests must run, not skip
         env:
           DELPHI_REQUIRE_SANDBOX: "1"
-        run: cargo test --locked -p delphi-sandbox -p delphi-engine -- sandbox exec:: harness_run build:: finalize::
+        run: |
+          cargo test --locked -p delphi-sandbox -p delphi-engine -- sandbox 'exec::' harness_run 'build::' 'finalize::'
