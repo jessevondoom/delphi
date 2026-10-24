@@ -121,15 +121,24 @@ pub struct Seen {
     pub thinking_disabled_reason: Option<String>,
 }
 
+type Responder = Box<dyn Fn(&Value) -> Step + Send + Sync>;
+
 /// A deterministic stand-in for the provider: replies from a script and records every request.
 pub struct ScriptedModel {
     script: Mutex<VecDeque<Step>>,
+    /// When set, each call is answered by this function of the request body instead of the next scripted step
+    /// (for tests where several spans run at once and the order of calls is not fixed).
+    responder: Mutex<Option<Responder>>,
     pub seen: Mutex<Vec<Seen>>,
 }
 
 impl ScriptedModel {
     pub fn new(steps: Vec<Step>) -> Arc<ScriptedModel> {
-        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), seen: Mutex::new(vec![]) })
+        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]) })
+    }
+
+    pub fn respond_with(&self, f: impl Fn(&Value) -> Step + Send + Sync + 'static) {
+        *self.responder.lock().unwrap() = Some(Box::new(f));
     }
 
     pub fn remaining(&self) -> usize {
@@ -145,7 +154,8 @@ impl ModelClient for ScriptedModel {
     fn call<'a>(&'a self, endpoint: &'a Endpoint, model_id: &'a str, compiled: &'a Compiled, on_event: OnEvent<'a>) -> CallFuture<'a> {
         Box::pin(async move {
             self.seen.lock().unwrap().push(Seen { endpoint_id: endpoint.id.clone(), model_id: model_id.into(), body: compiled.body.clone(), betas: compiled.betas.clone(), thinking_disabled_reason: compiled.thinking_disabled_reason.clone() });
-            let step = self.script.lock().unwrap().pop_front().unwrap_or(Step::Fail("the script ran out of steps"));
+            let answered = self.responder.lock().unwrap().as_ref().map(|r| r(&compiled.body));
+            let step = answered.unwrap_or_else(|| self.script.lock().unwrap().pop_front().unwrap_or(Step::Fail("the script ran out of steps")));
             match step {
                 Step::Reply { blocks, usage, stop_reason } => {
                     for (i, b) in blocks.iter().enumerate() {

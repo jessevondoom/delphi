@@ -89,7 +89,26 @@ pub fn run(tree: &Tree) -> Report {
     check_caps(tree, &mut r);
     check_links(tree, &mut r);
     check_abs_paths(tree, &mut r);
+    check_councils(tree, &mut r);
     r
+}
+
+// ── Council artifacts (specs/003 §4.1) ──────────────────────────────────────
+
+/// A Council record written by the runtime (`council_format: 1` in its frontmatter) must carry a Minority
+/// Report that matches its own structured Round 2 output: nothing dropped, nothing invented as unanimity.
+fn check_councils(tree: &Tree, r: &mut Report) {
+    let council = Regex::new(r"^missions/[^/]+/councils/\d{3}-[^/]+\.md$").unwrap();
+    for path in tree.with_ext(&[".md"]).filter(|p| council.is_match(p)) {
+        let text = tree.read(path).unwrap_or_default();
+        let head = text.split("\n---").next().unwrap_or("");
+        if !head.contains("council_format: 1") {
+            continue;
+        }
+        for problem in delphi_engine::council::lint_artifact(&text) {
+            r.fail("council", path.clone(), problem);
+        }
+    }
 }
 
 // ── theme packs ─────────────────────────────────────────────────────────────
@@ -987,6 +1006,20 @@ mod tests {
         assert_eq!(envelope_errors(&good.replace("heading: h", "heading: ''")).len(), 1);
         let no_ptrs: String = good.lines().filter(|l| !l.starts_with("context_pointers")).map(|l| format!("{}\n", l)).collect();
         assert_eq!(envelope_errors(&no_ptrs).len(), 1);
+    }
+
+    #[test]
+    fn runtime_council_records_must_carry_a_matching_minority_report() {
+        let ok = "---\ncouncil_format: 1\n---\n\n## Round 2 structured output\n\n- red-team | P0 | Drops work\n- red-team | concur | false\n\n## Verdict\n\nx\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n- [P0] red-team: Drops work\n";
+        let (_t, tree) = tree_of(&[("missions/m/councils/001-x.md", ok)]);
+        let bad = |t: &Tree| fails(t, "council").len();
+        assert_eq!(bad(&tree), 0);
+        let forged = ok.replace("- [P0] red-team: Drops work\n", "Unanimous — no unresolved P0/P1 (Red-Team concurs).\n");
+        let (_t, tree) = tree_of(&[("missions/m/councils/001-x.md", &forged)]);
+        assert!(bad(&tree) > 0);
+        // Historical records (no `council_format`) are verbatim and exempt.
+        let (_t, tree) = tree_of(&[("missions/m/councils/001-old.md", "# old\nno section")]);
+        assert_eq!(bad(&tree), 0);
     }
 
     // REV-ARCH-05: case-insensitive, no "theme" substring exemption, only missions/*/councils/ exempt

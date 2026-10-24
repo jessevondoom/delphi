@@ -152,6 +152,8 @@ pub struct MissionState {
     next_task: AtomicU64,
     next_span: AtomicU64,
     next_res: AtomicU64,
+    /// Content-bearing events of tasks whose output must stay in memory for now (Council Round 1).
+    held: Mutex<std::collections::HashMap<String, Vec<EventEnvelope>>>,
 }
 
 /// Highest trailing number among `prefix`-ed ids seen in `events` (so ids never repeat after a restart).
@@ -194,6 +196,7 @@ impl MissionState {
             registered: AtomicU64::new(0),
             reserve_gate: tokio::sync::Mutex::new(()),
             append_gate: tokio::sync::Mutex::new(()),
+            held: Mutex::new(std::collections::HashMap::new()),
         }))
     }
 
@@ -211,11 +214,46 @@ impl MissionState {
 
     /// Persist one event (fsync'd), apply it to the derived state, and publish it to attached clients.
     pub async fn append(&self, e: EventEnvelope) -> Result<EventEnvelope, EngineError> {
-        Ok(self.append_batch(vec![e]).await?.remove(0))
+        let mut stored = self.append_batch(vec![e.clone()]).await?;
+        Ok(if stored.is_empty() { e } else { stored.remove(0) }) // empty: held in memory
+    }
+
+    /// From now until [`MissionState::release_blocks`], what a task's agents say stays in daemon memory:
+    /// its `agent.block.complete` and `agent.turn.complete` events are buffered, not written. Everything
+    /// else (budget, usage, state) is written as usual.
+    pub fn hold_blocks(&self, task_id: &str) {
+        self.held.lock().unwrap().insert(task_id.to_string(), Vec::new());
+    }
+
+    /// Write what was held, in order, and stop holding. A no-op if nothing is held for the task.
+    pub async fn release_blocks(&self, task_id: &str) -> Result<(), EngineError> {
+        let buffered = self.held.lock().unwrap().remove(task_id);
+        match buffered {
+            Some(events) if !events.is_empty() => self.append_batch(events).await.map(|_| ()),
+            _ => Ok(()),
+        }
     }
 
     /// Persist several events together (one fsync), then apply and publish them in order.
     pub async fn append_batch(&self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
+        let events = {
+            let mut held = self.held.lock().unwrap();
+            if held.is_empty() {
+                events
+            } else {
+                let mut rest = Vec::with_capacity(events.len());
+                for e in events {
+                    match e.task_id.as_ref().and_then(|t| held.get_mut(t)) {
+                        Some(buf) if e.kind == "agent.block.complete" || e.kind == "agent.turn.complete" => buf.push(e),
+                        _ => rest.push(e),
+                    }
+                }
+                rest
+            }
+        };
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
         let _gate = self.append_gate.lock().await;
         let log = self.log.clone();
         let known = self.registered.load(Ordering::SeqCst) as usize;
