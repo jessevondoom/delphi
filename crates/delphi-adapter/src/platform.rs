@@ -101,6 +101,18 @@ fn check_header(name: &str, value: &str) -> Result<(), BuildError> {
     Ok(())
 }
 
+/// A value interpolated into a URL host or path: no character that could change which host or path is
+/// meant (`/`, `?`, `#`, `@`, `\\`, spaces, `..`).
+fn safe_segment(what: &str, v: &str) -> Result<(), BuildError> {
+    // Model ids may carry `@` (Vertex Claude versions) and `:` (Bedrock-style); hosts and projects may not carry `@`.
+    let extra: &[char] = if what == "model id" { &['@', ':'] } else { &[] };
+    if !v.is_empty() && v != ".." && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || extra.contains(&c)) {
+        Ok(())
+    } else {
+        Err(BuildError::Unsupported(format!("{} `{}` has characters that cannot appear in a URL path or host", what, v)))
+    }
+}
+
 /// `https://host:port/prefix` → (`https://host:port`, `host:port`, `/prefix`).
 fn split_url(url: &str) -> Option<(String, String, String)> {
     let (scheme, rest) = url.split_once("://")?;
@@ -129,6 +141,7 @@ fn build_gemini(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         headers.push((k.to_lowercase(), v.clone()));
     }
     let model = i.model_id.strip_prefix("models/").unwrap_or(i.model_id);
+    safe_segment("model id", model)?;
     let url = match (e.path, e.platform.as_deref()) {
         (AccessPath::Api, _) | (AccessPath::GatewayNative, _) => {
             let base = e.base_url.clone().unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
@@ -143,6 +156,8 @@ fn build_gemini(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         (AccessPath::Cloud, Some("vertex")) => {
             let region = e.region.clone().unwrap_or_default();
             let project = e.project.clone().unwrap_or_default();
+            safe_segment("region", &region)?;
+            safe_segment("project", &project)?;
             let base = e.base_url.clone().unwrap_or_else(|| if region == "global" { "https://aiplatform.googleapis.com".into() } else { format!("https://{}-aiplatform.googleapis.com", region) });
             headers.push(("authorization".into(), format!("Bearer {}", token(i.creds, "Vertex AI")?)));
             format!("{}/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent?alt=sse", base.trim_end_matches('/'), project, region, model)
@@ -238,6 +253,9 @@ pub fn build(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         (AccessPath::Cloud, Some("vertex")) => {
             let region = e.region.clone().unwrap_or_default();
             let project = e.project.clone().unwrap_or_default();
+            safe_segment("region", &region)?;
+            safe_segment("project", &project)?;
+            safe_segment("model id", i.model_id)?;
             let base = e.base_url.clone().unwrap_or_else(|| if region == "global" { "https://aiplatform.googleapis.com".into() } else { format!("https://{}-aiplatform.googleapis.com", region) });
             url = format!("{}/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:streamRawPredict", base.trim_end_matches('/'), project, region, i.model_id);
             core.insert("anthropic_version".into(), json!(VERTEX_ANTHROPIC_VERSION));
@@ -339,6 +357,19 @@ mod tests {
         assert_eq!(body(&v), c.body, "no model or stream field in the body");
         assert!(matches!(go("gb", &aws()), Err(BuildError::Unsupported(_))), "Bedrock does not serve Gemini");
         assert!(matches!(go("gd", &aws()), Err(BuildError::Unsupported(_))), "an AWS credential cannot authenticate the Gemini API");
+    }
+
+    #[test]
+    fn values_that_could_redirect_a_vertex_url_are_refused() {
+        use crate::claude::tests::opts;
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "gv".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        for (region, project, model) in [("evil.com/x#", "p", "m"), ("us-east5", "p/../q", "m"), ("us-east5", "p", "m?x=1"), ("us-east5", "p", "../../x"), ("us-east5", "", "m")] {
+            let extra = format!("[[endpoints]]\nid = \"gv\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"vertex\"\nregion = \"{}\"\nproject = \"{}\"\ncredential = \"gcloud-adc\"\n", region, project);
+            let Ok(cfg) = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"gv\"]"), extra)) else { continue };
+            let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("gv").unwrap(), model_id: model, compiled: &c, creds: &token("t"), now_unix: 0, register: &|_| {} });
+            assert!(matches!(r, Err(BuildError::Unsupported(_))), "{:?}", (region, project, model));
+        }
     }
 
     #[test]

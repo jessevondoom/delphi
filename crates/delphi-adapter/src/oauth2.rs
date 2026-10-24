@@ -83,7 +83,7 @@ pub struct Endpoints {
 }
 
 fn url_ok(u: &str) -> bool {
-    u.starts_with("https://") || u.starts_with("http://127.0.0.1") || u.starts_with("http://localhost") || u.starts_with("http://[::1]")
+    u.starts_with("https://") || crate::config::is_loopback(u)
 }
 
 fn form(params: &[(&str, &str)]) -> String {
@@ -829,6 +829,16 @@ mod tests {
         assert_eq!(store.get("oauth2.x").unwrap().as_deref(), Some("RT-1"));
         let exch = log.lock().unwrap().last().unwrap().1.clone();
         assert!(!exch["code_verifier"].is_empty() && exch["redirect_uri"].starts_with("http://127.0.0.1:"), "the verifier proves the same client");
+    }
+
+    #[test]
+    fn only_https_or_a_true_loopback_host_is_an_acceptable_endpoint() {
+        for ok in ["https://idp.example.com/t", "http://127.0.0.1:8080/t", "http://localhost/t"] {
+            assert!(url_ok(ok), "{}", ok);
+        }
+        for bad in ["http://127.0.0.1.evil.com/t", "http://localhost.evil.com/t", "http://idp.example.com/t", "ftp://x"] {
+            assert!(!url_ok(bad), "{}", bad);
+        }
     }
 
     #[test]

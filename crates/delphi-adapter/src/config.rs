@@ -178,7 +178,7 @@ pub struct Config {
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 
-fn is_loopback(url: &str) -> bool {
+pub(crate) fn is_loopback(url: &str) -> bool {
     let rest = url.strip_prefix("http://").unwrap_or("");
     let host = rest.split(['/', ':']).next().unwrap_or("");
     host == "127.0.0.1" || host == "localhost" || host == "[::1]"
