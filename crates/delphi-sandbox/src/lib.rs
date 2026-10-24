@@ -360,6 +360,16 @@ fn bwrap_args(r: &Resolved) -> Result<Vec<String>, SandboxError> {
     for p in &r.read_only {
         a.extend(["--ro-bind".to_string(), s(p), s(p)]);
     }
+    // On merged-/usr systems `/bin`, `/lib` and `/lib64` are links into `/usr`. Their targets are bound above
+    // (the paths were canonicalized), but the links themselves must exist too: `/lib64/ld-linux-x86-64.so.2`
+    // is the interpreter every dynamically linked program names.
+    for link in ["/bin", "/sbin", "/lib", "/lib64"] {
+        if let Ok(target) = std::fs::read_link(link) {
+            if target.is_relative() && target.starts_with("usr") {
+                a.extend(["--symlink".to_string(), s(&target), link.to_string()]);
+            }
+        }
+    }
     for p in r.writable() {
         a.extend(["--bind".to_string(), s(p), s(p)]);
     }
