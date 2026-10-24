@@ -17,6 +17,7 @@ use crate::handoff::{pointers_from_prompt, ContextPointer, HandoffEnvelope};
 use crate::mission::{LiveRedactor, EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
 use crate::pool::Pool;
+use crate::route::{resolve_route, Route, RouteRequest};
 use crate::probe::ProjectProbe;
 use crate::recovery::{self, Call, NodeStatus, Recovered};
 use crate::tools::{self, ToolCtx};
@@ -38,7 +39,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub const FAMILY: &str = "claude";
 pub const PROVIDER: &str = "anthropic";
 
 #[derive(Debug, Clone)]
@@ -207,6 +207,8 @@ pub(crate) struct SpanCtx {
     pub(crate) child_escalation: Option<String>,
     /// Set by a tool whose result text is kept outside the event log: the log records this reference instead.
     pub(crate) content_ref: Option<String>,
+    /// The `(endpoint, model)` that served the last turn, so a switch is reported once (`model.promoted`).
+    pub(crate) last_key: Mutex<Option<(String, String)>>,
 }
 
 impl SpanCtx {
@@ -384,7 +386,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None) };
 
             if fresh {
                 let mut open = vec![
@@ -460,11 +462,11 @@ impl Engine {
             // tried by the family's API endpoints; and the other way round when every API endpoint is down.
             let mut harness_tried = false;
             let mut harness_result: Option<Result<String, Escalate>> = None;
-            if let Some(hep) = if setup_error.is_none() { self.harness_endpoint(&sc.family) } else { None } {
+            if let Some(hep) = if setup_error.is_none() { self.route_harness(&sc) } else { None } {
                 harness_tried = true;
                 match self.run_harness(&mut sc, &ipr, &hep).await? {
                     Ok(text) => harness_result = Some(Ok(text)),
-                    Err(f) if f.retryable && self.has_api_endpoint(&sc.family) => {
+                    Err(f) if f.retryable && self.has_api_route(&sc) => {
                         m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": "api", "reason": self.secrets.redact(&f.reason)}))).await?;
                     }
                     Err(f) => harness_result = Some(Err(Escalate(f.reason))),
@@ -508,7 +510,7 @@ impl Engine {
                     Ok(t) => t,
                     Err(esc) => {
                         if esc.0.starts_with(EXHAUSTED) && !harness_tried {
-                            if let Some(hep) = self.any_harness_endpoint(&sc.family) {
+                            if let Some(hep) = self.route_harness(&sc) {
                                 m.append(sc.ev("harness.fallback", json!({"from": "api", "to": hep.id, "reason": esc.0}))).await?;
                                 break match self.run_harness(&mut sc, &ipr, &hep).await? {
                                     Ok(text) => Ok(text),
@@ -663,20 +665,44 @@ impl Engine {
     /// means stop and hand to the operator; `Err(EngineError)` (outer) is a fatal storage failure.
     async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32, prior_interruptions: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
         let cfg = self.cfg.get();
-        // Harness endpoints run whole spans (`harness_run.rs`); the turn-by-turn loop uses API endpoints only.
-        let endpoints: Vec<Endpoint> = cfg.endpoints_for(&sc.family).into_iter().filter(|e| e.path != delphi_adapter::config::AccessPath::Harness).cloned().collect();
-        if endpoints.is_empty() {
-            return Ok(Err(Escalate(format!("no allowed {} API endpoint is configured (see `delphi doctor`)", sc.family))));
-        }
         let m = &sc.m;
         let mut interruptions = prior_interruptions;
         if interruptions >= self.settings.max_interruptions {
             return Ok(Err(Escalate(format!("the same turn was interrupted {} times in a row", interruptions))));
         }
         let mut exhausted_note: Option<String> = None;
-        'endpoints: for ep in &endpoints {
+        // Each pass asks the resolver for the best pair that is usable now. A pair that throttles or runs out
+        // of quota is recorded in the pool, so the next pass moves on to the next one, across families
+        // (`specs/002` §4.1). The cap only guards against a pool that never settles.
+        let mut passes = 0usize;
+        'endpoints: loop {
+            passes += 1;
+            if passes > cfg.pool_entries().len() + 2 {
+                return Ok(Err(Escalate(format!("{}: no candidate settled after {} tries this turn", EXHAUSTED, passes - 1))));
+            }
+            let now = (self.clock_unix)();
+            let route = resolve_route(&cfg, &self.pool.snapshot(), now, &self.route_request(sc, true));
+            let note = exhausted_note.as_ref().map(|n| format!(": {}", n)).unwrap_or_default();
+            let (key, passed_over) = match &route {
+                Route::Target { key, .. } => (key.clone(), None),
+                Route::Similar { key, target, why, .. } => (key.clone(), Some((target.clone(), why.clone()))),
+                Route::Weaker { key, target, lost, .. } => {
+                    return Ok(Err(Escalate(format!(
+                        "{}{}; only a weaker model is available ({}/{} instead of {}/{}: {}), and asking the operator to confirm one is not built yet",
+                        EXHAUSTED, note, key.endpoint_id, key.model_id, target.endpoint_id, target.model_id, lost.join(", ")
+                    ))));
+                }
+                Route::NoModel { .. } => return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now))))),
+            };
+            let Some(ep) = cfg.endpoint(&key.endpoint_id) else { continue 'endpoints };
+            let model_id = key.model_id.clone();
+            let this_key = (key.endpoint_id.clone(), key.model_id.clone());
+            if let Some((target, why)) = passed_over {
+                if sc.last_key.lock().unwrap().as_ref() != Some(&this_key) {
+                    m.append(sc.ev("model.promoted", json!({"from": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "to": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "reason": self.secrets.redact(&why)}))).await?;
+                }
+            }
             loop {
-                let Some(model_id) = cfg.resolve_model(ep, &sc.tier) else { continue 'endpoints };
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
                     return Ok(Err(Escalate(format!("model `{}` has no [models.catalog] entry, so its cost can't be reserved", model_id))));
                 };
@@ -743,6 +769,7 @@ impl Engine {
                         if self.pool.record_success(&ep.id, &model_id) {
                             m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": model_id}))).await?;
                         }
+                        *sc.last_key.lock().unwrap() = Some(this_key);
                         return Ok(Ok((done, ep.clone(), model_id)));
                     }
                     Err(ModelError::Throttled(msg)) => {
@@ -785,8 +812,38 @@ impl Engine {
                 }
             }
         }
-        let why = exhausted_note.map(|n| format!(": {}", n)).unwrap_or_default();
-        Ok(Err(Escalate(format!("{}{}; waiting would not help right now", EXHAUSTED, why))))
+    }
+
+    /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;
+    /// a span that can run shell commands (a worktree and the shell tool, as for a Builder) needs an endpoint
+    /// with an approval bridge.
+    fn route_request(&self, sc: &SpanCtx, turn_by_turn: bool) -> RouteRequest {
+        RouteRequest {
+            role: sc.role.clone(),
+            tier: sc.tier.clone(),
+            prefer_family: Some(sc.family.clone()),
+            avoid_families: vec![],
+            mutating: sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped"),
+            min_context_tokens: 0,
+            target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
+            turn_by_turn,
+        }
+    }
+
+    /// The harness endpoint the resolver would use for this span now, if its pick is one (and needs no confirmation).
+    pub(crate) fn route_harness(&self, sc: &SpanCtx) -> Option<Endpoint> {
+        let cfg = self.cfg.get();
+        let route = resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, false));
+        if route.needs_confirmation() {
+            return None;
+        }
+        route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness).cloned()
+    }
+
+    /// Is there an API pair that can serve this span turn by turn right now?
+    pub(crate) fn has_api_route(&self, sc: &SpanCtx) -> bool {
+        let cfg = self.cfg.get();
+        matches!(resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, true)), Route::Target { .. } | Route::Similar { .. })
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
@@ -1428,6 +1485,48 @@ mod tests {
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("direct is out of quota") && r.contains("resets at")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
+    }
+
+    /// Claude and Gemini, each with one endpoint; one Gemini model serves every tier.
+    fn two_families(f: &Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"direct\"] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"gem\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    // specs/002 §4.1 tests 1 and 2: promotion at a turn boundary, with no orphaned tool call, and foreign signatures not carried.
+    #[tokio::test]
+    async fn a_span_whose_model_runs_out_between_turns_finishes_on_another_family_with_its_history() {
+        let f = setup(vec![signed_tool_turn("toolu_1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Finished on Gemini."), Step::text("Second task.")], 5.0, |_| {});
+        two_families(&f);
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Finished on Gemini."), "{}", out.text);
+        let reqs = f.model.requests();
+        let served: Vec<(&str, &str)> = reqs.iter().map(|r| (r.endpoint_id.as_str(), r.model_id.as_str())).collect();
+        assert_eq!(served, vec![("direct", "opus-x"), ("direct", "opus-x"), ("gem", "gem-pro")], "turn 2 ran out on Claude and was served by Gemini");
+        // The Gemini request carries the whole history: the tool call and its result, but not Claude's signed reasoning.
+        let body = reqs[2].body.to_string();
+        assert!(body.contains("read_file") && body.contains("pub fn needle"), "the tool call and its result are in the history: {}", body);
+        assert!(!body.contains("SIG-EXACT"), "a foreign signature is never sent to another provider");
+        // Events: the exhaustion with its reset, then the promotion naming both pairs.
+        let ex = events_of(&f, "model.exhausted");
+        assert_eq!((ex.len(), ex[0].payload["endpoint_id"].as_str()), (1, Some("direct")));
+        let pr = events_of(&f, "model.promoted");
+        assert_eq!(pr.len(), 1);
+        assert_eq!((pr[0].payload["from"]["endpoint_id"].as_str(), pr[0].payload["to"]["endpoint_id"].as_str(), pr[0].payload["to"]["model_id"].as_str()), (Some("direct"), Some("gem"), Some("gem-pro")));
+        assert!(pr[0].payload["reason"].as_str().unwrap().contains("exhausted"), "{}", pr[0].payload);
+        // Promotion is not a retry: the exhausted call's reservation was released and nothing is left reserved.
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+        assert!(!kinds(&f).contains(&"turn.interrupted".to_string()));
+        // The next task goes straight to Gemini: the pool remembers Claude is out, so it is not tried again.
+        let again = f.engine.run_task(&f.m, "architect", "One more").await.unwrap();
+        assert_eq!(again.text, "Second task.");
+        let reqs = f.model.requests();
+        assert_eq!(reqs.len(), 4);
+        assert_eq!(reqs[3].endpoint_id, "gem", "no request was spent on the exhausted pair");
+        assert_eq!(events_of(&f, "model.promoted").len(), 2, "a new span reports its own substitution");
     }
 
     #[tokio::test]

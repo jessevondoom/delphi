@@ -212,6 +212,12 @@ Both thresholds are configuration constants. Exhaustion is recorded as `model.ex
 
 **Primary is a runtime role.** For each request, `resolve_model_route` filters the pool to *eligible* models (tier or better, write tools and the approval bridge if the role mutates, enough context, a priced catalog entry, an endpoint inside `allowed_endpoints`) and takes the first `available` one. The rule applies at every dispatch, so when the previous primary is exhausted the next model simply becomes the primary and nothing else in the mission changes.
 
+**How candidates are ordered (ratified 2026-10-24, with `resolve_route`).**
+1. *Hard requirements* are checked first and are never traded away: the endpoint is allowed; a role that mutates needs an endpoint with an approval bridge (a harness has one only if it is `claude`); a known context window must be large enough (an unknown window never counts as too small); a call must be priceable from the catalog or metered by a subscription.
+2. *Preferences* order the rest: pairs outside the author's family, then the role's usual family, then the endpoint order, then pool order. **Without an explicit `[routing.pool] order`, the ratified `[access]` endpoint order decides within a tier**, exactly as the engine walks endpoints today, because the default pool is tier-major and says nothing about which endpoint to try first. An explicit `order` overrides it.
+3. *Substitutes*: **the closest tier wins**, so an equal tier on another family beats a higher tier on the usual family (cheaper, and the family was only a preference); a higher tier is used only when no equal one is usable.
+4. *Tiers a model serves*: an endpoint can map one model to several tiers (a subscription with a single model). Such a pair counts as the wanted tier whenever it serves it.
+
 **Mid-task promotion.** If the model serving an in-flight span is exhausted:
 1. Finish or abandon pending tool calls so every `tool_call` has a `tool_result` (§3.1 rule 3).
 2. Compile the canonical `ContentBlock[]` for the next eligible model (§3.1 rule 2). Signed reasoning is not carried across models.

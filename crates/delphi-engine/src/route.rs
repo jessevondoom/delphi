@@ -37,6 +37,8 @@ pub struct RouteRequest {
     pub min_context_tokens: u64,
     /// The role's target model (`[routing.targets]`).
     pub target: Option<String>,
+    /// The caller can only drive one model turn at a time, so a harness (which runs a whole span) is not a candidate.
+    pub turn_by_turn: bool,
 }
 
 /// An eligible pair that cannot be used right now, and when it may come back.
@@ -52,9 +54,9 @@ pub enum Route {
     /// The target (or, with none set, the preferred pair) is usable.
     Target { key: PoolKey, homogeneous: bool },
     /// The target is not usable; this one is at least as capable. Use it and say so.
-    Similar { key: PoolKey, target: PoolKey, homogeneous: bool },
+    Similar { key: PoolKey, target: PoolKey, why: String, homogeneous: bool },
     /// Only less capable pairs are usable. The caller asks the operator before using it.
-    Weaker { key: PoolKey, target: PoolKey, lost: Vec<String>, homogeneous: bool },
+    Weaker { key: PoolKey, target: PoolKey, why: String, lost: Vec<String>, homogeneous: bool },
     /// Nothing eligible is usable now. `back_at` is the soonest any blocked pair returns, if known.
     NoModel { target: Option<PoolKey>, blocked: Vec<Blocked>, ineligible: Vec<(PoolKey, String)>, back_at: Option<i64> },
 }
@@ -71,6 +73,15 @@ impl Route {
     /// True when the operator must confirm before the pair is used.
     pub fn needs_confirmation(&self) -> bool {
         matches!(self, Route::Weaker { .. })
+    }
+
+    /// For an escalation message: who is blocked and when, and what could never serve this request.
+    pub fn explain(&self, now: i64) -> String {
+        let Route::NoModel { blocked, ineligible, back_at, .. } = self else { return String::new() };
+        let mut parts: Vec<String> = blocked.iter().map(|b| format!("{}/{} {}{}", b.key.endpoint_id, b.key.model_id, b.why, b.back_at.map(|t| format!(", back in {}", crate::pool::fmt_secs(t - now))).unwrap_or_default())).collect();
+        parts.extend(ineligible.iter().map(|(k, why)| format!("{}/{} cannot serve this: {}", k.endpoint_id, k.model_id, why)));
+        let soonest = back_at.map(|t| format!("; the soonest returns in {}", crate::pool::fmt_secs(t - now))).unwrap_or_default();
+        format!("{}{}", parts.join("; "), soonest)
     }
 
     pub fn homogeneous(&self) -> bool {
@@ -129,6 +140,9 @@ fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String>
     let ep = cfg.endpoint(&key.endpoint_id)?;
     if !cfg.is_allowed(&ep.id) {
         return Some("the endpoint is not in allowed_endpoints".into());
+    }
+    if req.turn_by_turn && ep.path == delphi_adapter::config::AccessPath::Harness {
+        return Some("a harness runs whole spans, not single turns".into());
     }
     if req.mutating && !ep.can_mutate() {
         return Some("this harness has no approval bridge, so it can only serve read-only roles".into());
@@ -201,14 +215,16 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
             Avail::No { why, back_at } => blocked.push(Blocked { key: k.clone(), why, back_at }),
         }
     }
+    let mut ideal_why = String::new();
     if let Avail::No { why, back_at } = availability(find(&ideal), now) {
+        ideal_why = why.clone();
         blocked.insert(0, Blocked { key: ideal.clone(), why, back_at });
     }
     let similar = |k: &PoolKey| rank_at(cfg, k, ideal_rank) >= ideal_rank && !(ideal_ctx > 0 && context_of(cfg, k) > 0 && context_of(cfg, k) < ideal_ctx);
     // Among similar pairs prefer the closest tier (equal before higher), then the usual order.
     let pick_similar = usable.iter().enumerate().filter(|(_, k)| similar(k)).min_by_key(|(i, k)| (rank_at(cfg, k, ideal_rank) - ideal_rank, *i)).map(|(_, k)| k.clone());
     if let Some(key) = pick_similar {
-        return Route::Similar { homogeneous: homogeneous(&key), key, target: ideal };
+        return Route::Similar { homogeneous: homogeneous(&key), key, why: ideal_why, target: ideal };
     }
     // Weaker: the most capable of what is left, then the usual order.
     let pick_weaker = usable.iter().enumerate().min_by_key(|(i, k)| (-rank_at(cfg, k, ideal_rank), *i)).map(|(_, k)| k.clone());
@@ -221,7 +237,7 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
         if ideal_ctx > 0 && ctx > 0 && ctx < ideal_ctx {
             lost.push(format!("a {}-token context instead of {}", ctx, ideal_ctx));
         }
-        return Route::Weaker { homogeneous: homogeneous(&key), key, target: ideal, lost };
+        return Route::Weaker { homogeneous: homogeneous(&key), key, why: ideal_why, target: ideal, lost };
     }
     let back_at = blocked.iter().filter_map(|b| b.back_at).min();
     Route::NoModel { target: Some(ideal), blocked, ineligible: rejected, back_at }
