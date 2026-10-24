@@ -10,7 +10,7 @@ source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "§1.2, §2 (incl. §2.1, §2.1.1, §2.2), §3, §4 (operator pre-authorization, Council 004, 2026-10-23); §5 is governed by approved spec 009"
+approved_sections: "§4.1 and §3.1 rule 5 (amendment 002-A1, D-26, operator 2026-10-24); §1.2, §2 (incl. §2.1, §2.1.1, §2.2), §3, §4 (operator pre-authorization, Council 004, 2026-10-23); §5 is governed by approved spec 009"
 ---
 
 # Spec 002: Adapter: Dialect Compiler, Multi-Provider Drivers & Dynamic Model Scaling
@@ -150,6 +150,7 @@ To satisfy `[H-003]` and `[REV-ARCH-02]`, every turn in an agent's execution tra
 2. **Mid-Task Cross-Provider Failover (or Retry Upscale Across Providers):** If Turn 1–2 ran on `Gemini Flash` and failed verification (or hit a `429`/`503`), and **Orchestrator** upscales Turn 3 to `Claude Opus`, the compiler **cannot** send Gemini's cryptographic `thought_signature` to Anthropic. Instead, the compiler converts foreign `thinking` blocks into read-only `<prior_reasoning_note>` text blocks **in the assistant turn**, with that tag escaped inside the text, or omits them, while preserving all `tool_call` and `tool_result` history cleanly. If a provider requires a signed reasoning block to continue an open tool loop and none is replayable, that single continuation call is sent with thinking disabled.
 3. **Per-Provider History Rebuild:** Each request is compiled fresh from the canonical `ContentBlock[]` for its target provider. Signed reasoning blocks are echoed only for the provider that produced them and only within the current unbroken tool loop. Older same-provider reasoning that precedes a foreign turn is downgraded like any foreign block. A failover can only happen at a turn boundary, after every pending `tool_call` has its `tool_result`.
 4. **Rate Limits Before Failover:** `429` and `529` responses are retried on the same provider with exponential backoff and jitter, honoring `retry-after`, up to a configured wall-clock limit. Only then does the Adapter fail over, and only to the next endpoint in the ratified `[access] order` within `allowed_endpoints` (`specs/009` §5). Agent-authored routing hints such as `routing_directive.fallback_provider` are advisory and can never select an endpoint outside that policy. Failover and backoff never count as a verification attempt in the retry ladder.
+5. **Exhaustion Is Not a Rate Limit (002-A1, D-26):** a quota, subscription-window or budget exhaustion is not retried with backoff. The model is marked `exhausted` and the pool promotes the next eligible model (§4.1).
 
 ---
 
@@ -189,6 +190,51 @@ An endpoint's own `models` map overrides `[models.<family>]` for that endpoint (
 **Single-family setups:** when the ladder or a Council needs "a different family" and only one family is configured or allowed, a **different model of the same family** (another tier or version) is used instead, and the result is marked `homogeneous_retry: true` (`[H-008]`).
 
 Tiers resolve to concrete model IDs only through this configuration. Thinking budgets are clamped to each model's `min_thinking_budget` and `max_thinking_budget` from the catalog. Some frontier models reject a budget of `0` (thinking cannot be disabled), so a `0` request is raised to the model's minimum rather than sent and rejected. Specs and envelopes never name model versions, so a model release doesn't make the specs stale.
+
+### 4.1 Amendment 002-A1: Model Pool & Exhaustion Promotion (D-26; ratified by the operator 2026-10-24)
+
+Roles ask for capabilities (§4); this section says what happens when the model that would serve them runs out.
+
+**The pool.** `[routing.pool]` lists configured models in preference order. Each entry has a runtime state kept by the daemon (not in team-tracked files):
+
+| State | Meaning | Leaves the state when |
+| :--- | :--- | :--- |
+| `available` | Usable now | n/a |
+| `cooling_down` | Rate limited (`429`/`529`) | `retry-after` or the backoff limit passes (§3.1 rule 4) |
+| `exhausted` | Quota, subscription window or budget used up | A known reset time passes, or a capped probe call succeeds (re-probe after 15 minutes, doubling to 4 hours) |
+
+Exhaustion is detected from provider quota and billing errors (not rate limits), a harness `rate_limit_event` at 100% utilization, or the daemon's own reservation failing against a per-model cap. It is recorded as `model.exhausted` with the reason and the reset time if known.
+
+**Primary is a runtime role.** For each request, `resolve_model_route` filters the pool to *eligible* models (tier or better, write tools and the approval bridge if the role mutates, enough context, a priced catalog entry, an endpoint inside `allowed_endpoints`) and takes the first `available` one. The rule applies at every dispatch, so when the previous primary is exhausted the next model simply becomes the primary and nothing else in the mission changes.
+
+**Mid-task promotion.** If the model serving an in-flight span is exhausted:
+1. Finish or abandon pending tool calls so every `tool_call` has a `tool_result` (§3.1 rule 3).
+2. Compile the canonical `ContentBlock[]` for the next eligible model (§3.1 rule 2). Signed reasoning is not carried across models.
+3. Continue from the worktree and scratchpad state, and emit `model.promoted {from, to, reason}`.
+4. Promotion is not a verification attempt, does not use the retry ladder, and goes through the same budget reservation as any dispatch.
+
+Promotion prefers a model whose reasoning is replayable from the failed one (same endpoint family, §3.1 rule 1), then another family.
+
+**Preferences degrade, constraints do not.**
+- *Preferences:* `[H-007]`/`[H-008]` family separation, the "≥2 families" Council rule, long-context routing and tier choice. If only one family or tier is left, the request degrades (a different tier of the same family, then a fresh-context pass of the same model) and the result is marked `homogeneous` or `degraded_tier`.
+- *Constraints:* taint rules, approvals, `[access]` endpoint policy, budgets, and the read-only limit of harnesses without an approval bridge (spec 009 §7B). Promotion never relaxes these.
+- If no model meets the hard requirements, the task becomes `blocked: no_model` (reset times in the event) and resumes when one returns. It neither fails nor runs on an ineligible model.
+
+**Targets and confirmation.** Neither this spec nor `context/model-capabilities.md` assigns a role to a named model; examples there are defaults. Each role may have a *target model* (`[routing.targets]`, otherwise the first pool entry that is eligible). Delphi tries to satisfy the target and otherwise substitutes:
+1. **Target available:** use it.
+2. **Target unavailable, a *similar* model exists** (eligible, and at least the target's tier with no shorter context): substitute automatically and emit `model.promoted`.
+3. **Only *weaker* eligible models exist:** do not stop. Emit `model.degraded_confirm` (an approval card naming the target, the substitute and what is lost). The span runs on the substitute only after the operator confirms; declining waits for the target's reset. Confirmation covers that task, not the mission, and is recorded in the ledger. With no operator present (unattended runs) the task waits instead of assuming consent.
+4. **No eligible model:** `blocked: no_model` as above.
+
+**Tests (when implemented):**
+1. Exhaustion of the primary mid-span promotes at a turn boundary with no orphaned tool call.
+2. Cross-provider promotion downgrades foreign signatures.
+3. A read-only harness is never promoted into a mutating role.
+4. Promotion never selects an endpoint outside `allowed_endpoints`.
+5. With one family left a Council runs `homogeneous` instead of blocking.
+6. With no eligible model the task parks and resumes.
+6a. A similar substitute runs without a prompt; a weaker one raises `model.degraded_confirm` and does not run until confirmed, and declining waits for the target.
+7. Promotion does not consume a retry attempt.
 
 ---
 

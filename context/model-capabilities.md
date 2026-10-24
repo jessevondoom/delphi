@@ -50,6 +50,8 @@ Therefore, each `AGENT.md` defines only a **baseline default tier**, while **Orc
 
 ## 3. Orchestrator's Dynamic Upscaling & Downscaling Protocol
 
+> **Names below are examples, not assignments (D-26, ratified).** Roles request a tier and capabilities; config and the model pool (`specs/002` §4.1) decide which concrete model serves them. Wherever this section says "Builder → Sonnet" or "Council → Opus + Gemini Pro", read "a model of that tier that is currently available". If the preferred model is exhausted, the next eligible model in the pool takes over and the work continues.
+
 Rather than treating model size as static, **Orchestrator** adjusts **two orthogonal knobs** on every task dispatch:
 1. **Model Class:** `fast` (`Haiku` / `Gemini Flash`) $\leftrightarrow$ `workhorse` (`Sonnet` / `Gemini Flash-Thinking`) $\leftrightarrow$ `frontier` (`Opus` / `Gemini Pro`).
 2. **Thinking / Reasoning Budget:** `none` ($0$ tokens) $\leftrightarrow$ `low` ($1\text{K}–2\text{K}$) $\leftrightarrow$ `medium` ($4\text{K}–8\text{K}$) $\leftrightarrow$ `max` ($16\text{K}–32\text{K}$).
@@ -71,7 +73,7 @@ flowchart TD
 2. **Context Volume Crossover (`>120K` Tokens):**
    - When a task requires holding an entire repository or $>120\text{K}$ tokens of literature in active working memory simultaneously, **Orchestrator** routes to **Gemini Pro** (or **Gemini Flash** for initial pass) due to its flat 1M-token needle-in-a-haystack recall curve and server-side `cachedContents` economics.
 3. **Adversarial Cross-Provider Pairing (Claude $\leftrightarrow$ Gemini):**
-   - **Rule (`[H-007]`):** If **Builder** writes code or **Architect** drafts a spec using **Claude** (`Sonnet`/`Opus`), **Orchestrator** should preferentially schedule **Red-Team** (Red Team) or **Strategist** (Alignment Review) on **Gemini Pro** (and vice versa). Cross-provider auditing eliminates shared model-family blind spots.
+   - **Rule (`[H-007]`):** If **Builder** writes code or **Architect** drafts a spec using **Claude** (`Sonnet`/`Opus`), **Orchestrator** should preferentially schedule **Red-Team** (Red Team) or **Strategist** (Alignment Review) on a different family (here **Gemini Pro**, and vice versa). Cross-provider auditing eliminates shared model-family blind spots. This is a preference: with one family left it degrades to a different tier or a fresh-context pass and is marked `homogeneous` (`[H-008]`); it never blocks.
 4. **High-Blast-Radius / Architectural Forks:**
    - Any task touching [GOVERNANCE.md](../GOVERNANCE.md), security boundaries, concurrency state machines, or `delphi update` migrations automatically upscales **Architect**, **Red-Team**, and **Strategist** to `frontier` (`Claude Opus` + `Gemini Pro`) with high thinking budgets.
 
@@ -89,11 +91,11 @@ Every structured handoff emitted by **Orchestrator** includes an explicit `routi
 ```yaml
 routing_directive:
   target_agent: builder
-  provider_preference: anthropic          # anthropic | google | openai | local
+  provider_preference: anthropic          # a preference, not a requirement; an exhausted model is skipped
   model_tier: frontier                    # fast | workhorse | frontier
   model_id_hint: claude-opus-4-6          # Resolved against .delphi/config.toml
   thinking_budget_tokens: 16000           # 0 (disabled) up to 32000
-  fallback_provider: google               # Cross-provider resilience
+  fallback_provider: google               # Advisory only (D-26): pool order and [access] policy decide; exhaustion promotes the next eligible model
   fallback_model_hint: gemini-3-pro
   scaling_rationale: "Upscaled from Sonnet to Opus (16k thinking) because task involves concurrent UDS socket frame coalescing and failed initial race-condition test."
 ```

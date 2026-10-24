@@ -56,6 +56,14 @@ cross_provider_builder_critic = true # [H-007] Pair Claude builder with Gemini c
 max_attempts_per_node = 3            # Unified retry ladder (specs/003 §3.2): upscale, then reset, then escalate
 max_parallel_agents = 4
 
+# Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
+# model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
+# Roles ask for capabilities, never for a named model. Omit to use every configured tier, family by family.
+# [routing.pool]
+# order = ["<claude frontier model id>", "<gemini frontier model id>", "<claude workhorse model id>"]
+# [routing.targets]                    # optional target model per role; a similar model is substituted if it is
+# red-team = "<model id>"              # unavailable, and a weaker one needs the operator's confirmation
+
 [budget]
 mission_budget_usd = 5.0             # D-10: L1–L3 work (enforced with pre-dispatch cost reservations)
 council_budget_usd = 20.0            # D-10: Council Mode
