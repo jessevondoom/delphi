@@ -591,7 +591,11 @@ impl PtyConsole {
     fn wait_for(&self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(40);
         while !self.everything().contains(needle) {
-            assert!(Instant::now() < deadline, "timed out waiting for `{}`; the terminal shows:\n{}", needle, self.everything());
+            assert!(Instant::now() < deadline, "timed out waiting for `{}`; the terminal shows:\n{}\nraw output (escaped, last 1500 bytes):\n{}", needle, self.everything(), {
+                let raw = self.bytes.lock().unwrap();
+                let tail = &raw[raw.len().saturating_sub(1500)..];
+                String::from_utf8_lossy(tail).escape_debug().to_string()
+            });
             std::thread::sleep(Duration::from_millis(60));
         }
     }
