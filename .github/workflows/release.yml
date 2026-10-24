@@ -48,7 +48,10 @@ jobs:
         working-directory: ui
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          ./node_modules/.bin/bun build --compile --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
+          # Install scripts stay off for everything, except bun's own, which fetches the bun executable.
+          npm rebuild bun
+          # The release version is baked in: a console of another release refuses to run beside this delphi.
+          ./node_modules/.bin/bun build --compile --define "BUILD_VERSION=\"${GITHUB_REF_NAME#v}\"" --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
           test -x dist/delphi-ui
       - name: Package
         run: |

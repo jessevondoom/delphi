@@ -742,23 +742,31 @@ fn a_long_reply_is_cut_to_a_screenful_saved_whole_and_available_with_more() {
     kill_daemon(pid);
 }
 
+/// The command that starts the full-screen console: the compiled executable when CI built one
+/// (`DELPHI_UI_COMPILED`), else the sources run with Node. `None` when neither is available.
+fn ui_launcher(dir: &Path) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("DELPHI_UI_COMPILED") {
+        return Some(PathBuf::from(p));
+    }
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return None;
+    }
+    let wrapper = dir.join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Some(wrapper)
+}
+
 /// The full-screen console is a separate program (`ui/`, D-28). This drives it against the real daemon through the
 /// real `delphi chat` launcher; it runs only where `npm ci` has been done, and is skipped otherwise.
 #[test]
 fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_history() {
-    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
-        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
-        return;
-    }
     let m = mock(vec![reply_text("Hello **from** the daemon.\n\n- one\n- two")]);
     let e = setup(m.port);
-    let wrapper = e._t.path().join("delphi-ui");
-    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     c.wait_for("all agents idle");
@@ -775,6 +783,9 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("Hello from the daemon.");
+    // The text first shows dim as it streams; the finished reply (badge line, rendered list) follows.
+    c.wait_for("orchestrator ·");
+    c.wait_for("• one");
     let screen = c.visible();
     assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
     assert!(screen.lines().next().unwrap().contains("navigate: shift+arrows"), "header: {}", screen);
@@ -792,19 +803,9 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
 
 #[test]
 fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothing_runs() {
-    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
-        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
-        return;
-    }
     let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Drafted.")]);
     let e = setup(m.port);
-    let wrapper = e._t.path().join("delphi-ui");
-    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     c.wait_for("shortcuts: ?");
@@ -836,6 +837,69 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     assert!(!screen.contains("esc to stop") && screen.contains("all agents idle"), "{}", screen);
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
     assert_eq!(m.seen.lock().unwrap().len(), 1, "the queued message was never sent");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn a_console_of_another_release_hands_over_to_the_inline_console() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let stale = e._t.path().join("delphi-ui");
+    std::fs::write(&stale, "#!/bin/sh\necho 'delphi-ui 0.0.1 does not match' >&2\nexit 3\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &[("DELPHI_UI", stale.to_str().unwrap())]);
+    c.wait_for("all agents idle");
+    c.wait_for("shortcuts: ?");
+    c.type_keys("/quit\r");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_changes_the_mode() {
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"})), reply_text("Drafted specs/009-e2e.md.")]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    // Shift+Tab cycles the approval mode, shown in the footer, and the daemon agrees.
+    c.type_keys("\x1b[Z");
+    c.wait_for("accept edits");
+    c.type_keys("\x1b[Z");
+    c.wait_for("· auto ·");
+    c.type_keys("\x1b[Z");
+    c.wait_for("· approvals ·");
+    c.type_keys("@architect Draft a spec called 009-e2e");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("decision needed");
+    // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
+    c.type_keys("\x1b[1;2C");
+    c.wait_for("Pending decisions (1)");
+    std::thread::sleep(Duration::from_millis(500));
+    c.type_keys("\r");
+    c.wait_for("Approval required · 1 of 1 pending");
+    c.wait_for("1. Approve once");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "nothing is written before the answer");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("1");
+    c.wait_for("nothing needs you");
+    c.type_keys("\x1b");
+    c.wait_for("Drafted specs/009-e2e.md.");
+    assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
+    assert!(c.visible().contains("all agents idle"), "{}", c.visible());
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();

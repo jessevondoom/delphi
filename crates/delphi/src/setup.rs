@@ -472,7 +472,7 @@ fn google_oauth(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut Document
 }
 
 /// Put the access change in front of the operator and ratify it on their say-so.
-fn ratify_config(ui: &mut dyn Ui, home: &Path, ws_dir: &Path, yes: bool) -> bool {
+pub(crate) fn ratify_config(ui: &mut dyn Ui, home: &Path, ws_dir: &Path, yes: bool) -> bool {
     use delphi_engine::ratify;
     let pending: Vec<_> = ratify::list(home, ws_dir).into_iter().filter(|p| p.logical.starts_with("config.toml")).collect();
     if pending.is_empty() {

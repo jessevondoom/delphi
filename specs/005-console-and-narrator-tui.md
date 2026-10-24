@@ -3,14 +3,13 @@ id: spec-005-console-and-narrator-tui
 title: "005: Console, Narrator Window & UDS Event-Bus Daemon"
 author: architect
 timestamp: 2026-10-23T08:05:00Z
-status: draft
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "§1.1, §2.1–§2.5, §3, §4 (operator: Council 003 + Council 004, 2026-10-23); §5 remains draft"
 ---
 
 # Spec 005: Console, Narrator Window & UDS Event-Bus Daemon

@@ -1,0 +1,15 @@
+Delphi Council 010, CONFIRMING REVIEW of revised (v2) xenia specs. READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply (do not narrate your reading; your FINAL message must be the complete review in the format below).
+
+Under review: specs/011-xenia-trust-model.md and specs/012-xenia-record-schema.md (v2), plus the proposed amendment 007-A1 (the L2 row in specs/007-federated-mesh-and-sync.md §3). Xenia is an org-level shared-memory layer: operators publish signed records to a shared git store and pull each other's. Phase 1 is deliberately small (kinds memory, endorsement, tombstone; pointers display-only; no skills, requests, invites, vouch lists or pointer resolver: those are provisional in 011 §11 and 012 §11).
+
+Two earlier Councils reviewed v1 and were harsh. Read their verdicts first: missions/2026-10-23-foundational-design/councils/008-verdict.md and councils/009-verdict.md (the full per-round transcripts are not needed). v2 was rewritten in response, with a smaller Phase 1.
+
+Also read: GOVERNANCE.md, REVIEW.md (§1 severities), specs/001 §5, specs/007 §3-4, specs/010 §5.1, context/heuristics.md.
+
+Your task:
+1. For every P0 in councils/009-verdict.md (freeze/suppression, person-vs-DID self-endorsement, pointer-tier exception) and every P0 in councils/008-verdict.md, say `resolved` | `partly` | `not resolved` with one clause and the section that answers it. Spot-check the P1 list in 009 the same way (a compact list is fine).
+2. NEW defects in v2 (max 6, severity P0/P1/P2; each a falsifiable sequence of events, with exact remediation). Look especially at: the new freshness statement (011 §4: one admin signature, store_head, no-deletion check, expiry behavior, `--accept-rewritten-head`), the `person` field and quorum by person, rotation by re-signing (011 §8), the rule that retired/removed DIDs have no standing, the signed domain now including id and kid (012 §3), the join pin (011 §3.3), the sticky state (011 §3.5), anything the v2 cuts left inconsistent (stale cross-references, test numbering, phase table vs tests), and contradictions with specs 001/004/007/010.
+3. Answer: is Phase 1 now small enough and clear enough to build? What is still the single biggest risk?
+4. Verdict per spec: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0). If approve-with-fixes, list the exact fixes.
+
+At most 1,000 words. Repo-relative paths only. No praise. Do not issue verdicts on other files.

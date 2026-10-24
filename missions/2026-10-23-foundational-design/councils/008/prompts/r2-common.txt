@@ -1,0 +1,12 @@
+Delphi Council 008, ROUND 2. READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply. Review ONLY the files named here; do not issue verdicts on any other file.
+
+Round 1 (missions/2026-10-23-foundational-design/councils/008/round1-red-team.md and round1-strategist.md) found problems in the draft xenia specs specs/011-xenia-trust-model.md and specs/012-xenia-record-schema.md. Both have been revised. Read the revised files in full, plus specs/001 §5, specs/007 §3-4 and specs/010 §5.1.
+
+The ONLY open decisions are these (quote of the specs' tables):
+- O-1: Does steward endorsement alone lift a record from L1 to L2? (revised answer: yes, and it is the only path to L2 in v1; pointer targets never inherit it.)
+- O-2: One store per audience (with `store` bound into signatures) vs one per org.
+- O-3: Admin quorum (majority of the previous epoch's admins; `doctor` warns below 3) and steward assignment (areas set by admins).
+- O-4: Org join = admin-signed invite plus operator confirmation of the admin fingerprint.
+- O-5: Xenia may ship before federation Planes 1-2 (D-06).
+- S-1: Markdown+YAML records with detached raw-byte signatures. S-2: progress as separate expiring records. S-3: 16 KiB / 500-char caps. S-4: skills always a pinned git tree. S-5: claims public in v1.
+Do not invent other decisions.

@@ -3,7 +3,7 @@ id: spec-008-ambient-watch-and-rewind
 title: "008: Zero-Token Ambient Watch, Time-Travel Rewind & HITL Permission Tiers"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
-status: draft
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

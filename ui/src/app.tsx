@@ -6,7 +6,8 @@ import * as C from './composer.ts';
 import { COMMANDS } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
-import { runSlash } from './run.ts';
+import { resolveCard, runSlash } from './run.ts';
+import * as I from './inbox.ts';
 import { frame, transcript, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
@@ -47,6 +48,8 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   const [sel, setSel] = useState(0);
   const [expandTools, setExpandTools] = useState(false);
   const [queue, setQueue] = useState<string[]>([]);
+  const [inbox, setInbox] = useState(() => I.newInbox(Date.now()));
+  const [mode, setMode] = useState('default');
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -58,6 +61,11 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   stateRef.current = state;
   const queueRef = useRef<string[]>([]);
   const searchRef = useRef(search);
+  const inboxRef = useRef(inbox);
+  const deckRef = useRef<0 | 1 | 2>(1);
+  deckRef.current = deck;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   const listDir = useMemo(() => listTeamDir(info), [info]);
 
   useEffect(() => {
@@ -81,6 +89,8 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
     ev.on('closed', () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed', at: Date.now() })));
     return () => { ev.off('notification', onNote); if (timer) clearTimeout(timer); };
   }, [ev]);
+
+  useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => v?.mode && setMode(String(v.mode))).catch(() => {}); }, []);
 
   const note = (text: string) => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now() }));
 
@@ -158,6 +168,25 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
         return;
       }
 
+      // Shift+Tab cycles the approval mode from anywhere.
+      if (e.t === 'key' && e.k === 'shift-tab') {
+        const order = ['default', 'accept-edits', 'mission-auto'];
+        const next = order[(order.indexOf(modeRef.current) + 1) % order.length]!;
+        cmd.call('permissions.set', { mode: next }).then((v: any) => { setMode(String(v?.mode ?? next)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        return;
+      }
+
+      // On the right deck the keyboard belongs to the inbox (an explicit focus change), never the prompt.
+      if (deckRef.current === 2 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && !(e.t === 'ctrl' && e.c === 'c')) {
+        const now = Date.now();
+        const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
+        inboxRef.current = next; setInbox(next);
+        if (action.t === 'chat') { setDeck(1); deckRef.current = 1; }
+        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => bad && note(bad));
+        else if (action.t === 'resolve-all') for (const c of action.cards) void resolveCard(cmd, c, 'allow').then((bad) => bad && note(bad));
+        return;
+      }
+
       const m = menuNow();
       const items = m?.items ?? [];
       switch (e.t) {
@@ -178,7 +207,12 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
           if (e.c === 'r') { setS({ q: '', at: hist.length, match: null }); return; }
           return;
         case 'key': {
-          if (e.shift && (e.k === 'left' || e.k === 'right')) { setDeck((d) => Math.max(0, Math.min(2, d + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2); return; }
+          if (e.shift && (e.k === 'left' || e.k === 'right')) {
+            const d = Math.max(0, Math.min(2, deckRef.current + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2;
+            deckRef.current = d; setDeck(d);
+            if (d === 2) { const fresh = I.newInbox(Date.now()); inboxRef.current = fresh; setInbox(fresh); }
+            return;
+          }
           const pick = (n: number) => { selRef.current = n; setSel(n); };
           const accept = (it: { insert: string }) => upd((c) => {
             const t = C.textOf(c), cs = [...t];
@@ -230,7 +264,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode };
   const lineCount = useMemo(() => transcript(base, size.w).length, [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -240,7 +274,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search]);
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>

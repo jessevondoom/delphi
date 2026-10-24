@@ -1,0 +1,6 @@
+You are the RED-TEAM seat (agents/red-team/AGENT.md). Your task:
+1. For each Round 1 finding from BOTH seats that concerns specs 011 or 012: `resolved` | `partly` | `not resolved`, one clause why, checking the revised text (cite section numbers), not the summary of changes. Include the four P0s from your own Round 1 review.
+2. Any NEW defect introduced by the revision or missed before (max 6, each with a falsifiable failure mode and exact remediation, severity P0/P1/P2). Look hard at: the new single removal rule (a record from a removed signer survives only with a current steward's endorsement), the immutable roster chain and majority rule, the store-bound signature domain, pointer content always read as L0 and the quarantine-read consequences, tombstone/restore reversibility, steward collusion, and anything still described as enforced without a mechanism.
+3. Positions on O-1..O-5 and S-1..S-5.
+4. Verdict per spec: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0).
+At most 1,000 words. Repo-relative paths only. No praise.

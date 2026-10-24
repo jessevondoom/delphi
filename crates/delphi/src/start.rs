@@ -74,6 +74,8 @@ pub enum Remedy {
     ClaudeLogin,
     /// No (or stale, or failed) probe results: one tiny call per endpoint.
     Probe,
+    /// The endpoint/access block differs from its ratified version: show the diff and ask (never defaulted by `--yes`).
+    RatifyConfig,
 }
 
 impl Remedy {
@@ -82,6 +84,7 @@ impl Remedy {
             Remedy::Setup => "No model access is set up. Run the guided setup now?",
             Remedy::ClaudeLogin => "Claude Code is installed but not signed in. Sign in now (`claude auth login`)?",
             Remedy::Probe => "Test each model connection now (one tiny call per endpoint)?",
+            Remedy::RatifyConfig => "The model access settings changed since you last ratified them. Review the change now?",
         }
     }
 }
@@ -102,7 +105,13 @@ pub fn remedies(r: &Report) -> Vec<Remedy> {
             add(Remedy::ClaudeLogin);
         } else if f.check == "7 model-access" && (m.contains("probe") || m.contains("last probe")) {
             add(Remedy::Probe);
+        } else if f.check == "3 taint-audit" && f.location == "config.toml" && m.contains("differ from the ratified version") {
+            add(Remedy::RatifyConfig);
         }
+    }
+    // The guided setup ends by putting that same change in front of the operator.
+    if out.contains(&Remedy::Setup) {
+        out.retain(|r| *r != Remedy::RatifyConfig);
     }
     out
 }
@@ -136,6 +145,11 @@ pub fn apply(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path, found: &[
                     ui.say("  sign-in did not finish; run `claude auth login` when you are ready.");
                 }
             }
+            Remedy::RatifyConfig => {
+                if !setup::ratify_config(ui, home, &ws.dir, false) {
+                    ui.say("  Left as a pending proposal; `/ratify` in the console reviews it.");
+                }
+            }
             Remedy::Probe => {
                 let code = delphi_engine::endpoints_cli::run(&ws.dir, &["test".into(), "--probe".into()]);
                 if code != 0 {
@@ -147,18 +161,30 @@ pub fn apply(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path, found: &[
     ran
 }
 
+/// Drifted files are never ratified in bulk: each is reviewed with its diff in the console.
+fn drift_hint(r: &Report) -> Option<&'static str> {
+    let drifted = r.findings.iter().any(|f| f.level == Level::Warn && f.check == "3 taint-audit" && f.location != "config.toml" && f.message.contains("pending proposal"));
+    drifted.then_some("Changed or new files are pending proposals. Nothing loads them until you review each with its diff: run `delphi`, then `/ratify`.")
+}
+
 /// `delphi doctor --fix`: the report, then an offer for each fixable finding, then the report again.
 pub fn doctor_fix(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path, opts: &crate::doctor::Options) -> i32 {
     let report = crate::doctor::run(home, ws, opts);
     report.print();
     let found = remedies(&report);
     if found.is_empty() {
+        if let Some(h) = drift_hint(&report) {
+            println!("{}", h);
+        }
         println!("delphi doctor: workspace `{}`: {}", ws.name, report.worst());
         return report.exit_code();
     }
     let report = if apply(ui, home, ws, cwd, &found) { crate::doctor::run(home, ws, opts) } else { report };
     println!();
     report.print();
+    if let Some(h) = drift_hint(&report) {
+        println!("{}", h);
+    }
     println!("delphi doctor: workspace `{}`: {}", ws.name, report.worst());
     report.exit_code()
 }
@@ -265,5 +291,23 @@ mod tests {
         r.push(Level::Ok, "9 sandbox", "", "off");
         assert_eq!(remedies(&r), vec![Remedy::Setup, Remedy::ClaudeLogin, Remedy::Probe]);
         assert!(remedies(&Report::default()).is_empty());
+    }
+
+    #[test]
+    fn access_drift_offers_a_review_unless_setup_will_show_it_anyway() {
+        let mut r = Report::default();
+        r.warn("3 taint-audit", "config.toml", "endpoint/access/auth blocks differ from the ratified version: Red-tier proposal (specs/009 §5)");
+        assert_eq!(remedies(&r), vec![Remedy::RatifyConfig]);
+        r.warn("7 model-access", "", "no endpoints configured (`delphi endpoints add`, specs/009)");
+        assert_eq!(remedies(&r), vec![Remedy::Setup], "setup ends with the same review");
+    }
+
+    #[test]
+    fn drifted_files_get_a_hint_not_a_bulk_ratify() {
+        let mut r = Report::default();
+        r.warn("3 taint-audit", "REVIEW.md", "differs from the ratified copy: staged as a pending proposal; agents keep loading local/ratified/");
+        assert!(remedies(&r).is_empty());
+        assert!(drift_hint(&r).unwrap().contains("/ratify"));
+        assert!(drift_hint(&Report::default()).is_none());
     }
 }

@@ -753,7 +753,7 @@ mod tests {
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
-            let cancelled = c.call("task.cancel", json!({"task_id": t["task_id"]})).unwrap();
+            let cancelled = c.call("task.cancel", json!({"task_id": t["task_id"]})).unwrap_or_else(|e| panic!("task.cancel failed: {:?}", e));
             let again = c.call("task.cancel", json!({"task_id": t["task_id"]})).unwrap();
             std::thread::sleep(Duration::from_millis(300));
             (cancelled, again, c.call("session.snapshot", json!({})).unwrap())
