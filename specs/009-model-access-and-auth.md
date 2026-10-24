@@ -157,7 +157,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us", "claude-sub"]   # compliance 
 - whether usage is reported;
 - for gateways: native passthrough vs compat, detected rather than assumed.
 
-Results are stored in Zone 3 (`local/endpoint-capabilities.json`, mirrored in `state.db`) with a 24-hour TTL. They are **never** written to the team-tracked `context/model-capabilities.md`, which holds only static per-family defaults. `doctor` reads cached results and probes only with `--probe`, which keeps it offline and free by default. Routing uses probed features, not vendor assumptions.
+Probes run in order (plain reply and usage; forced tool call with the model's minimum thinking budget; the tool result sent back with signed reasoning replayed) and stop at the first failure that makes the rest meaningless. Prompt caching, context limits and `E1 → E2` replay are not probed in v1 and are recorded as such. Results are stored in Zone 3 (`local/endpoint-capabilities.json`; the `state.db` mirror is deferred) with a 24-hour TTL. They are **never** written to the team-tracked `context/model-capabilities.md`, which holds only static per-family defaults. `doctor` reads cached results and probes only with `--probe`, which keeps it offline and free by default. Routing uses probed features, not vendor assumptions.
 
 ---
 

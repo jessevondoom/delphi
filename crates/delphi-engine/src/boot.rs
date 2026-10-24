@@ -122,6 +122,29 @@ pub fn effective_config(ws_dir: &Path, live_text: &str) -> Result<(String, Vec<S
     Ok((toml::to_string(&live).map_err(|e| e.to_string())?, notices))
 }
 
+/// The production model client: credentials (including `oauth2:` when a runtime is available), the
+/// platform envelopes, retries, and redaction through `secrets`. Must be called inside a Tokio runtime
+/// for `oauth2:` credentials to work.
+pub fn http_model_client(cfg: SharedConfig, secrets: Arc<SecretRegistry>) -> Arc<HttpModelClient> {
+    let reg = secrets.clone();
+    let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
+        resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg.clone(), store, build_client(), handle)));
+    }
+    let creds = Arc::new(CredentialStore::new(resolver));
+    let (redact_secrets, register_secrets) = (secrets.clone(), secrets);
+    Arc::new(HttpModelClient {
+        cfg,
+        creds,
+        http: build_client(),
+        retry: RetryPolicy::default(),
+        idle_timeout: Duration::from_secs(120),
+        redact: Arc::new(move |s| redact_secrets.redact(s)),
+        register: Arc::new(move |s| register_secrets.register(s)),
+    })
+}
+
 /// Build the engine for `ws_dir` (`$DELPHI_HOME/workspaces/<name>`), publishing through `hub`.
 pub fn build(home: &Path, ws_dir: &Path, hub: Hub) -> Result<Booted, String> {
     build_with_model(home, ws_dir, hub, None)
@@ -138,24 +161,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     let model: Arc<dyn ModelClient> = match model {
         Some(m) => m,
         None => {
-            let reg = secrets.clone();
-            let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
-            // `oauth2:` credentials need a runtime to refresh on; the daemon always has one.
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
-                resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg.clone(), store, build_client(), handle)));
-            }
-            let creds = Arc::new(CredentialStore::new(resolver));
-            let (redact_secrets, register_secrets) = (secrets.clone(), secrets.clone());
-            Arc::new(HttpModelClient {
-                cfg: cfg.clone(),
-                creds,
-                http: build_client(),
-                retry: RetryPolicy::default(),
-                idle_timeout: Duration::from_secs(120),
-                redact: Arc::new(move |s| redact_secrets.redact(s)),
-                register: Arc::new(move |s| register_secrets.register(s)),
-            })
+            http_model_client(cfg.clone(), secrets.clone())
         }
     };
     std::fs::create_dir_all(ws_dir.join("local")).map_err(|e| e.to_string())?;

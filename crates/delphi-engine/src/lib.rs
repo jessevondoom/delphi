@@ -3,6 +3,8 @@
 pub mod approval;
 pub mod auth_cli;
 pub mod boot;
+pub mod capabilities;
+pub mod endpoints_cli;
 pub mod engine;
 pub mod handoff;
 pub mod mission;
