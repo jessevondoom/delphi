@@ -1085,6 +1085,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Understood, nothing was written.");
+    c.wait_for("· architect ·"); // the text streams dim first; the finished reply (its badge line) is what /pin keeps
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the denied action never ran");
 
     // Keep the reply, save the conversation.
