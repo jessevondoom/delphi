@@ -3,7 +3,8 @@ import chalk from 'chalk';
 import stringWidth from 'string-width';
 import { graphemes } from './text.ts';
 
-export type RoleInfo = { name: string; chassis: string; face: string };
+/** `crown`, `crown_rgb` and `mascot_face` draw the roster mascot; an older `delphi` that does not send them gets a plain figure. */
+export type RoleInfo = { name: string; chassis: string; face: string; crown?: string; crown_rgb?: string; mascot_face?: string };
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
   version: string; cwd: string; roles: Record<string, RoleInfo>;

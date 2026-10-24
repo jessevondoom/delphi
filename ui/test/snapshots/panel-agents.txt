@@ -12,7 +12,7 @@ delphi v0.5 · /proj
   ▀▀▀▀▀▀▀   in 1500 · cache 3000 · out 300 · think 50 · $0.100 · 2 call(s)
 
             hephaestus  builder  ● running
-    •─•     no call yet
+   •───•    no call yet
   ▀▀▀▀▀▀▀   in 0 · cache 0 · out 0 · think 0 · $0.000 · 0 call(s)
 
             ares  red-team  ○ idle

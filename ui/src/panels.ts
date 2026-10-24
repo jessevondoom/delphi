@@ -233,10 +233,14 @@ function forgeView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {
 const MASCOT_W = 7;
 function mascot(role: string, state: string, c: PanelCtx): string[] {
   const color = chalk.hex(c.info.roles[role]?.chassis ?? '#94a3b8');
-  const face = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '···' : '•─•') : (c.info.roles[role]?.face ?? '•_•');
-  const pad = MASCOT_W - [...face].length;
+  const r = c.info.roles[role];
+  // The scout has three eyes and the builder a wide mouth when idle, as in the Observer; any role shows its alert faces.
+  const idle = role === 'scout' ? '• • •' : role === 'builder' && r?.mascot_face ? r.mascot_face : (r?.face ?? '•_•');
+  const face = state === 'waiting on you' ? (role === 'scout' ? 'x ? x' : 'x?x') : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '· · ·' : role === 'builder' ? '•───•' : '•─•') : idle;
+  const pad = Math.max(0, MASCOT_W - [...face].length);
   const mid = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
-  return [' '.repeat(MASCOT_W), chalk.bgHex(c.info.roles[role]?.chassis ?? '#94a3b8').hex('#0f172a')(mid), color('▀'.repeat(MASCOT_W))];
+  const crown = [...(r?.crown ?? '')].slice(0, MASCOT_W).map((ch, i) => (ch === '▄' ? chalk.hex(role === 'builder' && i >= 1 && i <= 5 ? '#ffffff' : (r?.crown_rgb ?? '#94a3b8'))('▄') : ' ')).join('');
+  return [crown + ' '.repeat(MASCOT_W - [...(r?.crown ?? '')].slice(0, MASCOT_W).length), chalk.bgHex(c.info.roles[role]?.chassis ?? '#94a3b8').hex('#0f172a')(mid), color('▀'.repeat(MASCOT_W))];
 }
 
 function agentsView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {

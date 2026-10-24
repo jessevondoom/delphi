@@ -51,5 +51,5 @@ drag the window narrow and wide, `Ctrl+C`, and confirm the shell prompt and scro
 
 - Under about 40 columns the status line drops the navigation hint, then truncates; it never overflows.
 - Only the newest 1,500 messages are drawn; older ones are in the mission and in `/export`.
-- The mascot in the Agents panel is a simplified three-line figure (no crown), because the console receives the face and
-  colour of each role, not the full avatar theme.
+- With an older `delphi` that does not send the crown, the Agents mascot is a plain three-line figure; the console draws the
+  crown when it is told it.

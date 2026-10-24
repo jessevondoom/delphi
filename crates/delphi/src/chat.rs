@@ -830,7 +830,8 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
         .iter()
         .map(|t| {
             let (r, g, b) = t.chassis_rgb;
-            (t.role_id.to_string(), json!({"name": names.get(t.role_id).cloned().unwrap_or_else(|| t.role_id.to_string()), "chassis": format!("#{:02x}{:02x}{:02x}", r, g, b), "face": t.badge_face}))
+            let (cr, cg, cb) = t.crown_rgb;
+            (t.role_id.to_string(), json!({"name": names.get(t.role_id).cloned().unwrap_or_else(|| t.role_id.to_string()), "chassis": format!("#{:02x}{:02x}{:02x}", r, g, b), "face": t.badge_face, "crown": t.crown_slice, "crown_rgb": format!("#{:02x}{:02x}{:02x}", cr, cg, cb), "mascot_face": t.default_face}))
         })
         .collect();
     let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();
@@ -977,6 +978,7 @@ mod tests {
         assert_eq!((v["console_socket"].as_str(), v["narrator_socket"].as_str(), v["mission"].as_str()), (Some("/run/c.sock"), Some("/run/n.sock"), Some("m1")));
         assert_eq!(v["roles"]["orchestrator"]["name"], "Orch");
         assert_eq!(v["roles"]["orchestrator"]["chassis"], "#a855f7");
+        assert!(v["roles"]["builder"]["crown"].as_str().unwrap().contains('▄') && v["roles"]["builder"]["crown_rgb"] == "#f43f5e", "the console gets the crown to draw the roster mascot");
         assert_eq!(v["roles"]["builder"]["name"], "builder", "an unthemed role keeps its id");
         assert!(!v.to_string().to_lowercase().contains("token"), "nothing secret goes to the UI");
     }

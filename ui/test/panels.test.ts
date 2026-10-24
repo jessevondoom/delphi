@@ -1,4 +1,5 @@
 import test from 'node:test';
+import chalk from 'chalk';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -404,4 +405,18 @@ test('alt+arrows move between views too, for terminals that do not send shift+ar
   const o = world();
   assert.equal(panelKey(panelInit('council'), key('right', { alt: true }), o).ui.view, 'epic');
   assert.equal(panelKey(panelInit('council'), key('left', { alt: true }), o).ui.view, 'connectors');
+});
+
+test('the roster mascot has its crown when the console is told it, and the builder\'s middle is white', () => {
+  const withCrown: Info = { ...info, roles: { ...info.roles, builder: { ...info.roles.builder!, crown: '▄▄▄▄▄▄▄', crown_rgb: '#f43f5e', mascot_face: '•───•' }, architect: { ...info.roles.architect!, crown: '  ▄▄▄  ', crown_rgb: '#facc15' } } };
+  const level = chalk.level; chalk.level = 3;
+  const raw = panelBody(panelInit('agents'), { ...ctx(world()), info: withCrown }, 100, 30).join('\n');
+  chalk.level = level;
+  const rows = raw.split('\n').map(plain);
+  assert.ok(rows.some((r) => r.includes('▄▄▄▄▄▄▄')), 'builder crown');
+  assert.ok(rows.some((r) => /^ {2}  ▄▄▄  /.test(r) || r.includes('  ▄▄▄  ')), 'architect crown');
+  assert.ok(rows.some((r) => r.includes('•───•')), 'the builder\'s wide idle mouth');
+  assert.match(raw, /\x1b\[38;2;255;255;255m▄\x1b\[39m/, 'a white block in the builder crown');
+  const plainOne = panelBody(panelInit('agents'), ctx(world()), 100, 30).map(plain).join('\n');
+  assert.ok(!plainOne.includes('▄'), 'an older delphi that sends no crown gets a figure without one');
 });
