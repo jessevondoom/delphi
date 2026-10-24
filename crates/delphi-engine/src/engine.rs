@@ -1955,7 +1955,8 @@ mod tests {
         assert_eq!(f3.m.budget.lock().unwrap().reserved(), 0);
     }
 
-    #[tokio::test]
+    // Multi-threaded: after the simulated death a detached commit may still be finishing, and `restart` blocks this thread.
+    #[tokio::test(flavor = "multi_thread")]
     async fn an_unanswered_approval_dies_with_the_daemon_and_the_action_is_asked_about_again() {
         let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New"}))], 5.0, |_| {});
         let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };

@@ -694,6 +694,25 @@ exit 3"#;
     }
 
     /// The output the live `agy` printed with the Gemini quota used up (`tests/fixtures/quota/`).
+    /// The stream `claude` 2.1.310 printed with the five-hour window used up (`tests/fixtures/quota/`).
+    #[tokio::test]
+    async fn an_exhausted_claude_subscription_is_recorded_with_its_window_and_reset_and_escalates_with_the_reason() {
+        // The two lines the CLI printed (quoted with a here-document: the text has an apostrophe).
+        const RATE: &str = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792864800,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":1792864800,"status":"rejected","surpassedThreshold":1},"seven_day":{"utilization":0.62,"resetsAt":1793365200,"status":"allowed"}}},"uuid":"u","session_id":"s"}"#;
+        const RESULT: &str = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"api_error":"usage_limit_reached","result":"You've hit your session limit · resets 2pm (America/New_York)","stop_reason":"stop_sequence","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"duration_ms":268}"#;
+        let body = format!("{}\ncat <<'EOF'\n{}\n{}\nEOF\nexit 1", INIT, RATE, RESULT);
+        let (f, _s) = fixture(&body, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("out of quota") && r.contains("five_hour") && r.contains("resets at"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        let ex = events_of(&f, "model.exhausted");
+        assert_eq!(ex.len(), 1);
+        assert_eq!((ex[0].payload["endpoint_id"].as_str(), ex[0].payload["reset_at"].as_i64()), (Some("claude-sub"), Some(1_792_864_800)));
+        assert!(ex[0].payload["reason"].as_str().unwrap().contains("five_hour"));
+    }
+
     #[tokio::test]
     async fn an_exhausted_agy_model_says_why_and_when_it_returns_instead_of_an_empty_error() {
         let scripts = tempfile::tempdir().unwrap();

@@ -5,6 +5,7 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { status, type Block, type State } from './fold.ts';
 import * as T from './theme.ts';
+import * as I from './inbox.ts';
 import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 
@@ -15,6 +16,9 @@ export type Model = {
   expandTools: boolean;
   search: { q: string; match: string | null } | null;
   queue: string[];
+  inbox: I.Inbox;
+  /** permissions mode: default, accept-edits or mission-auto */
+  mode: string;
 };
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'];
@@ -26,7 +30,9 @@ export function header(m: Model, w: number): string[] {
   const st = status(m.state, m.now);
   let left: string;
   if (st.kind === 'alert') {
-    left = T.badge(st.role, 'waiting on you', m.info, m.pal) + ' ' + T.crimson(chalk.bold(T.roleName(st.role, m.info) + ': decision needed')) + T.dim(` · ${String(Math.floor(st.secs / 60)).padStart(2, '0')}:${String(st.secs % 60).padStart(2, '0')} remaining`);
+    const who = m.info.roles['red-team'] ? 'red-team' : st.role;
+    const n = Object.keys(m.state.approvals).length;
+    left = T.badge(who, 'waiting on you', m.info, m.pal) + ' ' + T.crimson(chalk.bold(T.roleName(who, m.info) + (n > 1 ? `: ${n} decisions pending` : ': decision needed'))) + T.dim(` · ${String(Math.floor(st.secs / 60)).padStart(2, '0')}:${String(st.secs % 60).padStart(2, '0')} remaining`);
   } else if (st.kind === 'active') {
     left = T.badge(st.role, 'running', m.info, m.pal) + ' ' + T.roleColor(st.role, m.info).bold(T.roleName(st.role, m.info) + ':') + ' ' + T.text(m.pal)(st.doing || 'working');
   } else {
@@ -37,10 +43,12 @@ export function header(m: Model, w: number): string[] {
   return [T.spread(left, nav(m.deck), w), T.clip(l2, w)];
 }
 
+const MODE: Record<string, string> = { default: 'approvals', 'accept-edits': 'accept edits', 'mission-auto': 'auto' };
+
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
   const pending = Object.keys(m.state.approvals).length;
-  const left = T.dim(`${k} tokens · approvals${pending ? ` · ${pending} waiting` : ''} · shortcuts: ?`);
+  const left = T.dim(`${k} tokens · ${MODE[m.mode] ?? m.mode}${pending ? ` · ${pending} waiting` : ''} · shortcuts: ?`);
   return T.spread(left, nav(m.deck), w);
 }
 
@@ -103,6 +111,7 @@ const HELP = [
 function deckBody(m: Model, w: number, h: number): string[] {
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
   if (m.deck === 0) return pad(['', T.dim('  Activity and thinking stream'), '', ...(m.state.live ? renderMarkdown(m.state.live.slice(-2000), w - 2).map((l) => '  ' + chalk.dim(l)) : [T.dim('  nothing running')]), '', T.dim('  Reasoning and tool parameters belong here, never in the chat. Lands in a later phase.')]);
+  if (m.deck === 2) return I.view(m.state, m.inbox, m.info, m.pal, m.now, w, h);
   const pend = Object.entries(m.state.approvals);
   return pad(['', T.dim('  Plan and decisions'), '', ...(pend.length ? pend.map(([id, a]) => `  ${T.badge(a.role, 'waiting on you', m.info, m.pal)} ${T.roleName(a.role, m.info)} · ${a.tool || 'approval'} ${T.dim('(' + id + ')')}`) : [T.dim('  nothing needs you')]), '', T.dim('  The decision inbox and plan progress land in a later phase.')]);
 }
@@ -131,6 +140,7 @@ export function frame(m: Model, w: number, h: number): string[] {
   const first = Math.max(0, Math.min(lay.cursorRow - promptRows + 1, lay.rows.length - promptRows));
   const prompt = lay.rows.slice(first, first + promptRows).map((r, i) =>
     (first + i === 0 ? T.dim('❯ ') : '  ') + T.text(m.pal)(r.before) + (r.at ? chalk.inverse(r.at) : '') + T.text(m.pal)(r.after));
+  if (m.deck === 2) { prompt.length = 0; prompt.push(T.dim(I.hint(m.inbox, I.cards(m.state).length))); }
   const bodyH = Math.max(1, h - head.length - 1 /*blank*/ - 1 /*status*/ - 1 - prompt.length - 1 - 1);
   let body: string[];
   if (m.deck !== 1) body = deckBody(m, w, bodyH);

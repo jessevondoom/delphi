@@ -3,7 +3,7 @@ id: spec-005c-inline-console
 title: "005c: The Inline Console, an interim step toward 005b"
 author: architect
 timestamp: 2026-10-24T09:30:00Z
-status: draft
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

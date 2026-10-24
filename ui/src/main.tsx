@@ -5,8 +5,12 @@ import { readFileSync } from 'node:fs';
 import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
-import { initial, replay } from './fold.ts';
+import { fold, initial, replay } from './fold.ts';
 import type { Info } from './theme.ts';
+
+declare const BUILD_VERSION: string | undefined; // set by the release build (bun --define); absent when run from source
+const VERSION = typeof BUILD_VERSION === 'string' ? BUILD_VERSION : 'dev';
+if (process.argv.includes('--version')) { console.log(`delphi-ui ${VERSION}`); process.exit(0); }
 
 function readInfo(): Info {
   const a = process.argv.indexOf('--info');
@@ -18,6 +22,11 @@ function readInfo(): Info {
 }
 
 const info = readInfo();
+if (VERSION !== 'dev' && VERSION !== info.version) {
+  // Exit code 3 tells `delphi chat` to use the inline console instead.
+  console.error(`delphi-ui ${VERSION} does not match delphi ${info.version}; run \`delphi self-update\` (using the inline console for now)`);
+  process.exit(3);
+}
 let cmd: Rpc, ev: Rpc, mission: string, history = initial(Date.now());
 try {
   cmd = await Rpc.connect(info.console_socket);
@@ -28,6 +37,8 @@ try {
   await ev.call('events.subscribe', {});
   const snap = await cmd.call('observe.snapshot', { mission_id: mission }).catch(() => ({ events: [] }));
   history = replay(initial(Date.now()), snap.events ?? []);
+  const waiting = await cmd.call('approval.list', {}).catch(() => []);
+  for (const a of waiting ?? []) history = fold(history, { method: 'event', params: { type: 'approval.requested', task_id: a.task_id, payload: a } }, Date.now());
   const live = await cmd.call('session.snapshot', { mission_id: mission }).catch(() => ({ running_tasks: [] }));
   for (const t of live.running_tasks ?? []) history.running[String(t.task_id)] = { since: Date.now() - Number(t.seconds ?? 0) * 1000 };
 } catch (e: any) {
