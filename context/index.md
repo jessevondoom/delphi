@@ -19,6 +19,8 @@ This directory is the **Tier 2 Shared Truth** for the entire Delphi agent. Agent
 - **[`context/model-capabilities.md`](model-capabilities.md):** Live capability matrix for **Anthropic Claude** (`Opus`, `Sonnet`, `Haiku`) and **Google Gemini** (`Pro`, `Flash`, `Flash-Lite`), plus **Orchestrator's** dynamic per-task upscaling/downscaling rules and thinking-budget controls.
 - **[`REVIEW.md`](../REVIEW.md):** Base-branch adversarial PR review rubric and false-positive suppression rules used by **Red-Team** and **Strategist**.
 
+- **[`context/taxonomy.md`](taxonomy.md):** audit of current tag use (subject vs kind vs provenance) and the starting vocabulary for the planned librarian role ([`specs/013`](../specs/013-librarian-and-internal-retrieval.md)).
+
 ## 2. Foundational Research Domains (`context/domains/`)
 - **[`mas-architecture-and-failure-modes.md`](domains/mas-architecture-and-failure-modes.md):** Empirical Multi-Agent System failure modes (MAST 14-mode taxonomy), Multi-Agent Debate (MAD) scaling laws (3–5 agents, 2–3 rounds, sparse hub topologies, heterogeneous models), and defenses against Memory Poisoning (`AgentPoison`) and Stale Heuristic Accumulation.
 - **[`multi-provider-and-tui-architecture.md`](domains/multi-provider-and-tui-architecture.md):** Why naive model-agnostic prompts fail (cryptographic thinking signatures, XML vs. Markdown/JSON adherence, schema dialects), the Intermediate Prompt Representation (IPR) dialect compiler (the Adapter layer), CLI harness JSONL bridging, and the Dual-Window (`Console` + `Narrator`) Unix Domain Socket daemon architecture.
