@@ -65,6 +65,20 @@ pub struct Endpoint {
     pub betas: Vec<String>,
 }
 
+impl Endpoint {
+    /// Can a role that writes files or runs commands be served here? Every API path can. A subscription
+    /// harness can only if it has a per-action approval bridge: `claude` does, `agy` does not (`specs/009` §7B),
+    /// so `agy` is limited to read-only roles and Council seats.
+    pub fn can_mutate(&self) -> bool {
+        self.path != AccessPath::Harness || self.harness.as_deref().unwrap_or("claude") == "claude"
+    }
+
+    /// Is a call here paid for by a subscription metered in tokens, rather than priced from the catalog?
+    pub fn is_metered_by_subscription(&self) -> bool {
+        self.path == AccessPath::Harness || self.cost_model.as_deref() == Some("subscription")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum AuthFlow {
     #[serde(rename = "device_code")]
@@ -213,6 +227,9 @@ pub struct CatalogEntry {
     pub min_thinking_budget: u32,
     #[serde(default)]
     pub max_thinking_budget: u32,
+    /// The context window in tokens; 0 means unknown, which routing never treats as too small.
+    #[serde(default)]
+    pub context_tokens: u64,
     /// Claude: the thinking budget counts inside `max_tokens`; Gemini: it is additive.
     #[serde(default = "yes")]
     pub thinking_in_max_tokens: bool,
@@ -817,6 +834,19 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
 
     fn slots(c: &Config) -> Vec<String> {
         c.pool_entries().iter().map(|k| format!("{}/{}", k.endpoint_id, k.model_id)).collect()
+    }
+
+    #[test]
+    fn only_a_harness_without_an_approval_bridge_is_read_only_and_context_is_optional() {
+        let text = format!(
+            "{}\n[[endpoints]]\nid = \"c\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\n[[endpoints]]\nid = \"a\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n[models.catalog.\"big\"]\nmax_output_tokens = 1\ncontext_tokens = 1000000\n",
+            SAMPLE
+        );
+        let c = Config::parse(&text).unwrap();
+        let can = |id: &str| c.endpoint(id).unwrap().can_mutate();
+        assert_eq!((can("direct"), can("bedrock-us"), can("corp-gateway"), can("c"), can("a")), (true, true, true, true, false));
+        assert!(c.endpoint("a").unwrap().is_metered_by_subscription() && c.endpoint("c").unwrap().is_metered_by_subscription() && !c.endpoint("direct").unwrap().is_metered_by_subscription());
+        assert_eq!((c.catalog_entry("big").unwrap().context_tokens, c.catalog_entry("sonnet-x").unwrap().context_tokens), (1_000_000, 0), "unset means unknown");
     }
 
     #[test]

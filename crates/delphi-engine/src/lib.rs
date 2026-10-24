@@ -26,6 +26,7 @@ pub mod observe;
 pub mod pool;
 pub mod probe;
 pub mod recovery;
+pub mod route;
 pub mod ratify;
 pub mod service;
 pub mod status;

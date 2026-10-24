@@ -38,6 +38,7 @@ frontier = "<gemini frontier model id>"
 # max_output_tokens = 64000
 # min_thinking_budget = 1024
 # max_thinking_budget = 32000
+# context_tokens = 200000            # the context window; omit if unknown (routing never treats unknown as too small)
 # thinking_in_max_tokens = true      # Claude: true; Gemini: false
 # input_usd_per_mtok = 0.0
 # cache_read_usd_per_mtok = 0.0
