@@ -111,7 +111,7 @@ pub fn effective_config(ws_dir: &Path, live_text: &str) -> Result<(String, Vec<S
     };
     let mut live: toml::Value = toml::from_str(live_text).map_err(|e| format!("config.toml is not valid TOML: {}", e))?;
     let table = live.as_table_mut().ok_or("config.toml is not a table")?;
-    for k in ["endpoints", "access", "auth"] {
+    for k in delphi_core::lock::ACCESS_KEYS {
         table.remove(k);
     }
     if let Ok(toml::Value::Table(t)) = toml::from_str::<toml::Value>(&trusted_blocks) {
@@ -188,6 +188,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         rules,
         clock: Arc::new(now_rfc3339),
         tools: Arc::new(crate::tools::Registry::builtin()),
+        exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

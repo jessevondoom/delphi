@@ -6,6 +6,7 @@ pub mod boot;
 pub mod capabilities;
 pub mod endpoints_cli;
 pub mod engine;
+pub mod exec;
 pub mod handoff;
 pub mod mission;
 pub mod model;
@@ -16,6 +17,7 @@ pub mod service;
 pub mod status;
 pub mod tools;
 pub mod workspace;
+pub mod worktree;
 
 #[cfg(test)]
 pub(crate) mod testkit;

@@ -115,6 +115,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         rules: OriginRules::with_defaults(),
         clock: Arc::new(|| "2026-10-24T00:00:00.000Z".to_string()),
         tools: Arc::new(crate::tools::Registry::builtin()),
+        exec: Arc::new(crate::exec::ExecEnv::new(&root.join("wsx"), crate::exec::ExecConfig::default(), delphi_sandbox::Sandbox::detect().ok())),
     });
     Fx { _t: t, engine, m, model, root }
 }

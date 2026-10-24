@@ -292,6 +292,7 @@ dependencies = [
  "blake3",
  "delphi-adapter",
  "delphi-core",
+ "delphi-sandbox",
  "libc",
  "regex",
  "serde",
