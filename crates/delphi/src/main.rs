@@ -9,6 +9,7 @@ mod lint;
 mod ratify_console;
 mod report;
 mod seed;
+mod selfupdate;
 mod setup;
 mod theme;
 
@@ -16,6 +17,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 const USAGE: &str = "usage:
+  delphi self-update [--check] [--version vX.Y.Z] [--rollback]
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
@@ -33,6 +35,7 @@ fn main() {
         Some("__core") => delphi_engine::core_main::run(args[1..].to_vec()),
         Some("lint") => cmd_lint(&args[1..]),
         Some("setup") => cmd_setup(&args[1..]),
+        Some("self-update") => cmd_self_update(&args[1..]),
         Some("init") => cmd_init(&args[1..]),
         Some("doctor") => cmd_doctor(&args[1..]),
         Some("chat") => cmd_chat(&args[1..]),
@@ -95,6 +98,16 @@ fn prompt(question: &str, default: &str) -> String {
     let _ = std::io::stdin().lock().read_line(&mut line);
     let v = line.trim();
     if v.is_empty() { default.to_string() } else { v.to_string() }
+}
+
+/// `delphi self-update`: replace this executable with the latest release (see `selfupdate.rs`).
+fn cmd_self_update(args: &[String]) -> i32 {
+    let Ok(dest) = std::env::current_exe().and_then(std::fs::canonicalize) else {
+        eprintln!("delphi self-update: cannot locate this executable");
+        return 1;
+    };
+    let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
+    selfupdate::run(args, &selfupdate::RealNet, &dest, &api)
 }
 
 /// `delphi setup`: detect, ask, write, ratify, prove (see `setup.rs`).
