@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Delphi adapter: model access, credentials, the Claude pass and platform envelopes (roadmap Step 2)"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [dependencies]
