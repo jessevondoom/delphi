@@ -2,6 +2,7 @@
 
 mod avatar;
 mod chat;
+mod console;
 mod doctor;
 mod frontmatter;
 mod home;
@@ -27,7 +28,7 @@ const USAGE: &str = "usage:
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
-  delphi chat [--workspace <name>] [--mission <id>] [--home <dir>]
+  delphi chat [--plain] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
@@ -231,7 +232,13 @@ fn cmd_chat(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     let names = theme_names(&ws);
-    chat::run(&home, &ws.dir, flag(args, "--mission"), names)
+    // The inline console on a terminal; the plain line console when piped, or when asked for with --plain.
+    let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    if on_terminal && !args.iter().any(|a| a == "--plain") {
+        console::run(&home, &ws.dir, flag(args, "--mission"), names)
+    } else {
+        chat::run(&home, &ws.dir, flag(args, "--mission"), names)
+    }
 }
 
 fn cmd_daemon(args: &[String]) -> i32 {

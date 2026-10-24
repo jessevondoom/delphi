@@ -255,22 +255,22 @@ pub fn osc8(links: &[Link]) -> String {
 // ── palette, hairlines, avatars ─────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
-struct Pal {
-    dark: bool,
+pub(crate) struct Pal {
+    pub(crate) dark: bool,
 }
 
 impl Pal {
-    fn text(self) -> Color {
+    pub(crate) fn text(self) -> Color {
         if self.dark { Color::Rgb(226, 232, 240) } else { Color::Rgb(15, 23, 42) }
     }
-    fn dim(self) -> Color {
+    pub(crate) fn dim(self) -> Color {
         Color::Rgb(100, 116, 139)
     }
-    fn rule(self) -> Color {
+    pub(crate) fn rule(self) -> Color {
         if self.dark { Color::Rgb(51, 65, 85) } else { Color::Rgb(203, 213, 225) }
     }
     /// Eyes on a badge: bright on dark terminals, deep slate on light ones (`skills/tui-design` §2.1).
-    fn eye(self) -> Color {
+    pub(crate) fn eye(self) -> Color {
         if self.dark { Color::Rgb(255, 255, 255) } else { Color::Rgb(15, 23, 42) }
     }
 }
@@ -279,7 +279,7 @@ fn rgb(c: (u8, u8, u8)) -> Color {
     Color::Rgb(c.0, c.1, c.2)
 }
 
-fn role_color(role: &str) -> Color {
+pub(crate) fn role_color(role: &str) -> Color {
     avatar::from_canonical_id(role).map(|r| rgb(avatar::get_theme(r).chassis_rgb)).unwrap_or(Color::Gray)
 }
 
@@ -295,7 +295,7 @@ fn face_for(role: &str, state: &str) -> &'static str {
 }
 
 /// `⟦•─•⟧` in the role's colour with bright eyes; the red-team's alert badge has gold eyes and crimson brackets.
-fn badge(role: &str, state: &str, pal: Pal) -> Vec<Span<'static>> {
+pub(crate) fn badge(role: &str, state: &str, pal: Pal) -> Vec<Span<'static>> {
     let chassis = role_color(role);
     let alert = role == "red-team" && state == "waiting on you";
     let eye = if alert { Color::Rgb(250, 204, 21) } else { pal.eye() };
@@ -345,11 +345,11 @@ fn mascot(role: &str, state: &str) -> [Line<'static>; 3] {
     ]
 }
 
-fn money(v: f64) -> String {
+pub(crate) fn money(v: f64) -> String {
     if v >= 100.0 { format!("${:.0}", v) } else if v >= 1.0 { format!("${:.2}", v) } else { format!("${:.3}", v) }
 }
 
-fn kilo(n: u64) -> String {
+pub(crate) fn kilo(n: u64) -> String {
     if n >= 10_000 { format!("{:.1}k", n as f64 / 1000.0) } else { n.to_string() }
 }
 
@@ -380,7 +380,7 @@ fn glyph(state: &str) -> &'static str {
     }
 }
 
-fn state_color(state: &str) -> Color {
+pub(crate) fn state_color(state: &str) -> Color {
     match state {
         "done" | "green" | "merged" => Color::Green,
         "running" => Color::Cyan,
@@ -391,20 +391,20 @@ fn state_color(state: &str) -> Color {
 }
 
 /// Roles in the order people think of them: the orchestrator first, then the rest as the roster lists them.
-fn ordered(st: &ObserverState) -> Vec<(&String, &delphi_engine::observe::AgentRow)> {
+pub(crate) fn ordered(st: &ObserverState) -> Vec<(&String, &delphi_engine::observe::AgentRow)> {
     const ORDER: [&str; 7] = ["orchestrator", "architect", "builder", "red-team", "strategist", "scout", "investigator"];
     let mut v: Vec<_> = st.agents.iter().collect();
     v.sort_by_key(|(r, _)| ORDER.iter().position(|o| o == &r.as_str()).unwrap_or(ORDER.len()));
     v
 }
 
-fn clip(s: &str, n: usize) -> String {
+pub(crate) fn clip(s: &str, n: usize) -> String {
     let s = sanitize(s).replace('\n', " ");
     if s.chars().count() <= n { s } else { format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>()) }
 }
 
 /// `── title ────────────` across `width`: a section break without a box.
-fn hairline(title: &str, width: u16, pal: Pal) -> Line<'static> {
+pub(crate) fn hairline(title: &str, width: u16, pal: Pal) -> Line<'static> {
     let head = if title.is_empty() { String::new() } else { format!("── {} ", title) };
     let fill = (width as usize).saturating_sub(head.chars().count());
     Line::from(Span::styled(format!("{}{}", head, "─".repeat(fill)), Style::default().fg(pal.rule())))
