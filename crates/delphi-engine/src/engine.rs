@@ -72,6 +72,9 @@ pub struct Settings {
     pub park_poll: Duration,
     /// The longest a task waits for a model before escalating. `None` waits as long as it takes; `Some(0)` never waits.
     pub park_max: Option<Duration>,
+    /// How long a "run on a weaker model?" card waits for the operator. No answer is not a no: the task
+    /// looks again (the target may be back) and asks again if not.
+    pub degrade_wait: Duration,
 }
 
 impl Default for Settings {
@@ -93,6 +96,7 @@ impl Default for Settings {
             council_seat_timeout: Duration::from_secs(600),
             park_poll: Duration::from_secs(5),
             park_max: None,
+            degrade_wait: Duration::from_secs(300),
         }
     }
 }
@@ -232,6 +236,11 @@ pub(crate) struct SpanCtx {
     pub(crate) last_key: Mutex<Option<(String, String)>>,
     /// Set by `model_turn` when it stops because no usable model exists; the span loop parks on it.
     pub(crate) parked: Mutex<Option<ParkInfo>>,
+    /// When this span first had to wait for a model; cleared by the next turn that runs. `park_max` counts from here.
+    pub(crate) blocked_since: Mutex<Option<std::time::Instant>>,
+    /// Families this span should stay out of if it can (from the handoff), and whether it already said it could not.
+    pub(crate) avoid_families: Vec<String>,
+    pub(crate) said_homogeneous: Mutex<bool>,
 }
 
 impl SpanCtx {
@@ -410,7 +419,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None) };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false) };
 
             if fresh {
                 let mut open = vec![
@@ -725,20 +734,32 @@ impl Engine {
                 Route::Weaker { key, target, why, back_at, lost, .. } => {
                     // Only less capable models are usable. Never silently: the operator confirms for this task, or the task waits.
                     let pair = (key.endpoint_id.clone(), key.model_id.clone());
-                    let (confirmed, declined) = self.degraded.lock().unwrap().get(&sc.task_id).map(|d| (d.confirmed.contains(&pair), d.declined.contains(&pair))).unwrap_or((false, false));
+                    let (confirmed, declined) = self.degraded_decisions(m, &sc.task_id, &pair);
                     let (from, to) = (format!("{}/{}", target.endpoint_id, target.model_id), format!("{}/{}", key.endpoint_id, key.model_id));
                     let mut ok = confirmed;
                     if !confirmed && !declined {
                         let summary = format!("{} is unavailable ({}). Run this task on {} instead? It has {}.", from, why, to, lost.join(" and "));
                         let detail = json!({"target": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "unavailable": self.secrets.redact(why), "lost": lost});
                         m.append(sc.ev("model.degraded_confirm", json!({"state": "asked", "detail": detail}))).await?;
-                        ok = self.ask(sc, ApprovalTier::Amber, "model", &format!("{}->{}", target.model_id, key.model_id), &summary, &detail).await?.is_none();
-                        {
+                        let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+                        let answer = self.ask_resolution(&who, ApprovalTier::Amber, "model", &format!("{}->{}", target.model_id, key.model_id), &summary, &detail, Some(self.settings.degrade_wait)).await?;
+                        // Silence is not a no: after the wait the task looks again (the target may be back) and asks again if not.
+                        let state = match &answer {
+                            Resolution::Approved { .. } => "confirmed",
+                            Resolution::Denied { .. } => "declined",
+                            Resolution::TimedOut => "timed_out",
+                        };
+                        ok = answer.is_approved();
+                        if state != "timed_out" {
                             let mut d = self.degraded.lock().unwrap();
                             let t = d.entry(sc.task_id.clone()).or_default();
                             if ok { t.confirmed.insert(pair.clone()); } else { t.declined.insert(pair.clone()); }
                         }
-                        m.append(sc.ev("model.degraded_confirm", json!({"state": if ok { "confirmed" } else { "declined" }, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}}))).await?;
+                        m.append(sc.ev("model.degraded_confirm", json!({"state": state, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}}))).await?;
+                        if state == "timed_out" {
+                            *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: Some(now), why: format!("no answer about running on {} instead of {}; looking again", to, from) });
+                            return Ok(Err(Escalate(format!("{}{}: nobody answered whether to run on the weaker {} ({} is unavailable: {})", EXHAUSTED, note, to, from, why))));
+                        }
                     }
                     if !ok {
                         *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the weaker {} was declined", from, why, to) });
@@ -753,6 +774,9 @@ impl Engine {
             };
             let Some(ep) = cfg.endpoint(&key.endpoint_id) else { continue 'endpoints };
             let model_id = key.model_id.clone();
+            if route.homogeneous() && !std::mem::replace(&mut *sc.said_homogeneous.lock().unwrap(), true) {
+                m.append(sc.ev("model.homogeneous", json!({"avoided": sc.avoid_families, "used": {"endpoint_id": key.endpoint_id, "model_id": key.model_id, "family": key.family}}))).await?;
+            }
             let this_key = (key.endpoint_id.clone(), key.model_id.clone());
             if let Some((target, why)) = passed_over {
                 if sc.last_key.lock().unwrap().as_ref() != Some(&this_key) {
@@ -827,6 +851,7 @@ impl Engine {
                             m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": model_id}))).await?;
                         }
                         *sc.last_key.lock().unwrap() = Some(this_key);
+                        *sc.blocked_since.lock().unwrap() = None;
                         return Ok(Ok((done, ep.clone(), model_id)));
                     }
                     Err(ModelError::Throttled(msg)) => {
@@ -871,6 +896,36 @@ impl Engine {
         }
     }
 
+    /// What the operator already decided about this weaker pair for this task: `(confirmed, declined)`. The
+    /// decisions live in the mission's log (`model.degraded_confirm`), so after a daemon restart in the same
+    /// session (the same mission) a resumed task is not asked again. A new mission starts with no decisions.
+    fn degraded_decisions(&self, m: &MissionState, task_id: &str, pair: &(String, String)) -> (bool, bool) {
+        let mut all = self.degraded.lock().unwrap();
+        if !all.contains_key(task_id) {
+            let mut restored = DegradedTask::default();
+            for e in m.replay().unwrap_or_default() {
+                if e.kind != "model.degraded_confirm" || e.task_id.as_deref() != Some(task_id) {
+                    continue;
+                }
+                let sub = &e.payload["substitute"];
+                let (Some(ep), Some(model)) = (sub["endpoint_id"].as_str(), sub["model_id"].as_str()) else { continue };
+                match e.payload["state"].as_str() {
+                    Some("confirmed") => {
+                        restored.declined.remove(&(ep.to_string(), model.to_string()));
+                        restored.confirmed.insert((ep.to_string(), model.to_string()));
+                    }
+                    Some("declined") => {
+                        restored.confirmed.remove(&(ep.to_string(), model.to_string()));
+                        restored.declined.insert((ep.to_string(), model.to_string()));
+                    }
+                    _ => {}
+                }
+            }
+            all.insert(task_id.to_string(), restored);
+        }
+        all.get(task_id).map(|d| (d.confirmed.contains(pair), d.declined.contains(pair))).unwrap_or((false, false))
+    }
+
     /// Wait, durably visible, until a model can serve this span again (`specs/002` §4.1 `blocked: no_model`).
     /// Returns true when it can take its turn, false when waiting is disabled, there is nothing to wait for, or
     /// `park_max` ran out (the caller escalates). A daemon restart in the middle is ordinary recovery.
@@ -880,7 +935,7 @@ impl Engine {
             return Ok(false);
         }
         sc.m.append(sc.ev("task.blocked", json!({"reason": "no_model", "back_at": back_at, "why": self.secrets.redact(&info.why)}))).await?;
-        let started = std::time::Instant::now();
+        let started = *sc.blocked_since.lock().unwrap().get_or_insert_with(std::time::Instant::now);
         loop {
             tokio::time::sleep(self.settings.park_poll).await;
             if self.settings.park_max.is_some_and(|max| started.elapsed() >= max) {
@@ -905,6 +960,26 @@ impl Engine {
         }
     }
 
+    /// Does `family` have a pair that could serve right now (allowed, able to run the role, not in cooldown
+    /// or out of quota)? Used to plan Councils and the retry ladder from what is usable, not what is configured.
+    pub(crate) fn family_usable(&self, family: &str, mutating: bool) -> bool {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let state = self.pool.snapshot();
+        cfg.pool_entries().into_iter().filter(|k| k.family == family).any(|k| {
+            let Some(ep) = cfg.endpoint(&k.endpoint_id) else { return false };
+            if mutating && !ep.can_mutate() {
+                return false;
+            }
+            state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id).is_none_or(|e| match (e.state, e.until) {
+                (crate::pool::State::Available, _) => true,
+                (crate::pool::State::CoolingDown | crate::pool::State::Exhausted, Some(t)) => t <= now,
+                (crate::pool::State::CoolingDown, None) => true,
+                (crate::pool::State::Exhausted, None) => false,
+            })
+        })
+    }
+
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;
     /// a span that can run shell commands (a worktree and the shell tool, as for a Builder) needs an endpoint
     /// with an approval bridge.
@@ -913,7 +988,7 @@ impl Engine {
             role: sc.role.clone(),
             tier: sc.tier.clone(),
             prefer_family: Some(sc.family.clone()),
-            avoid_families: vec![],
+            avoid_families: sc.avoid_families.clone(),
             mutating: sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped"),
             min_context_tokens: 0,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
@@ -1122,6 +1197,16 @@ impl Engine {
 
     /// As [`Engine::ask`] for a decision that belongs to no running span (merge approval after a build).
     pub(crate) async fn ask_as(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
+        Ok(match self.ask_resolution(who, tier, tool, pattern, summary, payload, None).await? {
+            Resolution::Approved { .. } => None,
+            Resolution::Denied { reason } => Some(tool_result_error(format!("The operator denied this action{}. Do not retry it; propose an alternative or ask.", if reason.is_empty() { String::new() } else { format!(": {}", reason) }))),
+            Resolution::TimedOut => Some(tool_result_error("The approval timed out and was denied. Do not retry it; propose an alternative.")),
+        })
+    }
+
+    /// Raise a card and return how it ended. `timeout` overrides the usual approval timeout for this card.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn ask_resolution(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value, timeout: Option<Duration>) -> Result<Resolution, EngineError> {
         let ev = |kind: &str, payload: Value| {
             let mut e = EventEnvelope::new(&who.m.id, kind, payload);
             e.task_id = Some(who.task_id.to_string());
@@ -1129,7 +1214,7 @@ impl Engine {
             e.agent = Some(who.role.to_string());
             e
         };
-        let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: self.settings.approval_timeout };
+        let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: timeout.unwrap_or(self.settings.approval_timeout) };
         let waiting = self.broker.request(req);
         let id = waiting.approval_id.clone();
         if let Some(raised) = self.broker.get(&id) {
@@ -1141,11 +1226,7 @@ impl Engine {
             _ => "console",
         };
         who.m.append(ev("approval.resolved", resolution.event_payload(&id, by))).await?;
-        Ok(match resolution {
-            Resolution::Approved { .. } => None,
-            Resolution::Denied { reason } => Some(tool_result_error(format!("The operator denied this action{}. Do not retry it; propose an alternative or ask.", if reason.is_empty() { String::new() } else { format!(": {}", reason) }))),
-            Resolution::TimedOut => Some(tool_result_error("The approval timed out and was denied. Do not retry it; propose an alternative.")),
-        })
+        Ok(resolution)
     }
 
     /// A dispatched child's report as the parent's tool result.
@@ -1540,7 +1621,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_throttled_endpoint_fails_over_in_the_ratified_order_and_re_reserves() {
-        let f = setup(vec![Step::Throttle, Step::text("ok")], 5.0, |s| s.approval_timeout = Duration::from_millis(50));
+        let f = setup(vec![Step::Throttle, Step::text("ok")], 5.0, |s| s.degrade_wait = Duration::from_millis(50));
         let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
         assert_eq!(out.status, Status::Done);
         let seen: Vec<String> = f.model.requests().iter().map(|r| r.endpoint_id.clone()).collect();
@@ -1551,7 +1632,7 @@ mod tests {
         assert!(k.contains(&"endpoint.throttled".to_string()));
         assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
         // Both throttled: no endpoint left inside the pin, so the task escalates instead of leaving it.
-        let g = setup(vec![Step::Throttle, Step::Throttle], 5.0, |s| s.approval_timeout = Duration::from_millis(50));
+        let g = setup(vec![Step::Throttle, Step::Throttle], 5.0, |s| s.degrade_wait = Duration::from_millis(50));
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
@@ -1559,7 +1640,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_exhausted_model_is_recorded_with_its_reset_and_the_next_endpoint_takes_over() {
-        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |s| s.approval_timeout = Duration::from_millis(50));
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |s| s.degrade_wait = Duration::from_millis(50));
         let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
         assert_eq!(out.status, Status::Done);
         let seen: Vec<String> = f.model.requests().iter().map(|r| r.endpoint_id.clone()).collect();
@@ -1572,7 +1653,7 @@ mod tests {
         assert!(ex["reset_at"].as_i64().unwrap() > 0 && ex["raw"].as_str().unwrap().contains("quota reached"));
         assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
         // Every endpoint out of quota: the task escalates and says which and why.
-        let g = setup(vec![Step::Exhaust, Step::Exhaust], 5.0, |s| s.approval_timeout = Duration::from_millis(50));
+        let g = setup(vec![Step::Exhaust, Step::Exhaust], 5.0, |s| s.degrade_wait = Duration::from_millis(50));
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("direct is out of quota") && r.contains("resets at")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
@@ -1691,35 +1772,189 @@ mod tests {
         assert_eq!(states, vec!["asked", "declined"], "one question; once declined it is not asked again");
     }
 
-    // specs/002 §4.1 test 6: with no usable model the task parks and resumes; an unattended run (nobody answers) waits instead of assuming consent.
+    // specs/002 §4.1 test 6 with nobody to answer: silence is retried, never taken as a yes or a no.
     #[tokio::test]
-    async fn with_every_model_throttled_and_nobody_to_ask_the_task_waits_and_resumes() {
+    async fn with_every_model_throttled_and_nobody_to_ask_the_task_keeps_looking_and_resumes() {
         let f = setup(vec![Step::Throttle, Step::Throttle, Step::text("Resumed.")], 5.0, |s| {
             s.park_max = None;
-            s.approval_timeout = Duration::from_millis(50);
+            s.degrade_wait = Duration::from_millis(40);
         });
         let task = spawn_task(&f, "architect", "Plan the change");
-        wait_for_event(&f, "task.blocked").await;
-        assert!(!task.is_finished());
-        let ask = events_of(&f, "model.degraded_confirm");
-        assert_eq!(ask.last().unwrap().payload["state"], "declined", "an unanswered question is a no, never a yes");
+        for _ in 0..400 {
+            if events_of(&f, "model.degraded_confirm").iter().filter(|e| e.payload["state"] == "asked").count() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!task.is_finished(), "still looking, not failed");
+        let states: Vec<String> = events_of(&f, "model.degraded_confirm").iter().map(|e| e.payload["state"].as_str().unwrap().to_string()).collect();
+        assert!(states.iter().filter(|s| *s == "asked").count() >= 2 && states.contains(&"timed_out".to_string()), "it asked again after the first card went unanswered: {:?}", states);
+        assert!(!states.contains(&"confirmed".to_string()) && !states.contains(&"declined".to_string()), "silence is neither: {:?}", states);
         f.advance(130); // the cooldown after a throttle with no retry-after is two minutes
         let out = task.await.unwrap().unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Resumed."), "{}", out.text);
-        assert_eq!(events_of(&f, "task.unblocked")[0].payload["resumed"], true);
+        assert_eq!(f.model.requests().len(), 3, "it never ran on a weaker model");
         assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+    }
+
+    // Your decision (2026-10-24): an unanswered downgrade card is asked again, and a later answer is honoured.
+    #[tokio::test]
+    async fn an_unanswered_downgrade_card_is_asked_again_and_a_later_yes_runs_it() {
+        let f = setup(vec![Step::text("Done on the weaker model.")], 5.0, |s| {
+            s.park_max = None;
+            s.degrade_wait = Duration::from_millis(250);
+        });
+        opus_out(&f, 3600);
+        let task = spawn_task(&f, "architect", "Plan the change");
+        let first = wait_for_card(&f).await;
+        wait_for_event_state(&f, "timed_out").await;
+        let second = loop {
+            let c = wait_for_card(&f).await;
+            if c.approval_id != first.approval_id {
+                break c;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        f.engine.broker.resolve(&second.approval_id, &second.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Done on the weaker model."), "{}", out.text);
+        let states: Vec<String> = events_of(&f, "model.degraded_confirm").iter().map(|e| e.payload["state"].as_str().unwrap().to_string()).collect();
+        assert_eq!(states, vec!["asked", "timed_out", "asked", "confirmed"]);
+    }
+
+    // Your decision (2026-10-24): a confirmation survives a daemon restart within the session (the mission log).
+    #[tokio::test]
+    async fn what_the_operator_decided_about_a_weaker_model_is_rebuilt_from_the_mission_log() {
+        let f = setup(vec![], 5.0, |_| {});
+        let note = |state: &str, task: &str, ep: &str, model: &str| {
+            let mut e = EventEnvelope::new(&f.m.id, "model.degraded_confirm", json!({"state": state, "substitute": {"endpoint_id": ep, "model_id": model}}));
+            e.task_id = Some(task.to_string());
+            e
+        };
+        f.m.append(note("asked", "t_0042", "direct", "sonnet-x")).await.unwrap();
+        f.m.append(note("confirmed", "t_0042", "direct", "sonnet-x")).await.unwrap();
+        f.m.append(note("declined", "t_0042", "backup", "haiku-x")).await.unwrap();
+        f.m.append(note("confirmed", "t_0043", "direct", "haiku-x")).await.unwrap();
+        // A restarted daemon has nothing in memory.
+        f.engine.degraded.lock().unwrap().clear();
+        let pair = |ep: &str, m: &str| (ep.to_string(), m.to_string());
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("direct", "sonnet-x")), (true, false), "confirmed before the restart");
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("backup", "haiku-x")), (false, true), "declined before the restart");
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("direct", "haiku-x")), (false, false), "another pair was never decided");
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0099", &pair("direct", "sonnet-x")), (false, false), "a confirmation covers one task only");
+        // A later answer wins: confirming what was declined.
+        f.m.append(note("confirmed", "t_0042", "backup", "haiku-x")).await.unwrap();
+        f.engine.degraded.lock().unwrap().clear();
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("backup", "haiku-x")), (true, false));
+        // A different mission (a new session) starts with no decisions at all.
+        let other = tempfile::tempdir().unwrap();
+        let fresh = MissionState::open(other.path(), "m2", Hub::new(), f.engine.ledger.clone(), SecretRegistry::new(), 5.0).unwrap();
+        f.engine.degraded.lock().unwrap().clear();
+        assert_eq!(f.engine.degraded_decisions(&fresh, "t_0042", &pair("direct", "sonnet-x")), (false, false));
+    }
+
+    async fn wait_for_event_state(f: &Fx, state: &str) {
+        for _ in 0..600 {
+            if events_of(f, "model.degraded_confirm").iter().any(|e| e.payload["state"] == state) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no model.degraded_confirm with state `{}`", state);
     }
 
     #[tokio::test]
     async fn a_task_stops_waiting_for_a_model_after_park_max_and_escalates_with_the_reason() {
         let f = setup(vec![Step::Throttle, Step::Throttle], 5.0, |s| {
-            s.park_max = Some(Duration::from_millis(60));
-            s.approval_timeout = Duration::from_millis(20);
+            s.park_max = Some(Duration::from_millis(120));
+            s.degrade_wait = Duration::from_millis(20);
         });
         let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
-        assert_eq!(events_of(&f, "task.blocked").len(), 1);
-        assert_eq!(events_of(&f, "task.unblocked")[0].payload["resumed"], false);
+        assert!(!events_of(&f, "task.blocked").is_empty());
+        assert_eq!(events_of(&f, "task.unblocked").last().unwrap().payload["resumed"], false, "it gave up after park_max, however many times it asked");
+    }
+
+    // specs/002 §4.1, [H-007] and [H-008]: a critic stays out of the author's family, and says so when it cannot.
+    #[tokio::test]
+    async fn a_critic_span_stays_out_of_the_authors_family_and_says_so_when_it_cannot() {
+        let f = setup(vec![Step::text("Reviewed by the other family."), Step::text("Reviewed by the same family.")], 5.0, |_| {});
+        two_families(&f);
+        let critic = |f: &Fx, id: &str| {
+            let mut h = HandoffEnvelope::root(&f.m.id, id, "red-team", "Review the change", vec![]);
+            h.routing_directive.model_family = Some("gemini".into());
+            h.routing_directive.avoid_families = vec!["claude".into()];
+            h
+        };
+        let out = f.engine.run_span(&f.m, "t_9001", critic(&f, "t_9001"), None, 0).await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Reviewed by the other family."), "{}", out.text);
+        assert_eq!(f.model.requests()[0].endpoint_id, "gem");
+        assert!(events_of(&f, "model.homogeneous").is_empty(), "another family was usable");
+        // Gemini runs out: the critic still runs (never blocked), on the author's family, and the review is labeled.
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        f.engine.pool.record_exhausted("gem", "gem-pro", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let out = f.engine.run_span(&f.m, "t_9002", critic(&f, "t_9002"), None, 0).await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Reviewed by the same family."), "{}", out.text);
+        assert_eq!(f.model.requests()[1].endpoint_id, "direct");
+        let h = events_of(&f, "model.homogeneous");
+        assert_eq!(h.len(), 1);
+        assert_eq!((h[0].payload["avoided"][0].as_str(), h[0].payload["used"]["family"].as_str()), (Some("claude"), Some("claude")));
+    }
+
+    // M8 sweep: the endpoint policy is a wall. An endpoint outside `allowed_endpoints` is never in the pool and never called,
+    // however many models fail.
+    #[tokio::test]
+    async fn an_endpoint_outside_the_pin_is_never_called_however_many_models_fail() {
+        let f = setup(vec![Step::Exhaust, Step::Exhaust, Step::Throttle, Step::Throttle, Step::Exhaust, Step::Exhaust], 5.0, |s| s.degrade_wait = Duration::from_millis(30));
+        let text = crate::testkit::CONFIG.replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        assert!(f.engine.cfg.get().pool_entries().iter().all(|k| k.endpoint_id != "gem"), "not allowed, so not in the pool");
+        for prompt in ["one", "two", "three"] {
+            let out = f.engine.run_task(&f.m, "architect", prompt).await.unwrap();
+            assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        }
+        assert!(f.model.requests().iter().all(|r| r.endpoint_id == "direct" || r.endpoint_id == "backup"), "{:?}", f.model.requests().iter().map(|r| r.endpoint_id.clone()).collect::<Vec<_>>());
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+    }
+
+    // M8 sweep: a promotion is charged at the substitute's prices, and the exhausted call is released, not charged.
+    #[tokio::test]
+    async fn a_promotion_is_charged_at_the_substitutes_prices_and_the_exhausted_call_costs_nothing() {
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |_| {});
+        two_families(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        // One reply of 1000 input and 200 output tokens on gem-pro at $2 and $12 per million: $0.0044.
+        let b = f.m.budget.lock().unwrap();
+        assert_eq!((b.spent(), b.reserved()), (4400, 0));
+        drop(b);
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!(usage.len(), 1, "the exhausted call recorded no usage");
+        assert_eq!((usage[0].endpoint_id.as_deref(), usage[0].model_id.as_deref()), (Some("gem"), Some("gem-pro")));
+        assert!((f.engine.ledger.lock().unwrap().mission_cost_usd(&f.m.id).unwrap() - 0.0044).abs() < 1e-9, "the ledger agrees with the budget");
+    }
+
+    // M8 sweep: cancelling a task that is waiting for a model ends it cleanly, with nothing reserved and nothing left open.
+    #[tokio::test]
+    async fn cancelling_a_task_that_is_waiting_for_a_model_leaves_nothing_open() {
+        let f = setup(vec![Step::text("never reached")], 5.0, |s| {
+            s.park_max = None;
+        });
+        opus_out(&f, 3600);
+        let task = spawn_task(&f, "architect", "Plan the change");
+        let card = wait_for_card(&f).await;
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "wait".into() }, "console-1").unwrap();
+        wait_for_event(&f, "task.blocked").await;
+        let tid = events_of(&f, "task.created")[0].task_id.clone().unwrap();
+        task.abort();
+        f.engine.cancel_task(&f.m, &tid).await.unwrap();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(events_of(&f, "task.cancelled").len(), 1);
+        assert!(f.engine.broker.pending().is_empty() && f.m.budget.lock().unwrap().reserved() == 0 && f.model.requests().is_empty());
+        // The mission is still usable afterwards: a later task runs normally once the target is back.
+        f.advance(3601);
+        let out = f.engine.run_task(&f.m, "architect", "Again").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "never reached"));
     }
 
     #[tokio::test]
@@ -1738,7 +1973,7 @@ mod tests {
     #[tokio::test]
     async fn throttling_task_after_task_for_ten_minutes_becomes_exhaustion() {
         use crate::pool::State;
-        let f = setup(vec![Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle], 5.0, |s| s.approval_timeout = Duration::from_millis(50));
+        let f = setup(vec![Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle], 5.0, |s| s.degrade_wait = Duration::from_millis(50));
         for gap in [0, 300, 360] {
             f.advance(gap);
             let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
@@ -1755,7 +1990,7 @@ mod tests {
     #[tokio::test]
     async fn an_exhausted_pair_with_no_known_reset_is_probed_when_due_and_recovers() {
         use crate::pool::State;
-        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |s| s.approval_timeout = Duration::from_millis(50));
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |s| s.degrade_wait = Duration::from_millis(50));
         f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
         let key = f.engine.pool.snapshot().remove(0);
         // Forget the reset time so only a probe can bring it back.
@@ -1774,7 +2009,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_exhausted_budget_escalates_before_any_call_and_never_downscales() {
-        let f = setup(vec![Step::text("should never be asked")], 0.0001, |s| s.approval_timeout = Duration::from_millis(50));
+        let f = setup(vec![Step::text("should never be asked")], 0.0001, |s| s.degrade_wait = Duration::from_millis(50));
         let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("mission budget") && r.contains("/budget")), "{:?}", out.status);
         assert!(f.model.requests().is_empty(), "no call was made");

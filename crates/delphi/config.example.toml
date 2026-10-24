@@ -58,6 +58,7 @@ max_attempts_per_node = 3            # Unified retry ladder (specs/003 §3.2): u
 max_parallel_agents = 4
 # When no usable model is left, a task waits for one to return (and says so) instead of failing, and a
 # weaker substitute is used only after you confirm it for that task (declining, or not answering, means waiting).
+# degrade_prompt_secs = 300           # how long the "run on a weaker model?" card waits; no answer means look again, then ask again
 # max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible

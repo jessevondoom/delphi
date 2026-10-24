@@ -7,12 +7,13 @@ import * as C from './composer.ts';
 import { COMMANDS } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
+import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
-import { frame, transcript, type Model } from './screen.ts';
+import { frame, transcriptCount, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
@@ -92,8 +93,13 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
     const flush = () => { timer = null; const q = queued; queued = []; setState((s) => q.reduce((a, n) => fold(a, n, Date.now()), s)); };
     const onNote = (n: any) => { queued.push(n); timer ??= setTimeout(flush, 33); };
     ev.on('notification', onNote);
-    ev.on('closed', () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed', at: Date.now() })));
-    return () => { ev.off('notification', onNote); if (timer) clearTimeout(timer); };
+    const onClosed = () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed; trying to reconnect…', at: Date.now() }));
+    const onBack = () => { // what happened meanwhile is in the log: rebuild from it, keep what is only on screen
+      cmd.whenReady().then(() => loadHistory(cmd, mission)).then((h) => setState((s) => addBlock({ ...h, activity: s.activity, sources: { ...h.sources, ...s.sources } }, { kind: 'note', text: 'reconnected to the daemon', at: Date.now() })));
+    };
+    ev.on('closed', onClosed);
+    ev.on('reconnected', onBack);
+    return () => { ev.off('notification', onNote); ev.off('closed', onClosed); ev.off('reconnected', onBack); if (timer) clearTimeout(timer); };
   }, [ev]);
 
   useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => v?.mode && setMode(String(v.mode))).catch(() => {}); }, []);
@@ -147,6 +153,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       return;
     }
     if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }
+    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls the transcript' : 'mouse off: select and copy text with the terminal; scroll with PgUp/PgDn'); return; }
     if (name === '/sources') { openPanel(P.openSources()); return; }
     if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
     if (name === '/pin') {
@@ -286,7 +293,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
             case 'down': if (items.length) pick(Math.min(items.length - 1, selRef.current + 1)); else upd(C.down); return;
             case 'tab': if (items.length) accept(items[Math.min(selRef.current, items.length - 1)]!); return;
             case 'enter': {
-              if (e.alt) { upd((c) => C.insert(c, '\n')); return; }
+              if (e.alt || e.shift) { upd((c) => C.insert(c, '\n')); return; }
               const text = C.textOf(comp.current);
               if (items.length) {
                 const it = items[Math.min(selRef.current, items.length - 1)]!;
@@ -313,7 +320,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
   const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel };
-  const lineCount = useMemo(() => transcript(base, size.w).length, [state.blocks, state.live, size.w, pal, expandTools, queue]);
+  const lineCount = useMemo(() => transcriptCount(base, size.w), [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
     total.current = lineCount;

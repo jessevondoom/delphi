@@ -26,5 +26,5 @@
   ▀▀▀▀▀▀▀   in 600 · cache 1200 · out 300 · think 0 · $0.070 · 6 call(s)
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- Agents 4/6  ·  ← Forge Diffs  ·  → Spend  ·  1-6 jump  ·  q … navigate: shift+arrows · ○ ○ ○ ● ○ ○
+ Agents 4/7 · ← Forge Diffs · → Spend · 1-7 jump · q quit    navigate: shift+arrows · ○ ○ ○ ● ○ ○ ○
  spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1

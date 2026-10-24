@@ -89,6 +89,19 @@ export class InputParser {
       const mod = mods ? Number(mods[1]) - 1 : 0;
       const flags = { shift: (mod & 1) !== 0, alt: (mod & 2) !== 0, ctrl: (mod & 4) !== 0 };
       if (fin === 'Z') return { len, ev: { t: 'key', k: 'shift-tab', alt: false, shift: true, ctrl: false } };
+      // modifyOtherKeys (`CSI 27 ; mod ; code ~`) and the kitty protocol (`CSI code ; mod u`): Shift+Enter and friends.
+      const mok = fin === '~' ? /^27;(\d+);(\d+)$/.exec(body) : fin === 'u' ? /^(\d+);(\d+)$/.exec(body) : null;
+      if (mok) {
+        const [code, m2] = fin === '~' ? [Number(mok[2]), Number(mok[1]) - 1] : [Number(mok[1]), Number(mok[2]) - 1];
+        const f = { shift: (m2 & 1) !== 0, alt: (m2 & 2) !== 0, ctrl: (m2 & 4) !== 0 };
+        if (code === 13) return { len, ev: { t: 'key', k: 'enter', ...f } };
+        if (code === 9) return { len, ev: { t: 'key', k: f.shift ? 'shift-tab' : 'tab', ...f } };
+        if (code === 27) return { len, ev: { t: 'key', k: 'esc', ...f } };
+        if (code === 127) return { len, ev: { t: 'key', k: 'backspace', ...f } };
+        if (f.ctrl && code >= 97 && code <= 122) return { len, ev: { t: 'ctrl', c: String.fromCharCode(code) } };
+        if (code >= 32 && code < 127 && !f.ctrl) return { len, ev: { t: 'text', s: String.fromCharCode(code) } };
+        return { len, ev: null };
+      }
       if (fin === '~') { const k = TILDE[body.split(';')[0]!]; return { len, ev: k ? { t: 'key', k, ...flags } : null }; }
       const k = CSI_KEYS[fin];
       return { len, ev: k ? { t: 'key', k, ...flags } : null };

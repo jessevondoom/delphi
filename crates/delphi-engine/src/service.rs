@@ -271,6 +271,13 @@ impl EngineService {
         }
     }
 
+    /// `models.get`: the pool as `delphi models` prints it, from the daemon's live state.
+    fn models_get(&self) -> RpcOutcome {
+        let cfg = self.engine.cfg.get();
+        let now = (self.engine.clock_unix)();
+        Ok(json!({"text": crate::models_cli::render(&cfg, &self.engine.pool.snapshot(), now)}))
+    }
+
     async fn usage_get(&self, p: Value) -> RpcOutcome {
         let group = match p["group"].as_str().unwrap_or("role") {
             "mission" => GroupBy::Mission,
@@ -463,6 +470,7 @@ impl Extension for ServiceExt {
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "usage.get" => svc.usage_get(params).await,
+                "models.get" => svc.models_get(),
                 "budget.get" => svc.mission(params["mission_id"].as_str()).await.map(|m| EngineService::budget_json(&m)),
                 "budget.set" => svc.budget_set(params, ctx).await,
                 "permissions.get" => Ok(json!({"mode": svc.engine.broker.mode().as_str(), "allow_similar": svc.engine.broker.allow_similar().iter().map(|(t, tool, pat)| json!({"task_id": t, "tool": tool, "pattern": pat})).collect::<Vec<_>>()})),
@@ -812,6 +820,27 @@ mod tests {
         assert!(!f.root.join("workspaces/w/team/specs/009-new.md").exists(), "the action that was waiting never ran");
         let rec = crate::recovery::rebuild_with(&f.m.replay().unwrap(), &|_| None);
         assert!(rec.tasks.values().all(|t| t.completed), "recovery never offers a cancelled task");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn models_get_shows_the_pool_as_the_daemon_sees_it() {
+        let f = setup(vec![], 5.0, |_| {});
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        f.engine.pool.record_exhausted("direct", "opus-x", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        let v = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&tok).unwrap();
+            c.call("models.get", json!({})).unwrap()
+        })
+        .await;
+        let text = v["text"].as_str().unwrap();
+        let out = text.lines().find(|l| l.contains("direct") && l.contains("opus-x")).unwrap();
+        assert!(out.contains("exhausted: quota reached") && out.contains("in 59m") || out.contains("in 1h"), "{}", out);
+        let other = text.lines().find(|l| l.contains("backup") && l.contains("opus-x")).unwrap();
+        assert!(other.trim_end().ends_with("available"), "the same model on another endpoint is untouched: {}", other);
     }
 
     #[tokio::test(flavor = "multi_thread")]

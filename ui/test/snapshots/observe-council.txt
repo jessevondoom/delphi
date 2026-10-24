@@ -26,5 +26,5 @@ P1 lost updates
    [P0] red-team: the race
  saved: missions/m/councils/008.md
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- Council 1/6  ·  ← Archives  ·  → Epic DAG  ·  1-6 jump  ·  q… navigate: shift+arrows · ● ○ ○ ○ ○ ○
+ Council 1/7 · ← Thinking · → Epic DAG · 1-7 jump · q quit   navigate: shift+arrows · ● ○ ○ ○ ○ ○ ○
  spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1

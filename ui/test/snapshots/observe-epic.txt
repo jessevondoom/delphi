@@ -26,5 +26,5 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- Epic DAG 2/6  ·  ← Council  ·  → Forge Diffs  ·  1-6 jump  ·… navigate: shift+arrows · ○ ● ○ ○ ○ ○
+ Epic DAG 2/7 · ← Council · → Forge Diffs · 1-7 jump · q qu… navigate: shift+arrows · ○ ● ○ ○ ○ ○ ○
  spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1

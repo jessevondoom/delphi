@@ -10,6 +10,7 @@ export const COMMANDS: Command[] = [
   { name: '/pin', desc: 'Keep the last reply, or the text you give, in the mission notebook', local: true },
   { name: '/notes', desc: 'Read the mission notebook', local: true },
   { name: '/connectors', desc: 'Which connectors are configured, logged in and pinned', local: true },
+  { name: '/mouse', desc: 'Turn mouse reporting on or off (off lets the terminal select text)', local: true },
   { name: '/quit', desc: 'Leave the console; the daemon keeps running', local: true },
   { name: '/build', desc: 'A Builder task: worktree, tests, audit, then your approval to merge', local: false },
   { name: '/council', desc: 'Convene a blind three-round council on a proposition', local: false },

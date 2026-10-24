@@ -1,0 +1,30 @@
+⟦x?x⟧ ares: 2 decisions pending · 09:56 remaining                     navigate: shift+arrows · ○ ○ ●
+delphi v0.5 · /proj
+
+
+  Pending decisions (2)
+
+  ❯ 1. RED  Ratify spec 005b into the canonical repository                     ⟦•_•⟧ daedalus  09:56
+    2. AMB  write crates/delphi/src/deck.rs (+184)                           ⟦•─•⟧ hephaestus  09:55
+
+  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+  Selected: #1 · write_file
+  Reason: Red-tier gate: Ratify spec 005b into the canonical repository
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+enter open card · y approve · n reject · a approve all amber · tab focus mode · esc chat
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ○ ●

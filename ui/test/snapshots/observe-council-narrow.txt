@@ -20,5 +20,5 @@ Round 2 → revise
    [P0] red-team: the race
  saved: missions/m/councils/008.md
 ────────────────────────────────────────────────────────
- Council 1/6  ·  … navigate: shift+arrows · ● ○ ○ ○ ○ ○
+ Council 1/7 · … navigate: shift+arrows · ● ○ ○ ○ ○ ○ ○
  spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cach…

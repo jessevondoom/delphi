@@ -1,4 +1,4 @@
-⟦x?x⟧ ares: 2 de… navigate: shift+arrows · ○ ● ○
+⟦x?x⟧ ares: 2 decisions pending · 09:58 r… ○ ● ○
 delphi v0.5 · /proj
 
     + fn enqueue()
@@ -15,4 +15,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────
 ❯ and then?
 ────────────────────────────────────────────────
-0 tokens · appro… navigate: shift+arrows · ○ ● ○
+0 tokens · approvals · 2 waiting · shortc… ○ ● ○

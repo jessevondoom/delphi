@@ -94,6 +94,7 @@ export const width = (s: string) => stringWidth(s);
 
 /** Left and right text on one line of `w` columns, the gap filled with spaces. The left side gives way first. */
 export function spread(left: string, right: string, w: number): string {
+  if (width(right) >= w) return clip(right, w);
   const gap = w - width(left) - width(right);
   if (gap >= 1) return left + ' '.repeat(gap) + right;
   const room = w - width(right) - 1;

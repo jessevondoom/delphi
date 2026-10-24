@@ -26,7 +26,7 @@ export type Model = {
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'];
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
 const dots = (deck: number) => [0, 1, 2].map((i) => (i === deck ? T.accent('●') : T.dim('○'))).join(' ');
-const nav = (deck: number) => T.dim('navigate: shift+arrows · ') + dots(deck);
+const nav = (deck: number, w = 100) => (w >= 72 ? T.dim('navigate: shift+arrows · ') : '') + dots(deck);
 
 export function header(m: Model, w: number): string[] {
   const st = status(m.state, m.now);
@@ -42,7 +42,7 @@ export function header(m: Model, w: number): string[] {
     left = roles.map((r) => T.badge(r, m.state.agents[r]?.state ?? 'idle', m.info, m.pal)).join(' ') + T.dim('  all agents idle');
   }
   const l2 = chalk.bold(T.text(m.pal)('delphi')) + T.dim(` v${m.info.version} · ${T.tilde(m.info.cwd)}`);
-  return [T.spread(left, nav(m.deck), w), T.clip(l2, w)];
+  return [T.spread(left, nav(m.deck, w), w), T.clip(l2, w)];
 }
 
 const MODE: Record<string, string> = { default: 'approvals', 'accept-edits': 'accept edits', 'mission-auto': 'auto' };
@@ -51,7 +51,7 @@ export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
   const pending = Object.keys(m.state.approvals).length;
   const left = T.dim(`${k} tokens · ${MODE[m.mode] ?? m.mode}${pending ? ` · ${pending} waiting` : ''} · shortcuts: ?`);
-  return T.spread(left, nav(m.deck), w);
+  return T.spread(left, nav(m.deck, w), w);
 }
 
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(10, w), { hard: true, trim: false }).split('\n');
@@ -82,10 +82,11 @@ function render(b: Block, m: Model, w: number): string[] {
 
 // Finished blocks never change, so each is rendered once per width and palette. A long session stays cheap.
 const cache = new WeakMap<Block, { key: string; lines: string[] }>();
-const rolesKeys = new WeakMap<object, string>();
-const rolesKey = (info: T.Info) => { let k = rolesKeys.get(info.roles); if (k === undefined) { k = JSON.stringify(info.roles); rolesKeys.set(info.roles, k); } return k; };
-function block(b: Block, m: Model, w: number, base: string): string[] {
-  const key = `${base}:${b.status}:${b.detail?.length ?? 0}`;
+const rolesKey = new WeakMap<object, string>();
+function block(b: Block, m: Model, w: number): string[] {
+  let rk = rolesKey.get(m.info.roles);
+  if (rk === undefined) { rk = JSON.stringify(m.info.roles); rolesKey.set(m.info.roles, rk); }
+  const key = `${w}:${m.pal.dark}:${m.expandTools}:${b.status}:${b.detail?.length ?? 0}:${rk}`;
   const hit = cache.get(b);
   if (hit && hit.key === key) return hit.lines;
   const lines = render(b, m, w);
@@ -93,22 +94,43 @@ function block(b: Block, m: Model, w: number, base: string): string[] {
   return lines;
 }
 
+/** Every transcript line, oldest first. The unfinished reply is dim at the bottom. */
+/** The transcript as pieces (each finished block is cached), so a long session costs a sum, not a copy. */
 /**
- * How many of the newest blocks are drawn. A session can run for days; drawing (and re-wrapping on every resize) all
- * of it would make each keystroke slower than the last. The mission keeps every event, `/export` writes them all, and
- * scrolling back past this window shows where it stops.
+ * How many of the newest blocks are drawn. A session can run for days; the mission keeps every event, `/export` writes
+ * them all, and scrolling back past this window shows where it stops.
  */
 export const WINDOW = 1500;
 
-/** The transcript lines, oldest first: the newest `WINDOW` blocks, the queue, and the unfinished reply dim at the bottom. */
-export function transcript(m: Model, w: number): string[] {
+function parts(m: Model, w: number): string[][] {
   const blocks = m.state.blocks;
   const from = Math.max(0, blocks.length - WINDOW);
-  const base = `${w}:${m.pal.dark}:${m.expandTools}:${rolesKey(m.info)}`;
-  const out: string[] = from > 0 ? ['', T.dim(`  … ${from} earlier messages are not drawn; the mission keeps them and /export saves them all`)] : [];
-  for (let i = from; i < blocks.length; i++) for (const l of block(blocks[i]!, m, w, base)) out.push(l);
-  for (const q of m.queue) out.push('', T.dim('❯ ' + q.split('\n')[0] + '  (queued)'));
-  if (m.state.live) out.push('', ...renderMarkdown(m.state.live.slice(-3000), w - 2).map((l) => '  ' + chalk.dim(l)));
+  const out: string[][] = from > 0 ? [['', T.dim(`  … ${from} earlier messages are not drawn; the mission keeps them and /export saves them all`)]] : [];
+  for (let i = from; i < blocks.length; i++) out.push(block(blocks[i]!, m, w));
+  for (const q of m.queue) out.push(['', T.dim('❯ ' + q.split('\n')[0] + '  (queued)')]);
+  if (m.state.live) out.push(['', ...renderMarkdown(m.state.live.slice(-3000), w - 2).map((l) => '  ' + chalk.dim(l))]);
+  return out;
+}
+
+export function transcript(m: Model, w: number): string[] {
+  return parts(m, w).flat();
+}
+
+/** How many lines the transcript has at this width. */
+export function transcriptCount(m: Model, w: number): number {
+  return parts(m, w).reduce((n, p) => n + p.length, 0);
+}
+
+/** Lines [start, end) of the transcript without building the rest of it. */
+function windowOf(ps: string[][], start: number, end: number): string[] {
+  const out: string[] = [];
+  let at = 0;
+  for (const p of ps) {
+    const next = at + p.length;
+    if (next > start && at < end) out.push(...p.slice(Math.max(0, start - at), Math.min(p.length, end - at)));
+    at = next;
+    if (at >= end) break;
+  }
   return out;
 }
 
@@ -160,6 +182,16 @@ function activityView(m: Model, w: number, h: number): string[] {
   return body;
 }
 
+export const MIN_W = 28, MIN_H = 9;
+
+/** A window too small to draw in: say so, in as few columns as it has, and nothing else. */
+export function tooSmall(w: number, h: number): string[] {
+  const msg = [`delphi needs at least ${MIN_W}x${MIN_H}`, `this window is ${w}x${h}`];
+  const out = Array.from({ length: Math.max(0, h) }, () => '');
+  msg.forEach((l, i) => { if (i < out.length) out[i] = [...l].slice(0, Math.max(0, w)).join(''); });
+  return out;
+}
+
 const SPIN = ['◐', '◓', '◑', '◒'];
 
 function statusRow(m: Model, w: number): string {
@@ -177,6 +209,7 @@ function statusRow(m: Model, w: number): string {
 
 /** The whole screen: exactly `h` lines. */
 export function frame(m: Model, w: number, h: number): string[] {
+  if (w < MIN_W || h < MIN_H) return tooSmall(w, h);
   const head = header(m, w);
   const lay = layout(m.composer, Math.max(8, w - 2));
   const promptRows = Math.min(lay.rows.length, 6);
@@ -190,10 +223,12 @@ export function frame(m: Model, w: number, h: number): string[] {
   if (m.deck !== 1) body = deckBody(m, w, bodyH);
   else if (m.panel) body = P.view(m.panel, m.state.sources, m.pal, w, bodyH);
   else {
-    const lines = m.help ? [...transcript(m, w), '', ...HELP.map(T.dim)] : transcript(m, w);
-    const maxBack = Math.max(0, lines.length - bodyH);
+    const ps = parts(m, w);
+    if (m.help) ps.push(['', ...HELP.map(T.dim)]);
+    const total = ps.reduce((n, p) => n + p.length, 0);
+    const maxBack = Math.max(0, total - bodyH);
     const back = Math.min(m.back, maxBack);
-    body = lines.slice(Math.max(0, lines.length - bodyH - back), lines.length - back);
+    body = windowOf(ps, Math.max(0, total - bodyH - back), total - back);
     while (body.length < bodyH) body.unshift('');
     if (back > 0) body[bodyH - 1] = T.spread('', chalk.hex('#facc15')(`↓ ${back} lines below · pgdn · new output waits here`), w);
     if (m.menu) {

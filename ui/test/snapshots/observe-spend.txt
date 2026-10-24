@@ -26,5 +26,5 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- Spend 5/6  ·  ← Agents  ·  → Archives  ·  1-6 jump  ·  q quit navigate: shift+arrows · ○ ○ ○ ○ ● ○
+ Spend 5/7 · ← Agents · → Archives · 1-7 jump · q quit       navigate: shift+arrows · ○ ○ ○ ○ ● ○ ○
  spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1

@@ -72,7 +72,8 @@ impl Engine {
         let mut families: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id) && e.family != current).map(|e| e.family.clone()).collect();
         families.sort();
         families.dedup();
-        families.into_iter().find(|f| cfg.endpoints_for(f).iter().any(|e| e.path != AccessPath::Harness || (e.harness.as_deref() == Some("claude")) || !builder))
+        // Only a family with something usable right now: a Builder on an exhausted family would just wait.
+        families.into_iter().find(|f| cfg.endpoints_for(f).iter().any(|e| e.path != AccessPath::Harness || (e.harness.as_deref() == Some("claude")) || !builder) && self.family_usable(f, builder))
     }
 
     fn span_handoff(&self, m: &MissionState, task_id: &str, n: u32, role: &str, objective: &str, pointers: Vec<ContextPointer>) -> HandoffEnvelope {
@@ -99,6 +100,7 @@ impl Engine {
         let mut h = self.span_handoff(m, task_id, n, "red-team", &objective, pointers);
         // No author-family self-review ([H-008]) when another family is allowed; never a blocker when it is not.
         h.routing_directive.model_family = self.other_family(builder_family, false);
+        h.routing_directive.avoid_families = vec![builder_family.to_string()];
         let out = self.run_span(m, task_id, h, None, 0).await?;
         let verdict = match (&out.status, parse_audit(&out.text)) {
             (Status::Done, Some(f)) => f,
@@ -143,6 +145,7 @@ impl Engine {
                 _ => {
                     h.routing_directive.model_tier = Some(upscale(manifest.tier()).to_string());
                     h.routing_directive.thinking_budget_tokens = Some((manifest.thinking_budget() * 2).max(2048));
+                    h.routing_directive.avoid_families = vec![base_family.clone()];
                     match self.other_family(&base_family, true) {
                         Some(f) => {
                             family = f.clone();
@@ -343,6 +346,24 @@ mod tests {
         assert!(!f.root.join("proj/src/new.rs").exists());
     }
 
+    // specs/002 §4.1 test 7: promoting to another model is not a verification attempt.
+    #[tokio::test]
+    async fn a_model_running_out_mid_build_is_promoted_without_using_a_retry_attempt() {
+        let f = fixture(vec![Step::Exhaust, write("good\n"), Step::text("done"), Step::text("AUDIT COMPLETE")], "grep -q good src/new.rs");
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        let out = run(&f).await;
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        assert!(out.text.contains("Merged") && out.text.contains("1 attempt"), "it still passed on the first attempt: {}", out.text);
+        let attempts = events_of(&f, "build.attempt");
+        assert_eq!((attempts.len(), attempts[0].payload["tier"].as_str()), (1, None), "no upscale, no second attempt");
+        assert_eq!(events_of(&f, "model.exhausted").len(), 1);
+        let reqs = f.model.requests();
+        assert_eq!((reqs[0].endpoint_id.as_str(), reqs[1].endpoint_id.as_str()), ("direct", "backup"), "the same attempt moved to the next endpoint");
+        assert_eq!(reqs[0].model_id, reqs[1].model_id, "the same tier, so nothing was upscaled");
+    }
+
     #[tokio::test]
     async fn a_second_family_is_used_for_attempt_three_when_one_is_allowed() {
         let steps = (0..3).flat_map(|_| vec![write("x\n"), Step::text("done")]).collect();
@@ -361,6 +382,28 @@ mod tests {
         let reqs = f.model.requests();
         assert_eq!(reqs[4].endpoint_id, "gem", "attempt 3 really ran on the other family");
         assert!(reqs[4].body.get("contents").is_some());
+    }
+
+    #[tokio::test]
+    async fn attempt_three_is_a_homogeneous_retry_when_the_other_family_is_out_of_quota() {
+        let steps = (0..3).flat_map(|_| vec![write("x\n"), Step::text("done")]).collect();
+        let f = fixture(steps, "false");
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[models.gemini]\nfast = \"gem-f\"\nworkhorse = \"gem-w\"\nfrontier = \"gem-p\"\n[models.catalog.\"gem-w\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[models.catalog.\"gem-p\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        for k in f.engine.cfg.get().pool_entries().into_iter().filter(|k| k.family == "gemini") {
+            f.engine.pool.record_exhausted(&k.endpoint_id, &k.model_id, &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        }
+        let out = run(&f).await;
+        assert!(matches!(out.status, Status::Escalated(_)));
+        let attempts = events_of(&f, "build.attempt");
+        assert_eq!((attempts[2].payload["family"].as_str(), attempts[2].payload["homogeneous_retry"].as_bool()), (Some("claude"), Some(true)), "the other family is out, so the retry says it is the same family");
+        assert!(f.model.requests().iter().all(|r| r.endpoint_id != "gem"), "nothing was sent to the exhausted family");
     }
 
     #[tokio::test]
