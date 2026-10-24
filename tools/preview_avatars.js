@@ -90,13 +90,13 @@ const AGENTS = {
   argos: {
     name: "Argos (Scout)",
     role: "scout",
-    chassis: [52, 211, 153],   // Emerald #34D399
-    crownStr: `   ${fg(250, 204, 21)}▄${RESET}   `,
+    chassis: [255, 255, 0],   // Bright Yellow #FFFF00
+    crownStr: `   ${fg(65, 105, 225)}▄${RESET}   `, // Royal Blue #4169E1
     defaultFace: "THREE_EYES_BULLET", // Larger dots for the 3 eyes (• • •)
     badgeFace: "•••",
     blinkFace: "THREE_EYES_BLINK",    // All 3 eyes close together (- - -)
     blinkBadge: "---",
-    crownLabel: "Center Beacon Sensor",
+    crownLabel: "Royal Blue Sensor Horn",
     personalityNote: "Three larger all-seeing eyes (• • •)"
   }
 };
