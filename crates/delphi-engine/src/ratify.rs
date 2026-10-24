@@ -118,6 +118,9 @@ fn live_files(home: &Path, ws_dir: &Path, scope: Scope) -> BTreeMap<String, Path
     let mut m = BTreeMap::new();
     match scope {
         Scope::Workspace => {
+            // The release snapshot first: `delphi update` refreshes it, and the difference from what was ratified
+            // is then a proposal. Operator customizations in core/ and team files override it.
+            walk(&ws_dir.join("base"), "", &mut m);
             walk(&ws_dir.join("core"), "", &mut m);
             walk(&ws_dir.join("team"), "", &mut m);
             walk(&ws_dir.join("local/memory"), "memory/", &mut m);

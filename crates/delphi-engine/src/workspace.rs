@@ -298,10 +298,10 @@ pub(crate) mod tests {
         }
         add("context/team-heuristics.md", "---\nid: t\n---\n### [T-001] Team rule\n- keep it short\n");
         add("heuristics.md", "---\nid: w\n---\n### [W-001] Workspace rule\n- prefer small diffs\n");
-        write(ws.dir.join("local/ratified.lock"), &serde_json::json!({"files": lock}).to_string());
-        // Release heuristics in base/ with its manifest lock.
+        // Release heuristics in base/ (ratified at init like every other protected release file), with its manifest lock.
         let rel = "---\nid: h\n---\n### [H-001] Release rule\n- verify before claiming\n";
-        write(ws.dir.join("base/context/heuristics.md"), rel);
+        add("context/heuristics.md", rel);
+        write(ws.dir.join("local/ratified.lock"), &serde_json::json!({"files": lock}).to_string());
         write(ws.dir.join("base/manifest.lock"), &serde_json::json!({"files": {"context/heuristics.md": hash(rel.as_bytes())}}).to_string());
         // Operator home.
         let op = root.join("operator");
