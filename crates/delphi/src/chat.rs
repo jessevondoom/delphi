@@ -299,14 +299,9 @@ fn say(s: &str) {
     let _ = out.flush();
 }
 
-/// `delphi-core` next to this executable, else on `PATH`.
+/// This executable: the daemon is `delphi __core --daemon …`, so there is nothing else to find.
 pub fn daemon_exe() -> Option<PathBuf> {
-    if let Some(p) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("delphi-core"))) {
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join("delphi-core")).find(|p| p.exists()))
+    std::env::current_exe().ok()
 }
 
 fn rpc_error(e: &ClientError) -> String {
@@ -379,10 +374,10 @@ fn is_tty() -> bool {
 /// Run the console. Returns the process exit code.
 pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>) -> i32 {
     let Some(exe) = daemon_exe() else {
-        eprintln!("delphi chat: cannot find the `delphi-core` daemon next to this program or on PATH");
+        eprintln!("delphi chat: cannot locate this program to start the daemon");
         return 1;
     };
-    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![] }) {
+    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));
@@ -600,10 +595,10 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
             }}
             if action == "restart" {
                 let Some(exe) = daemon_exe() else {
-                    eprintln!("cannot find the `delphi-core` daemon");
+                    eprintln!("cannot locate this program to start the daemon");
                     return 1;
                 };
-                return match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![] }) {
+                return match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
                     Ok(a) => {
                         println!("daemon started (pid {})", a.daemon_pid);
                         0

@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 delphi-core = { path = "../delphi-core" }
 delphi-sandbox = { path = "../delphi-sandbox" }
+delphi-engine = { path = "../delphi-engine" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }

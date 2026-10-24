@@ -27,6 +27,8 @@ const USAGE: &str = "usage:
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(|s| s.as_str()) {
+        // The daemon and its maintenance commands run from this same executable.
+        Some("__core") => delphi_engine::core_main::run(args[1..].to_vec()),
         Some("lint") => cmd_lint(&args[1..]),
         Some("init") => cmd_init(&args[1..]),
         Some("doctor") => cmd_doctor(&args[1..]),
@@ -187,15 +189,11 @@ fn cmd_daemon(args: &[String]) -> i32 {
     chat::daemon(&home, &ws.dir, action)
 }
 
-/// `delphi auth …` and `delphi endpoints …` run in `delphi-core`, which already carries the HTTP and keychain code.
+/// `delphi auth …` and `delphi endpoints …`, in this process.
 fn cmd_core(sub: &str, args: &[String]) -> i32 {
     let (_home, ws) = match resolve_ws(sub, args) {
         Ok(v) => v,
         Err(code) => return code,
-    };
-    let Some(exe) = chat::daemon_exe() else {
-        eprintln!("delphi {}: cannot find the `delphi-core` program next to this one or on PATH", sub);
-        return 1;
     };
     let mut rest: Vec<String> = Vec::new();
     let mut it = args.iter();
@@ -206,12 +204,9 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
             rest.push(a.clone());
         }
     }
-    match std::process::Command::new(exe).arg(sub).args(&rest).arg("--workspace").arg(&ws.dir).status() {
-        Ok(s) => s.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("delphi {}: {}", sub, e);
-            1
-        }
+    match sub {
+        "auth" => delphi_engine::auth_cli::run(&ws.dir, &rest),
+        _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
 }
 
