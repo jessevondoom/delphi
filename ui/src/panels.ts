@@ -80,7 +80,7 @@ export function panelKey(ui: PanelUi, e: Ev, obs: Observer): { ui: PanelUi; act?
   switch (e.k) {
     case 'esc': return { ui, act: { t: 'close' } };
     case 'left': case 'right': {
-      if (e.shift) return go(step(ui.view, e.k === 'left' ? -1 : 1));
+      if (e.shift || e.alt) return go(step(ui.view, e.k === 'left' ? -1 : 1));
       const n = pickable(ui, obs);
       if (!n) return { ui };
       const cur = resolvePick(ui, n);
@@ -351,9 +351,9 @@ export function panelBody(ui: PanelUi, c: PanelCtx, w: number, h: number): strin
 /** The prompt row while a panel has the keyboard. */
 export function panelHint(ui: PanelUi): string {
   const i = VIEWS.indexOf(ui.view);
-  const dots = VIEWS.map((_, n) => (n === i ? T.accent('●') : T.dim('○'))).join(' ');
+  const dots = VIEWS.map((_, n) => (n === i ? T.accent('●') : T.dim('○'))).join('');
   const extra = ui.view === 'archives' ? (ui.kb.editing ? 'enter search · esc stop typing' : '/ search · ↑↓ select') : ui.view === 'forge' ? '←→ build · r refresh' : ui.view === 'council' ? '←→ council' : ui.view === 'epic' || ui.view === 'sources' ? '↑↓ select' : '↑↓ scroll';
-  return T.dim(`${SHORT[ui.view]} ${i + 1}/${VIEWS.length} · shift+←→ or tab view · 1-${VIEWS.length} jump · ${extra} · esc chat  `) + dots;
+  return T.dim(`${SHORT[ui.view]} ${i + 1}/${VIEWS.length} · tab or shift+←→ view · 1-${VIEWS.length} jump · ${extra} · esc chat  `) + dots;
 }
 
 /** The line under the panel: spend against the ceiling, tokens, cache, retries, and proposals waiting for /ratify. */
@@ -361,5 +361,5 @@ export function panelFooter(c: PanelCtx, w: number): string {
   const o = c.obs;
   const frac = c.cap > 0 ? o.spentUsd / c.cap : 0;
   const colour = frac >= 0.9 ? T.crimson : frac >= 0.75 ? T.warn : chalk.hex('#22c55e');
-  return T.clip(T.text(c.pal)(` spend ${money(o.spentUsd)} / ${c.cap > 0 ? money(c.cap) : '?'} `) + colour(bar(frac, 12)) + T.text(c.pal)(` · tokens ${kilo(totalTokens(o.tokens))} · cache hit ${(o.cacheHitRatio() * 100).toFixed(0)}% · retries ${o.retries}${c.pending > 0 ? ` · ${c.pending} proposal(s) await /ratify` : ''}`), w);
+  return T.clip(T.text(c.pal)(` spend ${money(o.spentUsd)} / ${c.cap > 0 ? money(c.cap) : '?'} `) + colour(bar(frac, 12)) + T.text(c.pal)(` · tokens ${kilo(totalTokens(o.tokens))} · cache ${(o.cacheHitRatio() * 100).toFixed(0)}% · retries ${o.retries}${c.pending > 0 ? ` · ${c.pending} to /ratify` : ''}`), w);
 }

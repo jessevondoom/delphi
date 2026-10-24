@@ -1,0 +1,30 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+ AGENTS · mission m1
+
+            athena  orchestrator  ○ idle
+    •─•     no call yet
+  ▀▀▀▀▀▀▀   in 0 · cache 0 · out 0 · think 0 · $0.000 · 0 call(s)
+
+            daedalus  architect  ● running
+    •─•     frontier · opus ⬆ · direct
+  ▀▀▀▀▀▀▀   in 1500 · cache 3000 · out 300 · think 50 · $0.100 · 2 call(s)
+
+            hephaestus  builder  ● running
+    •─•     no call yet
+  ▀▀▀▀▀▀▀   in 0 · cache 0 · out 0 · think 0 · $0.000 · 0 call(s)
+
+            ares  red-team  ○ idle
+    -_-     no call yet
+  ▀▀▀▀▀▀▀   in 0 · cache 0 · out 0 · think 0 · $0.000 · 0 call(s)
+
+
+
+
+ spend $0.100 / $5.00 ░░░░░░░░░░░░ · tokens 4850 · cache 67% · retries 1 · 1 to /ratify
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Agents 4/9 · tab or shift+←→ view · 1-9 jump · ↑↓ scroll · esc chat  ○○○●○○○○○
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

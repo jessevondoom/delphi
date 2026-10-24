@@ -66,7 +66,7 @@ export function inboxKey(ui: InboxUi, e: Ev, cards: Approval[]): { ui: InboxUi; 
   }
 }
 
-const tierTag = (a: Approval) => (a.tier === 'red' ? T.crimson(chalk.bold('RED')) : T.warn('AMB'));
+const tierTag = (a: Approval) => (a.tier === 'red' ? T.crimson(chalk.bold('RED')) : T.warn('AMB')) + ' ';
 const mmss = (secs: number) => `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(10, w), { hard: true, trim: false }).split('\n');
 
@@ -91,10 +91,10 @@ export function inboxBody(ui: InboxUi, cards: Approval[], v: View, w: number, h:
       const left = Math.max(0, Math.round((a.at + a.timeoutS * 1000 - v.now) / 1000));
       const on = i === idx;
       const desc = (a.summary || a.tool || 'approval').split('\n')[0]!;
-      const line = `${on ? T.accent('►') : ' '} ${String(i + 1).padStart(2)}  ${tierTag(a)}  ${T.roleColor(a.role, v.info)(T.roleName(a.role, v.info).padEnd(11).slice(0, 11))} ${T.dim((a.task || '—').padEnd(6).slice(0, 6))} ${on ? chalk.bold(desc) : desc}`;
+      const line = `${on ? T.accent('►') : ' '} ${String(i + 1).padStart(2)}  ${tierTag(a)} ${T.roleColor(a.role, v.info)(T.roleName(a.role, v.info).padEnd(11).slice(0, 11))} ${T.dim((a.task || '—').padEnd(6).slice(0, 6))} ${on ? chalk.bold(desc) : desc}`;
       return T.spread(line, T.dim(mmss(left)), w - 1);
     });
-    const head = `  ${T.dim('#')}   ${T.dim('TIER')}  ${T.dim('ROLE'.padEnd(11))} ${T.dim('TASK'.padEnd(6))} ${T.dim('DESCRIPTION')}`;
+    const head = `  ${T.dim(' #')}  ${T.dim('TIER')} ${T.dim('ROLE'.padEnd(11))} ${T.dim('TASK'.padEnd(6))} ${T.dim('DESCRIPTION')}`;
     return pad(['', chalk.bold(T.text(v.pal)(`  DECISION INBOX · ${cards.length} PENDING`)), '', head, ...rows]);
   }
   const a = cards[idx]!;

@@ -1,0 +1,30 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+ CONNECTORS · mission m1
+ drive  ● ready
+   https://mcp.example/drive
+   account a@b.c · login google · roles scout
+   1 call(s) · 1 result(s) · last search
+   search                   read   pinned
+   upload                   write  not ratified: delphi connectors pin drive, then /ratify
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ spend $0.100 / $5.00 ░░░░░░░░░░░░ · tokens 4850 · cache 67% · retries 1 · 1 to /ratify
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Connectors 9/9 · tab or shift+←→ view · 1-9 jump · ↑↓ scroll · esc chat  ○○○○○○○○●
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

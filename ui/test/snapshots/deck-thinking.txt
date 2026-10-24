@@ -1,0 +1,24 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ● ○ ○
+delphi v0.5 · /proj
+
+
+  Activity and thinking stream · memory only, never saved
+
+  → read_file(specs/002-adapter-and-routing.md) ✔
+
+  ⟦•─•⟧ daedalus · n1
+    Weighing a table against a file:
+    transactions favour the table.
+
+
+
+
+
+
+
+
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ● ○ ○

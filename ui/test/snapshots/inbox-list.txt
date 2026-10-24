@@ -1,0 +1,24 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ○ ●
+delphi v0.5 · /proj
+
+
+  DECISION INBOX · 2 PENDING
+
+   #  TIER ROLE        TASK   DESCRIPTION
+►  1  RED  daedalus    t3     Ratify spec 011 into the canonical repository                   09:58
+   2  AMB  hephaestus  t2     Write crates/queue.rs (+84)                                     09:58
+
+
+
+
+
+
+
+
+
+
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+decision 1/2: ↑↓ select · enter inspect · y approve · n reject · a approve all amber · esc chat
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ○ ●

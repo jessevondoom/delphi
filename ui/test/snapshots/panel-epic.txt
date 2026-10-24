@@ -1,0 +1,30 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+ EPIC DAG · mission m1
+ t1 council · Table or file for the retry queue?
+  ○ daedalus     pending       1800 tok  $0.100
+    ○ hephaestus   pending          0 tok  $0.000
+
+
+
+
+
+
+
+
+
+
+
+── Narrative ───────────────────────────────────────────────────────────────────────────────────────
+ t1 started (council): Table or file for the retry queue?
+ t1: council convened
+ t1: round 1 is in
+ t1: council needs your decision
+ t2 started (build): build the queue
+ spend $0.100 / $5.00 ░░░░░░░░░░░░ · tokens 4850 · cache 67% · retries 1 · 1 to /ratify
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Epic DAG 2/9 · tab or shift+←→ view · 1-9 jump · ↑↓ select · esc chat  ○●○○○○○○○
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

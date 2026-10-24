@@ -6,6 +6,7 @@ import * as C from './composer.ts';
 import { COMMANDS } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
+import { graphemes } from './text.ts';
 import { cardsOf, inboxInit, inboxKey, type InboxUi } from './inbox.ts';
 import { addPin, readNotebook, type Pin } from './notebook.ts';
 import type { Observer } from './observer.ts';
@@ -225,7 +226,7 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
     const menuNow = (): Completion | null => {
       if (searchRef.current) return null;
       const c = comp.current;
-      return completions(C.textOf(c), c.cur, info, listDir);
+      return completions(c.chars, c.cur, info, listDir);
     };
     const onEv = (e: Ev) => {
       const bodyH = Math.max(3, sizeRef.current.h - 9);
@@ -256,7 +257,7 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
         return;
       }
 
-      if (deckRef.current === 2 && (e.t === 'text' || e.t === 'key' || e.t === 'paste') && !(e.t === 'key' && (e.k === 'shift-tab' || (e.shift && (e.k === 'left' || e.k === 'right'))))) {
+      if (deckRef.current === 2 && (e.t === 'text' || e.t === 'key' || e.t === 'paste') && !(e.t === 'key' && (e.k === 'shift-tab' || ((e.shift || e.alt) && (e.k === 'left' || e.k === 'right'))))) {
         if (e.t === 'paste') return;
         const r = inboxKey(inboxRef.current, e, cardsOf(stateRef.current));
         showInbox(r.ui);
@@ -287,12 +288,12 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
           return;
         case 'key': {
           if (e.k === 'shift-tab') { cycleMode(); return; }
-          if (e.shift && (e.k === 'left' || e.k === 'right')) { setDeck((d) => Math.max(0, Math.min(2, d + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2); return; }
+          if ((e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) { setDeck((d) => Math.max(0, Math.min(2, d + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2); return; }
           const pick = (n: number) => { selRef.current = n; setSel(n); };
           const accept = (it: { insert: string }) => upd((c) => {
-            const t = C.textOf(c), cs = [...t];
-            const next = [...cs.slice(0, m!.from), ...[...it.insert], ...cs.slice(m!.to)];
-            return { ...c, chars: next, cur: m!.from + [...it.insert].length, histAt: null };
+            const ins = graphemes(it.insert);
+            const next = [...c.chars.slice(0, m!.from), ...ins, ...c.chars.slice(m!.to)];
+            return { ...c, chars: next, cur: m!.from + ins.length, histAt: null };
           });
           switch (e.k) {
             case 'pgup': setBack((b) => b + bodyH - 1); return;
@@ -317,7 +318,7 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
               const text = C.textOf(comp.current);
               if (items.length) {
                 const it = items[Math.min(selRef.current, items.length - 1)]!;
-                const tok = text.slice(m!.from, m!.to);
+                const tok = comp.current.chars.slice(m!.from, m!.to).join('');
                 if (tok !== it.insert.trimEnd()) { accept(it); return; }
               }
               const { text: t, next } = C.submit(comp.current);
@@ -354,7 +355,7 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
     if (added > 0) setBack((b) => (b > 0 ? b + added : 0));
   }, [lineCount]);
 
-  const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
+  const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
   const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, obsV, cap, pins, panelSources]);
   return (

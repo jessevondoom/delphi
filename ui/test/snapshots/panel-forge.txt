@@ -1,0 +1,30 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+ FORGE DIFFS · mission m1
+ Build 1/1 · t2 · branch delphi/t2 · commit abcdef012345 · in progress
+   attempt 1 · workhorse · claude
+   ✔ tests      41 passed
+   ✖ clippy     2 warnings
+   audit P1 unbounded retry
+── Diff against the base commit ────────────────────────────────────────────────────────────────────
+  no live worktree for this build (it finished, or has not started). r refreshes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+ spend $0.100 / $5.00 ░░░░░░░░░░░░ · tokens 4850 · cache 67% · retries 1 · 1 to /ratify
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Forge Diffs 3/9 · tab or shift+←→ view · 1-9 jump · ←→ build · r refresh · esc chat  ○○●○○○○○○
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

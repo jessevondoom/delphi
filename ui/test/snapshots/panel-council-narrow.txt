@@ -1,0 +1,24 @@
+⟦x?x⟧ 2 decisions pendin… navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+ COUNCIL CHAMBER · mission m1
+ Council 1/1 · t1 · escalated
+ Table or file for the retry queue?
+
+daedalus (claude)            ares (gemini)
+────────                     ────────
+Round 1 (blind)              Round 1 (blind)
+A table, because of          A file: no lock contention.
+── Verdict ─────────────────────────────────────────────
+ Escalated to you: seats split
+   option: table — architect
+   option: file — red-team
+ Minority report:
+   [P1] red-team: contention unresolved
+ saved: missions/m1/council.md
+ spend $0.100 / $5.00 ░░░░░░░░░░░░ · tokens 4850 · cach…
+◐ working · 2s                               esc to stop
+────────────────────────────────────────────────────────
+Council 1/9 · tab or shift+←→ view · 1-9 jump · ←→ coun…
+────────────────────────────────────────────────────────
+0 tokens · approvals · 2… navigate: shift+arrows · ○ ● ○

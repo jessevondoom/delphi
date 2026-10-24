@@ -197,7 +197,7 @@ test('spend: sparkline, token bars, cache hit, per-agent shares and the ceiling'
 test('the footer line shows spend against the ceiling and the proposals waiting', () => {
   const f = plain(panelFooter(ctx(world()), 120));
   assert.match(f, /spend \$0\.100 \/ \$5\.00 ▓?░+ · tokens 5\.?\d*k?|spend \$0\.100 \/ \$5\.00/);
-  assert.match(f, /cache hit 67% · retries 1 · 2 proposal\(s\) await \/ratify/);
+  assert.match(f, /cache 67% · retries 1 · 2 to \/ratify/);
   assert.match(plain(panelFooter(ctx(world(), { cap: 0, pending: 0 }), 120)), /spend \$0\.100 \/ \?/);
 });
 
@@ -284,7 +284,7 @@ test('a panel takes the body and the prompt row, and the screen stays exactly w 
   }
   const out = frame(m, 100, 30).map(plain).join('\n');
   assert.match(out, /SPEND TELEMETRY · mission m1/);
-  assert.match(out, /Spend 5\/9 · shift\+←→ or tab view/);
+  assert.match(out, /Spend 5\/9 · tab or shift\+←→ view/);
   assert.doesNotMatch(out, /my draft/);
 });
 
@@ -398,4 +398,10 @@ test('an event for a connector the snapshot did not list still gets a row', () =
   const o = new Observer([]);
   o.apply(ev('connector.call', 't', { connector: 'slack', tool: 'post' }));
   assert.equal(o.connectors.get('slack')!.calls, 1);
+});
+
+test('alt+arrows move between views too, for terminals that do not send shift+arrows', () => {
+  const o = world();
+  assert.equal(panelKey(panelInit('council'), key('right', { alt: true }), o).ui.view, 'epic');
+  assert.equal(panelKey(panelInit('council'), key('left', { alt: true }), o).ui.view, 'connectors');
 });

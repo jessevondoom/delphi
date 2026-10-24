@@ -1,0 +1,40 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+    rust
+    fn enqueue(job: Job) -> Result<()> { Ok(()) }
+
+  See specs/002-adapter-and-routing.md#4 for the ladder.
+
+
+❯ Now write it
+
+── approval needed [amber] · hephaestus
+  Write crates/queue.rs (+84)
+    + fn enqueue()
+    + fn dequeue()
+  /y approve once · /a allow similar this task · /n reject · /d view all
+
+── approval needed [RED — never auto-approved] · daedalus
+  Ratify spec 011 into the canonical repository
+    ratify specs/011
+  /y approve once · /n reject · /d view all
+
+  approval mode: default
+
+keys
+  enter send · alt+enter or ctrl+j newline · esc clear · ↑↓ history
+  pgup pgdn or the mouse wheel scroll · shift+← shift+→ move between decks
+  ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave
+  / opens the command menu · tab or enter completes
+  answer a waiting approval with /y /a /n /d · @architect … sends to one role · @specs/… points at …
+  shift+→ or /operator opens the decision inbox (y n a d, tab list/focus, esc back) · shift+tab tog…
+  /panel [council|epic|forge|agents|spend|archives|sources|notebook|connectors] opens an Observer v…
+  /pin keeps the last reply in the mission notebook · /pin <text> keeps a note
+  esc stops what is running (when the prompt is empty) · ctrl+o shows tool details · ctrl+r searche…
+  a message sent while something runs is queued and goes when it finishes
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

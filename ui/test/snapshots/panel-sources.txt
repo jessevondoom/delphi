@@ -1,0 +1,30 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+ SOURCES · mission m1
+── Sources · 2 ─────────────────────────────────────────────────────────────────────────────────────
+❯  1. specs/002-adapter-and-routing.md  #4  ×2 · tool/said · architect
+   2. context/glossary.md  #term  ×1 · search · search
+
+── Preview ─────────────────────────────────────────────────────────────────────────────────────────
+ specs/002-adapter-and-routing.md
+   # specs/002-adapter-and-routing.md
+
+   The first lines of the document.
+
+
+
+
+
+
+
+
+
+
+
+ spend $0.100 / $5.00 ░░░░░░░░░░░░ · tokens 4850 · cache 67% · retries 1 · 1 to /ratify
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Sources 7/9 · tab or shift+←→ view · 1-9 jump · ↑↓ select · esc chat  ○○○○○○●○○
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

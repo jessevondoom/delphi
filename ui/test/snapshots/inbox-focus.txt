@@ -1,0 +1,24 @@
+⟦x?x⟧ 2 decisions pending · 09:58 remaining                           navigate: shift+arrows · ○ ○ ●
+delphi v0.5 · /proj
+
+
+APPROVAL REQUIRED [1 of 2] · red-tier gate · never auto-approved · 09:58 until it is denied
+  Requester : daedalus (architect)
+  Task      : t3
+  Tool      : ratify
+  Reason    : Ratify spec 011 into the canonical repository
+
+  Preview:
+    ratify specs/011
+
+  answers are bound to payload h2; a changed payload is a new approval
+
+
+
+
+
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+decision 1/2: y approve once · n reject · d full payload · tab list · ← → card · esc chat
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ○ ●

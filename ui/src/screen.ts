@@ -84,8 +84,10 @@ function render(b: Block, m: Model, w: number): string[] {
 
 // Finished blocks never change, so each is rendered once per width and palette. A long session stays cheap.
 const cache = new WeakMap<Block, { key: string; lines: string[] }>();
-function block(b: Block, m: Model, w: number): string[] {
-  const key = `${w}:${m.pal.dark}:${m.expandTools}:${b.status}:${b.detail?.length ?? 0}:${JSON.stringify(m.info.roles)}`;
+const rolesKeys = new WeakMap<object, string>();
+const rolesKey = (info: T.Info) => { let k = rolesKeys.get(info.roles); if (k === undefined) { k = JSON.stringify(info.roles); rolesKeys.set(info.roles, k); } return k; };
+function block(b: Block, m: Model, w: number, base: string): string[] {
+  const key = `${base}:${b.status}:${b.detail?.length ?? 0}`;
   const hit = cache.get(b);
   if (hit && hit.key === key) return hit.lines;
   const lines = render(b, m, w);
@@ -93,9 +95,20 @@ function block(b: Block, m: Model, w: number): string[] {
   return lines;
 }
 
-/** Every transcript line, oldest first. The unfinished reply is dim at the bottom. */
+/**
+ * How many of the newest blocks are drawn. A session can run for days; drawing (and re-wrapping on every resize) all
+ * of it would make each keystroke slower than the last. The mission keeps every event, `/export` writes them all, and
+ * scrolling back past this window shows where it stops.
+ */
+export const WINDOW = 1500;
+
+/** The transcript lines, oldest first: the newest `WINDOW` blocks, the queue, and the unfinished reply dim at the bottom. */
 export function transcript(m: Model, w: number): string[] {
-  const out = m.state.blocks.flatMap((b) => block(b, m, w));
+  const blocks = m.state.blocks;
+  const from = Math.max(0, blocks.length - WINDOW);
+  const base = `${w}:${m.pal.dark}:${m.expandTools}:${rolesKey(m.info)}`;
+  const out: string[] = from > 0 ? ['', T.dim(`  … ${from} earlier messages are not drawn; the mission keeps them and /export saves them all`)] : [];
+  for (let i = from; i < blocks.length; i++) for (const l of block(blocks[i]!, m, w, base)) out.push(l);
   for (const q of m.queue) out.push('', T.dim('❯ ' + q.split('\n')[0] + '  (queued)'));
   if (m.state.live) out.push('', ...renderMarkdown(m.state.live.slice(-3000), w - 2).map((l) => '  ' + chalk.dim(l)));
   return out;
