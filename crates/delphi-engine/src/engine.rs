@@ -238,6 +238,9 @@ pub(crate) struct SpanCtx {
     pub(crate) parked: Mutex<Option<ParkInfo>>,
     /// When this span first had to wait for a model; cleared by the next turn that runs. `park_max` counts from here.
     pub(crate) blocked_since: Mutex<Option<std::time::Instant>>,
+    /// Families this span should stay out of if it can (from the handoff), and whether it already said it could not.
+    pub(crate) avoid_families: Vec<String>,
+    pub(crate) said_homogeneous: Mutex<bool>,
 }
 
 impl SpanCtx {
@@ -416,7 +419,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None) };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false) };
 
             if fresh {
                 let mut open = vec![
@@ -771,6 +774,9 @@ impl Engine {
             };
             let Some(ep) = cfg.endpoint(&key.endpoint_id) else { continue 'endpoints };
             let model_id = key.model_id.clone();
+            if route.homogeneous() && !std::mem::replace(&mut *sc.said_homogeneous.lock().unwrap(), true) {
+                m.append(sc.ev("model.homogeneous", json!({"avoided": sc.avoid_families, "used": {"endpoint_id": key.endpoint_id, "model_id": key.model_id, "family": key.family}}))).await?;
+            }
             let this_key = (key.endpoint_id.clone(), key.model_id.clone());
             if let Some((target, why)) = passed_over {
                 if sc.last_key.lock().unwrap().as_ref() != Some(&this_key) {
@@ -954,6 +960,26 @@ impl Engine {
         }
     }
 
+    /// Does `family` have a pair that could serve right now (allowed, able to run the role, not in cooldown
+    /// or out of quota)? Used to plan Councils and the retry ladder from what is usable, not what is configured.
+    pub(crate) fn family_usable(&self, family: &str, mutating: bool) -> bool {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let state = self.pool.snapshot();
+        cfg.pool_entries().into_iter().filter(|k| k.family == family).any(|k| {
+            let Some(ep) = cfg.endpoint(&k.endpoint_id) else { return false };
+            if mutating && !ep.can_mutate() {
+                return false;
+            }
+            state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id).is_none_or(|e| match (e.state, e.until) {
+                (crate::pool::State::Available, _) => true,
+                (crate::pool::State::CoolingDown | crate::pool::State::Exhausted, Some(t)) => t <= now,
+                (crate::pool::State::CoolingDown, None) => true,
+                (crate::pool::State::Exhausted, None) => false,
+            })
+        })
+    }
+
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;
     /// a span that can run shell commands (a worktree and the shell tool, as for a Builder) needs an endpoint
     /// with an approval bridge.
@@ -962,7 +988,7 @@ impl Engine {
             role: sc.role.clone(),
             tier: sc.tier.clone(),
             prefer_family: Some(sc.family.clone()),
-            avoid_families: vec![],
+            avoid_families: sc.avoid_families.clone(),
             mutating: sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped"),
             min_context_tokens: 0,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
@@ -1847,6 +1873,32 @@ mod tests {
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
         assert!(!events_of(&f, "task.blocked").is_empty());
         assert_eq!(events_of(&f, "task.unblocked").last().unwrap().payload["resumed"], false, "it gave up after park_max, however many times it asked");
+    }
+
+    // specs/002 §4.1, [H-007] and [H-008]: a critic stays out of the author's family, and says so when it cannot.
+    #[tokio::test]
+    async fn a_critic_span_stays_out_of_the_authors_family_and_says_so_when_it_cannot() {
+        let f = setup(vec![Step::text("Reviewed by the other family."), Step::text("Reviewed by the same family.")], 5.0, |_| {});
+        two_families(&f);
+        let critic = |f: &Fx, id: &str| {
+            let mut h = HandoffEnvelope::root(&f.m.id, id, "red-team", "Review the change", vec![]);
+            h.routing_directive.model_family = Some("gemini".into());
+            h.routing_directive.avoid_families = vec!["claude".into()];
+            h
+        };
+        let out = f.engine.run_span(&f.m, "t_9001", critic(&f, "t_9001"), None, 0).await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Reviewed by the other family."), "{}", out.text);
+        assert_eq!(f.model.requests()[0].endpoint_id, "gem");
+        assert!(events_of(&f, "model.homogeneous").is_empty(), "another family was usable");
+        // Gemini runs out: the critic still runs (never blocked), on the author's family, and the review is labeled.
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        f.engine.pool.record_exhausted("gem", "gem-pro", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let out = f.engine.run_span(&f.m, "t_9002", critic(&f, "t_9002"), None, 0).await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Reviewed by the same family."), "{}", out.text);
+        assert_eq!(f.model.requests()[1].endpoint_id, "direct");
+        let h = events_of(&f, "model.homogeneous");
+        assert_eq!(h.len(), 1);
+        assert_eq!((h[0].payload["avoided"][0].as_str(), h[0].payload["used"]["family"].as_str()), (Some("claude"), Some("claude")));
     }
 
     #[tokio::test]

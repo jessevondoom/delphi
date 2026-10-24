@@ -28,6 +28,8 @@ pub const DEFAULT_SEATS: [&str; 3] = ["architect", "strategist", "red-team"];
 pub struct SeatPlan {
     pub role: String,
     pub family: String,
+    /// Families this seat should stay out of if it can: the author's, for a critic.
+    pub avoid: Vec<String>,
     /// A tier to use instead of the role's default (set only to separate a critic from the author's model).
     pub tier: Option<String>,
 }
@@ -57,7 +59,7 @@ pub fn assign(roles: &[String], preferred: &dyn Fn(&str) -> String, available: &
         .map(|r| {
             let p = preferred(r);
             let family = if fams.is_empty() || fams.contains(&p) { p } else { fams[0].clone() };
-            SeatPlan { role: r.clone(), family, tier: None }
+            SeatPlan { role: r.clone(), family, avoid: vec![], tier: None }
         })
         .collect();
     let mut notes = Vec::new();
@@ -99,6 +101,12 @@ pub fn assign(roles: &[String], preferred: &dyn Fn(&str) -> String, available: &
                     s.family = f;
                 }
             }
+        }
+    }
+    // A critic stays out of the author's family if it can, even if the family it was planned on later runs out.
+    if let Some(author) = &proposer {
+        for s in seats.iter_mut().filter(|s| s.role == "red-team" || (s.role == "strategist" && author_family.is_some())) {
+            s.avoid = vec![author.clone()];
         }
     }
     let mut used: Vec<&str> = seats.iter().map(|s| s.family.as_str()).collect();
@@ -589,12 +597,15 @@ pub struct CouncilReport {
 }
 
 impl Engine {
-    /// Families with at least one allowed endpoint.
+    /// Families with an allowed endpoint that is usable right now (not in cooldown, not out of quota). A
+    /// Council plans from what can answer, so a family whose quota is gone is not given a seat that would
+    /// only wait; with one family left it runs `homogeneous` instead (`[H-008]`), never blocked.
     fn available_families(&self) -> Vec<String> {
         let cfg = self.cfg.get();
         let mut f: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id)).map(|e| e.family.clone()).collect();
         f.sort();
         f.dedup();
+        f.retain(|fam| self.family_usable(fam, false));
         f
     }
 
@@ -604,6 +615,7 @@ impl Engine {
         h.handoff_id = format!("ho_{}_{}_{}", task_id, role, round);
         h.constraints = vec!["Answer in text only. You cannot run code, and you must not write files: the daemon records your answer.".into()];
         h.routing_directive.model_family = Some(plan.family.clone());
+        h.routing_directive.avoid_families = plan.avoid.clone();
         h.routing_directive.model_tier = plan.tier.clone();
         h
     }
@@ -751,7 +763,7 @@ impl Engine {
         // ── Synthesis: the Orchestrator writes the prose; the daemon writes the Minority Report.
         let mut synthesis = String::from("(The Orchestrator wrote no synthesis; the structured record above and below is complete.)");
         if !over_budget(self) {
-            let arbiter = SeatPlan { role: "orchestrator".into(), family: self.cfg.get().family_for_role("orchestrator").to_string(), tier: None };
+            let arbiter = SeatPlan { role: "orchestrator".into(), family: self.cfg.get().family_for_role("orchestrator").to_string(), avoid: vec![], tier: None };
             let mut sl = slices.clone();
             for (r, t) in &round2_text {
                 sl.push(ContextSlice { label: format!("council/round2/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() });
@@ -917,7 +929,7 @@ mod tests {
     }
 
     fn artifact(round2: &Round2, synthesis: &str, homogeneous: bool) -> String {
-        let plan = Assignment { seats: vec![SeatPlan { role: "architect".into(), family: "claude".into(), tier: None }, SeatPlan { role: "red-team".into(), family: "gemini".into(), tier: None }], homogeneous, notes: vec![] };
+        let plan = Assignment { seats: vec![SeatPlan { role: "architect".into(), family: "claude".into(), avoid: vec![], tier: None }, SeatPlan { role: "red-team".into(), family: "gemini".into(), avoid: vec![], tier: None }], homogeneous, notes: vec![] };
         let stances: BTreeMap<String, Stance> = [("architect".to_string(), Stance::Said("Use a queue.".into())), ("red-team".to_string(), Stance::Said("It drops on crash.".into()))].into_iter().collect();
         let texts: BTreeMap<String, String> = [("architect".to_string(), "ok".to_string()), ("red-team".to_string(), "no".to_string())].into_iter().collect();
         let d = decide(round2);
@@ -1001,6 +1013,24 @@ mod tests {
     }
 
     const RED_OK: &str = "RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P1 Needs idempotency keys\nCONCUR: yes\nROUND 2 COMPLETE";
+
+    // specs/002 §4.1 test 5: with one family left a Council runs homogeneous instead of blocking.
+    #[tokio::test]
+    async fn a_council_is_planned_from_the_families_that_can_answer_and_runs_homogeneous_when_one_is_out_of_quota() {
+        let (f, _early, _leaked) = fixture(RED_OK, None);
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        for k in f.engine.cfg.get().pool_entries().into_iter().filter(|k| k.family == "gemini") {
+            f.engine.pool.record_exhausted(&k.endpoint_id, &k.model_id, &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        }
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Should the retry queue be a table or a file?", CouncilOpts::default()).await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let started = &events_of(&f, "council.started")[0].payload;
+        assert_eq!(started["homogeneous"], true, "{}", started);
+        assert!(started["seats"].as_array().unwrap().iter().all(|s| s["family"] == "claude"), "no seat was given the family that is out: {}", started["seats"]);
+        assert!(f.model.requests().iter().all(|r| r.endpoint_id == "direct"), "nothing was sent to the exhausted family");
+        // The critics sit on a different tier from the author instead (`[H-008]`).
+        assert!(started["seats"].as_array().unwrap().iter().any(|s| s["role"] == "red-team" && s["tier"].is_string()), "{}", started["seats"]);
+    }
 
     #[tokio::test]
     async fn a_council_holds_round_one_in_memory_then_records_a_verdict_with_a_minority_report() {
