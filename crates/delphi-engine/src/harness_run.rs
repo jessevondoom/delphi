@@ -256,12 +256,18 @@ impl Engine {
         let (mut text_parts, mut final_text, mut result): (Vec<String>, Option<String>, Option<Event>) = (Vec::new(), None, None);
         let mut metered = 0u64;
         let mut failure: Option<(String, bool)> = None;
+        let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         while let Some(ev) = session.next(self.settings.harness_idle).await {
             match ev {
-                Event::Init { .. } | Event::RateLimit { .. } => {}
+                Event::Init { .. } => {}
+                Event::RateLimit { ref status, resets_at, ref window, .. } => {
+                    if let Some(x) = delphi_adapter::exhaust::classify_rate_limit_event(status, resets_at, window) {
+                        exhaustion.get_or_insert(x);
+                    }
+                }
                 Event::Text(t) => {
                     hub.push_delta(&span_id, DeltaKind::Text, &live.push(&t));
                     text_parts.push(t);
@@ -300,7 +306,14 @@ impl Engine {
                 }
                 Event::Result { ref text, is_error, ref usage, .. } => {
                     if is_error {
-                        failure = Some((format!("the CLI reported an error: {}", text.chars().take(200).collect::<String>()), !used_tools));
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                        if let Some(x) = delphi_adapter::exhaust::classify_cli_error(text, now) {
+                            exhaustion.get_or_insert(x);
+                        }
+                        failure = Some((match &exhaustion {
+                            Some(x) => format!("the CLI is out of quota: {}", self.secrets.redact(&x.to_string())),
+                            None => format!("the CLI reported an error: {}", text.chars().take(200).collect::<String>()),
+                        }, !used_tools));
                     }
                     metered = metered.max(usage.metered());
                     if metered > self.settings.harness_token_cap && failure.is_none() {
@@ -359,6 +372,10 @@ impl Engine {
             reservation_id: None,
         };
         let mut batch = vec![sc.agent_ev("agent.usage", payload.to_value(), ep, &launch.model), sc.agent_ev("harness.cost", json!({"total_cost_usd_equivalent": cost, "metered_tokens": metered}), ep, &launch.model)];
+
+        if let Some(x) = &exhaustion {
+            batch.push(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": launch.model, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)})));
+        }
 
         // Files the run created or changed take this span's tier, as with any other execution.
         if let (Some(w), Some(before)) = (&wt, before) {
@@ -649,6 +666,34 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
             Status::Escalated(r) => assert!(r.contains("no approval bridge"), "{}", r),
             other => panic!("{:?}", other),
         }
+    }
+
+    /// The output the live `agy` printed with the Gemini quota used up (`tests/fixtures/quota/`).
+    #[tokio::test]
+    async fn an_exhausted_agy_model_says_why_and_when_it_returns_instead_of_an_empty_error() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{"model":"gemini-4-argon-medium","tools":[]}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"error_message"}}'
+echo '{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 136h12m54s.","duration_seconds":0,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0}}}'
+exit 3"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("out of quota") && r.contains("resets at"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        let ex = events_of(&f, "model.exhausted");
+        assert_eq!(ex.len(), 1, "one event for the one failed run");
+        assert_eq!(ex[0].payload["endpoint_id"], "agy-sub");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let reset = ex[0].payload["reset_at"].as_i64().unwrap();
+        assert!((reset - now - (136 * 3600 + 12 * 60 + 54)).abs() < 60, "reset about 5.7 days out: {}", reset - now);
+        assert!(ex[0].payload["raw"].as_str().unwrap().contains("Individual quota reached"));
     }
 
     #[tokio::test]

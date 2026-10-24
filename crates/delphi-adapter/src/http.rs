@@ -3,7 +3,9 @@
 //! * **No cross-origin redirects:** a redirect to a different scheme, host or port is refused, never
 //!   followed with credentials attached.
 //! * Status mapping: 401/403 → [`CallError::Auth`]; 429/503/529 → [`CallError::RateLimited`] (with
-//!   `retry-after`); other 4xx/5xx → [`CallError::Http`]. Error bodies pass through the caller's
+//!   `retry-after`); other 4xx/5xx → [`CallError::Http`]. Before that mapping, a spent quota (a `402`,
+//!   a spend cap or limit, a `retry-after` over 15 minutes) → [`CallError::Exhausted`] and is never
+//!   retried (`crate::exhaust`). Error bodies pass through the caller's
 //!   `redact` function, so a token echoed by a provider never reaches an error message or log.
 //! * Backoff: 429/529 are retried on the same endpoint with exponential backoff and jitter, honoring
 //!   `retry-after`, up to a wall-clock limit, and only before any event has been delivered. Failing
@@ -13,6 +15,7 @@
 
 use crate::claude::{Assembler, Completed, SseDecoder, SseEvent, StreamError, StreamEvent};
 use crate::eventstream;
+use crate::exhaust::{self, Exhaustion};
 use crate::{gemini, openai};
 use crate::platform::{Dialect, HttpRequest, ResponseKind};
 use futures_util::StreamExt;
@@ -24,6 +27,8 @@ const MAX_ERROR_BODY: usize = 64 * 1024;
 pub enum CallError {
     Auth { status: u16, message: String },
     RateLimited { retry_after: Option<Duration>, message: String },
+    /// A spent quota, not a rate limit (`specs/002` §4.1): never retried here.
+    Exhausted(Exhaustion),
     Http { status: u16, message: String },
     /// A redirect to another origin was refused.
     CrossOriginRedirect { to: String },
@@ -38,6 +43,7 @@ impl std::fmt::Display for CallError {
         match self {
             CallError::Auth { status, message } => write!(f, "authentication failed ({}): {}", status, message),
             CallError::RateLimited { message, .. } => write!(f, "rate limited or overloaded: {}", message),
+            CallError::Exhausted(e) => write!(f, "quota exhausted: {}", e),
             CallError::Http { status, message } => write!(f, "HTTP {}: {}", status, message),
             CallError::CrossOriginRedirect { to } => write!(f, "refused a redirect to another origin ({})", to),
             CallError::Unreachable(m) => write!(f, "endpoint unreachable: {}", m),
@@ -132,7 +138,13 @@ pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Dur
                 break;
             }
         }
-        return Err(classify(status, retry, redact(&error_message(&String::from_utf8_lossy(&body)))));
+        let body = String::from_utf8_lossy(&body);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        if let Some(mut ex) = exhaust::classify_http(status, retry, &body, now) {
+            ex.raw = redact(&ex.raw);
+            return Err(CallError::Exhausted(ex));
+        }
+        return Err(classify(status, retry, redact(&error_message(&body))));
     }
 
     let mut sse = SseDecoder::default();
@@ -499,6 +511,32 @@ mod tests {
         let (res, _) = run(&cfg_for(addr, ""), "local-direct", "m", &tok("k"), &fast_policy()).await;
         assert_eq!(res.unwrap().blocks, want_blocks());
         assert_eq!(log.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_spent_quota_is_reported_at_once_and_never_retried() {
+        let cap = r#"{"type":"error","error":{"type":"rate_limit_error","message":"You will regain access on 2026-09-01 at 00:00 UTC. key sk-live-SECRET-1234567890","details":{"error_code":"enforced_spend_limit_reached"}}}"#;
+        for reply in [Reply::status(429, cap), Reply::status(402, r#"{"error":{"type":"billing_error","message":"credits"}}"#)] {
+            let (addr, log) = mock(vec![reply]).await;
+            let (res, _) = run(&cfg_for(addr, ""), "local-direct", "m", &tok("k"), &fast_policy()).await;
+            match res {
+                Err(CallError::Exhausted(e)) => assert!(!e.raw.contains("SECRET"), "the raw text is redacted: {}", e.raw),
+                other => panic!("{:?}", other),
+            }
+            assert_eq!(log.lock().unwrap().len(), 1, "one request, no backoff");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_beyond_fifteen_minutes_is_exhaustion_not_a_wait() {
+        let long = Reply { status: 429, headers: vec![("retry-after".into(), "600000".into()), ("content-type".into(), "application/json".into())], pieces: vec![br#"{"error":{"message":"daily quota"}}"#.to_vec()] };
+        let (addr, log) = mock(vec![long]).await;
+        let (res, _) = run(&cfg_for(addr, ""), "local-direct", "m", &tok("k"), &fast_policy()).await;
+        match res {
+            Err(CallError::Exhausted(e)) => assert!(e.reset_at.is_some() && e.reason.contains("wait")),
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(log.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
