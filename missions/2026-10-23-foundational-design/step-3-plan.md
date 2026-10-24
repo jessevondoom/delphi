@@ -92,3 +92,5 @@ Harness (spec 009 §7B): the Claude CLI runs as the operator's process with its 
 3. Approval bridge into the broker (the `[exec]` verdict function decides `Bash`).
 4. Spike 2: `gemini --acp` as a Gemini bridge.
 The strict (sandboxed) harness profile stays specified, for operators who want it, and is blocked on the same Keychain issue.
+
+Spike 1 done (2026-10-24, six calls, about $0.12, `tools/claude_bridge_spike.py`): the approval bridge works with `--permission-prompt-tool stdio` (not with `--permission-prompts host` alone); allow runs the command, deny returns the operator's message to the model and nothing runs; isolation flags leave no user MCP servers. Details and the wire format are in spec 009 §7B. Next in M3: the harness driver, then the bridge into the broker. Spike 2 (`gemini --acp`) is still to do.
