@@ -1,0 +1,23 @@
+{
+  "name": "delphi-ink-spike",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "start": "node --import tsx src/main.tsx"
+  },
+  "dependencies": {
+    "chalk": "6.0.1",
+    "ink": "8.0.0",
+    "marked": "18.1.1",
+    "react": "19.3.1",
+    "wrap-ansi": "10.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "19.3.0",
+    "bun": "1.4.4",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

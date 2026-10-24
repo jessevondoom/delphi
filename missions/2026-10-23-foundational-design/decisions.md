@@ -338,6 +338,20 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 
 **Status:** ✅ APPROVED 2026-10-24 by the operator: A, with the answers above. Touches spec 002 §3.1 rule 4 and §4 (new §4.1, amendment 002-A1, unratified), `context/model-capabilities.md` §3 and §4, spec 005 (new event kinds, to add when implemented) and `config.example.toml`.
 
+## ✅ D-28 — The full-screen console is an Ink (TypeScript) client; the Rust core and the daemon boundary stay
+**Context (operator, 2026-10-24):** the console must rival Claude Code's for research and multi-agent thinking. Building every widget in ratatui was ~45 h and slow to iterate on. A spike (`dev/ink-spike`, findings in `FINDINGS.md`) built a streaming markdown transcript, multi-line composer, scrolling and a council panel against the daemon's socket protocol in a fraction of that time, compiled by Bun to one executable (90 MB, 0.17 s start).
+
+**Decision (operator, 2026-10-24): commit to Ink for the full-screen console and the observer panels.**
+1. **Boundary.** The UI is a client of the daemon over its documented JSON-RPC socket (console scope for `delphi chat`, narrator scope for the observer). The Rust core, daemon, engine and governance are unchanged. The UI holds no authority the socket does not give it.
+2. **Kept in Rust:** the plain console (`--plain`), the inline console (`--inline`, the fallback when the UI executable is absent or the terminal cannot run it), and the existing `delphi observe` views until the Ink panels replace them.
+3. **Launch.** `delphi chat` starts the UI executable as a child, handing it the socket path (`delphi daemon where`) and mission. Token issue stays on the socket (TTY challenge); no token in the environment.
+4. **Supply chain.** Pinned exact versions, committed lockfile, `npm ci --ignore-scripts`, a production-dependency allowlist checked in CI, the Bun version pinned, and the UI executable built, checksummed and attested with the release like the Rust binary. Reasoning text stays in memory only (005c §3).
+5. **Daemon work this needs:** `observe.state` (a folded view model, so the UI does not re-implement the fold), `task.cancel` (for `Esc`), and approval/inbox calls already present.
+6. **Known spike problems to fix first:** mouse wheel (own input parser), a first-column redraw glitch after scroll, Enter arriving inside a paste, Shift+Enter in Terminal.app (use Alt+Enter plus the kitty protocol where available). Reference terminal: Terminal.app.
+7. **Cost accepted:** ~90 MB per platform and ~45 production packages.
+
+Supersedes 005c's no-alternate-screen premise for the default console. **Status:** ✅ APPROVED 2026-10-24 by the operator.
+
 ## ✅ D-27 — The MCP client is the official `rmcp` SDK, not an in-tree client
 **Context (operator, 2026-10-24):** spec 010 §1 item 6 (Council 006) chose a minimal in-tree MCP client behind an `McpTransport` trait and scheduled a spike against a library. A survey of Rust agent crates found that every agent framework (Rig, swarms-rs, ADK-Rust, AutoAgents, goose) owns the agent loop, where Delphi's governance lives, so none is adoptable; the plumbing crates are. The operator prefers existing open source wherever Delphi is not the differentiator.
 - **A. Adopt `rmcp` (the official SDK) behind a small `McpSession` trait; Delphi keeps the host list, redirect policy, error mapping and all policy code** (recommended)
