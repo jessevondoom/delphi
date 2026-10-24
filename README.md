@@ -1,72 +1,59 @@
-# Delphi: Multi-Agent Collaborative Working Environment
+<p align="center"><img src="specs/assets/agents.svg" alt="The six working Delphi agents: orchestrator, builder, architect, red-team, strategist and scout" width="660"></p>
 
-**Delphi** is a terminal-first (CLI/TUI) multi-agent working environment for **software engineering**, **deep research**, **systems architecture**, and (later) **personal project planning**. *(v1 targets git code repositories on macOS/Linux, D-13.)*
+# Delphi
 
-> **Start here:** [`OVERVIEW.md`](OVERVIEW.md) is a one-page summary of the architecture, learning loop, and operating model. Operator decisions are in [`missions/2026-10-23-foundational-design/decisions.md`](missions/2026-10-23-foundational-design/decisions.md).
+**A team of AI agents in your terminal that plans, builds and reviews software with you, and has to get your approval before anything leaves the sandbox.**
 
-Delphi is in its **spec-driven design phase (`v0.4`)**. This repository is the source of truth for Delphi's governance, agent manifests, skills catalog, seed knowledge base, theme packs and subsystem specifications. It is also the **install source**: the binary embeds the seed from this repo, and `delphi update` merges new releases into each user's Delphi home. Using Delphi never writes into a project repo, this one included (D-03).
+Delphi is a spec-driven, multi-agent working environment for **software engineering**, **deep research** and **systems architecture**, written in Rust. You talk to one console; behind it a small team of specialist agents (the faces above) reads your project, drafts specs, builds changes in isolated git worktrees, and argues with each other when a decision is hard. It runs the models you already have: the Anthropic and Gemini APIs, AWS Bedrock, Google Vertex, a corporate gateway, or your own `claude` and `agy` subscriptions.
 
-## Building (roadmap Step 1)
+> New here? [`OVERVIEW.md`](OVERVIEW.md) is the one-page tour. Design decisions are in [`missions/2026-10-23-foundational-design/decisions.md`](missions/2026-10-23-foundational-design/decisions.md), and where the build stands is in the [roadmap review](missions/2026-10-23-foundational-design/roadmap-review-2026-10-24.md).
 
-The `delphi` binary lives in [`crates/delphi`](crates/delphi). Step 1 provides `delphi init`, `delphi doctor` and `delphi lint`.
+## What you get
 
-```sh
-cargo test                                   # unit tests, including the specs' Step 1 verification tests
-cargo run -- lint --repo .                   # lint this source repository (CI uses this)
-cargo run -- init --non-interactive --project /path/to/repo   # create a workspace in ~/.delphi
-cargo run -- doctor                          # health checks, from inside a registered project
-```
+- **A console** (`delphi chat`): ask questions, hand out work with `@architect …`, `/build …` or `/council …`, and answer approval cards. Nothing consequential happens without a card.
+- **Builds you can trust:** the Builder works in a throwaway worktree; Delphi runs your tests, has a different agent audit the exact commit, and asks before merging (or opens a pull request).
+- **Councils:** for a hard call, several seats on different model families answer blind, attack each other's answers, and the verdict carries a Minority Report that the runtime copies verbatim.
+- **A second window** (`delphi narrator`): a read-only live view of the task graph, Council, worktree diffs, agents and spend.
+- **Knowledge search** (`delphi kb search`), **connectors** to Slack, Google and Zoom (in progress), and a budget that is enforced before each model call, not after.
+- **Safety by construction:** anything an agent reads from outside is untrusted and limits what it may do next; the model-access settings and agent definitions only change when you ratify them.
 
-Requires Rust 1.85 or newer (developed on stable 1.99). Set `DELPHI_HOME` to use a Delphi home other than `~/.delphi`.
-
-## Using Delphi (roadmap Step 2: the read-only assistant)
-
-Step 2 adds the daemon (`delphi-core`) and the operator console. You can ask Orchestrator and the Architect, Red-Team and Strategist roles to read a project, plan, draft specs and review. Nothing changes your project: there are no worktrees and no code execution yet (Step 3).
-
-**Install** (macOS or Linux; once a release is published):
+## Install
 
 ```sh
 curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh
 # or: brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi
-delphi self-update            # later: fetch the latest release, verified; --check, --rollback
 ```
 
-The installer checks the download against its published checksum and, if the `gh` CLI is signed in, against the
-build-provenance attestation made by this repository's release workflow. From source:
+macOS or Linux. The installer verifies the download against its checksum and, if the `gh` CLI is signed in, against the release's build attestation. Later, `delphi self-update` fetches and verifies the newest release (`--check`, `--rollback`), and `delphi update` refreshes the built-in agents and skills in your workspaces.
+
+## First run
 
 ```sh
-cargo build --release                        # one executable: target/release/delphi (the daemon is `delphi __core`)
-cd ~/code/my-project && delphi setup         # detects Claude Code / agy, asks only for what it cannot find, writes and ratifies the config
-delphi chat                                  # the console
+cd ~/code/my-project
+delphi setup        # finds Claude Code / agy, asks only for what it can't find, writes and ratifies the config
+delphi chat         # the console
 ```
-
-`delphi setup` does the following for you; edit `config.toml` by hand only if you skipped it. It needs:
-
-- `[models.claude]` with the model IDs for your `fast`, `workhorse` and `frontier` tiers, and a `[models.catalog."<id>"]` entry with that model's prices (Delphi reserves each call's worst-case cost before making it, so a model without prices can't be used);
-- one or more `[[endpoints]]` and an `[access]` policy (`specs/009`): the Anthropic API (`path = "api"`, `credential = "keychain:anthropic"` or `"env:ANTHROPIC_API_KEY"`), AWS Bedrock (`credential = "aws:<profile>"`), Google Vertex AI (`credential = "gcloud-adc"`), or a corporate gateway (`credential = "command:[...]"`).
-
-Endpoint settings are **ratified**: editing them changes nothing until you approve the change. In the console, `/ratify` lists pending proposals with their diffs; `/ratify show 1` and `/ratify apply 1` review and approve one. Then ask:
 
 ```
 › What does @project/my-project/src/lib.rs do?
 › @architect draft a spec for the retry ladder, using @specs/003-collaboration-and-council.md
+› /build implement @specs/011-retry.md in @project/my-project
+› /council Should the retry queue be a table or a file?
 ```
 
-Useful commands: `/usage` (tokens and cost by role), `/budget [dollars]`, `/permissions`, `/ratify`, `/y /a /n /d` to answer an approval card, and `/help`. If the daemon was interrupted (a crash, `kill -9`, a reboot), the next `delphi chat` shows what was in flight and waits for `/resume`. `missions/<id>/status.md` in the workspace always shows where a mission stands.
+Useful commands: `/usage`, `/budget [dollars]`, `/permissions`, `/ratify`, `/narrator`, `/y /a /n /d` to answer a card, and `/help`. `delphi doctor` checks the install; `delphi needs` shows which later features have earned their turn. Using Delphi never writes into your project repository (D-03); its state lives in `~/.delphi` (or `$DELPHI_HOME`).
+
+**From source:** `cargo build --release` produces one executable, `target/release/delphi` (the daemon is `delphi __core`). `cargo test` runs everything; `cargo run -- lint --repo .` lints this repository (CI does too). Rust 1.85 or newer.
 
 ---
 
-## Architectural Philosophy
+## How it is put together
 
-1. **Separation of powers:**
-   - **Console and runtime (`delphi`, `delphi-core`):** the persona-free operator window and deterministic daemon. They are the operator's instruments, not agents.
-   - **Governance ([`GOVERNANCE.md`](GOVERNANCE.md), [`REVIEW.md`](REVIEW.md)):** behavioral invariants, *No Spec, No Build*, trust boundaries, and the base-branch PR review rubric.
-   - **Adapter ([`specs/002`](specs/002-adapter-and-routing.md)):** compiles portable agent and skill manifests into each provider's native dialect (Claude, Gemini), preserving cryptographic thinking signatures across tool loops.
-   - **Agent team ([`agents/`](agents)):** nine roles whose predictable blind spots are each checked by a counterweight.
-2. **Disagreement breeds better answers:** routine work uses directed orchestration. High-ambiguity forks go to **Council Mode** ([`specs/003`](specs/003-collaboration-and-council.md)): blind parallel opening stances, seats on different model families, adversarial review by Red-Team, and a Minority Report the daemon fills verbatim.
-3. **Two windows:** the **console** is for input and approvals; the **narrator** shows the live task graph, Council chamber and worktree diffs on a second screen ([`specs/005`](specs/005-console-and-narrator-tui.md)).
-4. **Self-improvement without memory poisoning:** Orchestrator proposes lessons and rules after each mission, and the operator ratifies them at `/retro`. Taint is computed by the runtime, always-loaded rule files stay small (Rule of 25, 6 KB), and rules violated twice become scripts.
-5. **Roles are canonical; names are a theme:** governance, specs, manifests and config use **canonical role IDs** only. Display names and voice come from a per-install **theme pack**, Greek mythology by default ([`themes/greek/`](themes/greek/theme.md), [`specs/001`](specs/001-governance-and-manifests.md) §6). A theme can change how an agent sounds, never what it may do.
+1. **Separation of powers.** The console and daemon are the operator's instruments, not agents. [`GOVERNANCE.md`](GOVERNANCE.md) and [`REVIEW.md`](REVIEW.md) hold the behavioral invariants (*No Spec, No Build*, trust boundaries, the review rubric). The [adapter](specs/002-adapter-and-routing.md) compiles portable agent manifests into each provider's dialect.
+2. **Disagreement breeds better answers.** Routine work is directed; high-ambiguity forks go to [Council Mode](specs/003-collaboration-and-council.md).
+3. **Two windows.** The console takes input and approvals; the narrator only watches ([`specs/005`](specs/005-console-and-narrator-tui.md)).
+4. **Self-improvement without memory poisoning.** Lessons and rules are proposed after a mission and ratified by you; taint is computed by the runtime, and always-loaded rule files stay small.
+5. **Roles are canonical; names are a theme.** Specs, manifests and config use role IDs only; display names come from a per-install theme pack, Greek mythology by default ([`themes/greek/`](themes/greek/theme.md)). A theme changes how an agent sounds, never what it may do.
 
 ---
 
@@ -92,37 +79,24 @@ v1 enables `orchestrator`, `architect`, `builder`, `red-team`, `strategist` (D-0
 
 ```text
 delphi/
-├── README.md                        # This file
-├── OVERVIEW.md                      # One-page architecture, learning loop & operating model
-├── GOVERNANCE.md                    # Tier 1: behavioral charter & invariants
-├── SPEC.md                          # Tier 2: master architectural specification
-├── REVIEW.md                        # Tier 2: base-branch adversarial PR review rubric
-├── specs/                           # Modular subsystem specifications
-│   ├── 001-governance-and-manifests.md
-│   ├── 002-adapter-and-routing.md
-│   ├── 003-collaboration-and-council.md
-│   ├── 004-memory-and-coaching.md
-│   ├── 005-console-and-narrator-tui.md
-│   ├── 006-installer-and-updater.md
-│   ├── 007-federated-mesh-and-sync.md
-│   ├── 008-ambient-watch-and-rewind.md
-│   └── 009-model-access-and-auth.md
-├── agents/<role>/AGENT.md           # Role manifests (behavior only, no theme content)
-├── themes/greek/                    # Default theme pack (theme.md) + its research (research.md)
-├── skills/CATALOG.md                # Taxonomy of all 42 skills
-├── templates/config.example.toml    # Seed for a workspace's config.toml
-├── context/                         # Seed knowledge base
-│   ├── index.md                     # Knowledge base index
-│   ├── heuristics.md                # Always-loaded systemic rules (Rule of 25, ≤ 6 KB)
-│   ├── model-capabilities.md        # Model capability matrix by family (v1: Claude & Gemini)
-│   ├── invariant-enforcement.md     # Every invariant → where it is actually enforced
-│   └── domains/                     # Research & benchmark synthesis reports
-├── memory/agents/<role>/lessons.md  # Seed templates for per-role private memory
-└── missions/2026-10-23-foundational-design/
-    ├── mission.md                   # Mission 001 overview
-    ├── roadmap.md                   # Ratified 7-step build plan
-    ├── decisions.md                 # Operator decision register (D-01…D-17)
-    └── councils/                    # Council 001 verdict + Gemini seat (historical record)
+├── crates/                    # The Rust workspace
+│   ├── delphi/                #   the one executable (console, narrator, setup, update, lint); config.example.toml lives here
+│   ├── delphi-core/           #   daemon, event log, path guard, taint lattice, budget
+│   ├── delphi-engine/         #   the agent loop, tools, approvals, builds, Council, connectors, knowledge base
+│   ├── delphi-adapter/        #   provider dialects, credentials, OAuth, MCP client
+│   └── delphi-sandbox/        #   sandbox-exec / bubblewrap
+├── GOVERNANCE.md  SPEC.md  REVIEW.md   # Charter, master spec, PR review rubric (seeded into every install)
+├── OVERVIEW.md                # One-page architecture tour
+├── agents/<role>/AGENT.md     # Role manifests (behavior only, no theme content)
+├── skills/                    # Skill catalog and skill packages
+├── themes/greek/              # Default theme pack
+├── context/                   # Seed knowledge base (index, heuristics, capability matrix, domain research)
+├── memory/agents/<role>/      # Seed templates for per-role private lessons
+├── specs/                     # Subsystem specifications, UI blueprints and assets
+├── missions/                  # Delphi's own design records: roadmap, decisions, Councils, implementation notes
+├── dev/                       # Developer scripts (protocol spikes, avatar preview)
+├── Formula/                   # Homebrew formula (written by the release workflow)
+└── install.sh                 # The installer behind the curl one-liner
 ```
 
 ---
@@ -138,6 +112,9 @@ delphi/
 7. **[007 — Federation & Sync](specs/007-federated-mesh-and-sync.md):** team sync via ratified proposals (A2A delegation and `delphi://` pointers deferred).
 8. **[008 — Ambient Watch, Rewind & HITL Tiers](specs/008-ambient-watch-and-rewind.md):** zero-token watches, `/rewind` checkpoints, and Green/Amber/Red approvals.
 9. **[009 — Model Access & Authentication](specs/009-model-access-and-auth.md):** direct API, cloud platforms (Bedrock, Vertex), enterprise gateways with SSO, and subscription CLIs; endpoints, failover pins and delegated credentials (D-19).
+10. **[010 — Native Connectors (MCP)](specs/010-connectors-and-tool-access.md):** Slack, Google Drive, Calendar, Gmail and Zoom through Delphi's own MCP client, with ratified tool pins, taint-aware approvals and a payload store.
+
+Interface specs: [005a — terminal avatars](specs/005a-terminal-avatar-system.md), [005b — console decks, inbox, observer windows](specs/005b-deck-navigation-and-visual-interface.md) and the [wireframes](specs/ui-wireframes-and-blueprints.md).
 
 ---
 

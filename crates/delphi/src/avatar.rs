@@ -269,9 +269,60 @@ pub fn render_mascot(role: AgentRole, activity: AgentActivity) -> [String; 3] {
     [l1, l2, l3]
 }
 
+/// The README banner: the six working roles as sharp, theme-neutral vector art built from the same data as the
+/// terminal sprites, so it cannot drift from them. `svg_banner_is_current` fails when `specs/assets/agents.svg` is stale;
+/// run it with `DELPHI_WRITE_SVG=1` to rewrite the file.
+pub fn svg_banner() -> String {
+    const CELL: u32 = 10; // one terminal cell is 10 x 20 px
+    const ROLES6: [AgentRole; 6] = [AgentRole::Orchestrator, AgentRole::Builder, AgentRole::Architect, AgentRole::RedTeam, AgentRole::Strategist, AgentRole::Scout];
+    let hex = |c: (u8, u8, u8)| format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2);
+    let (slot, pad) = (110u32, 20u32);
+    let width = pad * 2 + slot * ROLES6.len() as u32 - (slot - 7 * CELL);
+    let mut out = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {width} 170\" width=\"{width}\" height=\"170\" role=\"img\" aria-label=\"The six working Delphi agents: orchestrator, builder, architect, red-team, strategist and scout\">\n");
+    out.push_str(&format!("<rect width=\"{width}\" height=\"170\" rx=\"14\" fill=\"#0d1117\"/>\n<g font-family=\"ui-monospace,SFMono-Regular,Menlo,Consolas,monospace\" text-anchor=\"middle\">\n"));
+    for (i, role) in ROLES6.iter().enumerate() {
+        let t = get_theme(*role);
+        let x0 = pad + i as u32 * slot;
+        out.push_str(&format!("<text x=\"{}\" y=\"30\" font-size=\"13\" fill=\"#c9d1d9\">{}</text>\n", x0 + 35, t.role_id));
+        // Crown: the lower half of the first cell row, one block per `▄` (the builder's ends are rose, its middle white).
+        for (col, _) in t.crown_slice.chars().enumerate().filter(|(_, c)| *c == '▄') {
+            let colour = if *role == AgentRole::Builder && (1..=5).contains(&col) { (255, 255, 255) } else { t.crown_rgb };
+            out.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{CELL}\" height=\"{}\" fill=\"{}\"/>\n", x0 + col as u32 * CELL, 50 + 10, 10, hex(colour)));
+        }
+        // Face: a full-height row in the role colour with dark features, then the flush chin (upper half of the next row).
+        out.push_str(&format!("<rect x=\"{x0}\" y=\"70\" width=\"70\" height=\"30\" fill=\"{}\"/>\n", hex(t.chassis_rgb)));
+        let face = if *role == AgentRole::Builder { "•───•" } else { t.default_face };
+        let start = (7 - face.chars().count()) / 2;
+        for (k, ch) in face.chars().enumerate() {
+            if ch != ' ' {
+                out.push_str(&format!("<text x=\"{}\" y=\"85\" font-size=\"15\" fill=\"#0f172a\">{}</text>\n", x0 + (start + k) as u32 * CELL + CELL / 2, ch));
+            }
+        }
+        // The inline badge, as it appears in tables and the Narrator header.
+        let badge = format!("⟦{}⟧", t.badge_face);
+        for (k, ch) in badge.chars().enumerate() {
+            let fill = if matches!(ch, '⟦' | '⟧') { hex(t.chassis_rgb) } else { "#ffffff".into() };
+            out.push_str(&format!("<text x=\"{}\" y=\"138\" font-size=\"15\" fill=\"{}\">{}</text>\n", x0 + 10 + k as u32 * CELL + CELL / 2, fill, ch));
+        }
+    }
+    out.push_str("</g>\n</svg>\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_banner_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specs/assets/agents.svg");
+        let svg = svg_banner();
+        if std::env::var("DELPHI_WRITE_SVG").is_ok() {
+            std::fs::write(&path, &svg).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), svg, "specs/assets/agents.svg is stale: run `DELPHI_WRITE_SVG=1 cargo test -p delphi svg_banner`");
+        assert!(svg.contains("red-team") && svg.matches("<rect").count() > 20 && !svg.contains("Athena"));
+    }
 
     fn strip_ansi(s: &str) -> String {
         let mut out = String::new();
