@@ -113,7 +113,7 @@ pub fn classify_http(status: u16, retry_after: Option<Duration>, body: &str, now
 pub fn classify_cli_error(text: &str, now: i64) -> Option<Exhaustion> {
     let lower = text.to_ascii_lowercase();
     let reset = parse_reset(text, now);
-    let says_quota = ["quota reached", "usage limit reached", "reached your usage limit", "hit your limit"].iter().any(|p| lower.contains(p));
+    let says_quota = ["quota reached", "usage limit reached", "reached your usage limit", "hit your limit", "hit your session limit"].iter().any(|p| lower.contains(p));
     if says_quota || (lower.contains("resource_exhausted") && reset.is_some()) {
         return exhausted("quota reached", reset, text);
     }
@@ -121,7 +121,8 @@ pub fn classify_cli_error(text: &str, now: i64) -> Option<Exhaustion> {
 }
 
 /// Classify a `claude` `rate_limit_event`. Only `rejected` is exhaustion; a utilization figure alone is not.
-/// `resets_at` may be in seconds or milliseconds (sources disagree), so a value above 10^12 is taken as ms.
+/// The live `claude` 2.1.310 sample gives epoch seconds (`tests/fixtures/quota/claude-cli-session-limit.md`); sources disagreed,
+/// so a value above 10^12 is still taken as ms.
 pub fn classify_rate_limit_event(status: &str, resets_at: Option<i64>, window: &str) -> Option<Exhaustion> {
     if status != "rejected" {
         return None;
@@ -216,6 +217,22 @@ mod tests {
         assert!(classify_cli_error("permission denied", NOW).is_none());
         assert!(classify_cli_error("", NOW).is_none());
         assert!(classify_cli_error("Claude usage limit reached. Your limit will reset at 1pm", NOW).unwrap().reset_at.is_none());
+    }
+
+    /// The text the live `claude` run printed with the session limit reached (`tests/fixtures/quota/`).
+    const CLAUDE: &str = "You've hit your session limit · resets 2pm (America/New_York)";
+
+    #[test]
+    fn the_real_claude_session_limit_text_is_exhaustion_without_a_parsed_reset() {
+        let e = classify_cli_error(CLAUDE, NOW).unwrap();
+        assert!(e.reset_at.is_none(), "a local clock time is not parsed; the rate_limit_event carries the real one");
+    }
+
+    #[test]
+    fn the_real_claude_rejected_event_is_exhaustion_with_epoch_seconds() {
+        let e = classify_rate_limit_event("rejected", Some(1_792_864_800), "five_hour").unwrap();
+        assert_eq!(e.reset_at, Some(1_792_864_800), "2026-10-24 14:00 EDT");
+        assert!(e.reason.contains("five_hour"));
     }
 
     #[test]
