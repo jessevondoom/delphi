@@ -37,6 +37,8 @@ pub enum Input {
     Pause,
     Answer(Decision),
     Prompt { target: Option<String>, text: String },
+    /// `/build …`: a Builder task under the retry ladder, audit and merge gates.
+    Build(String),
     Unknown(String),
 }
 
@@ -62,6 +64,10 @@ pub fn parse_input(line: &str) -> Input {
             "mission" => Input::Mission,
             "resume" => Input::Resume(rest.iter().map(|s| s.to_string()).collect()),
             "pause" => Input::Pause,
+            "build" => {
+                let text = cmd.trim_start().strip_prefix("build").unwrap_or("").trim();
+                if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
+            }
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
             "n" | "no" => Input::Answer(Decision::Deny),
@@ -93,6 +99,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /permissions [default|accept-edits|mission-auto]
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
+  /build <request>                   a Builder task: worktree, tests, audit, then your approval to merge
   /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
   /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
   /quit";
@@ -506,6 +513,13 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
                     say(&format!("{}\n", rpc_error(&e)));
                 }
             }
+            Input::Build(text) => match cmd.call("build.start", json!({"mission_id": mission_id, "prompt": text})) {
+                Ok(v) => {
+                    shared.running.fetch_add(1, Ordering::SeqCst);
+                    say(&format!("({} build started; you will be asked before anything is merged)\n", v["task_id"].as_str().unwrap_or("task")));
+                }
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
             Input::Prompt { target, text } => match cmd.call("task.submit", submit_params(&mission_id, target.as_deref(), &text)) {
                 Ok(v) => {
                     shared.running.fetch_add(1, Ordering::SeqCst);
@@ -626,6 +640,8 @@ mod tests {
         assert_eq!(parse_input("/budget $7.5"), Input::Budget(Some(7.5)));
         assert!(matches!(parse_input("/budget lots"), Input::Unknown(_)));
         assert_eq!(parse_input("/permissions accept-edits"), Input::Permissions(Some("accept-edits".into())));
+        assert_eq!(parse_input("/build implement @specs/011-x.md in @project/app"), Input::Build("implement @specs/011-x.md in @project/app".into()));
+        assert!(matches!(parse_input("/build"), Input::Unknown(m) if m.contains("needs a request")));
         assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
         assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
         assert_eq!(parse_input("/pause"), Input::Pause);

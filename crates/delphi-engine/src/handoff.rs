@@ -69,8 +69,12 @@ impl HandoffEnvelope {
             objective: prompt.into(),
             implements_spec: None,
             context_pointers: pointers,
-            constraints: vec!["Read-only work: you cannot run code or change the project; write only the notes and drafts your tools allow.".into()],
-            expected_output: ExpectedOutput { artifact_type: "answer".into(), required_fields: vec![] },
+            constraints: if target == "builder" {
+                vec!["Make the change in your task worktree, and run the project's checks there if your tools allow. Do not commit or merge: the daemon commits, runs the configured tests, has the exact commit audited and asks the operator to merge.".into(), "If the spec and the task contradict each other, or the spec lacks what you need, say so plainly instead of guessing.".into()]
+            } else {
+                vec!["Read-only work: you cannot run code or change the project; write only the notes and drafts your tools allow.".into()]
+            },
+            expected_output: if target == "builder" { ExpectedOutput { artifact_type: "the change made in the worktree, plus a short summary of what you changed".into(), required_fields: vec![] } } else { ExpectedOutput { artifact_type: "answer".into(), required_fields: vec![] } },
             routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1 },
         }
     }

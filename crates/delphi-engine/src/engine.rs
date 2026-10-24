@@ -53,6 +53,8 @@ pub struct Settings {
     pub enabled_agents: Vec<String>,
     /// The Claude CLI to launch for a harness endpoint.
     pub harness_program: String,
+    /// Attempts the unified retry ladder makes before halting for the operator (`specs/003` §3.2).
+    pub build_attempts: u32,
     /// The Antigravity CLI to launch for an `agy` harness endpoint.
     pub agy_program: String,
     /// Tokens (input, cache writes and output; not cache reads) one harness span may use before it is stopped.
@@ -71,6 +73,7 @@ impl Default for Settings {
             max_interruptions: 2,
             enabled_agents: ["orchestrator", "architect", "builder", "red-team", "strategist"].iter().map(|s| s.to_string()).collect(),
             harness_program: "claude".into(),
+            build_attempts: 3,
             agy_program: "agy".into(),
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
@@ -289,7 +292,7 @@ impl Engine {
     }
 
     /// Record a task's final output and completion.
-    async fn finish_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, outcome: SpanOutcome) -> Result<TaskOutcome, EngineError> {
+    pub(crate) async fn finish_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, outcome: SpanOutcome) -> Result<TaskOutcome, EngineError> {
         let mut out = EventEnvelope::new(&m.id, "task.output", json!({"status": match &outcome.status { Status::Done => "done", Status::Escalated(_) => "escalated" }, "text": outcome.text}));
         out.task_id = Some(task_id.clone());
         m.append(out).await?;
@@ -299,7 +302,7 @@ impl Engine {
         Ok(TaskOutcome { task_id, status: outcome.status, text: outcome.text })
     }
 
-    fn run_span<'a>(self: &'a Arc<Self>, m: &'a Arc<MissionState>, task_id: &'a str, handoff: HandoffEnvelope, parent: Option<Span>, depth: u32) -> BoxFut<'a, Result<SpanOutcome, EngineError>> {
+    pub(crate) fn run_span<'a>(self: &'a Arc<Self>, m: &'a Arc<MissionState>, task_id: &'a str, handoff: HandoffEnvelope, parent: Option<Span>, depth: u32) -> BoxFut<'a, Result<SpanOutcome, EngineError>> {
         self.drive(m, task_id, Start::Fresh { handoff: Box::new(handoff), parent, depth })
     }
 
@@ -346,6 +349,10 @@ impl Engine {
                 m.append_batch(open).await?;
             }
 
+            // Other roles of a task that has a worktree (an auditor) can read it; their write globs keep them out.
+            if let Some(w) = self.exec.known_worktree(task_id) {
+                sc.guard.zones.worktree = Some(w.path.clone());
+            }
             // A role that writes to `@worktree/**` works in its task's worktree, cut from the project's HEAD.
             let mut setup_error: Option<String> = None;
             if sc.manifest.write.iter().any(|g| g.starts_with("@worktree/")) {

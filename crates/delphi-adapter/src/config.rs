@@ -100,6 +100,10 @@ pub struct AuthBlock {
     /// Loopback PKCE: the fixed port registered with the provider (an ephemeral one when unset).
     #[serde(default)]
     pub redirect_port: Option<u16>,
+    /// Extra query parameters for the authorization request, for providers that need them to issue a refresh
+    /// token (Google: `access_type = "offline"`, `prompt = "consent"`).
+    #[serde(default)]
+    pub authorization_params: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
