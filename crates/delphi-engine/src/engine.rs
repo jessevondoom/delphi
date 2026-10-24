@@ -378,7 +378,7 @@ impl Engine {
                 };
                 interruptions = 0;
                 turns += 1;
-                history.push(Turn::assistant(turn_index, delphi_adapter::provider_for(&sc.family), &ep.id, &model_id, done.blocks.clone()));
+                history.push(Turn::assistant(turn_index, delphi_adapter::provider_for(&ep), &ep.id, &model_id, done.blocks.clone()));
                 let calls: Vec<Call> = done.blocks.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some(Call { id: id.clone(), name: name.clone(), args: arguments.clone() }) } else { None }).collect();
                 if done.stop_reason.as_deref() != Some("tool_use") || calls.is_empty() {
                     let mut text = final_text(&done.blocks);
@@ -423,7 +423,7 @@ impl Engine {
             let Some(res) = events.iter().find(|e| e.kind == "budget.reserve" && e.payload["reservation_id"] == rid.as_str()) else { continue };
             // The usage of an interrupted call can't be known: charge the whole reservation.
             let usage = delphi_core::usage::UsagePayload {
-                provider: res.endpoint_id.as_deref().and_then(|id| self.cfg.get().endpoint(id).map(|e| delphi_adapter::provider_for(&e.family))).unwrap_or(PROVIDER).into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+                provider: res.endpoint_id.as_deref().and_then(|id| self.cfg.get().endpoint(id).map(delphi_adapter::provider_for)).unwrap_or(PROVIDER).into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
                 cost_usd: amount as f64 / 1e6, reserved_usd: amount as f64 / 1e6, usage_source: "estimated".into(), cost_model: "metered".into(), outcome: "cancelled".into(), reservation_id: Some(rid.clone()),
             };
             let mut u = EventEnvelope::new(&m.id, "agent.usage", usage.to_value());
@@ -511,13 +511,13 @@ impl Engine {
                 let thinking = cfg.clamp_thinking(&model_id, sc.thinking);
                 let max_tokens = self.settings.max_tokens.max(thinking.unwrap_or(0) as u64 + 2048).min(entry.max_output_tokens.max(thinking.unwrap_or(0) as u64 + 1025));
                 let opts = CompileOptions { max_tokens, thinking_budget: thinking, temperature: None, tools: defs.to_vec(), betas: ep.betas.clone() };
-                let target = Target { provider: delphi_adapter::provider_for(&sc.family).into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };
-                let compiled: Compiled = match delphi_adapter::compile_for(&sc.family, ipr, history, &target, &opts) {
+                let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };
+                let compiled: Compiled = match delphi_adapter::compile_for(ep, ipr, history, &target, &opts) {
                     Ok(c) => c,
                     Err(e) => return Ok(Err(Escalate(format!("could not build the request: {}", e)))),
                 };
                 let body_bytes = serde_json::to_vec(&compiled.body).map(|b| b.len()).unwrap_or(0) as u64;
-                let system_bytes = serde_json::to_vec(delphi_adapter::system_of(&sc.family, &compiled.body)).map(|b| b.len()).unwrap_or(0) as u64;
+                let system_bytes = serde_json::to_vec(delphi_adapter::system_of(ep, &compiled.body)).map(|b| b.len()).unwrap_or(0) as u64;
                 let amount = price.worst_case_micro(body_bytes, system_bytes, max_tokens);
 
                 // Reserve before dispatch; the gate makes parallel spans see each other's reservations.
@@ -553,7 +553,7 @@ impl Engine {
                 let result = self.model.call(ep, &model_id, &compiled, &mut on_event).await;
                 match result {
                     Ok(done) => {
-                        let payload = done.usage.to_payload_for(delphi_adapter::provider_for(&sc.family), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "ok", "reported");
+                        let payload = done.usage.to_payload_for(delphi_adapter::provider_for(ep), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "ok", "reported");
                         let mut batch: Vec<EventEnvelope> = done
                             .blocks
                             .iter()
@@ -561,7 +561,7 @@ impl Engine {
                             .map(|(i, b)| sc.agent_ev("agent.block.complete", json!({"turn_index": turn_index, "role": "assistant", "block_index": i, "block": serde_json::to_value(b).expect("blocks serialize")}), ep, &model_id))
                             .collect();
                         // The completion marker is last: a turn without it is discarded on recovery.
-                        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len(), "provider": delphi_adapter::provider_for(&sc.family)}), ep, &model_id));
+                        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len(), "provider": delphi_adapter::provider_for(ep)}), ep, &model_id));
                         batch.push(sc.agent_ev("agent.usage", payload.to_value(), ep, &model_id));
                         m.append_batch(batch).await?;
                         return Ok(Ok((done, ep.clone(), model_id)));
@@ -573,7 +573,7 @@ impl Engine {
                     }
                     Err(ModelError::Interrupted(msg)) => {
                         // The usage of an interrupted call is unknowable: charge the full reservation.
-                        let mut u = delphi_adapter::claude::Usage::default().to_payload_for(delphi_adapter::provider_for(&sc.family), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
+                        let mut u = delphi_adapter::claude::Usage::default().to_payload_for(delphi_adapter::provider_for(ep), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
                         u.input_tokens = body_bytes.div_ceil(4);
                         u.cost_usd = amount as f64 / 1e6;
                         m.append_batch(vec![sc.agent_ev("agent.usage", u.to_value(), ep, &model_id), sc.ev("turn.interrupted", json!({"turn_index": turn_index, "message": self.secrets.redact(&msg)}))]).await?;
@@ -845,6 +845,24 @@ mod tests {
         assert!((usage[0].payload["cost_usd"].as_f64().unwrap() - (0.002 + 0.0018)).abs() < 1e-9, "{}", usage[0].payload["cost_usd"]);
         let turns = events_of(&f, "agent.turn.complete");
         assert_eq!(turns[0].payload["provider"], "google");
+    }
+
+    #[tokio::test]
+    async fn a_compat_gateway_is_degraded_but_works() {
+        let f = setup(vec![signed_tool_turn("call_1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::text("It defines `needle`.")], 5.0, |_| {});
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"compat\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal\"\ncredential = \"env:K\"\n[access]")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"compat\"] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"compat\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let reqs = f.model.requests();
+        assert_eq!(reqs[0].endpoint_id, "compat");
+        let msgs = reqs[1].body["messages"].as_array().unwrap();
+        assert_eq!(msgs.iter().map(|m| m["role"].as_str().unwrap()).collect::<Vec<_>>(), ["system", "user", "assistant", "tool", "user"]);
+        assert!(!reqs[1].body.to_string().contains("SIG-EXACT"), "no signature crosses a compat gateway");
+        assert!(events_of(&f, "agent.usage").iter().all(|e| e.payload["provider"] == "openai-compat"));
     }
 
     #[tokio::test]

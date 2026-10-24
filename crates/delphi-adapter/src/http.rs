@@ -13,7 +13,7 @@
 
 use crate::claude::{Assembler, Completed, SseDecoder, SseEvent, StreamError, StreamEvent};
 use crate::eventstream;
-use crate::gemini;
+use crate::{gemini, openai};
 use crate::platform::{Dialect, HttpRequest, ResponseKind};
 use futures_util::StreamExt;
 use std::time::{Duration, Instant};
@@ -85,6 +85,7 @@ fn error_message(body: &str) -> String {
 enum Asm {
     Claude(Assembler),
     Gemini(gemini::Assembler),
+    OpenAi(openai::Assembler),
 }
 
 impl Asm {
@@ -92,6 +93,7 @@ impl Asm {
         match self {
             Asm::Claude(a) => a.handle(ev),
             Asm::Gemini(a) => a.handle(ev),
+            Asm::OpenAi(a) => a.handle(ev),
         }
     }
 
@@ -99,6 +101,7 @@ impl Asm {
         match self {
             Asm::Claude(a) => a.finish(),
             Asm::Gemini(a) => a.finish(),
+            Asm::OpenAi(a) => a.finish(),
         }
     }
 }
@@ -137,6 +140,7 @@ pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Dur
     let mut asm = match req.dialect {
         Dialect::Claude => Asm::Claude(Assembler::new()),
         Dialect::Gemini => Asm::Gemini(gemini::Assembler::new()),
+        Dialect::OpenAi => Asm::OpenAi(openai::Assembler::new()),
     };
     let mut stream = resp.bytes_stream();
     loop {
@@ -453,6 +457,28 @@ mod tests {
         assert!(!sent.path.contains("AIza"), "the key is never in the URL");
         let b: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
         assert!(b["contents"].is_array() && b["systemInstruction"].is_object());
+    }
+
+    #[tokio::test]
+    async fn a_compat_gateway_streams_chat_completions() {
+        let chunks = [
+            serde_json::json!({"choices": [{"delta": {"content": "Hi"}}]}),
+            serde_json::json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+            serde_json::json!({"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 3}}),
+        ];
+        let mut body: String = chunks.iter().map(|c| format!("data: {}\n\n", c)).collect();
+        body.push_str("data: [DONE]\n\n");
+        let (addr, log) = mock(vec![Reply::sse(&body)]).await;
+        let extra = format!("[[endpoints]]\nid = \"local-compat\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"http://{}\"\ncredential = \"env:K\"\n", addr);
+        let cfg = cfg_for(addr, &extra);
+        let compiled = crate::openai::compile(&ipr(), &[], &opts(None)).unwrap();
+        let req = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("local-compat").unwrap(), model_id: "m", compiled: &compiled, creds: &tok("gw-token"), now_unix: 0, register: &|_| {} }).unwrap();
+        let mut events = Vec::new();
+        let done = call_with_retry(&build_client(), &req, Duration::from_secs(5), &fast_policy(), &|s| s.to_string(), &mut |e| events.push(e)).await.unwrap();
+        assert_eq!(done.blocks, vec![crate::blocks::ContentBlock::Text { text: "Hi".into() }]);
+        assert_eq!((done.usage.input_tokens, done.usage.output_tokens, done.stop_reason.as_deref()), (12, 3, Some("end_turn")));
+        let sent = log.lock().unwrap()[0].clone();
+        assert_eq!((sent.path.as_str(), sent.headers.get("authorization").map(String::as_str)), ("/v1/chat/completions", Some("Bearer gw-token")));
     }
 
     #[tokio::test]

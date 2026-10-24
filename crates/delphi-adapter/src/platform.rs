@@ -34,6 +34,8 @@ pub enum ResponseKind {
 pub enum Dialect {
     Claude,
     Gemini,
+    /// OpenAI chat-completions, for compat gateways.
+    OpenAi,
 }
 
 pub struct HttpRequest {
@@ -151,11 +153,33 @@ fn build_gemini(i: &BuildInput) -> Result<HttpRequest, BuildError> {
     Ok(HttpRequest { dialect: Dialect::Gemini, url, headers, body, response: ResponseKind::Sse })
 }
 
+/// A compat gateway: `POST {base_url}/v1/chat/completions` with a Bearer token.
+fn build_openai(i: &BuildInput) -> Result<HttpRequest, BuildError> {
+    let e = i.endpoint;
+    let base = e.base_url.clone().ok_or_else(|| BuildError::Unsupported(format!("compat endpoint `{}` needs a base_url", e.id)))?;
+    let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into()), ("accept".into(), "text/event-stream".into())];
+    for (k, v) in &e.headers {
+        check_header(k, v)?;
+        (i.register)(v);
+        headers.push((k.to_lowercase(), v.clone()));
+    }
+    headers.push(("authorization".into(), format!("Bearer {}", token(i.creds, "a compat gateway")?)));
+    let mut core = i.compiled.body.as_object().cloned().unwrap_or_default();
+    core.insert("model".into(), json!(i.model_id));
+    core.insert("stream".into(), json!(true));
+    core.insert("stream_options".into(), json!({"include_usage": true}));
+    let body = serde_json::to_vec(&Value::Object(core)).expect("body serializes");
+    Ok(HttpRequest { dialect: Dialect::OpenAi, url: format!("{}/v1/chat/completions", base.trim_end_matches('/')), headers, body, response: ResponseKind::Sse })
+}
+
 pub fn build(i: &BuildInput) -> Result<HttpRequest, BuildError> {
     if !i.cfg.is_allowed(&i.endpoint.id) {
         return Err(BuildError::NotAllowed(i.endpoint.id.clone()));
     }
     let e = i.endpoint;
+    if e.path == AccessPath::GatewayCompat {
+        return build_openai(i);
+    }
     if e.family == "gemini" {
         return build_gemini(i);
     }
@@ -315,6 +339,23 @@ mod tests {
         assert_eq!(body(&v), c.body, "no model or stream field in the body");
         assert!(matches!(go("gb", &aws()), Err(BuildError::Unsupported(_))), "Bedrock does not serve Gemini");
         assert!(matches!(go("gd", &aws()), Err(BuildError::Unsupported(_))), "an AWS credential cannot authenticate the Gemini API");
+    }
+
+    #[test]
+    fn compat_gateways_get_chat_completions_for_any_family() {
+        let extra = "[[endpoints]]\nid = \"cc\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal/openai/\"\ncredential = \"env:K\"\nheaders = { \"X-Team\" = \"t1\" }\n[[endpoints]]\nid = \"cg\"\nfamily = \"gemini\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal\"\ncredential = \"env:K\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"cc\", \"cg\"]"), extra)).unwrap();
+        let c = crate::openai::compile(&ipr(), &[], &crate::claude::tests::opts(None)).unwrap();
+        for id in ["cc", "cg"] {
+            let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint(id).unwrap(), model_id: "some-model", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
+            assert_eq!(r.dialect, Dialect::OpenAi);
+            assert!(r.url.ends_with("/v1/chat/completions") && !r.url.contains("//v1"), "{}", r.url);
+            assert_eq!(header(&r, "authorization"), Some("Bearer tok"));
+            let b = body(&r);
+            assert_eq!((b["model"].as_str(), b["stream"].as_bool(), b["stream_options"]["include_usage"].as_bool()), (Some("some-model"), Some(true), Some(true)));
+        }
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("cc").unwrap(), model_id: "m", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!(header(&r, "x-team"), Some("t1"));
     }
 
     #[test]
