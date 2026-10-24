@@ -161,6 +161,23 @@ impl Sandbox {
         cmd.args(args);
         cmd.env_clear();
         cmd.envs(&spec.env);
+        // Nothing the parent holds open may reach the child: the daemon passes its lock and readiness
+        // descriptors across its own `exec`, and a sandboxed process must not inherit any of them.
+        // SAFETY: only async-signal-safe calls (`fcntl`, `close`, `getdtablesize`) run between fork and exec.
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(|| {
+                let max = libc::getdtablesize().clamp(0, 65_536);
+                for fd in 3..max {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    // Close-on-exec descriptors (including std's own exec-error pipe) vanish at exec anyway.
+                    if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                        libc::close(fd);
+                    }
+                }
+                Ok(())
+            });
+        }
         Ok(cmd)
     }
 }
@@ -311,6 +328,38 @@ fn find_git(root: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn links_cannot_be_used_to_reach_files_outside_the_grant() {
+        let Some(sb) = sandbox() else { return };
+        let f = fx();
+        let s = spec(&f);
+        let secret = f.outside.join("secret.txt");
+        // A hard link to an outside file, created inside the writable tree, must not make it readable.
+        let hard = sh(&sb, &s, &format!("ln {} {} && cat {}", secret.display(), f.work.join("hard").display(), f.work.join("hard").display()));
+        assert!(!String::from_utf8_lossy(&hard.stdout).contains("hidden"), "hard link read the secret: {:?}", hard);
+        // A symlink to it is followed to the real path, which is not granted.
+        let soft = sh(&sb, &s, &format!("ln -s {} {} && cat {}", secret.display(), f.work.join("soft").display(), f.work.join("soft").display()));
+        assert!(!String::from_utf8_lossy(&soft.stdout).contains("hidden"), "symlink read the secret: {:?}", soft);
+    }
+
+    #[test]
+    fn file_descriptors_inherited_from_the_parent_do_not_reach_the_child() {
+        let Some(sb) = sandbox() else { return };
+        use std::os::unix::io::AsRawFd;
+        let f = fx();
+        let secret = fs::File::open(f.outside.join("secret.txt")).unwrap();
+        // Simulate a descriptor that was passed across exec (as the daemon's lock fd is): clear CLOEXEC.
+        let fd = secret.as_raw_fd();
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+        }
+        let out = sh(&sb, &spec(&f), &format!("cat <&{} 2>&1", fd));
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("hidden"), "an inherited descriptor leaked into the sandbox: {:?}", out);
+        drop(secret);
+    }
+
+
     use super::*;
     use std::fs;
     use std::process::Output;

@@ -43,3 +43,6 @@ Step 3b (after Council 006 approves spec 010): `ConnectorHost` and MCP client, t
   2. The CLI reads the item by running `/usr/bin/security`, so the sandbox must allow the keychain daemon, the keychain files and a long tail of system services. About a dozen rounds of denials were needed and the CLI still reported "Not logged in" inside the sandbox; the exact missing grant is not yet known.
 - **Stopped here.** The next diagnostic step was to have `security` look up the login item from inside the sandbox. The session's auto-mode classifier refused that as credential exploration, and it was not worked around. The operator decides how to continue (see the session report).
 - Gemini CLI keeps its login in a file (`~/.gemini/oauth_creds.json`), which is easier to expose read-only; untested.
+
+## Reordered again (2026-10-24, operator)
+The operator asked to keep thinking about the sandbox, consider other approaches, and wait for the full OAuth, API and MCP path if needed, skipping the CLIs. See `sandbox-review.md`. **M3 (harness mode) is paused.** New order: M6 (`oauth2`, Gemini dialect, compat gateway, probing) first, then the connector layer if spec 010 is approved, then sandbox hardening (resource limits, process-tree kill, Linux checks) for the Builder (M5), and harness mode last, with a VM option evaluated against what the API path has taught us.
