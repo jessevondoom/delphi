@@ -391,7 +391,7 @@ fn state_color(state: &str) -> Color {
 }
 
 /// Roles in the order people think of them: the orchestrator first, then the rest as the roster lists them.
-fn ordered<'a>(st: &'a ObserverState) -> Vec<(&'a String, &'a delphi_engine::observe::AgentRow)> {
+fn ordered(st: &ObserverState) -> Vec<(&String, &delphi_engine::observe::AgentRow)> {
     const ORDER: [&str; 7] = ["orchestrator", "architect", "builder", "red-team", "strategist", "scout", "investigator"];
     let mut v: Vec<_> = st.agents.iter().collect();
     v.sort_by_key(|(r, _)| ORDER.iter().position(|o| o == &r.as_str()).unwrap_or(ORDER.len()));
