@@ -4,7 +4,7 @@ title: "Step 3c M1 and M2 exploration: exhaustion signals and pool state"
 author: builder
 timestamp: 2026-10-24T19:00:00Z
 source_type: internal_generated
-confidence: medium                 # provider facts are from vendor docs read today; none has been probed live
+confidence: medium                 # provider facts are from vendor docs read today; only the agy Gemini path was probed live
 status: active
 source_mission: 2026-10-23-foundational-design
 tags: [step-3c, m1, m2, model-routing, exploration]
@@ -12,7 +12,7 @@ tags: [step-3c, m1, m2, model-routing, exploration]
 
 # M1 and M2 exploration
 
-Read-only exploration for [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) milestones M1 (exhaustion signal) and M2 (pool config and state). No code has changed. Provider facts come from vendor documentation fetched on 2026-10-24 (links at the end) and from this repo; **nothing here has been checked against a live quota-exhausted account**, and the two Gemini sources disagree (see §1.2).
+Read-only exploration for [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) milestones M1 (exhaustion signal) and M2 (pool config and state). No code has changed. Provider facts come from vendor documentation fetched on 2026-10-24 (links at the end) and from this repo; **only the `agy` Gemini path has been checked against a live exhausted model** (§1.5), and the two Gemini API sources disagree (see §1.2).
 
 ## 1. M1: how each path says "out of quota" versus "slow down"
 
@@ -23,6 +23,7 @@ Read-only exploration for [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan
 - `engine.rs` `model_turn`: `Throttled` records `endpoint.throttled` and moves to the next endpoint of the same family; when every endpoint is throttled the span escalates with "…waiting would not help right now". `Failed` and `Refused` (which is where a `402` lands) escalate immediately. So today both kinds of out-of-quota end at the operator; the difference is only whether a sibling endpoint is tried first.
 - `call_with_retry` already refuses to wait out a long `retry-after`: it gives up once the wait would pass its 60-second budget. A multi-day reset therefore surfaces quickly, as a throttle, with the date lost.
 - The subscription harness (`harness.rs`) reads only `utilization` from a `rate_limit_event`; it ignores `status` and any reset time.
+- **Verified against the live exhausted `agy` Gemini model (§1.5):** the harness spawns the CLI with stderr discarded and reads `result.response` but not `result.error`, so an exhausted `agy` run is reported as "the CLI reported an error: " with an empty reason. It is also marked retryable, so the span falls back to an API endpoint if one exists. The 5.7-day reset time never reaches the operator or the log.
 
 ### 1.2 Signals by path
 
@@ -41,7 +42,7 @@ Read-only exploration for [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan
 | Bedrock | `503` `ServiceUnavailable`, `529` `overloaded_error` | Capacity, explicitly *not* a quota | No | Documented |
 | `claude` harness | `rate_limit_event` with `status` of `allowed`, `allowed_warning` or `rejected` and a reset timestamp | `rejected` is a hard limit | Yes (unit disputed: seconds in one source, milliseconds in another) | **Secondary sources only; sources disagree on whether `rejected` stops the run** |
 | `claude` harness | Text such as "Claude usage limit reached. Your limit will reset at 1pm" | Subscription window used up | Yes, in prose | One third-party report |
-| `agy` harness (probably) | Output containing `RESOURCE_EXHAUSTED` and "resets in about 6.6 days" | Pool exhausted | Yes, in prose | **Observed in this repo** (Merge Gate 4 round 4 note). It does not say which path produced it; `agy` is likely, since the operator has no Gemini API key. |
+| `agy` harness | Exit code 3; stderr `error: Individual quota reached… Resets in 136h12m57s.` plus an `AGY_ERROR` JSON with `status: RESOURCE_EXHAUSTED`, `error_code: 429`, **`retryable: true`**; in stream-json mode the `result` event has `status: ERROR` and the same text in `result.error` | Individual (subscription) quota used up | Yes, a Go-style duration in the text | **Captured live 2026-10-24** ([fixture](../../crates/delphi-engine/tests/fixtures/quota/agy-gemini-individual-quota.md)) |
 
 Two patterns matter more than any single row:
 
@@ -64,7 +65,18 @@ Code changes M1 implies: `ModelError::Throttled(String)` becomes `Throttled { me
 ### 1.4 What would make M1 safer
 
 - **One real sample per path.** Raw bodies or CLI output from an actual quota-exhausted run for Anthropic API, Gemini API, `claude` harness and `agy`. Delphi should also keep the redacted raw error text in the `model.exhausted` event, so a wrong guess can be corrected from evidence.
-- **Deliberately forcing one**: Anthropic offers a user-set spend limit (the `400` row), which is a cheap and safe way to produce a real exhausted response on the API; set a $1 limit on a throwaway workspace and spend it. Nothing similar exists for Gemini or the harnesses.
+- **Deliberately forcing one**: Anthropic offers a user-set spend limit (the `400` row), which is a cheap and safe way to produce a real exhausted response on the API; set a $1 limit on a throwaway workspace and spend it (approved by the operator, 2026-10-24; needs an Anthropic API key, which we have not seen configured). Nothing similar exists for Gemini or the harnesses.
+
+### 1.5 A real sample: Gemini through `agy`
+
+The operator pointed out that the `gemini-4-argon-*` models in their `agy` pool are exhausted right now, so a real response could be captured at no cost. One call each in text and stream-json mode, in an empty directory with `--mode plan`, returned immediately with zero tokens. The full output is saved as a [fixture](../../crates/delphi-engine/tests/fixtures/quota/agy-gemini-individual-quota.md). What it shows:
+
+- **The exhaustion is explicit and carries its own reset time**: "Individual quota reached… Resets in 136h12m57s" (a Go-style duration, about 5.7 days), `status` `RESOURCE_EXHAUSTED`, `error_code` 429, exit code 3.
+- **`"retryable": true` is misleading** for a 5.7-day wait. This confirms rule 2 of the classifier (a long wait is the signal): the CLI's own `retryable` flag must not be trusted.
+- **In stream-json mode the details are only in `result.error`.** `result.response` is empty, so the harness's current parse loses them (§1.1). The classifier for `agy` should read `result.error`, and the harness should start capturing stderr (or use the `AGY_ERROR` line) so the structured `status` is available.
+- The wording "Individual quota" suggests `agy` has other quota kinds (team or organization); those would be new rows if they ever appear.
+
+Rule 1 of the classifier therefore gets a concrete `agy` entry: `status = ERROR` (or exit code 3) together with `RESOURCE_EXHAUSTED` or "quota reached" → `Exhausted`, with `reset_at = now + duration`. The duration grammar to parse is Go's (`136h12m57s`, `45m`, `30s`).
 
 ## 2. M2: pool config and state
 
@@ -127,11 +139,13 @@ M1 stays at 6 h and M2 at 9 h; the steps below add up to 14 of those 15 hours, l
 4. `delphi models` and the `doctor` check (about 2 h).
 5. Harness signals (`rejected`, reset time) and the observed `agy` text (about 2 h).
 
-## 5. Questions for the operator
+## 5. Questions for the operator (answered 2026-10-24)
 
-1. Are the 15-minute threshold for a "long `retry-after`" and the "3 attempts over 10 minutes" persistent-throttle rule acceptable defaults? Both are configurable constants; they are my proposals.
-2. Can you provide any saved output from a real quota-exhausted run (an error body, a `claude` or `agy` transcript)? The Council 005 and Step 2 audit runs both hit it, but the repo only keeps prose summaries, not the raw error.
-3. Is it acceptable to set a $1 spend limit on a throwaway Anthropic workspace to capture a real exhausted response for a fixture?
+1. **Thresholds**: the 15-minute "long `retry-after`" and "3 attempts over 10 minutes" persistent-throttle defaults are accepted. Both stay configurable constants.
+2. **Saved output**: none kept, but the operator's `agy` Gemini models are exhausted now, so a live sample was captured instead (§1.5).
+3. **$1 spend limit** on a throwaway Anthropic workspace to capture a real API `400`: approved. It needs an Anthropic API key and a throwaway workspace from the operator; neither has been seen configured, so this waits until the Anthropic API path is available.
+
+Still unsampled: Anthropic API (all rows), Gemini API (the `agy` sample is the subscription path and may differ from the API's `429` body), Bedrock, and the `claude` harness. The `claude` CLI could be tested the same way as `agy` if its limit is ever reached.
 
 ## Sources
 
