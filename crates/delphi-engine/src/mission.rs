@@ -213,7 +213,7 @@ impl MissionState {
     }
 
     /// Persist one event (fsync'd), apply it to the derived state, and publish it to attached clients.
-    pub async fn append(&self, e: EventEnvelope) -> Result<EventEnvelope, EngineError> {
+    pub async fn append(self: &Arc<Self>, e: EventEnvelope) -> Result<EventEnvelope, EngineError> {
         let mut stored = self.append_batch(vec![e.clone()]).await?;
         Ok(if stored.is_empty() { e } else { stored.remove(0) }) // empty: held in memory
     }
@@ -226,7 +226,7 @@ impl MissionState {
     }
 
     /// Write what was held, in order, and stop holding. A no-op if nothing is held for the task.
-    pub async fn release_blocks(&self, task_id: &str) -> Result<(), EngineError> {
+    pub async fn release_blocks(self: &Arc<Self>, task_id: &str) -> Result<(), EngineError> {
         let buffered = self.held.lock().unwrap().remove(task_id);
         match buffered {
             Some(events) if !events.is_empty() => self.append_batch(events).await.map(|_| ()),
@@ -235,7 +235,7 @@ impl MissionState {
     }
 
     /// Persist several events together (one fsync), then apply and publish them in order.
-    pub async fn append_batch(&self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
+    pub async fn append_batch(self: &Arc<Self>, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
         let events = {
             let mut held = self.held.lock().unwrap();
             if held.is_empty() {
@@ -254,6 +254,14 @@ impl MissionState {
         if events.is_empty() {
             return Ok(Vec::new());
         }
+        // Writing and applying an event must never be cut in half: `task.cancel` aborts a task at any await point, and
+        // an abort between the file write and the ledger update leaves a gap in the sequence. The commit therefore
+        // runs as its own task; if the caller is dropped, it still finishes.
+        let me = self.clone();
+        tokio::spawn(async move { me.commit(events).await }).await.map_err(|e| EngineError::Join(e.to_string()))?
+    }
+
+    async fn commit(&self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
         let _gate = self.append_gate.lock().await;
         let log = self.log.clone();
         let known = self.registered.load(Ordering::SeqCst) as usize;
@@ -313,6 +321,37 @@ mod tests {
         let ledger = Arc::new(Mutex::new(Ledger::open_in_memory().unwrap()));
         let secrets = SecretRegistry::new();
         (MissionState::open(dir, "m1", Hub::new(), ledger.clone(), secrets.clone(), 5.0).unwrap(), ledger, secrets)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn aborting_tasks_at_any_point_never_leaves_a_gap_in_the_event_sequence() {
+        let t = tempfile::tempdir().unwrap();
+        let (m, _ledger, _) = open(t.path());
+        let mut handles = Vec::new();
+        for i in 0..60u64 {
+            let m2 = m.clone();
+            let h = tokio::spawn(async move {
+                for k in 0..20 {
+                    let _ = m2.append(EventEnvelope::new("m1", "task.note", json!({"i": i, "k": k}))).await;
+                }
+            });
+            handles.push(h);
+        }
+        // Abort them at staggered moments, while the rest keep writing.
+        for (n, h) in handles.iter().enumerate() {
+            tokio::time::sleep(std::time::Duration::from_micros(150 * (n as u64 % 7))).await;
+            if n % 2 == 0 {
+                h.abort();
+            }
+        }
+        for h in handles {
+            let _ = h.await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await; // detached commits finish
+        m.append(EventEnvelope::new("m1", "task.note", json!({"after": true}))).await.expect("the mission still accepts events after the aborts");
+        let seqs: Vec<u64> = m.replay().unwrap().iter().map(|e| e.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[1] == w[0] + 1), "contiguous sequence numbers");
+        assert!(seqs.len() > 100);
     }
 
     #[tokio::test]

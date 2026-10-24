@@ -330,10 +330,6 @@ mod tests {
         }
     }
 
-    fn tarball(script: &str) -> Vec<u8> {
-        tarball_with(script, None)
-    }
-
     fn tarball_with(script: &str, ui: Option<&str>) -> Vec<u8> {
         let mut tar_bytes = Vec::new();
         {
