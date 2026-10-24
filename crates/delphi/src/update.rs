@@ -163,6 +163,15 @@ pub fn merge(base: &Path, core: &Path, release: &str, seed: &Seed, apply: bool, 
     }
     let sig = fs::read_to_string(base.join("manifest.lock")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.get("signature").and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "unsigned-dev-build".into());
     write_lock(&base.join("manifest.lock"), &new_manifest, &[("release", release.to_string()), ("signature", sig)])?;
+    // Customized files that had to be set aside are the evidence for (or against) building the automatic diff3 merge.
+    let root = base.parent().unwrap_or(base);
+    let log = if root.join("local").is_dir() { root.join("local/update-conflicts.jsonl") } else { root.join("update-conflicts.jsonl") };
+    for c in changes.iter().filter(|c| matches!(c.action, Action::Upstream(_))) {
+        use std::io::Write;
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log) {
+            let _ = writeln!(f, "{}", serde_json::json!({"release": release, "file": c.logical}));
+        }
+    }
     Ok(changes)
 }
 
@@ -325,6 +334,8 @@ mod tests {
         assert_eq!(fs::read_to_string(core.join("agents/a/AGENT.md")).unwrap(), "my customization");
         assert_eq!(fs::read_to_string(&up).unwrap(), "a2");
         assert_eq!(fs::read_to_string(base.join("agents/a/AGENT.md")).unwrap(), "a2", "the pristine ancestor advances");
+        let logged = fs::read_to_string(base.parent().unwrap().join("update-conflicts.jsonl")).unwrap();
+        assert!(logged.contains("agents/a/AGENT.md") && logged.contains("0.2.0"), "a set-aside file is recorded as evidence for diff3: {}", logged);
         // An edit made directly in base/ is kept too, with the manifest left alone so the next update still sees it.
         let (_t2, base2, core2) = setup(&[("x.md", "x1")]);
         fs::write(base2.join("x.md"), "edited in place").unwrap();
