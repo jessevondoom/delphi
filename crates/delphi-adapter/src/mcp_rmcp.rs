@@ -1,21 +1,20 @@
-//! The same MCP client surface as [`crate::mcp::McpClient`], backed by the official `rmcp` SDK (spike).
+//! The MCP client, on the official `rmcp` SDK (`specs/010` §2).
 //!
 //! The policy stays ours: the host list is enforced by the `reqwest` client's redirect policy, the URL is
 //! checked before anything is sent, and rmcp's errors are mapped back onto [`McpError`] so the connector code
-//! above (taint, approvals, pinning) would not change.
+//! above (taint, approvals, pinning) only sees Delphi's types.
 //!
-//! Gaps against `mcp.rs`, found by running the same loopback tests against both (none is wired into the
-//! connectors yet; decide each before switching over):
+//! Known differences from the hand-written client this replaced, accepted when it was adopted:
 //! - **No cap on a plain JSON response.** rmcp bounds one SSE event (`max_sse_event_size`) but reads a JSON body
-//!   with `response.bytes()`. `mcp.rs` stops at 8 MiB. Closing this needs a custom `StreamableHttpClient`.
+//!   with `response.bytes()`; only the 60 s request timeout bounds it. Closing this needs a custom
+//!   `StreamableHttpClient`, or an upstream change.
 //! - **`Retry-After` is dropped**, so `Throttled` is always `None`.
-//! - **401/403 are typed only through rmcp's own errors or the text `HTTP <status>: <body>`**, which `status_error`
+//! - **401/403 are typed through rmcp's own errors or the text `HTTP <status>: <body>`**, which `status_error`
 //!   parses; a change to that wording would silently turn them into `Transport`.
 //! - **Strict parsing.** rmcp rejects a server that omits `serverInfo.version`, or an image block with no
-//!   `mimeType` (the whole call fails). `mcp.rs` tolerates both.
-//! - **Tool paging is unbounded** (`list_all_tools`); `mcp.rs` stops after 10 pages.
-//! - rmcp also gives session recovery on a 404, stdio and child-process transports, and an OAuth module, none of
-//!   which `mcp.rs` has.
+//!   `mimeType` (the whole call fails). Check a new connector with the `live_server_smoke` test before ratifying it.
+//! - rmcp caches a tool listing for the server's `ttl_ms`; the connector host opens a fresh session to refresh, so
+//!   a pin check never reads a cached list.
 
 use crate::mcp::{BoxFuture, CallResult, McpError, McpSession, RemoteTool, MIN_PROTOCOL_VERSION};
 use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock, Implementation, PaginatedRequestParams};
@@ -184,6 +183,29 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
+    /// Against a real server, for checking a connector before it is ratified (the strictness gap in the module header
+    /// only shows up against real servers). Not run by default:
+    /// `DELPHI_MCP_SMOKE_URL=https://… [DELPHI_MCP_SMOKE_TOKEN=…] [DELPHI_MCP_SMOKE_CALL=tool DELPHI_MCP_SMOKE_ARGS='{…}']
+    ///  cargo test -p delphi-adapter live_server -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_server_smoke() {
+        let Ok(url) = std::env::var("DELPHI_MCP_SMOKE_URL") else { panic!("set DELPHI_MCP_SMOKE_URL") };
+        let host = reqwest::Url::parse(&url).unwrap().host_str().unwrap().to_string();
+        let c = RmcpClient::connect(&url, &[host], std::env::var("DELPHI_MCP_SMOKE_TOKEN").ok()).await.unwrap();
+        println!("protocol {}", c.protocol_version());
+        let tools = c.list_tools().await.unwrap();
+        for t in &tools {
+            println!("tool {} ({} chars of description, hash {})", t.name, t.description.len(), &crate::mcp::definition_hash(t)[..12]);
+        }
+        assert!(!tools.is_empty(), "the server listed no tools");
+        if let Ok(tool) = std::env::var("DELPHI_MCP_SMOKE_CALL") {
+            let args: Value = serde_json::from_str(&std::env::var("DELPHI_MCP_SMOKE_ARGS").unwrap_or_else(|_| "{}".into())).unwrap();
+            let r = c.call_tool(&tool, &args).await.unwrap();
+            println!("call {} -> is_error={} {} chars: {}", tool, r.is_error, r.text.len(), r.text.chars().take(300).collect::<String>());
+        }
+    }
+
     async fn connect(port: u16, hosts: &[&str], token: Option<&str>) -> Result<RmcpClient, McpError> {
         let hosts: Vec<String> = hosts.iter().map(|s| s.to_string()).collect();
         RmcpClient::connect(&format!("http://127.0.0.1:{}/mcp", port), &hosts, token.map(String::from)).await
@@ -218,6 +240,26 @@ mod tests {
         assert!(matches!(connect(s.port, &["127.0.0.1"], None).await.err().unwrap(), McpError::Forbidden(m) if m.contains("admin approval")));
         let s = server(Arc::new(|_m, msg, _h| (200, "application/json".into(), json!({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32602, "message": "bad params"}}).to_string(), vec![])));
         assert_eq!(connect(s.port, &["127.0.0.1"], None).await.err().unwrap(), McpError::Rpc { code: -32602, message: "bad params".into() });
+    }
+
+    #[tokio::test]
+    async fn tool_listing_follows_pages_and_stops_at_the_page_limit() {
+        let page = Arc::new(std::sync::Mutex::new(0usize));
+        let p2 = page.clone();
+        let s = server(Arc::new(move |method, msg, _h| match method {
+            "initialize" => (200, "application/json".into(), rpc(&msg["id"], json!({"protocolVersion": "2025-11-25", "capabilities": {}, "serverInfo": {"name": "m", "version": "0"}})), vec![]),
+            "notifications/initialized" => (202, "text/plain".into(), String::new(), vec![]),
+            "tools/list" => {
+                let mut n = p2.lock().unwrap();
+                *n += 1;
+                // Endless pages: every reply names a next cursor.
+                let tool = json!({"name": format!("t{}", *n), "description": "T", "inputSchema": {"type": "object"}});
+                (200, "application/json".into(), rpc(&msg["id"], json!({"tools": [tool], "nextCursor": format!("c{}", *n)})), vec![])
+            }
+            _ => (404, "text/plain".into(), "no".into(), vec![]),
+        }));
+        let c = connect(s.port, &["127.0.0.1"], None).await.unwrap();
+        assert_eq!(c.list_tools().await.unwrap().len(), MAX_TOOL_PAGES, "a server that never stops paging is cut off");
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-//! The connector host (`specs/010`): Delphi's own MCP client, run in the daemon.
+//! The connector host (`specs/010`): runs the MCP sessions in the daemon (client: the official `rmcp` SDK, D-27).
 //!
 //! The ratified catalog (`[connectors.*]`) decides which servers, hosts, roles and tools exist. A server's
 //! tool is offered to an agent only if it is listed there, its definition (name, schema, description) matches
