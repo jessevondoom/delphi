@@ -114,7 +114,7 @@ delphi/
 9. **[009 — Model Access & Authentication](specs/009-model-access-and-auth.md):** direct API, cloud platforms (Bedrock, Vertex), enterprise gateways with SSO, and subscription CLIs; endpoints, failover pins and delegated credentials (D-19).
 10. **[010 — Native Connectors (MCP)](specs/010-connectors-and-tool-access.md):** Slack, Google Drive, Calendar, Gmail and Zoom through Delphi's own MCP client, with ratified tool pins, taint-aware approvals and a payload store.
 
-Interface specs: [005a — terminal avatars](specs/005a-terminal-avatar-system.md), [005b — console decks, inbox, observer windows](specs/005b-deck-navigation-and-visual-interface.md) and the [wireframes](specs/ui-wireframes-and-blueprints.md).
+Interface specs: [005a — terminal avatars](specs/005a-terminal-avatar-system.md), [005b — console decks, inbox, observer windows](specs/005b-deck-navigation-and-visual-interface.md), [005c — the inline console, the interim step toward 005b](specs/005c-inline-console.md) and the [wireframes](specs/ui-wireframes-and-blueprints.md).
 
 ---
 
