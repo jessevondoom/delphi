@@ -899,7 +899,8 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.type_keys("\x1b");
     c.wait_for("Drafted specs/009-e2e.md.");
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
-    assert!(c.visible().contains("all agents idle"), "{}", c.visible());
+    // The reply can appear a frame before the status line settles, so wait for it rather than assert on one snapshot.
+    c.wait_for("all agents idle");
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
