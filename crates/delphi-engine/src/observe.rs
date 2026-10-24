@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 26] = [
+pub const KINDS: [&str; 29] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -455,6 +455,9 @@ impl ObserverState {
                 self.say(line);
             }
             "endpoint.throttled" => self.say(format!("{} is throttled; trying the next endpoint", s(&p["endpoint_id"]))),
+            "task.blocked" => self.say(format!("waiting for a model: {}", s(&p["why"]))),
+            "task.unblocked" => self.say(if p["resumed"] == true { "a model is back; resuming".to_string() } else { "stopped waiting for a model".to_string() }),
+            "model.degraded_confirm" if p["state"] == "asked" => self.say("asking whether a weaker model may run this task".to_string()),
             "model.recovered" => self.say(format!("{} is back ({})", s(&p["endpoint_id"]), s(&p["model_id"]))),
             "model.exhausted" => self.say(format!("{} is out of quota ({}); trying the next endpoint", s(&p["endpoint_id"]), s(&p["reason"]))),
             "harness.fallback" => self.say(format!("{} fell back to the API", s(&p["from"]))),

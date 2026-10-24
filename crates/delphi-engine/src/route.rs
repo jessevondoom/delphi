@@ -56,7 +56,7 @@ pub enum Route {
     /// The target is not usable; this one is at least as capable. Use it and say so.
     Similar { key: PoolKey, target: PoolKey, why: String, homogeneous: bool },
     /// Only less capable pairs are usable. The caller asks the operator before using it.
-    Weaker { key: PoolKey, target: PoolKey, why: String, lost: Vec<String>, homogeneous: bool },
+    Weaker { key: PoolKey, target: PoolKey, why: String, back_at: Option<i64>, lost: Vec<String>, homogeneous: bool },
     /// Nothing eligible is usable now. `back_at` is the soonest any blocked pair returns, if known.
     NoModel { target: Option<PoolKey>, blocked: Vec<Blocked>, ineligible: Vec<(PoolKey, String)>, back_at: Option<i64> },
 }
@@ -216,8 +216,10 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
         }
     }
     let mut ideal_why = String::new();
+    let mut ideal_back_at = None;
     if let Avail::No { why, back_at } = availability(find(&ideal), now) {
         ideal_why = why.clone();
+        ideal_back_at = back_at;
         blocked.insert(0, Blocked { key: ideal.clone(), why, back_at });
     }
     let similar = |k: &PoolKey| rank_at(cfg, k, ideal_rank) >= ideal_rank && !(ideal_ctx > 0 && context_of(cfg, k) > 0 && context_of(cfg, k) < ideal_ctx);
@@ -237,7 +239,7 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
         if ideal_ctx > 0 && ctx > 0 && ctx < ideal_ctx {
             lost.push(format!("a {}-token context instead of {}", ctx, ideal_ctx));
         }
-        return Route::Weaker { homogeneous: homogeneous(&key), key, why: ideal_why, target: ideal, lost };
+        return Route::Weaker { homogeneous: homogeneous(&key), key, why: ideal_why, back_at: ideal_back_at, target: ideal, lost };
     }
     let back_at = blocked.iter().filter_map(|b| b.back_at).min();
     Route::NoModel { target: Some(ideal), blocked, ineligible: rejected, back_at }

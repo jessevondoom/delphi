@@ -56,6 +56,9 @@ enable_dynamic_scaling = true
 cross_provider_builder_critic = true # [H-007] Pair Claude builder with Gemini critic
 max_attempts_per_node = 3            # Unified retry ladder (specs/003 §3.2): upscale, then reset, then escalate
 max_parallel_agents = 4
+# When no usable model is left, a task waits for one to return (and says so) instead of failing, and a
+# weaker substitute is used only after you confirm it for that task (declining, or not answering, means waiting).
+# max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
 # Model pool (specs/002 §4.1, D-26: ratified). Models in preference order; when the first eligible
 # model is exhausted (quota, subscription window or budget) the next one takes over and work continues.
