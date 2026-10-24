@@ -100,7 +100,10 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
         let mut out = Vec::new();
         for ep in &targets {
             if ep.path == AccessPath::Harness {
-                println!("{:<16} skipped: harness endpoints are probed by the sandboxed harness check, not here", ep.id);
+                let program = if ep.harness.as_deref() == Some("agy") { "agy" } else { "claude" };
+                let cap = crate::capabilities::probe_harness(&cfg, ep, program, now()).await;
+                print_row(&cap, cap.probed_at);
+                out.push(cap);
                 continue;
             }
             let mut models: Vec<String> = TIERS.iter().filter_map(|t| cfg.resolve_model(ep, t)).collect();

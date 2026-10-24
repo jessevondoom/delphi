@@ -278,7 +278,7 @@ impl Config {
                 },
                 AccessPath::Harness => {
                     if e.harness.as_deref().unwrap_or("").is_empty() {
-                        errs.push(format!("endpoint `{}`: harness endpoints need `harness = \"claude\"|\"gemini\"|\"codex\"`", e.id));
+                        errs.push(format!("endpoint `{}`: harness endpoints need `harness = \"claude\"|\"agy\"|\"codex\"` (`gemini` is accepted but the Gemini CLI no longer supports personal sign-in)", e.id));
                     }
                 }
                 AccessPath::Api => {

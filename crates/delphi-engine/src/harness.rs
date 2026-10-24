@@ -20,6 +20,34 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::mpsc;
 
+/// Which subscription CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cli {
+    /// `claude` (Claude Code): stream-json with a permission bridge.
+    Claude,
+    /// `agy` (the Antigravity CLI, the Gemini subscription's CLI now that the Gemini CLI refuses personal
+    /// sign-in): stream-json events, no permission bridge, tools cannot be turned off.
+    Agy,
+}
+
+impl Cli {
+    pub fn from_harness(name: &str) -> Option<Cli> {
+        match name {
+            "claude" => Some(Cli::Claude),
+            "agy" => Some(Cli::Agy),
+            _ => None,
+        }
+    }
+
+    /// The program name used when none is configured.
+    pub fn program(self) -> &'static str {
+        match self {
+            Cli::Claude => "claude",
+            Cli::Agy => "agy",
+        }
+    }
+}
+
 /// Which built-in tools the CLI is given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tools {
@@ -31,7 +59,8 @@ pub enum Tools {
 
 #[derive(Debug, Clone)]
 pub struct Launch {
-    /// `claude`, or a path (tests use a stand-in script).
+    pub cli: Cli,
+    /// The program name or a path (tests use a stand-in script).
     pub program: String,
     pub model: String,
     pub system_prompt: String,
@@ -150,6 +179,46 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     out
 }
 
+/// `agy` output. Events: `init`, `step_update` (user input, agent response deltas, tool steps) and `result`.
+pub fn parse_agy_line(line: &str) -> Vec<Event> {
+    let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
+    let usage_of = |u: &Value| Tokens { input: u["input_tokens"].as_u64().unwrap_or(0), cache_read: u["cache_read_tokens"].as_u64().unwrap_or(0), cache_write: 0, output: u["output_tokens"].as_u64().unwrap_or(0) + u["thinking_tokens"].as_u64().unwrap_or(0) };
+    let mut out = Vec::new();
+    match m["event"].as_str() {
+        Some("init") => out.push(Event::Init { session_id: String::new() }),
+        Some("step_update") => {
+            let s = &m["step_update"];
+            let id = s["step_index"].as_u64().unwrap_or(0).to_string();
+            match (s["step_type"].as_str(), s["state"].as_str()) {
+                (Some("agent_response"), _) => {
+                    if let Some(t) = s["text_delta"].as_str().filter(|t| !t.is_empty()) {
+                        out.push(Event::Text(t.into()));
+                    }
+                    if s["state"] == "DONE" && s["usage"].is_object() {
+                        out.push(Event::Usage(usage_of(&s["usage"])));
+                    }
+                }
+                (Some("tool"), Some("ACTIVE")) => out.push(Event::ToolUse { id, name: s["tool_name"].as_str().unwrap_or("").into(), input: s["tool_info"]["parameters"].clone() }),
+                (Some("tool"), Some(state)) => out.push(Event::ToolResult { id, is_error: state == "ERROR" }),
+                _ => {}
+            }
+        }
+        Some("result") => {
+            let r = &m["result"];
+            let denied = r["denied_actions"].as_array().map(|a| a.len()).unwrap_or(0);
+            out.push(Event::Result {
+                text: r["response"].as_str().unwrap_or("").into(),
+                is_error: r["status"].as_str().is_some_and(|s| s != "SUCCESS"),
+                stop_reason: (denied > 0).then(|| format!("{} action(s) denied by the CLI", denied)),
+                total_cost_usd: 0.0,
+                usage: usage_of(&r["usage"]),
+            });
+        }
+        _ => {}
+    }
+    out
+}
+
 /// The `control_response` line for a decision. Never carries `updatedPermissions`.
 pub fn response_line(p: &Permission, d: &Decision) -> String {
     let body = match d {
@@ -160,6 +229,10 @@ pub fn response_line(p: &Permission, d: &Decision) -> String {
 }
 
 fn args(l: &Launch) -> Vec<String> {
+    if l.cli == Cli::Agy {
+        // `--print=` takes the prompt as its value; with stream input the prompt arrives on stdin instead.
+        return ["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--model", l.model.as_str()].iter().map(|s| s.to_string()).collect();
+    }
     let mut a: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", "manual", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config"].iter().map(|s| s.to_string()).collect();
     a.extend(["--model".into(), l.model.clone(), "--append-system-prompt".into(), l.system_prompt.clone()]);
     if l.tools == Tools::None {
@@ -187,7 +260,14 @@ impl Session {
         let pgid = child.id().unwrap_or(0) as i32;
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
-        let first = json!({"type": "user", "message": {"role": "user", "content": l.user_prompt}}).to_string() + "\n";
+        let first = match l.cli {
+            Cli::Claude => json!({"type": "user", "message": {"role": "user", "content": l.user_prompt}}),
+            // `agy` has no system-prompt flag: the governance and role come first in the user turn.
+            Cli::Agy => json!({"event": "user", "message": {"content": format!("{}\n\n{}", l.system_prompt, l.user_prompt)}}),
+        }
+        .to_string()
+            + "\n";
+        let cli = l.cli;
         stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
         let (tx, rx) = mpsc::channel(256);
@@ -198,7 +278,7 @@ impl Session {
                 if line.len() > 8 << 20 {
                     continue;
                 }
-                for ev in parse_line(&line) {
+                for ev in if cli == Cli::Agy { parse_agy_line(&line) } else { parse_line(&line) } {
                     if tx.send(ev).await.is_err() {
                         return;
                     }
@@ -229,6 +309,7 @@ impl Session {
     }
 
     pub async fn decide(&mut self, p: &Permission, d: &Decision) -> Result<(), String> {
+        // Only the Claude stream carries permission requests, so only it has answers to send.
         let stdin = self.stdin.as_mut().ok_or("the session's input is closed")?;
         stdin.write_all((response_line(p, d) + "\n").as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())
@@ -294,6 +375,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn agy_lines_become_the_same_events_and_its_args_use_stdin_for_the_prompt() {
+        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new() }]);
+        let delta = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"po"}}"#);
+        assert_eq!(delta, vec![Event::Text("po".into())]);
+        let done = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":6801,"output_tokens":1,"thinking_tokens":3,"cache_read_tokens":10}}}"#);
+        assert!(matches!(&done[1], Event::Usage(t) if t.metered() == 6805 && t.cache_read == 10), "{:?}", done);
+        let tool = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"ls"}}}}"#);
+        assert!(matches!(&tool[0], Event::ToolUse { name, input, .. } if name == "run_command" && input["CommandLine"] == "ls"));
+        let err = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool","tool_name":"run_command"}}"#);
+        assert_eq!(err, vec![Event::ToolResult { id: "2".into(), is_error: true }]);
+        let res = parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"pong\n","usage":{"input_tokens":6,"output_tokens":1},"denied_actions":[{"action":"command"}]}}"#);
+        assert!(matches!(&res[0], Event::Result { text, is_error: false, stop_reason: Some(r), .. } if text == "pong\n" && r.contains("denied")), "{:?}", res);
+        let bad = parse_agy_line(r#"{"event":"result","result":{"status":"ERROR","error":"x"}}"#);
+        assert!(matches!(&bad[0], Event::Result { is_error: true, .. }));
+        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new() };
+        let a = args(&l);
+        assert_eq!(a, ["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--model", "gemini-3.8-flash-low"]);
+        assert!(!a.iter().any(|x| x.contains("dangerously")), "never the bypass flag");
+    }
+
+    #[test]
     fn permission_requests_parse_and_answers_never_carry_suggestions() {
         let line = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"touch a"},"tool_use_id":"tu1","blocked_path":"/w/a","description":"d","permission_suggestions":[{"type":"addRules","rules":[]}]}}"#;
         let ev = parse_line(line);
@@ -311,7 +413,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_launch_arguments_isolate_the_cli_and_turn_the_bridge_on() {
-        let l = Launch { program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new() };
+        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new() };
         let a = args(&l);
         let pos = |f: &str| a.iter().position(|x| x == f).unwrap();
         assert_eq!(a[pos("--permission-prompt-tool") + 1], "stdio");
@@ -346,7 +448,7 @@ pub(crate) mod tests {
     }
 
     fn launch(program: String, dir: &std::path::Path) -> Launch {
-        Launch { program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env() }
+        Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env() }
     }
 
     #[tokio::test]
@@ -405,7 +507,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     async fn live_claude_round_trip_with_the_approval_bridge() {
         let d = tempfile::tempdir().unwrap();
         let dir = std::fs::canonicalize(d.path()).unwrap();
-        let l = Launch { program: "claude".into(), model: "sonnet".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Use the Bash tool to run exactly: touch live.txt   Then reply with the single word done.".into(), cwd: dir.clone(), tools: Tools::Standard, env: cli_env() };
+        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Use the Bash tool to run exactly: touch live.txt   Then reply with the single word done.".into(), cwd: dir.clone(), tools: Tools::Standard, env: cli_env() };
         let mut s = Session::start(&l).await.unwrap();
         let (mut asked, mut text, mut result, mut metered) = (0, String::new(), false, 0);
         while let Some(ev) = s.next(Duration::from_secs(90)).await {
@@ -428,5 +530,29 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         }
         assert!(result && asked == 1 && text.to_lowercase().contains("done") && metered > 0, "asked={} text={} metered={}", asked, text, metered);
         assert!(dir.join("live.txt").exists(), "the approved command ran");
+    }
+
+    /// Against the real `agy` (a few thousand tokens of the Gemini subscription; run with `--ignored`).
+    #[tokio::test]
+    #[ignore]
+    async fn live_agy_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Reply with the single word pong.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env() };
+        let mut s = Session::start(&l).await.unwrap();
+        let (mut text, mut result, mut metered) = (String::new(), false, 0);
+        while let Some(ev) = s.next(Duration::from_secs(60)).await {
+            match ev {
+                Event::Text(t) => text.push_str(&t),
+                Event::Usage(t) => metered += t.metered(),
+                Event::Result { is_error, .. } => {
+                    assert!(!is_error);
+                    result = true;
+                    s.close_input();
+                }
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(result && text.to_lowercase().contains("pong") && metered > 0, "text={:?} metered={}", text, metered);
     }
 }
