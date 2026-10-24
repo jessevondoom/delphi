@@ -56,7 +56,7 @@ This specification defines the dual-scale visual identity and real-time interact
       -_-                          •_•                       • • •         
    ▀▀▀▀▀▀▀                      ▀▀▀▀▀▀▀                    ▀▀▀▀▀▀▀         
     ⟦-_-⟧                        ⟦•_•⟧                      ⟦•••⟧          
-  Bronze horns on Crimson    Light Pink notch on Teal   Gold sensor on Emerald
+  Bronze horns on Crimson    Light Pink notch on Teal   Royal Blue horn on Yellow
   Sneaky squint default      Cutout crown notch         Three all-seeing eyes
 ```
 
@@ -69,7 +69,7 @@ This specification defines the dual-scale visual identity and real-time interact
 | `architect` | `#38BDF8` (Cyan) | `#FFFFFF` (White) | `▄▄▄▄▄▄▄` | `•_•` | `⟦•_•⟧` |
 | `red-team` | `#EF4444` (Crimson)| `#FACC15` (Bronze)| `▄     ▄` | `-_-` | `⟦-_-⟧` |
 | `strategist` | `#14B8A6` (Teal) | `#F9A8D4` (Pink) | `▄▄ ▄ ▄▄` | `•_•` | `⟦•_•⟧` |
-| `scout` | `#34D399` (Emerald)| `#FACC15` (Gold) | `   ▄   ` | `• • •` | `⟦•••⟧` |
+| `scout` | `#FFFF00` (Bright Yellow)| `#4169E1` (Royal Blue)| `   ▄   ` | `• • •` | `⟦•••⟧` |
 | `operator` | `#94A3B8` (Slate) | `#CBD5E1` (Silver)| `▄▄▄▄▄▄▄` | `•_•` | `⟦•_•⟧` |
 
 * **1-Line Badge Styling Rule:** Brackets (`⟦ ⟧`) and mouth inherit the single Chassis color. Eyes are pure White (`#FFFFFF`) in dark mode or Black (`#0F172A`) in light mode.

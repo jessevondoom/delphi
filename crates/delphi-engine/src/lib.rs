@@ -10,6 +10,8 @@ pub mod exec;
 pub mod finalize;
 pub mod gates;
 pub mod handoff;
+pub mod harness;
+pub mod harness_run;
 pub mod mission;
 pub mod model;
 pub mod probe;

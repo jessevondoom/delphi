@@ -102,8 +102,8 @@ pub const ROLES: [RoleTheme; 7] = [
     },
     RoleTheme {
         role_id: "scout",
-        chassis_rgb: (52, 211, 153), // Emerald #34D399
-        crown_rgb: (250, 204, 21),   // Gold beacon #FACC15
+        chassis_rgb: (255, 255, 0), // Bright Yellow #FFFF00
+        crown_rgb: (65, 105, 225),  // Royal Blue #4169E1
         crown_slice: "   ▄   ",
         default_face: "• • •",       // 3 all-seeing eyes, NO mouth
         badge_face: "•••",
