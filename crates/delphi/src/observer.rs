@@ -762,7 +762,7 @@ pub fn run(home: &Path, ws_dir: &Path, view: Option<View>, names: HashMap<String
             return 1;
         }
     };
-    let mut cmd = match attach(&layout.sock) {
+    let mut cmd = match attach(&layout.narrator_sock) {
         Ok(c) => c,
         Err(ClientError::Io(_)) | Err(ClientError::Closed) => {
             eprintln!("delphi narrator: no daemon is running for this workspace. Start the console (`delphi chat`) first: the Narrator only watches.");
@@ -794,7 +794,7 @@ pub fn run(home: &Path, ws_dir: &Path, view: Option<View>, names: HashMap<String
     }
     // A second connection carries the live stream so a slow redraw never blocks the daemon's queue.
     let (tx, rx) = mpsc::channel::<Value>();
-    match attach(&layout.sock).and_then(|mut c| c.call("events.subscribe", json!({})).map(|_| c)) {
+    match attach(&layout.narrator_sock).and_then(|mut c| c.call("events.subscribe", json!({})).map(|_| c)) {
         Ok(mut ev) => {
             std::thread::spawn(move || {
                 while let Ok(n) = ev.next_notification() {

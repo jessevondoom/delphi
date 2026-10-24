@@ -17,6 +17,7 @@ const DAEMON_EXE: &str = env!("CARGO_BIN_EXE_delphi-core");
 struct Fixture {
     _dir: tempfile::TempDir,
     sock: PathBuf,
+    narrator_sock: PathBuf,
     daemon: Arc<Daemon>,
 }
 
@@ -25,22 +26,24 @@ async fn start(policy: TtyPolicy, queue_cap: usize) -> Fixture {
     let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
     let sock = dir.path().join("d.sock");
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let narrator_sock = dir.path().join("n.sock");
+    let narrator_listener = tokio::net::UnixListener::bind(&narrator_sock).unwrap();
     let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
     cfg.tty_policy = policy;
     cfg.queue_cap = queue_cap;
     cfg.auth_timeout = Duration::from_millis(500);
     let daemon = Daemon::new(cfg).unwrap();
-    tokio::spawn(daemon.clone().serve(listener));
-    Fixture { _dir: dir, sock, daemon }
+    tokio::spawn(daemon.clone().serve_sockets(listener, Some(narrator_listener)));
+    Fixture { _dir: dir, sock, narrator_sock, daemon }
 }
 
 fn authed(f: &Fixture, scope: Scope) -> Client {
-    let mut c = Client::connect(&f.sock).unwrap();
-    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    let token = match scope {
-        Scope::Console => f.daemon.console_token(),
-        Scope::Narrator => f.daemon.narrator_token(),
+    let (sock, token) = match scope {
+        Scope::Console => (&f.sock, f.daemon.console_token()),
+        Scope::Narrator => (&f.narrator_sock, f.daemon.narrator_token()),
     };
+    let mut c = Client::connect(sock).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     c.hello(token).unwrap();
     c
 }
@@ -140,7 +143,12 @@ async fn token_issue_requires_a_terminal_and_no_running_amber_command() {
     c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     assert_eq!(c.issue_token(Scope::Console).unwrap(), g.daemon.console_token());
     g.daemon.amber_active.store(true, std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(rpc_code(c.issue_token(Scope::Narrator).map(Value::from)), Some(code::CONFIRMATION_REQUIRED));
+    // Each socket issues only its own kind of token; with an unsandboxed command running, neither issues any.
+    assert_eq!(rpc_code(c.issue_token(Scope::Narrator).map(Value::from)), Some(code::FORBIDDEN), "the console socket will not issue a narrator token");
+    assert_eq!(rpc_code(c.issue_token(Scope::Console).map(Value::from)), Some(code::CONFIRMATION_REQUIRED));
+    let mut n = Client::connect(&g.narrator_sock).unwrap();
+    n.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert_eq!(rpc_code(n.issue_token(Scope::Narrator).map(Value::from)), Some(code::CONFIRMATION_REQUIRED));
 }
 
 /// Child half: connect and ask for a token, print the outcome.
@@ -230,7 +238,7 @@ async fn deltas_are_coalesced_to_at_most_60_frames_per_second_without_loss() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stalled_client_is_resynced_and_does_not_slow_the_others() {
     let f = start(TtyPolicy::Disabled, 64).await;
-    let mut stalled = UnixStream::connect(&f.sock).unwrap();
+    let mut stalled = UnixStream::connect(&f.narrator_sock).unwrap();
     writeln!(stalled, "{}", json!({"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol_version":1,"binary_version":"x","token":f.daemon.narrator_token()}})).unwrap();
     writeln!(stalled, "{}", json!({"jsonrpc":"2.0","id":2,"method":"events.subscribe","params":{}})).unwrap();
     let mut healthy = authed(&f, Scope::Console);
