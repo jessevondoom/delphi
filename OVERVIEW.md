@@ -10,7 +10,7 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
  console ──┐        delphi-core daemon (from Step 2, D-05)
  (input, approvals)├─ UDS ─┤  ├── Claude driver ─┐
  narrator window ──┘        │  ├── Gemini driver ─┴─ Adapter IPR compiler (dialects, signatures)
- (live narration)        │  ├── sandboxed worktrees (D-04)
+ (live narration)        │  ├── isolated worktrees (sandbox optional, D-24)
                          │  ├── events.jsonl   ← single source of truth (agents can't read it)
                          │  └── state.db       ← derived index: FTS5 search, cost ledger (D-01)
  $DELPHI_HOME/workspaces/<name>/  ← all Delphi state; project repos stay clean (D-03)
@@ -33,10 +33,10 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
 - **Taint is computed, not declared.** Every agent span carries the lowest trust tier of anything it read: `external_untrusted` < `federated_peer` < `federated_verified` < `internal_generated` < `internal_empirical` < `user_ratified`.
 - **Taint limits actions.** A span that has read untrusted content cannot write, execute, call out, or dispatch without a Red approval.
 - **Three approval tiers:**
-  - 🟢 **Green:** reads, mission notes, and tests inside an OS sandbox. Runs without asking.
-  - 🟠 **Amber:** commits, pinned installs, and unsandboxed runs. Approved once when you ratify the spec.
+  - 🟢 **Green:** reads, mission notes, read-only commands inside the worktree, commands your `allow` rules cover, and (if you turn the sandbox on) everything inside it. Runs without asking.
+  - 🟠 **Amber:** commits, pinned installs, and every other command (the sandbox is optional and off by default, like Claude Code). Shown to you for approval.
   - 🔴 **Red:** anything outbound, merges, new dependencies, constitution edits, and destructive commands. Always asks; denied if nobody answers.
-- **Worktrees are not sandboxes.** Execution is sandboxed (D-04), and agents can never write `.git/` (no hook planting).
+- **Worktrees are not sandboxes.** Commands ask for approval unless you allow them or enable the sandbox (D-24), and Delphi undoes any change a command makes to git hooks or config.
 
 ## The learning loop
 1. **During a mission**, a failed check climbs a fixed ladder: upscale the model, then reset the context on a different model family, then **escalate to you**. Spending is capped: $5 per mission and $20 per Council by default (D-10).

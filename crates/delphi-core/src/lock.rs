@@ -28,10 +28,10 @@ pub fn is_protected(logical: &str) -> bool {
         || (l.starts_with("memory/agents/") && l.ends_with("/lessons.md"))
 }
 
-/// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]`, `[connectors.*]` and `[sandbox]` blocks pinned by `specs/009` §5 and `specs/008` §4, re-serialized
+/// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]`, `[connectors.*]` and `[exec]` blocks pinned by `specs/009` §5 and `specs/008` §4, re-serialized
 /// deterministically so the hash doesn't depend on formatting or comments.
 /// The `config.toml` tables the daemon trusts only from the ratified copy.
-pub const ACCESS_KEYS: [&str; 6] = ["endpoints", "access", "auth", "harness", "connectors", "sandbox"];
+pub const ACCESS_KEYS: [&str; 6] = ["endpoints", "access", "auth", "harness", "connectors", "exec"];
 
 pub fn access_blocks(config: &str) -> String {
     let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));

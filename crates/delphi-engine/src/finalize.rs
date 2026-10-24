@@ -54,6 +54,27 @@ fn events_for(m: &MissionState, task_id: &str, kind: &str) -> Result<Vec<delphi_
 }
 
 impl Engine {
+    async fn run_gate_command(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, wt: &crate::worktree::Worktree, argv: Option<Vec<String>>) -> Result<Option<RunSummary>, EngineError> {
+        let Some(argv) = argv else { return Ok(None) };
+        match self.exec.verdict(&argv) {
+            exec::Verdict::Refused(why) => return Ok(Some(RunSummary { ok: false, detail: format!("refused by policy: {}", why) })),
+            exec::Verdict::Allowed(_) => {}
+            exec::Verdict::Ask => {
+                let payload = json!({"tool": "gate_command", "task_id": task_id, "argv": argv, "cwd": "@worktree", "sandboxed": false});
+                let who = Asker { m, task_id, span_id: "merge", role: "orchestrator" };
+                if self.ask_as(&who, ApprovalTier::Amber, "gate_command", &format!("gate_command {}", argv[0]), &format!("run `{}` for a merge gate (not sandboxed)", argv.join(" ")), &payload).await?.is_some() {
+                    return Ok(Some(RunSummary { ok: false, detail: "the operator did not approve running this command".into() }));
+                }
+            }
+        }
+        let (exec, wt, a2) = (self.exec.clone(), wt.clone(), argv.clone());
+        let r = tokio::task::spawn_blocking(move || exec.run(&wt, &a2, None)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        Ok(Some(match r {
+            Ok(report) => summarize(&report, &argv),
+            Err(e) => RunSummary { ok: false, detail: e.to_string() },
+        }))
+    }
+
     /// Record a `REVIEW.md` audit of one commit (what gate 4 reads). Called with the Red-Team's verdict; the
     /// SHA is the commit it examined, so a later commit needs a fresh audit.
     pub async fn record_audit(&self, m: &Arc<MissionState>, task_id: &str, sha: &str, role: &str, findings: &[(String, String)]) -> Result<(), EngineError> {
@@ -82,21 +103,10 @@ impl Engine {
         let (w, he) = (wt.clone(), host_exec.clone());
         let diff = tokio::task::spawn_blocking(move || w.diff(&he)).await.map_err(|e| EngineError::Invalid(e.to_string()))?.map_err(|e| EngineError::Invalid(e.to_string()))?;
 
-        // Gates 1 and 2 run the configured commands in the sandbox.
-        let run = |argv: Option<Vec<String>>| {
-            let (exec, wt) = (exec.clone(), wt.clone());
-            async move {
-                let Some(argv) = argv else { return Ok::<_, EngineError>(None) };
-                let a2 = argv.clone();
-                let r = tokio::task::spawn_blocking(move || exec.run(&wt, &a2, None)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
-                Ok(Some(match r {
-                    Ok(report) => summarize(&report, &argv),
-                    Err(e) => RunSummary { ok: false, detail: e.to_string() },
-                }))
-            }
-        };
-        let tests = run(exec.cfg.test_command.clone()).await?;
-        let check = run(exec.cfg.check_command.clone()).await?;
+        // Gates 1 and 2 run the commands the operator configured. Unsandboxed, each is shown to the operator
+        // first unless a rule or the sandbox already covers it, exactly like any other command.
+        let tests = self.run_gate_command(m, task_id, &wt, exec.cfg.test_command.clone()).await?;
+        let check = self.run_gate_command(m, task_id, &wt, exec.cfg.check_command.clone()).await?;
 
         // Provenance: every changed file must carry a stamp for exactly the content that is committed.
         let mut unstamped = Vec::new();

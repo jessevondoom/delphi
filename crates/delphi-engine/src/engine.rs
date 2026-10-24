@@ -12,7 +12,7 @@
 //! endpoint order inside `allowed_endpoints`.
 
 use crate::approval::{payload_blake3, Broker, Need, Request, Resolution, Tier as ApprovalTier};
-use crate::exec::{self, ExecError};
+use crate::exec;
 use crate::handoff::{pointers_from_prompt, ContextPointer, HandoffEnvelope};
 use crate::mission::{LiveRedactor, EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
@@ -203,7 +203,7 @@ fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
 fn run_command_def() -> ToolDef {
     ToolDef {
         name: "run_command".into(),
-        description: "Run a program in your task worktree inside the OS sandbox: no network, no access outside the worktree and scratch space, killed after a timeout. Give `argv` (the program, then its arguments; there is no shell, so pipes and redirects do not work). Use it to run the tests, the build and linters. Output is truncated to its tail.".into(),
+        description: "Run a program in your task worktree (killed after a timeout). Give `argv` (the program, then its arguments; there is no shell, so pipes and redirects do not work). Use it to run the tests, the build and linters. Unless the operator has set a rule allowing it, each command is shown to the operator for approval, so prefer a few meaningful commands over many small ones. Output is truncated to its tail.".into(),
         input_schema: json!({"type": "object", "required": ["argv"], "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "timeout_secs": {"type": "integer"}}}),
     }
 }
@@ -729,8 +729,8 @@ impl Engine {
             Ok(a) => a,
             Err(e) => return Ok(tool_result_error(e.to_string())),
         };
-        if self.exec.sandbox.is_none() {
-            return Ok(tool_result_error(ExecError::NoSandbox.to_string()));
+        if let Err(e) = self.exec.can_run() {
+            return Ok(tool_result_error(e.to_string()));
         }
         match gate(sc.span.ceiling(), Action::WorktreeWrite) {
             Gate::Allow => {}
@@ -741,6 +741,36 @@ impl Engine {
                 if let Some(denied) = self.ask(sc, ApprovalTier::Red, "run_command", "run_command", &summary, &payload).await? {
                     return Ok(denied);
                 }
+            }
+        }
+        // The policy: deny rules, the sandbox, allow rules and the read-only list decide what needs a card.
+        match self.exec.verdict(&argv) {
+            exec::Verdict::Refused(why) => return Ok(tool_result_error(format!("refused by policy: {}", why))),
+            exec::Verdict::Allowed(_) => {}
+            exec::Verdict::Ask => {
+                // "Allow similar" covers the program, and its subcommand for tools that have them (`cargo test`, `git log`).
+                let has_sub = ["cargo", "git", "npm", "pnpm", "yarn", "go", "make", "pip", "uv", "bundle", "gradle", "mvn"].contains(&argv[0].rsplit('/').next().unwrap_or(""));
+                let pattern = format!("run_command {}", argv.iter().take(if has_sub && argv.len() > 1 && !argv[1].starts_with('-') { 2 } else { 1 }).cloned().collect::<Vec<_>>().join(" "));
+                let c = tools::Classified {
+                    tool: "run_command".into(),
+                    tier: tools::ToolTier::Amber,
+                    kind: tools::ActionKind::UnsandboxedExec,
+                    summary: format!("run `{}` in the worktree (not sandboxed)", argv.join(" ")),
+                    payload: json!({"tool": "run_command", "argv": argv, "cwd": "@worktree", "sandboxed": false, "timeout_secs": args["timeout_secs"]}),
+                    pattern,
+                };
+                if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
+                    if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
+                        return Ok(denied);
+                    }
+                }
+            }
+        }
+        // What a read-only command prints may be untrusted text (a vendored file): it taints like `read_file`.
+        if exec::is_safe_read_only(&argv) {
+            let hit = argv[1..].iter().filter(|a| !a.starts_with('-')).any(|a| self.rules.untrusted(a.trim_start_matches("./")) || self.rules.untrusted(&format!("{}/x", a.trim_start_matches("./").trim_end_matches('/'))));
+            if hit && sc.span.observe_input(delphi_core::provenance::Tier::L0) {
+                sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "run_command output"}))).await?;
             }
         }
         // Write-ahead: a crash between these two events leaves a command whose outcome is unknown.
@@ -1058,6 +1088,99 @@ mod tests {
         assert_eq!((results[0].payload["ok"].as_bool(), results[0].payload["changed_files"].as_u64()), (Some(true), Some(1)));
         let stamped: Vec<String> = events_of(&f, "provenance.stamp").iter().map(|e| e.payload["path"].as_str().unwrap_or("").to_string()).collect();
         assert!(stamped.contains(&"built.txt".to_string()) && stamped.contains(&"src/new.rs".to_string()), "{:?}", stamped);
+    }
+
+    fn builder_fixture(steps: Vec<Step>, cfg: impl FnOnce(&mut crate::exec::ExecConfig)) -> Fx {
+        let f = crate::testkit::setup_with_exec(steps, 5.0, |_| {}, cfg);
+        git_project(&f);
+        crate::testkit::ratify_spec(&f);
+        f
+    }
+
+    const BUILD_PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
+
+    #[tokio::test]
+    async fn without_the_sandbox_every_command_asks_and_no_permission_mode_waves_it_through() {
+        let f = builder_fixture(vec![Step::tool("c1", "run_command", json!({"argv": ["/bin/sh", "-c", "echo hi"]})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        f.engine.broker.set_mode(Mode::MissionAuto);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_PROMPT).await }) };
+        let card = wait_for_card(&f).await;
+        assert_eq!((card.tool.as_str(), card.tier), ("run_command", ApprovalTier::Amber), "even in the most permissive mode");
+        assert_eq!(card.payload["sandboxed"], false);
+        assert!(card.summary.contains("echo hi") && card.summary.contains("not sandboxed"), "{}", card.summary);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        let result = f.model.requests()[1].body["messages"].to_string();
+        assert!(result.contains("hi") && result.contains("not sandboxed") && result.contains("exit 0"), "{}", result);
+    }
+
+    #[tokio::test]
+    async fn a_denied_command_does_not_run_and_allow_similar_covers_the_same_command_shape_for_the_task() {
+        let f = builder_fixture(
+            vec![
+                Step::tool("c1", "run_command", json!({"argv": ["/bin/sh", "-c", "touch denied.txt"]})),
+                Step::tool("c2", "run_command", json!({"argv": ["/usr/bin/touch", "a.txt"]})),
+                Step::tool("c3", "run_command", json!({"argv": ["/usr/bin/touch", "b.txt"]})),
+                Step::text("done"),
+            ],
+            |c| c.sandbox = crate::exec::SandboxMode::Off,
+        );
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_PROMPT).await }) };
+        let card = wait_for_card(&f).await;
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        let card = wait_for_card(&f).await;
+        assert!(card.summary.contains("touch a.txt"));
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::AllowSimilar, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        assert_eq!(events_of(&f, "approval.requested").iter().filter(|e| e.payload["tool"] == "run_command").count(), 2, "the third command did not ask");
+        let wt = f.root.join("workspaces/w/worktrees").join(events_of(&f, "task.created")[0].task_id.clone().unwrap());
+        assert!(!wt.join("denied.txt").exists() && wt.join("a.txt").exists() && wt.join("b.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn ratified_rules_allow_or_refuse_without_a_card_and_the_read_only_list_runs_free() {
+        let f = builder_fixture(
+            vec![
+                Step::tool("c1", "run_command", json!({"argv": ["/usr/bin/touch", "ok.txt"]})),
+                Step::tool("c2", "run_command", json!({"argv": ["/usr/bin/git", "push", "origin"]})),
+                Step::tool("c3", "run_command", json!({"argv": ["ls", "-a"]})),
+                Step::tool("c4", "run_command", json!({"argv": ["cat", "/etc/hosts"]})),
+                Step::text("done"),
+            ],
+            |c| {
+                c.sandbox = crate::exec::SandboxMode::Off;
+                c.allow = vec!["/usr/bin/touch*".into()];
+                c.deny = vec!["/usr/bin/git push*".into()];
+            },
+        );
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_PROMPT).await }) };
+        // Only the out-of-tree `cat` asks.
+        let card = wait_for_card(&f).await;
+        assert!(card.summary.contains("cat /etc/hosts"), "{}", card.summary);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        let all = f.model.requests()[4].body["messages"].to_string();
+        assert!(all.contains("refused by policy") && all.contains("deny rule"), "{}", all);
+        assert_eq!(events_of(&f, "approval.requested").iter().filter(|e| e.payload["tool"] == "run_command").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn reading_a_vendored_file_through_a_command_taints_the_span_like_read_file() {
+        let f = builder_fixture(vec![Step::tool("c1", "run_command", json!({"argv": ["cat", "vendor/x.js"]})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        let out = f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let taints = events_of(&f, "span.taint");
+        assert!(taints.iter().any(|e| e.payload["cause"] == "run_command output" && e.payload["ceiling"] == "L0"), "{:?}", taints.iter().map(|e| e.payload.clone()).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn required_sandbox_refuses_when_none_exists_but_not_otherwise() {
+        let f = builder_fixture(vec![Step::tool("c1", "run_command", json!({"argv": ["ls"]})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Required);
+        if f.engine.exec.sandbox.is_some() {
+            return; // the refusal path needs a machine without one; exec.rs tests it directly
+        }
+        f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("no OS sandbox"));
     }
 
     #[tokio::test]

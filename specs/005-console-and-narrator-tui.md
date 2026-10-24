@@ -229,7 +229,7 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
 - **Slash Command Palette** (roadmap step in brackets):
   - `/usage [mission|task|role]` [2]: token and cost totals from the usage ledger (§2.4).
   - `/budget` [2]: shows and adjusts the mission cost ceiling (`specs/003` §3.2).
-  - `/permissions` [2]: sets the approval mode. **No mode ever auto-approves a Red-tier action, unsandboxed execution, or an unbridged harness diff:**
+  - `/permissions` [2]: sets the approval mode. **No mode ever auto-approves a Red-tier action, a command run outside the sandbox, or an unbridged harness diff** (a ratified `allow` rule, the built-in read-only list and "allow similar" for the task are the only ways a command skips its card, D-24):
     - `default`: every Amber action asks.
     - `accept-edits`: auto-approves Amber *worktree file and branch edits* only.
     - `mission-auto`: additionally auto-approves dependency installs pinned in a committed lockfile.

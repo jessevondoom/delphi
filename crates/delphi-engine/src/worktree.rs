@@ -275,6 +275,14 @@ impl Worktree {
         git_command(Some(&self.git_dir), Some(&self.path), &self.scratch_home)
     }
 
+    /// Files and directories whose contents decide what git runs on the operator's machine: config, attribute
+    /// overrides and hooks, for the project and for this worktree. `exec.rs` watches them around any command
+    /// that is not sandboxed.
+    pub fn git_internals(&self) -> Vec<PathBuf> {
+        let common = self.project.join(".git");
+        vec![common.join("config"), common.join("info/attributes"), common.join("hooks"), self.git_dir.join("config.worktree"), self.git_dir.join("info/attributes"), self.git_dir.join("hooks")]
+    }
+
     /// Stage everything the build produced (nothing is ever staged from a `.git` segment) and commit it.
     /// `None` means there was nothing to commit. Hooks never run.
     pub fn commit_all(&self, message: &str, author: &str) -> Result<Option<String>, GitError> {

@@ -65,7 +65,7 @@ Useful commands: `/usage` (tokens and cost by role), `/budget [dollars]`, `/perm
 | Role ID | Manifest | Responsibility | Default tier | Blind spot → counterweight |
 | :--- | :--- | :--- | :--- | :--- |
 | `orchestrator` | [`agents/orchestrator`](agents/orchestrator/AGENT.md) | Routing, model scaling, Council arbitration, coaching | `deep-reasoning` | Smoothing dissent → daemon-filled verbatim Minority Report |
-| `builder` | [`agents/builder`](agents/builder/AGENT.md) | Code, tests and scripts in sandboxed worktrees | `code-craft` | Silent workarounds → *No Spec, No Build*, drift halt |
+| `builder` | [`agents/builder`](agents/builder/AGENT.md) | Code, tests and scripts in isolated worktrees | `code-craft` | Silent workarounds → *No Spec, No Build*, drift halt |
 | `architect` | [`agents/architect`](agents/architect/AGENT.md) | System design and specs | `deep-reasoning` | Over-abstraction → simpler-alternative rule |
 | `investigator` | [`agents/investigator`](agents/investigator/AGENT.md) | Bisects, benchmarks, primary sources | `fast-triage` | Target fixation → discovery-only, read-only |
 | `scout` | [`agents/scout`](agents/scout/AGENT.md) | Broad discovery and cartography | `high-context-discovery` | Context overflow → pointer-map rule (`[H-002]`) |

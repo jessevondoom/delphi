@@ -32,6 +32,9 @@ pub enum ActionKind {
     WorktreeEdit,
     /// Dependency installs pinned in a committed lockfile (Step 3).
     PinnedDependencyInstall,
+    /// A command run directly on the operator's machine. No permission mode approves it on its own; only a
+    /// ratified allow rule or "allow similar" for the task does.
+    UnsandboxedExec,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
