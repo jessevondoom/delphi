@@ -172,6 +172,31 @@ impl EngineService {
         Ok(json!({"task_id": task_id, "mission_id": mid}))
     }
 
+    /// `build.start`: a Builder task under the retry ladder (`build.rs`), in the background.
+    async fn build_start(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let prompt = p["prompt"].as_str().unwrap_or("").trim().to_string();
+        if prompt.is_empty() || prompt.chars().count() > 20_000 {
+            return Err(err(code::INVALID_PARAMS, "`prompt` must be 1 to 20,000 characters"));
+        }
+        if !self.engine.settings.enabled_agents.iter().any(|a| a == "builder") {
+            return Err(err(code::INVALID_PARAMS, "the builder role is not enabled"));
+        }
+        let task_id = m.next_task_id();
+        self.running.lock().unwrap().insert(task_id.clone(), Running { target: "builder".into(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
+        let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
+        tokio::spawn(async move {
+            if let Err(e) = engine.run_build(&m, tid.clone(), &prompt).await {
+                let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
+                ev.task_id = Some(tid.clone());
+                let _ = m.append(ev).await;
+            }
+            running.lock().unwrap().remove(&tid);
+        });
+        Ok(json!({"task_id": task_id, "mission_id": mid}))
+    }
+
     fn approval_resolve(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let (Some(id), Some(hash)) = (p["approval_id"].as_str(), p["payload_blake3"].as_str()) else {
@@ -296,6 +321,7 @@ impl Extension for ServiceExt {
                     Ok(json!({"paused": true}))
                 })(),
                 "task.submit" => svc.task_submit(params, ctx).await,
+                "build.start" => svc.build_start(params, ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "usage.get" => svc.usage_get(params).await,
@@ -403,7 +429,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("build.start", json!({"prompt": "hi"})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot"] {

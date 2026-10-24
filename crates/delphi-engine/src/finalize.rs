@@ -33,6 +33,15 @@ pub fn spec_link(ws_dir: &Path, spec: Option<&str>) -> SpecLink {
     }
 }
 
+/// Everything known about a commit after gates 1 to 4 were evaluated.
+pub(crate) struct Evaluation {
+    pub wt: crate::worktree::Worktree,
+    pub sha: String,
+    pub diff: crate::worktree::DiffSummary,
+    pub report: Report,
+    pub host_exec: Vec<String>,
+}
+
 #[derive(Debug)]
 pub enum BuildOutcome {
     /// Gates 1 to 4 are not all green: nothing was shown to the operator.
@@ -54,25 +63,49 @@ fn events_for(m: &MissionState, task_id: &str, kind: &str) -> Result<Vec<delphi_
 }
 
 impl Engine {
-    async fn run_gate_command(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, wt: &crate::worktree::Worktree, argv: Option<Vec<String>>) -> Result<Option<RunSummary>, EngineError> {
-        let Some(argv) = argv else { return Ok(None) };
-        match self.exec.verdict(&argv) {
-            exec::Verdict::Refused(why) => return Ok(Some(RunSummary { ok: false, detail: format!("refused by policy: {}", why) })),
-            exec::Verdict::Allowed(_) => {}
-            exec::Verdict::Ask => {
-                let payload = json!({"tool": "gate_command", "task_id": task_id, "argv": argv, "cwd": "@worktree", "sandboxed": false});
-                let who = Asker { m, task_id, span_id: "merge", role: "orchestrator" };
-                if self.ask_as(&who, ApprovalTier::Amber, "gate_command", &format!("gate_command {}", argv[0]), &format!("run `{}` for a merge gate (not sandboxed)", argv.join(" ")), &payload).await?.is_some() {
-                    return Ok(Some(RunSummary { ok: false, detail: "the operator did not approve running this command".into() }));
+    /// Run the test and check commands. Unsandboxed, the ones no rule covers are shown to the operator in
+    /// one card for the pair, not one card each.
+    async fn run_gate_commands(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, wt: &crate::worktree::Worktree, test: Option<Vec<String>>, check: Option<Vec<String>>) -> Result<(Option<RunSummary>, Option<RunSummary>), EngineError> {
+        let mut refused: [Option<String>; 2] = [None, None];
+        let mut ask: Vec<&Vec<String>> = Vec::new();
+        for (i, c) in [&test, &check].into_iter().enumerate() {
+            if let Some(argv) = c {
+                match self.exec.verdict(argv) {
+                    exec::Verdict::Refused(why) => refused[i] = Some(format!("refused by policy: {}", why)),
+                    exec::Verdict::Allowed(_) => {}
+                    exec::Verdict::Ask => ask.push(argv),
                 }
             }
         }
-        let (exec, wt, a2) = (self.exec.clone(), wt.clone(), argv.clone());
-        let r = tokio::task::spawn_blocking(move || exec.run(&wt, &a2, None)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
-        Ok(Some(match r {
-            Ok(report) => summarize(&report, &argv),
-            Err(e) => RunSummary { ok: false, detail: e.to_string() },
-        }))
+        if !ask.is_empty() {
+            let lines: Vec<String> = ask.iter().map(|a| a.join(" ")).collect();
+            let payload = json!({"tool": "gate_command", "task_id": task_id, "commands": lines, "cwd": "@worktree", "sandboxed": false});
+            let who = Asker { m, task_id, span_id: "merge", role: "orchestrator" };
+            let declined = self.ask_as(&who, ApprovalTier::Amber, "gate_command", &format!("gate_command {}", ask[0][0]), &format!("run for the merge gates (not sandboxed): {}", lines.iter().map(|l| format!("`{}`", l)).collect::<Vec<_>>().join(" and ")), &payload).await?.is_some();
+            if declined {
+                for (i, c) in [&test, &check].into_iter().enumerate() {
+                    if c.as_ref().is_some_and(|a| ask.contains(&a)) {
+                        refused[i] = Some("the operator did not approve running this command".into());
+                    }
+                }
+            }
+        }
+        let mut out: [Option<RunSummary>; 2] = [None, None];
+        for (i, c) in [test, check].into_iter().enumerate() {
+            let Some(argv) = c else { continue };
+            if let Some(why) = refused[i].take() {
+                out[i] = Some(RunSummary { ok: false, detail: why });
+                continue;
+            }
+            let (exec, wt, a2) = (self.exec.clone(), wt.clone(), argv.clone());
+            let r = tokio::task::spawn_blocking(move || exec.run(&wt, &a2, None)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+            out[i] = Some(match r {
+                Ok(report) => summarize(&report, &argv),
+                Err(e) => RunSummary { ok: false, detail: e.to_string() },
+            });
+        }
+        let [t, c] = out;
+        Ok((t, c))
     }
 
     /// Record a `REVIEW.md` audit of one commit (what gate 4 reads). Called with the Red-Team's verdict; the
@@ -86,8 +119,9 @@ impl Engine {
         Ok(())
     }
 
-    /// Commit the task's worktree, evaluate the gates, ask the operator, merge.
-    pub async fn finalize_build(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<BuildOutcome, EngineError> {
+    /// Commit the worktree and evaluate gates 1 to 4 against that commit (gate 5 is shown as waiting). Runs
+    /// the configured test and check commands, so unsandboxed it may ask the operator first.
+    pub(crate) async fn evaluate_gates(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<Evaluation, EngineError> {
         let exec = self.exec.clone();
         let wt = match exec.known_worktree(task_id) {
             Some(w) => w,
@@ -105,8 +139,7 @@ impl Engine {
 
         // Gates 1 and 2 run the commands the operator configured. Unsandboxed, each is shown to the operator
         // first unless a rule or the sandbox already covers it, exactly like any other command.
-        let tests = self.run_gate_command(m, task_id, &wt, exec.cfg.test_command.clone()).await?;
-        let check = self.run_gate_command(m, task_id, &wt, exec.cfg.check_command.clone()).await?;
+        let (tests, check) = self.run_gate_commands(m, task_id, &wt, exec.cfg.test_command.clone(), exec.cfg.check_command.clone()).await?;
 
         // Provenance: every changed file must carry a stamp for exactly the content that is committed.
         let mut unstamped = Vec::new();
@@ -133,13 +166,20 @@ impl Engine {
         let exemption = !events_for(m, task_id, "exemption.approved")?.is_empty();
         let approved: Vec<String> = events_for(m, task_id, "merge.approved")?.iter().filter_map(|e| e.payload["sha"].as_str().map(String::from)).collect();
 
-        let mut report = Report {
+        let report = Report {
             sha: sha.clone(),
             gates: vec![gates::tests(tests), gates::checks(check, &unstamped, &diff), gates::spec(&spec_link(&self.ws.dir, spec.as_deref()), &diff, exemption), gates::audit(&sha, &audits), gates::approval(&sha, &approved)],
         };
         let mut ev = delphi_core::event::EventEnvelope::new(&m.id, "gates.evaluated", json!({"sha": sha, "gates": report.gates}));
         ev.task_id = Some(task_id.to_string());
         m.append(ev).await?;
+        Ok(Evaluation { wt, sha, diff, report, host_exec })
+    }
+
+    /// Commit the task's worktree, evaluate the gates, ask the operator, merge.
+    pub async fn finalize_build(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<BuildOutcome, EngineError> {
+        let exec = self.exec.clone();
+        let Evaluation { wt, sha, diff, mut report, host_exec } = self.evaluate_gates(m, task_id).await?;
         if report.gates[..4].iter().any(|g| g.state == State::Red) {
             return Ok(BuildOutcome::Blocked(report));
         }

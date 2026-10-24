@@ -146,10 +146,17 @@ fn build_gemini(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         (AccessPath::Api, _) | (AccessPath::GatewayNative, _) => {
             let base = e.base_url.clone().unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
             let key = token(i.creds, "the Gemini API")?;
-            if e.path == AccessPath::Api {
-                headers.push(("x-goog-api-key".into(), key.to_string()));
-            } else {
+            // An API key goes in `x-goog-api-key`; anything that is an OAuth or ADC access token is a Bearer
+            // token, and a user token needs the quota project named (the operator's own Google Cloud project).
+            let bearer = e.path == AccessPath::GatewayNative || e.credential.starts_with("oauth2:") || e.credential == "gcloud-adc" || e.credential.starts_with("command:");
+            if bearer {
                 headers.push(("authorization".into(), format!("Bearer {}", key)));
+                if let Some(p) = e.project.as_deref().filter(|p| !p.is_empty()) {
+                    safe_segment("project", p)?;
+                    headers.push(("x-goog-user-project".into(), p.to_string()));
+                }
+            } else {
+                headers.push(("x-goog-api-key".into(), key.to_string()));
             }
             format!("{}/v1beta/models/{}:streamGenerateContent?alt=sse", base.trim_end_matches('/'), model)
         }
@@ -357,6 +364,18 @@ mod tests {
         assert_eq!(body(&v), c.body, "no model or stream field in the body");
         assert!(matches!(go("gb", &aws()), Err(BuildError::Unsupported(_))), "Bedrock does not serve Gemini");
         assert!(matches!(go("gd", &aws()), Err(BuildError::Unsupported(_))), "an AWS credential cannot authenticate the Gemini API");
+    }
+
+    #[test]
+    fn a_gemini_endpoint_with_an_oauth_credential_sends_a_bearer_token_and_the_quota_project() {
+        use crate::claude::tests::opts;
+        let extra = "[auth.google]\nflow = \"loopback_pkce\"\nissuer = \"https://accounts.google.com\"\nclient_id = \"cid.apps.googleusercontent.com\"\nscopes = [\"https://www.googleapis.com/auth/generative-language\"]\n[[endpoints]]\nid = \"go\"\nfamily = \"gemini\"\npath = \"api\"\nproject = \"my-gcp-project\"\ncredential = \"oauth2:google\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"go\"]"), extra)).unwrap();
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "go".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("go").unwrap(), model_id: "gemini-x", compiled: &c, creds: &token("ya29.user-token"), now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!((header(&r, "authorization"), header(&r, "x-goog-api-key"), header(&r, "x-goog-user-project")), (Some("Bearer ya29.user-token"), None, Some("my-gcp-project")));
+        assert!(r.url.starts_with("https://generativelanguage.googleapis.com/v1beta/models/gemini-x:streamGenerateContent"));
     }
 
     #[test]

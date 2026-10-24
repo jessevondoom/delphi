@@ -288,6 +288,11 @@ pub fn authorization_url(ep: &Endpoints, a: &AuthBlock, redirect_uri: &str, pkce
     if let Some(aud) = &a.audience {
         p.push(("audience", aud));
     }
+    // Operator-supplied parameters never override the ones that make the flow safe.
+    const OWN: [&str; 6] = ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"];
+    for (k, v) in a.authorization_params.iter().filter(|(k, _)| !OWN.contains(&k.as_str())) {
+        p.push((k, v));
+    }
     Ok(format!("{}{}{}", base, if base.contains('?') { '&' } else { '?' }, form(&p)))
 }
 
@@ -829,6 +834,18 @@ mod tests {
         assert_eq!(store.get("oauth2.x").unwrap().as_deref(), Some("RT-1"));
         let exch = log.lock().unwrap().last().unwrap().1.clone();
         assert!(!exch["code_verifier"].is_empty() && exch["redirect_uri"].starts_with("http://127.0.0.1:"), "the verifier proves the same client");
+    }
+
+    #[test]
+    fn extra_authorization_parameters_are_added_but_cannot_replace_the_safe_ones() {
+        let mut a = block("http://127.0.0.1:1", "loopback_pkce", "");
+        a.authorization_params = [("access_type".to_string(), "offline".to_string()), ("prompt".to_string(), "consent".to_string()), ("state".to_string(), "attacker".to_string()), ("code_challenge".to_string(), "evil".to_string())].into();
+        let ep = Endpoints { token: "http://127.0.0.1:1/token".into(), device: None, authorization: Some("http://127.0.0.1:1/authorize".into()) };
+        let pk = Pkce::generate().unwrap();
+        let url = authorization_url(&ep, &a, "http://127.0.0.1:9/callback", &pk).unwrap();
+        let q = query_of(&url);
+        assert_eq!((q["access_type"].as_str(), q["prompt"].as_str()), ("offline", "consent"));
+        assert_eq!((q["state"].as_str(), q["code_challenge"].as_str()), (pk.state.as_str(), pk.challenge.as_str()));
     }
 
     #[test]

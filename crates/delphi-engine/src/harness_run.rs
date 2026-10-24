@@ -81,6 +81,15 @@ impl HarnessErr {
     }
 }
 
+/// What the CLI needs to know about Delphi's logical paths and its own situation.
+fn harness_note(builder: bool) -> &'static str {
+    if builder {
+        "<harness_note>You are running inside Delphi. Your working directory is this task's git worktree, a checkout of the project at its current commit. Paths written as @worktree/x or @project/<name>/x in the task mean the file x in your working directory (the project's own files are at the top of it, for example src/lib.rs). Make the change by editing files here with your tools, run the checks you need, and do not commit: Delphi commits, verifies and asks the operator to merge. When the change is made, reply with a short summary of what you changed.</harness_note>"
+    } else {
+        "<harness_note>You are running inside Delphi with no tools and no file access. Everything you need is quoted in the task. Answer from it, and say so if something you need is missing.</harness_note>"
+    }
+}
+
 impl Engine {
     /// The harness endpoint that serves this family, if the ratified order puts one first.
     pub(crate) fn harness_endpoint(&self, family: &str) -> Option<Endpoint> {
@@ -229,7 +238,7 @@ impl Engine {
             }
         };
         let program = if cli == Cli::Agy { self.settings.agy_program.clone() } else { self.settings.harness_program.clone() };
-        let launch = Launch { cli, program, model, system_prompt: ipr.system_sections().join("\n\n"), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env() };
+        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", ipr.system_sections().join("\n\n"), harness_note(builder)), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env() };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": if builder { "standard" } else { "none" }, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
