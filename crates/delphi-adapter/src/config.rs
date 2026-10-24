@@ -543,7 +543,7 @@ allowed_endpoints = ["a", "ghost"]
 order = { gemini = ["a"] }
 "#;
         let errs = Config::parse(bad).unwrap_err().join("\n");
-        for needle in ["defined twice", "need a region", "need a project", "must be https", "whatever", "harness endpoints need", "unknown endpoint `ghost`", "belongs to family `claude`"] {
+        for needle in ["defined twice", "need a region", "need a project", "must be https", "unknown credential source", "harness endpoints need", "unknown endpoint `ghost`", "belongs to family `claude`"] {
             assert!(errs.contains(needle), "missing `{}` in:\n{}", needle, errs);
         }
     }

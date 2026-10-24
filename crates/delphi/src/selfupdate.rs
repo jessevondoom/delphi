@@ -45,7 +45,7 @@ pub fn parse_version(v: &str) -> Option<(u64, u64, u64, bool)> {
 /// Is `candidate` a newer release than `current`?
 pub fn newer(candidate: &str, current: &str) -> bool {
     match (parse_version(candidate), parse_version(current)) {
-        (Some((a, b, c, _)), Some((x, y, z, _))) => (a, b, c) > (x, y, z),
+        (Some((a, b, c, pre)), Some((x, y, z, cur_pre))) => (a, b, c, !pre) > (x, y, z, !cur_pre),
         _ => false,
     }
 }
@@ -149,16 +149,20 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
         }
         // It must run and be the version it claims to be, before it replaces anything.
-        let out = std::process::Command::new(&tmp).arg("--version").output().context("the new binary does not run on this machine")?;
+        let out = std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output().context("the new binary does not run on this machine")?;
         let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let tag_version = rel.tag.trim_start_matches('v');
-        if !out.status.success() || !said.contains(tag_version) {
+        if !out.status.success() || tag_version.is_empty() || said.split_whitespace().last() != Some(tag_version) {
             bail!("the new binary reports `{}`, not {}; nothing was changed", said, rel.tag);
         }
         let backup = dir.join("delphi.prev");
-        if dest.exists() {
-            let _ = std::fs::remove_file(&backup);
-            std::fs::copy(dest, &backup).context("could not keep the old version for rollback")?;
+        // Keep the old version for rollback, unless it is the same version (that would replace the real fallback),
+        // and never leave a half-written backup behind.
+        let same = std::process::Command::new(dest).arg("--version").stdin(std::process::Stdio::null()).output().is_ok_and(|o| o.status.success() && o.stdout.trim_ascii() == out.stdout.trim_ascii());
+        if dest.exists() && !same {
+            let part = dir.join(format!(".delphi-prev-{}", std::process::id()));
+            std::fs::copy(dest, &part).context("could not keep the old version for rollback")?;
+            std::fs::rename(&part, &backup).context("could not keep the old version for rollback")?;
         }
         std::fs::rename(&tmp, dest).context("could not replace the executable (is the directory writable?)")?;
         Ok(Installed { tag: rel.tag.clone(), backup })
@@ -176,9 +180,19 @@ pub fn rollback(dest: &Path) -> Result<()> {
         bail!("there is no previous version ({} does not exist)", backup.display());
     }
     let tmp = dest.with_file_name(format!(".delphi-rollback-{}", std::process::id()));
-    std::fs::copy(&backup, &tmp)?;
-    std::fs::rename(&tmp, dest).context("could not restore the previous executable")?;
-    Ok(())
+    let result = (|| -> Result<()> {
+        std::fs::copy(&backup, &tmp)?;
+        let ok = std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output().is_ok_and(|o| o.status.success());
+        if !ok {
+            bail!("the saved previous version does not run; leaving the current one in place");
+        }
+        std::fs::rename(&tmp, dest).context("could not restore the previous executable")?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 pub struct RealNet;
@@ -189,6 +203,9 @@ impl Net for RealNet {
         // GitHub serves release assets from another host, so redirects are followed, but only to https.
         let policy = delphi_adapter::reqwest::redirect::Policy::custom(|a| if a.url().scheme() == "https" && a.previous().len() < 5 { a.follow() } else { a.error("redirect refused (not https, or too many)") });
         let client = delphi_adapter::reqwest::Client::builder().redirect(policy).user_agent(concat!("delphi/", env!("CARGO_PKG_VERSION"))).connect_timeout(std::time::Duration::from_secs(15)).timeout(std::time::Duration::from_secs(300)).build().map_err(|e| e.to_string())?;
+        if !url.starts_with("https://") {
+            return Err("refusing a download that is not over https".into());
+        }
         rt.block_on(async {
             let mut resp = client.get(url).header("accept", "application/octet-stream, application/vnd.github+json").send().await.map_err(|e| e.without_url().to_string())?;
             if !resp.status().is_success() {

@@ -223,7 +223,15 @@ impl Renderer {
                 Some(match p["status"].as_str() {
                     Some("escalated") => format!("\n⚠ {} needs you: {}\n", tid, text),
                     _ if root_streamed => format!("\n✓ {} done\n", tid),
-                    _ => format!("\n{}\n✓ {} done\n", text, tid),
+                    _ => {
+                        // A reply that finished before any live frame arrived still says who is speaking.
+                        let mut roots: Vec<&String> = self.spans.iter().filter(|(_, (_, d))| *d == 0).map(|(k, _)| k).collect();
+                        roots.sort();
+                        match roots.first() {
+                            Some(k) => format!("\n{}: {}\n✓ {} done\n", self.span_name(k), text, tid),
+                            None => format!("\n{}: {}\n✓ {} done\n", self.name("orchestrator"), text, tid),
+                        }
+                    }
                 })
             }
             _ => None,

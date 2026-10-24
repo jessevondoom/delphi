@@ -480,8 +480,12 @@ fn ratify_config(ui: &mut dyn Ui, home: &Path, ws_dir: &Path, yes: bool) -> bool
     }
     let mut all = true;
     for p in pending {
-        ui.say(&format!("\nModel access changed — this is what you are about to trust ({}):\n{}", p.summary, p.diff.lines().take(40).collect::<Vec<_>>().join("\n")));
-        if yes || ui.yes_no("Ratify this (Delphi will only talk to the endpoints listed here)?", true) {
+        ui.say(&format!("\nModel access changed — this is what you are about to trust ({}):\n{}", p.summary, p.diff));
+        // `--yes` never ratifies: trust in what a model may reach is the one answer that is not defaulted.
+        if yes {
+            ui.say("  Not ratified (--yes does not ratify). Review it and run `/ratify` in the console.");
+            all = false;
+        } else if ui.yes_no("Ratify this (Delphi will only talk to the endpoints listed here)?", true) {
             match p.live_blake3.as_deref().map(|h| ratify::apply(home, ws_dir, &p.id, h)) {
                 Some(Ok(_)) => ui.say("  Ratified."),
                 other => {

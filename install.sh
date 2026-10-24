@@ -60,6 +60,7 @@ if [ -z "$VERSION" ]; then
   VERSION="$(fetch "$API/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   [ -n "$VERSION" ] || die "could not find the latest release (is anything published yet?)"
 fi
+case "$VERSION" in *[!A-Za-z0-9.+-]*) die "DELPHI_VERSION has characters a version cannot have" ;; esac
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
 printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$' || die "odd version string: $VERSION (expected vMAJOR.MINOR.PATCH)"
 
@@ -102,7 +103,10 @@ bin="$tmp/delphi-$VERSION-$target/delphi"
 mkdir -p "$DIR"
 [ ! -L "$DIR/delphi" ] || die "$DIR/delphi is a symlink; remove it first"
 stage="$(mktemp "$DIR/.delphi.XXXXXX")"
-cp "$bin" "$stage" && chmod 755 "$stage" && mv -f "$stage" "$DIR/delphi"
+trap 'rm -rf "$tmp"; rm -f "$stage"' EXIT INT TERM
+cp "$bin" "$stage" || die "could not copy the binary into $DIR"
+chmod 755 "$stage" || die "could not make the binary executable"
+mv -f "$stage" "$DIR/delphi" || die "could not move the binary into place"
 say "Installed $("$DIR/delphi" --version) to $DIR/delphi"
 
 case ":$PATH:" in
@@ -110,10 +114,10 @@ case ":$PATH:" in
   *) say ""; say "$DIR is not on your PATH. Add this line to your shell profile (~/.zshrc or ~/.bashrc):"; printf '  export PATH="%s:$PATH"\n' "$DIR" ;;
 esac
 
-if [ "$SETUP" -eq 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+if [ "$SETUP" -eq 1 ] && ( : < /dev/tty ) 2>/dev/null; then
   printf '\nRun `delphi setup` now to connect your models? [Y/n] ' > /dev/tty
   read -r answer < /dev/tty || answer=""
-  case "$answer" in n|N|no|No) say "Run \`delphi setup\` whenever you are ready." ;; *) "$DIR/delphi" setup < /dev/tty ;; esac
+  case "$answer" in n|N|no|No) say "Run \`delphi setup\` whenever you are ready." ;; *) "$DIR/delphi" setup < /dev/tty || say "Setup did not finish; run \`delphi setup\` again when you are ready." ;; esac
 else
   say ""; say "Next: cd into a project and run \`delphi setup\`."
 fi

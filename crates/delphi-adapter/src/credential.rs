@@ -32,7 +32,7 @@ pub enum CredentialRef {
 
 impl CredentialRef {
     pub fn parse(s: &str) -> Result<CredentialRef, String> {
-        let nonempty = |v: &str, what: &str| if v.trim().is_empty() { Err(format!("credential `{}` needs a {}", s, what)) } else { Ok(v.to_string()) };
+        let nonempty = |v: &str, what: &str| if v.trim().is_empty() { Err(format!("a `{}:` credential needs a {}", s.split(':').next().unwrap_or(""), what)) } else { Ok(v.to_string()) };
         if s == "gcloud-adc" {
             return Ok(CredentialRef::GcloudAdc);
         }
@@ -49,7 +49,7 @@ impl CredentialRef {
                 let argv = parse_argv(v).map_err(|e| format!("credential `command:` {}", e))?;
                 Ok(CredentialRef::Command(argv))
             }
-            _ => Err(format!("unknown credential source `{}` (expected keychain:, env:, aws:, gcloud-adc, gcloud-sa:, oauth2:, command: or harness-login)", s)),
+            _ => Err("unknown credential source (expected keychain:, env:, aws:, gcloud-adc, gcloud-sa:, oauth2:, command: or harness-login); the value is not shown in case it is a pasted secret".to_string()),
         }
     }
 }
