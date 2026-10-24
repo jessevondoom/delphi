@@ -45,7 +45,7 @@ test('the screen is exactly w by h, with a hairline above and below the prompt a
 test('line one: active agent, then the alert with a countdown, then the idle strip', () => {
   let s = fold(initial(0), { method: 'event', params: { type: 'dag.node.added', payload: { node_id: 'n_1', role: 'orchestrator', depth: 0 } } }, 500);
   const l1 = (m: Model) => plain(header(m, 100)[0]!);
-  assert.match(l1(model({ state: s, now: 1000 })), /^⟦•─•⟧ athena: working\s+navigate: shift\+arrows · ○ ● ○$/);
+  assert.match(l1(model({ state: s, now: 1000 })), /^⟦•─•⟧ athena: working\s+navigate: arrows · ○ ● ○$/);
   assert.match(l1(model({ state: s, now: 60_000 })), /all agents idle/);
   s = fold(s, { method: 'event', params: { type: 'approval.requested', payload: { approval_id: 'a', role: 'red-team', timeout_s: 600 } } }, 1000);
   assert.match(l1(model({ state: s, now: 1000 })), /^⟦x\?x⟧ ares: decision needed · 10:00 remaining/);
@@ -54,7 +54,7 @@ test('line one: active agent, then the alert with a countdown, then the idle str
 
 test('footer has tokens, mode and shortcuts on the left, deck dots on the right, and no money', () => {
   const f = plain(footer(model({ state: { ...initial(0), tokens: 42100 } }), 100));
-  assert.match(f, /^42\.1k tokens · approvals · shortcuts: \?\s+navigate: shift\+arrows · ○ ● ○$/);
+  assert.match(f, /^42\.1k tokens · approvals · shortcuts: \?\s+navigate: arrows · ○ ● ○$/);
   assert.ok(!f.includes('$'));
 });
 

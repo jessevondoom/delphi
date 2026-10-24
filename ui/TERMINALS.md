@@ -23,7 +23,8 @@ emulator is not Terminal.app, so the table below is a checklist, not a claim.
 
 | Key | Needs | If it does not arrive |
 | :-- | :-- | :-- |
-| `Shift+←` `Shift+→` (decks) | xterm modifier encoding (`ESC [ 1 ; 2 C`) | `Alt+←` `Alt+→` where the terminal sends them (`ESC [ 1 ; 3 C`) |
+| `←` `→` on an empty prompt (decks) | plain arrows (`ESC [ D` or `ESC O D`) | any terminal sends these |
+| `Shift+←` `Shift+→` (decks, with text in the prompt) | xterm modifier encoding (`ESC [ 1 ; 2 C`) | empty the prompt first and use plain `←` `→` |
 | `Shift+Tab` (approval mode) | `ESC [ Z` | `/permissions default`, `accept-edits` or `mission-auto` |
 | `Alt+Enter` (new line) | `ESC CR` | `Ctrl+J` |
 | Mouse wheel | SGR mouse reporting | `PgUp` `PgDn` |

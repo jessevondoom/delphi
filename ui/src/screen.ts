@@ -26,7 +26,7 @@ export type Model = {
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'];
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
 const dots = (deck: number) => [0, 1, 2].map((i) => (i === deck ? T.accent('●') : T.dim('○'))).join(' ');
-const nav = (deck: number, w = 100) => (w >= 72 ? T.dim('navigate: shift+arrows · ') : '') + dots(deck);
+const nav = (deck: number, w = 100) => (w >= 64 ? T.dim('navigate: arrows · ') : '') + dots(deck);
 
 export function header(m: Model, w: number): string[] {
   const st = status(m.state, m.now);
@@ -137,7 +137,7 @@ function windowOf(ps: string[][], start: number, end: number): string[] {
 const HELP = [
   'keys',
   '  enter send · alt+enter or ctrl+j newline · esc clear · ↑↓ history',
-  '  pgup pgdn or the mouse wheel scroll · shift+← shift+→ move between decks',
+  '  pgup pgdn or the mouse wheel scroll · ← → with an empty prompt (or shift+← shift+→ any time) move between decks',
   '  ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave',
   '  / opens the command menu · tab or enter completes',
   '  answer a waiting approval with /y /a /n /d · @architect … sends to one role · @specs/… points at a file',

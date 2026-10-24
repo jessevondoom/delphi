@@ -1,4 +1,4 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                     navigate: shift+arrows · ○ ● ○
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                           navigate: arrows · ○ ● ○
 delphi v0.5 · /proj
 
   Use a table. It gives you:
@@ -27,7 +27,7 @@ delphi v0.5 · /proj
 
 keys
   enter send · alt+enter or ctrl+j newline · esc clear · ↑↓ history
-  pgup pgdn or the mouse wheel scroll · shift+← shift+→ move between decks
+  pgup pgdn or the mouse wheel scroll · ← → with an empty prompt (or shift+← shift+→ any time) move…
   ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave
   / opens the command menu · tab or enter completes
   answer a waiting approval with /y /a /n /d · @architect … sends to one role · @specs/… points at …
@@ -37,4 +37,4 @@ keys
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○
+0 tokens · approvals · 2 waiting · shortcuts: ?                             navigate: arrows · ○ ● ○

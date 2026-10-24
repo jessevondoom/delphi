@@ -818,7 +818,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c.wait_for("• one");
     let screen = c.visible();
     assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
-    assert!(screen.lines().next().unwrap().contains("navigate: shift+arrows"), "header: {}", screen);
+    assert!(screen.lines().next().unwrap().contains("navigate: arrows"), "header: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
@@ -1078,7 +1078,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     // A task that needs the operator, answered from the inbox.
     line(&mut c, "@architect Draft a spec called 009-e2e");
     c.wait_for("approval needed [amber]");
-    c.type_keys("\x1b[1;2C"); // Shift+Right
+    c.type_keys("\x1b[C"); // Right, with nothing typed: the next deck
     c.wait_for("Pending decisions (1)");
     std::thread::sleep(Duration::from_millis(400)); // the 300 ms guard
     c.type_keys("n");
@@ -1087,6 +1087,26 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("Understood, nothing was written.");
     c.wait_for("· architect ·"); // the text streams dim first; the finished reply (its badge line) is what /pin keeps
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the denied action never ran");
+
+    // Arrows edit a prompt that has text and move between decks when it is empty; Shift+arrows always move a deck.
+    c.type_keys("abc");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\x1b[D"); // Left, with text: the cursor moves, the deck stays
+    std::thread::sleep(Duration::from_millis(300));
+    let kept = c.visible();
+    assert!(kept.contains("❯ abc") && kept.contains("navigate: arrows · ○ ● ○"), "{}", kept);
+    c.type_keys("\x1b[1;2D"); // Shift+Left: the left deck, the draft waits
+    c.wait_for("navigate: arrows · ● ○ ○");
+    c.type_keys("\x1b[1;2C");
+    c.wait_for("❯ abc");
+    c.type_keys("\x05\x15"); // End, then delete to the start: an empty prompt
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!c.visible().contains("❯ abc"), "{}", c.visible());
+    c.type_keys("\x1b[D"); // Left, now empty: the left deck
+    c.wait_for("navigate: arrows · ● ○ ○");
+    c.type_keys("\x1b[C"); // and back to the chat
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(c.visible().contains("navigate: arrows · ○ ● ○"), "{}", c.visible());
 
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
@@ -1115,7 +1135,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     let big = c.visible();
     let rows: Vec<&str> = big.lines().collect();
     assert_eq!(rows.len(), 36, "{}", big);
-    assert!(rows[35].contains("shortcuts: ?") && rows[35].contains("navigate: shift+arrows"), "{}", big);
+    assert!(rows[35].contains("shortcuts: ?") && rows[35].contains("navigate: arrows"), "{}", big);
     assert!(!big.contains("Pending decisions"), "no leftovers from the inbox:\n{}", big);
 
     // Leave, and the terminal comes back: alternate screen off, cursor on, mouse and paste modes off.

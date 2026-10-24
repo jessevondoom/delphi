@@ -48,6 +48,8 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
     const n = card ? options(card).length : 1;
     return none({ ...inb, opt: Math.max(0, Math.min(n - 1, inb.opt + d)) });
   }
+  // `←` in the list goes back to the chat; in focus mode it and `→` walk through the cards.
+  if (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl && (inb.mode === 'list' || !list.length)) return { inbox: { ...inb, confirmAll: false }, action: { t: 'chat' } };
   if (inb.mode === 'focus' && (k === 'left' || k === 'right')) return none({ ...inb, sel: Math.max(0, Math.min(list.length - 1, sel + (k === 'left' ? -1 : 1))), opt: 0, payload: false });
   if (k === 'enter') {
     if (inb.mode === 'list') return card ? none({ ...inb, mode: 'focus', sel, opt: 0 }) : none();

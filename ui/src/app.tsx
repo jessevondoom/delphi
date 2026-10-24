@@ -1,3 +1,4 @@
+import { deckTarget, type Deck } from './decknav.ts';
 import { graphemes } from './text.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useStdout } from 'ink';
@@ -219,7 +220,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       // Ctrl+K and Ctrl+S open the research panels from the chat deck.
       if (!panelRef.current && deckRef.current === 1 && e.t === 'ctrl' && (e.c === 'k' || e.c === 's')) { openPanel(e.c === 'k' ? P.openSearch() : P.openSources()); return; }
       // An open panel owns the keyboard until it is closed.
-      if (panelRef.current && deckRef.current === 1 && !(e.t === 'key' && (e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) && e.t !== 'wheel' && e.t !== 'bg') {
+      if (panelRef.current && deckRef.current === 1 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && e.t !== 'wheel' && e.t !== 'bg') {
         const { panel: next0, action } = P.key({ ...panelRef.current, flash: undefined } as P.Panel, e, stateRef.current.sources);
         const next = next0;
         panelRef.current = next; setPanel(next);
@@ -232,7 +233,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       }
 
       // On the right deck the keyboard belongs to the inbox (an explicit focus change), never the prompt.
-      if (deckRef.current === 2 && !(e.t === 'key' && (e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) && !(e.t === 'ctrl' && e.c === 'c')) {
+      if (deckRef.current === 2 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && !(e.t === 'ctrl' && e.c === 'c')) {
         const now = Date.now();
         const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
         inboxRef.current = next; setInbox(next);
@@ -262,8 +263,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
           if (e.c === 'r') { setS({ q: '', at: hist.length, match: null }); return; }
           return;
         case 'key': {
-          if ((e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) {
-            const d = Math.max(0, Math.min(2, deckRef.current + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2;
+          const d = deckTarget(deckRef.current as Deck, e, comp.current.chars.length === 0);
+          if (d !== null) {
             deckRef.current = d; setDeck(d);
             if (d === 2) { const fresh = I.newInbox(Date.now()); inboxRef.current = fresh; setInbox(fresh); }
             return;
