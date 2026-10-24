@@ -29,6 +29,8 @@ pub enum Input {
     Help,
     Quit,
     Usage(Option<String>),
+    /// `/models`: the model pool and where each model stands.
+    Models,
     Budget(Option<f64>),
     Permissions(Option<String>),
     Ratify(Vec<String>),
@@ -61,6 +63,7 @@ pub fn parse_input(line: &str) -> Input {
             "help" | "?" => Input::Help,
             "quit" | "exit" | "q" => Input::Quit,
             "usage" => Input::Usage(rest.first().map(|s| s.to_string())),
+            "models" => Input::Models,
             "budget" => match rest.first() {
                 None => Input::Budget(None),
                 Some(v) => v.trim_start_matches('$').parse::<f64>().map(|x| Input::Budget(Some(x))).unwrap_or_else(|_| Input::Unknown(format!("/budget takes a dollar amount, not `{}`", v))),
@@ -131,6 +134,7 @@ fn parse_council(args: &str) -> Input {
 pub const HELP: &str = "\
 Type a request and press Enter. Reference files with @project/<name>/path or @specs/…; route to a role with `@architect …`.
   /usage [mission|role|task|model]   token and cost totals
+  /models                            the model pool: which models are usable, out of quota, or cooling down
   /budget [dollars]                  show or change this mission's cost ceiling
   /permissions [default|accept-edits|mission-auto]
   /ratify                            pending proposals (config, manifests, specs)
@@ -654,6 +658,10 @@ impl Session {
                 Ok(v) => say(&format!("{}\n", render_usage(&v))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
+            Input::Models => match self.cmd.call("models.get", json!({})) {
+                Ok(v) => say(v["text"].as_str().unwrap_or("")),
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
             Input::Budget(None) => match self.cmd.call("budget.get", json!({"mission_id": self.mission_id})) {
                 Ok(b) => say(&format!("ceiling ${:.2} · spent ${:.4} · reserved ${:.4} · available ${:.4}\n", b["cap_usd"].as_f64().unwrap_or(0.0), b["spent_usd"].as_f64().unwrap_or(0.0), b["reserved_usd"].as_f64().unwrap_or(0.0), b["available_usd"].as_f64().unwrap_or(0.0))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
@@ -963,6 +971,7 @@ mod tests {
         assert_eq!(parse_input("  "), Input::Empty);
         assert_eq!(parse_input("/help"), Input::Help);
         assert_eq!(parse_input("/usage role"), Input::Usage(Some("role".into())));
+        assert_eq!(parse_input("/models"), Input::Models);
         assert_eq!(parse_input("/budget"), Input::Budget(None));
         assert_eq!(parse_input("/budget $7.5"), Input::Budget(Some(7.5)));
         assert!(matches!(parse_input("/budget lots"), Input::Unknown(_)));
