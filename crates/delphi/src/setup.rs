@@ -573,7 +573,7 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
 
     let ratified = ratify_config(ui, &o.home, &ws_dir, o.yes);
     ui.say(&format!("\nDone. {}", if added.is_empty() { "No new endpoints were added.".to_string() } else { format!("Added: {}.", added.join(", ")) }));
-    ui.say("Next:\n  delphi endpoints test --probe     one tiny call per endpoint, to prove it works\n  delphi chat                       the console; try `/build implement @specs/… in @project/<name>`");
+    ui.say("Next:\n  delphi endpoints test --probe     one tiny call per endpoint, to prove it works\n  delphi                            the console; try `/build implement @specs/… in @project/<name>`");
     Ok(Outcome { added, ratified })
 }
 

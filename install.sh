@@ -94,11 +94,17 @@ else
   say "Note: only the checksum was verified. Install and sign in to the gh CLI to also verify who built this."
 fi
 
-# Extract exactly one path, and only if it is a regular file.
+# Extract exactly two paths (the program and its full-screen console), and only if they are regular files.
 tar -xzf "$tmp/$name" -C "$tmp" "delphi-$VERSION-$target/delphi" || die "the archive has no delphi executable"
 bin="$tmp/delphi-$VERSION-$target/delphi"
 [ -f "$bin" ] && [ ! -L "$bin" ] || die "the archive's delphi is not a regular file"
 "$bin" --version >/dev/null 2>&1 || die "the downloaded binary does not run on this machine"
+# Older releases have no console; the program then falls back to its inline one.
+ui=""
+if tar -xzf "$tmp/$name" -C "$tmp" "delphi-$VERSION-$target/delphi-ui" 2>/dev/null; then
+  ui="$tmp/delphi-$VERSION-$target/delphi-ui"
+  [ -f "$ui" ] && [ ! -L "$ui" ] || die "the archive's delphi-ui is not a regular file"
+fi
 
 mkdir -p "$DIR"
 [ ! -L "$DIR/delphi" ] || die "$DIR/delphi is a symlink; remove it first"
@@ -107,6 +113,12 @@ trap 'rm -rf "$tmp"; rm -f "$stage"' EXIT INT TERM
 cp "$bin" "$stage" || die "could not copy the binary into $DIR"
 chmod 755 "$stage" || die "could not make the binary executable"
 mv -f "$stage" "$DIR/delphi" || die "could not move the binary into place"
+if [ -n "$ui" ]; then
+  [ ! -L "$DIR/delphi-ui" ] || die "$DIR/delphi-ui is a symlink; remove it first"
+  stage_ui="$(mktemp "$DIR/.delphi-ui.XXXXXX")"
+  trap 'rm -rf "$tmp"; rm -f "$stage" "$stage_ui"' EXIT INT TERM
+  cp "$ui" "$stage_ui" && chmod 755 "$stage_ui" && mv -f "$stage_ui" "$DIR/delphi-ui" || die "could not install delphi-ui into $DIR"
+fi
 say "Installed $("$DIR/delphi" --version) to $DIR/delphi"
 
 case ":$PATH:" in
@@ -115,9 +127,9 @@ case ":$PATH:" in
 esac
 
 if [ "$SETUP" -eq 1 ] && ( : < /dev/tty ) 2>/dev/null; then
-  printf '\nRun `delphi setup` now to connect your models? [Y/n] ' > /dev/tty
+  printf '\nRun `delphi` now to finish setting up? [Y/n] ' > /dev/tty
   read -r answer < /dev/tty || answer=""
-  case "$answer" in n|N|no|No) say "Run \`delphi setup\` whenever you are ready." ;; *) "$DIR/delphi" setup < /dev/tty || say "Setup did not finish; run \`delphi setup\` again when you are ready." ;; esac
+  case "$answer" in n|N|no|No) say "Run \`delphi\` in a project whenever you are ready." ;; *) "$DIR/delphi" < /dev/tty || say "Setup did not finish; run \`delphi\` again when you are ready." ;; esac
 else
-  say ""; say "Next: cd into a project and run \`delphi setup\`."
+  say ""; say "Next: cd into a project and run \`delphi\`."
 fi

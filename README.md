@@ -30,9 +30,10 @@ macOS or Linux. The installer verifies the download against its checksum and, if
 
 ```sh
 cd ~/code/my-project
-delphi setup        # finds Claude Code / agy, asks only for what it can't find, writes and ratifies the config
-delphi chat         # the console
+delphi              # sets up whatever is missing, then opens the console
 ```
+
+The first time, `delphi` creates a workspace for the project (with a one-line note), runs the guided model setup if no model access exists (it finds Claude Code and `agy`, asks only for what it can't find, and ratifies the config), and runs the doctor, offering to fix what it can. After that it just opens the console. Outside a git repository it uses a `default` workspace that holds only the built-in memories and context. `delphi doctor --fix` runs the same offers on demand; `delphi setup` and `delphi chat` remain for scripts and reconfiguring.
 
 ```
 › What does @project/my-project/src/lib.rs do?
