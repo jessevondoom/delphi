@@ -13,7 +13,7 @@ council_format: 1
 
 # Council 007: Narrator window, separate process or embedded pane
 
-The first Council run by the runtime itself (`/council`), on a real design question for Step 5. Seats: Architect and Strategist on Claude (Sonnet, subscription harness), Red-Team on Gemini (Flash, via `agy`). **Operator decision: pending.** The seats unanimously recommend the separate process; the escalation is the deterministic P0 rule, and the P0 items are enforcement requirements to carry into the Narrator spec.
+The first Council run by the runtime itself (`/council`), on a real design question for Step 5. Seats: Architect and Strategist on Claude (Sonnet, subscription harness), Red-Team on Gemini (Flash, via `agy`). **Operator decision (2026-10-24): approved, a separate process (D-25).** The seats unanimously recommended it; the escalation was the deterministic P0 rule, and the P0 items are enforcement requirements recorded as open follow-ups in D-25.
 
 **Proposition:** Should Delphi's Narrator window be a separate `delphi narrator` process that attaches to the daemon over its Unix socket, or a pane embedded in the console REPL process? The Narrator shows an agents pane and four views and must never be able to start work or approve anything.
 
