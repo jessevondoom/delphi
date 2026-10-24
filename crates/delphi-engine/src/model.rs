@@ -5,6 +5,7 @@ use delphi_adapter::blocks::ContentBlock;
 use delphi_adapter::claude::{Completed, Compiled, StreamError, StreamEvent, Usage};
 use delphi_adapter::config::{Endpoint, SharedConfig};
 use delphi_adapter::credential::{CredentialError, CredentialStore};
+use delphi_adapter::exhaust::Exhaustion;
 use delphi_adapter::http::{call_with_retry, CallError, RetryPolicy};
 use delphi_adapter::platform::{build, BuildError, BuildInput};
 use serde_json::Value;
@@ -21,6 +22,9 @@ pub type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<Completed, ModelErr
 pub enum ModelError {
     /// Refused or throttled before any content: try the next endpoint in the ratified order.
     Throttled(String),
+    /// The model's quota, spend limit or subscription window is used up (`specs/002` §4.1): waiting
+    /// here will not help, so go to the next endpoint without retrying this one.
+    Exhausted(Exhaustion),
     /// The credential expired and cannot be renewed: pause, never fail over.
     NeedsReauth { endpoint: String },
     /// The endpoint is outside the pin, or the request can't be built.
@@ -35,6 +39,7 @@ impl std::fmt::Display for ModelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ModelError::Throttled(m) | ModelError::Refused(m) | ModelError::Interrupted(m) | ModelError::Failed(m) => write!(f, "{}", m),
+            ModelError::Exhausted(e) => write!(f, "quota exhausted: {}", e),
             ModelError::NeedsReauth { endpoint } => write!(f, "re-authenticate {}", endpoint),
         }
     }
@@ -78,6 +83,7 @@ impl ModelClient for HttpModelClient {
             match call_with_retry(&self.http, &req, self.idle_timeout, &self.retry, &*redact, on_event).await {
                 Ok(done) => Ok(done),
                 Err(CallError::RateLimited { message, .. }) => Err(ModelError::Throttled(message)),
+                Err(CallError::Exhausted(e)) => Err(ModelError::Exhausted(e)),
                 Err(CallError::Stream(StreamError::Incomplete)) => Err(ModelError::Interrupted("the stream ended before the message completed".into())),
                 Err(CallError::Unreachable(m)) => Err(ModelError::Throttled(m)), // nothing was sent: no charge, next endpoint
                 Err(CallError::Transport(m)) => Err(ModelError::Interrupted(m)),
@@ -95,6 +101,8 @@ pub enum Step {
     /// Show some deltas, then break the stream.
     Interrupt,
     Throttle,
+    /// The quota is used up; resets 5 days from the call (a script cannot know the real clock).
+    Exhaust,
     NeedsReauth,
     Fail(&'static str),
     /// The call never returns (the daemon is killed while waiting for the provider).
@@ -170,6 +178,10 @@ impl ModelClient for ScriptedModel {
                     Err(ModelError::Interrupted("the stream ended before the message completed".into()))
                 }
                 Step::Throttle => Err(ModelError::Throttled("slow down".into())),
+                Step::Exhaust => {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                    Err(ModelError::Exhausted(Exhaustion { reason: "quota reached".into(), reset_at: Some(now + 5 * 86_400), raw: "Individual quota reached. Resets in 120h0m0s.".into() }))
+                }
                 Step::NeedsReauth => Err(ModelError::NeedsReauth { endpoint: endpoint.id.clone() }),
                 Step::Fail(m) => Err(ModelError::Failed(m.into())),
                 Step::Hang => std::future::pending().await,

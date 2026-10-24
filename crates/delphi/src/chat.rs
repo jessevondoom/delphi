@@ -302,6 +302,7 @@ impl Renderer {
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
             "span.taint" => Some(format!("\n  ! {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
             "endpoint.throttled" => Some(format!("\n  ! {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
+            "model.exhausted" => Some(format!("\n  ! {} is out of quota ({}){}; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"), p["reason"].as_str().unwrap_or("?"), p["reset_at"].as_i64().map(|t| format!(", back at {}", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
             "endpoint.reauth_required" => Some(format!("\n  ! re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
             "turn.interrupted" => Some("\n  ! the stream was interrupted; retrying the turn\n".to_string()),
             "task.failed" => Some(format!("\n✗ task failed: {}\n", p["error"].as_str().unwrap_or(""))),

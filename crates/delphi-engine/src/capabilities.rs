@@ -65,6 +65,7 @@ fn describe(e: &ModelError) -> String {
     match e {
         ModelError::NeedsReauth { .. } => "re-authenticate".into(),
         ModelError::Throttled(m) => format!("throttled: {}", m.chars().take(120).collect::<String>()),
+        ModelError::Exhausted(e) => format!("exhausted: {}", e),
         ModelError::Refused(m) => format!("refused: {}", m.chars().take(120).collect::<String>()),
         ModelError::Interrupted(m) => format!("interrupted: {}", m.chars().take(120).collect::<String>()),
         ModelError::Failed(m) => format!("failed: {}", m.chars().take(160).collect::<String>()),
@@ -223,7 +224,7 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
             while let Some(ev) = s.next(Duration::from_secs(90)).await {
                 match ev {
                     Event::Usage(t) => cap.tokens_used += t.metered(),
-                    Event::RateLimit { utilization, window } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
+                    Event::RateLimit { utilization, window, .. } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
                     Event::Result { is_error, text, usage, .. } => {
                         got_result = true;
                         cap.usage_reported = Some(usage.metered() + usage.cache_read > 0);

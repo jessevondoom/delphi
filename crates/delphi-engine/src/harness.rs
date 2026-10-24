@@ -119,7 +119,8 @@ pub enum Event {
     /// One assistant message's usage (the sum of these is the live meter).
     Usage(Tokens),
     /// Share of the subscription's window used, 0 to 1.
-    RateLimit { utilization: f64, window: String },
+    /// `status` is `allowed`, `allowed_warning` or `rejected` (empty when the CLI does not say); `resets_at` is Unix seconds or milliseconds, as the CLI sent it.
+    RateLimit { utilization: f64, window: String, status: String, resets_at: Option<i64> },
     Result { text: String, is_error: bool, stop_reason: Option<String>, total_cost_usd: f64, usage: Tokens },
     /// The process ended; no more events follow.
     Exit { code: Option<i32> },
@@ -152,8 +153,10 @@ pub fn parse_line(line: &str) -> Vec<Event> {
         }
         Some("rate_limit_event") => {
             let i = &m["rate_limit_info"];
-            if let Some(u) = i["utilization"].as_f64() {
-                out.push(Event::RateLimit { utilization: u, window: i["rateLimitType"].as_str().unwrap_or("").into() });
+            let status = i["status"].as_str().unwrap_or("");
+            if i["utilization"].is_number() || !status.is_empty() {
+                let resets_at = ["resetsAt", "resets_at"].iter().find_map(|k| i[*k].as_i64().or_else(|| i[*k].as_f64().map(|f| f as i64)));
+                out.push(Event::RateLimit { utilization: i["utilization"].as_f64().unwrap_or(0.0), window: i["rateLimitType"].as_str().unwrap_or("").into(), status: status.into(), resets_at });
             }
         }
         Some("control_request") if m["request"]["subtype"] == "can_use_tool" => {
@@ -206,9 +209,13 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
         Some("result") => {
             let r = &m["result"];
             let denied = r["denied_actions"].as_array().map(|a| a.len()).unwrap_or(0);
+            let is_error = r["status"].as_str().is_some_and(|s| s != "SUCCESS");
+            // A failed run has an empty `response`; the reason (a spent quota, its reset time) is in `error`.
+            let response = r["response"].as_str().unwrap_or("");
+            let text = if is_error && response.is_empty() { r["error"].as_str().unwrap_or("") } else { response };
             out.push(Event::Result {
-                text: r["response"].as_str().unwrap_or("").into(),
-                is_error: r["status"].as_str().is_some_and(|s| s != "SUCCESS"),
+                text: text.into(),
+                is_error,
                 stop_reason: (denied > 0).then(|| format!("{} action(s) denied by the CLI", denied)),
                 total_cost_usd: 0.0,
                 usage: usage_of(&r["usage"]),
@@ -366,9 +373,13 @@ pub(crate) mod tests {
         let Event::Usage(t) = &asst[2] else { panic!() };
         assert_eq!((t.metered(), t.cache_read), (124, 9000), "cache reads are not metered");
         assert_eq!(parse_line(r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"x"}]}}"#), vec![Event::ToolResult { id: "tu1".into(), is_error: true }]);
-        assert_eq!(parse_line(r#"{"type":"rate_limit_event","rate_limit_info":{"utilization":0.32,"rateLimitType":"seven_day"}}"#), vec![Event::RateLimit { utilization: 0.32, window: "seven_day".into() }]);
+        assert_eq!(parse_line(r#"{"type":"rate_limit_event","rate_limit_info":{"utilization":0.32,"rateLimitType":"seven_day"}}"#), vec![Event::RateLimit { utilization: 0.32, window: "seven_day".into(), status: String::new(), resets_at: None }]);
+        assert_eq!(parse_line(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","resetsAt":1790003600}}"#), vec![Event::RateLimit { utilization: 0.0, window: "five_hour".into(), status: "rejected".into(), resets_at: Some(1_790_003_600) }]);
         let res = parse_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"done","stop_reason":"end_turn","total_cost_usd":0.02,"usage":{"input_tokens":4,"output_tokens":80}}"#);
         assert!(matches!(&res[0], Event::Result { text, is_error: false, total_cost_usd, .. } if text == "done" && *total_cost_usd == 0.02));
+        // `agy` with the quota used up: the reason is in `error`, not `response` (a captured sample).
+        let res = parse_agy_line(r#"{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Resets in 136h12m54s.","usage":{"input_tokens":0,"output_tokens":0}}}"#);
+        assert!(matches!(&res[0], Event::Result { text, is_error: true, .. } if text == "Individual quota reached. Resets in 136h12m54s."), "{:?}", res);
         let err = parse_line(r#"{"type":"result","subtype":"error_max_budget_usd","is_error":false,"result":""}"#);
         assert!(matches!(&err[0], Event::Result { is_error: true, .. }), "a non-success subtype is an error");
         assert!(parse_line("not json").is_empty() && parse_line(r#"{"type":"stream_event"}"#).is_empty());

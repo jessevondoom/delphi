@@ -5,6 +5,7 @@ pub mod claude;
 pub mod config;
 pub mod credential;
 pub mod eventstream;
+pub mod exhaust;
 pub mod gemini;
 pub mod http;
 pub mod ipr;

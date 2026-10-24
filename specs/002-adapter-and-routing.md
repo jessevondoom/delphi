@@ -195,7 +195,7 @@ Tiers resolve to concrete model IDs only through this configuration. Thinking bu
 
 Roles ask for capabilities (§4); this section says what happens when the model that would serve them runs out.
 
-**The pool.** `[routing.pool]` lists configured models in preference order. Each entry has a runtime state kept by the daemon (not in team-tracked files):
+**The pool.** `[routing.pool]` lists configured models in preference order. A model ID expands to every allowed endpoint that serves it, in the ratified `[access]` order. **State is kept per `(endpoint_id, model_id)`**, not per model: the same model behind a direct API, Bedrock and a subscription harness has separate quotas. Each entry has a runtime state kept by the daemon (not in team-tracked files):
 
 | State | Meaning | Leaves the state when |
 | :--- | :--- | :--- |
@@ -203,7 +203,13 @@ Roles ask for capabilities (§4); this section says what happens when the model 
 | `cooling_down` | Rate limited (`429`/`529`) | `retry-after` or the backoff limit passes (§3.1 rule 4) |
 | `exhausted` | Quota, subscription window or budget used up | A known reset time passes, or a capped probe call succeeds (re-probe after 15 minutes, doubling to 4 hours) |
 
-Exhaustion is detected from provider quota and billing errors (not rate limits), a harness `rate_limit_event` at 100% utilization, or the daemon's own reservation failing against a per-model cap. It is recorded as `model.exhausted` with the reason and the reset time if known.
+**Detecting exhaustion (classifier).** A pure function over the provider's reply, with rules applied in order:
+1. **Explicit signal** → `exhausted`, with the reset time parsed from the header or message when present: a billing error (`402`), a spend-cap or spend-limit reply, a harness `rate_limit_event` with `status = rejected`, a CLI error such as `RESOURCE_EXHAUSTED` or "quota reached" with a reset duration, or the daemon's own reservation failing against a per-model cap. A harness `utilization` figure alone is not a signal: utilization is not rejection.
+2. **Long `retry-after`**: a wait longer than 15 minutes → `exhausted`, with `reset_at = now + retry_after`. A CLI's own "retryable" flag is not trusted.
+3. **Persistent throttling**: the same `(endpoint_id, model_id)` throttled on 3 consecutive attempts spread over at least 10 minutes → `exhausted` with no reset time. This is the backstop for providers that report a spent quota as an ordinary rate limit (Bedrock, the Gemini API).
+4. **Anything else stays a throttle** (`cooling_down`, today's behavior). An unrecognised error never becomes `exhausted` by guess: a wrong early promotion costs a model switch that a re-probe undoes, while a missed exhaustion only costs the existing bounded retry.
+
+Both thresholds are configuration constants. Exhaustion is recorded as `model.exhausted` with the reason, the reset time if known, and the redacted raw error text, so a wrong classification can be corrected from evidence.
 
 **Primary is a runtime role.** For each request, `resolve_model_route` filters the pool to *eligible* models (tier or better, write tools and the approval bridge if the role mutates, enough context, a priced catalog entry, an endpoint inside `allowed_endpoints`) and takes the first `available` one. The rule applies at every dispatch, so when the previous primary is exhausted the next model simply becomes the primary and nothing else in the mission changes.
 

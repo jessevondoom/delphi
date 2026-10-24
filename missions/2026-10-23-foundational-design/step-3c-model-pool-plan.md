@@ -60,6 +60,10 @@ M1 and M2 are independent and can run in parallel. M3 is pure code with no engin
 4. **Config compatibility.** Existing workspaces use `role_family`. It must keep working as the default target, with a test that an unchanged config routes exactly as before.
 5. **Budget interplay.** A promotion to a pricier model re-reserves at its prices; a promotion that would exceed the mission budget escalates as it does today, never silently downgrades.
 
+## Progress
+
+- **M1 done 2026-10-24** (about 6 h): `delphi-adapter/src/exhaust.rs` (the pure classifier: explicit signals and the 15-minute `retry-after` rule, Go-duration and reset-time parsing), `CallError::Exhausted` and `ModelError::Exhausted`, the `model.exhausted` event and its Narrator and console lines, `model_turn` failing over without retry and escalating with the reason and reset time, and the harness fixes the live `agy` sample showed (it now reads `result.error`, and a `claude` `rate_limit_event` carries `status` and the reset time). Tested against the documented Anthropic bodies and the real `agy` output. **Rule 3 of the classifier (persistent throttling) is deliberately not in M1**: it needs history per `(endpoint_id, model_id)`, which is the pool state of M2. Still unsampled live: Anthropic API, Gemini API, Bedrock, the `claude` harness.
+
 ## Definition of done
 
 Spec 002 §4.1 tests 1–7 and 6a pass; an unchanged config routes as before; a real two-family run where the target is made unavailable (a model removed from the pool, or a recorded exhaustion fixture) finishes the task on the substitute with `model.promoted` in the log; and `delphi models` shows the states.

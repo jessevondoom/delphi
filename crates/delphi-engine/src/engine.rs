@@ -608,6 +608,7 @@ impl Engine {
         if interruptions >= self.settings.max_interruptions {
             return Ok(Err(Escalate(format!("the same turn was interrupted {} times in a row", interruptions))));
         }
+        let mut exhausted_note: Option<String> = None;
         'endpoints: for ep in &endpoints {
             loop {
                 let Some(model_id) = cfg.resolve_model(ep, &sc.tier) else { continue 'endpoints };
@@ -681,6 +682,13 @@ impl Engine {
                         m.append(sc.ev("endpoint.throttled", json!({"endpoint_id": ep.id, "message": self.secrets.redact(&msg)}))).await?;
                         continue 'endpoints; // the next allowed endpoint, in ratified order
                     }
+                    Err(ModelError::Exhausted(x)) => {
+                        // Out of quota, not slow: no retry here (`specs/002` §4.1). Say why and when it returns, then try the next endpoint.
+                        m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "quota exhausted"}), ep, &model_id)).await?;
+                        m.append(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": model_id, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)}))).await?;
+                        exhausted_note.get_or_insert_with(|| format!("{} is out of quota ({})", ep.id, self.secrets.redact(&x.to_string())));
+                        continue 'endpoints;
+                    }
                     Err(ModelError::Interrupted(msg)) => {
                         // The usage of an interrupted call is unknowable: charge the full reservation.
                         let mut u = delphi_adapter::claude::Usage::default().to_payload_for(delphi_adapter::provider_for(ep), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
@@ -704,7 +712,8 @@ impl Engine {
                 }
             }
         }
-        Ok(Err(Escalate(format!("{}; waiting would not help right now", EXHAUSTED))))
+        let why = exhausted_note.map(|n| format!(": {}", n)).unwrap_or_default();
+        Ok(Err(Escalate(format!("{}{}; waiting would not help right now", EXHAUSTED, why))))
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
@@ -1324,6 +1333,27 @@ mod tests {
         let g = setup(vec![Step::Throttle, Step::Throttle], 5.0, |_| {});
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
+        assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_model_is_recorded_with_its_reset_and_the_next_endpoint_takes_over() {
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let seen: Vec<String> = f.model.requests().iter().map(|r| r.endpoint_id.clone()).collect();
+        assert_eq!(seen, vec!["direct", "backup"]);
+        let k = kinds(&f);
+        assert!(k.contains(&"model.exhausted".to_string()) && !k.contains(&"endpoint.throttled".to_string()), "exhaustion is not reported as a throttle");
+        assert_eq!(k.iter().filter(|x| *x == "budget.release").count(), 1, "the first reservation is released, not charged");
+        let ex = &events_of(&f, "model.exhausted")[0].payload;
+        assert_eq!((ex["endpoint_id"].as_str(), ex["reason"].as_str()), (Some("direct"), Some("quota reached")));
+        assert!(ex["reset_at"].as_i64().unwrap() > 0 && ex["raw"].as_str().unwrap().contains("quota reached"));
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+        // Every endpoint out of quota: the task escalates and says which and why.
+        let g = setup(vec![Step::Exhaust, Step::Exhaust], 5.0, |_| {});
+        let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("direct is out of quota") && r.contains("resets at")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
     }
 
