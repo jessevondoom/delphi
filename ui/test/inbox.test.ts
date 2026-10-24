@@ -92,7 +92,7 @@ test('the views follow the design: list rows with tier, role badge and time; foc
 
 test('the header alert uses the red-team badge and counts decisions; the footer shows the approval mode', () => {
   const s = three();
-  const m = (over: Partial<Model> = {}): Model => ({ info, pal, state: s, now: 5000, deck: 2, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', ...over });
+  const m = (over: Partial<Model> = {}): Model => ({ info, pal, state: s, now: 5000, deck: 2, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, ...over });
   assert.match(plain(header(m(), 100)[0]!), /^⟦x\?x⟧ ares: 3 decisions pending · \d\d:\d\d remaining\s+navigate: shift\+arrows · ○ ○ ●$/);
   assert.match(plain(footer(m(), 100)), /^0 tokens · approvals · 3 waiting · shortcuts: \?/);
   assert.match(plain(footer(m({ mode: 'mission-auto' }), 100)), /· auto ·/);

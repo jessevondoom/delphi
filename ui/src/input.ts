@@ -111,6 +111,8 @@ export class InputParser {
     // Alt+key: ESC then a character (Alt+Enter is ESC CR).
     if (n === '\r' || n === '\n') return { len: 2, ev: { t: 'key', k: 'enter', alt: true, shift: false, ctrl: false } };
     if (n === '\x7f') return { len: 2, ev: { t: 'key', k: 'backspace', alt: true, shift: false, ctrl: false } };
+    // Escape followed at once by a control key (Ctrl+C) is two keypresses, not an Alt combination.
+    if (n < ' ') return { len: 1, ev: { t: 'key', k: 'esc', alt: false, shift: false, ctrl: false } };
     return { len: 2, ev: { t: 'text', s: n } }; // Alt+letter: treated as the letter
   }
 }

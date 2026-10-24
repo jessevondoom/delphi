@@ -6,6 +6,7 @@ import type { Item } from './complete.ts';
 import { status, type Block, type State } from './fold.ts';
 import * as T from './theme.ts';
 import * as I from './inbox.ts';
+import * as P from './panel.ts';
 import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 
@@ -17,6 +18,7 @@ export type Model = {
   search: { q: string; match: string | null } | null;
   queue: string[];
   inbox: I.Inbox;
+  panel: P.Panel | null;
   /** permissions mode: default, accept-edits or mission-auto */
   mode: string;
 };
@@ -169,9 +171,11 @@ export function frame(m: Model, w: number, h: number): string[] {
   const prompt = lay.rows.slice(first, first + promptRows).map((r, i) =>
     (first + i === 0 ? T.dim('❯ ') : '  ') + T.text(m.pal)(r.before) + (r.at ? chalk.inverse(r.at) : '') + T.text(m.pal)(r.after));
   if (m.deck === 2) { prompt.length = 0; prompt.push(T.dim(I.hint(m.inbox, I.cards(m.state).length))); }
+  if (m.panel && m.deck === 1) { prompt.length = 0; prompt.push(T.dim(P.hint(m.panel))); }
   const bodyH = Math.max(1, h - head.length - 1 /*blank*/ - 1 /*status*/ - 1 - prompt.length - 1 - 1);
   let body: string[];
   if (m.deck !== 1) body = deckBody(m, w, bodyH);
+  else if (m.panel) body = P.view(m.panel, m.state.sources, m.pal, w, bodyH);
   else {
     const lines = m.help ? [...transcript(m, w), '', ...HELP.map(T.dim)] : transcript(m, w);
     const maxBack = Math.max(0, lines.length - bodyH);

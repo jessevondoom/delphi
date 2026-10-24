@@ -17,7 +17,7 @@ const info: Info = {
   },
 };
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', help: false, ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, ...over });
 
 test('every badge is five columns, in every state, dark and light', () => {
   for (const role of Object.keys(info.roles)) for (const st of ['idle', 'running', 'waiting on you', 'escalated'] as const) for (const dark of [true, false]) {

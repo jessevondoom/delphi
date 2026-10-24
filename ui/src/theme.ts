@@ -6,6 +6,8 @@ export type RoleInfo = { name: string; chassis: string; face: string; crown?: st
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
   version: string; cwd: string; roles: Record<string, RoleInfo>;
+  /** Where `delphi` is and which workspace/home this is: for the few things the UI asks the CLI for. */
+  delphi_exe?: string; workspace_name?: string; home?: string;
 };
 
 export type Pal = { dark: boolean };

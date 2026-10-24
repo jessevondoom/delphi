@@ -1,4 +1,5 @@
 // The event fold: daemon notifications in, the console's state out. Pure, so it is tested without a terminal.
+import { citations, noteSources, type Source } from './research.ts';
 import { sanitize, type AgentState } from './theme.ts';
 
 export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string };
@@ -16,6 +17,8 @@ export type State = {
   lastActivity: number;
   nextId: number;
   council: boolean;
+  /** Where answers came from: files the agents read (this session) and documents their replies cite. */
+  sources: Record<string, Source>;
   /** The left deck's stream: reasoning, replies and tool calls as they happen. In memory only; never written anywhere. */
   activity: Act[];
   /** Tasks the daemon is working on, by task id. */
@@ -23,7 +26,7 @@ export type State = {
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: [],
+  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: [], sources: {},
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
@@ -102,7 +105,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const idle: Record<string, Agent> = {};
       for (const [r, a] of Object.entries(s.agents)) idle[r] = a.state === 'waiting on you' ? a : { state: 'idle', doing: '' };
       const escalated = pl.status === 'escalated';
-      const next = addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), lastActivity: now }, {
+      const said = sanitize(String(pl.text ?? ''));
+      const next = addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), sources: noteSources(s.sources, citations(said), 'cited', role, stamp(e, now)), lastActivity: now }, {
         kind: 'reply', role, text: sanitize(String(pl.text ?? '')), at: stamp(e, now), status: escalated ? 'escalated' : 'done',
       });
       return escalated ? setAgent(next, role, { state: 'escalated', doing: '' }) : next;
@@ -116,7 +120,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const b = pl.block;
       if (b?.type !== 'tool_call') return s;
       const line = `${b.name}(${briefArgs(b.arguments)})`;
-      const withAct = { ...s, activity: pushAct(s.activity, String(e.span_id ?? ''), String(e.agent ?? '?'), 'tool', sanitize(line), s.nextId + s.activity.length) };
+      const read = b.name === 'read_file' && typeof b.arguments?.path === 'string' ? [String(b.arguments.path)] : [];
+      const withAct = { ...s, sources: noteSources(s.sources, read, 'read', String(e.agent ?? '?'), now), activity: pushAct(s.activity, String(e.span_id ?? ''), String(e.agent ?? '?'), 'tool', sanitize(line), s.nextId + s.activity.length) };
       return addBlock(withAct, { kind: 'tool', role: e.agent, text: line, at: now, status: 'pending', ref: String(b.id ?? '') });
     }
     case 'tool.result': {

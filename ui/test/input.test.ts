@@ -45,3 +45,7 @@ test('the background colour reply says dark or light', () => {
   assert.deepEqual(keys('\x1b]11;rgb:1a1a/1f1f/2929\x07'), [{ t: 'bg', dark: true }]);
   assert.deepEqual(keys('\x1b]11;rgb:ffff/ffff/ffff\x1b\\'), [{ t: 'bg', dark: false }]);
 });
+
+test('escape then a control key in one read is two keypresses', () => {
+  assert.deepEqual(keys('\x1b\x03'), [{ t: 'key', k: 'esc', alt: false, shift: false, ctrl: false }, { t: 'ctrl', c: 'c' }]);
+});
