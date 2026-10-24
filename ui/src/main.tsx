@@ -63,7 +63,14 @@ if (observeAt >= 0) {
   term.start();
   const { dark, forced } = await detectDark(term);
   const app = render(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} />, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
-  await app.waitUntilExit();
+  try {
+    await app.waitUntilExit();
+  } catch (e) { // a render error: leave the alternate screen first so the message stays readable
+    term.stop();
+    console.error('delphi observe: the Observer stopped on an error:', e);
+    cmd.close(); ev.close();
+    process.exit(1);
+  }
   term.stop();
   cmd.close(); ev.close();
   process.exit(0);
@@ -96,7 +103,14 @@ const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={missi
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });
-await app.waitUntilExit();
+try {
+  await app.waitUntilExit();
+} catch (e) { // a render error: leave the alternate screen first so the message stays readable
+  term.stop();
+  console.error('delphi-ui: the console stopped on an error:', e);
+  cmd.close(); ev.close();
+  process.exit(1);
+}
 term.stop();
 cmd.close(); ev.close();
 process.exit(0);

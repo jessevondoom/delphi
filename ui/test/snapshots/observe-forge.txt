@@ -1,0 +1,30 @@
+ DELPHI OBSERVER  ·  FORGE DIFFS  ·  mission 2026-10-24-ui
+ ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus running   ⟦x?x⟧ ares waiting on you   ⟦•_•⟧ odyss…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Build 1/1 · t_1 · branch delphi/t_1 · commit abc1234 · in progress
+   attempt 1: red
+   ✔ tests      12 passed
+   ✖ audit      1 finding
+   audit P1 unchecked unwrap
+   a test failed once and passed on a rerun (flaky)
+
+── Diff against the base commit ────────────────────────────────────────────────────────────────────
+  no live worktree for this build (it finished, or has not started). r refreshes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Forge Diffs 3/6  ·  ← Epic DAG  ·  → Agents  ·  1-6 jump  · … navigate: shift+arrows · ○ ○ ● ○ ○ ○
+ spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1

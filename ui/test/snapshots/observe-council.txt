@@ -1,0 +1,30 @@
+ DELPHI OBSERVER  ·  COUNCIL CHAMBER  ·  mission 2026-10-24-ui
+ ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus running   ⟦x?x⟧ ares waiting on you   ⟦•_•⟧ odyss…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Council 1/1 · t_2 · verdict
+ Table or file?
+
+daedalus (a)                      ares (b)                          odysseus (c)
+────────────────────────────────  ────────────────────────────────  ────────────────────────────────
+Round 1 (blind)                   abstained: no answer              writing… (blind)
+Use a table.
+It indexes.
+
+Round 2 → revise · does not
+concur
+P1 lost updates
+
+
+
+
+
+── Verdict ─────────────────────────────────────────────────────────────────────────────────────────
+ Escalated to you: seats deadlocked
+   option: table — architect
+   option: file — strategist
+ Minority report:
+   [P0] red-team: the race
+ saved: missions/m/councils/008.md
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Council 1/6  ·  ← Archives  ·  → Epic DAG  ·  1-6 jump  ·  q… navigate: shift+arrows · ● ○ ○ ○ ○ ○
+ spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1

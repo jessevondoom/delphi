@@ -1,3 +1,4 @@
+import { graphemes } from './text.ts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useStdout } from 'ink';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -179,7 +180,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
     const menuNow = (): Completion | null => {
       if (searchRef.current) return null;
       const c = comp.current;
-      return completions(C.textOf(c), c.cur, info, listDir);
+      return completions(c.chars, c.cur, info, listDir);
     };
     const onEv = (e: Ev) => {
       const bodyH = Math.max(3, sizeRef.current.h - 9);
@@ -211,7 +212,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       // Ctrl+K and Ctrl+S open the research panels from the chat deck.
       if (!panelRef.current && deckRef.current === 1 && e.t === 'ctrl' && (e.c === 'k' || e.c === 's')) { openPanel(e.c === 'k' ? P.openSearch() : P.openSources()); return; }
       // An open panel owns the keyboard until it is closed.
-      if (panelRef.current && deckRef.current === 1 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && e.t !== 'wheel' && e.t !== 'bg') {
+      if (panelRef.current && deckRef.current === 1 && !(e.t === 'key' && (e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) && e.t !== 'wheel' && e.t !== 'bg') {
         const { panel: next0, action } = P.key({ ...panelRef.current, flash: undefined } as P.Panel, e, stateRef.current.sources);
         const next = next0;
         panelRef.current = next; setPanel(next);
@@ -224,7 +225,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       }
 
       // On the right deck the keyboard belongs to the inbox (an explicit focus change), never the prompt.
-      if (deckRef.current === 2 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && !(e.t === 'ctrl' && e.c === 'c')) {
+      if (deckRef.current === 2 && !(e.t === 'key' && (e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) && !(e.t === 'ctrl' && e.c === 'c')) {
         const now = Date.now();
         const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
         inboxRef.current = next; setInbox(next);
@@ -254,7 +255,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
           if (e.c === 'r') { setS({ q: '', at: hist.length, match: null }); return; }
           return;
         case 'key': {
-          if (e.shift && (e.k === 'left' || e.k === 'right')) {
+          if ((e.shift || e.alt) && (e.k === 'left' || e.k === 'right')) {
             const d = Math.max(0, Math.min(2, deckRef.current + (e.k === 'left' ? -1 : 1))) as 0 | 1 | 2;
             deckRef.current = d; setDeck(d);
             if (d === 2) { const fresh = I.newInbox(Date.now()); inboxRef.current = fresh; setInbox(fresh); }
@@ -262,9 +263,9 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
           }
           const pick = (n: number) => { selRef.current = n; setSel(n); };
           const accept = (it: { insert: string }) => upd((c) => {
-            const t = C.textOf(c), cs = [...t];
-            const next = [...cs.slice(0, m!.from), ...[...it.insert], ...cs.slice(m!.to)];
-            return { ...c, chars: next, cur: m!.from + [...it.insert].length, histAt: null };
+            const ins = graphemes(it.insert);
+            const next = [...c.chars.slice(0, m!.from), ...ins, ...c.chars.slice(m!.to)];
+            return { ...c, chars: next, cur: m!.from + ins.length, histAt: null };
           });
           switch (e.k) {
             case 'pgup': setBack((b) => b + bodyH - 1); return;
@@ -289,7 +290,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
               const text = C.textOf(comp.current);
               if (items.length) {
                 const it = items[Math.min(selRef.current, items.length - 1)]!;
-                const tok = text.slice(m!.from, m!.to);
+                const tok = comp.current.chars.slice(m!.from, m!.to).join('');
                 if (tok !== it.insert.trimEnd()) { accept(it); return; }
               }
               const { text: t, next } = C.submit(comp.current);
@@ -319,7 +320,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
     if (added > 0) setBack((b) => (b > 0 ? b + added : 0));
   }, [lineCount]);
 
-  const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
+  const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
   const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel]);
   return (

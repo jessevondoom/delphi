@@ -1,0 +1,24 @@
+ DELPHI OBSERVER  ·  COUNCIL CHAMBER  ·  mission 2026-1…
+ ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus runni…
+────────────────────────────────────────────────────────
+ Council 1/1 · t_2 · verdict
+ Table or file?
+
+daedalus (a)       ares (b)           odysseus (c)
+─────────────────  ─────────────────  ─────────────────
+Round 1 (blind)    abstained: no      writing… (blind)
+Use a table.       answer
+It indexes.
+
+Round 2 → revise
+· does not concur
+── Verdict ─────────────────────────────────────────────
+ Escalated to you: seats deadlocked
+   option: table — architect
+   option: file — strategist
+ Minority report:
+   [P0] red-team: the race
+ saved: missions/m/councils/008.md
+────────────────────────────────────────────────────────
+ Council 1/6  ·  … navigate: shift+arrows · ● ○ ○ ○ ○ ○
+ spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cach…

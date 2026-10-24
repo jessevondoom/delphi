@@ -1,0 +1,24 @@
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                     navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+
+  Sources (2)
+
+  ❯ specs/002-adapter-and-routing.md  read 1× · architect
+    specs/002-adapter-and-routing.md#4  cited 1× · architect
+
+  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+
+
+
+
+
+
+
+
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+↑↓ choose · enter put @path in the prompt · p pin · esc close
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

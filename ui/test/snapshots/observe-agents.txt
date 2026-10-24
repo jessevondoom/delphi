@@ -1,0 +1,30 @@
+ DELPHI OBSERVER  ·  MASCOT ROSTER  ·  mission 2026-10-24-ui
+ ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus running   ⟦x?x⟧ ares waiting on you   ⟦•_•⟧ odyss…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+    ▄▄▄     athena  orchestrator  ○ idle
+    •─•     frontier · claude-x · direct
+  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · $0.070 · 1 call(s)
+
+  ▄▄▄▄▄▄▄   daedalus  architect  ○ idle
+    •_•     frontier · claude-x · direct
+  ▀▀▀▀▀▀▀   in 200 · cache 400 · out 100 · think 0 · $0.070 · 2 call(s)
+
+  ▄▄▄▄▄▄▄   hephaestus  builder  ● running
+   •───•    frontier · claude-x · direct
+  ▀▀▀▀▀▀▀   in 300 · cache 600 · out 150 · think 0 · $0.070 · 3 call(s)
+
+  ▄     ▄   ares  red-team  ► waiting on you
+    x?x     frontier · claude-x · direct
+  ▀▀▀▀▀▀▀   in 400 · cache 800 · out 200 · think 0 · $0.070 · 4 call(s)
+
+  ▄▄ ▄ ▄▄   odysseus  strategist  ○ idle
+    •_•     frontier · claude-x · direct
+  ▀▀▀▀▀▀▀   in 500 · cache 1000 · out 250 · think 0 · $0.070 · 5 call(s)
+
+     ▄      hermes  scout  ○ idle
+   • • •    frontier · claude-x · direct
+  ▀▀▀▀▀▀▀   in 600 · cache 1200 · out 300 · think 0 · $0.070 · 6 call(s)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Agents 4/6  ·  ← Forge Diffs  ·  → Spend  ·  1-6 jump  ·  q … navigate: shift+arrows · ○ ○ ○ ● ○ ○
+ spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1
