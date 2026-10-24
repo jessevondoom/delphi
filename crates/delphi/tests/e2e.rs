@@ -859,3 +859,48 @@ fn a_console_of_another_release_hands_over_to_the_inline_console() {
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_changes_the_mode() {
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"})), reply_text("Drafted specs/009-e2e.md.")]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    // Shift+Tab cycles the approval mode, shown in the footer, and the daemon agrees.
+    c.type_keys("\x1b[Z");
+    c.wait_for("accept edits");
+    c.type_keys("\x1b[Z");
+    c.wait_for("· auto ·");
+    c.type_keys("\x1b[Z");
+    c.wait_for("· approvals ·");
+    c.type_keys("@architect Draft a spec called 009-e2e");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("decision needed");
+    // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
+    c.type_keys("\x1b[1;2C");
+    c.wait_for("Pending decisions (1)");
+    std::thread::sleep(Duration::from_millis(500));
+    c.type_keys("\r");
+    c.wait_for("Approval required · 1 of 1 pending");
+    c.wait_for("1. Approve once");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "nothing is written before the answer");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("1");
+    c.wait_for("nothing needs you");
+    c.type_keys("\x1b");
+    c.wait_for("Drafted specs/009-e2e.md.");
+    assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
+    assert!(c.visible().contains("all agents idle"), "{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
