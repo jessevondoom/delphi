@@ -6,21 +6,33 @@ use std::process::{Command, Stdio};
 
 const DELPHI: &str = env!("CARGO_BIN_EXE_delphi");
 
-/// Run `delphi` (piped, so no prompts) in `cwd` with `/quit` on stdin; returns (exit code, stderr+stdout).
+/// Run `delphi` (stdin piped, so no prompts) in `cwd` with `/quit` on stdin; returns (exit code, stderr+stdout).
+///
+/// Output goes to files, not pipes: `delphi` starts a daemon that inherits its stdio, and `wait_with_output` on a
+/// pipe waits for every holder of the write end to let go, so the test could block until that daemon exited (a hang
+/// seen on the macOS runner). A file needs no EOF.
 fn run_bare(home: &Path, cwd: &Path, extra: &[&str]) -> (i32, String) {
+    use std::io::{Read, Seek, SeekFrom};
+    let (mut out, mut err) = (tempfile::tempfile().unwrap(), tempfile::tempfile().unwrap());
     let mut child = Command::new(DELPHI)
         .args(extra)
         .current_dir(cwd)
         .env("DELPHI_HOME", home)
         .env_remove("DELPHI_WORKSPACE")
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(out.try_clone().unwrap()))
+        .stderr(Stdio::from(err.try_clone().unwrap()))
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(b"/quit\n").unwrap();
-    let out = child.wait_with_output().unwrap();
-    (out.status.code().unwrap_or(-1), format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout)))
+    let status = child.wait().unwrap();
+    let read = |f: &mut std::fs::File| {
+        let mut s = String::new();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.read_to_string(&mut s).unwrap();
+        s
+    };
+    (status.code().unwrap_or(-1), format!("{}{}", read(&mut err), read(&mut out)))
 }
 
 fn stop_daemon(home: &Path, ws: &str) {
