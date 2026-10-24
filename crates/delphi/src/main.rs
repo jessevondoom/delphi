@@ -19,6 +19,8 @@ const USAGE: &str = "usage:
   delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
   delphi chat [--workspace <name>] [--mission <id>] [--home <dir>]
+  delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
+  delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi --version";
 
@@ -30,6 +32,8 @@ fn main() {
         Some("doctor") => cmd_doctor(&args[1..]),
         Some("chat") => cmd_chat(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
+        Some("auth") => cmd_core("auth", &args[1..]),
+        Some("endpoints") => cmd_core("endpoints", &args[1..]),
         Some("--version") | Some("version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
@@ -181,6 +185,34 @@ fn cmd_daemon(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     chat::daemon(&home, &ws.dir, action)
+}
+
+/// `delphi auth …` and `delphi endpoints …` run in `delphi-core`, which already carries the HTTP and keychain code.
+fn cmd_core(sub: &str, args: &[String]) -> i32 {
+    let (_home, ws) = match resolve_ws(sub, args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let Some(exe) = chat::daemon_exe() else {
+        eprintln!("delphi {}: cannot find the `delphi-core` program next to this one or on PATH", sub);
+        return 1;
+    };
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--workspace" || a == "--home" {
+            it.next();
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    match std::process::Command::new(exe).arg(sub).args(&rest).arg("--workspace").arg(&ws.dir).status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("delphi {}: {}", sub, e);
+            1
+        }
+    }
 }
 
 fn cmd_doctor(args: &[String]) -> i32 {

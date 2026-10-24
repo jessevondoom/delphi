@@ -111,7 +111,7 @@ pub fn effective_config(ws_dir: &Path, live_text: &str) -> Result<(String, Vec<S
     };
     let mut live: toml::Value = toml::from_str(live_text).map_err(|e| format!("config.toml is not valid TOML: {}", e))?;
     let table = live.as_table_mut().ok_or("config.toml is not a table")?;
-    for k in ["endpoints", "access", "auth"] {
+    for k in delphi_core::lock::ACCESS_KEYS {
         table.remove(k);
     }
     if let Ok(toml::Value::Table(t)) = toml::from_str::<toml::Value>(&trusted_blocks) {
@@ -120,6 +120,29 @@ pub fn effective_config(ws_dir: &Path, live_text: &str) -> Result<(String, Vec<S
         }
     }
     Ok((toml::to_string(&live).map_err(|e| e.to_string())?, notices))
+}
+
+/// The production model client: credentials (including `oauth2:` when a runtime is available), the
+/// platform envelopes, retries, and redaction through `secrets`. Must be called inside a Tokio runtime
+/// for `oauth2:` credentials to work.
+pub fn http_model_client(cfg: SharedConfig, secrets: Arc<SecretRegistry>) -> Arc<HttpModelClient> {
+    let reg = secrets.clone();
+    let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
+        resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg.clone(), store, build_client(), handle)));
+    }
+    let creds = Arc::new(CredentialStore::new(resolver));
+    let (redact_secrets, register_secrets) = (secrets.clone(), secrets);
+    Arc::new(HttpModelClient {
+        cfg,
+        creds,
+        http: build_client(),
+        retry: RetryPolicy::default(),
+        idle_timeout: Duration::from_secs(120),
+        redact: Arc::new(move |s| redact_secrets.redact(s)),
+        register: Arc::new(move |s| register_secrets.register(s)),
+    })
 }
 
 /// Build the engine for `ws_dir` (`$DELPHI_HOME/workspaces/<name>`), publishing through `hub`.
@@ -138,18 +161,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     let model: Arc<dyn ModelClient> = match model {
         Some(m) => m,
         None => {
-            let reg = secrets.clone();
-            let creds = Arc::new(CredentialStore::new(Resolver::system(Arc::new(move |s| reg.register(s)))));
-            let (redact_secrets, register_secrets) = (secrets.clone(), secrets.clone());
-            Arc::new(HttpModelClient {
-                cfg: cfg.clone(),
-                creds,
-                http: build_client(),
-                retry: RetryPolicy::default(),
-                idle_timeout: Duration::from_secs(120),
-                redact: Arc::new(move |s| redact_secrets.redact(s)),
-                register: Arc::new(move |s| register_secrets.register(s)),
-            })
+            http_model_client(cfg.clone(), secrets.clone())
         }
     };
     std::fs::create_dir_all(ws_dir.join("local")).map_err(|e| e.to_string())?;
@@ -176,6 +188,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         rules,
         clock: Arc::new(now_rfc3339),
         tools: Arc::new(crate::tools::Registry::builtin()),
+        exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

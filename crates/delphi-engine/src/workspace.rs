@@ -290,6 +290,7 @@ pub(crate) mod tests {
         for (role, text) in [
             ("orchestrator", include_str!("../../../agents/orchestrator/AGENT.md")),
             ("architect", include_str!("../../../agents/architect/AGENT.md")),
+            ("builder", include_str!("../../../agents/builder/AGENT.md")),
             ("red-team", include_str!("../../../agents/red-team/AGENT.md")),
             ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
         ] {
@@ -323,7 +324,7 @@ pub(crate) mod tests {
         assert!(m.read.contains(&"*".to_string()) && m.write.contains(&"specs/**".to_string()));
         assert!(m.max_turn_budget > 0 && m.body.contains("Architect"));
         assert_eq!((m.tier(), m.thinking_budget()), ("frontier", 8192));
-        assert!(matches!(ws.load_manifest("builder"), Err(LoadError::Missing(_))));
+        assert!(matches!(ws.load_manifest("scout"), Err(LoadError::Missing(_))));
     }
 
     #[test]

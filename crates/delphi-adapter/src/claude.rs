@@ -309,18 +309,24 @@ pub struct Usage {
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
     pub output_tokens: u64,
+    /// Reported apart from output only by providers that do so (Gemini); billed at the output price.
+    pub thinking_tokens: u64,
 }
 
 impl Usage {
     /// Build the ledger payload. `price` of `None` records zero cost (a subscription or unpriced model).
     pub fn to_payload(&self, price: Option<&Price>, reserved_usd: f64, reservation_id: Option<String>, outcome: &str, usage_source: &str) -> UsagePayload {
+        self.to_payload_for(PROVIDER, price, reserved_usd, reservation_id, outcome, usage_source)
+    }
+
+    pub fn to_payload_for(&self, provider: &str, price: Option<&Price>, reserved_usd: f64, reservation_id: Option<String>, outcome: &str, usage_source: &str) -> UsagePayload {
         let mut p = UsagePayload {
-            provider: PROVIDER.into(),
+            provider: provider.into(),
             input_tokens: self.input_tokens,
             cache_read_tokens: self.cache_read_tokens,
             cache_write_tokens: self.cache_write_tokens,
             output_tokens: self.output_tokens,
-            thinking_tokens: 0, // Claude bills thinking inside output_tokens and doesn't report it separately
+            thinking_tokens: self.thinking_tokens, // zero for Claude, which bills thinking inside output_tokens
             cost_usd: 0.0,
             reserved_usd,
             usage_source: usage_source.into(),
@@ -588,7 +594,7 @@ pub(crate) mod tests {
     fn a_stream_becomes_typed_blocks_with_signatures_byte_exact() {
         let done = parse(&fixture(), 1 << 20).unwrap();
         assert_eq!(done.stop_reason.as_deref(), Some("tool_use"));
-        assert_eq!(done.usage, Usage { input_tokens: 1200, cache_read_tokens: 800, cache_write_tokens: 50, output_tokens: 321 });
+        assert_eq!(done.usage, Usage { input_tokens: 1200, cache_read_tokens: 800, cache_write_tokens: 50, output_tokens: 321, thinking_tokens: 0 });
         match &done.blocks[..] {
             [ContentBlock::Thinking { thought, provider_meta, replayable: true, .. }, ContentBlock::RedactedThinking { provider_meta: rmeta, .. }, ContentBlock::Text { text }, ContentBlock::ToolCall { id, name, arguments }] => {
                 assert_eq!(thought, "Let me look at the file.");
@@ -643,7 +649,7 @@ pub(crate) mod tests {
 
     #[test]
     fn usage_converts_to_a_priced_ledger_payload() {
-        let u = Usage { input_tokens: 1_000, cache_read_tokens: 10_000, cache_write_tokens: 2_000, output_tokens: 1_000 };
+        let u = Usage { input_tokens: 1_000, cache_read_tokens: 10_000, cache_write_tokens: 2_000, output_tokens: 1_000, thinking_tokens: 0 };
         let price = Price { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 };
         let p = u.to_payload(Some(&price), 0.5, Some("r1".into()), "ok", "reported");
         assert!((p.cost_usd - (3000.0 + 3000.0 + 7500.0 + 15000.0) / 1e6).abs() < 1e-9, "{}", p.cost_usd);

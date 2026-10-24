@@ -65,12 +65,52 @@ pub struct Endpoint {
     pub betas: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum AuthFlow {
+    #[serde(rename = "device_code")]
+    DeviceCode,
+    #[serde(rename = "client_credentials")]
+    ClientCredentials,
+    /// Authorization code with PKCE, redirected to a loopback port (`specs/010` §5).
+    #[serde(rename = "loopback_pkce")]
+    LoopbackPkce,
+}
+
+/// One `[auth.<name>]` block (`specs/009` §4.1). Delphi ships no client ids: they come from the operator.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct AuthBlock {
+    pub flow: AuthFlow,
+    /// OIDC discovery root; or give the URLs below directly.
+    #[serde(default)]
+    pub issuer: Option<String>,
+    #[serde(default)]
+    pub token_url: Option<String>,
+    #[serde(default)]
+    pub device_authorization_url: Option<String>,
+    #[serde(default)]
+    pub authorization_url: Option<String>,
+    pub client_id: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// `keychain:<name>` only; never an inline secret.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Loopback PKCE: the fixed port registered with the provider (an ephemeral one when unset).
+    #[serde(default)]
+    pub redirect_port: Option<u16>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Access {
     #[serde(default)]
     pub order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub allowed_endpoints: Option<Vec<String>>,
+    /// Role → model family (`claude` or `gemini`) for roles that should not use the default, Claude.
+    #[serde(default)]
+    pub role_family: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -133,11 +173,12 @@ pub struct Config {
     /// family → tier → model ID.
     pub models: BTreeMap<String, BTreeMap<String, String>>,
     pub catalog: BTreeMap<String, CatalogEntry>,
+    pub auth: BTreeMap<String, AuthBlock>,
 }
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 
-fn is_loopback(url: &str) -> bool {
+pub(crate) fn is_loopback(url: &str) -> bool {
     let rest = url.strip_prefix("http://").unwrap_or("");
     let host = rest.split(['/', ':']).next().unwrap_or("");
     host == "127.0.0.1" || host == "localhost" || host == "[::1]"
@@ -160,6 +201,12 @@ impl Config {
             match a.clone().try_into::<Access>() {
                 Ok(v) => cfg.access = v,
                 Err(e) => errs.push(format!("[access]: {}", e)),
+            }
+        }
+        if let Some(a) = root.get("auth") {
+            match a.clone().try_into::<BTreeMap<String, AuthBlock>>() {
+                Ok(v) => cfg.auth = v,
+                Err(e) => errs.push(format!("[auth.*]: {}", e)),
             }
         }
         if let Some(models) = root.get("models").and_then(|m| m.as_table()) {
@@ -259,7 +306,53 @@ impl Config {
                 }
             }
         }
+        for (name, a) in &self.auth {
+            let url_ok = |u: &str| u.starts_with("https://") || is_loopback(u);
+            for (field, v) in [("issuer", &a.issuer), ("token_url", &a.token_url), ("device_authorization_url", &a.device_authorization_url), ("authorization_url", &a.authorization_url)] {
+                if let Some(u) = v {
+                    if !url_ok(u) {
+                        errs.push(format!("[auth.{}] {} must be https", name, field));
+                    }
+                }
+            }
+            if a.client_id.trim().is_empty() {
+                errs.push(format!("[auth.{}] needs a client_id (Delphi ships none; your identity provider's admin issues one)", name));
+            }
+            if a.issuer.is_none() && a.token_url.is_none() {
+                errs.push(format!("[auth.{}] needs an issuer (OIDC discovery) or a token_url", name));
+            }
+            match a.flow {
+                AuthFlow::DeviceCode if a.issuer.is_none() && a.device_authorization_url.is_none() => errs.push(format!("[auth.{}] the device_code flow needs an issuer or a device_authorization_url", name)),
+                AuthFlow::LoopbackPkce if a.issuer.is_none() && a.authorization_url.is_none() => errs.push(format!("[auth.{}] the loopback_pkce flow needs an issuer or an authorization_url", name)),
+                AuthFlow::ClientCredentials if a.client_secret.is_none() => errs.push(format!("[auth.{}] the client_credentials flow needs a client_secret = \"keychain:<name>\"", name)),
+                _ => {}
+            }
+            if let Some(sec) = &a.client_secret {
+                if !matches!(CredentialRef::parse(sec), Ok(CredentialRef::Keychain(_))) {
+                    errs.push(format!("[auth.{}] client_secret must be a keychain reference (`keychain:<name>`), never an inline value", name));
+                }
+            }
+        }
+        for e in &self.endpoints {
+            if let Ok(CredentialRef::Oauth2(n)) = CredentialRef::parse(&e.credential) {
+                if !self.auth.contains_key(&n) {
+                    errs.push(format!("endpoint `{}`: credential oauth2:{} has no [auth.{}] block", e.id, n, n));
+                }
+            }
+        }
+        for (role, family) in &self.access.role_family {
+            if !matches!(family.as_str(), "claude" | "gemini") {
+                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude` or `gemini`)", role, family));
+            } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
+                errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
+            }
+        }
         errs
+    }
+
+    /// The model family a role is served by.
+    pub fn family_for_role(&self, role: &str) -> &str {
+        self.access.role_family.get(role).map(String::as_str).unwrap_or("claude")
     }
 
     /// The compliance pin: endpoints a request may be sent to. Without `allowed_endpoints`, all of them.
@@ -449,6 +542,18 @@ order = { gemini = ["a"] }
         for needle in ["defined twice", "need a region", "need a project", "must be https", "whatever", "harness endpoints need", "unknown endpoint `ghost`", "belongs to family `claude`"] {
             assert!(errs.contains(needle), "missing `{}` in:\n{}", needle, errs);
         }
+    }
+
+    #[test]
+    fn role_family_must_name_a_known_family_with_an_allowed_endpoint() {
+        let base = "[[endpoints]]\nid = \"d\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        let gem = "[[endpoints]]\nid = \"g\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        let ok = Config::parse(&format!("{}{}[access]\nrole_family = {{ architect = \"gemini\" }}\n", base, gem)).unwrap();
+        assert_eq!((ok.family_for_role("architect"), ok.family_for_role("builder")), ("gemini", "claude"));
+        let errs = Config::parse(&format!("{}[access]\nrole_family = {{ architect = \"gemini\", scribe = \"gpt\" }}\n", base)).unwrap_err().join("\n");
+        assert!(errs.contains("no allowed endpoint serves that family") && errs.contains("unknown family `gpt`"), "{}", errs);
+        let pinned = Config::parse(&format!("{}{}[access]\nallowed_endpoints = [\"d\"]\nrole_family = {{ architect = \"gemini\" }}\n", base, gem)).unwrap_err().join("\n");
+        assert!(pinned.contains("no allowed endpoint serves that family"), "the pin counts: {}", pinned);
     }
 
     #[test]

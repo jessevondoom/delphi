@@ -12,6 +12,7 @@
 //! endpoint order inside `allowed_endpoints`.
 
 use crate::approval::{payload_blake3, Broker, Need, Request, Resolution, Tier as ApprovalTier};
+use crate::exec::{self, ExecError};
 use crate::handoff::{pointers_from_prompt, ContextPointer, HandoffEnvelope};
 use crate::mission::{LiveRedactor, EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
@@ -20,14 +21,14 @@ use crate::recovery::{self, Call, NodeStatus, Recovered};
 use crate::tools::{self, ToolCtx};
 use crate::workspace::{AgentManifest, WorkspacePaths};
 use delphi_adapter::blocks::{ContentBlock, Turn};
-use delphi_adapter::claude::{compile, Compiled, CompileOptions, Completed, StreamEvent, Target, ToolDef};
+use delphi_adapter::claude::{Compiled, CompileOptions, Completed, StreamEvent, Target, ToolDef};
 use delphi_adapter::config::{Endpoint, SharedConfig};
 use delphi_adapter::ipr::{ContextSlice, Ipr};
 use delphi_core::event::EventEnvelope;
 use delphi_core::hub::{DeltaKind, Hub};
 use delphi_core::ledger::Ledger;
 use delphi_core::pathguard::{Guard, Zones};
-use delphi_core::provenance::{gate, Action, Gate, OriginRules, Span};
+use delphi_core::provenance::{gate, Action, Gate, OriginRules, OutputCheck, Span};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
@@ -128,6 +129,8 @@ pub struct Engine {
     pub clock: Arc<dyn Fn() -> String + Send + Sync>,
     /// The tools offered to agents (`tools::Registry`).
     pub tools: Arc<tools::Registry>,
+    /// Sandboxed execution and task worktrees (`exec.rs`).
+    pub exec: Arc<exec::ExecEnv>,
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -137,6 +140,14 @@ enum Start {
     Fresh { handoff: Box<HandoffEnvelope>, parent: Option<Span>, depth: u32 },
     /// Continue a span rebuilt from the log; `rec` lets it resume the children it had dispatched.
     Resume { rec: Arc<Recovered>, span_id: String },
+}
+
+/// Who an approval card is raised for.
+pub(crate) struct Asker<'a> {
+    pub m: &'a Arc<MissionState>,
+    pub task_id: &'a str,
+    pub span_id: &'a str,
+    pub role: &'a str,
 }
 
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
@@ -153,6 +164,8 @@ struct SpanCtx {
     span: Span,
     depth: u32,
     tier: String,
+    /// Which model family serves this span (`claude` unless the handoff says otherwise).
+    family: String,
     thinking: u32,
     /// Set when a dispatched child halted: the parent halts too, and the operator decides (specs/003 §3.2).
     child_escalation: Option<String>,
@@ -185,6 +198,14 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 
 fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
     tools::ToolResult { content: msg.into(), is_error: true }
+}
+
+fn run_command_def() -> ToolDef {
+    ToolDef {
+        name: "run_command".into(),
+        description: "Run a program in your task worktree inside the OS sandbox: no network, no access outside the worktree and scratch space, killed after a timeout. Give `argv` (the program, then its arguments; there is no shell, so pipes and redirects do not work). Use it to run the tests, the build and linters. Output is truncated to its tail.".into(),
+        input_schema: json!({"type": "object", "required": ["argv"], "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "timeout_secs": {"type": "integer"}}}),
+    }
 }
 
 fn dispatch_def() -> ToolDef {
@@ -233,7 +254,11 @@ impl Engine {
     }
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool) -> Result<TaskOutcome, EngineError> {
-        let handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
+        let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
+        if target == "builder" {
+            // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
+            handoff.implements_spec = handoff.context_pointers.iter().find(|p| p.uri.starts_with("specs/") && p.uri.ends_with(".md")).map(|p| p.uri.clone());
+        }
         handoff.validate().map_err(EngineError::Invalid)?;
         if !self.settings.enabled_agents.iter().any(|a| a == target) {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
@@ -290,8 +315,9 @@ impl Engine {
             let manifest = self.ws.load_manifest(&role)?;
             let snapshot = self.ws.load_snapshot(&role)?;
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
+            let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, thinking, child_escalation: None };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None };
 
             if fresh {
                 let mut open = vec![
@@ -303,6 +329,14 @@ impl Engine {
                     open.push(sc.ev("snapshot.trim", json!({"note": t})));
                 }
                 m.append_batch(open).await?;
+            }
+
+            // A role that writes to `@worktree/**` works in its task's worktree, cut from the project's HEAD.
+            let mut setup_error: Option<String> = None;
+            if sc.manifest.write.iter().any(|g| g.starts_with("@worktree/")) {
+                if let Err(e) = self.attach_worktree(&mut sc, &handoff).await {
+                    setup_error = Some(e);
+                }
             }
 
             // Block 5: resolve each pointer as this role; the span's ceiling is clamped before turn 1.
@@ -341,9 +375,15 @@ impl Engine {
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
                 defs.push(dispatch_def());
             }
+            if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+                defs.push(run_command_def());
+            }
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             let outcome = loop {
+                if let Some(e) = setup_error.take() {
+                    break Err(Escalate(e));
+                }
                 // Tool calls still owed a result (a fresh tool_use turn, or ones interrupted by a crash).
                 if let Some(calls) = pending.take() {
                     let result_index = history.len() as u32 + 1;
@@ -375,7 +415,7 @@ impl Engine {
                 };
                 interruptions = 0;
                 turns += 1;
-                history.push(Turn::assistant(turn_index, PROVIDER, &ep.id, &model_id, done.blocks.clone()));
+                history.push(Turn::assistant(turn_index, delphi_adapter::provider_for(&ep), &ep.id, &model_id, done.blocks.clone()));
                 let calls: Vec<Call> = done.blocks.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some(Call { id: id.clone(), name: name.clone(), args: arguments.clone() }) } else { None }).collect();
                 if done.stop_reason.as_deref() != Some("tool_use") || calls.is_empty() {
                     let mut text = final_text(&done.blocks);
@@ -420,7 +460,7 @@ impl Engine {
             let Some(res) = events.iter().find(|e| e.kind == "budget.reserve" && e.payload["reservation_id"] == rid.as_str()) else { continue };
             // The usage of an interrupted call can't be known: charge the whole reservation.
             let usage = delphi_core::usage::UsagePayload {
-                provider: PROVIDER.into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+                provider: res.endpoint_id.as_deref().and_then(|id| self.cfg.get().endpoint(id).map(delphi_adapter::provider_for)).unwrap_or(PROVIDER).into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
                 cost_usd: amount as f64 / 1e6, reserved_usd: amount as f64 / 1e6, usage_source: "estimated".into(), cost_model: "metered".into(), outcome: "cancelled".into(), reservation_id: Some(rid.clone()),
             };
             let mut u = EventEnvelope::new(&m.id, "agent.usage", usage.to_value());
@@ -486,9 +526,9 @@ impl Engine {
     /// means stop and hand to the operator; `Err(EngineError)` (outer) is a fatal storage failure.
     async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32, prior_interruptions: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
         let cfg = self.cfg.get();
-        let endpoints: Vec<Endpoint> = cfg.endpoints_for(FAMILY).into_iter().cloned().collect();
+        let endpoints: Vec<Endpoint> = cfg.endpoints_for(&sc.family).into_iter().cloned().collect();
         if endpoints.is_empty() {
-            return Ok(Err(Escalate("no allowed Claude endpoint is configured (see `delphi doctor`)".into())));
+            return Ok(Err(Escalate(format!("no allowed {} endpoint is configured (see `delphi doctor`)", sc.family))));
         }
         let m = &sc.m;
         let mut interruptions = prior_interruptions;
@@ -508,13 +548,13 @@ impl Engine {
                 let thinking = cfg.clamp_thinking(&model_id, sc.thinking);
                 let max_tokens = self.settings.max_tokens.max(thinking.unwrap_or(0) as u64 + 2048).min(entry.max_output_tokens.max(thinking.unwrap_or(0) as u64 + 1025));
                 let opts = CompileOptions { max_tokens, thinking_budget: thinking, temperature: None, tools: defs.to_vec(), betas: ep.betas.clone() };
-                let target = Target { provider: PROVIDER.into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };
-                let compiled: Compiled = match compile(ipr, history, &target, &opts) {
+                let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };
+                let compiled: Compiled = match delphi_adapter::compile_for(ep, ipr, history, &target, &opts) {
                     Ok(c) => c,
                     Err(e) => return Ok(Err(Escalate(format!("could not build the request: {}", e)))),
                 };
                 let body_bytes = serde_json::to_vec(&compiled.body).map(|b| b.len()).unwrap_or(0) as u64;
-                let system_bytes = serde_json::to_vec(&compiled.body["system"]).map(|b| b.len()).unwrap_or(0) as u64;
+                let system_bytes = serde_json::to_vec(delphi_adapter::system_of(ep, &compiled.body)).map(|b| b.len()).unwrap_or(0) as u64;
                 let amount = price.worst_case_micro(body_bytes, system_bytes, max_tokens);
 
                 // Reserve before dispatch; the gate makes parallel spans see each other's reservations.
@@ -550,7 +590,7 @@ impl Engine {
                 let result = self.model.call(ep, &model_id, &compiled, &mut on_event).await;
                 match result {
                     Ok(done) => {
-                        let payload = done.usage.to_payload(Some(&price), amount as f64 / 1e6, Some(rid.clone()), "ok", "reported");
+                        let payload = done.usage.to_payload_for(delphi_adapter::provider_for(ep), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "ok", "reported");
                         let mut batch: Vec<EventEnvelope> = done
                             .blocks
                             .iter()
@@ -558,7 +598,7 @@ impl Engine {
                             .map(|(i, b)| sc.agent_ev("agent.block.complete", json!({"turn_index": turn_index, "role": "assistant", "block_index": i, "block": serde_json::to_value(b).expect("blocks serialize")}), ep, &model_id))
                             .collect();
                         // The completion marker is last: a turn without it is discarded on recovery.
-                        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len()}), ep, &model_id));
+                        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len(), "provider": delphi_adapter::provider_for(ep)}), ep, &model_id));
                         batch.push(sc.agent_ev("agent.usage", payload.to_value(), ep, &model_id));
                         m.append_batch(batch).await?;
                         return Ok(Ok((done, ep.clone(), model_id)));
@@ -570,7 +610,7 @@ impl Engine {
                     }
                     Err(ModelError::Interrupted(msg)) => {
                         // The usage of an interrupted call is unknowable: charge the full reservation.
-                        let mut u = delphi_adapter::claude::Usage::default().to_payload(Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
+                        let mut u = delphi_adapter::claude::Usage::default().to_payload_for(delphi_adapter::provider_for(ep), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
                         u.input_tokens = body_bytes.div_ceil(4);
                         u.cost_usd = amount as f64 / 1e6;
                         m.append_batch(vec![sc.agent_ev("agent.usage", u.to_value(), ep, &model_id), sc.ev("turn.interrupted", json!({"turn_index": turn_index, "message": self.secrets.redact(&msg)}))]).await?;
@@ -596,6 +636,9 @@ impl Engine {
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
     async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+        if name == "run_command" {
+            return self.exec_command(sc, call_id, args).await;
+        }
         if name == "dispatch_agent" {
             // The schema is only offered to roles that may dispatch; a call from any other role is refused here too.
             if !sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
@@ -637,21 +680,131 @@ impl Engine {
         Ok(result)
     }
 
+    /// The registered project a Builder task works on: named by an `@project/<name>/…` pointer, else the
+    /// only registered one.
+    fn project_for(&self, handoff: &HandoffEnvelope) -> Result<(String, PathBuf), String> {
+        let named = handoff.context_pointers.iter().find_map(|p| p.uri.trim_start_matches("./").strip_prefix("@project/").and_then(|r| r.split('/').next()).map(|n| n.to_lowercase()));
+        match named {
+            Some(n) => self.projects.iter().find(|(name, _)| name.to_lowercase() == n).cloned().ok_or_else(|| format!("`@project/{}` is not a registered project", n)),
+            None if self.projects.len() == 1 => Ok(self.projects[0].clone()),
+            None => Err("this task needs a project: mention one with an @project/<name>/… pointer".into()),
+        }
+    }
+
+    async fn attach_worktree(&self, sc: &mut SpanCtx, handoff: &HandoffEnvelope) -> Result<(), String> {
+        let (name, path) = self.project_for(handoff)?;
+        // The spec gate (`specs/003` §3.1.2): no worktree without a ratified spec, or the operator's
+        // approval of the bounded exemption. Frontmatter proves nothing; only the lock does.
+        match crate::finalize::spec_link(&self.ws.dir, handoff.implements_spec.as_deref()) {
+            crate::gates::SpecLink::Ratified(_) => {}
+            crate::gates::SpecLink::NotRatified { spec, why } => return Err(format!("`{}` is not a ratified spec ({}); the operator must ratify it before a build starts", spec, why)),
+            crate::gates::SpecLink::None => {
+                let payload = json!({"tool": "build_without_spec", "task_id": sc.task_id, "objective": handoff.objective.chars().take(500).collect::<String>(), "limits": "at most 2 files and 100 changed lines, no host-executed files, dependency manifests or governance files"});
+                let summary = "build without a ratified spec under the bounded exemption (at most 2 files, 100 lines, nothing sensitive)";
+                if self.ask(sc, ApprovalTier::Amber, "build_without_spec", "build_without_spec", summary, &payload).await.map_err(|e| e.to_string())?.is_some() {
+                    return Err("the operator did not approve building without a ratified spec".into());
+                }
+                sc.m.append(sc.ev("exemption.approved", json!({"task_id": sc.task_id}))).await.map_err(|e| e.to_string())?;
+            }
+        }
+        let (exec, task) = (self.exec.clone(), sc.task_id.clone());
+        let (wt, created) = tokio::task::spawn_blocking(move || exec.ensure(&task, &path)).await.map_err(|e| e.to_string())?.map_err(|e| format!("could not set up the worktree: {}", e))?;
+        sc.guard.zones.worktree = Some(wt.path.clone());
+        if created {
+            let ev = sc.ev("worktree.created", json!({"project": name, "branch": wt.branch, "base_sha": wt.base_sha, "project_was_dirty": wt.project_was_dirty, "implements_spec": handoff.implements_spec}));
+            sc.m.append(ev).await.map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// `run_command`: gate on the span's taint, run in the sandbox, stamp what changed.
+    async fn exec_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+            return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped"));
+        }
+        let Some(wt) = self.exec.known_worktree(&sc.task_id) else {
+            return Ok(tool_result_error("this task has no worktree"));
+        };
+        let argv = match exec::parse_argv(args) {
+            Ok(a) => a,
+            Err(e) => return Ok(tool_result_error(e.to_string())),
+        };
+        if self.exec.sandbox.is_none() {
+            return Ok(tool_result_error(ExecError::NoSandbox.to_string()));
+        }
+        match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+            Gate::Allow => {}
+            Gate::Deny => return Ok(tool_result_error("code execution is not allowed from a span at this taint level")),
+            Gate::Red => {
+                let payload = json!({"tool": "run_command", "argv": argv, "ceiling": sc.span.ceiling().as_str()});
+                let summary = format!("run `{}` from a span tainted at {}", argv.join(" "), sc.span.ceiling());
+                if let Some(denied) = self.ask(sc, ApprovalTier::Red, "run_command", "run_command", &summary, &payload).await? {
+                    return Ok(denied);
+                }
+            }
+        }
+        // Write-ahead: a crash between these two events leaves a command whose outcome is unknown.
+        sc.m.append(sc.ev("action.intent", json!({"action_id": call_id, "tool": "run_command", "argv": argv}))).await?;
+        let (exec, wt2, argv2) = (self.exec.clone(), wt.clone(), argv.clone());
+        let timeout = args["timeout_secs"].as_u64().filter(|n| *n > 0).map(Duration::from_secs);
+        let ran = tokio::task::spawn_blocking(move || exec.run(&wt2, &argv2, timeout)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        let report = match ran {
+            Ok(r) => r,
+            Err(e) => {
+                sc.m.append(sc.ev("action.result", json!({"action_id": call_id, "ok": false, "error": e.to_string()}))).await?;
+                return Ok(tool_result_error(e.to_string()));
+            }
+        };
+        // Files the command created or changed take this span's tier, exactly as if a file tool had written them.
+        let tier = sc.span.output_tier(OutputCheck::Unverified);
+        let mut events = Vec::new();
+        {
+            let mut idx = sc.m.index.lock().unwrap();
+            for rel in report.changed.iter().take(500) {
+                let Ok(bytes) = std::fs::read(wt.path.join(rel)).map(|b| if b.len() > 8 << 20 { Vec::new() } else { b }) else { continue };
+                if bytes.is_empty() {
+                    continue;
+                }
+                let hash = blake3::hash(&bytes).to_hex().to_string();
+                idx.stamp(delphi_core::provenance::Zone::Worktree, rel, &hash, tier);
+                events.push(sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(delphi_core::provenance::Zone::Worktree, rel, &hash, tier)));
+            }
+        }
+        let o = &report.outcome;
+        events.push(sc.ev("action.result", json!({"action_id": call_id, "ok": o.success(), "exit_code": o.status.and_then(|s| s.code()), "timed_out": o.timed_out, "output_capped": o.output_capped, "changed_files": report.changed.len(), "over_quota": !o.over_quota.is_empty(), "millis": report.elapsed.as_millis() as u64})));
+        sc.m.append_batch(events).await?;
+        let (text, is_error) = exec::render(&report, &argv);
+        Ok(tools::ToolResult { content: text, is_error })
+    }
+
     /// Raise an approval card and wait for the answer. `None` means approved; `Some(result)` is the denial
     /// the model sees.
     async fn ask(&self, sc: &SpanCtx, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
-        let req = Request { approval_id: String::new(), task_id: sc.task_id.clone(), span_id: sc.span_id.clone(), role: sc.role.clone(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: self.settings.approval_timeout };
+        let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+        self.ask_as(&who, tier, tool, pattern, summary, payload).await
+    }
+
+    /// As [`Engine::ask`] for a decision that belongs to no running span (merge approval after a build).
+    pub(crate) async fn ask_as(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
+        let ev = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new(&who.m.id, kind, payload);
+            e.task_id = Some(who.task_id.to_string());
+            e.span_id = Some(who.span_id.to_string());
+            e.agent = Some(who.role.to_string());
+            e
+        };
+        let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: self.settings.approval_timeout };
         let waiting = self.broker.request(req);
         let id = waiting.approval_id.clone();
         if let Some(raised) = self.broker.get(&id) {
-            sc.m.append(sc.ev("approval.requested", raised.event_payload())).await?;
+            who.m.append(ev("approval.requested", raised.event_payload())).await?;
         }
         let resolution = waiting.wait().await;
         let by = match &resolution {
             Resolution::TimedOut => "timeout",
             _ => "console",
         };
-        sc.m.append(sc.ev("approval.resolved", resolution.event_payload(&id, by))).await?;
+        who.m.append(ev("approval.resolved", resolution.event_payload(&id, by))).await?;
         Ok(match resolution {
             Resolution::Approved { .. } => None,
             Resolution::Denied { reason } => Some(tool_result_error(format!("The operator denied this action{}. Do not retry it; propose an alternative or ask.", if reason.is_empty() { String::new() } else { format!(": {}", reason) }))),
@@ -763,7 +916,7 @@ mod tests {
                 ContentBlock::Thinking { thought: "let me check".into(), replayable: true, signature_dropped_reason: None, provider_meta: ProviderMeta { provider: Some("anthropic".into()), signature: Some("SIG-EXACT==".into()), data: None } },
                 ContentBlock::ToolCall { id: id.into(), name: name.into(), arguments: args },
             ],
-            usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 150 },
+            usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 150, thinking_tokens: 0 },
             stop_reason: "tool_use",
         }
     }
@@ -808,6 +961,129 @@ mod tests {
         }
         assert!(saw_delta);
         assert!(!k.iter().any(|x| x.contains("delta")));
+    }
+
+    /// The default roster config plus one Gemini endpoint that serves the `architect` role.
+    fn with_gemini(f: &crate::testkit::Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[models.gemini]\nfast = \"gem-fast\"\nworkhorse = \"gem-work\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_role_served_by_gemini_speaks_the_gemini_dialect_end_to_end() {
+        let sig = ContentBlock::Thinking { thought: String::new(), replayable: true, signature_dropped_reason: None, provider_meta: ProviderMeta { provider: Some("google".into()), signature: Some("GSIG==".into()), data: None } };
+        let call = Step::Reply {
+            blocks: vec![sig, ContentBlock::ToolCall { id: "dg-1".into(), name: "read_file".into(), arguments: json!({"path": "@project/app/src/lib.rs"}) }],
+            usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100, thinking_tokens: 50 },
+            stop_reason: "tool_use",
+        };
+        let f = setup(vec![call, Step::text("It defines `needle`.")], 5.0, |_| {});
+        with_gemini(&f);
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let reqs = f.model.requests();
+        assert_eq!((reqs[0].endpoint_id.as_str(), reqs[0].model_id.as_str()), ("gem", "gem-pro"), "a Gemini role never lands on a Claude endpoint");
+        assert!(reqs[0].body["contents"].is_array() && reqs[0].body["systemInstruction"].is_object() && reqs[0].body.get("messages").is_none());
+        let replay = reqs[1].body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(replay.iter().find(|p| p.get("functionCall").is_some()).unwrap()["thoughtSignature"], "GSIG==", "same endpoint and model: the signature is replayed on its call");
+        let usage = events_of(&f, "agent.usage");
+        assert!(usage.iter().all(|e| e.payload["provider"] == "google"));
+        assert_eq!(usage[0].payload["thinking_tokens"], 50);
+        // 1000 in @ $2/M + (100 out + 50 thinking) @ $12/M
+        assert!((usage[0].payload["cost_usd"].as_f64().unwrap() - (0.002 + 0.0018)).abs() < 1e-9, "{}", usage[0].payload["cost_usd"]);
+        let turns = events_of(&f, "agent.turn.complete");
+        assert_eq!(turns[0].payload["provider"], "google");
+    }
+
+    #[tokio::test]
+    async fn a_compat_gateway_is_degraded_but_works() {
+        let f = setup(vec![signed_tool_turn("call_1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::text("It defines `needle`.")], 5.0, |_| {});
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"compat\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal\"\ncredential = \"env:K\"\n[access]")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"compat\"] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"compat\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let reqs = f.model.requests();
+        assert_eq!(reqs[0].endpoint_id, "compat");
+        let msgs = reqs[1].body["messages"].as_array().unwrap();
+        assert_eq!(msgs.iter().map(|m| m["role"].as_str().unwrap()).collect::<Vec<_>>(), ["system", "user", "assistant", "tool", "user"]);
+        assert!(!reqs[1].body.to_string().contains("SIG-EXACT"), "no signature crosses a compat gateway");
+        assert!(events_of(&f, "agent.usage").iter().all(|e| e.payload["provider"] == "openai-compat"));
+    }
+
+    /// The testkit project becomes a git repository so a Builder can get a worktree.
+    fn git_project(f: &Fx) {
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+    }
+
+    #[tokio::test]
+    async fn a_builder_edits_and_runs_commands_in_a_sandboxed_worktree_and_the_project_stays_clean() {
+        let f = setup(
+            vec![
+                Step::tool("c1", "write_file", json!({"path": "@worktree/src/new.rs", "content": "pub fn b() {}\n"})),
+                Step::tool("c2", "run_command", json!({"argv": ["/bin/sh", "-c", "echo compiled > built.txt; cat src/new.rs; echo \"cwd=$(pwd)\""]})),
+                Step::text("Added `b` and ran the build."),
+            ],
+            5.0,
+            |_| {},
+        );
+        git_project(&f);
+        crate::testkit::ratify_spec(&f);
+        f.engine.broker.set_mode(Mode::AcceptEdits);
+        let out = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md: add a function b in @project/app/src/lib.rs").await.unwrap();
+        if f.engine.exec.sandbox.is_none() {
+            assert!(matches!(out.status, Status::Done | Status::Escalated(_)));
+            return;
+        }
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let reqs = f.model.requests();
+        let tools_offered: Vec<String> = reqs[0].body["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        assert!(tools_offered.contains(&"run_command".to_string()) && tools_offered.contains(&"write_file".to_string()), "{:?}", tools_offered);
+        // The command's output reached the model, and it ran in the worktree, not the project.
+        let result = reqs[2].body["messages"].to_string();
+        assert!(result.contains("pub fn b()") && result.contains("exit 0") && result.contains("sandboxed, no network"), "{}", result);
+        let created = events_of(&f, "worktree.created");
+        assert_eq!(created.len(), 1);
+        let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
+        assert_eq!(fs::read_to_string(wt.join("src/new.rs")).unwrap(), "pub fn b() {}\n");
+        assert_eq!(fs::read_to_string(wt.join("built.txt")).unwrap(), "compiled\n");
+        assert!(!f.root.join("proj/src/new.rs").exists() && !f.root.join("proj/built.txt").exists(), "the project checkout must stay untouched");
+        let intents = events_of(&f, "action.intent");
+        let results = events_of(&f, "action.result");
+        assert_eq!((intents.len(), results.len()), (1, 1));
+        assert_eq!((results[0].payload["ok"].as_bool(), results[0].payload["changed_files"].as_u64()), (Some(true), Some(1)));
+        let stamped: Vec<String> = events_of(&f, "provenance.stamp").iter().map(|e| e.payload["path"].as_str().unwrap_or("").to_string()).collect();
+        assert!(stamped.contains(&"built.txt".to_string()) && stamped.contains(&"src/new.rs".to_string()), "{:?}", stamped);
+    }
+
+    #[tokio::test]
+    async fn only_roles_that_may_run_code_are_offered_or_obeyed_on_run_command() {
+        let f = setup(vec![Step::tool("c1", "run_command", json!({"argv": ["/bin/echo", "x"]})), Step::text("done")], 5.0, |_| {});
+        git_project(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Look at @project/app/src/lib.rs").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let reqs = f.model.requests();
+        let offered = reqs[0].body["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert!(!offered.contains(&"run_command".to_string()), "{:?}", offered);
+        let r = reqs[1].body["messages"].to_string();
+        assert!(r.contains("does not authorize shell-worktree-scoped"), "a call to a tool that was never offered is refused: {}", r);
+        assert!(events_of(&f, "action.intent").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_builder_without_a_git_project_escalates_instead_of_running_anywhere_else() {
+        let f = setup(vec![Step::text("unreachable")], 5.0, |_| {});
+        crate::testkit::ratify_spec(&f);
+        let out = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        match out.status {
+            Status::Escalated(r) => assert!(r.contains("worktree"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(f.model.requests().len(), 0, "no model call is made for a task that cannot be set up");
     }
 
     #[tokio::test]
@@ -1141,7 +1417,7 @@ mod tests {
         let err = f.engine.run_task(&f.m, "architect", "hi").await.unwrap_err();
         assert!(err.to_string().contains("does not match its lock"), "{}", err);
         assert!(f.model.requests().is_empty());
-        assert!(f.engine.run_task(&f.m, "builder", "hi").await.is_err(), "roles outside the v1 roster aren't enabled");
+        assert!(f.engine.run_task(&f.m, "scout", "hi").await.is_err(), "roles outside the v1 roster have no manifest here");
         let _ = Path::new("");
     }
 

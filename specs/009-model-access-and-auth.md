@@ -85,13 +85,17 @@ The number in parentheses is the roadmap step.
 ### 4.1 `[auth.<name>]` Schema (OAuth2)
 ```toml
 [auth.corp-okta]
-flow = "device_code"                  # device_code | client_credentials
+flow = "device_code"                  # device_code | client_credentials | loopback_pkce
 issuer = "https://idp.example.com"    # OIDC discovery; or token_url + device_authorization_url
 client_id = "<per-organization client id>"   # supplied by the operator's IdP admin; Delphi ships none
 scopes = ["llm.invoke"]
 audience = "llm-gateway"              # optional
-client_secret = "keychain:corp-okta-secret"  # client_credentials only; keychain reference, never inline
+client_secret = "keychain:corp-okta-secret"  # client_credentials (or a confidential PKCE client); keychain reference, never inline
+# token_url / device_authorization_url / authorization_url   # override OIDC discovery; https only
+# redirect_port = 8765                  # loopback_pkce: the fixed port registered with the provider
 ```
+
+`delphi auth login <name> [--manual]`, `delphi auth status` and `delphi auth logout <name>` read the **ratified** blocks (a local edit cannot redirect a login). Login stores one thing: the refresh token, in Delphi's own keychain entry `oauth2.<name>` (`service=delphi`), written through the system tool's standard input so it never appears on a command line. `loopback_pkce` binds `127.0.0.1`, checks `Host` and fetch metadata, requires a 256-bit `state`, and falls back to pasting the redirect URL with `--manual`. A revoked token (`invalid_grant`) removes the entry and pauses the call with `re-authenticate <endpoint>`; an unreachable provider does not.
 
 ### 4.2 Credential Invariants
 1. **Never on disk.** Delphi never writes a credential to any file: not config, logs or `events.jsonl`. The only exception is keychain entries it created.
@@ -136,6 +140,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us", "claude-sub"]   # compliance 
 ```
 
 - **The pin applies to all model traffic:** primary selection, failover, per-role overrides, capability probes (§6) and `doctor`. A request is sent only to an endpoint in `allowed_endpoints`. When every allowed endpoint is down, the task waits or escalates; it never leaves the allowed set.
+- **Gemini endpoints:** `family = "gemini"` with `path = "api"` (Developer API, `x-goog-api-key` header), `"gateway-native"` (Bearer) or `"cloud"` with `platform = "vertex"` (publisher `google`, Bearer). Bedrock does not serve Gemini. A role is served by Claude unless `[access] role_family = { <role> = "gemini" }` says otherwise (or a handoff's `routing_directive.model_family` does); failover never crosses families, because reasoning signatures and tool formats are not portable. `role_family` is part of the ratified `[access]` block.
 - **No cross-origin redirects:** HTTP redirects to a different scheme, host or port than the endpoint's `base_url` are refused, never followed with credentials attached.
 - **Configuration is ratified:** the `[[endpoints]]`, `[access]`, `[auth.*]` and `[harness.*]` blocks of `config.toml` are hashed in `local/ratified.lock` (`specs/006` §3.1). Any change to a `command:` credential, `base_url`, `headers`, `allowed_endpoints`, `order` or `[auth.*]` is staged as a **Red-tier** proposal and doesn't take effect until ratified. A local process that edits the config therefore can't inject a helper command or move traffic.
 - **Signatures across endpoints:** reasoning blocks are treated as foreign when a turn moves between endpoints (`specs/002` §3.1), unless an explicit `E1 → E2` replay probe (§6) passed for that ordered pair.
@@ -152,7 +157,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us", "claude-sub"]   # compliance 
 - whether usage is reported;
 - for gateways: native passthrough vs compat, detected rather than assumed.
 
-Results are stored in Zone 3 (`local/endpoint-capabilities.json`, mirrored in `state.db`) with a 24-hour TTL. They are **never** written to the team-tracked `context/model-capabilities.md`, which holds only static per-family defaults. `doctor` reads cached results and probes only with `--probe`, which keeps it offline and free by default. Routing uses probed features, not vendor assumptions.
+Probes run in order (plain reply and usage; forced tool call with the model's minimum thinking budget; the tool result sent back with signed reasoning replayed) and stop at the first failure that makes the rest meaningless. Prompt caching, context limits and `E1 → E2` replay are not probed in v1 and are recorded as such. Results are stored in Zone 3 (`local/endpoint-capabilities.json`; the `state.db` mirror is deferred) with a 24-hour TTL. They are **never** written to the team-tracked `context/model-capabilities.md`, which holds only static per-family defaults. `doctor` reads cached results and probes only with `--probe`, which keeps it offline and free by default. Routing uses probed features, not vendor assumptions.
 
 ---
 

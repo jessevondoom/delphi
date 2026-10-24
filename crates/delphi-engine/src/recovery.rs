@@ -174,7 +174,7 @@ pub fn rebuild(events: &[EventEnvelope]) -> Recovered {
                 s.pending = if p["stop_reason"] == "tool_use" { list.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some(Call { id: id.clone(), name: name.clone(), args: arguments.clone() }) } else { None }).collect() } else { vec![] };
                 s.known_results.clear();
                 s.interruptions = 0;
-                s.history.push(Turn::assistant(turn_index, "anthropic", &ep, &model, list));
+                s.history.push(Turn::assistant(turn_index, p["provider"].as_str().unwrap_or("anthropic"), &ep, &model, list));
             }
             "tool.result" => {
                 let Some(s) = rec.spans.get_mut(&span) else { continue };

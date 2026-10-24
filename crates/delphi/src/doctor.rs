@@ -121,11 +121,33 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     } else if endpoints == 0 {
         r.warn("7 model-access", "", "no endpoints configured (`delphi endpoints add`, specs/009)");
     } else {
-        r.push(Level::Ok, "7 model-access", "", format!("{} endpoint(s) configured; run with --probe to test them", endpoints));
+        r.push(Level::Ok, "7 model-access", "", format!("{} endpoint(s) configured; `delphi endpoints test --probe` tests them", endpoints));
+        // Cached probe results (specs/009 §6): read offline, never refreshed here.
+        let cache = fs::read_to_string(ws.dir.join("local/endpoint-capabilities.json")).ok().and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok()).unwrap_or_default();
+        if cache.is_empty() {
+            r.warn("7 model-access", "local/endpoint-capabilities.json", "no probe results yet: run `delphi endpoints test --probe` to learn what each endpoint really supports");
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        for c in &cache {
+            let name = format!("{} / {}", c["endpoint_id"].as_str().unwrap_or("?"), c["model_id"].as_str().unwrap_or("?"));
+            if c["auth"].as_str() != Some("ok") {
+                r.warn("7 model-access", name, format!("last probe: {}", c["auth"].as_str().unwrap_or("unknown")));
+            } else if now - c["probed_at"].as_i64().unwrap_or(0) >= 24 * 3600 {
+                r.warn("7 model-access", name, "probe results are over 24 hours old: re-run `delphi endpoints test --probe`");
+            } else if c["signature_round_trip"] == serde_json::Value::Bool(false) {
+                r.warn("7 model-access", name, "reasoning signatures did not survive a round trip; Delphi will drop them for this endpoint");
+            }
+        }
     }
 
     // 8. Hygiene: clean projects, orphaned worktrees.
     check_hygiene(ws, home, &mut r);
+
+    // 9. Sandbox (D-04): proven by running a trivial program under it, not by finding the binary.
+    match delphi_sandbox::detect() {
+        Some(mode) => r.push(Level::Ok, "9 sandbox", "", format!("{} is active: sandboxed execution is Green, harness mode is available", mode.name())),
+        None => r.warn("9 sandbox", "", "no OS sandbox is available (sandbox-exec on macOS, bubblewrap on Linux): code execution falls back to Amber and harness mode is unavailable"),
+    }
     r
 }
 

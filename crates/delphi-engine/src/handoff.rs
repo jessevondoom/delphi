@@ -26,6 +26,9 @@ pub struct RoutingDirective {
     /// `fast` | `workhorse` | `frontier`. Tiers, never model IDs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_tier: Option<String>,
+    /// `claude` (the default) or `gemini`. Failover never crosses families.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_budget_tokens: Option<u32>,
     #[serde(default)]
@@ -68,7 +71,7 @@ impl HandoffEnvelope {
             context_pointers: pointers,
             constraints: vec!["Read-only work: you cannot run code or change the project; write only the notes and drafts your tools allow.".into()],
             expected_output: ExpectedOutput { artifact_type: "answer".into(), required_fields: vec![] },
-            routing_directive: RoutingDirective { model_tier: None, thinking_budget_tokens: None, attempt_number: 1 },
+            routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1 },
         }
     }
 

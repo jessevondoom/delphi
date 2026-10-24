@@ -81,7 +81,7 @@ impl ModelClient for HttpModelClient {
                 Err(CallError::Stream(StreamError::Incomplete)) => Err(ModelError::Interrupted("the stream ended before the message completed".into())),
                 Err(CallError::Unreachable(m)) => Err(ModelError::Throttled(m)), // nothing was sent: no charge, next endpoint
                 Err(CallError::Transport(m)) => Err(ModelError::Interrupted(m)),
-                Err(CallError::Stream(StreamError::Provider { kind, message })) if matches!(kind.as_str(), "overloaded_error" | "rate_limit_error" | "throttlingException" | "ThrottlingException" | "serviceUnavailableException" | "modelNotReadyException") => Err(ModelError::Throttled(message)),
+                Err(CallError::Stream(StreamError::Provider { kind, message })) if matches!(kind.as_str(), "overloaded_error" | "rate_limit_error" | "throttlingException" | "ThrottlingException" | "serviceUnavailableException" | "modelNotReadyException" | "RESOURCE_EXHAUSTED" | "UNAVAILABLE" | "rate_limit_exceeded") => Err(ModelError::Throttled(message)),
                 Err(other) => Err(ModelError::Failed(other.to_string())),
             }
         })
@@ -103,11 +103,11 @@ pub enum Step {
 
 impl Step {
     pub fn text(text: &str) -> Step {
-        Step::Reply { blocks: vec![ContentBlock::Text { text: text.into() }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 200 }, stop_reason: "end_turn" }
+        Step::Reply { blocks: vec![ContentBlock::Text { text: text.into() }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 200, thinking_tokens: 0 }, stop_reason: "end_turn" }
     }
 
     pub fn tool(id: &str, name: &str, args: Value) -> Step {
-        Step::Reply { blocks: vec![ContentBlock::ToolCall { id: id.into(), name: name.into(), arguments: args }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100 }, stop_reason: "tool_use" }
+        Step::Reply { blocks: vec![ContentBlock::ToolCall { id: id.into(), name: name.into(), arguments: args }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100, thinking_tokens: 0 }, stop_reason: "tool_use" }
     }
 }
 

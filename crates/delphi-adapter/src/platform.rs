@@ -29,7 +29,17 @@ pub enum ResponseKind {
     AwsEventStream,
 }
 
+/// Which wire dialect the response speaks; it picks the stream assembler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    Claude,
+    Gemini,
+    /// OpenAI chat-completions, for compat gateways.
+    OpenAi,
+}
+
 pub struct HttpRequest {
+    pub dialect: Dialect,
     pub url: String,
     /// Lowercase names.
     pub headers: Vec<(String, String)>,
@@ -91,6 +101,18 @@ fn check_header(name: &str, value: &str) -> Result<(), BuildError> {
     Ok(())
 }
 
+/// A value interpolated into a URL host or path: no character that could change which host or path is
+/// meant (`/`, `?`, `#`, `@`, `\\`, spaces, `..`).
+fn safe_segment(what: &str, v: &str) -> Result<(), BuildError> {
+    // Model ids may carry `@` (Vertex Claude versions) and `:` (Bedrock-style); hosts and projects may not carry `@`.
+    let extra: &[char] = if what == "model id" { &['@', ':'] } else { &[] };
+    if !v.is_empty() && v != ".." && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || extra.contains(&c)) {
+        Ok(())
+    } else {
+        Err(BuildError::Unsupported(format!("{} `{}` has characters that cannot appear in a URL path or host", what, v)))
+    }
+}
+
 /// `https://host:port/prefix` → (`https://host:port`, `host:port`, `/prefix`).
 fn split_url(url: &str) -> Option<(String, String, String)> {
     let (scheme, rest) = url.split_once("://")?;
@@ -108,11 +130,74 @@ fn token<'a>(creds: &'a Resolved, what: &str) -> Result<&'a str, BuildError> {
     }
 }
 
+/// Gemini over the Developer API (`x-goog-api-key`), a native gateway (Bearer) or Vertex AI (Bearer). The
+/// key travels in a header, never the URL, so it cannot reach a log through a request line.
+fn build_gemini(i: &BuildInput) -> Result<HttpRequest, BuildError> {
+    let e = i.endpoint;
+    let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into()), ("accept".into(), "text/event-stream".into())];
+    for (k, v) in &e.headers {
+        check_header(k, v)?;
+        (i.register)(v);
+        headers.push((k.to_lowercase(), v.clone()));
+    }
+    let model = i.model_id.strip_prefix("models/").unwrap_or(i.model_id);
+    safe_segment("model id", model)?;
+    let url = match (e.path, e.platform.as_deref()) {
+        (AccessPath::Api, _) | (AccessPath::GatewayNative, _) => {
+            let base = e.base_url.clone().unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+            let key = token(i.creds, "the Gemini API")?;
+            if e.path == AccessPath::Api {
+                headers.push(("x-goog-api-key".into(), key.to_string()));
+            } else {
+                headers.push(("authorization".into(), format!("Bearer {}", key)));
+            }
+            format!("{}/v1beta/models/{}:streamGenerateContent?alt=sse", base.trim_end_matches('/'), model)
+        }
+        (AccessPath::Cloud, Some("vertex")) => {
+            let region = e.region.clone().unwrap_or_default();
+            let project = e.project.clone().unwrap_or_default();
+            safe_segment("region", &region)?;
+            safe_segment("project", &project)?;
+            let base = e.base_url.clone().unwrap_or_else(|| if region == "global" { "https://aiplatform.googleapis.com".into() } else { format!("https://{}-aiplatform.googleapis.com", region) });
+            headers.push(("authorization".into(), format!("Bearer {}", token(i.creds, "Vertex AI")?)));
+            format!("{}/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent?alt=sse", base.trim_end_matches('/'), project, region, model)
+        }
+        _ => return Err(BuildError::Unsupported(format!("endpoint `{}` ({}) is not a Gemini generateContent path in this step", e.id, e.path.as_str()))),
+    };
+    let body = serde_json::to_vec(&i.compiled.body).expect("body serializes");
+    Ok(HttpRequest { dialect: Dialect::Gemini, url, headers, body, response: ResponseKind::Sse })
+}
+
+/// A compat gateway: `POST {base_url}/v1/chat/completions` with a Bearer token.
+fn build_openai(i: &BuildInput) -> Result<HttpRequest, BuildError> {
+    let e = i.endpoint;
+    let base = e.base_url.clone().ok_or_else(|| BuildError::Unsupported(format!("compat endpoint `{}` needs a base_url", e.id)))?;
+    let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into()), ("accept".into(), "text/event-stream".into())];
+    for (k, v) in &e.headers {
+        check_header(k, v)?;
+        (i.register)(v);
+        headers.push((k.to_lowercase(), v.clone()));
+    }
+    headers.push(("authorization".into(), format!("Bearer {}", token(i.creds, "a compat gateway")?)));
+    let mut core = i.compiled.body.as_object().cloned().unwrap_or_default();
+    core.insert("model".into(), json!(i.model_id));
+    core.insert("stream".into(), json!(true));
+    core.insert("stream_options".into(), json!({"include_usage": true}));
+    let body = serde_json::to_vec(&Value::Object(core)).expect("body serializes");
+    Ok(HttpRequest { dialect: Dialect::OpenAi, url: format!("{}/v1/chat/completions", base.trim_end_matches('/')), headers, body, response: ResponseKind::Sse })
+}
+
 pub fn build(i: &BuildInput) -> Result<HttpRequest, BuildError> {
     if !i.cfg.is_allowed(&i.endpoint.id) {
         return Err(BuildError::NotAllowed(i.endpoint.id.clone()));
     }
     let e = i.endpoint;
+    if e.path == AccessPath::GatewayCompat {
+        return build_openai(i);
+    }
+    if e.family == "gemini" {
+        return build_gemini(i);
+    }
     let mut core = i.compiled.body.as_object().cloned().unwrap_or_default();
     let mut headers: Vec<(String, String)> = vec![("content-type".into(), "application/json".into())];
     for (k, v) in &e.headers {
@@ -163,11 +248,14 @@ pub fn build(i: &BuildInput) -> Result<HttpRequest, BuildError> {
             headers.push(("x-amz-date".into(), date));
             headers.push(("accept".into(), "application/vnd.amazon.eventstream".into()));
             headers.extend(auth);
-            return Ok(HttpRequest { url, headers, body, response: ResponseKind::AwsEventStream });
+            return Ok(HttpRequest { dialect: Dialect::Claude, url, headers, body, response: ResponseKind::AwsEventStream });
         }
         (AccessPath::Cloud, Some("vertex")) => {
             let region = e.region.clone().unwrap_or_default();
             let project = e.project.clone().unwrap_or_default();
+            safe_segment("region", &region)?;
+            safe_segment("project", &project)?;
+            safe_segment("model id", i.model_id)?;
             let base = e.base_url.clone().unwrap_or_else(|| if region == "global" { "https://aiplatform.googleapis.com".into() } else { format!("https://{}-aiplatform.googleapis.com", region) });
             url = format!("{}/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:streamRawPredict", base.trim_end_matches('/'), project, region, i.model_id);
             core.insert("anthropic_version".into(), json!(VERTEX_ANTHROPIC_VERSION));
@@ -183,7 +271,7 @@ pub fn build(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         }
     }
     let body = serde_json::to_vec(&Value::Object(core)).expect("body serializes");
-    Ok(HttpRequest { url, headers, body, response: ResponseKind::Sse })
+    Ok(HttpRequest { dialect: Dialect::Claude, url, headers, body, response: ResponseKind::Sse })
 }
 
 #[cfg(test)]
@@ -249,6 +337,56 @@ mod tests {
         assert_eq!(r.url, "https://llm-gateway.example.internal/anthropic/v1/messages");
         assert_eq!((header(&r, "authorization"), header(&r, "x-cost-center"), header(&r, "x-api-key")), (Some("Bearer tok"), Some("eng-123"), None));
         assert_eq!(seen.lock().unwrap().as_slice(), ["eng-123"]);
+    }
+
+    #[test]
+    fn gemini_endpoints_use_generate_content_with_the_right_auth() {
+        use crate::claude::tests::opts;
+        let extra = "[[endpoints]]\nid = \"gd\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[[endpoints]]\nid = \"gv\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"vertex\"\nregion = \"global\"\nproject = \"p1\"\ncredential = \"gcloud-adc\"\n[[endpoints]]\nid = \"gb\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"bedrock\"\nregion = \"us-east-1\"\ncredential = \"aws:p\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"gd\", \"gv\", \"gb\"]"), extra)).unwrap();
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "gd".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        let go = |id: &str, creds: &Resolved| build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint(id).unwrap(), model_id: "gemini-x", compiled: &c, creds, now_unix: 0, register: &|_| {} });
+        let r = go("gd", &token("AIza-k")).unwrap();
+        assert_eq!(r.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-x:streamGenerateContent?alt=sse");
+        assert_eq!((header(&r, "x-goog-api-key"), header(&r, "authorization")), (Some("AIza-k"), None));
+        assert!(!r.url.contains("AIza"));
+        let v = go("gv", &token("ya29.t")).unwrap();
+        assert_eq!(v.url, "https://aiplatform.googleapis.com/v1/projects/p1/locations/global/publishers/google/models/gemini-x:streamGenerateContent?alt=sse");
+        assert_eq!(header(&v, "authorization"), Some("Bearer ya29.t"));
+        assert_eq!(body(&v), c.body, "no model or stream field in the body");
+        assert!(matches!(go("gb", &aws()), Err(BuildError::Unsupported(_))), "Bedrock does not serve Gemini");
+        assert!(matches!(go("gd", &aws()), Err(BuildError::Unsupported(_))), "an AWS credential cannot authenticate the Gemini API");
+    }
+
+    #[test]
+    fn values_that_could_redirect_a_vertex_url_are_refused() {
+        use crate::claude::tests::opts;
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "gv".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        for (region, project, model) in [("evil.com/x#", "p", "m"), ("us-east5", "p/../q", "m"), ("us-east5", "p", "m?x=1"), ("us-east5", "p", "../../x"), ("us-east5", "", "m")] {
+            let extra = format!("[[endpoints]]\nid = \"gv\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"vertex\"\nregion = \"{}\"\nproject = \"{}\"\ncredential = \"gcloud-adc\"\n", region, project);
+            let Ok(cfg) = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"gv\"]"), extra)) else { continue };
+            let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("gv").unwrap(), model_id: model, compiled: &c, creds: &token("t"), now_unix: 0, register: &|_| {} });
+            assert!(matches!(r, Err(BuildError::Unsupported(_))), "{:?}", (region, project, model));
+        }
+    }
+
+    #[test]
+    fn compat_gateways_get_chat_completions_for_any_family() {
+        let extra = "[[endpoints]]\nid = \"cc\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal/openai/\"\ncredential = \"env:K\"\nheaders = { \"X-Team\" = \"t1\" }\n[[endpoints]]\nid = \"cg\"\nfamily = \"gemini\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal\"\ncredential = \"env:K\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"cc\", \"cg\"]"), extra)).unwrap();
+        let c = crate::openai::compile(&ipr(), &[], &crate::claude::tests::opts(None)).unwrap();
+        for id in ["cc", "cg"] {
+            let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint(id).unwrap(), model_id: "some-model", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
+            assert_eq!(r.dialect, Dialect::OpenAi);
+            assert!(r.url.ends_with("/v1/chat/completions") && !r.url.contains("//v1"), "{}", r.url);
+            assert_eq!(header(&r, "authorization"), Some("Bearer tok"));
+            let b = body(&r);
+            assert_eq!((b["model"].as_str(), b["stream"].as_bool(), b["stream_options"]["include_usage"].as_bool()), (Some("some-model"), Some(true), Some(true)));
+        }
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("cc").unwrap(), model_id: "m", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!(header(&r, "x-team"), Some("t1"));
     }
 
     #[test]

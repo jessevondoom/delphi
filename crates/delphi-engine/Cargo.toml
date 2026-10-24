@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 delphi-core = { path = "../delphi-core" }
 delphi-adapter = { path = "../delphi-adapter" }
+delphi-sandbox = { path = "../delphi-sandbox" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.9"
