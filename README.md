@@ -10,7 +10,7 @@ Delphi is a spec-driven, multi-agent working environment for **software engineer
 
 ## What you get
 
-- **A console** (`delphi chat`): ask questions, hand out work with `@architect …`, `/build …` or `/council …`, and answer approval cards. Nothing consequential happens without a card.
+- **A console** (just `delphi`): ask questions, hand out work with `@architect …`, `/build …` or `/council …`, and answer approval cards. Nothing consequential happens without a card.
 - **Builds you can trust:** the Builder works in a throwaway worktree; Delphi runs your tests, has a different agent audit the exact commit, and asks before merging (or opens a pull request).
 - **Councils:** for a hard call, several seats on different model families answer blind, attack each other's answers, and the verdict carries a Minority Report that the runtime copies verbatim.
 - **A second window** (`delphi narrator`): a read-only live view of the task graph, Council, worktree diffs, agents and spend.
@@ -24,7 +24,7 @@ curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/insta
 # or: brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi
 ```
 
-macOS or Linux. The installer verifies the download against its checksum and, if the `gh` CLI is signed in, against the release's build attestation. Later, `delphi self-update` fetches and verifies the newest release (`--check`, `--rollback`), and `delphi update` refreshes the built-in agents and skills in your workspaces.
+macOS or Linux. This installs `delphi` and `delphi-ui` (the full-screen console) side by side. The installer verifies the download against its checksum and, if the `gh` CLI is signed in, against the release's build attestation. Later, `delphi self-update` fetches and verifies the newest release (`--check`, `--rollback`) and replaces both files together, and `delphi update` refreshes the built-in agents and skills in your workspaces.
 
 ## First run
 
@@ -42,9 +42,9 @@ The first time, `delphi` creates a workspace for the project (with a one-line no
 › /council Should the retry queue be a table or a file?
 ```
 
-Useful commands: `/usage`, `/budget [dollars]`, `/permissions`, `/ratify`, `/narrator`, `/y /a /n /d` to answer a card, and `/help`. `delphi doctor` checks the install; `delphi needs` shows which later features have earned their turn. Using Delphi never writes into your project repository (D-03); its state lives in `~/.delphi` (or `$DELPHI_HOME`).
+Everything after install is the one command `delphi`; run it again any time (in any project) and it opens the console. In the console, useful commands: `/usage`, `/budget [dollars]`, `/permissions`, `/ratify`, `/narrator`, `/y /a /n /d` to answer a card, and `/help`. `delphi doctor` checks the install; `delphi needs` shows which later features have earned their turn. Using Delphi never writes into your project repository (D-03); its state lives in `~/.delphi` (or `$DELPHI_HOME`).
 
-**From source:** `cargo build --release` produces one executable, `target/release/delphi` (the daemon is `delphi __core`). `cargo test` runs everything; `cargo run -- lint --repo .` lints this repository (CI does too). Rust 1.85 or newer.
+**From source:** `cargo build --release` produces one executable, `target/release/delphi` (the daemon is `delphi __core`). For the full-screen console also run `cd ui && npm ci && npm run build` and put `ui/dist/delphi-ui` next to `delphi` (or set `$DELPHI_UI`); without it `delphi` uses the inline console. `cargo test` runs everything; `cargo run -- lint --repo .` lints this repository (CI does too). Rust 1.85 or newer.
 
 ---
 
