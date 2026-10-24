@@ -128,3 +128,9 @@ delphi/
 7. **[007 — Federation & Sync](specs/007-federated-mesh-and-sync.md):** team sync via ratified proposals (A2A delegation and `delphi://` pointers deferred).
 8. **[008 — Ambient Watch, Rewind & HITL Tiers](specs/008-ambient-watch-and-rewind.md):** zero-token watches, `/rewind` checkpoints, and Green/Amber/Red approvals.
 9. **[009 — Model Access & Authentication](specs/009-model-access-and-auth.md):** direct API, cloud platforms (Bedrock, Vertex), enterprise gateways with SSO, and subscription CLIs; endpoints, failover pins and delegated credentials (D-19).
+
+---
+
+## License
+
+[MIT](LICENSE). Delphi launches your own `claude` and `agy` programs and never reads or stores their logins; each provider's terms govern automated use of a subscription (`specs/009` §7).

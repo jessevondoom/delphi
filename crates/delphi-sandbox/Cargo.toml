@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "OS-level sandbox for Delphi: sandbox-exec (macOS) and bubblewrap (Linux), deny-by-default (roadmap Step 3)"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [dependencies]
