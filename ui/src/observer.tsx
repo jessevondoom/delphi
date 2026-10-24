@@ -8,9 +8,9 @@ import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; view: View | null };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; themeForced?: boolean; view: View | null };
 
-export function Observer({ cmd, ev, term, info, dark, view: first }: Props) {
+export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }: Props) {
   const { exit } = useApp();
   const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
@@ -79,7 +79,7 @@ export function Observer({ cmd, ev, term, info, dark, view: first }: Props) {
     const step = (d: number) => go(VIEWS[(VIEWS.indexOf(R.current.view) + d + VIEWS.length) % VIEWS.length]!);
     const onEv = (e: Ev) => {
       const { view: v, search: s } = R.current;
-      if (e.t === 'bg') { setPal({ dark: e.dark }); return; }
+      if (e.t === 'bg') { if (!themeForced) setPal({ dark: e.dark }); return; }
       if (e.t === 'wheel') { setScroll((x) => Math.max(0, x + (e.dir === 'up' ? -3 : 3))); return; }
       if (s.editing) {
         if (e.t === 'text' && [...s.query].length < 200) setSearch({ ...s, query: s.query + e.s });

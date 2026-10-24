@@ -35,6 +35,8 @@ pub enum AgentActivity {
     Surprise,
     Alarm,
     Success,
+    /// The agent gave up and handed the decision to the operator (`x_x`).
+    Escalated,
 }
 
 pub struct RoleTheme {
@@ -164,53 +166,143 @@ fn bg(rgb: (u8, u8, u8)) -> String {
     format!("\x1b[48;2;{};{};{}m", rgb.0, rgb.1, rgb.2)
 }
 
+/// Eye colours on a badge, by terminal background: bright on dark, deep slate on light (`skills/tui-design` §2.1).
+pub const EYE_DARK: (u8, u8, u8) = (255, 255, 255);
+pub const EYE_LIGHT: (u8, u8, u8) = (15, 23, 42);
+
+/// The three cells between a badge's brackets. This is the one place a badge's faces are defined; the ANSI
+/// renderer below and the full-screen console (through `ui_spec`) both read it.
+pub fn badge_cells(role: AgentRole, activity: AgentActivity) -> String {
+    use AgentActivity::*;
+    let t = get_theme(role);
+    match activity {
+        WaitingApproval => return "x?x".into(),
+        Escalated => return "x_x".into(),
+        _ => {}
+    }
+    if role == AgentRole::Scout {
+        // The scout has no mouth: it speaks only through its sensor eyes.
+        return match activity {
+            Blink => "---",
+            ThinkingLeft => "…  ",
+            ThinkingRight => "  …",
+            Working => "···",
+            Surprise => "●●●",
+            Success => "^^^",
+            _ => "•••",
+        }
+        .into();
+    }
+    match activity {
+        Idle => t.badge_face,
+        Blink => t.blink_badge,
+        ThinkingLeft => "•• ",
+        ThinkingRight => " ••",
+        Working => "•─•",
+        Surprise => "●_●",
+        Alarm => "●_!",
+        Success => "^─^",
+        WaitingApproval | Escalated => unreachable!("returned above"),
+    }
+    .into()
+}
+
+/// Which of the three cells is the mouth (drawn in the role colour); `None` when every cell is an eye.
+pub fn badge_mouth(role: AgentRole, activity: AgentActivity) -> Option<usize> {
+    if role == AgentRole::Scout || activity == AgentActivity::WaitingApproval {
+        None
+    } else {
+        Some(1)
+    }
+}
+
 /// Renders a single-line badge (exact 5 display characters).
 /// e.g. `⟦•_•⟧` or `⟦x?x⟧`
 pub fn render_badge(role: AgentRole, activity: AgentActivity, is_dark_mode: bool) -> String {
     let t = get_theme(role);
     let c = fg(t.chassis_rgb);
-    let eye_color = if is_dark_mode {
-        "\x1b[38;2;255;255;255m" // White
-    } else {
-        "\x1b[38;2;15;23;42m" // Black
-    };
-
-    // Special cases
+    let eye_color = fg(if is_dark_mode { EYE_DARK } else { EYE_LIGHT });
+    let cells: Vec<char> = badge_cells(role, activity).chars().collect();
     if activity == AgentActivity::WaitingApproval {
-        return format!("{c}⟦{eye_color}{DIM}x{RESET}{eye_color}{BOLD}?{RESET}{eye_color}{DIM}x{RESET}{c}⟧{RESET}");
+        return format!("{c}⟦{eye_color}{DIM}{}{RESET}{eye_color}{BOLD}{}{RESET}{eye_color}{DIM}{}{RESET}{c}⟧{RESET}", cells[0], cells[1], cells[2]);
     }
+    let mouth = badge_mouth(role, activity);
+    let body: String = cells.iter().enumerate().map(|(i, ch)| format!("{}{ch}", if Some(i) == mouth { &c } else { &eye_color })).collect();
+    format!("{c}⟦{body}{c}⟧{RESET}")
+}
 
-    if role == AgentRole::Scout {
-        return match activity {
-            AgentActivity::Idle => format!("{c}⟦{eye_color}•••{c}⟧{RESET}"),
-            AgentActivity::Blink => format!("{c}⟦{eye_color}---{c}⟧{RESET}"),
-            AgentActivity::ThinkingLeft => format!("{c}⟦{eye_color}…  {c}⟧{RESET}"),
-            AgentActivity::ThinkingRight => format!("{c}⟦{eye_color}  …{c}⟧{RESET}"),
-            AgentActivity::Working => format!("{c}⟦{eye_color}···{c}⟧{RESET}"),
-            AgentActivity::Surprise => format!("{c}⟦{eye_color}●●●{c}⟧{RESET}"),
-            AgentActivity::Success => format!("{c}⟦{eye_color}^^^{c}⟧{RESET}"),
-            _ => format!("{c}⟦{eye_color}•••{c}⟧{RESET}"),
-        };
+/// Every activity by the name the full-screen console looks it up under.
+pub const ACTIVITIES: [(&str, AgentActivity); 10] = [
+    ("idle", AgentActivity::Idle),
+    ("blink", AgentActivity::Blink),
+    ("thinking_left", AgentActivity::ThinkingLeft),
+    ("thinking_right", AgentActivity::ThinkingRight),
+    ("working", AgentActivity::Working),
+    ("waiting_approval", AgentActivity::WaitingApproval),
+    ("surprise", AgentActivity::Surprise),
+    ("alarm", AgentActivity::Alarm),
+    ("success", AgentActivity::Success),
+    ("escalated", AgentActivity::Escalated),
+];
+
+fn hex_rgb(c: (u8, u8, u8)) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2)
+}
+
+/// Everything the full-screen console needs to draw badges and mascots, as data, so a new role or face added
+/// above reaches it without touching TypeScript. `ui/test/fixtures/avatar-spec.json` is this value; a test keeps
+/// the two equal (`DELPHI_WRITE_UI_SPEC=1 cargo test -p delphi avatar` rewrites it).
+pub fn ui_spec() -> serde_json::Value {
+    use serde_json::{json, Map, Value};
+    let mut roles = Map::new();
+    for t in ROLES.iter() {
+        let Some(role) = from_canonical_id(t.role_id) else { continue };
+        let badge: Map<String, Value> = ACTIVITIES.iter().map(|(name, a)| ((*name).to_string(), json!({"cells": badge_cells(role, *a), "mouth": badge_mouth(role, *a)}))).collect();
+        let mascot: Map<String, Value> = ACTIVITIES.iter().map(|(name, a)| ((*name).to_string(), json!(mascot_row(role, *a)))).collect();
+        let mut r = json!({
+            "chassis": hex_rgb(t.chassis_rgb),
+            "crown": t.crown_slice,
+            "crown_rgb": hex_rgb(t.crown_rgb),
+            "mascot_face": t.default_face,
+            "badge": badge,
+            "mascot": mascot,
+        });
+        if role == AgentRole::RedTeam {
+            // Gold eyes while it waits on the operator; a darker gold on light terminals, where #facc15 disappears.
+            r["alert_eye"] = json!({"dark": "#facc15", "light": "#a16207"});
+        }
+        roles.insert(t.role_id.to_string(), r);
     }
+    json!({"version": 1, "eye": {"dark": hex_rgb(EYE_DARK), "light": hex_rgb(EYE_LIGHT)}, "roles": roles})
+}
 
-    let face = match activity {
-        AgentActivity::Idle => t.badge_face,
-        AgentActivity::Blink => t.blink_badge,
-        AgentActivity::ThinkingLeft => "•• ",
-        AgentActivity::ThinkingRight => " ••",
-        AgentActivity::Working => "•─•",
-        AgentActivity::WaitingApproval => "x?x",
-        AgentActivity::Surprise => "●_●",
-        AgentActivity::Alarm => "●_!",
-        AgentActivity::Success => "^─^",
-    };
-
-    let mut chars = face.chars();
-    let e1 = chars.next().unwrap_or('•');
-    let m = chars.next().unwrap_or('_');
-    let e2 = chars.next().unwrap_or('•');
-
-    format!("{c}⟦{eye_color}{e1}{c}{m}{eye_color}{e2}{c}⟧{RESET}")
+/// The seven cells of a mascot's face row (eyes and mouth in dark ink on the role-coloured body).
+pub fn mascot_row(role: AgentRole, activity: AgentActivity) -> String {
+    use AgentActivity::*;
+    let t = get_theme(role);
+    match (role, activity) {
+        (_, WaitingApproval) => " x ? x ".into(),
+        (_, Escalated) => "  x_x  ".into(),
+        // The scout has three eyes and no mouth.
+        (AgentRole::Scout, Idle) => " • • • ".into(),
+        (AgentRole::Scout, Blink) => " - - - ".into(),
+        (AgentRole::Scout, ThinkingLeft) => "• • •  ".into(),
+        (AgentRole::Scout, ThinkingRight) => "  • • •".into(),
+        (AgentRole::Scout, Working) => " · · · ".into(),
+        (AgentRole::Scout, Surprise) => " ● ● ● ".into(),
+        (AgentRole::Scout, Success) => " ^ ^ ^ ".into(),
+        // The builder has a wide mouth.
+        (AgentRole::Builder, Idle) => " •───• ".into(),
+        (AgentRole::Builder, Blink) => " -───- ".into(),
+        (_, Idle) => format!("  {}  ", t.default_face),
+        (_, Blink) => format!("  {}  ", t.blink_face),
+        (_, ThinkingLeft) => "  ••   ".into(),
+        (_, ThinkingRight) => "   ••  ".into(),
+        (_, Working) => "  •─•  ".into(),
+        (_, Surprise) => "  ●_●  ".into(),
+        (_, Alarm) => "  ●_!  ".into(),
+        (_, Success) => "  ^─^  ".into(),
+    }
 }
 
 /// Renders a 3-line solid mascot (exact 7 display columns per row).
@@ -234,33 +326,11 @@ pub fn render_mascot(role: AgentRole, activity: AgentActivity) -> [String; 3] {
     };
 
     // Line 2: Solid Face (strictly 7 characters)
-    let l2 = match (role, activity) {
-        // Waiting on Approval across all roles
-        (_, AgentActivity::WaitingApproval) => {
-            format!("{c_bg}{eye_fg} x {BOLD}?{RESET}{c_bg}{eye_fg} x {RESET}")
-        }
-        // Scout 3-eyed zero-mouth suite
-        (AgentRole::Scout, AgentActivity::Idle) => format!("{c_bg}{eye_fg} • • • {RESET}"),
-        (AgentRole::Scout, AgentActivity::Blink) => format!("{c_bg}{eye_fg} - - - {RESET}"),
-        (AgentRole::Scout, AgentActivity::ThinkingLeft) => format!("{c_bg}{eye_fg}• • •  {RESET}"),
-        (AgentRole::Scout, AgentActivity::ThinkingRight) => format!("{c_bg}{eye_fg}  • • •{RESET}"),
-        (AgentRole::Scout, AgentActivity::Working) => format!("{c_bg}{eye_fg} · · · {RESET}"),
-        (AgentRole::Scout, AgentActivity::Surprise) => format!("{c_bg}{eye_fg} ● ● ● {RESET}"),
-        (AgentRole::Scout, AgentActivity::Success) => format!("{c_bg}{eye_fg} ^ ^ ^ {RESET}"),
-
-        // Builder wide mouth
-        (AgentRole::Builder, AgentActivity::Idle) => format!("{c_bg}{eye_fg} •───• {RESET}"),
-        (AgentRole::Builder, AgentActivity::Blink) => format!("{c_bg}{eye_fg} -───- {RESET}"),
-
-        // Standard 2-eye agents
-        (_, AgentActivity::Idle) => format!("{c_bg}{eye_fg}  {}  {RESET}", t.default_face),
-        (_, AgentActivity::Blink) => format!("{c_bg}{eye_fg}  {}  {RESET}", t.blink_face),
-        (_, AgentActivity::ThinkingLeft) => format!("{c_bg}{eye_fg}  ••   {RESET}"),
-        (_, AgentActivity::ThinkingRight) => format!("{c_bg}{eye_fg}   ••  {RESET}"),
-        (_, AgentActivity::Working) => format!("{c_bg}{eye_fg}  •─•  {RESET}"),
-        (_, AgentActivity::Surprise) => format!("{c_bg}{eye_fg}  ●_●  {RESET}"),
-        (_, AgentActivity::Alarm) => format!("{c_bg}{eye_fg}  ●_!  {RESET}"),
-        (_, AgentActivity::Success) => format!("{c_bg}{eye_fg}  ^─^  {RESET}"),
+    let row = mascot_row(role, activity);
+    let l2 = if activity == AgentActivity::WaitingApproval {
+        format!("{c_bg}{eye_fg} x {BOLD}?{RESET}{c_bg}{eye_fg} x {RESET}")
+    } else {
+        format!("{c_bg}{eye_fg}{row}{RESET}")
     };
 
     // Line 3: Flush Chin
@@ -440,6 +510,43 @@ mod tests {
                 a,
                 clean
             );
+        }
+    }
+
+    /// The console draws from this data, so it must be the data the library has. Regenerate after adding a role or a face:
+    /// `DELPHI_WRITE_UI_SPEC=1 cargo test -p delphi ui_spec`, then read the diff.
+    #[test]
+    fn ui_spec_fixture_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/test/fixtures/avatar-spec.json");
+        let want = serde_json::to_string_pretty(&ui_spec()).unwrap() + "\n";
+        if std::env::var("DELPHI_WRITE_UI_SPEC").is_ok() {
+            std::fs::write(&path, &want).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), want, "ui/test/fixtures/avatar-spec.json is stale: run `DELPHI_WRITE_UI_SPEC=1 cargo test -p delphi ui_spec`");
+    }
+
+    #[test]
+    fn every_badge_state_is_five_columns_and_the_eyes_are_dark_on_light_terminals() {
+        let spec = ui_spec();
+        for t in ROLES.iter() {
+            let role = from_canonical_id(t.role_id).unwrap();
+            for (name, a) in ACTIVITIES.iter() {
+                let cells = badge_cells(role, *a);
+                assert_eq!(cells.chars().count(), 3, "{} {}", t.role_id, name);
+                assert_eq!(spec["roles"][t.role_id]["badge"][*name]["cells"], cells.as_str());
+                assert_eq!(mascot_row(role, *a).chars().count(), 7, "mascot {} {}", t.role_id, name);
+                for (dark, eye) in [(true, "\x1b[38;2;255;255;255m"), (false, "\x1b[38;2;15;23;42m")] {
+                    let out = render_badge(role, *a, dark);
+                    assert!(out.contains(eye), "{} {} dark={}: eyes use {:?}", t.role_id, name, dark, eye);
+                    assert!(!out.contains(if dark { "\x1b[38;2;15;23;42m" } else { "\x1b[38;2;255;255;255m" }), "{} {} dark={}: the other mode's eye colour leaked in", t.role_id, name, dark);
+                    // Eyes are the cells that are not the mouth, whatever character they are: the red-team's `-_-` has `-` eyes.
+                    if let Some(m) = badge_mouth(role, *a) {
+                        let chassis = fg(t.chassis_rgb);
+                        let mouth_ch = cells.chars().nth(m).unwrap();
+                        assert!(out.contains(&format!("{chassis}{mouth_ch}")), "{} {} mouth is chassis-coloured", t.role_id, name);
+                    }
+                }
+            }
         }
     }
 }
