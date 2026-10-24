@@ -304,3 +304,17 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 - **Accepted residual risk (same as Claude Code):** an approved command runs with the operator's privileges and can touch anything the operator can, including `$DELPHI_HOME` and the ratification lock files. The approval card is the boundary. Spec 005 §2.1 already defends the daemon socket against same-UID processes (token plus TTY challenge); tamper-evidence for `ratified.lock` against a same-UID writer (a keychain-held MAC) is a candidate hardening if we want it.
 - **Harnesses:** see spec 009 §7B. The Claude CLI runs as the operator's own process with its own login and Delphi's approval bridge; this also removes the Keychain obstacle that blocked sandboxed harness runs.
 - **Supersedes:** D-04's "Green only inside a sandbox" default and the "always sandboxed" rule in spec 009 §7 item 2. Amends specs 005 §3.1 (`/permissions` wording), 008 §4, 009 §7 and 002 §5 note.
+
+## ✅ D-25 — The Narrator is a separate, read-only process (Council 007)
+**Context:** Spec 005 §4 puts the Narrator in its own window; the question (Council 007, 2026-10-24) was whether it should be a separate `delphi narrator` process attached over the daemon's Unix socket, or a pane embedded in the console process. It must never be able to start work or approve anything.
+- **A. Separate process, read-only by daemon enforcement** (chosen; unanimous among the Architect, Strategist and Red-Team seats)
+- **B. A pane embedded in the console process** (no seat defended it: the guarantee would rest on code discipline in a process that holds the capability to approve)
+
+**Decision (operator, 2026-10-24): A.** The Narrator (`delphi observe`, also `delphi narrator`) is its own process with a narrator-scope token; the daemon rejects every mutating call on that scope.
+
+**Follow-ups the Council made conditions, still open:**
+1. **Role fixed at accept time, not by a client claim.** Today the role comes from the token presented in `hello`. Move to a dedicated narrator socket (mode 0600, in the 0700 run directory) whose listener fixes the scope, with no role in the handshake.
+2. **Deny by construction.** The narrator socket's dispatcher should contain only read handlers (subscribe, snapshot, usage, observe, kb search), so a new mutating verb cannot be reachable by omission. A test must try every mutating verb and expect refusal.
+3. **Bounded per-client queues with resync.** A stalled Narrator must not starve the daemon: a bounded queue, and on overflow drop the subscriber and force a snapshot resync (the Narrator already handles `resync_required`).
+4. **Say what this does and does not stop.** It stops UI-level and accidental escalation, not a hostile process running as the same user (same-UID processes can reach both sockets). Spec 005 §2.1 should state it plainly.
+5. **Redaction before the socket.** State in spec 005 that the Narrator sees what the console sees, with secrets redacted by the daemon before events leave it.
