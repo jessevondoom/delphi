@@ -899,7 +899,8 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.type_keys("\x1b");
     c.wait_for("Drafted specs/009-e2e.md.");
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
-    assert!(c.visible().contains("all agents idle"), "{}", c.visible());
+    // The reply can appear a frame before the status line settles, so wait for it rather than assert on one snapshot.
+    c.wait_for("all agents idle");
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
@@ -937,6 +938,9 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.type_keys("2");
     o.wait_for("EPIC DAG");
     o.wait_for("Say something");
+    o.type_keys("7");
+    o.wait_for("THINKING");
+    o.wait_for("Nothing is thinking right now");
     o.type_keys("q");
     assert_eq!(o.wait_exit(), 0);
     c.type_keys("\x03");
@@ -1004,6 +1008,72 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("no connectors are configured");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    // --no-mouse: the wheel is not captured, so the terminal can select and copy text.
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--no-mouse", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    let raw = |c: &PtyConsole| String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
+    assert!(raw(&c).contains("\x1b[?1049h") && raw(&c).contains("\x1b[?2004h"), "alternate screen and bracketed paste are on");
+    assert!(!raw(&c).contains("\x1b[?1000h"), "mouse reporting stays off with --no-mouse");
+    // /mouse turns it on for this session, and says so.
+    c.type_keys("/mouse");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("mouse on");
+    assert!(raw(&c).contains("\x1b[?1000h"));
+    // Leaving puts everything back: alternate screen left, paste and mouse modes off, cursor shown.
+    c.type_keys("\x03");
+    let bytes = c.bytes.clone();
+    assert_eq!(c.wait_exit(), 0);
+    let end = String::from_utf8_lossy(&bytes.lock().unwrap()).to_string();
+    let tail = &end[end.rfind("\x1b[>4;0m").expect("the terminal reset was written")..];
+    for want in ["\x1b[?2004l", "\x1b[?1006l", "\x1b[?1000l", "\x1b[?1049l", "\x1b[?25h"] {
+        assert!(tail.contains(want), "missing {:?} in the reset {:?}", want, tail);
+    }
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
+    let m = mock(vec![reply_text("First answer."), reply_text("Second answer, after the restart.")]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("One");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("First answer.");
+    c.wait_for("orchestrator ·");
+    // The daemon is stopped and started again behind the console's back.
+    // (the CLI asks for a terminal, as the console does, so it runs in one)
+    let restart = PtyConsole::start_env(&e.home, &["daemon", "restart", "--workspace", "e2e"], 10, 80, &[]);
+    assert_eq!(restart.wait_exit(), 0);
+    c.wait_for("the daemon connection closed");
+    c.wait_for("reconnected to the daemon");
+    // The conversation is still there, and the next message works.
+    assert!(c.visible().contains("First answer."), "{}", c.visible());
+    c.type_keys("Two");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Second answer, after the restart.");
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();

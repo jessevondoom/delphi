@@ -1,0 +1,30 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle                              navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+❯ Compare a table and a file for the retry queue.
+
+⟦•_•⟧ daedalus · architect · 09:00:05
+
+  Retry queue
+
+  A table gives indexes and transactions.
+
+  • atomic claims
+  • easy audit
+
+    rust
+    fn claim(id: u64) -> Result<(), Error> {
+        // lock the row
+        Ok(())
+    }
+
+  See specs/003-collaboration-and-council.md#ladder.
+
+  → read_file(specs/003.md) ✔
+
+  ■ stopped
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · shortcuts: ?                                   navigate: shift+arrows · ○ ● ○

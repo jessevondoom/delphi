@@ -93,9 +93,11 @@ export const width = (s: string) => stringWidth(s);
 
 /** Left and right text on one line of `w` columns, the gap filled with spaces. The left side gives way first. */
 export function spread(left: string, right: string, w: number): string {
+  if (width(right) >= w) return clip(right, w);
   const gap = w - width(left) - width(right);
   if (gap >= 1) return left + ' '.repeat(gap) + right;
-  return clip(left, Math.max(0, w - width(right) - 1)) + ' ' + right;
+  if (w - width(right) - 1 < 2) return clip(right, w); // no room for both: the right side (the navigation) wins
+  return clip(left, w - width(right) - 1) + ' ' + right;
 }
 
 /** Cut to `w` display columns, keeping styling and adding an ellipsis when something was cut. */
