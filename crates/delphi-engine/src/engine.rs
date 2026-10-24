@@ -53,6 +53,8 @@ pub struct Settings {
     pub enabled_agents: Vec<String>,
     /// The Claude CLI to launch for a harness endpoint.
     pub harness_program: String,
+    /// The GitHub CLI used to open pull requests in PR mode.
+    pub gh_program: String,
     /// Attempts the unified retry ladder makes before halting for the operator (`specs/003` §3.2).
     pub build_attempts: u32,
     /// The Antigravity CLI to launch for an `agy` harness endpoint.
@@ -73,6 +75,7 @@ impl Default for Settings {
             max_interruptions: 2,
             enabled_agents: ["orchestrator", "architect", "builder", "red-team", "strategist"].iter().map(|s| s.to_string()).collect(),
             harness_program: "claude".into(),
+            gh_program: "gh".into(),
             build_attempts: 3,
             agy_program: "agy".into(),
             harness_token_cap: 500_000,
@@ -793,7 +796,7 @@ impl Engine {
             }
         }
         // The policy: deny rules, the sandbox, allow rules and the read-only list decide what needs a card.
-        match self.exec.verdict(&argv) {
+        match self.exec.verdict_at(&argv, Some(&wt.path)) {
             exec::Verdict::Refused(why) => return Ok(tool_result_error(format!("refused by policy: {}", why))),
             exec::Verdict::Allowed(_) => {}
             exec::Verdict::Ask => {
@@ -816,7 +819,7 @@ impl Engine {
             }
         }
         // What a read-only command prints may be untrusted text (a vendored file): it taints like `read_file`.
-        if exec::is_safe_read_only(&argv) {
+        if exec::is_safe_read_only(&argv, Some(&wt.path)) {
             let hit = argv[1..].iter().filter(|a| !a.starts_with('-')).any(|a| self.rules.untrusted(a.trim_start_matches("./")) || self.rules.untrusted(&format!("{}/x", a.trim_start_matches("./").trim_end_matches('/'))));
             if hit && sc.span.observe_input(delphi_core::provenance::Tier::L0) {
                 sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "run_command output"}))).await?;

@@ -14,6 +14,7 @@
 //! ```toml
 //! [exec]
 //! sandbox = "off"                                 # off (default) | prefer | required
+//! merge = "local"                                  # local (default) | pr: push the branch and open a pull request
 //! allow = ["cargo test*", "cargo build*"]         # matched against the argv joined by spaces
 //! deny = ["rm -rf *", "git push*"]
 //! toolchain = ["~/.cargo", "~/.rustup"]          # sandbox only: read-only and executable
@@ -38,6 +39,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+/// What approving a finished build does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMode {
+    /// Merge the task branch into the branch you have checked out.
+    Local,
+    /// Push the task branch to `origin` and open a pull request with `gh`.
+    Pr,
+}
+
 /// Whether commands run inside the OS sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxMode {
@@ -52,6 +62,7 @@ pub enum SandboxMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecConfig {
     pub sandbox: SandboxMode,
+    pub merge: MergeMode,
     /// Commands that need no approval (patterns over the argv joined by spaces; `*` matches anything).
     pub allow: Vec<String>,
     /// Commands that are refused outright; checked before `allow`.
@@ -71,6 +82,7 @@ impl Default for ExecConfig {
     fn default() -> ExecConfig {
         ExecConfig {
             sandbox: SandboxMode::Off,
+            merge: MergeMode::Local,
             allow: vec![],
             deny: vec![],
             toolchain: vec![],
@@ -86,14 +98,20 @@ impl Default for ExecConfig {
     }
 }
 
+/// `~` and `~/x` expanded in every element of a `:`-separated value (a `PATH` has several).
 fn expand_home(s: &str, home: &Path) -> String {
-    if s == "~" {
-        home.display().to_string()
-    } else if let Some(rest) = s.strip_prefix("~/") {
-        home.join(rest).display().to_string()
-    } else {
-        s.replace(":~/", &format!(":{}/", home.display()))
-    }
+    s.split(':')
+        .map(|part| {
+            if part == "~" {
+                home.display().to_string()
+            } else if let Some(rest) = part.strip_prefix("~/") {
+                home.join(rest).display().to_string()
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn string_list(v: Option<&toml::Value>) -> Vec<String> {
@@ -111,6 +129,7 @@ impl ExecConfig {
             Some("required") => SandboxMode::Required,
             _ => SandboxMode::Off, // unknown values are the safe-to-approve default, not a silent widening
         };
+        c.merge = if t.get("merge").and_then(|v| v.as_str()) == Some("pr") { MergeMode::Pr } else { MergeMode::Local };
         c.allow = string_list(t.get("allow"));
         c.deny = string_list(t.get("deny"));
         c.toolchain = string_list(t.get("toolchain")).iter().map(|p| PathBuf::from(expand_home(p, home))).collect();
@@ -206,40 +225,44 @@ pub(crate) fn changed(before: &Snapshot, after: &Snapshot) -> Vec<String> {
 /// A copy of the small files that decide what git executes (hooks, config, attributes), taken before a
 /// command that is not sandboxed. A command that changes them is planting something that would run the
 /// next time the operator commits, so the change is undone and reported.
+///
+/// Everything is judged without following symlinks: a hook that is a symlink (dangling or not) is not a file
+/// we can trust, and restoring never writes through one.
 pub struct GitGuard {
-    /// (path, contents, mode); a directory is recorded as the entries inside it, directly.
+    /// Regular files we could read: (path, contents, mode).
     files: Vec<(PathBuf, Vec<u8>, u32)>,
+    /// Every path that existed at the snapshot, readable or not. Only paths outside this set are "added".
+    existed: std::collections::HashSet<PathBuf>,
     roots: Vec<PathBuf>,
 }
 
 impl GitGuard {
     const MAX_FILE: u64 = 256 * 1024;
 
+    /// Entries directly inside a directory root (any type but a directory), or the root itself if it is a file or link.
     fn entries(root: &Path) -> Vec<PathBuf> {
-        if root.is_dir() {
-            std::fs::read_dir(root).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect()).unwrap_or_default()
-        } else if root.is_file() {
-            vec![root.to_path_buf()]
-        } else {
-            vec![]
+        match std::fs::symlink_metadata(root) {
+            Ok(md) if md.is_dir() => std::fs::read_dir(root).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_dir())).collect()).unwrap_or_default(),
+            Ok(_) => vec![root.to_path_buf()],
+            Err(_) => vec![],
         }
     }
 
     pub fn snapshot(roots: &[PathBuf]) -> GitGuard {
         use std::os::unix::fs::PermissionsExt;
-        let mut files = Vec::new();
+        let (mut files, mut existed) = (Vec::new(), std::collections::HashSet::new());
         for r in roots {
             for p in Self::entries(r) {
-                if let Ok(md) = std::fs::metadata(&p) {
-                    if md.len() <= Self::MAX_FILE {
-                        if let Ok(bytes) = std::fs::read(&p) {
-                            files.push((p, bytes, md.permissions().mode()));
-                        }
+                existed.insert(p.clone());
+                let Ok(md) = std::fs::symlink_metadata(&p) else { continue };
+                if md.is_file() && md.len() <= Self::MAX_FILE {
+                    if let Ok(bytes) = std::fs::read(&p) {
+                        files.push((p, bytes, md.permissions().mode()));
                     }
                 }
             }
         }
-        GitGuard { files, roots: roots.to_vec() }
+        GitGuard { files, existed, roots: roots.to_vec() }
     }
 
     /// Put everything back as it was; returns the paths that had been changed, added or removed.
@@ -248,25 +271,29 @@ impl GitGuard {
         let mut touched = Vec::new();
         for r in &self.roots {
             for p in Self::entries(r) {
-                if !self.files.iter().any(|(q, _, _)| *q == p) {
-                    // Added (or grew past the cap): remove it.
-                    if std::fs::remove_file(&p).is_ok() {
-                        touched.push(p.display().to_string());
-                    }
+                // New since the snapshot (a file, or a link of any kind): remove it. Pre-existing files we could not
+                // snapshot (too large, unreadable) are left alone, never deleted.
+                if !self.existed.contains(&p) && std::fs::remove_file(&p).is_ok() {
+                    touched.push(p.display().to_string());
                 }
             }
         }
         for (p, bytes, mode) in &self.files {
-            let same = std::fs::read(p).map(|now| now == *bytes).unwrap_or(false);
-            if !same {
-                if let Some(parent) = p.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if std::fs::write(p, bytes).is_ok() {
-                    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(*mode));
-                }
-                touched.push(p.display().to_string());
+            let is_link = std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+            let same = !is_link && std::fs::read(p).map(|now| now == *bytes).unwrap_or(false);
+            if same {
+                continue;
             }
+            if is_link {
+                let _ = std::fs::remove_file(p); // never write through a link
+            }
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::write(p, bytes).is_ok() {
+                let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(*mode));
+            }
+            touched.push(p.display().to_string());
         }
         touched.sort();
         touched
@@ -317,8 +344,6 @@ pub fn in_tree(arg: &str) -> bool {
     !arg.starts_with('/') && !arg.starts_with('~') && !arg.contains('$') && !arg.contains('`') && !arg.split('/').any(|c| c == "..")
 }
 
-/// Read-only commands that need no card when everything they touch is inside the worktree, like Claude
-/// Code's built-in read-only list. Flags that write, execute or reach elsewhere disqualify.
 /// Split a command string into words, honoring single and double quotes. `None` when it has anything a
 /// shell would interpret beyond that (operators, redirects, expansions, escapes, subshells, globs in the
 /// program position are fine as data but `$`, backticks and parentheses are not).
@@ -359,28 +384,80 @@ pub fn shell_words(line: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-pub fn is_safe_read_only(argv: &[String]) -> bool {
+/// The only flags a read-only command may carry: single-letter flags (alone or combined, with no attached value)
+/// and exact long flags. Anything else, including `-oFILE`, `--out=FILE` and getopt abbreviations, is not allowed,
+/// so a flag cannot smuggle in an output file or an outside input file.
+struct Flags {
+    short: &'static str,
+    long: &'static [&'static str],
+}
+
+impl Flags {
+    fn ok(&self, arg: &str) -> bool {
+        if let Some(l) = arg.strip_prefix("--") {
+            !l.contains('=') && self.long.contains(&arg)
+        } else if let Some(letters) = arg.strip_prefix('-') {
+            !letters.is_empty() && letters.chars().all(|c| self.short.contains(c))
+        } else {
+            true // a positional
+        }
+    }
+}
+
+/// `-name '*.rs'` style options of `find`.
+const FIND_OPTS: [&str; 11] = ["-name", "-iname", "-type", "-maxdepth", "-mindepth", "-path", "-ipath", "-print", "-not", "-empty", "-size"];
+
+/// Read-only commands that need no card, like Claude Code's built-in list: every flag is on a per-command
+/// allowlist, every positional is a path inside the worktree, and (given the worktree root) no path resolves
+/// through a symlink to somewhere else.
+pub fn is_safe_read_only(argv: &[String], root: Option<&Path>) -> bool {
     let prog = base(&argv[0]);
     let args = &argv[1..];
-    let paths_ok = |skip: usize| args.iter().skip(skip).filter(|a| !a.starts_with('-')).all(|a| in_tree(a));
-    let none_of = |bad: &[&str]| !args.iter().any(|a| bad.iter().any(|b| a == b || a.starts_with(&format!("{}=", b))));
+    let flags = |f: &Flags| args.iter().all(|a| f.ok(a));
+    let positionals = |skip: usize| args.iter().skip(skip).filter(|a| !a.starts_with('-'));
+    let tree = |skip: usize| positionals(skip).all(|a| in_tree(a) && stays_inside(root, a));
     match prog {
-        "ls" | "cat" | "head" | "tail" | "wc" | "pwd" | "file" | "stat" | "du" | "diff" | "uniq" | "tree" | "basename" | "dirname" | "true" => none_of(&["-o", "--output"]) && paths_ok(0),
+        "ls" => flags(&Flags { short: "alhRtSrdFA1", long: &["--all", "--almost-all", "--human-readable"] }) && tree(0),
+        "cat" => flags(&Flags { short: "nbsA", long: &[] }) && tree(0),
+        "head" | "tail" => flags(&Flags { short: "nc", long: &[] }) && tree(0),
+        "wc" => flags(&Flags { short: "lwcm", long: &[] }) && tree(0),
+        "file" => flags(&Flags { short: "bi", long: &[] }) && tree(0),
+        "diff" => flags(&Flags { short: "uqwr", long: &[] }) && tree(0),
+        "sort" => flags(&Flags { short: "rnubk", long: &[] }) && tree(0),
+        "stat" | "basename" | "dirname" => flags(&Flags { short: "", long: &[] }) && tree(0),
+        "pwd" | "true" => args.is_empty(),
         "echo" => true,
-        "sort" => none_of(&["-o", "--output", "--compress-program"]) && paths_ok(0),
-        "grep" | "rg" => none_of(&["--pre", "--pre-glob", "--hostname-bin"]) && args.iter().all(|a| a.starts_with('-') || in_tree(a)),
-        "find" => none_of(&["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]) && paths_ok(0),
+        "grep" | "rg" => {
+            // The pattern can be any text; only the flags and the paths are constrained. A flag that takes the
+            // pattern (`-e`) is followed by free text, so positionals here are checked as paths only when they
+            // exist on disk.
+            flags(&Flags { short: "inlLcvwEFHhoasqxeABCr", long: &["--ignore-case", "--line-number", "--files-with-matches", "--count", "--no-heading", "--hidden"] }) && positionals(0).all(|a| a.chars().all(|c| c != '\0') && (!Path::new(a).exists() || (in_tree(a) && stays_inside(root, a))) && !a.starts_with('/') && !a.split('/').any(|c| c == ".."))
+        }
+        "find" => args.iter().enumerate().all(|(i, a)| if a.starts_with('-') { FIND_OPTS.contains(&a.as_str()) } else { (i == 0 || args[i - 1].starts_with('-') || in_tree(a)) && (args[..i].iter().any(|p| p.starts_with('-')) || (in_tree(a) && stays_inside(root, a))) || args[i.saturating_sub(1)].starts_with('-') }),
         "git" => {
             const SUB: [&str; 7] = ["status", "diff", "log", "show", "rev-parse", "ls-files", "branch"];
             let Some(sub) = args.first() else { return false };
             if !SUB.contains(&sub.as_str()) {
                 return false;
             }
-            let bad = ["-c", "-C", "--git-dir", "--work-tree", "--exec-path", "--output", "--ext-diff", "--textconv", "-d", "-D", "-m", "-M", "--delete", "--move", "--set-upstream-to", "--unset-upstream", "--edit-description"];
-            let branch_listing = sub != "branch" || args.iter().skip(1).all(|a| matches!(a.as_str(), "--list" | "-l" | "-a" | "-r" | "-v" | "-vv" | "--show-current" | "--all"));
-            branch_listing && none_of(&bad) && paths_ok(1)
+            let f = Flags {
+                short: "sbalrvnp",
+                long: &["--short", "--porcelain", "--branch", "--oneline", "--stat", "--name-only", "--name-status", "--cached", "--staged", "--shortstat", "--graph", "--decorate", "--list", "--show-current", "--all", "--abbrev-ref", "--no-pager", "--no-color", "--show-toplevel", "--verify", "--no-patch"],
+            };
+            let branch_ok = sub != "branch" || args.iter().skip(1).filter(|a| a.starts_with('-')).all(|a| matches!(a.as_str(), "--list" | "-l" | "-a" | "-r" | "-v" | "--show-current" | "--all"));
+            branch_ok && args.iter().skip(1).all(|a| f.ok(a)) && tree(1)
         }
         _ => false,
+    }
+}
+
+/// With a worktree root: the path, if it exists, must resolve to somewhere inside it (no symlink out).
+fn stays_inside(root: Option<&Path>, arg: &str) -> bool {
+    let Some(root) = root else { return true };
+    let Ok(real_root) = std::fs::canonicalize(root) else { return false };
+    match std::fs::canonicalize(root.join(arg)) {
+        Ok(real) => real.starts_with(&real_root),
+        Err(_) => true, // does not exist (yet): nothing to read through
     }
 }
 
@@ -459,7 +536,13 @@ impl ExecEnv {
     /// What the policy says about `argv` before the operator is asked: deny rules first, then the sandbox
     /// (Green when active), allow rules, and the built-in read-only list.
     pub fn verdict(&self, argv: &[String]) -> Verdict {
-        self.judge(&argv.join(" "), argv, self.active_sandbox().is_some())
+        self.verdict_at(argv, None)
+    }
+
+    /// As [`ExecEnv::verdict`], with the worktree the command will run in (so the read-only list can refuse
+    /// paths that resolve outside it through a symlink).
+    pub fn verdict_at(&self, argv: &[String], root: Option<&Path>) -> Verdict {
+        self.judge(argv, root, self.active_sandbox().is_some())
     }
 
     /// As [`ExecEnv::verdict`] for a shell command string, which is what the Claude CLI's Bash tool sends.
@@ -467,30 +550,72 @@ impl ExecEnv {
     /// beyond plain words and quotes (`;`, `|`, `&`, redirects, expansions, subshells) can never be allowed
     /// by a rule or the read-only list; it asks. Deny rules are checked against every segment.
     pub fn verdict_line(&self, line: &str) -> Verdict {
+        self.verdict_line_at(line, None)
+    }
+
+    pub fn verdict_line_at(&self, line: &str, root: Option<&Path>) -> Verdict {
         for seg in line.split([';', '|', '&', '\n']) {
             let seg = seg.trim();
-            if let Some(d) = self.cfg.deny.iter().find(|d| glob_match(d, seg)) {
-                return Verdict::Refused(format!("`{}` matches the deny rule `{}`", seg.chars().take(120).collect::<String>(), d));
+            let words = shell_words(seg).unwrap_or_else(|| seg.split_whitespace().map(String::from).collect());
+            if let Some(why) = self.denied(&words, seg) {
+                return Verdict::Refused(why);
             }
         }
         match shell_words(line) {
-            Some(argv) if !argv.is_empty() => self.judge(&argv.join(" "), &argv, false),
+            Some(argv) if !argv.is_empty() => self.judge(&argv, root, false),
             _ => Verdict::Ask,
         }
     }
 
-    fn judge(&self, line: &str, argv: &[String], sandboxed: bool) -> Verdict {
-        if let Some(d) = self.cfg.deny.iter().find(|d| glob_match(d, line)) {
-            return Verdict::Refused(format!("`{}` matches the deny rule `{}`", line.chars().take(120).collect::<String>(), d));
+    /// The several spellings a deny rule must catch: the line as written, with the program's directory removed and
+    /// lowercased (case-insensitive volumes), and with git's global options (`-C x`, `-c k=v`, `--no-pager`, …)
+    /// taken out, so `/usr/bin/git -C . push` is still `git push`.
+    fn deny_forms(argv: &[String], raw: &str) -> Vec<String> {
+        let mut forms = vec![raw.to_string()];
+        if argv.is_empty() {
+            return forms;
+        }
+        let prog = base(&argv[0]).to_lowercase();
+        let mut stripped: Vec<&str> = vec![prog.as_str()];
+        stripped.extend(argv[1..].iter().map(String::as_str));
+        forms.push(stripped.join(" "));
+        if prog == "git" {
+            let mut rest = Vec::new();
+            let mut it = argv[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path" => {
+                        it.next();
+                    }
+                    "--no-pager" | "--paginate" | "-p" | "--bare" | "--no-replace-objects" | "--literal-pathspecs" => {}
+                    x if x.starts_with("--git-dir=") || x.starts_with("--work-tree=") || x.starts_with("-c") && x.len() > 2 => {}
+                    x => rest.push(x),
+                }
+            }
+            forms.push(format!("git {}", rest.join(" ")));
+        }
+        forms
+    }
+
+    fn denied(&self, argv: &[String], raw: &str) -> Option<String> {
+        let forms = Self::deny_forms(argv, raw);
+        let d = self.cfg.deny.iter().find(|d| forms.iter().any(|f| glob_match(d, f) || glob_match(&d.to_lowercase(), &f.to_lowercase())))?;
+        Some(format!("`{}` matches the deny rule `{}`", raw.chars().take(120).collect::<String>(), d))
+    }
+
+    fn judge(&self, argv: &[String], root: Option<&Path>, sandboxed: bool) -> Verdict {
+        let line = argv.join(" ");
+        if let Some(why) = self.denied(argv, &line) {
+            return Verdict::Refused(why);
         }
         if sandboxed {
             return Verdict::Allowed("sandboxed");
         }
         let wrapper = WRAPPERS.contains(&base(&argv[0]));
-        if !wrapper && self.cfg.allow.iter().any(|a| glob_match(a, line)) {
+        if !wrapper && self.cfg.allow.iter().any(|a| glob_match(a, &line)) {
             return Verdict::Allowed("allow rule");
         }
-        if is_safe_read_only(argv) {
+        if is_safe_read_only(argv, root) {
             return Verdict::Allowed("read-only command inside the worktree");
         }
         Verdict::Ask
@@ -779,11 +904,62 @@ pub(crate) mod tests {
     #[test]
     fn the_read_only_list_needs_paths_inside_the_worktree_and_no_writing_flags() {
         for ok in [&["ls", "-la"][..], &["cat", "src/lib.rs"], &["git", "status", "--short"], &["git", "diff"], &["grep", "-rn", "needle", "src"], &["find", "src", "-name", "*.rs"], &["head", "-n", "5", "a.txt"], &["git", "branch", "--list"], &["echo", "hi"]] {
-            assert!(is_safe_read_only(&argv(ok)), "{:?}", ok);
+            assert!(is_safe_read_only(&argv(ok), None), "{:?}", ok);
         }
         for bad in [&["cat", "/etc/passwd"][..], &["cat", "../outside"], &["cat", "~/.ssh/id_rsa"], &["cat", "$HOME/x"], &["ls", "/"], &["find", ".", "-exec", "rm", "{}", ";"], &["find", ".", "-delete"], &["sort", "-o", "out", "in"], &["git", "-c", "core.pager=x", "log"], &["git", "push"], &["git", "commit", "-m", "x"], &["git", "branch", "-D", "x"], &["git", "diff", "--ext-diff"], &["rm", "x"], &["sh", "-c", "ls"], &["grep", "--pre=sh", "x", "y"], &["cargo", "test"]] {
-            assert!(!is_safe_read_only(&argv(bad)), "{:?}", bad);
+            assert!(!is_safe_read_only(&argv(bad), None), "{:?}", bad);
         }
+    }
+
+    #[test]
+    fn attached_flag_values_and_unlisted_flags_cannot_write_or_read_outside() {
+        for bad in [&["sort", "-oout", "in"][..], &["sort", "--output=out", "in"], &["grep", "-f/etc/passwd", "x"], &["grep", "--file=/etc/passwd", "x"], &["sort", "--files0-from=x"], &["diff", "--from-file=/etc/passwd", "a"], &["uniq", "in", "out"], &["du", "-a"], &["tree", "-o", "x"], &["grep", "-R", "x", "/"], &["find", ".", "-fprint", "x"], &["git", "diff", "--output=x"], &["git", "log", "--output=x"], &["ls", "--color=always"]] {
+            assert!(!is_safe_read_only(&argv(bad), None), "{:?}", bad);
+        }
+    }
+
+    #[test]
+    fn a_symlink_out_of_the_worktree_is_not_read_only() {
+        let f = off();
+        let wt = f.env.worktree_for("t_sym", &f.project).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", wt.path.join("link")).unwrap();
+        assert!(is_safe_read_only(&argv(&["cat", "link"]), None), "lexically fine");
+        assert!(!is_safe_read_only(&argv(&["cat", "link"]), Some(&wt.path)), "resolves outside the tree");
+    }
+
+    #[test]
+    fn deny_rules_see_through_paths_case_and_git_global_options() {
+        let mut f = off();
+        f.env.cfg.deny = vec!["git push*".into()];
+        for l in ["/usr/bin/git push origin main", "GIT push", "git -C . push", "git -c a=b push", "git --no-pager push", "/usr/bin/git -C x --no-pager push"] {
+            assert!(matches!(f.env.verdict_line(l), Verdict::Refused(_)), "{}", l);
+            let words = shell_words(l).unwrap();
+            assert!(matches!(f.env.verdict(&words), Verdict::Refused(_)), "{}", l);
+        }
+    }
+
+    #[test]
+    fn every_element_of_a_path_value_gets_home_expanded() {
+        assert_eq!(expand_home("~/a:~/b:/usr/bin:~", Path::new("/h")), "/h/a:/h/b:/usr/bin:/h");
+    }
+
+    #[test]
+    fn restoring_never_deletes_a_pre_existing_file_it_could_not_snapshot() {
+        let d = tempfile::tempdir().unwrap();
+        let hooks = d.path().join("hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        std::fs::write(hooks.join("big"), vec![b'x'; 300 * 1024]).unwrap();
+        std::fs::write(hooks.join("small"), b"keep").unwrap();
+        let g = GitGuard::snapshot(std::slice::from_ref(&hooks));
+        std::fs::write(hooks.join("small"), b"evil").unwrap();
+        std::fs::write(hooks.join("new"), b"evil").unwrap();
+        std::os::unix::fs::symlink("/nonexistent", hooks.join("dangling")).unwrap();
+        let touched = g.restore();
+        assert!(hooks.join("big").exists(), "oversize hook survives the restore");
+        assert_eq!(std::fs::read(hooks.join("small")).unwrap(), b"keep");
+        assert!(!hooks.join("new").exists());
+        assert!(std::fs::symlink_metadata(hooks.join("dangling")).is_err(), "a planted dangling link is removed");
+        assert_eq!(touched.len(), 3);
     }
 
     #[test]

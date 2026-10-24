@@ -37,15 +37,19 @@ pub fn parse_audit(text: &str) -> Option<Vec<(String, String)>> {
     let mut complete = false;
     for line in text.lines() {
         let l = line.trim().trim_start_matches(['-', '*', '•', ' ']).trim();
-        let upper = l.to_uppercase();
-        if upper.starts_with("AUDIT COMPLETE") {
+        // Offsets come from `l` itself: uppercasing can change a string's byte length.
+        let head = |word: &str| l.get(..word.len()).is_some_and(|h| h.eq_ignore_ascii_case(word));
+        if head("AUDIT COMPLETE") && l[14..].trim_matches(|c: char| !c.is_alphanumeric()).is_empty() {
             complete = true;
-        } else if let Some(rest) = upper.strip_prefix("FINDING") {
-            let rest_orig = &l[l.len() - rest.len()..];
-            let mut it = rest_orig.trim().splitn(2, char::is_whitespace);
+        } else if head("FINDING") {
+            let rest = l[7..].trim_start_matches([':', '-', ' ', '\t']);
+            let mut it = rest.splitn(2, char::is_whitespace);
             let sev = it.next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
             if matches!(sev.as_str(), "P0" | "P1" | "P2" | "P3") {
                 findings.push((sev, it.next().unwrap_or("").trim().chars().take(200).collect()));
+            } else {
+                // A finding we cannot read is still a finding: it blocks rather than vanishing.
+                findings.push(("P1".to_string(), format!("unparseable finding: {}", l.chars().take(150).collect::<String>())));
             }
         }
     }
@@ -80,14 +84,17 @@ impl Engine {
     /// Have a Red-Team audit exactly this commit and record the verdict (what gate 4 reads).
     async fn audit_build(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, n: u32, target: &AuditTarget<'_>, builder_family: &str) -> Result<Vec<(String, String)>, EngineError> {
         let AuditTarget { sha, files, spec } = *target;
-        let mut pointers: Vec<ContextPointer> = files.iter().take(12).map(|f| ContextPointer { uri: format!("@worktree/{}", f), heading: String::new(), blake3: String::new(), reason: "changed in this build".into() }).collect();
+        const ATTACH_MAX: usize = 12;
+        let mut pointers: Vec<ContextPointer> = files.iter().take(ATTACH_MAX).map(|f| ContextPointer { uri: format!("@worktree/{}", f), heading: String::new(), blake3: String::new(), reason: "changed in this build".into() }).collect();
         pointers.push(ContextPointer { uri: "REVIEW.md".into(), heading: String::new(), blake3: String::new(), reason: "the review rubric".into() });
         if let Some(s) = spec {
             pointers.push(ContextPointer { uri: s.into(), heading: String::new(), blake3: String::new(), reason: "the spec this build implements".into() });
         }
+        let omitted = if files.len() > ATTACH_MAX { format!(" {} more changed files are not attached; open them under @worktree: {}.", files.len() - ATTACH_MAX, files[ATTACH_MAX..].iter().take(40).cloned().collect::<Vec<_>>().join(", ")) } else { String::new() };
         let objective = format!(
-            "Audit commit {} of this task's worktree against REVIEW.md and the linked spec. The changed files are attached. Reply with one line per defect, exactly `FINDING P0 <short title>` (blocking), `FINDING P1 <short title>` (major) or `FINDING P2 <short title>` (minor), then a final line `AUDIT COMPLETE`. If there is nothing to report, reply only `AUDIT COMPLETE`.",
-            &sha[..sha.len().min(12)]
+            "Audit commit {} of this task's worktree against REVIEW.md and the linked spec. The changed files are attached.{} Reply with one line per defect, exactly `FINDING P0 <short title>` (blocking), `FINDING P1 <short title>` (major) or `FINDING P2 <short title>` (minor), then a final line `AUDIT COMPLETE`. If there is nothing to report, reply only `AUDIT COMPLETE`.",
+            &sha[..sha.len().min(12)],
+            omitted
         );
         let mut h = self.span_handoff(m, task_id, n, "red-team", &objective, pointers);
         // No author-family self-review ([H-008]) when another family is allowed; never a blocker when it is not.
@@ -188,6 +195,7 @@ impl Engine {
             // Everything the daemon can check is green: the operator decides.
             return Ok(match self.finalize_build(m, task_id).await? {
                 BuildOutcome::Merged { report, merge_commit } => (Status::Done, format!("Merged {} into your branch (merge commit {}) after {} attempt(s). Gates: {}.", &report.sha[..report.sha.len().min(8)], &merge_commit[..merge_commit.len().min(8)], attempt, report.gates.iter().map(|g| g.name).collect::<Vec<_>>().join(", "))),
+                BuildOutcome::PrOpened { report, url } => (Status::Done, format!("Opened a pull request for {} after {} attempt(s): {}", &report.sha[..report.sha.len().min(8)], attempt, url)),
                 BuildOutcome::Declined(report) => (Status::Done, format!("You declined the merge of {}. The branch delphi/{} and its worktree are kept.", &report.sha[..report.sha.len().min(8)], task_id)),
                 BuildOutcome::MergeRefused { why, .. } => (Status::Escalated(why.clone()), format!("[approved, but the merge was refused: {}]", why)),
                 BuildOutcome::Blocked(report) => {
@@ -216,7 +224,10 @@ mod tests {
         assert_eq!(parse_audit(ok).unwrap(), vec![("P1".to_string(), "Unchecked index in parse()".to_string()), ("P2".to_string(), "naming nit".to_string()), ("P0".to_string(), "data loss on retry".to_string())]);
         assert_eq!(parse_audit("AUDIT COMPLETE").unwrap(), vec![]);
         assert_eq!(parse_audit("FINDING P0 bad\n"), None, "no completion line: not an audit");
-        assert_eq!(parse_audit("FINDING Q9 nonsense\nAUDIT COMPLETE").unwrap(), vec![], "unknown severities are ignored");
+        assert_eq!(parse_audit("FINDING Q9 nonsense\nAUDIT COMPLETE").unwrap()[0].0, "P1", "an unreadable finding blocks");
+        assert_eq!(parse_audit("FINDING: P0 sql injection\nAUDIT COMPLETE").unwrap(), vec![("P0".to_string(), "sql injection".to_string())]);
+        assert_eq!(parse_audit("FINDING P0 straße ŉŉŉŉŉŉŉŉ overflow\nAUDIT COMPLETE").unwrap()[0].0, "P0", "multi-byte uppercasing cannot shift the parse");
+        assert_eq!(parse_audit("AUDIT COMPLETELY SKIPPED"), None);
     }
 
     use crate::approval::Answer;

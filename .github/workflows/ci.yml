@@ -26,3 +26,23 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Repo lint
         run: cargo run -q --locked -p delphi -- lint --repo .
+
+  # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
+  # namespaces (Ubuntu 24.04 restricts them by default), and require the sandbox tests to really run.
+  linux-sandbox:
+    name: linux sandbox (bubblewrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install bubblewrap and allow user namespaces
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+          bwrap --ro-bind / / --unshare-all --die-with-parent true && echo "bwrap works here"
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Sandbox tests must run, not skip
+        env:
+          DELPHI_REQUIRE_SANDBOX: "1"
+        run: cargo test --locked -p delphi-sandbox -p delphi-engine -- sandbox exec:: harness_run build:: finalize::

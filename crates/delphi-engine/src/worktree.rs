@@ -132,6 +132,13 @@ pub enum MergeOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrOutcome {
+    Opened { url: String },
+    /// Nothing was pushed.
+    Refused(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileChange {
     pub path: String,
     pub status: char,
@@ -375,10 +382,29 @@ impl Worktree {
                 Some("160000") => Some("submodule"),
                 _ => None,
             };
-            files.push(FileChange { path: path.to_string(), status: status.get(path).copied().unwrap_or('M'), added: a.parse().unwrap_or(0), removed: r.parse().unwrap_or(0), host_exec: host || special.is_some(), special });
+            files.push(FileChange { path: path.to_string(), status: status.get(path).copied().unwrap_or('M'), added: a.parse().unwrap_or(10_000), removed: r.parse().unwrap_or(0), host_exec: host || special.is_some(), special });
         }
         files.sort_by(|a, b| (!a.host_exec, &a.path).cmp(&(!b.host_exec, &b.path)));
         Ok(DiffSummary { head_sha, files })
+    }
+
+    /// Did this build add or change a test? Judged from the paths (`tests/`, `*_test.*`, `*.spec.*`, …) and from
+    /// the added lines (`#[test]`, `#[cfg(test)]`, `def test_`, `it(`, `@Test`, …). Used to decide whether a
+    /// failing test run may be retried once as a possible flake: a failure of anything the task wrote always counts.
+    pub fn touches_tests(&self) -> Result<bool, GitError> {
+        let d = self.diff(&[])?;
+        let path_hint = |p: &str| {
+            let l = p.to_lowercase();
+            l.contains("/tests/") || l.starts_with("tests/") || l.contains("/test/") || l.starts_with("test/") || l.contains("__tests__") || l.contains("_test.") || l.contains(".test.") || l.contains(".spec.") || l.contains("/spec/") || l.rsplit('/').next().is_some_and(|n| n.starts_with("test_"))
+        };
+        if d.files.iter().any(|f| path_hint(&f.path)) {
+            return Ok(true);
+        }
+        let mut c = self.git();
+        c.args(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0", &self.base_sha, "HEAD"]);
+        let text = run(c, "diff -U0")?;
+        const MARKERS: [&str; 10] = ["#[test]", "#[cfg(test)]", "#[tokio::test]", "def test_", "func Test", "@Test", " it(", " test(", "describe(", "fn test_"];
+        Ok(text.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).any(|l| MARKERS.iter().any(|m| l.contains(m))))
     }
 
     /// The unified diff of one file against the base (for the approval card), without any external driver.
@@ -434,6 +460,42 @@ impl Worktree {
                 let _ = project(&["merge", "--abort"], "merge --abort");
                 Ok(MergeOutcome::Conflict(conflicts))
             }
+        }
+    }
+
+    /// Push the task branch to `origin` and open a pull request with `gh` (PR mode). Only ever called after the
+    /// operator approved `approved_sha`. These two calls need the operator's own credentials (git's helper, the
+    /// SSH agent, `gh`'s login), so they run with the operator's environment; hooks and external protocols stay off.
+    pub fn open_pr(&self, approved_sha: &str, title: &str, body: &str, gh: &str) -> Result<PrOutcome, GitError> {
+        let project = |args: &[&str], label: &str| {
+            let mut c = git_command(None, None, &self.scratch_home);
+            c.arg("-C").arg(&self.project).args(args);
+            run(c, label)
+        };
+        let tip = project(&["rev-parse", &self.branch], "rev-parse branch")?.trim().to_string();
+        if tip != approved_sha {
+            return Ok(PrOutcome::Refused(format!("the branch moved after approval ({} is not {})", &tip[..tip.len().min(8)], &approved_sha[..approved_sha.len().min(8)])));
+        }
+        let base = match project(&["symbolic-ref", "--quiet", "--short", "HEAD"], "symbolic-ref") {
+            Ok(b) => b.trim().to_string(),
+            Err(_) => return Ok(PrOutcome::Refused("the project has a detached HEAD; check out the branch the pull request should target".into())),
+        };
+        if project(&["remote", "get-url", "origin"], "remote get-url").is_err() {
+            return Ok(PrOutcome::Refused("the project has no `origin` remote to push to".into()));
+        }
+        let mut push = Command::new("git");
+        push.args(["-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never", "-C"]).arg(&self.project).args(["push", "--no-verify", "origin", &format!("{}:refs/heads/{}", self.branch, self.branch)]).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+        if let Err(e) = run(push, "push") {
+            return Ok(PrOutcome::Refused(format!("the push failed: {}", e)));
+        }
+        let mut pr = Command::new(gh);
+        pr.args(["pr", "create", "--head", &self.branch, "--base", &base, "--title", title, "--body", body]).current_dir(&self.project).stdin(Stdio::null());
+        match run(pr, "gh pr create") {
+            Ok(out) => match out.lines().rev().map(str::trim).find(|l| l.starts_with("https://")) {
+                Some(url) => Ok(PrOutcome::Opened { url: url.to_string() }),
+                None => Ok(PrOutcome::Refused("the branch was pushed, but `gh pr create` printed no pull request URL".into())),
+            },
+            Err(e) => Ok(PrOutcome::Refused(format!("the branch was pushed, but opening the pull request failed: {}", e))),
         }
     }
 
@@ -544,6 +606,24 @@ pub(crate) mod tests {
         let mut c = wt.git();
         c.args(["log", "-1", "--format=%an"]);
         assert_eq!(run(c, "log").unwrap().trim(), "builder");
+    }
+
+    #[test]
+    fn a_build_that_adds_or_changes_a_test_is_recognised_by_path_or_by_content() {
+        let (_d, p, w) = fx();
+        let plain = w.create(&p, "t_ft1").unwrap();
+        fs::write(plain.path.join("src/lib.rs"), "pub fn a() {}\npub fn b() {}\n").unwrap();
+        plain.commit_all("plain", "builder").unwrap();
+        assert!(!plain.touches_tests().unwrap());
+        let by_path = w.create(&p, "t_ft2").unwrap();
+        fs::create_dir_all(by_path.path.join("tests")).unwrap();
+        fs::write(by_path.path.join("tests/it.rs"), "x").unwrap();
+        by_path.commit_all("t", "builder").unwrap();
+        assert!(by_path.touches_tests().unwrap());
+        let by_content = w.create(&p, "t_ft3").unwrap();
+        fs::write(by_content.path.join("src/lib.rs"), "pub fn a() {}\n#[cfg(test)]\nmod t { #[test] fn ok() {} }\n").unwrap();
+        by_content.commit_all("t", "builder").unwrap();
+        assert!(by_content.touches_tests().unwrap());
     }
 
     #[test]

@@ -468,9 +468,13 @@ mod tests {
 
     // The other tests return early when no sandbox exists; on the platforms we develop on that must not be silent.
     #[test]
-    fn the_sandbox_is_actually_available_on_macos() {
+    fn the_sandbox_is_actually_available_where_it_is_required() {
         if cfg!(target_os = "macos") {
             assert_eq!(detect(), Some(Mode::SandboxExec), "sandbox-exec must work here, or the other tests prove nothing");
+        }
+        // CI sets this on a machine where bubblewrap is installed: there the tests below must run, not skip.
+        if std::env::var("DELPHI_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+            assert!(detect().is_some(), "DELPHI_REQUIRE_SANDBOX=1 but no sandbox works on this machine");
         }
     }
 

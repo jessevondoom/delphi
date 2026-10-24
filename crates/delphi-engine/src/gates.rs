@@ -55,6 +55,8 @@ impl Report {
 pub struct RunSummary {
     pub ok: bool,
     pub detail: String,
+    /// The command actually ran (false when it was refused or the operator declined it).
+    pub ran: bool,
 }
 
 /// Gate 1. A project with no `test_command` configured cannot pass: "no tests" is not "tests green".
@@ -69,7 +71,7 @@ pub fn tests(run: Option<RunSummary>) -> Gate {
 /// proposals (`specs/001` §5.1 gate, GOVERNANCE §5.7).
 pub fn is_protected_path(path: &str) -> bool {
     let l = path.to_lowercase();
-    l == "governance.md" || l == "review.md" || l.starts_with("agents/") || l.starts_with("skills/") || l == "context/heuristics.md" || l.starts_with("memory/agents/")
+    l == "governance.md" || l == "review.md" || l.starts_with("agents/") || l.starts_with("skills/") || l == "context/heuristics.md" || l.starts_with("memory/agents/") || l == "delphi.toml" || l.starts_with(".github/") || l.starts_with(".delphi/")
 }
 
 /// Gate 2. `check` is `None` when no `check_command` is configured (the other checks still apply).
@@ -94,7 +96,8 @@ pub fn checks(check: Option<RunSummary>, unstamped: &[String], diff: &DiffSummar
     }
 }
 
-const DEPENDENCY_FILES: [&str; 17] = [
+const DEPENDENCY_FILES: [&str; 28] = [
+    "makefile", "dockerfile", "rust-toolchain.toml", "setup.py", "setup.cfg", "uv.lock", ".npmrc", "config.toml", "build.rs", "justfile", "tox.ini",
     "cargo.toml", "cargo.lock", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "go.mod", "go.sum", "pyproject.toml", "pipfile", "pipfile.lock", "poetry.lock", "gemfile", "gemfile.lock", "composer.json", "composer.lock", "requirements.txt",
 ];
 
@@ -170,16 +173,27 @@ pub struct Audit {
     pub findings: Vec<Finding>,
 }
 
-/// Gate 4: the audit must name *this* SHA; an audit of an earlier commit proves nothing about this one.
+/// Gate 4: the audit must name *this* SHA; an audit of an earlier commit proves nothing about this one. For one
+/// commit, the latest audit **of each role** counts (a re-audit after fixes supersedes that role's earlier one),
+/// and every role's latest must be clean: another role's clean audit cannot hide an open finding. A severity that
+/// is not clearly minor (`P2`, `P3`) blocks, so a malformed one fails closed.
 pub fn audit(sha: &str, audits: &[Audit]) -> Gate {
-    let Some(a) = audits.iter().rev().find(|a| a.sha == sha) else {
+    let mut latest: Vec<&Audit> = Vec::new();
+    for a in audits.iter().filter(|a| a.sha == sha) {
+        match latest.iter_mut().find(|l| l.role == a.role) {
+            Some(slot) => *slot = a,
+            None => latest.push(a),
+        }
+    }
+    if latest.is_empty() {
         return Gate::new(4, "audit", false, if audits.is_empty() { "no REVIEW.md audit has been recorded for this task".to_string() } else { "the recorded audit is for an earlier commit; audit this one".to_string() });
-    };
-    let open: Vec<&Finding> = a.findings.iter().filter(|f| matches!(f.severity.to_uppercase().as_str(), "P0" | "P1")).collect();
+    }
+    let blocking = |f: &Finding| !matches!(f.severity.trim().to_uppercase().as_str(), "P2" | "P3");
+    let open: Vec<(&str, &Finding)> = latest.iter().flat_map(|a| a.findings.iter().filter(|f| blocking(f)).map(move |f| (a.role.as_str(), f))).collect();
     if open.is_empty() {
-        Gate::new(4, "audit", true, format!("{} audited this commit: no open P0 or P1", a.role))
+        Gate::new(4, "audit", true, format!("{} audited this commit: no open P0 or P1", latest.iter().map(|a| a.role.as_str()).collect::<Vec<_>>().join(", ")))
     } else {
-        Gate::new(4, "audit", false, format!("{} open P0/P1 finding(s): {}", open.len(), open.iter().take(3).map(|f| format!("[{}] {}", f.severity, f.title)).collect::<Vec<_>>().join("; ")))
+        Gate::new(4, "audit", false, format!("{} open P0/P1 finding(s): {}", open.len(), open.iter().take(3).map(|(r, f)| format!("[{} {}] {}", r, f.severity, f.title)).collect::<Vec<_>>().join("; ")))
     }
 }
 
@@ -202,14 +216,14 @@ mod tests {
     }
 
     fn ok() -> RunSummary {
-        RunSummary { ok: true, detail: "exit 0".into() }
+        RunSummary { ok: true, detail: "exit 0".into(), ran: true }
     }
 
     #[test]
     fn no_configured_tests_is_not_green() {
         assert_eq!(tests(None).state, State::Red);
         assert_eq!(tests(Some(ok())).state, State::Green);
-        let fail = tests(Some(RunSummary { ok: false, detail: "exit 101".into() }));
+        let fail = tests(Some(RunSummary { ok: false, detail: "exit 101".into(), ran: true }));
         assert_eq!((fail.state, fail.detail.as_str()), (State::Red, "exit 101"));
     }
 
@@ -220,7 +234,7 @@ mod tests {
         assert_eq!(checks(None, &[], &d).state, State::Green);
         let g = checks(Some(ok()), &["src/a.rs".into()], &d);
         assert!(g.state == State::Red && g.detail.contains("no provenance stamp"), "{}", g.detail);
-        let g = checks(Some(RunSummary { ok: false, detail: "clippy".into() }), &[], &d);
+        let g = checks(Some(RunSummary { ok: false, detail: "clippy".into(), ran: true }), &[], &d);
         assert!(g.state == State::Red && g.detail.contains("check command failed"));
         for p in ["GOVERNANCE.md", "agents/builder/AGENT.md", "skills/x/SKILL.md", "REVIEW.md", "memory/agents/builder/lessons.md"] {
             let g = checks(None, &[], &diff(vec![fc(p, 1, 0, false)]));
@@ -260,10 +274,30 @@ mod tests {
         assert!(audit("aaa", &[]).detail.contains("no REVIEW.md audit"));
         let bad = vec![Audit { sha: "aaa".into(), role: "red-team".into(), findings: vec![f("p1"), f("P2")] }];
         let g = audit("aaa", &bad);
-        assert!(g.state == State::Red && g.detail.contains("[p1]"), "{}", g.detail);
+        assert!(g.state == State::Red && g.detail.contains("p1"), "{}", g.detail);
         // The latest audit of the same commit wins (a re-audit after fixes).
         let both = vec![bad[0].clone(), Audit { sha: "aaa".into(), role: "red-team".into(), findings: vec![] }];
         assert_eq!(audit("aaa", &both).state, State::Green);
+    }
+
+    #[test]
+    fn another_roles_clean_audit_cannot_hide_an_open_finding_and_odd_severities_block() {
+        let f = |s: &str| Finding { severity: s.into(), title: "t".into() };
+        let audits = vec![
+            Audit { sha: "aaa".into(), role: "red-team".into(), findings: vec![f("P0")] },
+            Audit { sha: "aaa".into(), role: "strategist".into(), findings: vec![] },
+        ];
+        let g = audit("aaa", &audits);
+        assert!(g.state == State::Red && g.detail.contains("red-team"), "{}", g.detail);
+        // The same role re-auditing after fixes does supersede its own earlier audit.
+        let mut fixed = audits.clone();
+        fixed.push(Audit { sha: "aaa".into(), role: "red-team".into(), findings: vec![f("P2")] });
+        assert_eq!(audit("aaa", &fixed).state, State::Green);
+        for odd in [" P0", "P-0", "critical", "", "blocker"] {
+            let a = vec![Audit { sha: "aaa".into(), role: "red-team".into(), findings: vec![f(odd)] }];
+            assert_eq!(audit("aaa", &a).state, State::Red, "{:?} must block", odd);
+        }
+        assert_eq!(audit("aaa", &[Audit { sha: "aaa".into(), role: "r".into(), findings: vec![f(" p3 ")] }]).state, State::Green);
     }
 
     #[test]

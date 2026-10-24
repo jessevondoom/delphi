@@ -106,7 +106,7 @@ fn check_header(name: &str, value: &str) -> Result<(), BuildError> {
 fn safe_segment(what: &str, v: &str) -> Result<(), BuildError> {
     // Model ids may carry `@` (Vertex Claude versions) and `:` (Bedrock-style); hosts and projects may not carry `@`.
     let extra: &[char] = if what == "model id" { &['@', ':'] } else { &[] };
-    if !v.is_empty() && v != ".." && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || extra.contains(&c)) {
+    if !v.is_empty() && !v.chars().all(|c| c == '.') && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') || extra.contains(&c)) {
         Ok(())
     } else {
         Err(BuildError::Unsupported(format!("{} `{}` has characters that cannot appear in a URL path or host", what, v)))
@@ -233,6 +233,7 @@ pub fn build(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         }
         (AccessPath::Cloud, Some("bedrock")) => {
             let region = e.region.clone().unwrap_or_default();
+            safe_segment("region", &region)?;
             let base = e.base_url.clone().unwrap_or_else(|| format!("https://bedrock-runtime.{}.amazonaws.com", region));
             let (origin, authority, prefix) = split_url(&base).ok_or_else(|| BuildError::Unsupported(format!("bad base_url `{}`", base)))?;
             let wire_path = format!("{}/model/{}/invoke-with-response-stream", prefix, sigv4::uri_encode(i.model_id));

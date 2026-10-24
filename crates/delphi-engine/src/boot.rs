@@ -305,7 +305,7 @@ mod tests {
         // Once ratified they are what the daemon would use, so the problems are reported in full.
         pin_config(&ws);
         let err = build(&ws.home, &ws.dir, Hub::new()).err().unwrap();
-        assert!(err.contains("config.toml has problems") && err.contains("need platform") && err.contains("bogus"), "{}", err);
+        assert!(err.contains("config.toml has problems") && err.contains("need platform") && err.contains("unknown credential source"), "{}", err);
         fs::write(ws.dir.join("config.toml"), "not toml [").unwrap();
         assert!(build(&ws.home, &ws.dir, Hub::new()).err().unwrap().contains("not valid TOML"));
         fs::remove_file(ws.dir.join("config.toml")).unwrap();

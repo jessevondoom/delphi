@@ -26,26 +26,23 @@ use std::path::{Component, Path, PathBuf};
 pub(crate) fn inside(root: &Path, p: &str) -> Option<PathBuf> {
     let root = std::fs::canonicalize(root).ok()?;
     let joined = if Path::new(p).is_absolute() { PathBuf::from(p) } else { root.join(p) };
-    let mut norm = PathBuf::new();
+    // Walk the path one component at a time, resolving symlinks as we go, so `link/..` means the parent of
+    // what `link` points to (as the kernel sees it), never the parent of the link's own directory.
+    let mut real = PathBuf::new();
     for c in joined.components() {
         match c {
             Component::ParentDir => {
-                norm.pop();
+                real.pop();
             }
             Component::CurDir => {}
-            other => norm.push(other.as_os_str()),
+            other => {
+                real.push(other.as_os_str());
+                if real.symlink_metadata().is_ok() {
+                    real = std::fs::canonicalize(&real).ok()?; // a dangling link fails closed
+                }
+            }
         }
     }
-    let mut existing = norm.clone();
-    let mut tail = Vec::new();
-    while !existing.exists() {
-        tail.push(existing.file_name()?.to_os_string());
-        if !existing.pop() {
-            return None;
-        }
-    }
-    let mut real = std::fs::canonicalize(&existing).ok()?;
-    real.extend(tail.iter().rev());
     if !real.starts_with(&root) {
         return None;
     }
@@ -114,9 +111,12 @@ impl Engine {
         let target = path_of(&p.input);
         match name {
             "Read" | "Grep" | "Glob" | "LS" | "NotebookRead" => {
+                let pattern = p.input["pattern"].as_str().unwrap_or("");
+                let reaches_out = Path::new(pattern).is_absolute() || pattern.starts_with('~') || pattern.split('/').any(|c| c == "..");
+                let path_key_ok = ["file_path", "path", "notebook_path"].iter().all(|k| p.input.get(*k).is_none_or(|v| v.is_string() || v.is_null()));
                 let in_tree = match (wt, target) {
-                    (Some(w), Some(t)) => inside(&w.path, t).is_some(),
-                    (Some(_), None) => true, // a pattern search in the working directory
+                    (Some(w), Some(t)) => inside(&w.path, t).is_some() && !reaches_out && path_key_ok,
+                    (Some(_), None) => !reaches_out && path_key_ok, // a pattern search in the working directory
                     (None, _) => false,
                 };
                 if in_tree {
@@ -138,8 +138,15 @@ impl Engine {
                 if inside(&w.path, t).is_none() {
                     return deny("edits are allowed only inside the task worktree, and never on a .git path");
                 }
-                if gate(sc.span.ceiling(), Action::WorktreeWrite) == Gate::Deny {
-                    return deny("edits are not allowed from a span at this taint level");
+                match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+                    Gate::Deny => return deny("edits are not allowed from a span at this taint level"),
+                    Gate::Red => {
+                        let summary = format!("{} {} from a span tainted at {}", name, t, sc.span.ceiling());
+                        if let Some(d) = self.ask(sc, ApprovalTier::Red, "harness_edit", "harness_edit", &summary, &json!({"tool": name, "path": t, "ceiling": sc.span.ceiling().as_str()})).await? {
+                            return Ok(Decision::Deny(d.content));
+                        }
+                    }
+                    Gate::Allow => {}
                 }
                 let c = Classified { tool: "harness_edit".into(), tier: ToolTier::Amber, kind: ActionKind::WorktreeEdit, summary: format!("{} {}", name, t), payload: json!({"tool": name, "path": t}), pattern: format!("harness_edit {}", name) };
                 if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
@@ -164,7 +171,7 @@ impl Engine {
                     }
                     Gate::Allow => {}
                 }
-                match self.exec.verdict_line(line) {
+                match self.exec.verdict_line_at(line, wt.as_ref().map(|w| w.path.as_path())) {
                     Verdict::Refused(why) => deny(&format!("refused by policy: {}", why)),
                     Verdict::Allowed(_) => Ok(Decision::Allow),
                     Verdict::Ask => {
@@ -274,6 +281,10 @@ impl Engine {
                 }
                 Event::Permission(p) => {
                     let d = self.harness_decide(sc, &wt, &p).await?;
+                    // An approved action may already have run by the time anything fails, so it counts as acting.
+                    if matches!(d, Decision::Allow) && !matches!(p.tool_name.as_str(), "Read" | "Grep" | "Glob" | "LS" | "NotebookRead") {
+                        used_tools = true;
+                    }
                     if session.decide(&p, &d).await.is_err() {
                         failure = Some(("the Claude CLI stopped listening before its permission request was answered".into(), false));
                         break;
@@ -292,6 +303,9 @@ impl Engine {
                         failure = Some((format!("the CLI reported an error: {}", text.chars().take(200).collect::<String>()), !used_tools));
                     }
                     metered = metered.max(usage.metered());
+                    if metered > self.settings.harness_token_cap && failure.is_none() {
+                        failure = Some((format!("the CLI used {} tokens, over the {} cap for a span", metered, self.settings.harness_token_cap), false));
+                    }
                     final_text = Some(text.clone());
                     result = Some(ev.clone());
                     session.close_input();
@@ -309,6 +323,9 @@ impl Engine {
                     break;
                 }
             }
+        }
+        if result.is_none() && failure.is_none() {
+            failure = Some((format!("the {} CLI stopped without a result", launch.program), !used_tools));
         }
         session.kill().await;
         let tail = live.finish();
@@ -429,7 +446,7 @@ mod tests {
             assert!(inside(&root, ok).is_some(), "{}", ok);
         }
         assert!(inside(&root, &format!("{}/src/a.rs", root.display())).is_some());
-        for bad in ["../x", "/etc/passwd", "src/../../x", ".git/hooks/pre-commit", "sub/.GIT/config", "link/passwd", "link"] {
+        for bad in ["../x", "/etc/passwd", "src/../../x", ".git/hooks/pre-commit", "sub/.GIT/config", "link/passwd", "link", "link/../z", "link/../.git/hooks/x"] {
             assert!(inside(&root, bad).is_none(), "{}", bad);
         }
     }
