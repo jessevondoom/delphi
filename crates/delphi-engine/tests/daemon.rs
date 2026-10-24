@@ -312,7 +312,7 @@ fn race_child() {
     let Ok(out) = std::env::var("DELPHI_RACE_OUT") else { return };
     let home = PathBuf::from(std::env::var("DELPHI_RACE_HOME").unwrap());
     let ws = PathBuf::from(std::env::var("DELPHI_RACE_WS").unwrap());
-    let res = connect_or_spawn(&SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![] });
+    let res = connect_or_spawn(&SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![], prefix_args: vec![] });
     let line = match res {
         Ok(mut a) => {
             let pong = a.client.call("session.ping", json!({})).map(|v| v == json!("pong")).unwrap_or(false);

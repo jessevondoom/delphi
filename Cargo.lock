@@ -235,6 +235,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "delphi-core",
+ "delphi-engine",
  "delphi-sandbox",
  "include_dir",
  "libc",

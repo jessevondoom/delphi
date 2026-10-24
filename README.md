@@ -24,7 +24,7 @@ Requires Rust 1.85 or newer (developed on stable 1.99). Set `DELPHI_HOME` to use
 Step 2 adds the daemon (`delphi-core`) and the operator console. You can ask Orchestrator and the Architect, Red-Team and Strategist roles to read a project, plan, draft specs and review. Nothing changes your project: there are no worktrees and no code execution yet (Step 3).
 
 ```sh
-cargo build --release                        # builds delphi and delphi-core; keep them in the same directory
+cargo build --release                        # one executable: target/release/delphi (the daemon is `delphi __core`)
 delphi init --project ~/code/my-project      # creates a workspace in ~/.delphi (writes nothing into the project)
 $EDITOR ~/.delphi/workspaces/<name>/config.toml
 delphi chat                                  # the console

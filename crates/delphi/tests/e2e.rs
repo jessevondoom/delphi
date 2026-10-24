@@ -11,24 +11,16 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const DELPHI: &str = env!("CARGO_BIN_EXE_delphi");
 const KEY: &str = "sk-e2e-key-0123456789abcdef";
 
-fn ensure_daemon_binary() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let sibling = Path::new(DELPHI).with_file_name("delphi-core");
-        if !sibling.exists() {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            assert!(Command::new(cargo).args(["build", "-p", "delphi-engine", "--bin", "delphi-core"]).current_dir(root).status().unwrap().success());
-        }
-        assert!(sibling.exists(), "delphi-core must sit next to delphi");
-    });
-}
+/// The daemon is `delphi __core`: there is no second executable to build or find. (This used to build and check
+/// for a sibling `delphi-core`. Verified once with the sibling deleted; it is not deleted here because the engine's
+/// own daemon tests use that binary and run at the same time.)
+fn ensure_daemon_binary() {}
 
 // ── a mock Claude ───────────────────────────────────────────────────────────
 

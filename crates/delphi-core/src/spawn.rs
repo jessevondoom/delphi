@@ -67,6 +67,8 @@ pub struct SpawnOptions<'a> {
     pub daemon_exe: &'a Path,
     /// Extra arguments for the daemon (tests only).
     pub extra_args: Vec<String>,
+    /// Arguments before `--daemon` (`delphi` runs the daemon as `delphi __core --daemon …`).
+    pub prefix_args: Vec<String>,
 }
 
 fn flock(file: &File, op: libc::c_int) -> io::Result<()> {
@@ -164,7 +166,7 @@ pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     let log = OpenOptions::new().create(true).append(true).open(&l.log)?;
     fs::set_permissions(&l.log, fs::Permissions::from_mode(0o600))?;
     let mut cmd = Command::new(opts.daemon_exe);
-    cmd.arg("--daemon")
+    cmd.args(&opts.prefix_args).arg("--daemon")
         .arg("--workspace")
         .arg(opts.workspace)
         .arg("--home")
