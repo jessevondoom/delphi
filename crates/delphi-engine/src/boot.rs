@@ -61,6 +61,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.enabled_agents = roles;
         }
     }
+    if let Some(v) = root.get("routing").and_then(|r| r.get("max_park_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.park_max = Some(Duration::from_secs(v as u64));
+    }
     if let Some(v) = root.get("harness").and_then(|h| h.get("subscription_budget_tokens")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.harness_token_cap = v as u64;
     }
@@ -258,6 +261,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         connectors,
         pool,
         clock_unix: crate::pool::system_clock(),
+        degraded: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

@@ -621,6 +621,8 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
         let fb = events_of(&f, "harness.fallback");
         assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("api"), Some("claude-sub")));
         assert_eq!(events_of(&f, "endpoint.throttled").len(), 1);
+        // A harness as capable as the target takes the span; the operator is not asked about a weaker API model first.
+        assert!(events_of(&f, "model.degraded_confirm").is_empty() && events_of(&f, "task.blocked").is_empty());
     }
 
     /// A Gemini-family harness endpoint on `agy`, serving the `architect` and `builder` roles.
