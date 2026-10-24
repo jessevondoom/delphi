@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
-import { fold, initial, replay } from './fold.ts';
+import { initial } from './fold.ts';
+import { loadHistory } from './attach.ts';
 import type { Info } from './theme.ts';
 
 declare const BUILD_VERSION: string | undefined; // set by the release build (bun --define); absent when run from source
@@ -40,11 +41,13 @@ if (observeAt >= 0) {
     ev = await Rpc.connect(info.narrator_socket);
     await ev.attachAsNarrator();
     await ev.call('events.subscribe', {});
+    cmd.keepAlive(async () => { await cmd.attachAsNarrator(); });
+    ev.keepAlive(async () => { await ev.attachAsNarrator(); await ev.call('events.subscribe', {}); });
   } catch (e: any) {
     console.error('delphi observe: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
     process.exit(1);
   }
-  const term = new Term();
+  const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.env.DELPHI_NO_MOUSE });
   let dark = true;
   term.start();
   await new Promise<void>((done) => {
@@ -52,6 +55,7 @@ if (observeAt >= 0) {
     term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
   });
   const app = render(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} view={view} />, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
+  term.on('resume', () => { app.clear(); app.rerender(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} view={view} />); });
   await app.waitUntilExit();
   term.stop();
   cmd.close(); ev.close();
@@ -66,18 +70,15 @@ try {
   ev = await Rpc.connect(info.console_socket);
   await ev.attachAsConsole();
   await ev.call('events.subscribe', {});
-  const snap = await cmd.call('observe.snapshot', { mission_id: mission }).catch(() => ({ events: [] }));
-  history = replay(initial(Date.now()), snap.events ?? []);
-  const waiting = await cmd.call('approval.list', {}).catch(() => []);
-  for (const a of waiting ?? []) history = fold(history, { method: 'event', params: { type: 'approval.requested', task_id: a.task_id, payload: a } }, Date.now());
-  const live = await cmd.call('session.snapshot', { mission_id: mission }).catch(() => ({ running_tasks: [] }));
-  for (const t of live.running_tasks ?? []) history.running[String(t.task_id)] = { since: Date.now() - Number(t.seconds ?? 0) * 1000 };
+  cmd.keepAlive(async () => { await cmd.attachAsConsole(); await cmd.call('mission.open', { mission_id: mission }); });
+  ev.keepAlive(async () => { await ev.attachAsConsole(); await ev.call('events.subscribe', {}); });
+  history = await loadHistory(cmd, mission);
 } catch (e: any) {
   console.error('delphi-ui: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
   process.exit(1);
 }
 
-const term = new Term();
+const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.env.DELPHI_NO_MOUSE });
 let dark = true;
 term.once('ev', () => {}); // keep the emitter alive until the app subscribes
 term.start();
@@ -89,6 +90,7 @@ const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={missi
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });
+term.on('resume', () => { app.clear(); app.rerender(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} />); });
 await app.waitUntilExit();
 term.stop();
 cmd.close(); ev.close();

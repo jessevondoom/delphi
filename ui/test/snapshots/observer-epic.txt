@@ -1,0 +1,30 @@
+ DELPHI OBSERVER  ·  EPIC DAG  ·  mission 2026-10-24-ui
+ ⟦•─•⟧ athena running   ⟦x?x⟧ ares waiting on you
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ t_1 build · Implement the deck router
+  ● athena       running       1200 tok  $0.100
+
+
+
+
+
+
+
+
+
+
+
+
+
+── Narrative ───────────────────────────────────────────────────────────────────────────────────────
+ t_1 started
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Epic DAG 2/7 · ← Council · → Forge Diffs · 1-7 jump · q qu… navigate: shift+arrows · ○ ● ○ ○ ○ ○ ○
+ spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 0

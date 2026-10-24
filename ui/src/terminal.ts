@@ -1,27 +1,64 @@
-// Terminal setup and teardown, and the one place stdin is read.
+// Terminal setup and teardown, and the one place stdin is read. Whatever happens, the terminal is given back: the
+// alternate screen left, mouse and paste modes off, the cursor shown, raw mode cleared.
 import { EventEmitter } from 'node:events';
 import { InputParser, type Ev } from './input.ts';
 
-const ON = '\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?2004h';
-const OFF = '\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h';
+const SCREEN = '\x1b[?1049h';
+const PASTE = '\x1b[?2004h';
+const MOUSE = '\x1b[?1000h\x1b[?1006h';
+const KEYS = '\x1b[>4;1m'; // modifyOtherKeys, level 1: Shift+Enter becomes distinguishable where the terminal knows it
+const OFF = '\x1b[>4;0m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h';
 
 export class Term extends EventEmitter {
   private parser = new InputParser();
   private active = false;
+  private mouseOn: boolean;
+
+  constructor(opts: { mouse?: boolean } = {}) {
+    super();
+    this.mouseOn = opts.mouse ?? !process.env.DELPHI_NO_MOUSE;
+  }
+
+  get mouse() { return this.mouseOn; }
+
+  /** Mouse reporting makes the wheel scroll the transcript but stops the terminal selecting text; this switches it. */
+  setMouse(on: boolean) {
+    this.mouseOn = on;
+    if (this.active) process.stdout.write(on ? MOUSE : '\x1b[?1006l\x1b[?1000l');
+  }
 
   start() {
     if (this.active) return;
     this.active = true;
-    process.stdout.write(ON);
+    process.stdout.write(SCREEN + PASTE + KEYS + (this.mouseOn ? MOUSE : ''));
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (d: string) => { for (const e of this.parser.feed(d)) this.emit('ev', e as Ev); });
     process.stdin.resume();
     process.stdout.write('\x1b]11;?\x07'); // ask for the background colour: the reply picks dark or light
-    // Whatever happens, give the terminal back.
+    if (this.wired) return;
+    this.wired = true;
+    process.stdin.on('data', (d: string) => { for (const e of this.parser.feed(d)) this.input(e); });
+    process.stdin.on('end', () => { this.stop(); process.exit(0); }); // the terminal went away
     process.on('exit', () => this.stop());
     for (const sig of ['SIGTERM', 'SIGHUP'] as const) process.on(sig, () => { this.stop(); process.exit(1); });
-    process.on('uncaughtException', (e) => { this.stop(); console.error(e); process.exit(1); });
+    const die = (e: unknown) => { this.stop(); console.error(e); process.exit(1); };
+    process.on('uncaughtException', die);
+    process.on('unhandledRejection', die);
+    // Suspended (Ctrl+Z, a shell's job control) and continued: hand the terminal back, take it again, redraw.
+    process.on('SIGCONT', () => { if (!this.active) { this.start(); this.emit('resume'); } });
+  }
+
+  private wired = false;
+
+  private input(e: Ev) {
+    if (e.t === 'ctrl' && e.c === 'z') { this.suspend(); return; }
+    this.emit('ev', e);
+  }
+
+  /** Ctrl+Z: leave the terminal as we found it, then stop like any foreground program. */
+  suspend() {
+    this.stop();
+    process.kill(process.pid, 'SIGSTOP');
   }
 
   stop() {

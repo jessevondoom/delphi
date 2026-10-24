@@ -49,3 +49,11 @@ test('the background colour reply says dark or light', () => {
 test('escape then a control key in one read is two keypresses', () => {
   assert.deepEqual(keys('\x1b\x03'), [{ t: 'key', k: 'esc', alt: false, shift: false, ctrl: false }, { t: 'ctrl', c: 'c' }]);
 });
+
+test('Shift+Enter arrives as modifyOtherKeys or kitty sequences and is a newline request', () => {
+  const nl = { t: 'key', k: 'enter', alt: false, shift: true, ctrl: false };
+  assert.deepEqual(keys('\x1b[27;2;13~'), [nl]);
+  assert.deepEqual(keys('\x1b[13;2u'), [nl]);
+  assert.deepEqual(keys('\x1b[99;5u'), [{ t: 'ctrl', c: 'c' }]);
+  assert.deepEqual(keys('\x1b[97;1u'), [{ t: 'text', s: 'a' }]);
+});

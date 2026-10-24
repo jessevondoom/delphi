@@ -21,6 +21,7 @@ export function Observer({ cmd, ev, term, info, dark, view: first }: Props) {
   const [scroll, setScroll] = useState(0);
   const [selNode, setSelNode] = useState(0);
   const [live, setLive] = useState<Record<string, string>>({});
+  const [think, setThink] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(true);
   const [diff, setDiff] = useState<OModel['diff']>(null);
   const [search, setSearch] = useState<OModel['search']>({ editing: false, query: '', hits: [], note: '' });
@@ -52,14 +53,22 @@ export function Observer({ cmd, ev, term, info, dark, view: first }: Props) {
           for (const [id, v] of Object.entries<any>(spans)) if (v?.text) next[id] = ((next[id] ?? '') + v.text).slice(-6000);
           return next;
         });
+        setThink((cur) => {
+          const next = { ...cur };
+          for (const [id, v] of Object.entries<any>(spans)) if (v?.thinking) next[id] = ((next[id] ?? '') + v.thinking).slice(-4000);
+          return next;
+        });
       } else if (n.method === 'event') {
         timer ??= setTimeout(() => { timer = null; void load(); }, 300);
-        if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; });
+        if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) { setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; }); setThink((cur) => { const { [n.params.payload.node_id]: _y, ...rest } = cur; return rest; }); }
       } else if (n.method === 'resync_required') void load();
     };
     ev.on('notification', onNote);
-    ev.on('closed', () => setConnected(false));
-    return () => { ev.off('notification', onNote); if (timer) clearTimeout(timer); };
+    const down = () => setConnected(false);
+    const up = () => { cmd.whenReady().then(() => { setConnected(true); return load(); }); };
+    ev.on('closed', down);
+    ev.on('reconnected', up);
+    return () => { ev.off('notification', onNote); ev.off('closed', down); ev.off('reconnected', up); if (timer) clearTimeout(timer); };
   }, [ev]);
 
   const refreshDiff = () => {
@@ -94,7 +103,7 @@ export function Observer({ cmd, ev, term, info, dark, view: first }: Props) {
       if (e.t === 'ctrl' && e.c === 'c') { exit(); return; }
       if (e.t === 'text') {
         if (e.s === 'q') { exit(); return; }
-        if (/^[1-6]$/.test(e.s)) { go(VIEWS[Number(e.s) - 1]!); return; }
+        if (/^[1-7]$/.test(e.s)) { go(VIEWS[Number(e.s) - 1]!); return; }
         if (e.s === '/' && v === 'archives') { setSearch({ ...s, editing: true }); return; }
         if (e.s === '[') { setPick((p) => Math.max(0, Math.min(p, 1e6) - 1)); return; }
         if (e.s === ']') { setPick((p) => p + 1); return; }
@@ -121,7 +130,7 @@ export function Observer({ cmd, ev, term, info, dark, view: first }: Props) {
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, search, diff, live, connected };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, search, diff, live, connected, think };
   const lines = observeFrame(model, size.w, size.h);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>

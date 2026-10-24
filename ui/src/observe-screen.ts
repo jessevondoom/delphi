@@ -17,12 +17,12 @@ export type OState = {
   cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
-export const VIEWS = ['council', 'epic', 'forge', 'agents', 'spend', 'archives'] as const;
+export const VIEWS = ['council', 'epic', 'forge', 'agents', 'spend', 'archives', 'thinking'] as const;
 export type View = (typeof VIEWS)[number];
-const TITLE: Record<View, string> = { council: 'COUNCIL CHAMBER', epic: 'EPIC DAG', forge: 'FORGE DIFFS', agents: 'MASCOT ROSTER', spend: 'SPEND TELEMETRY', archives: 'ARCHIVES' };
-const SHORT: Record<View, string> = { council: 'Council', epic: 'Epic DAG', forge: 'Forge Diffs', agents: 'Agents', spend: 'Spend', archives: 'Archives' };
+const TITLE: Record<View, string> = { council: 'COUNCIL CHAMBER', epic: 'EPIC DAG', forge: 'FORGE DIFFS', agents: 'MASCOT ROSTER', spend: 'SPEND TELEMETRY', archives: 'ARCHIVES', thinking: 'THINKING' };
+const SHORT: Record<View, string> = { council: 'Council', epic: 'Epic DAG', forge: 'Forge Diffs', agents: 'Agents', spend: 'Spend', archives: 'Archives', thinking: 'Thinking' };
 export const parseView = (s: string): View | null => {
-  const m: Record<string, View> = { council: 'council', chamber: 'council', '1': 'council', epic: 'epic', dag: 'epic', '2': 'epic', forge: 'forge', diffs: 'forge', '3': 'forge', agents: 'agents', roster: 'agents', '4': 'agents', spend: 'spend', telemetry: 'spend', '5': 'spend', archives: 'archives', kb: 'archives', '6': 'archives' };
+  const m: Record<string, View> = { council: 'council', chamber: 'council', '1': 'council', epic: 'epic', dag: 'epic', '2': 'epic', forge: 'forge', diffs: 'forge', '3': 'forge', agents: 'agents', roster: 'agents', '4': 'agents', spend: 'spend', telemetry: 'spend', '5': 'spend', archives: 'archives', kb: 'archives', '6': 'archives', thinking: 'thinking', reasoning: 'thinking', '7': 'thinking' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -32,6 +32,8 @@ export type OModel = {
   search: { editing: boolean; query: string; hits: Hit[]; note: string };
   diff: { available: boolean; stat?: string; diff?: string; untracked?: string[] } | null;
   live: Record<string, string>; connected: boolean;
+  /** Reasoning per running span, in memory only: never written anywhere, not in the snapshot a reopened window receives. */
+  think?: Record<string, string>;
 };
 
 export const emptyState = (): OState => ({
@@ -225,6 +227,20 @@ function archives(m: OModel, w: number, _h: number): string[] {
   return out;
 }
 
+function thinking(m: OModel, w: number, h: number): string[] {
+  const spans = Object.entries(m.think ?? {}).filter(([, t]) => t.trim());
+  if (!spans.length) return ['', dim('  Nothing is thinking right now.'), '', dim('  Reasoning of running agents appears here as it streams. It lives only in this window:'), dim('  it is never saved, and a window opened later starts empty.')];
+  const out: string[] = [];
+  for (const [id, t] of spans) {
+    const node = m.st.nodes[id];
+    const role = node?.role ?? '?';
+    const a = m.st.agents[role];
+    out.push('', ' ' + T.badge(role, 'running', m.info, m.pal) + ' ' + roleCol(m, role).bold(name(m, role)) + dim(`  ${a?.tier ?? ''} · ${a?.model ? clean(a.model, 28) : 'model unknown'} · ${node?.task_id ?? ''}`), rule(m, w));
+    out.push(...sanitize(t).split('\n').flatMap((l) => wrap(l, w - 4)).slice(-Math.max(4, Math.floor(h / spans.length) - 3)).map((l) => '  ' + chalk.italic(dim(l))));
+  }
+  return out.slice(-h);
+}
+
 function header(m: OModel, w: number): string[] {
   const conn = m.connected ? '' : '   (disconnected)';
   const l1 = chalk.bold(text(m)(' DELPHI OBSERVER')) + dim(`  ·  ${TITLE[m.view]}  ·  mission ${m.st.mission_id || '…'}${conn}`);
@@ -240,7 +256,7 @@ function footer(m: OModel, w: number): string[] {
   const i = VIEWS.indexOf(m.view), st = m.st, cap = st.budget.cap_usd;
   const dots = VIEWS.map((_, n) => (n === i ? T.accent('●') : dim('○'))).join(' ');
   const prev = SHORT[VIEWS[(i + VIEWS.length - 1) % VIEWS.length]!], next = SHORT[VIEWS[(i + 1) % VIEWS.length]!];
-  const left = dim(` ${SHORT[m.view]} ${i + 1}/${VIEWS.length}  ·  ← ${prev}  ·  → ${next}  ·  1-${VIEWS.length} jump  ·  q quit`);
+  const left = dim(` ${SHORT[m.view]} ${i + 1}/${VIEWS.length} · ← ${prev} · → ${next} · 1-${VIEWS.length} jump · q quit`);
   const frac = cap > 0 ? st.spent_usd / cap : 0;
   const col = frac >= 0.9 ? '#ef4444' : frac >= 0.75 ? '#facc15' : '#4ade80';
   const sp = text(m)(` spend ${money(st.spent_usd)} / ${cap > 0 ? money(cap) : '?'} `) + colored(bar(frac, 12), col) + text(m)(` · tokens ${kilo(tokTotal(st.tokens))} · cache hit ${(st.cache_hit_ratio * 100).toFixed(0)}% · retries ${st.retries}${st.pending_proposals > 0 ? ` · ${st.pending_proposals} proposal(s) await /ratify` : ''}`);
@@ -248,11 +264,12 @@ function footer(m: OModel, w: number): string[] {
 }
 
 export function observeFrame(m: OModel, w: number, h: number): string[] {
+  if (w < 28 || h < 9) return [`observer needs 28x9`, `window is ${w}x${h}`].map((l) => [...l].slice(0, Math.max(0, w)).join('')).concat(Array(Math.max(0, h - 2)).fill('')).slice(0, Math.max(0, h));
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
-  const fn = { council, epic, forge, agents, spend, archives }[m.view];
+  const fn = { council, epic, forge, agents, spend, archives, thinking }[m.view];
   let body = fn(m, w, bodyH);
-  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'forge') body = body.slice(m.scroll);
+  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'forge' && m.view !== 'thinking') body = body.slice(m.scroll);
   body = body.slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);

@@ -44,7 +44,7 @@ test('the header names the view and mission and shows one badge per role; the fo
   assert.match(l[0]!, /DELPHI OBSERVER\s+·\s+MASCOT ROSTER\s+·\s+mission 2026-10-24-ui/);
   assert.match(l[1]!, /⟦•─•⟧ athena/);
   assert.match(l[1]!, /⟦x\?x⟧ ares waiting on you/);
-  assert.match(l.at(-2)!, /Agents 4\/6\s+·\s+← Forge Diffs\s+·\s+→ Spend.*navigate: shift\+arrows · ○ ○ ○ ● ○ ○/);
+  assert.match(l.at(-2)!, /Agents 4\/7 · ← Forge Diffs · → Spend.*navigate: shift\+arrows · ○ ○ ○ ● ○ ○ ○/);
   assert.match(l.at(-1)!, /spend \$0\.420 \/ \$5\.00 .* tokens .* cache hit 50% · retries 1/);
 });
 
@@ -123,4 +123,15 @@ test('model text cannot move the cursor, and view names parse', () => {
   const t = observeFrame(model('epic', { st: s }), 110, 34).join('\n');
   assert.ok(!t.includes('\x1b[2J') && !t.includes('\x1b]0;'));
   assert.deepEqual([parseView('Council'), parseView('4'), parseView('kb'), parseView('nope')], ['council', 'agents', 'archives', null]);
+});
+
+test('thinking: reasoning per running agent with its badge, tier and model; empty when nothing thinks; nothing from other spans', () => {
+  const s = sample();
+  s.nodes['n_7'] = { id: 'n_7', role: 'architect', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 0, cost_usd: 0 };
+  const t = observeFrame(model('thinking', { st: s, think: { n_7: 'Weighing a table against a file.\nThe table indexes.' } }), 110, 30).map(plain).join('\n');
+  assert.match(t, /THINKING/);
+  assert.match(t, /⟦•─•⟧ daedalus\s+frontier · claude-x · t_1/);
+  assert.match(t, /Weighing a table against a file\.\n\s+The table indexes\./);
+  assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /Nothing is thinking right now[\s\S]*never saved/);
+  assert.equal(parseView('7'), 'thinking');
 });
