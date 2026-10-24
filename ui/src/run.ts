@@ -41,6 +41,12 @@ export function parseCouncil(args: string): { proposition: string; seats: string
   return rest.length ? { proposition: rest.join(' '), seats, author } : usage;
 }
 
+/** Answer a card: the daemon checks the payload hash, so what is approved is exactly what was shown. */
+export async function resolveCard(cmd: Rpc, card: Approval, decision: 'allow' | 'allow_similar' | 'deny'): Promise<string | null> {
+  try { await cmd.call('approval.resolve', { approval_id: card.id, payload_blake3: card.blake3, decision }); return null; }
+  catch (e) { return errText(e); }
+}
+
 /** The newest approval that is still waiting. */
 export const waiting = (s: State): Approval | undefined => Object.values(s.approvals).sort((a, b) => b.at - a.at)[0];
 
@@ -96,8 +102,8 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (d === 'view') { ctx.post(JSON.stringify(card.payload, null, 2)); return; }
       if (d === 'allow_similar' && card.tier === 'red') { ctx.post('`allow similar` never applies to a Red action; use /y to approve this once or /n'); return; }
       if (now - card.at < 300) { ctx.post('that card only just appeared; look at it, then answer'); return; }
-      try { await ctx.cmd.call('approval.resolve', { approval_id: card.id, payload_blake3: card.blake3, decision: d }); }
-      catch (e) { ctx.post(errText(e)); }
+      const bad = await resolveCard(ctx.cmd, card, d);
+      if (bad) ctx.post(bad);
       return;
     }
     default: ctx.post(`unknown command /${name} (try /help)`);
