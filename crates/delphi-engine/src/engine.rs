@@ -157,6 +157,8 @@ pub struct Engine {
     pub exec: Arc<exec::ExecEnv>,
     /// Context slices a driver hands a span directly, by handoff id (Council Round 2 peers' stances).
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
+    /// The connector host (`specs/010`): MCP sessions, pins, the payload store.
+    pub connectors: Arc<crate::connectors::ConnectorHost>,
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -198,6 +200,8 @@ pub(crate) struct SpanCtx {
     pub(crate) thinking: u32,
     /// Set when a dispatched child halted: the parent halts too, and the operator decides (specs/003 §3.2).
     pub(crate) child_escalation: Option<String>,
+    /// Set by a tool whose result text is kept outside the event log: the log records this reference instead.
+    pub(crate) content_ref: Option<String>,
 }
 
 impl SpanCtx {
@@ -252,7 +256,7 @@ impl Engine {
         (self.clock)()
     }
 
-    fn guard_for(&self, manifest: &AgentManifest) -> Guard {
+    pub(crate) fn guard_for(&self, manifest: &AgentManifest) -> Guard {
         let ws = &self.ws.dir;
         let mut protected = HashSet::new();
         for p in [ws.join("local/ratified.lock"), ws.join("local/state.db"), self.ws.home.join("operator/ratified.lock")] {
@@ -262,7 +266,7 @@ impl Engine {
             }
         }
         Guard {
-            zones: Zones { local: ws.join("local"), team: ws.join("team"), base: ws.join("base"), ratified: ws.join("local/ratified"), worktree: None, projects: self.projects.clone() },
+            zones: Zones { local: ws.join("local"), team: ws.join("team"), base: ws.join("base"), ratified: ws.join("local/ratified"), worktree: None, projects: self.projects.clone(), payload: Some(ws.join("payloads")) },
             role: manifest.id.clone(),
             read_globs: manifest.read.clone(),
             write_globs: manifest.write.clone(),
@@ -346,7 +350,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None };
 
             if fresh {
                 let mut open = vec![
@@ -414,6 +418,7 @@ impl Engine {
             if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
                 defs.push(run_command_def());
             }
+            defs.extend(self.connector_defs(&sc).await?);
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             // A family whose first allowed endpoint is a harness runs the whole span in the subscription CLI
@@ -445,7 +450,12 @@ impl Engine {
                             None => {
                                 let r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
                                 // Durable before the next tool runs (or waits for an approval): a crash must not re-run a finished side effect.
-                                m.append(sc.ev("tool.result", json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error}))).await?;
+                                let payload = match sc.content_ref.take() {
+                                    // A connector result: the log holds a pointer to the payload store, never the text.
+                                    Some(h) => json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": format!("[connector result stored as @payload/{}, {} characters]", h, r.content.chars().count()), "content_ref": h, "is_error": r.is_error}),
+                                    None => json!({"turn_index": result_index, "tool_call_id": id, "name": name, "content": r.content, "is_error": r.is_error}),
+                                };
+                                m.append(sc.ev("tool.result", payload)).await?;
                                 r
                             }
                         };
@@ -510,7 +520,7 @@ impl Engine {
     /// summary first. `None` means there is nothing to recover.
     pub async fn recover_mission(self: &Arc<Self>, m: &Arc<MissionState>) -> Result<Option<RecoveryPlan>, EngineError> {
         let events = m.replay()?;
-        let before = recovery::rebuild(&events);
+        let before = recovery::rebuild_with(&events, &|h| self.connectors.read_payload(h));
         let open_reservations = m.budget.lock().unwrap().open_reservations();
         let unfinished = before.tasks.values().any(|t| !t.completed);
         if !unfinished && open_reservations.is_empty() && before.open_approvals.is_empty() {
@@ -542,7 +552,7 @@ impl Engine {
             m.append_batch(batch).await?;
         }
 
-        let rec = Arc::new(recovery::rebuild(&m.replay()?));
+        let rec = Arc::new(recovery::rebuild_with(&m.replay()?, &|h| self.connectors.read_payload(h)));
         let mut items = Vec::new();
         for t in rec.tasks.values().filter(|t| !t.completed) {
             let Some(root) = t.root_span.as_ref().and_then(|id| rec.spans.get(id)) else {
@@ -708,6 +718,9 @@ impl Engine {
                 return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
+        }
+        if let Some((connector, tool)) = self.connectors.parse_wire(name) {
+            return self.exec_connector(sc, call_id, &connector, &tool, args).await;
         }
         let c = match self.tools.classify(name, args) {
             Ok(c) => c,

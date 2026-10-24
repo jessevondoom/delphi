@@ -140,6 +140,9 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         }
     }
 
+    // 7b. Connectors (specs/010 §9), offline: what is configured and whether its tool definitions are ratified.
+    check_connectors(ws, &cfg, &mut r);
+
     // 8. Hygiene: clean projects, orphaned worktrees.
     check_hygiene(ws, home, &mut r);
 
@@ -413,6 +416,30 @@ fn check_zone_layout(ws: &Workspace, home: &Path, r: &mut Report) {
 
 /// Narrow-only (`specs/001` §2.3, 001-A1): `core/` and `operator/core/` overrides get the full manifest
 /// checks, compared against the built-in in `base/`.
+/// Each configured connector should have ratified pins for its tools; without them nothing is offered to agents.
+/// Reads only the ratified copies. Probing the servers is `delphi connectors test <name>`.
+fn check_connectors(ws: &Workspace, cfg: &str, r: &mut Report) {
+    let Some(table) = toml::from_str::<toml::Value>(cfg).ok().and_then(|v| v.get("connectors").and_then(|c| c.as_table().cloned())) else { return };
+    let lock = delphi_core::lock::read(&ws.dir.join("local/ratified.lock")).ok();
+    for (name, c) in &table {
+        let logical = format!("connectors/{}.pins.json", name);
+        let ratified = fs::read(ws.dir.join("local/ratified").join(&logical)).ok();
+        let intact = match (&ratified, lock.as_ref().and_then(|l| l.files.get(&logical))) {
+            (Some(bytes), Some(want)) => &delphi_core::lock::hash(bytes) == want,
+            _ => false,
+        };
+        let listed = c.get("tools").and_then(|t| t.as_table()).map(|t| t.len()).unwrap_or(0);
+        let location = format!("[connectors.{}]", name);
+        if intact {
+            r.push(Level::Ok, "7b connectors", location, format!("{} tool(s) in the catalog, definitions ratified; `delphi connectors test {}` checks the server", listed, name));
+        } else if ratified.is_some() {
+            r.fail("7b connectors", location, "the ratified tool pins do not match the lock: the copy was changed outside ratification");
+        } else {
+            r.warn("7b connectors", location, format!("no ratified tool definitions, so agents are offered none: run `delphi connectors pin {}`, then /ratify", name));
+        }
+    }
+}
+
 fn check_overrides(ws: &Workspace, home: &Path, r: &mut Report) {
     let tree = overlay(ws, home);
     for (root, label) in [(ws.dir.join("core/agents"), "core/agents"), (home.join("operator/core/agents"), "operator/core/agents")] {
@@ -520,6 +547,27 @@ mod tests {
         assert_eq!(r.exit_code(), 0);
         assert!(r.findings.iter().any(|f| f.check.starts_with("3") && f.level == Level::Ok));
         assert!(r.findings.iter().any(|f| f.check.starts_with("5") && f.level == Level::Ok));
+    }
+
+    // specs/010 §9 (offline part): a connector with no ratified tool definitions offers agents nothing, and doctor says so.
+    #[test]
+    fn a_connector_without_ratified_pins_warns_and_a_tampered_pin_file_fails() {
+        let (_t, home, ws, _p) = setup();
+        let mut cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap();
+        cfg.push_str("\n[connectors.docs]\nurl = \"https://mcp.example.com/mcp\"\nhosts = [\"mcp.example.com\"]\nroles = [\"orchestrator\"]\ntools = { search = \"read\" }\n");
+        fs::write(ws.dir.join("config.toml"), cfg).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "7b connectors" && f.level == Level::Warn && f.message.contains("delphi connectors pin docs")), "{:?}", r.findings.iter().map(|f| (&f.check, &f.message)).collect::<Vec<_>>());
+        // Ratified pins that match the lock are fine; a copy changed behind the lock's back fails.
+        let pins = "{\"connector\": \"docs\", \"tools\": {}}\n";
+        fs::create_dir_all(ws.dir.join("local/ratified/connectors")).unwrap();
+        fs::write(ws.dir.join("local/ratified/connectors/docs.pins.json"), pins).unwrap();
+        let mut lock = delphi_core::lock::read(&ws.dir.join("local/ratified.lock")).unwrap();
+        lock.files.insert("connectors/docs.pins.json".into(), delphi_core::lock::hash(pins.as_bytes()));
+        delphi_core::lock::write(&ws.dir.join("local/ratified.lock"), &lock).unwrap();
+        assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.check == "7b connectors" && f.level == Level::Ok));
+        fs::write(ws.dir.join("local/ratified/connectors/docs.pins.json"), "{\"tools\": {\"evil\": {}}}").unwrap();
+        assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.check == "7b connectors" && f.level == Level::Fail));
     }
 
     // specs/006 §6 test 7

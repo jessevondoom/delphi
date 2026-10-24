@@ -48,6 +48,8 @@ pub struct Zones {
     pub worktree: Option<PathBuf>,
     /// Registered projects by name, read-only through `@project/<name>/**` (001-A2).
     pub projects: Vec<(String, PathBuf)>,
+    /// The connector payload store, readable only as `@payload/<64 hex>` (`specs/010` §8.2).
+    pub payload: Option<PathBuf>,
 }
 
 pub struct Guard {
@@ -200,6 +202,12 @@ impl Guard {
     fn zone_of(&self, path: &str, key: &str, access: Access) -> Option<(PathBuf, String)> {
         if key.starts_with("@worktree/") {
             return self.zones.worktree.clone().map(|w| (w, path["@worktree/".len()..].to_string()));
+        }
+        if key.starts_with("@payload/") {
+            // Read-only, one file by its exact blake3 name: no directory, no listing, no traversal.
+            let name = &path["@payload/".len()..];
+            let hex = name.len() == 64 && name.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+            return if access == Access::Read && hex { self.zones.payload.clone().map(|p| (p, name.to_string())) } else { None };
         }
         if let Some(rest) = key.strip_prefix("@project/") {
             let name = rest.split('/').next()?;
@@ -549,6 +557,7 @@ mod tests {
                 ratified: ws.join("ratified"),
                 worktree: Some(ws.join("wt")),
                 projects: vec![("app".into(), ws.join("proj"))],
+                payload: Some(ws.join("payloads")),
             },
             role: "builder".into(),
             read_globs: vec!["*".into()],
@@ -556,6 +565,27 @@ mod tests {
             protected,
         };
         (t, g)
+    }
+
+    // specs/010 §8.2: a stored connector result is reachable only by its exact name, read-only.
+    #[test]
+    fn payloads_are_readable_only_by_their_exact_hash_name() {
+        let (t, g) = setup();
+        let hash = "ab".repeat(32);
+        fs::create_dir_all(t.path().join("payloads")).unwrap();
+        fs::write(t.path().join("payloads").join(&hash), "private mail").unwrap();
+        fs::write(t.path().join("payloads/notes.txt"), "not a payload").unwrap();
+        let r = g.check(&format!("@payload/{}", hash), Access::Read).unwrap();
+        assert_eq!(r.read(100).unwrap().0, b"private mail");
+        for bad in [format!("@payload/{}", hash.to_uppercase()), format!("@payload/{}/", &hash[..63]), "@payload/notes.txt".into(), "@payload".into(), "@payload/".into(), format!("@payload/../{}", hash), format!("@payload/x/{}", hash)] {
+            assert!(g.check(&bad, Access::Read).is_err(), "{}", bad);
+        }
+        assert!(g.check(&format!("@payload/{}", hash), Access::Write).is_err(), "never writable");
+        assert!(g.list("@payload").is_err(), "never listable");
+        // With no payload store configured, the scheme names nothing.
+        let (_t2, mut g2) = setup();
+        g2.zones.payload = None;
+        assert!(g2.check(&format!("@payload/{}", hash), Access::Read).is_err());
     }
 
     #[test]

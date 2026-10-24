@@ -26,6 +26,8 @@ pub fn is_protected(logical: &str) -> bool {
         || (l.starts_with("skills/") && (l.ends_with("/skill.md") || l.contains("/scripts/") || l.ends_with("/scripts")))
         || (l.starts_with("themes/") && l.ends_with("/theme.md"))
         || (l.starts_with("memory/agents/") && l.ends_with("/lessons.md"))
+        // The ratified definition hashes of a connector's tools (`specs/010` §3.2).
+        || (l.starts_with("connectors/") && l.ends_with(".pins.json") && !l[11..].contains('/'))
 }
 
 /// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]`, `[connectors.*]` and `[exec]` blocks pinned by `specs/009` §5 and `specs/008` §4, re-serialized

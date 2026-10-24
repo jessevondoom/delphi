@@ -125,6 +125,66 @@ pub fn effective_config(ws_dir: &Path, live_text: &str) -> Result<(String, Vec<S
     Ok((toml::to_string(&live).map_err(|e| e.to_string())?, notices))
 }
 
+/// The credential store behind OAuth logins: the same resolver the model client uses, and the secret store that
+/// holds refresh tokens (for signing a connector out).
+pub fn credential_store(cfg: SharedConfig, secrets: Arc<SecretRegistry>) -> (Arc<CredentialStore>, Arc<delphi_adapter::oauth2::SystemSecretStore>) {
+    let reg = secrets.clone();
+    let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
+    let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg, store.clone(), build_client(), handle)));
+    }
+    (Arc::new(CredentialStore::new(resolver)), store)
+}
+
+/// Access tokens for connectors come from the connector's `[auth.<login>]` block, exactly as model endpoints get theirs.
+struct OauthTokens {
+    creds: Arc<CredentialStore>,
+    store: Arc<delphi_adapter::oauth2::SystemSecretStore>,
+}
+
+impl crate::connectors::TokenSource for OauthTokens {
+    fn token(&self, connector: &str, login: &str) -> Result<String, String> {
+        match self.creds.get(&format!("connector-{}", connector), &format!("oauth2:{}", login)) {
+            Ok(delphi_adapter::credential::Resolved::Token(t)) => Ok(t.expose().to_string()),
+            Ok(_) => Err("not a token credential".into()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn forget(&self, _connector: &str, login: &str) {
+        use delphi_adapter::oauth2::SecretStore;
+        let _ = self.store.delete(&delphi_adapter::oauth2::refresh_entry(login));
+    }
+}
+
+/// Who a Google access token belongs to: the OpenID userinfo email.
+struct GoogleIdentity;
+
+impl crate::connectors::Identity for GoogleIdentity {
+    fn who(&self, kind: &str, token: &str) -> Result<String, String> {
+        if kind != "google" {
+            return Err(format!("no identity lookup for `{}`", kind));
+        }
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            let c = delphi_adapter::reqwest::Client::builder().redirect(delphi_adapter::reqwest::redirect::Policy::none()).timeout(Duration::from_secs(20)).build().map_err(|e| e.to_string())?;
+            let r = c.get("https://openidconnect.googleapis.com/v1/userinfo").bearer_auth(token).send().await.map_err(|e| e.without_url().to_string())?;
+            if !r.status().is_success() {
+                return Err(format!("the identity lookup failed (HTTP {})", r.status().as_u16()));
+            }
+            let v: serde_json::Value = serde_json::from_slice(&r.bytes().await.map_err(|e| e.without_url().to_string())?).map_err(|e| e.to_string())?;
+            v["email"].as_str().map(String::from).ok_or_else(|| "the identity lookup returned no email".to_string())
+        })
+    }
+}
+
+/// The connector host for a workspace (`specs/010`).
+pub fn connector_host(cfg: SharedConfig, secrets: Arc<SecretRegistry>, ws_dir: &Path) -> Arc<crate::connectors::ConnectorHost> {
+    let (creds, store) = credential_store(cfg.clone(), secrets);
+    crate::connectors::ConnectorHost::new(cfg, ws_dir, Arc::new(OauthTokens { creds, store }), Arc::new(crate::connectors::HttpFactory), Some(Arc::new(GoogleIdentity)))
+}
+
 /// The production model client: credentials (including `oauth2:` when a runtime is available), the
 /// platform envelopes, retries, and redaction through `secrets`. Must be called inside a Tokio runtime
 /// for `oauth2:` credentials to work.
@@ -177,6 +237,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
             OriginRules { untrusted_paths: custom }
         }
     };
+    let connectors = connector_host(cfg.clone(), secrets.clone(), ws_dir);
     let engine = Arc::new(Engine {
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
         cfg,
@@ -193,6 +254,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         tools: Arc::new(crate::tools::Registry::builtin()),
         exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
+        connectors,
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

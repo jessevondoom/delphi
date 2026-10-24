@@ -361,6 +361,7 @@ name = "delphi-adapter"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "blake3",
  "crc32fast",
  "delphi-core",
  "futures-util",

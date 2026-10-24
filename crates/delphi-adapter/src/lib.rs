@@ -8,6 +8,7 @@ pub mod eventstream;
 pub mod gemini;
 pub mod http;
 pub mod ipr;
+pub mod mcp;
 pub mod oauth2;
 pub mod openai;
 pub mod platform;

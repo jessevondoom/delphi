@@ -124,6 +124,7 @@ fn live_files(home: &Path, ws_dir: &Path, scope: Scope) -> BTreeMap<String, Path
             walk(&ws_dir.join("core"), "", &mut m);
             walk(&ws_dir.join("team"), "", &mut m);
             walk(&ws_dir.join("local/memory"), "memory/", &mut m);
+            walk(&ws_dir.join("local/connectors"), "connectors/", &mut m);
             walk(&home.join("themes"), "themes/", &mut m);
             if ws_dir.join("local/heuristics.md").exists() {
                 m.insert("heuristics.md".into(), ws_dir.join("local/heuristics.md"));

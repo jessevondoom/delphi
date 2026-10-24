@@ -29,6 +29,7 @@ const USAGE: &str = "usage:
   delphi chat [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
+  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
   delphi narrator [council|epic|forge|archives] [--once] [--workspace <name>] [--home <dir>]   (also: delphi observe)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
@@ -49,6 +50,7 @@ fn main() {
         Some("chat") => cmd_chat(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
+        Some("connectors") => cmd_core("connectors", &args[1..]),
         Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
         Some("endpoints") => cmd_core("endpoints", &args[1..]),
@@ -256,6 +258,7 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
         }
     }
     match sub {
+        "connectors" => delphi_engine::connectors_cli::run(&ws.dir, &rest),
         "auth" => delphi_engine::auth_cli::run(&ws.dir, &rest),
         _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
