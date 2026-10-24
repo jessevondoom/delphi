@@ -142,6 +142,14 @@ enum Start {
     Resume { rec: Arc<Recovered>, span_id: String },
 }
 
+/// Who an approval card is raised for.
+pub(crate) struct Asker<'a> {
+    pub m: &'a Arc<MissionState>,
+    pub task_id: &'a str,
+    pub span_id: &'a str,
+    pub role: &'a str,
+}
+
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
 struct Escalate(String);
 
@@ -246,7 +254,11 @@ impl Engine {
     }
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool) -> Result<TaskOutcome, EngineError> {
-        let handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
+        let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
+        if target == "builder" {
+            // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
+            handoff.implements_spec = handoff.context_pointers.iter().find(|p| p.uri.starts_with("specs/") && p.uri.ends_with(".md")).map(|p| p.uri.clone());
+        }
         handoff.validate().map_err(EngineError::Invalid)?;
         if !self.settings.enabled_agents.iter().any(|a| a == target) {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
@@ -681,11 +693,25 @@ impl Engine {
 
     async fn attach_worktree(&self, sc: &mut SpanCtx, handoff: &HandoffEnvelope) -> Result<(), String> {
         let (name, path) = self.project_for(handoff)?;
+        // The spec gate (`specs/003` §3.1.2): no worktree without a ratified spec, or the operator's
+        // approval of the bounded exemption. Frontmatter proves nothing; only the lock does.
+        match crate::finalize::spec_link(&self.ws.dir, handoff.implements_spec.as_deref()) {
+            crate::gates::SpecLink::Ratified(_) => {}
+            crate::gates::SpecLink::NotRatified { spec, why } => return Err(format!("`{}` is not a ratified spec ({}); the operator must ratify it before a build starts", spec, why)),
+            crate::gates::SpecLink::None => {
+                let payload = json!({"tool": "build_without_spec", "task_id": sc.task_id, "objective": handoff.objective.chars().take(500).collect::<String>(), "limits": "at most 2 files and 100 changed lines, no host-executed files, dependency manifests or governance files"});
+                let summary = "build without a ratified spec under the bounded exemption (at most 2 files, 100 lines, nothing sensitive)";
+                if self.ask(sc, ApprovalTier::Amber, "build_without_spec", "build_without_spec", summary, &payload).await.map_err(|e| e.to_string())?.is_some() {
+                    return Err("the operator did not approve building without a ratified spec".into());
+                }
+                sc.m.append(sc.ev("exemption.approved", json!({"task_id": sc.task_id}))).await.map_err(|e| e.to_string())?;
+            }
+        }
         let (exec, task) = (self.exec.clone(), sc.task_id.clone());
         let (wt, created) = tokio::task::spawn_blocking(move || exec.ensure(&task, &path)).await.map_err(|e| e.to_string())?.map_err(|e| format!("could not set up the worktree: {}", e))?;
         sc.guard.zones.worktree = Some(wt.path.clone());
         if created {
-            let ev = sc.ev("worktree.created", json!({"project": name, "branch": wt.branch, "base_sha": wt.base_sha, "project_was_dirty": wt.project_was_dirty}));
+            let ev = sc.ev("worktree.created", json!({"project": name, "branch": wt.branch, "base_sha": wt.base_sha, "project_was_dirty": wt.project_was_dirty, "implements_spec": handoff.implements_spec}));
             sc.m.append(ev).await.map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -754,18 +780,31 @@ impl Engine {
     /// Raise an approval card and wait for the answer. `None` means approved; `Some(result)` is the denial
     /// the model sees.
     async fn ask(&self, sc: &SpanCtx, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
-        let req = Request { approval_id: String::new(), task_id: sc.task_id.clone(), span_id: sc.span_id.clone(), role: sc.role.clone(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: self.settings.approval_timeout };
+        let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+        self.ask_as(&who, tier, tool, pattern, summary, payload).await
+    }
+
+    /// As [`Engine::ask`] for a decision that belongs to no running span (merge approval after a build).
+    pub(crate) async fn ask_as(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
+        let ev = |kind: &str, payload: Value| {
+            let mut e = EventEnvelope::new(&who.m.id, kind, payload);
+            e.task_id = Some(who.task_id.to_string());
+            e.span_id = Some(who.span_id.to_string());
+            e.agent = Some(who.role.to_string());
+            e
+        };
+        let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: self.settings.approval_timeout };
         let waiting = self.broker.request(req);
         let id = waiting.approval_id.clone();
         if let Some(raised) = self.broker.get(&id) {
-            sc.m.append(sc.ev("approval.requested", raised.event_payload())).await?;
+            who.m.append(ev("approval.requested", raised.event_payload())).await?;
         }
         let resolution = waiting.wait().await;
         let by = match &resolution {
             Resolution::TimedOut => "timeout",
             _ => "console",
         };
-        sc.m.append(sc.ev("approval.resolved", resolution.event_payload(&id, by))).await?;
+        who.m.append(ev("approval.resolved", resolution.event_payload(&id, by))).await?;
         Ok(match resolution {
             Resolution::Approved { .. } => None,
             Resolution::Denied { reason } => Some(tool_result_error(format!("The operator denied this action{}. Do not retry it; propose an alternative or ask.", if reason.is_empty() { String::new() } else { format!(": {}", reason) }))),
@@ -993,8 +1032,9 @@ mod tests {
             |_| {},
         );
         git_project(&f);
+        crate::testkit::ratify_spec(&f);
         f.engine.broker.set_mode(Mode::AcceptEdits);
-        let out = f.engine.run_task(&f.m, "builder", "Add a function b in @project/app/src/lib.rs").await.unwrap();
+        let out = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md: add a function b in @project/app/src/lib.rs").await.unwrap();
         if f.engine.exec.sandbox.is_none() {
             assert!(matches!(out.status, Status::Done | Status::Escalated(_)));
             return;
@@ -1008,7 +1048,7 @@ mod tests {
         assert!(result.contains("pub fn b()") && result.contains("exit 0") && result.contains("sandboxed, no network"), "{}", result);
         let created = events_of(&f, "worktree.created");
         assert_eq!(created.len(), 1);
-        let wt = f.root.join("wsx/worktrees").join(&out.task_id);
+        let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
         assert_eq!(fs::read_to_string(wt.join("src/new.rs")).unwrap(), "pub fn b() {}\n");
         assert_eq!(fs::read_to_string(wt.join("built.txt")).unwrap(), "compiled\n");
         assert!(!f.root.join("proj/src/new.rs").exists() && !f.root.join("proj/built.txt").exists(), "the project checkout must stay untouched");
@@ -1037,7 +1077,8 @@ mod tests {
     #[tokio::test]
     async fn a_builder_without_a_git_project_escalates_instead_of_running_anywhere_else() {
         let f = setup(vec![Step::text("unreachable")], 5.0, |_| {});
-        let out = f.engine.run_task(&f.m, "builder", "Add a function b in @project/app/src/lib.rs").await.unwrap();
+        crate::testkit::ratify_spec(&f);
+        let out = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
         match out.status {
             Status::Escalated(r) => assert!(r.contains("worktree"), "{}", r),
             other => panic!("{:?}", other),

@@ -7,6 +7,8 @@ pub mod capabilities;
 pub mod endpoints_cli;
 pub mod engine;
 pub mod exec;
+pub mod finalize;
+pub mod gates;
 pub mod handoff;
 pub mod mission;
 pub mod model;
