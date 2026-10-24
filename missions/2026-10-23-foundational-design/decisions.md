@@ -353,7 +353,7 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 6. **Known spike problems to fix first:** mouse wheel (own input parser), a first-column redraw glitch after scroll, Enter arriving inside a paste, Shift+Enter in Terminal.app (use Alt+Enter plus the kitty protocol where available). Reference terminal: Terminal.app.
 7. **Cost accepted:** ~90 MB per platform and ~45 production packages.
 
-Supersedes 005c's no-alternate-screen premise for the default console. **Status:** ✅ APPROVED 2026-10-24 by the operator.
+Supersedes 005c's no-alternate-screen premise for the default console. **Status:** ✅ APPROVED 2026-10-24 by the operator. **Built 2026-10-24:** phases 0 to 6 of `ui/PLAN.md` (specs/005d records it; [console-ink-handoff.md](console-ink-handoff.md) lists what is proven and what needs a person).
 
 ## ✅ D-27 — The MCP client is the official `rmcp` SDK, not an in-tree client
 **Context (operator, 2026-10-24):** spec 010 §1 item 6 (Council 006) chose a minimal in-tree MCP client behind an `McpTransport` trait and scheduled a spike against a library. A survey of Rust agent crates found that every agent framework (Rig, swarms-rs, ADK-Rust, AutoAgents, goose) owns the agent loop, where Delphi's governance lives, so none is adoptable; the plumbing crates are. The operator prefers existing open source wherever Delphi is not the differentiator.
