@@ -318,23 +318,23 @@ pub fn definition_hash(t: &RemoteTool) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex as StdMutex};
 
     /// A one-thread MCP server on loopback. `handler(method, params, headers) -> (status, content-type, body)`.
-    struct Server {
-        port: u16,
-        seen: Arc<StdMutex<Vec<Seen>>>,
+    pub(crate) struct Server {
+        pub(crate) port: u16,
+        pub(crate) seen: Arc<StdMutex<Vec<Seen>>>,
     }
 
-    type Seen = (String, std::collections::BTreeMap<String, String>, Value);
+    pub(crate) type Seen = (String, std::collections::BTreeMap<String, String>, Value);
 
-    type Handler = dyn Fn(&str, &Value, &std::collections::BTreeMap<String, String>) -> (u16, String, String, Vec<(String, String)>) + Send + Sync;
+    pub(crate) type Handler = dyn Fn(&str, &Value, &std::collections::BTreeMap<String, String>) -> (u16, String, String, Vec<(String, String)>) + Send + Sync;
 
-    fn server(handler: Arc<Handler>) -> Server {
+    pub(crate) fn server(handler: Arc<Handler>) -> Server {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let seen = Arc::new(StdMutex::new(Vec::new()));
@@ -378,16 +378,16 @@ mod tests {
         Server { port, seen }
     }
 
-    fn rpc(id: &Value, result: Value) -> String {
+    pub(crate) fn rpc(id: &Value, result: Value) -> String {
         json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
     }
 
-    fn standard(tools: Value) -> Arc<Handler> {
+    pub(crate) fn standard(tools: Value) -> Arc<Handler> {
         Arc::new(move |method, msg, _h| match method {
-            "initialize" => (200, "application/json".into(), rpc(&msg["id"], json!({"protocolVersion": "2025-11-25", "capabilities": {}, "serverInfo": {"name": "mock"}})), vec![("mcp-session-id".into(), "sess-1".into())]),
+            "initialize" => (200, "application/json".into(), rpc(&msg["id"], json!({"protocolVersion": "2025-11-25", "capabilities": {}, "serverInfo": {"name": "mock", "version": "0"}})), vec![("mcp-session-id".into(), "sess-1".into())]),
             "notifications/initialized" => (202, "text/plain".into(), String::new(), vec![]),
             "tools/list" => (200, "application/json".into(), rpc(&msg["id"], json!({"tools": tools})), vec![]),
-            "tools/call" => (200, "text/event-stream".into(), format!("event: message\ndata: {}\n\n", rpc(&msg["id"], json!({"content": [{"type": "text", "text": format!("called {}", msg["params"]["name"].as_str().unwrap_or(""))}, {"type": "image", "data": "xx"}], "isError": false}))), vec![]),
+            "tools/call" => (200, "text/event-stream".into(), format!("event: message\ndata: {}\n\n", rpc(&msg["id"], json!({"content": [{"type": "text", "text": format!("called {}", msg["params"]["name"].as_str().unwrap_or(""))}, {"type": "image", "data": "xx", "mimeType": "image/png"}], "isError": false}))), vec![]),
             _ => (404, "text/plain".into(), "no".into(), vec![]),
         })
     }
