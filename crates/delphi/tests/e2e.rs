@@ -297,6 +297,12 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     s.wait_for("total $");
     s.send("/budget");
     s.wait_for("ceiling $5.00");
+    // A second window attaches read-only and draws what just happened, without a console token.
+    let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "archives");
+    assert_eq!(ncode, 0, "{}\n{}", screen, nerr);
+    for want in ["DELPHI NARRATOR", "ARCHIVES & SPEND", "Athena", "opus-t", "spend $", "/ $5.00"] {
+        assert!(screen.contains(want), "missing `{}` in\n{}", want, screen);
+    }
     let (code, out) = s.finish();
     assert_eq!(code, 0, "{}", out);
     let pid = pid_in(&out);
@@ -319,6 +325,33 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
         assert!(!std::fs::read(&entry).unwrap().windows(KEY.len()).any(|w| w == KEY.as_bytes()), "{} contains the key", entry.display());
     }
     kill_daemon(pid);
+}
+
+/// Run `delphi narrator <view> --once` with a controlling terminal (the daemon only hands a Narrator token to
+/// a peer that has one) and return the screen it drew.
+fn narrator_once(home: &Path, workspace: &str, view: &str) -> (i32, String, String) {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::process::CommandExt;
+    let (mut master, mut slave) = (0, 0);
+    unsafe {
+        assert_eq!(libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()), 0);
+    }
+    let mut cmd = Command::new(DELPHI);
+    cmd.args(["narrator", view, "--once", "--workspace", workspace, "--home"]).arg(home);
+    cmd.stdin(unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(slave))) }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            libc::ioctl(0, libc::TIOCSCTTY as _, 0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    unsafe {
+        libc::close(slave);
+        libc::close(master);
+    }
+    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 fn walkdir_files(root: &Path) -> Vec<PathBuf> {

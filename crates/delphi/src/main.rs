@@ -6,6 +6,7 @@ mod doctor;
 mod frontmatter;
 mod home;
 mod lint;
+mod observer;
 mod ratify_console;
 mod report;
 mod seed;
@@ -29,6 +30,7 @@ const USAGE: &str = "usage:
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
+  delphi narrator [council|epic|forge|archives] [--once] [--workspace <name>] [--home <dir>]   (also: delphi observe)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi --version";
 
@@ -47,6 +49,7 @@ fn main() {
         Some("chat") => cmd_chat(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
+        Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
         Some("endpoints") => cmd_core("endpoints", &args[1..]),
         Some("--version") | Some("version") => {
@@ -256,6 +259,24 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
         "auth" => delphi_engine::auth_cli::run(&ws.dir, &rest),
         _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
+}
+
+fn cmd_narrator(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("narrator", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let view = match args.iter().find(|a| !a.starts_with("--") && Some(a.as_str()) != flag(args, "--workspace").as_deref() && Some(a.as_str()) != flag(args, "--home").as_deref()) {
+        Some(v) => match observer::View::parse(v) {
+            Some(v) => Some(v),
+            None => {
+                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge or archives)", v);
+                return 2;
+            }
+        },
+        None => None,
+    };
+    observer::run(&home, &ws.dir, view, theme_names(&ws), args.iter().any(|a| a == "--once"))
 }
 
 fn cmd_kb(args: &[String]) -> i32 {
