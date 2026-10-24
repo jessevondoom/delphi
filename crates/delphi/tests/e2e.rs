@@ -489,3 +489,194 @@ fn killing_the_daemon_mid_request_loses_nothing_and_the_operator_resumes_from_th
     assert!(status.contains("t_0001") && status.contains("done") && status.contains("## Last recovery") && !status.contains("\nnone\n"), "{}", status);
     kill_daemon(pid_in(&out));
 }
+
+// ── the inline console, driven through a pseudo-terminal and read back through a terminal emulator ──────
+
+fn writer_dup(fd: i32) -> std::fs::File {
+    use std::os::fd::FromRawFd;
+    unsafe { std::fs::File::from_raw_fd(libc::dup(fd)) }
+}
+
+struct PtyConsole {
+    child: Child,
+    writer: std::fs::File,
+    bytes: Arc<Mutex<Vec<u8>>>,
+    rows: u16,
+    cols: u16,
+}
+
+impl PtyConsole {
+    fn start(home: &Path, args: &[&str], rows: u16, cols: u16) -> PtyConsole {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::process::CommandExt;
+        let (mut master, mut slave) = (0, 0);
+        let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        unsafe {
+            assert_eq!(libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), &ws as *const _ as *mut _), 0);
+        }
+        let dup = |fd| unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(fd))) };
+        let mut cmd = Command::new(DELPHI);
+        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env_remove("TMUX").stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                libc::ioctl(0, libc::TIOCSCTTY as _, 0);
+                Ok(())
+            });
+        }
+        let child = cmd.spawn().unwrap();
+        unsafe { libc::close(slave) };
+        let reader = unsafe { std::fs::File::from_raw_fd(libc::dup(master)) };
+        let writer = unsafe { std::fs::File::from_raw_fd(master) };
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let b2 = bytes.clone();
+        let mut answer = writer_dup(master);
+        std::thread::spawn(move || {
+            let mut r = reader;
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = r.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let mut all = b2.lock().unwrap();
+                all.extend_from_slice(&buf[..n]);
+                // A real terminal answers "where is the cursor?"; the inline viewport asks at start-up.
+                if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                    let mut p = vt100::Parser::new(rows, cols, 0);
+                    p.process(&all);
+                    let (row, col) = p.screen().cursor_position();
+                    let _ = answer.write_all(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
+                }
+            }
+        });
+        PtyConsole { child, writer, bytes, rows, cols }
+    }
+
+    fn type_keys(&mut self, s: &str) {
+        self.writer.write_all(s.as_bytes()).unwrap();
+        self.writer.flush().unwrap();
+    }
+
+    /// What a person sees by scrolling back as far as the emulator allows (one screen of history), then the screen.
+    fn everything(&self) -> String {
+        let mut p = vt100::Parser::new(self.rows, self.cols, 5000);
+        p.process(&self.bytes.lock().unwrap());
+        let cols = self.cols;
+        p.set_scrollback(self.rows as usize);
+        let n = p.screen().scrollback();
+        let mut lines: Vec<String> = p.screen().rows(0, cols).take(n).map(|l| l.trim_end().to_string()).collect();
+        p.set_scrollback(0);
+        lines.extend(p.screen().rows(0, cols).map(|l| l.trim_end().to_string()));
+        lines.join("\n")
+    }
+
+    /// How many lines have scrolled off the top of the screen into the terminal's history (up to one screen).
+    fn lines_in_scrollback(&self) -> usize {
+        let mut p = vt100::Parser::new(self.rows, self.cols, 5000);
+        p.process(&self.bytes.lock().unwrap());
+        p.set_scrollback(self.rows as usize);
+        p.screen().scrollback()
+    }
+
+    fn visible(&self) -> String {
+        let mut p = vt100::Parser::new(self.rows, self.cols, 5000);
+        p.process(&self.bytes.lock().unwrap());
+        p.screen().contents()
+    }
+
+    fn wait_for(&self, needle: &str) {
+        let deadline = Instant::now() + Duration::from_secs(40);
+        while !self.everything().contains(needle) {
+            assert!(Instant::now() < deadline, "timed out waiting for `{}`; the terminal shows:\n{}", needle, self.everything());
+            std::thread::sleep(Duration::from_millis(60));
+        }
+    }
+
+    fn wait_exit(mut self) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(st) = self.child.try_wait().unwrap() {
+                return st.code().unwrap_or(-1);
+            }
+            assert!(Instant::now() < deadline, "the console did not exit:\n{}", self.everything());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[test]
+fn the_inline_console_pins_a_block_prints_into_scrollback_and_never_takes_over_the_screen() {
+    let m = mock(vec![reply_tool("toolu_1", "read_file", json!({"path": "@project/proj/src/lib.rs"})), reply_text("The file defines `needle`, which returns 42.\nIt takes no arguments.")]);
+    let e = setup(m.port);
+    // A short terminal, so that what is printed must scroll.
+    let mut c = PtyConsole::start(&e.home, &["chat", "--workspace", "e2e"], 24, 100);
+    c.wait_for("daemon pid");
+    let pid = {
+        let txt = c.everything();
+        let rest = txt.split("daemon pid ").nth(1).unwrap_or_else(|| panic!("no daemon pid in:\n{}", txt));
+        rest.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>().parse::<i32>().unwrap()
+    };
+    c.wait_for("/help for commands");
+    {
+        let raw = c.bytes.lock().unwrap().clone();
+        let text = String::from_utf8_lossy(&raw).to_string();
+        assert!(!text.contains("\x1b[?1049h") && !text.contains("\x1b[?47h"), "the alternate screen is never used");
+        assert_eq!(text.matches("\x1b[2J").count(), 1, "the screen is cleared exactly once, at the start");
+        assert!(text.starts_with("\x1b[2J"), "and before anything else is drawn");
+    }
+    // The pinned block: header, prompt and footer, without boxes or money.
+    let first = c.visible();
+    for want in ["all agents idle", "delphi v", "mission", "›", "0 tokens · approvals · shortcuts: ?"] {
+        assert!(first.contains(want), "missing `{}` in\n{}", want, first);
+    }
+    let block: Vec<&str> = first.lines().filter(|l| !l.trim().is_empty()).collect();
+    let block = block[block.len().saturating_sub(6)..].join("\n");
+    assert!(!block.contains('$') && block.contains("shortcuts: ?"), "no cost in the pinned block:\n{}", block);
+
+    c.type_keys("/ratify\r");
+    c.wait_for("pending proposal");
+    c.type_keys("/ratify apply 1\r");
+    c.wait_for("ratified ws:config.toml#access");
+    c.type_keys("What does @project/proj/src/lib.rs define?\r");
+    c.wait_for("It takes no arguments.");
+    c.wait_for("✓ t_0001 done");
+    // The line sent stays in the scrollback as typed, and the task's output is whole lines above the block.
+    let all = c.everything();
+    assert!(all.contains("› What does @project/proj/src/lib.rs define?") && all.contains("→ read_file(@project/proj/src/lib.rs)") && all.contains("The file defines `needle`, which returns 42."), "{}", all);
+    assert!(all.contains("delphi · mission"), "the opening lines are on screen or in the scrollback:\n{}", all);
+    // Print more than a screenful: lines scroll off the top into the terminal's own history, and the block stays put.
+    for _ in 0..3 {
+        c.type_keys("/help\r");
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while c.everything().matches("/usage [mission|role|task|model]").count() < 2 {
+        assert!(Instant::now() < deadline, "{}", c.everything());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    assert!(c.lines_in_scrollback() >= 10, "output scrolled into the terminal's scrollback ({} lines), it was not redrawn over:\n{}", c.lines_in_scrollback(), c.everything());
+    let tail = c.visible();
+    let shown: Vec<&str> = tail.lines().collect();
+    assert!(shown.last().map(|l| l.contains("shortcuts: ?")).unwrap_or(false), "the footer is still the bottom line after scrolling:\n{}", tail);
+    c.type_keys("/budget\r");
+    c.wait_for("ceiling $5.00");
+    // Typing is never dropped while the screen changes.
+    c.type_keys("abcdefghijklmnopqrstuvwxyz");
+    c.wait_for("› abcdefghijklmnopqrstuvwxyz");
+    c.type_keys("\x15/quit\r"); // Ctrl+U, then quit
+    assert_eq!(c.wait_exit(), 0);
+    kill_daemon(pid);
+}
+
+#[test]
+fn the_plain_console_is_still_there_and_gives_the_same_answers() {
+    let m = mock(vec![reply_text("unused")]);
+    let e = setup(m.port);
+    let mut s = Session::start(&e.home, &["chat", "--plain", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/budget");
+    s.wait_for("ceiling $5.00");
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    assert!(!out.contains('\x1b'), "plain output carries no escape sequences");
+    kill_daemon(pid_in(&out));
+}

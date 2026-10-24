@@ -168,15 +168,15 @@ impl Card {
 pub fn render_card(e: &Value, who: &str) -> String {
     let tier = e["tier"].as_str().unwrap_or("amber");
     let badge = if tier == "red" { "RED — never auto-approved" } else { "amber" };
-    let mut s = format!("\n┌─ approval needed [{}] · {} · {}\n", badge, who, e["tool"].as_str().unwrap_or("?"));
-    s.push_str(&format!("│ {}\n", e["summary"].as_str().unwrap_or("")));
+    let mut s = format!("\n── approval needed [{}] · {} · {}\n", badge, who, e["tool"].as_str().unwrap_or("?"));
+    s.push_str(&format!("  {}\n", e["summary"].as_str().unwrap_or("")));
     if let Some(preview) = e["payload"]["preview"].as_str() {
         for l in preview.lines().take(6) {
-            s.push_str(&format!("│   {}\n", l.chars().take(100).collect::<String>()));
+            s.push_str(&format!("    {}\n", l.chars().take(100).collect::<String>()));
         }
     }
     let similar = if tier == "red" { "" } else { " · /a allow similar this task" };
-    s.push_str(&format!("└─ /y approve once{} · /n reject · /d view all   (id {}, expires in {}s)\n", similar, e["approval_id"].as_str().unwrap_or("?"), e["timeout_secs"].as_u64().unwrap_or(0)));
+    s.push_str(&format!("  /y approve once{} · /n reject · /d view all   (id {}, expires in {}s)\n", similar, e["approval_id"].as_str().unwrap_or("?"), e["timeout_secs"].as_u64().unwrap_or(0)));
     s
 }
 
@@ -356,18 +356,35 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-struct Shared {
-    card: Mutex<Option<Card>>,
+pub(crate) struct Shared {
+    pub(crate) card: Mutex<Option<Card>>,
+    /// What the daemon has told this console, folded for the header and footer (no model text is kept).
+    pub(crate) obs: Mutex<delphi_engine::observe::ObserverState>,
     renderer: Mutex<Renderer>,
     names: HashMap<String, String>,
-    running: AtomicUsize,
-    failures: AtomicUsize,
-    closed: AtomicBool,
+    pub(crate) running: AtomicUsize,
+    pub(crate) failures: AtomicUsize,
+    pub(crate) closed: AtomicBool,
 }
 
-fn say(s: &str) {
+/// Where console output goes. Plain mode writes to stdout; the inline console installs a channel and prints
+/// the text above its pinned block.
+static SINK: Mutex<Option<std::sync::mpsc::Sender<String>>> = Mutex::new(None);
+
+pub fn set_sink(tx: Option<std::sync::mpsc::Sender<String>>) {
+    *SINK.lock().unwrap() = tx;
+}
+
+/// Everything that reaches the screen passes through here: text from models and tools is stripped of terminal
+/// control sequences first, so it can neither move the cursor nor forge the pinned block.
+pub fn say(s: &str) {
+    let clean = delphi_engine::observe::sanitize(s);
+    if let Some(tx) = SINK.lock().unwrap().as_ref() {
+        let _ = tx.send(clean);
+        return;
+    }
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(s.as_bytes());
+    let _ = out.write_all(clean.as_bytes());
     let _ = out.flush();
 }
 
@@ -388,6 +405,7 @@ fn reader(mut ev: Client, shared: Arc<Shared>) {
         match ev.next_notification() {
             Ok(n) => match n["method"].as_str() {
                 Some("delta.frame") => {
+                    shared.obs.lock().unwrap().apply_frame(&n["params"]);
                     let s = shared.renderer.lock().unwrap().frame(&n["params"]);
                     if !s.is_empty() {
                         say(&s);
@@ -407,6 +425,7 @@ fn reader(mut ev: Client, shared: Arc<Shared>) {
 }
 
 fn handle_event(shared: &Shared, e: &Value) {
+    shared.obs.lock().unwrap().apply(e);
     let kind = e["type"].as_str().unwrap_or("");
     let p = &e["payload"];
     match kind {
@@ -439,28 +458,40 @@ fn handle_event(shared: &Shared, e: &Value) {
     }
 }
 
-fn is_tty() -> bool {
+pub(crate) fn is_tty() -> bool {
     unsafe { libc::isatty(0) == 1 }
 }
 
-/// Run the console. Returns the process exit code.
-pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>) -> i32 {
+/// One attached console: the daemon connection, the mission, and the event-driven state the reader thread keeps
+/// current. Both the plain console and the inline one drive it through [`Session::handle`], so every command
+/// behaves the same in either.
+pub(crate) struct Session {
+    cmd: Client,
+    pub(crate) mission_id: String,
+    pub(crate) shared: Arc<Shared>,
+    ws_dir: PathBuf,
+    home: PathBuf,
+    last_ratify: Vec<Value>,
+}
+
+/// Start (or join) the daemon, open the mission, start the event reader, and print what the operator should see first.
+pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>) -> Result<Session, i32> {
     let Some(exe) = daemon_exe() else {
         eprintln!("delphi chat: cannot locate this program to start the daemon");
-        return 1;
+        return Err(1);
     };
     let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));
-            return 1;
+            return Err(1);
         }
     };
     let opened = match attached.client.call("mission.open", json!({"mission_id": mission})) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));
-            return 1;
+            return Err(1);
         }
     };
     let mission_id = opened["mission_id"].as_str().unwrap_or("").to_string();
@@ -469,15 +500,24 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
         Ok(c) => c,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));
-            return 1;
+            return Err(1);
         }
     };
     let _ = ev.call("events.subscribe", json!({}));
-    let shared = Arc::new(Shared { card: Mutex::new(None), renderer: Mutex::new(Renderer::new(names.clone())), names, running: AtomicUsize::new(0), failures: AtomicUsize::new(0), closed: AtomicBool::new(false) });
+    let mut cmd = attached.client;
+    // What the header and footer need: the roles, and history so a console opened mid-mission is not blank.
+    let mut obs = delphi_engine::observe::ObserverState::new(&[]);
+    if let Ok(snap) = cmd.call("observe.snapshot", json!({"mission_id": mission_id})) {
+        let roles: Vec<String> = snap["enabled_agents"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        obs = delphi_engine::observe::ObserverState::new(&roles);
+        for e in snap["events"].as_array().into_iter().flatten() {
+            obs.apply(e);
+        }
+    }
+    let shared = Arc::new(Shared { card: Mutex::new(None), obs: Mutex::new(obs), renderer: Mutex::new(Renderer::new(names.clone())), names, running: AtomicUsize::new(0), failures: AtomicUsize::new(0), closed: AtomicBool::new(false) });
     let s2 = shared.clone();
     std::thread::spawn(move || reader(ev, s2));
 
-    let mut cmd = attached.client;
     say(&format!("delphi · mission {} · budget ${:.2} · daemon pid {}{}\n/help for commands\n", mission_id, opened["budget"]["cap_usd"].as_f64().unwrap_or(0.0), attached.daemon_pid, if attached.spawned { " (started)" } else { "" }));
     if let Ok(list) = cmd.call("approval.list", json!({})) {
         for card in list.as_array().cloned().unwrap_or_default() {
@@ -485,7 +525,6 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
             say(&render_card(&card, card["role"].as_str().unwrap_or("agent")));
         }
     }
-
     if let Some(note) = recovery_note {
         say(&note);
     }
@@ -499,100 +538,94 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
             say(&format!("{} proposal(s) await your ratification: /ratify\n", pending));
         }
     }
-    let mut last_ratify: Vec<Value> = Vec::new();
-    let interactive = is_tty();
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    loop {
-        if interactive {
-            say("› ");
-        }
-        line.clear();
-        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 || shared.closed.load(Ordering::SeqCst) {
-            break;
-        }
-        match parse_input(&line) {
+    Ok(Session { cmd, mission_id, shared, ws_dir: ws_dir.to_path_buf(), home: home.to_path_buf(), last_ratify: Vec::new() })
+}
+
+impl Session {
+    /// Run one parsed input. `false` means the operator asked to quit.
+    pub(crate) fn handle(&mut self, input: Input) -> bool {
+        match input {
             Input::Empty => {}
-            Input::Quit => break,
+            Input::Quit => return false,
             Input::Help => say(&format!("{}\n", HELP)),
             Input::Unknown(m) => say(&format!("{}\n", m)),
-            Input::Mission => say(&format!("mission {}\n", mission_id)),
-            Input::Resume(tasks) => match cmd.call("recovery.resume", json!({"mission_id": mission_id, "tasks": if tasks.is_empty() { Value::Null } else { json!(tasks) }})) {
+            Input::Mission => say(&format!("mission {}\n", self.mission_id)),
+            Input::Resume(tasks) => match self.cmd.call("recovery.resume", json!({"mission_id": self.mission_id, "tasks": if tasks.is_empty() { Value::Null } else { json!(tasks) }})) {
                 Ok(v) => {
                     let n = v["resumed"].as_array().map(|a| a.len()).unwrap_or(0);
-                    shared.running.fetch_add(n, Ordering::SeqCst);
+                    self.shared.running.fetch_add(n, Ordering::SeqCst);
                     say(&if n == 0 { "nothing to resume\n".to_string() } else { format!("resuming {} task(s)…\n", n) });
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Pause => match cmd.call("recovery.pause", json!({})) {
+            Input::Pause => match self.cmd.call("recovery.pause", json!({})) {
                 Ok(_) => say("left as they are; they will be offered again after the next restart\n"),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Usage(group) => match cmd.call("usage.get", json!({"mission_id": mission_id, "group": group.unwrap_or_else(|| "role".into())})) {
+            Input::Usage(group) => match self.cmd.call("usage.get", json!({"mission_id": self.mission_id, "group": group.unwrap_or_else(|| "role".into())})) {
                 Ok(v) => say(&format!("{}\n", render_usage(&v))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Budget(None) => match cmd.call("budget.get", json!({"mission_id": mission_id})) {
+            Input::Budget(None) => match self.cmd.call("budget.get", json!({"mission_id": self.mission_id})) {
                 Ok(b) => say(&format!("ceiling ${:.2} · spent ${:.4} · reserved ${:.4} · available ${:.4}\n", b["cap_usd"].as_f64().unwrap_or(0.0), b["spent_usd"].as_f64().unwrap_or(0.0), b["reserved_usd"].as_f64().unwrap_or(0.0), b["available_usd"].as_f64().unwrap_or(0.0))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Budget(Some(usd)) => match cmd.call("budget.set", json!({"mission_id": mission_id, "usd": usd})) {
+            Input::Budget(Some(usd)) => match self.cmd.call("budget.set", json!({"mission_id": self.mission_id, "usd": usd})) {
                 Ok(b) => say(&format!("ceiling is now ${:.2}\n", b["cap_usd"].as_f64().unwrap_or(0.0))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Permissions(None) => match cmd.call("permissions.get", json!({})) {
+            Input::Permissions(None) => match self.cmd.call("permissions.get", json!({})) {
                 Ok(v) => {
                     let sim: Vec<String> = v["allow_similar"].as_array().cloned().unwrap_or_default().iter().map(|s| format!("{} ({})", s["pattern"].as_str().unwrap_or(""), s["task_id"].as_str().unwrap_or(""))).collect();
                     say(&format!("mode: {} · allowed similar this task: {}\n", v["mode"].as_str().unwrap_or("?"), if sim.is_empty() { "none".to_string() } else { sim.join(", ") }));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Permissions(Some(mode)) => match cmd.call("permissions.set", json!({"mode": mode})) {
+            Input::Permissions(Some(mode)) => match self.cmd.call("permissions.set", json!({"mode": mode})) {
                 Ok(v) => say(&format!("mode is now {}\n", v["mode"].as_str().unwrap_or("?"))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Ratify(args) => say(&crate::ratify_console::handle(&mut cmd, &args, &mut last_ratify)),
+            Input::Ratify(args) => say(&crate::ratify_console::handle(&mut self.cmd, &args, &mut self.last_ratify)),
             Input::Answer(d) => {
-                let card = shared.card.lock().unwrap().clone();
+                let card = self.shared.card.lock().unwrap().clone();
                 let Some(card) = card else {
                     say("no approval is waiting\n");
-                    continue;
+                    return true;
                 };
                 if d == Decision::View {
                     say(&format!("{}\n", serde_json::to_string_pretty(&card.payload).unwrap_or_default()));
-                    continue;
+                    return true;
                 }
                 if d == Decision::AllowSimilar && card.tier == "red" {
                     say("`allow similar` never applies to a Red action; use /y to approve this once or /n\n");
-                    continue;
+                    return true;
                 }
                 if let Err(m) = card.may_answer(Instant::now()) {
                     say(&format!("{}\n", m));
-                    continue;
+                    return true;
                 }
                 let decision = match d {
                     Decision::Allow => "allow",
                     Decision::AllowSimilar => "allow_similar",
                     _ => "deny",
                 };
-                if let Err(e) = cmd.call("approval.resolve", json!({"approval_id": card.approval_id, "payload_blake3": card.payload_blake3, "decision": decision})) {
+                if let Err(e) = self.cmd.call("approval.resolve", json!({"approval_id": card.approval_id, "payload_blake3": card.payload_blake3, "decision": decision})) {
                     say(&format!("{}\n", rpc_error(&e)));
                 }
             }
-            Input::Build(text) => match cmd.call("build.start", json!({"mission_id": mission_id, "prompt": text})) {
+            Input::Build(text) => match self.cmd.call("build.start", json!({"mission_id": self.mission_id, "prompt": text})) {
                 Ok(v) => {
-                    shared.running.fetch_add(1, Ordering::SeqCst);
+                    self.shared.running.fetch_add(1, Ordering::SeqCst);
                     say(&format!("({} build started; you will be asked before anything is merged)\n", v["task_id"].as_str().unwrap_or("task")));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
             Input::Narrator(view) => {
-                let ws = ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let ws = self.ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let exe = daemon_exe().map(|p| p.display().to_string()).unwrap_or_else(|| "delphi".into());
                 let tile = view.as_deref() == Some("tile");
                 let views: Vec<String> = if tile { ["council", "epic", "forge", "agents"].iter().map(|s| s.to_string()).collect() } else { vec![view.unwrap_or_default()] };
-                let lines: Vec<String> = views.iter().map(|v| format!("{} observe {} --workspace {} --home {}", exe, v, ws, home.display())).collect();
+                let lines: Vec<String> = views.iter().map(|v| format!("{} observe {} --workspace {} --home {}", exe, v, ws, self.home.display())).collect();
                 if std::env::var_os("TMUX").is_some() {
                     // One window per view, laid out by tmux: Delphi never tiles inside a window.
                     let opened = lines.iter().enumerate().all(|(i, l)| std::process::Command::new("tmux").args(["split-window", if i % 2 == 0 { "-h" } else { "-v" }, l]).status().map(|s| s.success()).unwrap_or(false));
@@ -606,40 +639,72 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
                     say(&format!("Run {} in another terminal (it only watches):\n  {}\n", if tile { "each of these" } else { "this" }, lines.join("\n  ")));
                 }
             }
-            Input::Council { proposition, seats, author } => match cmd.call("council.start", json!({"mission_id": mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
+            Input::Council { proposition, seats, author } => match self.cmd.call("council.start", json!({"mission_id": self.mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
                 Ok(v) => {
-                    shared.running.fetch_add(1, Ordering::SeqCst);
+                    self.shared.running.fetch_add(1, Ordering::SeqCst);
                     say(&format!("({} council convened; the seats answer blind, then critique each other)\n", v["task_id"].as_str().unwrap_or("task")));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Prompt { target, text } => match cmd.call("task.submit", submit_params(&mission_id, target.as_deref(), &text)) {
+            Input::Prompt { target, text } => match self.cmd.call("task.submit", submit_params(&self.mission_id, target.as_deref(), &text)) {
                 Ok(v) => {
-                    shared.running.fetch_add(1, Ordering::SeqCst);
+                    self.shared.running.fetch_add(1, Ordering::SeqCst);
                     say(&format!("({} started)\n", v["task_id"].as_str().unwrap_or("task")));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
         }
+        true
     }
 
-    // Input ended: nobody can answer a waiting card any more, so deny it, then let running tasks finish.
-    if !interactive {
+    /// The approval mode, for the footer.
+    pub(crate) fn permission_mode(&mut self) -> String {
+        self.cmd.call("permissions.get", json!({})).ok().and_then(|v| v["mode"].as_str().map(String::from)).unwrap_or_else(|| "default".into())
+    }
+
+    /// Input has ended and nobody can answer a waiting card any more: deny it, then let running tasks finish.
+    pub(crate) fn drain(&mut self) {
         loop {
-            let card = shared.card.lock().unwrap().clone();
+            let card = self.shared.card.lock().unwrap().clone();
             if let Some(c) = card {
                 say("(input closed; denying the waiting approval)\n");
-                let _ = cmd.call("approval.resolve", json!({"approval_id": c.approval_id, "payload_blake3": c.payload_blake3, "decision": "deny", "reason": "input closed"}));
+                let _ = self.cmd.call("approval.resolve", json!({"approval_id": c.approval_id, "payload_blake3": c.payload_blake3, "decision": "deny", "reason": "input closed"}));
                 std::thread::sleep(Duration::from_millis(50));
             }
-            if shared.running.load(Ordering::SeqCst) == 0 || shared.closed.load(Ordering::SeqCst) {
+            if self.shared.running.load(Ordering::SeqCst) == 0 || self.shared.closed.load(Ordering::SeqCst) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+/// Run the plain, line-based console. Returns the process exit code.
+pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>) -> i32 {
+    let mut session = match connect(home, ws_dir, mission, names) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let interactive = is_tty();
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        if interactive {
+            say("› ");
+        }
+        line.clear();
+        if stdin.lock().read_line(&mut line).unwrap_or(0) == 0 || session.shared.closed.load(Ordering::SeqCst) {
+            break;
+        }
+        if !session.handle(parse_input(&line)) {
+            break;
+        }
+    }
+    if !interactive {
+        session.drain();
+    }
     say("\n");
-    if shared.failures.load(Ordering::SeqCst) > 0 {
+    if session.shared.failures.load(Ordering::SeqCst) > 0 {
         1
     } else {
         0
@@ -768,7 +833,7 @@ mod tests {
     fn cards_show_the_action_a_preview_and_the_available_answers() {
         let amber = json!({"approval_id": "ap_0001", "tier": "amber", "tool": "write_file", "summary": "write specs/009-x.md (12 bytes)", "payload": {"preview": "# New\nbody"}, "timeout_secs": 600});
         let s = render_card(&amber, "Daedalus");
-        assert!(s.contains("Daedalus") && s.contains("write specs/009-x.md") && s.contains("│   # New") && s.contains("/a allow similar") && s.contains("ap_0001"), "{}", s);
+        assert!(s.contains("Daedalus") && s.contains("write specs/009-x.md") && s.contains("    # New") && s.contains("/a allow similar") && s.contains("ap_0001"), "{}", s);
         let red = render_card(&json!({"approval_id": "ap_2", "tier": "red", "tool": "dispatch_agent", "summary": "dispatch", "payload": {}, "timeout_secs": 60}), "Athena");
         assert!(red.contains("RED — never auto-approved") && !red.contains("allow similar"), "{}", red);
     }
