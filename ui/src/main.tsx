@@ -6,11 +6,26 @@ import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
 import { fold, initial, replay } from './fold.ts';
-import type { Info } from './theme.ts';
+import { envTheme, type Info } from './theme.ts';
 
 declare const BUILD_VERSION: string | undefined; // set by the release build (bun --define); absent when run from source
 const VERSION = typeof BUILD_VERSION === 'string' ? BUILD_VERSION : 'dev';
 if (process.argv.includes('--version')) { console.log(`delphi-ui ${VERSION}`); process.exit(0); }
+
+/**
+ * Light or dark: `DELPHI_THEME` if set; else what the terminal answers to the background query; else `COLORFGBG`;
+ * else dark. Call after `term.start()`, which sends the query.
+ */
+async function detectDark(term: Term): Promise<{ dark: boolean; forced: boolean }> {
+  const env = envTheme();
+  if (env?.forced) return { dark: env.dark, forced: true };
+  let dark = env?.dark ?? true;
+  await new Promise<void>((done) => {
+    const t = setTimeout(done, 250);
+    term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
+  });
+  return { dark, forced: false };
+}
 
 function readInfo(): Info {
   const a = process.argv.indexOf('--info');
@@ -45,13 +60,9 @@ if (observeAt >= 0) {
     process.exit(1);
   }
   const term = new Term();
-  let dark = true;
   term.start();
-  await new Promise<void>((done) => {
-    const t = setTimeout(done, 250);
-    term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
-  });
-  const app = render(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} view={view} />, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
+  const { dark, forced } = await detectDark(term);
+  const app = render(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} />, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
   await app.waitUntilExit();
   term.stop();
   cmd.close(); ev.close();
@@ -78,14 +89,10 @@ try {
 }
 
 const term = new Term();
-let dark = true;
 term.once('ev', () => {}); // keep the emitter alive until the app subscribes
 term.start();
-await new Promise<void>((done) => {
-  const t = setTimeout(done, 250);
-  term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
-});
-const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} />, {
+const { dark, forced } = await detectDark(term);
+const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} themeForced={forced} history={history} />, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });
