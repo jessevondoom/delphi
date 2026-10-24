@@ -632,7 +632,8 @@ fn the_inline_console_pins_a_block_prints_into_scrollback_and_never_takes_over_t
         assert_eq!(text.matches("\x1b[2J").count(), 1, "the screen is cleared exactly once, at the start");
         assert!(text.starts_with("\x1b[2J"), "and before anything else is drawn");
     }
-    // The pinned block: header, prompt and footer, without boxes or money.
+    // The pinned block: header, prompt and footer, without boxes or money. It is drawn just after the first text.
+    c.wait_for("shortcuts: ?");
     let first = c.visible();
     for want in ["all agents idle", "delphi v", "mission", "›", "0 tokens · approvals · shortcuts: ?"] {
         assert!(first.contains(want), "missing `{}` in\n{}", want, first);
