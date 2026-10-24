@@ -3,7 +3,8 @@ id: spec-005d-full-screen-console
 title: "005d: The Full-Screen Console (an Ink client of the daemon)"
 author: architect
 timestamp: 2026-10-24T18:00:00Z
-status: draft
+status: approved
+approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, ui, tui, console, ink, d-28]
 
 # Spec 005d: The Full-Screen Console
 
-**Status.** Draft, recording what was built under **D-28** (the operator committed to Ink for the full-screen console and the Observer on 2026-10-24). It becomes approved through `/ratify` like any spec. It implements [`005b`](005b-deck-navigation-and-visual-interface.md) and supersedes the premise of [`005c`](005c-inline-console.md) that the console must not own the screen; 005c's inline console stays as a fallback.
+**Status.** Approved by the operator on 2026-10-24. It records what was built under **D-28** (the operator committed to Ink for the full-screen console and the Observer the same day). It implements [`005b`](005b-deck-navigation-and-visual-interface.md) and supersedes the premise of [`005c`](005c-inline-console.md) that the console must not own the screen; 005c's inline console stays as a fallback.
 
 ## 1. Why this shape
 
