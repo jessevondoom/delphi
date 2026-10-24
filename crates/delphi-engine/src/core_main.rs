@@ -21,6 +21,8 @@ fn die(msg: &str) -> ! {
 
 /// Run as the per-workspace daemon, or as one of its maintenance subcommands. `args` excludes the program name.
 pub fn run(args: Vec<String>) -> ! {
+    // Before any credential is read: no core dump, no memory read by another process of this user.
+    delphi_sandbox::harden_self().unwrap_or_else(|e| die(&format!("process hardening: {}", e)));
     if args.first().map(String::as_str) == Some("auth") {
         let workspace = PathBuf::from(arg(&args, "--workspace").unwrap_or_else(|| die("--workspace is required")));
         std::process::exit(crate::auth_cli::run(&workspace, &args[1..]));

@@ -229,6 +229,30 @@ fn harden_process(cmd: &mut Command, limits: Limits) {
     }
 }
 
+/// Hardening for the daemon itself, which holds access tokens and keys in memory (the programs it starts are
+/// covered by [`harden_process`]): no core file, and no way for another process of the same user to read its
+/// memory. On Linux that is `PR_SET_DUMPABLE=0` (blocks `ptrace` attach and `/proc/<pid>/mem`); on macOS it is
+/// `PT_DENY_ATTACH`, in release builds only so a debugger still works in development. The same steps as
+/// codex-rs `process-hardening` (Apache-2.0), written here from its description.
+pub fn harden_self() -> io::Result<()> {
+    // SAFETY: plain syscalls on this process with valid arguments.
+    unsafe {
+        let none = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        if libc::setrlimit(libc::RLIMIT_CORE, &none) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        #[cfg(target_os = "linux")]
+        if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        #[cfg(all(target_os = "macos", not(debug_assertions)))]
+        if libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// A program run directly, **without** the OS sandbox, but with the same process hardening (own process
 /// group, limits, no inherited descriptors) and an explicit environment. Used when the operator has not
 /// enabled the sandbox; what stands between the program and the machine is then the approval card.
@@ -430,6 +454,19 @@ mod tests {
         let out = sh(&sb, &spec(&f), &format!("cat <&{} 2>&1", fd));
         assert!(!String::from_utf8_lossy(&out.stdout).contains("hidden"), "an inherited descriptor leaked into the sandbox: {:?}", out);
         drop(secret);
+    }
+
+    #[test]
+    fn the_daemon_hardens_itself_so_a_core_file_cannot_be_written() {
+        use std::os::unix::process::CommandExt;
+        // Done in a child, so the test runner's own limits and dumpable flag are left alone.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "ulimit -c"]);
+        unsafe {
+            cmd.pre_exec(harden_self);
+        }
+        let out = cmd.output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0", "{:?}", out);
     }
 
 

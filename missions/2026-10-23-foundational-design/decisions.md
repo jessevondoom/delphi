@@ -351,3 +351,16 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 7. **Cost accepted:** ~90 MB per platform and ~45 production packages.
 
 Supersedes 005c's no-alternate-screen premise for the default console. **Status:** ✅ APPROVED 2026-10-24 by the operator.
+
+## ✅ D-27 — The MCP client is the official `rmcp` SDK, not an in-tree client
+**Context (operator, 2026-10-24):** spec 010 §1 item 6 (Council 006) chose a minimal in-tree MCP client behind an `McpTransport` trait and scheduled a spike against a library. A survey of Rust agent crates found that every agent framework (Rig, swarms-rs, ADK-Rust, AutoAgents, goose) owns the agent loop, where Delphi's governance lives, so none is adoptable; the plumbing crates are. The operator prefers existing open source wherever Delphi is not the differentiator.
+- **A. Adopt `rmcp` (the official SDK) behind a small `McpSession` trait; Delphi keeps the host list, redirect policy, error mapping and all policy code** (recommended)
+- **B. Keep the in-tree client** (the previous decision)
+
+**Decision (operator, 2026-10-24): A**, and the operator accepts the lack of a size cap on a plain JSON response (only the 60 s request timeout bounds it).
+1. `delphi-adapter::mcp_rmcp::RmcpClient` replaces `McpClient`/`HttpTransport`/`McpTransport`; `ConnectorHost` takes a `SessionFactory` that returns a connected `McpSession`. The scripted test server became a scripted session, so the engine tests did not change.
+2. Same contract cases pass against it: happy path over JSON and SSE, typed errors with no token in them, an old protocol refused, a host outside the list refused including through a redirect, and tool listing capped at 10 pages. It also initialized, listed tools and called a tool on two real public servers (DeepWiki, Cloudflare docs).
+3. **Accepted differences:** no cap on a plain JSON response; `Retry-After` dropped; strict parsing (a server without `serverInfo.version`, or an image block without `mimeType`, fails the call). **Open:** the Slack, Google Drive, Calendar, Gmail and Zoom servers have not been run through the `live_server_smoke` test (it needs their credentials); do that before ratifying each connector.
+4. **Follow-ups, not done:** report or fix upstream the JSON body cap and `Retry-After`; `cargo audit`/`cargo deny` in CI (rmcp adds about a dozen crates); consider a seccomp filter blocking `io_uring` in the Linux sandbox (from codex-rs); ACP stays parked until `gemini --acp` can sign in (spec 009 §7).
+
+**Status:** ✅ APPROVED 2026-10-24 by the operator (amendment 010-A1, spec 010 §1 item 6).
