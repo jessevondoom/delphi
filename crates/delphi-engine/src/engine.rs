@@ -16,6 +16,7 @@ use crate::exec;
 use crate::handoff::{pointers_from_prompt, ContextPointer, HandoffEnvelope};
 use crate::mission::{LiveRedactor, EngineError, MissionState, SecretRegistry};
 use crate::model::{ModelClient, ModelError};
+use crate::pool::Pool;
 use crate::probe::ProjectProbe;
 use crate::recovery::{self, Call, NodeStatus, Recovered};
 use crate::tools::{self, ToolCtx};
@@ -159,6 +160,10 @@ pub struct Engine {
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
     /// The connector host (`specs/010`): MCP sessions, pins, the payload store.
     pub connectors: Arc<crate::connectors::ConnectorHost>,
+    /// Which `(endpoint, model)` pairs are usable now (`specs/002` §4.1). Outcomes are recorded here; routing reads it from M3.
+    pub pool: Arc<Pool>,
+    /// Unix seconds. Real time in production; tests may fix it.
+    pub clock_unix: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -301,9 +306,38 @@ impl Engine {
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
+        self.reprobe_due(m).await?;
         let outcome = self.run_span(m, &task_id, handoff, None, 0).await;
         self.broker.end_task(&task_id);
         self.finish_task(m, task_id, outcome?).await
+    }
+
+    /// Re-probe exhausted pairs whose next probe is due (`specs/002` §4.1): a capped one-word call for an
+    /// API endpoint, the CLI's own probe for a harness. A pair with a known reset time is never probed;
+    /// it comes back when the time passes. Runs when a task starts, so an idle daemon spends nothing.
+    pub(crate) async fn reprobe_due(&self, m: &Arc<MissionState>) -> Result<(), EngineError> {
+        let due = self.pool.due_probes();
+        if due.is_empty() {
+            return Ok(());
+        }
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        for (endpoint_id, model_id) in due {
+            let Some(ep) = cfg.endpoint(&endpoint_id).filter(|e| cfg.is_allowed(&e.id)) else { continue };
+            let alive = if ep.path == delphi_adapter::config::AccessPath::Harness {
+                let program = if ep.harness.as_deref() == Some("agy") { &self.settings.agy_program } else { &self.settings.harness_program };
+                crate::capabilities::probe_harness(&cfg, ep, program, now).await.auth == "ok"
+            } else {
+                crate::capabilities::probe_alive(&*self.model, &cfg, ep, &model_id).await.is_ok()
+            };
+            if alive {
+                self.pool.record_success(&endpoint_id, &model_id);
+                m.append(EventEnvelope::new(&m.id, "model.recovered", json!({"endpoint_id": endpoint_id, "model_id": model_id, "by": "probe"}))).await?;
+            } else {
+                self.pool.probe_failed(&endpoint_id, &model_id);
+            }
+        }
+        Ok(())
     }
 
     /// Record a task's final output and completion.
@@ -512,6 +546,37 @@ impl Engine {
         })
     }
 
+    /// The operator stopped a task (`task.cancel`): close what it left open, then record the end. The in-flight
+    /// model call is charged its full reservation (its real usage can't be known), approvals waiting on the task
+    /// are closed, and `task.cancelled` ends it so recovery never offers it again.
+    pub async fn cancel_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<(), EngineError> {
+        let events = m.replay()?;
+        let open = m.budget.lock().unwrap().open_reservations();
+        let mut batch = Vec::new();
+        for (rid, amount) in open {
+            let Some(res) = events.iter().find(|e| e.kind == "budget.reserve" && e.payload["reservation_id"] == rid.as_str() && e.task_id.as_deref() == Some(task_id)) else { continue };
+            let usage = delphi_core::usage::UsagePayload {
+                provider: res.endpoint_id.as_deref().and_then(|id| self.cfg.get().endpoint(id).map(delphi_adapter::provider_for)).unwrap_or(PROVIDER).into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+                cost_usd: amount as f64 / 1e6, reserved_usd: amount as f64 / 1e6, usage_source: "estimated".into(), cost_model: "metered".into(), outcome: "cancelled".into(), reservation_id: Some(rid.clone()),
+            };
+            let mut u = EventEnvelope::new(&m.id, "agent.usage", usage.to_value());
+            (u.task_id, u.span_id, u.agent, u.endpoint_id, u.access_path, u.model_tier, u.model_id, u.attempt, u.mode) =
+                (res.task_id.clone(), res.span_id.clone(), res.agent.clone(), res.endpoint_id.clone(), res.access_path.clone(), res.model_tier.clone(), res.model_id.clone(), res.attempt, res.mode.clone());
+            batch.push(u);
+        }
+        // Approvals still waiting for this task will never be acted on.
+        let before = recovery::rebuild_with(&events, &|h| self.connectors.read_payload(h));
+        for id in before.open_approvals.iter().filter(|id| events.iter().any(|e| e.kind == "approval.requested" && e.payload["approval_id"] == id.as_str() && e.task_id.as_deref() == Some(task_id))) {
+            batch.push(EventEnvelope::new(&m.id, "approval.resolved", json!({"approval_id": id, "resolution": "expired", "by": "operator", "reason": "the task was cancelled"})));
+        }
+        self.broker.end_task(task_id);
+        let mut c = EventEnvelope::new(&m.id, "task.cancelled", json!({"reason": "the operator stopped it"}));
+        c.task_id = Some(task_id.to_string());
+        batch.push(c);
+        m.append_batch(batch).await?;
+        Ok(())
+    }
+
     // ── recovery (`specs/005` §2.5) ─────────────────────────────────────────
 
     /// After a restart: charge the calls that died with the daemon their full reservation, close approval
@@ -608,6 +673,7 @@ impl Engine {
         if interruptions >= self.settings.max_interruptions {
             return Ok(Err(Escalate(format!("the same turn was interrupted {} times in a row", interruptions))));
         }
+        let mut exhausted_note: Option<String> = None;
         'endpoints: for ep in &endpoints {
             loop {
                 let Some(model_id) = cfg.resolve_model(ep, &sc.tier) else { continue 'endpoints };
@@ -674,12 +740,27 @@ impl Engine {
                         batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len(), "provider": delphi_adapter::provider_for(ep)}), ep, &model_id));
                         batch.push(sc.agent_ev("agent.usage", payload.to_value(), ep, &model_id));
                         m.append_batch(batch).await?;
+                        if self.pool.record_success(&ep.id, &model_id) {
+                            m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": model_id}))).await?;
+                        }
                         return Ok(Ok((done, ep.clone(), model_id)));
                     }
                     Err(ModelError::Throttled(msg)) => {
                         m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "throttled"}), ep, &model_id)).await?;
                         m.append(sc.ev("endpoint.throttled", json!({"endpoint_id": ep.id, "message": self.secrets.redact(&msg)}))).await?;
+                        // Rule 3 (`specs/002` §4.1): throttled over and over for ten minutes is a spent quota, not a rate limit.
+                        if let Some(x) = self.pool.record_throttle(&ep.id, &model_id, None) {
+                            m.append(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": model_id, "reason": x.reason, "reset_at": x.reset_at, "raw": ""}))).await?;
+                        }
                         continue 'endpoints; // the next allowed endpoint, in ratified order
+                    }
+                    Err(ModelError::Exhausted(x)) => {
+                        // Out of quota, not slow: no retry here (`specs/002` §4.1). Say why and when it returns, then try the next endpoint.
+                        m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "quota exhausted"}), ep, &model_id)).await?;
+                        m.append(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": model_id, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)}))).await?;
+                        self.pool.record_exhausted(&ep.id, &model_id, &x);
+                        exhausted_note.get_or_insert_with(|| format!("{} is out of quota ({})", ep.id, self.secrets.redact(&x.to_string())));
+                        continue 'endpoints;
                     }
                     Err(ModelError::Interrupted(msg)) => {
                         // The usage of an interrupted call is unknowable: charge the full reservation.
@@ -704,7 +785,8 @@ impl Engine {
                 }
             }
         }
-        Ok(Err(Escalate(format!("{}; waiting would not help right now", EXHAUSTED))))
+        let why = exhausted_note.map(|n| format!(": {}", n)).unwrap_or_default();
+        Ok(Err(Escalate(format!("{}{}; waiting would not help right now", EXHAUSTED, why))))
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
@@ -1325,6 +1407,77 @@ mod tests {
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_model_is_recorded_with_its_reset_and_the_next_endpoint_takes_over() {
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let seen: Vec<String> = f.model.requests().iter().map(|r| r.endpoint_id.clone()).collect();
+        assert_eq!(seen, vec!["direct", "backup"]);
+        let k = kinds(&f);
+        assert!(k.contains(&"model.exhausted".to_string()) && !k.contains(&"endpoint.throttled".to_string()), "exhaustion is not reported as a throttle");
+        assert_eq!(k.iter().filter(|x| *x == "budget.release").count(), 1, "the first reservation is released, not charged");
+        let ex = &events_of(&f, "model.exhausted")[0].payload;
+        assert_eq!((ex["endpoint_id"].as_str(), ex["reason"].as_str()), (Some("direct"), Some("quota reached")));
+        assert!(ex["reset_at"].as_i64().unwrap() > 0 && ex["raw"].as_str().unwrap().contains("quota reached"));
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+        // Every endpoint out of quota: the task escalates and says which and why.
+        let g = setup(vec![Step::Exhaust, Step::Exhaust], 5.0, |_| {});
+        let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("direct is out of quota") && r.contains("resets at")), "{:?}", out.status);
+        assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
+    }
+
+    #[tokio::test]
+    async fn outcomes_are_recorded_in_the_pool_per_endpoint_and_model() {
+        use crate::pool::State;
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+        let pool = f.engine.pool.snapshot();
+        assert_eq!(pool.len(), 1, "only the failed pair is recorded: {:?}", pool);
+        assert_eq!((pool[0].endpoint_id.as_str(), pool[0].state), ("direct", State::Exhausted));
+        assert!(pool[0].until.is_some(), "the scripted exhaustion carries a reset time");
+        assert_eq!(f.engine.pool.state("backup", &pool[0].model_id), State::Available, "the same model on another endpoint is untouched");
+        assert!(f.engine.ws.dir.join("local/pool-state.json").exists(), "state is mirrored to the workspace");
+    }
+
+    #[tokio::test]
+    async fn throttling_task_after_task_for_ten_minutes_becomes_exhaustion() {
+        use crate::pool::State;
+        let f = setup(vec![Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle, Step::Throttle], 5.0, |_| {});
+        for gap in [0, 300, 360] {
+            f.advance(gap);
+            let out = f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+            assert!(matches!(out.status, Status::Escalated(_)), "both endpoints throttle every time");
+        }
+        let ex = events_of(&f, "model.exhausted");
+        assert_eq!(ex.len(), 2, "direct and backup each tip over on the third throttle, 11 minutes after the first: {:?}", ex.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert!(ex[0].payload["reason"].as_str().unwrap().contains("3 times in a row over 11 minutes"));
+        assert!(ex[0].payload["reset_at"].is_null());
+        let snap = f.engine.pool.snapshot();
+        assert!(snap.iter().all(|e| e.state == State::Exhausted && e.next_probe_at.is_some()), "{:?}", snap);
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_pair_with_no_known_reset_is_probed_when_due_and_recovers() {
+        use crate::pool::State;
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "hi").await.unwrap();
+        let key = f.engine.pool.snapshot().remove(0);
+        // Forget the reset time so only a probe can bring it back.
+        f.engine.pool.record_exhausted(&key.endpoint_id, &key.model_id, &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: None, raw: String::new() });
+        let before = f.model.requests().len();
+        f.model.respond_with(|_| Step::text("OK"));
+        assert!(f.engine.pool.due_probes().is_empty(), "not due for 15 minutes");
+        f.advance(901);
+        f.engine.run_task(&f.m, "orchestrator", "again").await.unwrap();
+        let reqs = f.model.requests();
+        let probe = &reqs[before];
+        assert_eq!((probe.endpoint_id.as_str(), probe.body["max_tokens"].as_u64()), (key.endpoint_id.as_str(), Some(64)), "a capped one-word probe of the exhausted pair first");
+        assert_eq!(f.engine.pool.state(&key.endpoint_id, &key.model_id), State::Available);
+        assert_eq!(events_of(&f, "model.recovered").len(), 1);
     }
 
     #[tokio::test]

@@ -507,6 +507,10 @@ struct PtyConsole {
 
 impl PtyConsole {
     fn start(home: &Path, args: &[&str], rows: u16, cols: u16) -> PtyConsole {
+        PtyConsole::start_env(home, args, rows, cols, &[])
+    }
+
+    fn start_env(home: &Path, args: &[&str], rows: u16, cols: u16, envs: &[(&str, &str)]) -> PtyConsole {
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
         let (mut master, mut slave) = (0, 0);
@@ -516,7 +520,7 @@ impl PtyConsole {
         }
         let dup = |fd| unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(fd))) };
         let mut cmd = Command::new(DELPHI);
-        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env_remove("TMUX").stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
+        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env_remove("TMUX").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
@@ -587,7 +591,11 @@ impl PtyConsole {
     fn wait_for(&self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(40);
         while !self.everything().contains(needle) {
-            assert!(Instant::now() < deadline, "timed out waiting for `{}`; the terminal shows:\n{}", needle, self.everything());
+            assert!(Instant::now() < deadline, "timed out waiting for `{}`; the terminal shows:\n{}\nraw output (escaped, last 1500 bytes):\n{}", needle, self.everything(), {
+                let raw = self.bytes.lock().unwrap();
+                let tail = &raw[raw.len().saturating_sub(1500)..];
+                String::from_utf8_lossy(tail).escape_debug().to_string()
+            });
             std::thread::sleep(Duration::from_millis(60));
         }
     }
@@ -624,7 +632,8 @@ fn the_inline_console_pins_a_block_prints_into_scrollback_and_never_takes_over_t
         assert_eq!(text.matches("\x1b[2J").count(), 1, "the screen is cleared exactly once, at the start");
         assert!(text.starts_with("\x1b[2J"), "and before anything else is drawn");
     }
-    // The pinned block: header, prompt and footer, without boxes or money.
+    // The pinned block: header, prompt and footer, without boxes or money. It is drawn just after the first text.
+    c.wait_for("shortcuts: ?");
     let first = c.visible();
     for want in ["all agents idle", "delphi v", "mission", "›", "0 tokens · approvals · shortcuts: ?"] {
         assert!(first.contains(want), "missing `{}` in\n{}", want, first);
@@ -716,11 +725,118 @@ fn a_long_reply_is_cut_to_a_screenful_saved_whole_and_available_with_more() {
     c.wait_for("line 60 of the long answer");
     // Everything the console wrote, not the two screens `everything()` can show: whether line 25 is still within
     // them depends on how much more output (the redrawn block) has arrived, which is a race.
-    let raw = String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
-    assert!(raw.contains("line 25 of the long answer"), "/more printed lines 25 to 60");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut raw = String::new();
+    while Instant::now() < deadline {
+        raw = String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
+        if raw.contains("line 25 of the long answer") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(raw.contains("line 25 of the long answer"), "/more printed lines 25 to 60:\n{}", raw.escape_debug());
     c.type_keys("/more\r");
     c.wait_for("nothing more");
     c.type_keys("/quit\r");
     assert_eq!(c.wait_exit(), 0);
     kill_daemon(pid);
+}
+
+/// The full-screen console is a separate program (`ui/`, D-28). This drives it against the real daemon through the
+/// real `delphi chat` launcher; it runs only where `npm ci` has been done, and is skipped otherwise.
+#[test]
+fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_history() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_text("Hello **from** the daemon.\n\n- one\n- two")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("all agents idle");
+    c.wait_for("shortcuts: ?");
+    c.type_keys("/ratify");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("pending proposal");
+    c.type_keys("/ratify apply 1");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("ratified ws:config.toml#access");
+    c.type_keys("Tell me something");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Hello from the daemon.");
+    let screen = c.visible();
+    assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
+    assert!(screen.lines().next().unwrap().contains("navigate: shift+arrows"), "header: {}", screen);
+    assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+
+    // Reopen: the conversation is replayed from the mission's events.
+    let c2 = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c2.wait_for("Hello from the daemon.");
+    assert!(c2.visible().contains("❯ Tell me something"), "{}", c2.visible());
+    drop(c2);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothing_runs() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Drafted.")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("@architect Draft a spec called 009-e2e");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("decision needed");
+    c.wait_for("approval needed [amber]");
+    c.wait_for("esc to stop");
+    // A message sent while the task waits is queued, not sent.
+    c.type_keys("and then another thing");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("(queued)");
+    c.wait_for("1 queued");
+    // Esc with an empty prompt stops the task.
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\x1b");
+    c.wait_for("■ stopped");
+    c.wait_for("1 queued message(s) were dropped");
+    std::thread::sleep(Duration::from_millis(500));
+    let screen = c.visible();
+    assert!(!screen.contains("esc to stop") && screen.contains("all agents idle"), "{}", screen);
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
+    assert_eq!(m.seen.lock().unwrap().len(), 1, "the queued message was never sent");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }

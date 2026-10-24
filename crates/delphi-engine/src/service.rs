@@ -24,6 +24,8 @@ struct Running {
 
 pub struct EngineService {
     engine: Arc<Engine>,
+    /// Handles to stop the tasks in `running` (`task.cancel`).
+    aborts: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     default_mission: String,
     missions: Mutex<HashMap<String, Arc<MissionState>>>,
     running: Arc<Mutex<HashMap<String, Running>>>,
@@ -65,7 +67,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()) })
     }
 
     pub fn set_notices(&self, n: Vec<String>) {
@@ -126,7 +128,7 @@ impl EngineService {
             let target = rec.tasks.get(tid).map(|t| t.target.clone()).unwrap_or_default();
             let prompt = rec.tasks.get(tid).map(|t| t.prompt.chars().take(120).collect::<String>()).unwrap_or_default();
             running.lock().unwrap().insert(tid.clone(), Running { target, prompt, started: Instant::now() });
-            tokio::spawn(async move {
+            let h = tokio::spawn(async move {
                 if let Err(e) = engine.resume_task(&m2, &rec2, &tid2).await {
                     let mut ev = EventEnvelope::new(&m2.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                     ev.task_id = Some(tid2.clone());
@@ -134,6 +136,7 @@ impl EngineService {
                 }
                 running.lock().unwrap().remove(&tid2);
             });
+            self.aborts.lock().unwrap().insert(tid.clone(), h.abort_handle());
         }
         Ok(json!({"resumed": ids}))
     }
@@ -161,7 +164,7 @@ impl EngineService {
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: target.clone(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
-        tokio::spawn(async move {
+        let h = tokio::spawn(async move {
             if let Err(e) = engine.run_task_with_id(&m, tid.clone(), &target, &prompt).await {
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
@@ -169,7 +172,34 @@ impl EngineService {
             }
             running.lock().unwrap().remove(&tid);
         });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
         Ok(json!({"task_id": task_id, "mission_id": mid}))
+    }
+
+    /// `task.cancel`: stop one running task (or every one) at the operator's word. What was started is left in a
+    /// defined state: the task ends as `task.cancelled`, an in-flight model call is charged its full reservation (the
+    /// same rule as a crash), approvals waiting on it are closed, a build's worktree is kept and nothing is merged.
+    /// A command already running in a sandbox finishes or times out on its own; its result is ignored.
+    async fn task_cancel(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let wanted: Vec<String> = match p["task_id"].as_str() {
+            Some(t) => vec![t.to_string()],
+            None => self.running.lock().unwrap().keys().cloned().collect(),
+        };
+        let mut done = Vec::new();
+        for tid in wanted {
+            if self.running.lock().unwrap().remove(&tid).is_none() {
+                continue;
+            }
+            if let Some(h) = self.aborts.lock().unwrap().remove(&tid) {
+                h.abort();
+            }
+            self.engine.cancel_task(&m, &tid).await.map_err(engine_err)?;
+            done.push(tid);
+        }
+        self.aborts.lock().unwrap().retain(|k, _| self.running.lock().unwrap().contains_key(k));
+        Ok(json!({"cancelled": done}))
     }
 
     /// `build.start`: a Builder task under the retry ladder (`build.rs`), in the background.
@@ -186,7 +216,7 @@ impl EngineService {
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "builder".into(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
-        tokio::spawn(async move {
+        let h = tokio::spawn(async move {
             if let Err(e) = engine.run_build(&m, tid.clone(), &prompt).await {
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
@@ -194,6 +224,7 @@ impl EngineService {
             }
             running.lock().unwrap().remove(&tid);
         });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
         Ok(json!({"task_id": task_id, "mission_id": mid}))
     }
 
@@ -210,7 +241,7 @@ impl EngineService {
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "council".into(), prompt: proposition.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
-        tokio::spawn(async move {
+        let h = tokio::spawn(async move {
             if let Err(e) = engine.run_council(&m, tid.clone(), &proposition, opts).await {
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
@@ -218,6 +249,7 @@ impl EngineService {
             }
             running.lock().unwrap().remove(&tid);
         });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
         Ok(json!({"task_id": task_id, "mission_id": mid}))
     }
 
@@ -399,6 +431,7 @@ impl Extension for ServiceExt {
                     Ok(json!({"paused": true}))
                 })(),
                 "task.submit" => svc.task_submit(params, ctx).await,
+                "task.cancel" => svc.task_cancel(params, ctx).await,
                 "build.start" => svc.build_start(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
@@ -522,7 +555,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.diff"] {
@@ -702,6 +735,41 @@ mod tests {
         assert_eq!(final_text, "Drafted.");
         assert!(f.root.join("workspaces/w/team/specs/009-new.md").exists());
         assert_eq!(events_of(&f, "approval.resolved").len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancelling_a_task_waiting_on_an_approval_ends_it_cleanly_and_it_is_never_offered_again() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New"})), Step::text("Drafted.")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        let (cancelled, again, snap) = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&tok).unwrap();
+            let t = c.call("task.submit", json!({"target": "architect", "prompt": "Draft a spec"})).unwrap();
+            loop {
+                if c.call("approval.list", json!({})).unwrap().as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let cancelled = c.call("task.cancel", json!({"task_id": t["task_id"]})).unwrap();
+            let again = c.call("task.cancel", json!({"task_id": t["task_id"]})).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            (cancelled, again, c.call("session.snapshot", json!({})).unwrap())
+        })
+        .await;
+        assert_eq!(cancelled["cancelled"].as_array().unwrap().len(), 1);
+        assert_eq!(again["cancelled"].as_array().unwrap().len(), 0, "cancelling twice does nothing the second time");
+        assert_eq!(snap["running_tasks"].as_array().unwrap().len(), 0);
+        assert_eq!(snap["pending_approvals"].as_array().unwrap().len(), 0, "the waiting card is closed");
+        assert_eq!(events_of(&f, "task.cancelled").len(), 1);
+        let resolved = events_of(&f, "approval.resolved");
+        assert_eq!((resolved.len(), resolved[0].payload["resolution"].as_str()), (1, Some("expired")));
+        assert!(events_of(&f, "task.output").is_empty(), "no reply is produced after a cancel");
+        assert!(!f.root.join("workspaces/w/team/specs/009-new.md").exists(), "the action that was waiting never ran");
+        let rec = crate::recovery::rebuild_with(&f.m.replay().unwrap(), &|_| None);
+        assert!(rec.tasks.values().all(|t| t.completed), "recovery never offers a cancelled task");
     }
 
     #[tokio::test(flavor = "multi_thread")]

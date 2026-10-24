@@ -238,6 +238,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         }
     };
     let connectors = connector_host(cfg.clone(), secrets.clone(), ws_dir);
+    let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
     let engine = Arc::new(Engine {
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
         cfg,
@@ -255,6 +256,8 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
         connectors,
+        pool,
+        clock_unix: crate::pool::system_clock(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

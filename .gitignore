@@ -18,3 +18,5 @@ scratch/
 # OS artifacts
 .DS_Store
 Thumbs.db
+/ui/dist/
+/ui/node_modules/

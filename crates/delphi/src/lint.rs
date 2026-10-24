@@ -52,7 +52,7 @@ impl Tree {
         // governed directory such as `context/target/` is still linted.
         let walker = walkdir::WalkDir::new(root).into_iter().filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            !(e.file_type().is_dir() && (name == ".git" || (e.depth() == 1 && SKIP_DIRS.contains(&name.as_ref()))))
+            !(e.file_type().is_dir() && (name == ".git" || name == "node_modules" || (e.depth() == 1 && SKIP_DIRS.contains(&name.as_ref()))))
         });
         for entry in walker {
             let entry = entry?;

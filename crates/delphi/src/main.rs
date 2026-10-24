@@ -14,6 +14,7 @@ mod report;
 mod seed;
 mod selfupdate;
 mod setup;
+mod start;
 mod theme;
 mod update;
 
@@ -21,15 +22,17 @@ use std::path::PathBuf;
 use std::process::exit;
 
 const USAGE: &str = "usage:
+  delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]   (set up whatever is missing, then open the console)
   delphi update [--check] [--allow-downgrade] [--workspace <name>] [--home <dir>]
   delphi rollback [--workspace <name>] [--home <dir>]
   delphi self-update [--check] [--version vX.Y.Z] [--rollback]
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
-  delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
+  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
   delphi chat [--plain] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
+  delphi models [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
   delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
@@ -41,6 +44,8 @@ const USAGE: &str = "usage:
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(|s| s.as_str()) {
+        None => cmd_start(&args),
+        Some(a) if a.starts_with("--") && a != "--version" => cmd_start(&args),
         // The daemon and its maintenance commands run from this same executable.
         Some("__core") => delphi_engine::core_main::run(args[1..].to_vec()),
         Some("lint") => cmd_lint(&args[1..]),
@@ -58,6 +63,7 @@ fn main() {
         Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
         Some("endpoints") => cmd_core("endpoints", &args[1..]),
+        Some("models") => cmd_core("models", &args[1..]),
         Some("--version") | Some("version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
@@ -180,7 +186,7 @@ fn cmd_init(args: &[String]) -> i32 {
             for p in &projects {
                 println!("  project: {} (unchanged; Delphi writes nothing into projects)", p.display());
             }
-            println!("  next: configure model access (specs/009), then run `delphi doctor`");
+            println!("  next: configure model access (specs/009), then run `delphi`");
             0
         }
         Err(e) => {
@@ -205,8 +211,10 @@ fn resolve_ws(cmd: &str, args: &[String]) -> Result<(PathBuf, home::Workspace), 
             eprintln!("delphi {}: no workspace registers {}; run `delphi init --project {}`", cmd, root.display(), root.display());
             return Err(2);
         }
+        // Outside any project, the workspace that bare `delphi` made for that case, if it exists.
+        home::Resolve::NotInGitRepo if home.join("workspaces").join(start::DEFAULT_WORKSPACE).join("config.toml").exists() => start::DEFAULT_WORKSPACE.to_string(),
         home::Resolve::NotInGitRepo => {
-            eprintln!("delphi {}: not inside a git repository; pass --workspace <name>", cmd);
+            eprintln!("delphi {}: not inside a git repository; pass --workspace <name>, or run `delphi` to create the default workspace", cmd);
             return Err(2);
         }
         home::Resolve::NoSuchWorkspace(n) => {
@@ -226,6 +234,12 @@ fn theme_names(ws: &home::Workspace) -> std::collections::HashMap<String, String
     theme::parse(&text).map(|t| t.roles.into_iter().map(|(role, name, _, _)| (role, name)).collect()).unwrap_or_default()
 }
 
+/// The full-screen console (D-28): `$DELPHI_UI`, or `delphi-ui` next to this executable. Absent, the inline console runs.
+fn ui_executable() -> Option<std::path::PathBuf> {
+    let p = std::env::var_os("DELPHI_UI").map(std::path::PathBuf::from).or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("delphi-ui"))))?;
+    p.is_file().then_some(p)
+}
+
 fn cmd_chat(args: &[String]) -> i32 {
     let (home, ws) = match resolve_ws("chat", args) {
         Ok(v) => v,
@@ -234,6 +248,11 @@ fn cmd_chat(args: &[String]) -> i32 {
     let names = theme_names(&ws);
     // The inline console on a terminal; the plain line console when piped, or when asked for with --plain.
     let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    if on_terminal && !args.iter().any(|a| a == "--plain" || a == "--inline") {
+        if let Some(ui) = ui_executable() {
+            return chat::launch_ui(&ui, &home, &ws.dir, flag(args, "--mission"), &names);
+        }
+    }
     if on_terminal && !args.iter().any(|a| a == "--plain") {
         console::run(&home, &ws.dir, flag(args, "--mission"), names)
     } else {
@@ -271,6 +290,7 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
     match sub {
         "connectors" => delphi_engine::connectors_cli::run(&ws.dir, &rest),
         "auth" => delphi_engine::auth_cli::run(&ws.dir, &rest),
+        "models" => delphi_engine::models_cli::run(&ws.dir, &rest),
         _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
 }
@@ -347,12 +367,42 @@ fn cmd_kb(args: &[String]) -> i32 {
     delphi_engine::kb::run(&ws.dir, &rest)
 }
 
+/// Bare `delphi`: create what is missing (workspace, model access), then open the console.
+fn cmd_start(args: &[String]) -> i32 {
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    let interactive = on_terminal && !args.iter().any(|a| a == "--no-onboard") && std::env::var_os("DELPHI_NO_ONBOARD").is_none();
+    let ws = match start::preflight(&home, &cwd, flag(args, "--workspace"), interactive) {
+        Ok(ws) => ws,
+        Err(e) => {
+            eprintln!("delphi: {:#}", e);
+            return 2;
+        }
+    };
+    // From here it is `delphi chat` on the workspace that was just resolved.
+    let mut rest: Vec<String> = args.iter().filter(|a| *a != "--no-onboard").cloned().collect();
+    if flag(&rest, "--workspace").is_none() {
+        rest.extend(["--workspace".into(), ws.name]);
+    }
+    cmd_chat(&rest)
+}
+
 fn cmd_doctor(args: &[String]) -> i32 {
     let (home, ws) = match resolve_ws("doctor", args) {
         Ok(v) => v,
         Err(code) => return code,
     };
     let opts = doctor::Options { require_providers: args.iter().any(|a| a == "--require-providers") };
+    let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    if args.iter().any(|a| a == "--fix") {
+        if !on_terminal {
+            eprintln!("delphi doctor --fix: needs a terminal (it asks before each fix); run `delphi doctor` for the report");
+            return 2;
+        }
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        return start::doctor_fix(&mut setup::TerminalUi { auto: false }, &home, &ws, &cwd, &opts);
+    }
     let report = doctor::run(&home, &ws, &opts);
     report.print();
     println!("delphi doctor: workspace `{}`: {}", ws.name, report.worst());

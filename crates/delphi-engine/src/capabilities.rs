@@ -65,10 +65,21 @@ fn describe(e: &ModelError) -> String {
     match e {
         ModelError::NeedsReauth { .. } => "re-authenticate".into(),
         ModelError::Throttled(m) => format!("throttled: {}", m.chars().take(120).collect::<String>()),
+        ModelError::Exhausted(e) => format!("exhausted: {}", e),
         ModelError::Refused(m) => format!("refused: {}", m.chars().take(120).collect::<String>()),
         ModelError::Interrupted(m) => format!("interrupted: {}", m.chars().take(120).collect::<String>()),
         ModelError::Failed(m) => format!("failed: {}", m.chars().take(160).collect::<String>()),
     }
+}
+
+/// The cheapest possible "is it back?" check: one capped one-word call (`specs/002` §4.1 re-probe).
+pub async fn probe_alive(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_id: &str) -> Result<(), ModelError> {
+    let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: model_id.to_string() };
+    let plain = CompileOptions { max_tokens: PLAIN_MAX_TOKENS, thinking_budget: None, temperature: None, tools: vec![], betas: ep.betas.clone() };
+    let compiled = delphi_adapter::compile_for(ep, &probe_ipr("Reply with exactly the word OK."), &[], &target, &plain).map_err(|e| ModelError::Refused(e.to_string()))?;
+    let _ = cfg;
+    let mut sink = |_e: delphi_adapter::claude::StreamEvent| {};
+    model.call(ep, model_id, &compiled, &mut sink).await.map(|_| ())
 }
 
 /// Probe one endpoint × model. Never panics and never leaves the endpoint it was given.
@@ -223,7 +234,7 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
             while let Some(ev) = s.next(Duration::from_secs(90)).await {
                 match ev {
                     Event::Usage(t) => cap.tokens_used += t.metered(),
-                    Event::RateLimit { utilization, window } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
+                    Event::RateLimit { utilization, window, .. } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
                     Event::Result { is_error, text, usage, .. } => {
                         got_result = true;
                         cap.usage_reported = Some(usage.metered() + usage.cache_read > 0);

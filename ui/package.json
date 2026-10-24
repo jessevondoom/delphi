@@ -1,16 +1,21 @@
 {
-  "name": "delphi-ink-spike",
+  "name": "delphi-ui",
   "private": true,
   "type": "module",
   "version": "0.0.0",
   "scripts": {
-    "start": "node --import tsx src/main.tsx"
+    "start": "node --import tsx src/main.tsx",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc",
+    "build": "bun build --compile src/main.tsx --outfile dist/delphi-ui",
+    "check-deps": "node dev/check-deps.mjs"
   },
   "dependencies": {
     "chalk": "6.0.1",
     "ink": "8.0.0",
     "marked": "18.1.1",
     "react": "19.3.1",
+    "string-width": "8.3.0",
     "wrap-ansi": "10.0.2"
   },
   "devDependencies": {

@@ -65,6 +65,20 @@ pub struct Endpoint {
     pub betas: Vec<String>,
 }
 
+impl Endpoint {
+    /// Can a role that writes files or runs commands be served here? Every API path can. A subscription
+    /// harness can only if it has a per-action approval bridge: `claude` does, `agy` does not (`specs/009` §7B),
+    /// so `agy` is limited to read-only roles and Council seats.
+    pub fn can_mutate(&self) -> bool {
+        self.path != AccessPath::Harness || self.harness.as_deref().unwrap_or("claude") == "claude"
+    }
+
+    /// Is a call here paid for by a subscription metered in tokens, rather than priced from the catalog?
+    pub fn is_metered_by_subscription(&self) -> bool {
+        self.path == AccessPath::Harness || self.cost_model.as_deref() == Some("subscription")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum AuthFlow {
     #[serde(rename = "device_code")]
@@ -213,6 +227,9 @@ pub struct CatalogEntry {
     pub min_thinking_budget: u32,
     #[serde(default)]
     pub max_thinking_budget: u32,
+    /// The context window in tokens; 0 means unknown, which routing never treats as too small.
+    #[serde(default)]
+    pub context_tokens: u64,
     /// Claude: the thinking budget counts inside `max_tokens`; Gemini: it is additive.
     #[serde(default = "yes")]
     pub thinking_in_max_tokens: bool,
@@ -259,10 +276,57 @@ impl SharedConfig {
     }
 }
 
+/// Thresholds of the model pool (`specs/002` §4.1). Every field is optional in `[routing.pool]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PoolTuning {
+    /// Consecutive throttles of one `(endpoint, model)` that, over `throttle_window_secs`, count as exhaustion.
+    pub throttle_attempts: u32,
+    pub throttle_window_secs: i64,
+    /// First re-probe of an exhausted model with no known reset time, then doubling up to `reprobe_max_secs`.
+    pub reprobe_first_secs: i64,
+    pub reprobe_max_secs: i64,
+}
+
+impl Default for PoolTuning {
+    fn default() -> PoolTuning {
+        PoolTuning { throttle_attempts: 3, throttle_window_secs: 600, reprobe_first_secs: 900, reprobe_max_secs: 4 * 3600 }
+    }
+}
+
+/// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
+/// (`enable_dynamic_scaling`, …) are not read here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Routing {
+    /// Model IDs in preference order, as written; `None` when `[routing.pool]` has no `order`.
+    pub pool: Option<Vec<String>>,
+    /// Role → target model ID.
+    pub targets: BTreeMap<String, String>,
+    pub tuning: PoolTuning,
+}
+
+#[derive(Deserialize, Default)]
+struct PoolRaw {
+    order: Option<Vec<String>>,
+    throttle_attempts: Option<u32>,
+    throttle_window_secs: Option<i64>,
+    reprobe_first_secs: Option<i64>,
+    reprobe_max_secs: Option<i64>,
+}
+
+/// One slot of the pool: a model on one endpoint. Quotas belong to this pair, not to the model alone.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PoolKey {
+    pub endpoint_id: String,
+    pub model_id: String,
+    pub tier: String,
+    pub family: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub endpoints: Vec<Endpoint>,
     pub access: Access,
+    pub routing: Routing,
     /// family → tier → model ID.
     pub models: BTreeMap<String, BTreeMap<String, String>>,
     pub catalog: BTreeMap<String, CatalogEntry>,
@@ -307,6 +371,34 @@ impl Config {
             match c.clone().try_into::<BTreeMap<String, Connector>>() {
                 Ok(v) => cfg.connectors = v,
                 Err(e) => errs.push(format!("[connectors.*]: {}", e)),
+            }
+        }
+        if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
+            if let Some(p) = r.get("pool") {
+                match p.clone().try_into::<PoolRaw>() {
+                    Ok(raw) => {
+                        cfg.routing.pool = raw.order;
+                        let d = PoolTuning::default();
+                        cfg.routing.tuning = PoolTuning {
+                            throttle_attempts: raw.throttle_attempts.unwrap_or(d.throttle_attempts),
+                            throttle_window_secs: raw.throttle_window_secs.unwrap_or(d.throttle_window_secs),
+                            reprobe_first_secs: raw.reprobe_first_secs.unwrap_or(d.reprobe_first_secs),
+                            reprobe_max_secs: raw.reprobe_max_secs.unwrap_or(d.reprobe_max_secs),
+                        };
+                    }
+                    Err(e) => errs.push(format!("[routing.pool]: {}", e)),
+                }
+            }
+            if let Some(t) = r.get("targets") {
+                match t.clone().try_into::<BTreeMap<String, String>>() {
+                    // Template placeholders such as "<model id>" count as unset, like `[models.*]`.
+                    Ok(v) => cfg.routing.targets = v.into_iter().filter(|(_, id)| !id.trim().is_empty() && !id.starts_with('<')).collect(),
+                    Err(e) => errs.push(format!("[routing.targets]: {}", e)),
+                }
+            }
+            if let Some(list) = &cfg.routing.pool {
+                // Placeholders in a template count as unset, so an untouched template parses.
+                cfg.routing.pool = Some(list.iter().filter(|id| !id.trim().is_empty() && !id.starts_with('<')).cloned().collect()).filter(|v: &Vec<String>| !v.is_empty());
             }
         }
         if let Some(models) = root.get("models").and_then(|m| m.as_table()) {
@@ -505,7 +597,87 @@ impl Config {
                 errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
             }
         }
+        let t = &self.routing.tuning;
+        if t.throttle_attempts == 0 || t.throttle_window_secs <= 0 || t.reprobe_first_secs <= 0 || t.reprobe_max_secs < t.reprobe_first_secs {
+            errs.push("[routing.pool]: throttle_attempts, throttle_window_secs and reprobe_first_secs must be positive, and reprobe_max_secs at least reprobe_first_secs".into());
+        }
+        if let Some(order) = &self.routing.pool {
+            let mut seen = std::collections::BTreeSet::new();
+            for id in order {
+                if !seen.insert(id.as_str()) {
+                    errs.push(format!("[routing.pool] order lists `{}` twice", id));
+                } else if self.endpoints_serving(id).is_empty() {
+                    errs.push(format!("[routing.pool] order: `{}` is not served by any allowed endpoint (check [models.*], the endpoints' `models` and allowed_endpoints)", id));
+                }
+            }
+        }
+        for (role, id) in &self.routing.targets {
+            if self.endpoints_serving(id).is_empty() {
+                errs.push(format!("[routing.targets] {} = `{}` is not served by any allowed endpoint", role, id));
+            } else if let Some(order) = &self.routing.pool {
+                if !order.contains(id) {
+                    errs.push(format!("[routing.targets] {} = `{}` is not in [routing.pool] order", role, id));
+                }
+            }
+        }
         errs
+    }
+
+    /// Every allowed endpoint that serves `model_id` for some tier, grouped by family in policy order
+    /// ([`Config::endpoints_for`]). Each is returned once, with the highest tier that names the model.
+    pub fn endpoints_serving(&self, model_id: &str) -> Vec<PoolKey> {
+        let mut families: Vec<&str> = Vec::new();
+        let allowed = self.allowed();
+        for e in &self.endpoints {
+            if allowed.contains(&e.id) && !families.contains(&e.family.as_str()) {
+                families.push(&e.family);
+            }
+        }
+        let mut out = Vec::new();
+        for fam in families {
+            for ep in self.endpoints_for(fam) {
+                if let Some(tier) = TIERS.iter().rev().find(|t| self.resolve_model(ep, t).as_deref() == Some(model_id)) {
+                    out.push(PoolKey { endpoint_id: ep.id.clone(), model_id: model_id.to_string(), tier: tier.to_string(), family: fam.to_string() });
+                }
+            }
+        }
+        out
+    }
+
+    /// The pool in preference order. With `[routing.pool] order`, each model expands to its endpoints
+    /// in policy order. Without it, every configured tier, family by family, highest tier first.
+    pub fn pool_entries(&self) -> Vec<PoolKey> {
+        let mut out: Vec<PoolKey> = Vec::new();
+        let mut push = |k: PoolKey| {
+            if !out.iter().any(|o| o.endpoint_id == k.endpoint_id && o.model_id == k.model_id) {
+                out.push(k);
+            }
+        };
+        if let Some(order) = &self.routing.pool {
+            for id in order {
+                for k in self.endpoints_serving(id) {
+                    push(k);
+                }
+            }
+            return out;
+        }
+        let allowed = self.allowed();
+        let mut families: Vec<&str> = Vec::new();
+        for e in &self.endpoints {
+            if allowed.contains(&e.id) && !families.contains(&e.family.as_str()) {
+                families.push(&e.family);
+            }
+        }
+        for fam in families {
+            for tier in TIERS.iter().rev() {
+                for ep in self.endpoints_for(fam) {
+                    if let Some(model_id) = self.resolve_model(ep, tier) {
+                        push(PoolKey { endpoint_id: ep.id.clone(), model_id, tier: tier.to_string(), family: fam.to_string() });
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The model family a role is served by.
@@ -654,6 +826,62 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!(c.resolve_model(bedrock, "fast").as_deref(), Some("haiku-x"), "falls back to [models.claude]");
         assert_eq!(c.resolve_model(bedrock, "frontier"), None, "template placeholders are unset");
         assert!((c.catalog_entry("sonnet-x").unwrap().price().cache_write - 3.75).abs() < 1e-9);
+    }
+
+    fn with_routing(extra: &str) -> Result<Config, Vec<String>> {
+        Config::parse(&format!("{}\n{}", SAMPLE, extra))
+    }
+
+    fn slots(c: &Config) -> Vec<String> {
+        c.pool_entries().iter().map(|k| format!("{}/{}", k.endpoint_id, k.model_id)).collect()
+    }
+
+    #[test]
+    fn only_a_harness_without_an_approval_bridge_is_read_only_and_context_is_optional() {
+        let text = format!(
+            "{}\n[[endpoints]]\nid = \"c\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\n[[endpoints]]\nid = \"a\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n[models.catalog.\"big\"]\nmax_output_tokens = 1\ncontext_tokens = 1000000\n",
+            SAMPLE
+        );
+        let c = Config::parse(&text).unwrap();
+        let can = |id: &str| c.endpoint(id).unwrap().can_mutate();
+        assert_eq!((can("direct"), can("bedrock-us"), can("corp-gateway"), can("c"), can("a")), (true, true, true, true, false));
+        assert!(c.endpoint("a").unwrap().is_metered_by_subscription() && c.endpoint("c").unwrap().is_metered_by_subscription() && !c.endpoint("direct").unwrap().is_metered_by_subscription());
+        assert_eq!((c.catalog_entry("big").unwrap().context_tokens, c.catalog_entry("sonnet-x").unwrap().context_tokens), (1_000_000, 0), "unset means unknown");
+    }
+
+    #[test]
+    fn without_a_pool_every_configured_tier_is_used_family_by_family_highest_tier_first() {
+        let c = Config::parse(SAMPLE).unwrap();
+        assert_eq!(c.routing, Routing::default());
+        assert_eq!(slots(&c), vec!["corp-gateway/sonnet-x", "bedrock-us/bedrock-sonnet-x", "corp-gateway/haiku-x", "bedrock-us/haiku-x"]);
+        assert_eq!(c.routing.tuning, PoolTuning { throttle_attempts: 3, throttle_window_secs: 600, reprobe_first_secs: 900, reprobe_max_secs: 14_400 });
+    }
+
+    #[test]
+    fn a_pool_order_expands_each_model_to_the_allowed_endpoints_that_serve_it_in_policy_order() {
+        let c = with_routing("[routing.pool]\norder = [\"haiku-x\", \"sonnet-x\"]\nthrottle_attempts = 5\n[routing.targets]\nbuilder = \"sonnet-x\"").unwrap();
+        // `direct` serves both models but is outside allowed_endpoints; bedrock-us names a different workhorse model.
+        assert_eq!(slots(&c), vec!["corp-gateway/haiku-x", "bedrock-us/haiku-x", "corp-gateway/sonnet-x"]);
+        let first = &c.pool_entries()[0];
+        assert_eq!((first.tier.as_str(), first.family.as_str()), ("fast", "claude"));
+        assert_eq!((c.routing.tuning.throttle_attempts, c.routing.tuning.throttle_window_secs), (5, 600), "unset keys keep their defaults");
+        assert_eq!(c.routing.targets.get("builder").map(String::as_str), Some("sonnet-x"));
+    }
+
+    #[test]
+    fn a_bad_pool_or_target_is_reported_in_full() {
+        let errs = with_routing("[routing.pool]\norder = [\"sonnet-x\", \"sonnet-x\", \"nope-x\"]\nreprobe_first_secs = 100\nreprobe_max_secs = 10\n[routing.targets]\nbuilder = \"haiku-x\"\nred-team = \"ghost-x\"").unwrap_err().join("\n");
+        for want in ["lists `sonnet-x` twice", "`nope-x` is not served by any allowed endpoint", "reprobe_max_secs at least reprobe_first_secs", "builder = `haiku-x` is not in [routing.pool] order", "red-team = `ghost-x` is not served"] {
+            assert!(errs.contains(want), "missing `{}` in:\n{}", want, errs);
+        }
+        assert!(with_routing("[routing.pool]\norder = \"sonnet-x\"").is_err(), "order must be a list");
+    }
+
+    #[test]
+    fn template_placeholders_and_unrelated_routing_keys_are_ignored() {
+        let c = with_routing("[routing]\nenable_dynamic_scaling = true\nmax_parallel_agents = 4\n[routing.pool]\norder = [\"<claude frontier model id>\"]\n[routing.targets]\nred-team = \"<model id>\"").unwrap();
+        assert_eq!((c.routing.pool.clone(), c.routing.targets.clone()), (None, BTreeMap::new()));
+        assert_eq!(slots(&c).len(), 4, "an untouched template behaves as no pool");
     }
 
     #[test]

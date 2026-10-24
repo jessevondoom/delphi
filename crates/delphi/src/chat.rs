@@ -302,6 +302,8 @@ impl Renderer {
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
             "span.taint" => Some(format!("\n  ! {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
             "endpoint.throttled" => Some(format!("\n  ! {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
+            "model.recovered" => Some(format!("\n  {} is available again ({})\n", p["endpoint_id"].as_str().unwrap_or("?"), p["model_id"].as_str().unwrap_or("?"))),
+            "model.exhausted" => Some(format!("\n  ! {} is out of quota ({}){}; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"), p["reason"].as_str().unwrap_or("?"), p["reset_at"].as_i64().map(|t| format!(", back at {}", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
             "endpoint.reauth_required" => Some(format!("\n  ! re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
             "turn.interrupted" => Some("\n  ! the stream was interrupted; retrying the turn\n".to_string()),
             "task.failed" => Some(format!("\n✗ task failed: {}\n", p["error"].as_str().unwrap_or(""))),
@@ -793,6 +795,48 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
     }
 }
 
+/// Start (or join) the daemon, then run the full-screen UI as a child of this process. The UI gets what it needs to
+/// connect (socket paths, mission, role names and colours) as one JSON argument: no token, no secret. It asks the
+/// daemon for its own token through the socket, which checks that it was started from a terminal.
+pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>, names: &HashMap<String, String>) -> i32 {
+    let Some(exe) = daemon_exe() else {
+        eprintln!("delphi chat: cannot locate this program to start the daemon");
+        return 1;
+    };
+    if let Err(e) = connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
+        eprintln!("delphi chat: {}", rpc_error(&e));
+        return 1;
+    }
+    let l = match layout(home, ws_dir) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("delphi chat: {}", e);
+            return 1;
+        }
+    };
+    let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, mission, names);
+    match std::process::Command::new(ui).arg("--info").arg(info.to_string()).status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("delphi chat: cannot start the full-screen console ({}); try `delphi chat --inline`", e);
+            1
+        }
+    }
+}
+
+/// What the UI needs to know that only this program knows: where things are, and how roles look.
+pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: Option<String>, names: &HashMap<String, String>) -> Value {
+    let roles: serde_json::Map<String, Value> = crate::avatar::ROLES
+        .iter()
+        .map(|t| {
+            let (r, g, b) = t.chassis_rgb;
+            (t.role_id.to_string(), json!({"name": names.get(t.role_id).cloned().unwrap_or_else(|| t.role_id.to_string()), "chassis": format!("#{:02x}{:02x}{:02x}", r, g, b), "face": t.badge_face}))
+        })
+        .collect();
+    let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();
+    json!({"console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles})
+}
+
 /// `delphi daemon status|stop|restart`.
 pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
     let l = match layout(home, ws_dir) {
@@ -811,7 +855,7 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
     match action {
         // For clients written in other languages: where the daemon's sockets are.
         "where" => {
-            println!("{}", json!({"console_socket": l.sock, "narrator_socket": l.narrator_sock}));
+            println!("{}", ui_info(&l.sock, &l.narrator_sock, ws_dir, None, &HashMap::new()));
             0
         }
         "status" => match connect() {
@@ -923,6 +967,18 @@ mod tests {
         assert!(s.contains("Daedalus") && s.contains("write specs/009-x.md") && s.contains("    # New") && s.contains("/a allow similar") && s.contains("ap_0001"), "{}", s);
         let red = render_card(&json!({"approval_id": "ap_2", "tier": "red", "tool": "dispatch_agent", "summary": "dispatch", "payload": {}, "timeout_secs": 60}), "Athena");
         assert!(red.contains("RED — never auto-approved") && !red.contains("allow similar"), "{}", red);
+    }
+
+    #[test]
+    fn ui_info_gives_the_ui_sockets_and_role_looks_and_no_secrets() {
+        let mut n = HashMap::new();
+        n.insert("orchestrator".to_string(), "Orch".to_string());
+        let v = ui_info(Path::new("/run/c.sock"), Path::new("/run/n.sock"), Path::new("/ws"), Some("m1".into()), &n);
+        assert_eq!((v["console_socket"].as_str(), v["narrator_socket"].as_str(), v["mission"].as_str()), (Some("/run/c.sock"), Some("/run/n.sock"), Some("m1")));
+        assert_eq!(v["roles"]["orchestrator"]["name"], "Orch");
+        assert_eq!(v["roles"]["orchestrator"]["chassis"], "#a855f7");
+        assert_eq!(v["roles"]["builder"]["name"], "builder", "an unthemed role keeps its id");
+        assert!(!v.to_string().to_lowercase().contains("token"), "nothing secret goes to the UI");
     }
 
     #[test]
