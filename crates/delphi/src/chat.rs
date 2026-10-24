@@ -41,6 +41,8 @@ pub enum Input {
     Build(String),
     /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
+    /// `/narrator [view]`: open the read-only window (a tmux split when inside tmux, else the command to run).
+    Narrator(Option<String>),
     Unknown(String),
 }
 
@@ -70,6 +72,10 @@ pub fn parse_input(line: &str) -> Input {
                 let text = cmd.trim_start().strip_prefix("build").unwrap_or("").trim();
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
+            "narrator" | "observe" | "visualize" => match rest.first() {
+                Some(v) if crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge or archives, not `{}`", v)),
+                v => Input::Narrator(v.map(|s| s.to_string())),
+            },
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
@@ -127,6 +133,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
   /build <request>                   a Builder task: worktree, tests, audit, then your approval to merge
+  /narrator [council|epic|forge|archives]   the read-only live window (a tmux split, or the command to run in a second terminal)
   /council <proposition>             a blind three-round Council (architect, strategist, red-team); you decide if it deadlocks
   /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
   /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
@@ -580,6 +587,19 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
+            Input::Narrator(view) => {
+                let ws = ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let exe = daemon_exe().map(|p| p.display().to_string()).unwrap_or_else(|| "delphi".into());
+                let line = format!("{} narrator {} --workspace {} --home {}", exe, view.unwrap_or_default(), ws, home.display());
+                if std::env::var_os("TMUX").is_some() {
+                    match std::process::Command::new("tmux").args(["split-window", "-h", "-p", "45", &line]).status() {
+                        Ok(s) if s.success() => say("(narrator opened in a tmux split)\n"),
+                        _ => say(&format!("could not open a tmux split; run this in another terminal:\n  {}\n", line)),
+                    }
+                } else {
+                    say(&format!("Run this in a second terminal window (it only watches):\n  {}\n", line));
+                }
+            }
             Input::Council { proposition, seats, author } => match cmd.call("council.start", json!({"mission_id": mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
                 Ok(v) => {
                     shared.running.fetch_add(1, Ordering::SeqCst);
@@ -709,6 +729,9 @@ mod tests {
         assert_eq!(parse_input("/permissions accept-edits"), Input::Permissions(Some("accept-edits".into())));
         assert_eq!(parse_input("/build implement @specs/011-x.md in @project/app"), Input::Build("implement @specs/011-x.md in @project/app".into()));
         assert!(matches!(parse_input("/build"), Input::Unknown(m) if m.contains("needs a request")));
+        assert_eq!(parse_input("/narrator"), Input::Narrator(None));
+        assert_eq!(parse_input("/observe council"), Input::Narrator(Some("council".into())));
+        assert!(matches!(parse_input("/narrator nonsense"), Input::Unknown(m) if m.contains("council, epic")));
         assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
         assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
         assert_eq!(parse_input("/pause"), Input::Pause);

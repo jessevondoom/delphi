@@ -265,6 +265,28 @@ impl EngineService {
         Ok(Self::budget_json(&m))
     }
 
+    /// `observe.snapshot`: the recent history the Narrator needs, as the events it would have seen live.
+    /// Read-only; only the kinds the Narrator folds, newest 4,000.
+    async fn observe_snapshot(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let mut events = m.replay().map_err(engine_err)?;
+        events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
+        let skip = events.len().saturating_sub(4000);
+        let events: Vec<Value> = events.into_iter().skip(skip).map(|e| serde_json::to_value(e).expect("events serialize")).collect();
+        Ok(json!({"mission_id": m.id, "events": events, "enabled_agents": self.engine.settings.enabled_agents, "budget": Self::budget_json(&m), "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len()}))
+    }
+
+    /// `observe.diff`: the live diff of a build's worktree for the Forge view (read-only).
+    async fn observe_diff(&self, p: Value) -> RpcOutcome {
+        let task = p["task_id"].as_str().unwrap_or("").to_string();
+        let Some(wt) = self.engine.exec.known_worktree(&task) else { return Ok(json!({"available": false})) };
+        let r = tokio::task::spawn_blocking(move || wt.live_diff(120_000)).await.map_err(|e| err(-32000, e.to_string()))?;
+        match r {
+            Ok((stat, diff, untracked)) => Ok(json!({"available": true, "stat": stat, "diff": diff, "untracked": untracked})),
+            Err(e) => Ok(json!({"available": false, "error": self.engine.secrets.redact(&e.to_string())})),
+        }
+    }
+
     /// `kb.search`: pointers and previews from the workspace's knowledge base (read-only). `kb.index` refreshes it.
     async fn kb_search(&self, p: Value) -> RpcOutcome {
         let query = p["query"].as_str().unwrap_or("").to_string();
@@ -378,6 +400,8 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
+                "observe.snapshot" => svc.observe_snapshot(params).await,
+                "observe.diff" => svc.observe_diff(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
@@ -489,7 +513,7 @@ mod tests {
             for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
-            for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot"] {
+            for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.diff"] {
                 assert!(c.call(m, json!({})).is_ok(), "{} should be readable", m);
             }
             assert_eq!(rpc_code(c.call("no.such.method", json!({}))), Some(code::METHOD_NOT_FOUND));
@@ -497,6 +521,38 @@ mod tests {
         })
         .await;
         assert_eq!(f.model.requests().len(), 0, "the narrator started nothing");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_narrator_that_attaches_late_rebuilds_the_same_picture_from_the_snapshot() {
+        let f = setup(vec![Step::text("The ladder has three attempts.")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Explain the retry ladder").await.unwrap();
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.narrator.clone());
+        let snap = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            assert_eq!(c.call("observe.diff", json!({"task_id": "t_0001"})).unwrap()["available"], false, "no live worktree for a plain task");
+            c.call("observe.snapshot", json!({})).unwrap()
+        })
+        .await;
+        let roles: Vec<String> = snap["enabled_agents"].as_array().unwrap().iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        let mut late = crate::observe::ObserverState::new(&roles);
+        for e in snap["events"].as_array().unwrap() {
+            late.apply(e);
+        }
+        // The same fold over the log directly gives the same state.
+        let mut direct = crate::observe::ObserverState::new(&roles);
+        for e in f.m.replay().unwrap() {
+            direct.apply(&serde_json::to_value(e).unwrap());
+        }
+        let (a, b) = (&late.agents["orchestrator"], &direct.agents["orchestrator"]);
+        assert_eq!((a.calls, a.tokens.clone(), a.model.clone(), a.state.clone()), (b.calls, b.tokens.clone(), b.model.clone(), b.state.clone()));
+        assert_eq!((a.calls, a.state.as_str()), (1, "idle"));
+        assert!(a.tokens.total() > 0 && late.spent_usd > 0.0 && (late.spent_usd - direct.spent_usd).abs() < 1e-12);
+        assert_eq!(late.tasks["t_0001"].status, "done");
+        assert!(snap["budget"]["cap_usd"].as_f64().unwrap() > 0.0);
     }
 
     #[tokio::test(flavor = "multi_thread")]

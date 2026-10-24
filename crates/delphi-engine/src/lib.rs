@@ -18,6 +18,7 @@ pub mod harness_run;
 pub mod kb;
 pub mod mission;
 pub mod model;
+pub mod observe;
 pub mod probe;
 pub mod recovery;
 pub mod ratify;
