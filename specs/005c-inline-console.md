@@ -50,7 +50,10 @@ tags: [spec, ui, tui, console, interim]
 ## 3. Reasoning in the Observer
 `delphi observe thinking` is a seventh Observer view: a tail of live reasoning and tool calls per active span, newest at the bottom, labelled with the agent's badge, tier and model. It reads the `thinking` text the daemon already coalesces into frames. It is **context only**: it exists in the Observer's memory while the window is open, is never written to `events.jsonl` or anywhere else, and is not included in the snapshot a reopened window receives. Control sequences are stripped like all model text.
 
-## 4. A native viewer window, no browser
+## 4. A native viewer window, no browser (later work)
+
+**Not part of the current build.** The console and the Observer come first. This section records the agreed design so it is not lost; no slice below builds it until the operator schedules it.
+
 `delphi view <path>` and `/view <path>` open a document in a **small native window drawn by Rust**: its own window on the desktop, outside the terminal, with no web engine, no server and no generated HTML.
 - **Toolkit:** `egui` through `eframe` (immediate-mode, pure Rust, one dependency tree), with `egui_commonmark` for Markdown and `egui_extras`' image loaders. SVG is rasterized in-process with `resvg`; PNG and JPEG use the `image` crate. Nothing in the window executes scripts or touches the network.
 - **Markdown:** headings, emphasis, lists, block quotes, tables, fenced code (with a copy button), rules, inline images and links. Raw HTML in a document is shown as plain text, never interpreted. A link to another workspace document opens it in the same window; any other link is shown, not followed, unless the operator clicks it (then it goes to the system's default handler).
@@ -68,9 +71,10 @@ Costs worth knowing: the GUI stack adds a few megabytes to the executable and se
 | 1 | Inline shell (§2.1 items 1 to 4, 8), including the shared command layer | 3 h |
 | 2 | Brevity (§2.1 item 5) | 1.5 h |
 | 3 | Inbox, header states and approval mode (§2.1 items 2, 6, 7) | 2.5 h |
-| 4 | `observe thinking` (1 h) and the native viewer window (§4; 4 to 5 h including the build-time and CI work) | 5 to 6 h |
+| 4 | `observe thinking` (§3) | 1 h |
+| later | The native viewer window (§4), including build-time and CI work | 5 to 6 h |
 
-Slices 1 to 3 are the core and ship first. After each, the operator drives it before the next begins.
+Slices 1 to 3 are the core and ship first, then slice 4. After each, the operator drives it before the next begins.
 
 ## 6. Verification
 1. **Scrollback.** Print 200 lines of chat; the terminal's scrollback holds all of them and the pinned block stays at the bottom (tested in a pseudo-terminal and under `tmux`).
