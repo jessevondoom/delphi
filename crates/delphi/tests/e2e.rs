@@ -948,3 +948,58 @@ fn the_observer_panels_open_inside_the_full_screen_console_and_read_the_real_dae
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn pin_sources_notebook_and_connector_status_work_in_the_full_screen_console() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_text("The ladder is in specs/002-adapter-and-routing.md#4 and it has three attempts.")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 36, 110, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("How does the retry ladder work?");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("three attempts");
+    // Pin the reply: it lands in the mission's notebook document.
+    c.type_keys("/pin");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("pinned to local/missions/");
+    let nb = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().map(|m| m.path().join("notebook.md")).find(|p| p.exists()).expect("a notebook.md");
+    let text = std::fs::read_to_string(&nb).unwrap();
+    assert!(text.starts_with("---\n") && text.contains("tags: [notebook]") && text.contains("three attempts"), "{}", text);
+    c.type_keys("/panel notebook");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("NOTEBOOK · mission");
+    c.wait_for("three attempts");
+    // Sources: the spec the reply named.
+    c.type_keys("7");
+    c.wait_for("Sources · 1");
+    c.wait_for("specs/002-adapter-and-routing.md");
+    // Connectors: none are configured in this workspace, and the panel says how to add one.
+    c.type_keys("9");
+    c.wait_for("No connectors are configured.");
+    c.type_keys("\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}

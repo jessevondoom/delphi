@@ -33,6 +33,7 @@ try {
   history = replay(initial(Date.now()), snap.events ?? []);
   if (Array.isArray(snap.enabled_agents)) obs = new Observer(snap.enabled_agents);
   for (const e of snap.events ?? []) obs.apply(e);
+  obs.setConnectors(snap.connectors);
   cap0 = Number(snap.budget?.cap_usd) || 0;
   pending0 = Number(snap.pending_proposals) || 0;
   const live = await cmd.call('session.snapshot', { mission_id: mission }).catch(() => ({ running_tasks: [] }));

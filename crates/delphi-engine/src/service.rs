@@ -305,7 +305,21 @@ impl EngineService {
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let events: Vec<Value> = events.into_iter().skip(skip).map(|e| serde_json::to_value(e).expect("events serialize")).collect();
-        Ok(json!({"mission_id": m.id, "events": events, "enabled_agents": self.engine.settings.enabled_agents, "budget": Self::budget_json(&m), "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len()}))
+        Ok(json!({"mission_id": m.id, "events": events, "enabled_agents": self.engine.settings.enabled_agents, "budget": Self::budget_json(&m), "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(), "connectors": self.connectors_json()}))
+    }
+
+    /// The ratified connectors for the console's status panel: what is configured and which tools are pinned. No secrets.
+    fn connectors_json(&self) -> Vec<Value> {
+        let host = &self.engine.connectors;
+        host.names()
+            .into_iter()
+            .filter_map(|n| {
+                let c = host.connector(&n)?;
+                let pins = host.ratified_pins(&n);
+                let tools: Vec<Value> = c.tools.iter().map(|(t, class)| json!({"name": t, "class": class.as_str(), "pinned": pins.contains_key(t)})).collect();
+                Some(json!({"name": n, "url": c.url, "account": c.account, "login": c.login, "roles": c.roles, "tools": tools}))
+            })
+            .collect()
     }
 
     /// `observe.diff`: the live diff of a build's worktree for the Forge view (read-only).
@@ -692,6 +706,10 @@ mod tests {
         assert!(a.tokens.total() > 0 && late.spent_usd > 0.0 && (late.spent_usd - direct.spent_usd).abs() < 1e-12);
         assert_eq!(late.tasks["t_0001"].status, "done");
         assert!(snap["budget"]["cap_usd"].as_f64().unwrap() > 0.0);
+        assert!(snap["connectors"].as_array().unwrap().is_empty(), "no connector is configured here, and the field is still there for the console's status panel");
+        for kind in ["connector.call", "connector.result", "connector.denied", "connector.unavailable", "connector.reauth_required"] {
+            assert!(crate::observe::KINDS.contains(&kind), "{} is part of the snapshot", kind);
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

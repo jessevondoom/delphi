@@ -5,7 +5,9 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { status, type Block, type State } from './fold.ts';
 import { cardsOf, inboxBody, inboxHint, type InboxUi } from './inbox.ts';
+import type { Pin } from './notebook.ts';
 import type { Observer } from './observer.ts';
+import type { Source } from './sources.ts';
 import { panelBody, panelFooter, panelHint, type PanelCtx, type PanelUi } from './panels.ts';
 import * as T from './theme.ts';
 import chalk from 'chalk';
@@ -24,7 +26,7 @@ export type Model = {
   /** The Observer's view model: panels and the thinking deck read it. */
   obs: Observer;
   /** An open panel, over whatever deck is showing. */
-  panel: { ui: PanelUi; cap: number; pending: number; mission: string } | null;
+  panel: { ui: PanelUi; cap: number; pending: number; mission: string; sources?: Source[]; notebook?: Pin[]; preview?: (rel: string) => string[] } | null;
 };
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'];
@@ -107,6 +109,8 @@ const HELP = [
   '  / opens the command menu · tab or enter completes',
   '  answer a waiting approval with /y /a /n /d · @architect … sends to one role · @specs/… points at a file',
   '  shift+→ or /operator opens the decision inbox (y n a d, tab list/focus, esc back) · shift+tab toggles approvals/accept-edits',
+  '  /panel [council|epic|forge|agents|spend|archives|sources|notebook|connectors] opens an Observer view here (1-9 jump, shift+←→ cycle, esc back)',
+  '  /pin keeps the last reply in the mission notebook · /pin <text> keeps a note',
   '  esc stops what is running (when the prompt is empty) · ctrl+o shows tool details · ctrl+r searches history',
   '  a message sent while something runs is queued and goes when it finishes',
 ];
@@ -165,7 +169,7 @@ export function frame(m: Model, w: number, h: number): string[] {
   const bodyH = Math.max(1, h - head.length - 1 /*blank*/ - 1 /*status*/ - 1 - prompt.length - 1 - 1);
   let body: string[];
   if (m.panel) {
-    const ctx: PanelCtx = { obs: m.obs, info: m.info, pal: m.pal, now: m.now, cap: m.panel.cap, pending: m.panel.pending, mission: m.panel.mission };
+    const ctx: PanelCtx = { obs: m.obs, info: m.info, pal: m.pal, now: m.now, cap: m.panel.cap, pending: m.panel.pending, mission: m.panel.mission, sources: m.panel.sources, notebook: m.panel.notebook, preview: m.panel.preview };
     body = [...panelBody(m.panel.ui, ctx, w, Math.max(1, bodyH - 1)), panelFooter(ctx, w)];
   } else if (m.deck !== 1) body = deckBody(m, w, bodyH);
   else {

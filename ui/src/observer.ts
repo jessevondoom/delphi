@@ -28,6 +28,14 @@ export type Council = {
 export type GateRow = { name: string; state: string; detail: string };
 export type Build = { taskId: string; branch: string; attempts: string[]; sha: string; gates: GateRow[]; findings: [string, string][]; flaky: boolean; merge: string };
 
+export type ConnectorTool = { name: string; class: string; pinned: boolean };
+/** A configured connector (from the snapshot) and what its events say about it. `idle` until it has been used. */
+export type ConnectorRow = {
+  name: string; url: string; account: string | null; login: string | null; roles: string[]; tools: ConnectorTool[];
+  calls: number; results: number; errors: number; denied: number; lastTool: string; lastAt: number;
+  state: 'idle' | 'ready' | 'needs login' | 'unavailable'; reason: string;
+};
+
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const cap = (v: unknown, n: number) => sanitize(str(v)).slice(0, n);
 const sevTitle = (a: unknown): [string, string][] => (Array.isArray(a) ? a.map((f: any) => [str(f?.severity), sanitize(str(f?.title))] as [string, string]) : []);
@@ -49,9 +57,28 @@ export class Observer {
   series: number[] = [];
   /** Live text per span while it streams (cleared when the node finishes). Memory only: never written anywhere. */
   live = new Map<string, string>();
+  connectors = new Map<string, ConnectorRow>();
 
   constructor(roles: string[] = []) {
     for (const r of roles) this.agents.set(r, { role: r, state: 'idle', taskId: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: noTokens(), costUsd: 0, calls: 0 });
+  }
+
+  /** The configured connectors, from `observe.snapshot`. Counters already gathered from events are kept. */
+  setConnectors(list: unknown) {
+    if (!Array.isArray(list)) return;
+    for (const c of list as any[]) {
+      const name = str(c?.name);
+      if (!name) continue;
+      const row = this.connector(name);
+      row.url = sanitize(str(c.url)); row.account = typeof c.account === 'string' ? c.account : null; row.login = typeof c.login === 'string' ? c.login : null;
+      row.roles = Array.isArray(c.roles) ? c.roles.map(str) : [];
+      row.tools = Array.isArray(c.tools) ? c.tools.map((t: any) => ({ name: str(t?.name), class: str(t?.class), pinned: t?.pinned === true })) : [];
+    }
+  }
+  private connector(name: string): ConnectorRow {
+    let r = this.connectors.get(name);
+    if (!r) { r = { name, url: '', account: null, login: null, roles: [], tools: [], calls: 0, results: 0, errors: 0, denied: 0, lastTool: '', lastAt: 0, state: 'idle', reason: '' }; this.connectors.set(name, r); }
+    return r;
   }
 
   private say(line: string) {
@@ -232,6 +259,16 @@ export class Observer {
         this.say(`${task}: council ${esc !== null ? 'needs your decision' : 'reached a verdict'}`);
         break;
       }
+      case 'connector.call': { const r = this.connector(str(p.connector)); r.calls++; r.lastTool = str(p.tool); r.lastAt = Date.parse(str(e.timestamp)) || r.lastAt; break; }
+      case 'connector.result': {
+        const r = this.connector(str(p.connector));
+        r.results++;
+        if (p.is_error === true) r.errors++; else { r.state = 'ready'; r.reason = ''; }
+        break;
+      }
+      case 'connector.denied': { const r = this.connector(str(p.connector)); r.denied++; r.reason = cap(p.reason, 200); this.say(`${r.name} refused ${str(p.tool)}: ${r.reason}`); break; }
+      case 'connector.unavailable': { const r = this.connector(str(p.connector)); r.state = 'unavailable'; r.reason = cap(p.reason, 200); this.say(`${r.name} is unavailable: ${r.reason}`); break; }
+      case 'connector.reauth_required': { const r = this.connector(str(p.connector)); r.state = 'needs login'; r.reason = cap(p.reason, 200); this.say(`${r.name} needs you to sign in again (delphi auth login)`); break; }
       case 'endpoint.throttled': this.say(`${str(p.endpoint_id)} is throttled; trying the next endpoint`); break;
       case 'model.recovered': this.say(`${str(p.endpoint_id)} is back (${str(p.model_id)})`); break;
       case 'model.exhausted': this.say(`${str(p.endpoint_id)} is out of quota (${str(p.reason)}); trying the next endpoint`); break;

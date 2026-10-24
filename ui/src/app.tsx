@@ -7,7 +7,9 @@ import { COMMANDS } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { cardsOf, inboxInit, inboxKey, type InboxUi } from './inbox.ts';
+import { addPin, readNotebook, type Pin } from './notebook.ts';
 import type { Observer } from './observer.ts';
+import { collectSources, previewOf } from './sources.ts';
 import { panelInit, panelKey, parseView, selectedBuild, type PanelUi } from './panels.ts';
 import { answerCard, runSlash } from './run.ts';
 import { frame, transcript, type Model } from './screen.ts';
@@ -55,6 +57,8 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
   const [panel, setPanel] = useState<PanelUi | null>(null);
   const [obsV, setObsV] = useState(0);
   const [cap, setCap] = useState(cap0);
+  const [pins, setPins] = useState<Pin[]>(() => readNotebook(info.workspace, mission));
+  const previews = useRef(new Map<string, string[]>());
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -106,7 +110,7 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
   const openPanel = (arg: string) => {
     const want = arg.trim();
     const view = want ? parseView(want) : (obs.defaultView() as ReturnType<typeof parseView>);
-    if (!view) { note(`unknown panel \`${want}\` (council, epic, forge, agents, spend, archives)`); return; }
+    if (!view) { note(`unknown panel \`${want}\` (council, epic, forge, agents, spend, archives, sources, notebook, connectors)`); return; }
     const ui = panelInit(view);
     showPanel(ui);
     if (view === 'forge') refreshDiff(ui);
@@ -189,6 +193,18 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
     const name = line.split(/\s/)[0]!;
     if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
+    if (name === '/pin') {
+      const arg = line.slice(name.length).trim();
+      const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
+      const text = arg || last?.text;
+      if (!text) { note('nothing to pin yet; /pin keeps the last reply, /pin <text> keeps a note'); return; }
+      try {
+        const file = addPin(info.workspace, mission, { source: arg ? 'note' : `${info.roles[last!.role ?? '']?.name ?? last!.role} (${last!.role})`, text });
+        setPins(readNotebook(info.workspace, mission));
+        note(`pinned to ${file.replace(info.workspace + '/', '')} · /panel notebook shows it`);
+      } catch (e: any) { note('could not pin: ' + e.message); }
+      return;
+    }
     if (name === '/operator' || name === '/decide') { setDeck(2); return; }
     if (['/panel', '/observe', '/narrator', '/visualize'].includes(name)) { openPanel(line.slice(name.length)); return; }
     if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
@@ -321,9 +337,16 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
     return () => { term.off('ev', onEv); };
   }, [term, help, info, listDir]);
 
+  const panelSources = useMemo(() => (panel?.view === 'sources' ? collectSources(state.blocks, panel.kb.hits, (r) => info.roles[r]?.name ?? r) : []), [panel?.view === 'sources' ? state.blocks : null, panel?.kb.hits, panel?.view]);
+  const preview = (rel: string) => {
+    let v = previews.current.get(rel);
+    if (!v) { v = previewOf(info.workspace, rel); previews.current.set(rel, v); }
+    return v;
+  };
+
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, obs, panel: panel ? { ui: panel, cap, pending: pending0, mission } : null };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, obs, panel: panel ? { ui: panel, cap, pending: pending0, mission, sources: panelSources, notebook: pins, preview } : null };
   const lineCount = useMemo(() => transcript(base, size.w).length, [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -333,7 +356,7 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
 
   const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, obsV, cap]);
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, obsV, cap, pins, panelSources]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>

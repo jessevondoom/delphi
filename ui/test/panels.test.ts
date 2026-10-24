@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Observer, totalTokens } from '../src/observer.ts';
+import { addPin, readNotebook } from '../src/notebook.ts';
+import { collectSources, extractPointers, previewOf, resolveSource } from '../src/sources.ts';
+import type { Block } from '../src/fold.ts';
 import { panelBody, panelFooter, panelHint, panelInit, panelKey, parseView, selectedBuild, sparkline, VIEWS, type PanelCtx, type PanelUi } from '../src/panels.ts';
 import { thinkingBody, type Model } from '../src/screen.ts';
 import { frame } from '../src/screen.ts';
@@ -200,7 +206,7 @@ test('keys: shift+arrows and tab cycle the views, digits jump, esc and q close',
   let r = panelKey(panelInit('council'), key('right', { shift: true }), o);
   assert.equal(r.ui.view, 'epic');
   r = panelKey(r.ui, key('left', { shift: true }), o); r = panelKey(r.ui, key('left', { shift: true }), o);
-  assert.equal(r.ui.view, 'archives', 'wraps around');
+  assert.equal(r.ui.view, 'connectors', 'wraps around');
   assert.equal(panelKey(r.ui, text('3'), o).ui.view, 'forge');
   assert.equal(panelKey(panelInit('spend'), key('tab'), o).ui.view, 'archives');
   assert.deepEqual(panelKey(panelInit('spend'), key('esc'), o).act, { t: 'close' });
@@ -278,7 +284,7 @@ test('a panel takes the body and the prompt row, and the screen stays exactly w 
   }
   const out = frame(m, 100, 30).map(plain).join('\n');
   assert.match(out, /SPEND TELEMETRY · mission m1/);
-  assert.match(out, /Spend 5\/6 · shift\+←→ or tab view/);
+  assert.match(out, /Spend 5\/9 · shift\+←→ or tab view/);
   assert.doesNotMatch(out, /my draft/);
 });
 
@@ -288,4 +294,108 @@ test('keys that arrive in one read are taken one at a time, except while typing 
   assert.equal(r.ui.kb.editing, true);
   assert.equal(r.ui.kb.query, 'abc', 'after the slash everything typed is the query');
   assert.equal(panelKey(panelInit('spend'), text('31'), o).ui.view, 'council', 'digits are keys too, applied in order');
+});
+
+// ── phase 5: sources, notebook, connectors ──────────────────────────────────
+
+const blocks = (): Block[] => [
+  { id: 1, kind: 'user', text: 'Compare @specs/002-adapter-and-routing.md with REVIEW.md please', at: 1 },
+  { id: 2, kind: 'reply', role: 'architect', text: 'See specs/002-adapter-and-routing.md#4 and https://example.com/specs/zzz.md. Also memory/agents/architect.md.', at: 2 },
+  { id: 3, kind: 'tool', role: 'architect', text: 'read_file(specs/002-adapter-and-routing.md)', at: 3 },
+  { id: 4, kind: 'note', text: 'ignore specs/never.md in notes', at: 4 },
+];
+
+test('pointers are read out of replies, tool calls and mentions; URLs and ../ are ignored', () => {
+  assert.deepEqual(extractPointers('a specs/x.md#top b REVIEW.md c ../specs/y.md d https://h/specs/z.md e context/../specs/q.md'), [{ path: 'specs/x.md', anchor: 'top' }, { path: 'REVIEW.md', anchor: '' }]);
+});
+
+test('sources are counted per document, with anchors, who referenced them and how; notes are not evidence', () => {
+  const s = collectSources(blocks(), [{ pointer: 'context/glossary.md#term' }], (r) => (r === 'architect' ? 'daedalus' : r));
+  const top = s[0]!;
+  assert.equal(top.path, 'specs/002-adapter-and-routing.md');
+  assert.equal(top.count, 3);
+  assert.deepEqual(top.anchors, ['4']);
+  assert.deepEqual(top.by, ['you', 'daedalus']);
+  assert.deepEqual(top.how.sort(), ['asked', 'said', 'tool']);
+  assert.ok(s.some((x) => x.path === 'REVIEW.md' && x.by[0] === 'you'));
+  assert.ok(s.some((x) => x.path === 'memory/agents/architect.md'));
+  assert.ok(s.some((x) => x.path === 'context/glossary.md' && x.how[0] === 'search'));
+  assert.ok(!s.some((x) => x.path.includes('never') || x.path.includes('zzz')));
+});
+
+test('a source is previewed from the workspace without its frontmatter, and cannot escape it', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'ui-src-'));
+  mkdirSync(join(ws, 'team/specs'), { recursive: true });
+  writeFileSync(join(ws, 'team/specs/a.md'), '---\nid: a\n---\n\n# Title\n\nbody \x1b[31mred\x1b[0m\n');
+  writeFileSync(join(ws, 'secret.txt'), 'nope');
+  assert.deepEqual(previewOf(ws, 'specs/a.md'), ['# Title', '', 'body red', '']);
+  assert.deepEqual(previewOf(ws, '../secret.txt'), ['(not found in this workspace)']);
+  assert.deepEqual(previewOf(ws, 'specs/missing.md'), ['(not found in this workspace)']);
+  assert.equal(resolveSource(ws, '/etc/passwd'), null);
+  rmSync(ws, { recursive: true });
+});
+
+test('the sources view lists, selects and previews', () => {
+  const o = new Observer([]);
+  const sources = collectSources(blocks());
+  const c = ctx(o, { sources, preview: (rel) => [`first line of ${rel}`, 'second line'] });
+  let ui = panelInit('sources');
+  let t = panelBody(ui, c, 110, 24).map(plain).join('\n');
+  assert.match(t, /Sources · 3/);
+  assert.match(t, /❯  1\. specs\/002-adapter-and-routing\.md +#4 +×3 · asked\/said\/tool · you, architect/);
+  assert.match(t, /first line of specs\/002-adapter-and-routing\.md/);
+  ui = panelKey(ui, key('down'), o).ui;
+  t = panelBody(ui, c, 110, 24).map(plain).join('\n');
+  assert.match(t, /first line of (REVIEW|memory)/);
+  assert.equal(panelKey(panelInit('sources'), key('up'), o).ui.src, 0);
+  assert.match(panelBody(panelInit('sources'), ctx(o, { sources: [] }), 100, 12).map(plain).join('\n'), /Nothing referenced yet/);
+});
+
+test('the notebook appends pins to one document, reads them back newest first, and survives headings in the text', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'ui-nb-'));
+  assert.deepEqual(readNotebook(ws, 'm1'), []);
+  const file = addPin(ws, 'm1', { source: 'daedalus (architect)', text: 'Use a table.\n\n## Why\n\nTransactions.' }, new Date('2026-10-24T10:00:00Z'));
+  addPin(ws, 'm1', { source: 'note', text: 'check lock contention' }, new Date('2026-10-24T11:30:00Z'));
+  const raw = readFileSync(file, 'utf8');
+  assert.match(raw, /^---\nid: notebook-m1\ntitle: "Mission notebook"\nauthor: operator\n/);
+  assert.equal(raw.match(/^---$/gm)!.length, 2, 'one frontmatter block, however many pins');
+  const pins = readNotebook(ws, 'm1');
+  assert.equal(pins.length, 2);
+  assert.deepEqual(pins[0], { at: '2026-10-24T10:00:00.000Z', source: 'daedalus (architect)', text: 'Use a table.\n\n## Why\n\nTransactions.' });
+  assert.equal(pins[1]!.text, 'check lock contention');
+  const t = panelBody(panelInit('notebook'), ctx(new Observer([]), { notebook: pins }), 100, 20).map(plain).join('\n');
+  assert.ok(t.indexOf('check lock contention') < t.indexOf('Use a table.'), 'newest first');
+  assert.match(t, /2 · 2026-10-24 11:30 · note/);
+  assert.match(panelBody(panelInit('notebook'), ctx(new Observer([])), 100, 12).map(plain).join('\n'), /Nothing pinned yet\./);
+  rmSync(ws, { recursive: true });
+});
+
+test('connectors: configured ones show tools and pin state; events move a connector between ready, needs login and unavailable', () => {
+  seq = 0;
+  const o = new Observer([]);
+  o.setConnectors([{ name: 'drive', url: 'https://mcp.example/drive', account: 'a@b.c', login: 'google', roles: ['scout'], tools: [{ name: 'search', class: 'read', pinned: true }, { name: 'upload', class: 'write', pinned: false }] }]);
+  let t = panelBody(panelInit('connectors'), ctx(o), 110, 24).map(plain).join('\n');
+  assert.match(t, /drive +○ idle/);
+  assert.match(t, /account a@b\.c · login google · roles scout/);
+  assert.match(t, /search +read +pinned/);
+  assert.match(t, /upload +write +not ratified: delphi connectors pin drive, then \/ratify/);
+  o.apply(ev('connector.call', 't', { connector: 'drive', tool: 'search' }, { timestamp: '2026-10-24T10:00:00Z' }));
+  o.apply(ev('connector.result', 't', { connector: 'drive', tool: 'search', is_error: false }));
+  o.apply(ev('connector.denied', 't', { connector: 'drive', tool: 'upload', reason: 'not available to the scout' }));
+  t = panelBody(panelInit('connectors'), ctx(o), 110, 24).map(plain).join('\n');
+  assert.match(t, /drive +● ready/);
+  assert.match(t, /1 call\(s\) · 1 result\(s\) · 1 refused · last search/);
+  o.apply(ev('connector.reauth_required', 't', { connector: 'drive', reason: 'token expired' }));
+  assert.match(panelBody(panelInit('connectors'), ctx(o), 110, 24).map(plain).join('\n'), /✖ needs login · token expired/);
+  o.apply(ev('connector.unavailable', 't', { connector: 'drive', reason: 'listing the tools timed out' }));
+  assert.match(panelBody(panelInit('connectors'), ctx(o), 110, 24).map(plain).join('\n'), /✖ unavailable · listing the tools timed out/);
+  assert.ok(o.narrative.some((l) => l.includes('drive needs you to sign in again')));
+  assert.match(panelBody(panelInit('connectors'), ctx(new Observer([])), 100, 12).map(plain).join('\n'), /No connectors are configured/);
+});
+
+test('an event for a connector the snapshot did not list still gets a row', () => {
+  seq = 0;
+  const o = new Observer([]);
+  o.apply(ev('connector.call', 't', { connector: 'slack', tool: 'post' }));
+  assert.equal(o.connectors.get('slack')!.calls, 1);
 });

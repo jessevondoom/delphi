@@ -4,17 +4,19 @@
 import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import type { Ev } from './input.ts';
+import type { Pin } from './notebook.ts';
 import { ordered, totalTokens, type Build, type Council, type Observer } from './observer.ts';
+import type { Source } from './sources.ts';
 import * as T from './theme.ts';
 
-export type View = 'council' | 'epic' | 'forge' | 'agents' | 'spend' | 'archives';
-export const VIEWS: View[] = ['council', 'epic', 'forge', 'agents', 'spend', 'archives'];
-export const TITLES: Record<View, string> = { council: 'COUNCIL CHAMBER', epic: 'EPIC DAG', forge: 'FORGE DIFFS', agents: 'AGENTS', spend: 'SPEND TELEMETRY', archives: 'ARCHIVES' };
-const SHORT: Record<View, string> = { council: 'Council', epic: 'Epic DAG', forge: 'Forge Diffs', agents: 'Agents', spend: 'Spend', archives: 'Archives' };
+export type View = 'council' | 'epic' | 'forge' | 'agents' | 'spend' | 'archives' | 'sources' | 'notebook' | 'connectors';
+export const VIEWS: View[] = ['council', 'epic', 'forge', 'agents', 'spend', 'archives', 'sources', 'notebook', 'connectors'];
+export const TITLES: Record<View, string> = { council: 'COUNCIL CHAMBER', epic: 'EPIC DAG', forge: 'FORGE DIFFS', agents: 'AGENTS', spend: 'SPEND TELEMETRY', archives: 'ARCHIVES', sources: 'SOURCES', notebook: 'NOTEBOOK', connectors: 'CONNECTORS' };
+const SHORT: Record<View, string> = { council: 'Council', epic: 'Epic DAG', forge: 'Forge Diffs', agents: 'Agents', spend: 'Spend', archives: 'Archives', sources: 'Sources', notebook: 'Notebook', connectors: 'Connectors' };
 
 export function parseView(s: string): View | null {
   const k = s.toLowerCase();
-  const alias: Record<string, View> = { council: 'council', chamber: 'council', '1': 'council', epic: 'epic', dag: 'epic', '2': 'epic', forge: 'forge', diffs: 'forge', '3': 'forge', agents: 'agents', roster: 'agents', '4': 'agents', spend: 'spend', telemetry: 'spend', '5': 'spend', archives: 'archives', kb: 'archives', '6': 'archives' };
+  const alias: Record<string, View> = { council: 'council', chamber: 'council', '1': 'council', epic: 'epic', dag: 'epic', '2': 'epic', forge: 'forge', diffs: 'forge', '3': 'forge', agents: 'agents', roster: 'agents', '4': 'agents', spend: 'spend', telemetry: 'spend', '5': 'spend', archives: 'archives', kb: 'archives', '6': 'archives', sources: 'sources', citations: 'sources', '7': 'sources', notebook: 'notebook', pins: 'notebook', '8': 'notebook', connectors: 'connectors', connector: 'connectors', '9': 'connectors' };
   return alias[k] ?? null;
 }
 
@@ -30,9 +32,11 @@ export type PanelUi = {
   /** The last `observe.diff` answer for the Forge view. */
   diff: any | null;
   kb: Kb;
+  /** Selected row in the Sources list. */
+  src: number;
 };
 
-export const panelInit = (view: View = 'epic'): PanelUi => ({ view, pick: -1, scroll: 0, node: 0, diff: null, kb: { editing: false, query: '', hits: [], note: '', sel: 0 } });
+export const panelInit = (view: View = 'epic'): PanelUi => ({ view, pick: -1, scroll: 0, node: 0, src: 0, diff: null, kb: { editing: false, query: '', hits: [], note: '', sel: 0 } });
 
 export type PanelAct = { t: 'close' } | { t: 'search'; q: string } | { t: 'diff'; task: string };
 
@@ -87,8 +91,8 @@ export function panelKey(ui: PanelUi, e: Ev, obs: Observer): { ui: PanelUi; act?
     }
     case 'tab': return go(step(ui.view, 1));
     case 'shift-tab': return go(step(ui.view, -1));
-    case 'up': return ui.view === 'epic' ? { ui: { ...ui, node: Math.max(0, ui.node - 1) } } : ui.view === 'archives' && ui.kb.hits.length ? { ui: { ...ui, kb: { ...ui.kb, sel: Math.max(0, ui.kb.sel - 1) } } } : scroll(-1);
-    case 'down': return ui.view === 'epic' ? { ui: { ...ui, node: ui.node + 1 } } : ui.view === 'archives' && ui.kb.hits.length ? { ui: { ...ui, kb: { ...ui.kb, sel: Math.min(ui.kb.hits.length - 1, ui.kb.sel + 1) } } } : scroll(1);
+    case 'up': return ui.view === 'sources' ? { ui: { ...ui, src: Math.max(0, ui.src - 1) } } : ui.view === 'epic' ? { ui: { ...ui, node: Math.max(0, ui.node - 1) } } : ui.view === 'archives' && ui.kb.hits.length ? { ui: { ...ui, kb: { ...ui.kb, sel: Math.max(0, ui.kb.sel - 1) } } } : scroll(-1);
+    case 'down': return ui.view === 'sources' ? { ui: { ...ui, src: ui.src + 1 } } : ui.view === 'epic' ? { ui: { ...ui, node: ui.node + 1 } } : ui.view === 'archives' && ui.kb.hits.length ? { ui: { ...ui, kb: { ...ui.kb, sel: Math.min(ui.kb.hits.length - 1, ui.kb.sel + 1) } } } : scroll(1);
     case 'pgup': return scroll(-10);
     case 'pgdn': return scroll(10);
     case 'home': return { ui: { ...ui, scroll: 0 } };
@@ -122,7 +126,11 @@ function columns(cols: string[][], w: number, gap = 2): string[] {
   return Array.from({ length: rows }, (_, i) => wrapped.map((c) => { const l = c[i] ?? ''; return l + ' '.repeat(Math.max(0, cw - T.width(l))); }).join(' '.repeat(gap)).trimEnd());
 }
 
-export type PanelCtx = { obs: Observer; info: T.Info; pal: T.Pal; now: number; cap: number; pending: number; mission: string };
+export type PanelCtx = {
+  obs: Observer; info: T.Info; pal: T.Pal; now: number; cap: number; pending: number; mission: string;
+  /** What the conversation referenced, what the operator pinned, and a way to read a source's first lines. */
+  sources?: Source[]; notebook?: Pin[]; preview?: (rel: string) => string[];
+};
 
 const name = (c: PanelCtx, role: string) => T.roleName(role, c.info);
 const window = (lines: string[], scroll: number, h: number) => { const at = Math.max(0, Math.min(scroll, Math.max(0, lines.length - h))); return lines.slice(at, at + h); };
@@ -284,13 +292,59 @@ function archivesView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] 
   return window(lines, ui.scroll, h);
 }
 
+function sourcesView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {
+  const p = c.pal, list = c.sources ?? [];
+  if (!list.length) return ['', T.dim('  Nothing referenced yet.'), '', T.dim('  Documents named in replies, read by tools, @-mentioned by you or found by a search appear here.')];
+  const sel = Math.min(ui.src, list.length - 1);
+  const lines = [rule(`Sources · ${list.length}`, w, p)];
+  list.forEach((s, i) => {
+    const anchors = s.anchors.length ? '  ' + s.anchors.map((a) => '#' + a).join(' ') : '';
+    const row = `${i === sel ? T.accent('❯') : ' '} ${String(i + 1).padStart(2)}. ${T.link(s.path)}${T.dim(anchors + `  ×${s.count} · ${s.how.join('/')} · ${s.by.join(', ')}`)}`;
+    lines.push(i === sel ? chalk.bold(row) : row);
+  });
+  const cur = list[sel]!;
+  const room = Math.max(3, h - lines.length - 3);
+  lines.push('', rule('Preview', w, p), T.link(' ' + cur.path));
+  for (const l of (c.preview?.(cur.path) ?? []).flatMap((x) => wrap('   ' + x, w - 1)).slice(0, room)) lines.push(T.text(p)(l));
+  return window(lines, ui.scroll, h);
+}
+
+function notebookView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {
+  const p = c.pal, pins = c.notebook ?? [];
+  if (!pins.length) return ['', T.dim('  Nothing pinned yet.'), '', T.dim('  /pin keeps the last reply here; /pin <text> keeps a note. The notebook is a markdown document in the mission.')];
+  const lines: string[] = [];
+  [...pins].reverse().forEach((pin, i) => {
+    lines.push(rule(`${pins.length - i} · ${pin.at.replace('T', ' ').slice(0, 16)} · ${pin.source}`, w, p));
+    lines.push(...pin.text.split('\n').flatMap((l) => wrap(' ' + l, w - 1)).map(T.text(p)), '');
+  });
+  return window(lines, ui.scroll, h);
+}
+
+const CONN_COLOR: Record<string, (s: string) => string> = { ready: chalk.hex('#22c55e'), idle: T.dim, 'needs login': T.warn, unavailable: T.crimson };
+function connectorsView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {
+  const p = c.pal, rows = [...c.obs.connectors.values()];
+  if (!rows.length) return ['', T.dim('  No connectors are configured.'), '', T.dim('  Add [connectors.<name>] to config.toml and ratify it (delphi connectors status).')];
+  const lines: string[] = [];
+  for (const r of rows) {
+    const paint = CONN_COLOR[r.state] ?? T.dim;
+    lines.push(chalk.bold(T.text(p)(` ${r.name}`)) + '  ' + paint(`${r.state === 'ready' ? '●' : r.state === 'idle' ? '○' : '✖'} ${r.state}`) + T.dim(r.reason ? ` · ${oneLine(r.reason, w - 30)}` : ''));
+    lines.push(T.dim(`   ${r.url || '(not in the snapshot)'}`));
+    lines.push(T.dim(`   account ${r.account ?? '(none)'} · login ${r.login ?? '(none needed)'} · roles ${r.roles.join(', ') || '—'}`));
+    lines.push(T.text(p)(`   ${r.calls} call(s) · ${r.results} result(s)${r.errors ? ` · ${r.errors} error(s)` : ''}${r.denied ? ` · ${r.denied} refused` : ''}${r.lastTool ? ` · last ${r.lastTool}` : ''}`));
+    for (const t of r.tools) lines.push(`   ${T.text(p)(t.name.padEnd(24))} ${T.dim(t.class.padEnd(6))} ${t.pinned ? chalk.hex('#22c55e')('pinned') : T.warn('not ratified: delphi connectors pin ' + r.name + ', then /ratify')}`);
+    lines.push('');
+  }
+  return window(lines, ui.scroll, h);
+}
+
 /** The panel body: exactly `h` lines of at most `w` columns. */
 export function panelBody(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {
   const title = T.dim(` ${TITLES[ui.view]} · mission ${c.mission || '…'}`);
   const inner = h - 1;
   const body = ui.view === 'council' ? councilView(ui, c, w, inner) : ui.view === 'epic' ? epicView(ui, c, w, inner)
     : ui.view === 'forge' ? forgeView(ui, c, w, inner) : ui.view === 'agents' ? agentsView(ui, c, w, inner)
-    : ui.view === 'spend' ? spendView(ui, c, w, inner) : archivesView(ui, c, w, inner);
+    : ui.view === 'spend' ? spendView(ui, c, w, inner) : ui.view === 'sources' ? sourcesView(ui, c, w, inner)
+    : ui.view === 'notebook' ? notebookView(ui, c, w, inner) : ui.view === 'connectors' ? connectorsView(ui, c, w, inner) : archivesView(ui, c, w, inner);
   return [title, ...body, ...Array(inner).fill('')].slice(0, h).map((l) => T.clip(l, w));
 }
 
@@ -298,7 +352,7 @@ export function panelBody(ui: PanelUi, c: PanelCtx, w: number, h: number): strin
 export function panelHint(ui: PanelUi): string {
   const i = VIEWS.indexOf(ui.view);
   const dots = VIEWS.map((_, n) => (n === i ? T.accent('●') : T.dim('○'))).join(' ');
-  const extra = ui.view === 'archives' ? (ui.kb.editing ? 'enter search · esc stop typing' : '/ search · ↑↓ select') : ui.view === 'forge' ? '←→ build · r refresh' : ui.view === 'council' ? '←→ council' : ui.view === 'epic' ? '↑↓ select' : '↑↓ scroll';
+  const extra = ui.view === 'archives' ? (ui.kb.editing ? 'enter search · esc stop typing' : '/ search · ↑↓ select') : ui.view === 'forge' ? '←→ build · r refresh' : ui.view === 'council' ? '←→ council' : ui.view === 'epic' || ui.view === 'sources' ? '↑↓ select' : '↑↓ scroll';
   return T.dim(`${SHORT[ui.view]} ${i + 1}/${VIEWS.length} · shift+←→ or tab view · 1-${VIEWS.length} jump · ${extra} · esc chat  `) + dots;
 }
 
