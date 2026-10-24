@@ -78,14 +78,12 @@ The architecture is already chosen in `context/domains/federation-rag-and-distri
 3. Add embeddings only if lexical recall on that set is inadequate. Retrieved chunks keep their source provenance tier.
 4. Index is derived state: rebuildable from the Markdown, never a source of truth, never synced as authoritative (`specs/007`).
 
-## 8. Naming (open decision for the operator)
-Role ID is `librarian`; theme names never appear in persisted files (`specs/001` §6.1), so the role can exist without any figure. The Greek theme needs a name for display, and the obvious one is taken:
+## 8. Naming (decided: operator, 2026-10-24)
+Role ID is `librarian`; theme names never appear in persisted files (`specs/001` §6.1), so nothing below touches a manifest, path or log.
 
-- The strongest mythic fit for a librarian (patron of the Muses, keeper of Delphi's maxims) is the figure the Greek theme already gives to `writer`. Using it means re-figuring the writer; the candidates and trade-off are recorded in `themes/greek/theme.md`, not here.
-- **Mnemosyne** (mother of the Muses, personified memory) fits the librarian without displacing anyone, and makes "Muses as subagents" literal.
-- A theme pack must name exactly the canonical roles (`specs/001` §6.2), so adding the tenth role needs a `theme_schema` bump. That is part of the build, not of this spec.
-
-Recommendation: decide at build time. Until then the Greek theme records the reservation in its non-loaded rationale section only.
+- **Greek theme display name: "the Muses"**, a collective rather than a single figure. This displaces no existing figure and makes the §4 subagents literal. The single-figure candidates (the writer's figure, and Mnemosyne, rejected as hard to remember) are not used.
+- **Badge:** wherever the librarian or one of its Muse spans is rendered, it shows a badge in one of nine colors, one per Muse, chosen at random per span. Color is display-only: it carries no meaning, is never persisted, and the badge always includes the text label so it is legible without color.
+- A theme pack must name exactly the canonical roles (`specs/001` §6.2), so adding the tenth role needs a `theme_schema` bump and a collective-name/badge field. That is part of the build, not of this spec.
 
 ## 9. Verification Plan (applies when built)
 1. `delphi lint` accepts the new manifest and rejects a librarian manifest with network or shell.

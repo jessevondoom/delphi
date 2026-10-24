@@ -50,4 +50,4 @@ roles:
 
 **Window labels.** In Hesiod, **Chaos** (*Khaos*, from *khainō*, "to gape") is the non-anthropomorphic clearing everything else emerges from, which fits the persona-free operator console. **Homer** chronicles the gods' deeds, which fits the narrator window.
 
-**Reserved (not loaded).** A tenth role, `librarian`, is scoped in [`specs/013`](../../specs/013-librarian-and-internal-retrieval.md). Its figure is undecided: **Apollo** (patron of the Muses, but currently the `writer`) or **Mnemosyne** (mother of the Muses). Nothing here changes the nine-role mapping above.
+**Reserved (not loaded).** A tenth role, `librarian`, is scoped in [`specs/013`](../../specs/013-librarian-and-internal-retrieval.md). Decided by the operator 2026-10-24: its Greek display name is **the Muses** (collective), rendered as a badge in one of nine random colors, one per Muse; Apollo stays `writer`. Nothing here changes the nine-role mapping above.
