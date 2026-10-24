@@ -1,4 +1,4 @@
-//! The connector host (`specs/010`): Delphi's own MCP client, run in the daemon.
+//! The connector host (`specs/010`): runs the MCP sessions in the daemon (client: the official `rmcp` SDK, D-27).
 //!
 //! The ratified catalog (`[connectors.*]`) decides which servers, hosts, roles and tools exist. A server's
 //! tool is offered to an agent only if it is listed there, its definition (name, schema, description) matches
@@ -12,7 +12,8 @@
 
 use delphi_adapter::claude::ToolDef;
 use delphi_adapter::config::{Connector, SharedConfig, ToolClass};
-use delphi_adapter::mcp::{definition_hash, HttpTransport, McpClient, McpError, McpTransport, RemoteTool};
+use delphi_adapter::mcp::{definition_hash, BoxFuture, McpError, McpSession, RemoteTool};
+use delphi_adapter::mcp_rmcp::RmcpClient;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -60,16 +61,18 @@ pub trait TokenSource: Send + Sync {
     fn forget(&self, connector: &str, login: &str);
 }
 
-/// How a connector reaches its server.
-pub trait TransportFactory: Send + Sync {
-    fn make(&self, c: &Connector) -> Result<Box<dyn McpTransport>, McpError>;
+/// How a connector reaches its server: connects, runs `initialize`, and hands back the live session.
+/// `token` is the OAuth access token, sent as a Bearer header.
+pub trait SessionFactory: Send + Sync {
+    fn connect<'a>(&'a self, c: &'a Connector, token: Option<String>) -> BoxFuture<'a, Result<Arc<dyn McpSession>, McpError>>;
 }
 
+/// The real thing: the official MCP SDK over Streamable HTTP, held to the connector's host list.
 pub struct HttpFactory;
 
-impl TransportFactory for HttpFactory {
-    fn make(&self, c: &Connector) -> Result<Box<dyn McpTransport>, McpError> {
-        Ok(Box::new(HttpTransport::new(&c.url, &c.hosts)?))
+impl SessionFactory for HttpFactory {
+    fn connect<'a>(&'a self, c: &'a Connector, token: Option<String>) -> BoxFuture<'a, Result<Arc<dyn McpSession>, McpError>> {
+        Box::pin(async move { Ok(Arc::new(RmcpClient::connect(&c.url, &c.hosts, token).await?) as Arc<dyn McpSession>) })
     }
 }
 
@@ -125,9 +128,9 @@ pub struct ConnectorHost {
     cfg: SharedConfig,
     ws_dir: PathBuf,
     tokens: Arc<dyn TokenSource>,
-    factory: Arc<dyn TransportFactory>,
+    factory: Arc<dyn SessionFactory>,
     identity: Arc<dyn Identity>,
-    sessions: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
+    sessions: tokio::sync::Mutex<HashMap<String, Arc<dyn McpSession>>>,
     /// connector → its tools as of the last refresh.
     listed: Mutex<HashMap<String, Vec<ToolStatus>>>,
     calls: Mutex<HashMap<String, VecDeque<Instant>>>,
@@ -148,7 +151,7 @@ pub fn wire_name(connector: &str, tool: &str) -> String {
 }
 
 impl ConnectorHost {
-    pub fn new(cfg: SharedConfig, ws_dir: &Path, tokens: Arc<dyn TokenSource>, factory: Arc<dyn TransportFactory>, identity: Option<Arc<dyn Identity>>) -> Arc<ConnectorHost> {
+    pub fn new(cfg: SharedConfig, ws_dir: &Path, tokens: Arc<dyn TokenSource>, factory: Arc<dyn SessionFactory>, identity: Option<Arc<dyn Identity>>) -> Arc<ConnectorHost> {
         Arc::new(ConnectorHost {
             cfg,
             ws_dir: ws_dir.to_path_buf(),
@@ -245,7 +248,7 @@ impl ConnectorHost {
 
     // ── sessions ────────────────────────────────────────────────────────────
 
-    async fn session(&self, connector: &str, fresh: bool) -> Result<Arc<McpClient>, ConnectorError> {
+    async fn session(&self, connector: &str, fresh: bool) -> Result<Arc<dyn McpSession>, ConnectorError> {
         let c = self.connector(connector).ok_or_else(|| ConnectorError::Unknown(connector.into()))?;
         let mut sessions = self.sessions.lock().await;
         if !fresh {
@@ -271,8 +274,7 @@ impl ConnectorHost {
                 return Err(ConnectorError::AccountMismatch { connector: connector.into(), expected: account.clone() });
             }
         }
-        let client = Arc::new(McpClient::new(self.factory.make(&c).map_err(ConnectorError::Mcp)?, token));
-        client.initialize().await.map_err(|e| map_mcp(connector, e))?;
+        let client = self.factory.connect(&c, token).await.map_err(|e| map_mcp(connector, e))?;
         sessions.insert(connector.to_string(), client.clone());
         Ok(client)
     }
@@ -492,37 +494,47 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) struct MockTransport(pub Arc<Mock>);
+    /// The scripted server as a session: `status` stands in for the HTTP status the server would answer with.
+    pub(crate) struct MockSession(pub Arc<Mock>);
 
-    impl McpTransport for MockTransport {
-        fn post<'a>(&'a self, body: &'a Value, _h: &'a [(String, String)], expect_id: Option<i64>) -> delphi_adapter::mcp::BoxFuture<'a, Result<delphi_adapter::mcp::Reply, McpError>> {
+    impl MockSession {
+        fn check(&self) -> Result<(), McpError> {
+            match *self.0.status.lock().unwrap() {
+                401 => Err(McpError::NeedsReauth),
+                403 => Err(McpError::Forbidden("refused".into())),
+                429 | 503 => Err(McpError::Throttled(None)),
+                _ => Ok(()),
+            }
+        }
+    }
+
+    impl McpSession for MockSession {
+        fn list_tools(&self) -> BoxFuture<'_, Result<Vec<RemoteTool>, McpError>> {
             Box::pin(async move {
-                let m = &self.0;
-                let method = body["method"].as_str().unwrap_or("");
-                let status = *m.status.lock().unwrap();
-                let wrap = |result: Value| Some(json!({"jsonrpc": "2.0", "id": body["id"], "result": result}));
-                let message = match method {
-                    "initialize" => {
-                        m.inits.fetch_add(1, Ordering::SeqCst);
-                        wrap(json!({"protocolVersion": "2025-11-25", "capabilities": {}}))
-                    }
-                    "tools/list" => wrap(json!({"tools": m.tools.lock().unwrap().clone()})),
-                    "tools/call" => {
-                        m.calls.lock().unwrap().push((body["params"]["name"].as_str().unwrap_or("").to_string(), body["params"]["arguments"].clone()));
-                        wrap(json!({"content": [{"type": "text", "text": m.reply.lock().unwrap().clone()}], "isError": false}))
-                    }
-                    _ => None,
-                };
-                Ok(delphi_adapter::mcp::Reply { status: if expect_id.is_none() { 202 } else { status }, session_id: None, message, retry_after: None, body_hint: String::new() })
+                self.check()?;
+                Ok(self.0.tools.lock().unwrap().iter().map(|t| RemoteTool { name: t["name"].as_str().unwrap_or("").into(), description: t["description"].as_str().unwrap_or("").into(), input_schema: t["inputSchema"].clone() }).collect())
+            })
+        }
+
+        fn call_tool<'a>(&'a self, name: &'a str, arguments: &'a Value) -> BoxFuture<'a, Result<delphi_adapter::mcp::CallResult, McpError>> {
+            Box::pin(async move {
+                self.check()?;
+                self.0.calls.lock().unwrap().push((name.to_string(), arguments.clone()));
+                Ok(delphi_adapter::mcp::CallResult { text: self.0.reply.lock().unwrap().clone(), is_error: false })
             })
         }
     }
 
     pub(crate) struct MockFactory(pub Arc<Mock>);
 
-    impl TransportFactory for MockFactory {
-        fn make(&self, _c: &Connector) -> Result<Box<dyn McpTransport>, McpError> {
-            Ok(Box::new(MockTransport(self.0.clone())))
+    impl SessionFactory for MockFactory {
+        fn connect<'a>(&'a self, _c: &'a Connector, _token: Option<String>) -> BoxFuture<'a, Result<Arc<dyn McpSession>, McpError>> {
+            Box::pin(async move {
+                self.0.inits.fetch_add(1, Ordering::SeqCst);
+                let session = MockSession(self.0.clone());
+                session.check()?;
+                Ok(Arc::new(session) as Arc<dyn McpSession>)
+            })
         }
     }
 

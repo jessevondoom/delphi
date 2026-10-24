@@ -3,7 +3,7 @@ id: spec-010-connectors-and-tool-access
 title: "010: Native Connectors (MCP) & the Tool Access Layer"
 author: architect
 timestamp: 2026-10-24T16:00:00Z
-status: approved   # by the operator, 2026-10-24, after Council 006 rounds 1 and 2 (D-23)
+status: approved   # by the operator, 2026-10-24, after Council 006 rounds 1 and 2 (D-23); §1 item 6 amended by 010-A1 (D-27, operator 2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified
@@ -32,7 +32,7 @@ agent span ──tool call──▶ tool pipeline ──▶ ConnectorHost ──
 3. **One pipeline.** Every connector call passes through the same steps as `read_file` and `write_file`: classify → taint gate → approval if needed → execute → persist. There is no second code path.
 4. **Harness bridge.** When a model runs through a harness (`specs/009` §7), connector tools reach it through the per-span MCP socket of `specs/009` §7.6. The harness sees them as Delphi's tools; its own connectors stay off (§7 item 5 stands).
 5. **Transports:** Streamable HTTP (remote servers; all five v1 connectors) and stdio (local servers, later). The client negotiates the protocol version and pins a minimum (initially the 2025-11-25 revision).
-6. **The MCP client is written in-tree by default**, minimal (`initialize`, `tools/list`, `tools/call`, Streamable HTTP, protocol-version negotiation) on the existing `reqwest` transport, behind a small `McpTransport` trait so an adopted crate can replace it later. Reasons: redirects, TLS, timeouts and size limits stay under Delphi's control, and none of the protocol's optional features (roots, sampling, prompts) are wanted (Council 006, red-team). The strategist seat argued for adopting a library to avoid the maintenance of Streamable HTTP session handling. The first task of slice 1 is a short spike comparing the two on the same contract tests; the trait keeps the choice reversible, and the policy code (taint, approvals, path guard, pinning) stays in-tree either way.
+6. **The MCP client is the official Rust SDK, `rmcp`** (amendment 010-A1, D-27, operator 2026-10-24), wrapped in `delphi-adapter::mcp_rmcp` behind a small `McpSession` trait (`list_tools`, `call_tool`) so the connector host sees only Delphi's types. Delphi keeps what makes it safe: the connector's host list is enforced by the HTTP client's redirect policy and a check of the URL before anything is sent (https only, loopback excepted; only 307/308 followed, only to a listed host, at most 3 hops), tokens never appear in errors, and the policy code (taint, approvals, path guard, pinning) stays in-tree. *History:* Council 006 chose a minimal in-tree client so redirects, timeouts and size limits stayed under Delphi's control; the strategist seat argued for a library. The slice-1 spike ran both on the same contract cases and the library matched them except the accepted differences listed in the `mcp_rmcp.rs` header (no cap on a plain JSON response, `Retry-After` dropped, strict parsing of server replies). The protocol floor is still 2025-11-25. A new connector is checked against the real server with the ignored `live_server_smoke` test before it is ratified.
 
 ## 3. The Ratified Catalog
 Connector configuration is a Red-tier proposal and is hashed with `[access]` (`config.toml#access`; `[connectors.*]` joins `[harness.*]` in `lock::access_blocks`). Nothing is read from an unratified edit.
