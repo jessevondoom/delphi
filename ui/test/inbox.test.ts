@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { cardsOf, inboxBody, inboxHint, inboxInit, inboxKey } from '../src/inbox.ts';
+import { Observer } from '../src/observer.ts';
 import { fold, initial } from '../src/fold.ts';
 import { answerCard } from '../src/run.ts';
 import { frame, header, footer, type Model } from '../src/screen.ts';
@@ -116,7 +117,7 @@ test('a card is answered with its own hash, not the newest one\'s', async () => 
 
 test('deck 2 swaps the prompt for the inbox hint and the header counts the decisions', () => {
   const s = three();
-  const m: Model = { info, pal: { dark: true }, state: s, now: 5000, deck: 2, composer: C.insert(C.empty(), 'draft text'), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'default' };
+  const m: Model = { info, pal: { dark: true }, state: s, now: 5000, deck: 2, composer: C.insert(C.empty(), 'draft text'), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'default', obs: new Observer(), panel: null };
   const out = frame(m, 100, 24).map(plain).join('\n');
   assert.doesNotMatch(out, /draft text/, 'the draft is kept but not shown while the inbox has the keys');
   assert.match(out, /decision 1\/3/);
@@ -124,6 +125,6 @@ test('deck 2 swaps the prompt for the inbox hint and the header counts the decis
 });
 
 test('the footer names a non-default approval mode', () => {
-  const m = { info, pal: { dark: true }, state: initial(0), now: 0, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'accept-edits' } as Model;
+  const m = { info, pal: { dark: true }, state: initial(0), now: 0, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'accept-edits', obs: new Observer(), panel: null } as Model;
   assert.match(plain(footer(m, 100)), /0 tokens · accept-edits · approvals|0 tokens · accept-edits · shortcuts/);
 });

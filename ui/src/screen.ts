@@ -5,6 +5,8 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { status, type Block, type State } from './fold.ts';
 import { cardsOf, inboxBody, inboxHint, type InboxUi } from './inbox.ts';
+import type { Observer } from './observer.ts';
+import { panelBody, panelFooter, panelHint, type PanelCtx, type PanelUi } from './panels.ts';
 import * as T from './theme.ts';
 import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
@@ -19,6 +21,10 @@ export type Model = {
   inbox: InboxUi;
   /** The approval mode the daemon is in: default, accept-edits or mission-auto. */
   mode: string;
+  /** The Observer's view model: panels and the thinking deck read it. */
+  obs: Observer;
+  /** An open panel, over whatever deck is showing. */
+  panel: { ui: PanelUi; cap: number; pending: number; mission: string } | null;
 };
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'];
@@ -105,9 +111,30 @@ const HELP = [
   '  a message sent while something runs is queued and goes when it finishes',
 ];
 
+/**
+ * The left deck (spec 005b §3.3): what each agent is writing right now, span by span, and the tool calls so far.
+ * It reads the Observer's live buffers, which live in memory only: reasoning is never saved and never enters the chat.
+ */
+export function thinkingBody(m: Model, w: number, h: number): string[] {
+  const spans = [...m.obs.live.entries()].filter(([, t]) => t.trim());
+  const out: string[] = ['', T.dim('  Activity and thinking stream · memory only, never saved')];
+  const tools = m.state.blocks.filter((b) => b.kind === 'tool').slice(-4);
+  if (tools.length) out.push('', ...tools.map((b) => '  ' + T.dim('→ ' + b.text) + ' ' + (b.status === 'error' ? T.crimson('✖') : b.status === 'ok' ? T.dim('✔') : T.dim('…'))));
+  if (!spans.length) out.push('', T.dim(Object.keys(m.state.running).length ? '  waiting for the first words…' : '  nothing running'));
+  for (const [id, t] of spans) {
+    const node = m.obs.nodes.get(id);
+    const role = node?.role ?? 'orchestrator';
+    out.push('', '  ' + T.badge(role, 'running', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(` · ${id}`));
+    out.push(...t.split('\n').flatMap((l) => wrapAnsi(l, Math.max(10, w - 4), { hard: true, trim: false }).split('\n')).map((l) => '    ' + chalk.dim(l)));
+  }
+  if (m.state.live && !spans.length) out.push('', ...renderMarkdown(m.state.live.slice(-2000), w - 2).map((l) => '  ' + chalk.dim(l)));
+  const fit = out.length > h ? [...out.slice(0, 2), ...out.slice(out.length - (h - 2))] : [...out, ...Array(h - out.length).fill('')];
+  return fit.map((l) => T.clip(l, w));
+}
+
 function deckBody(m: Model, w: number, h: number): string[] {
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
-  if (m.deck === 0) return pad(['', T.dim('  Activity and thinking stream'), '', ...(m.state.live ? renderMarkdown(m.state.live.slice(-2000), w - 2).map((l) => '  ' + chalk.dim(l)) : [T.dim('  nothing running')]), '', T.dim('  Reasoning and tool parameters belong here, never in the chat. Lands in a later phase.')]);
+  if (m.deck === 0) return thinkingBody(m, w, h);
   return inboxBody(m.inbox, cardsOf(m.state), m, w, h);
 }
 
@@ -133,11 +160,14 @@ export function frame(m: Model, w: number, h: number): string[] {
   const lay = layout(m.composer, Math.max(8, w - 2));
   const promptRows = Math.min(lay.rows.length, 6);
   const first = Math.max(0, Math.min(lay.cursorRow - promptRows + 1, lay.rows.length - promptRows));
-  const prompt = m.deck === 2 ? [inboxHint(m.inbox, cardsOf(m.state), m)] : lay.rows.slice(first, first + promptRows).map((r, i) =>
+  const prompt = m.panel ? [panelHint(m.panel.ui)] : m.deck === 2 ? [inboxHint(m.inbox, cardsOf(m.state), m)] : lay.rows.slice(first, first + promptRows).map((r, i) =>
     (first + i === 0 ? T.dim('❯ ') : '  ') + T.text(m.pal)(r.before) + (r.at ? chalk.inverse(r.at) : '') + T.text(m.pal)(r.after));
   const bodyH = Math.max(1, h - head.length - 1 /*blank*/ - 1 /*status*/ - 1 - prompt.length - 1 - 1);
   let body: string[];
-  if (m.deck !== 1) body = deckBody(m, w, bodyH);
+  if (m.panel) {
+    const ctx: PanelCtx = { obs: m.obs, info: m.info, pal: m.pal, now: m.now, cap: m.panel.cap, pending: m.panel.pending, mission: m.panel.mission };
+    body = [...panelBody(m.panel.ui, ctx, w, Math.max(1, bodyH - 1)), panelFooter(ctx, w)];
+  } else if (m.deck !== 1) body = deckBody(m, w, bodyH);
   else {
     const lines = m.help ? [...transcript(m, w), '', ...HELP.map(T.dim)] : transcript(m, w);
     const maxBack = Math.max(0, lines.length - bodyH);

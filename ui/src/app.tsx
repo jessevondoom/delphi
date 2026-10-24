@@ -7,6 +7,8 @@ import { COMMANDS } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { cardsOf, inboxInit, inboxKey, type InboxUi } from './inbox.ts';
+import type { Observer } from './observer.ts';
+import { panelInit, panelKey, parseView, selectedBuild, type PanelUi } from './panels.ts';
 import { answerCard, runSlash } from './run.ts';
 import { frame, transcript, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
@@ -14,7 +16,7 @@ import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; history: State };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; history: State; obs: Observer; cap0: number; pending0: number };
 
 /** Entries of a directory under the workspace's team root, for `@specs/…` completion. Read-only, names only. */
 const listTeamDir = (info: Info): ListDir => (rel) => {
@@ -34,7 +36,7 @@ export function exportMarkdown(s: State, info: Info, mission: string): string {
   return out.join('\n');
 }
 
-export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
+export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pending0 }: Props) {
   const { exit } = useApp();
   const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
@@ -50,6 +52,9 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   const [queue, setQueue] = useState<string[]>([]);
   const [inbox, setInbox] = useState<InboxUi>(inboxInit);
   const [mode, setMode] = useState('default');
+  const [panel, setPanel] = useState<PanelUi | null>(null);
+  const [obsV, setObsV] = useState(0);
+  const [cap, setCap] = useState(cap0);
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -65,6 +70,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   deckRef.current = deck;
   const inboxRef = useRef(inbox);
   const modeRef = useRef(mode);
+  const panelRef = useRef<PanelUi | null>(null);
   const listDir = useMemo(() => listTeamDir(info), [info]);
 
   useEffect(() => {
@@ -82,14 +88,53 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   useEffect(() => {
     // Frames arrive many times a second; fold them in batches so a stream costs one repaint per 33 ms, not one per frame.
     let queued: any[] = [], timer: ReturnType<typeof setTimeout> | null = null;
-    const flush = () => { timer = null; const q = queued; queued = []; setState((s) => q.reduce((a, n) => fold(a, n, Date.now()), s)); };
+    const flush = () => {
+      timer = null; const q = queued; queued = [];
+      for (const n of q) { if (n.method === 'event') obs.apply(n.params); else if (n.method === 'delta.frame') obs.applyFrame(n.params); }
+      setObsV((v) => v + 1);
+      setState((s) => q.reduce((a, n) => fold(a, n, Date.now()), s));
+    };
     const onNote = (n: any) => { queued.push(n); timer ??= setTimeout(flush, 33); };
     ev.on('notification', onNote);
     ev.on('closed', () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed', at: Date.now() })));
     return () => { ev.off('notification', onNote); if (timer) clearTimeout(timer); };
-  }, [ev]);
+  }, [ev, obs]);
 
   const note = (text: string) => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now() }));
+
+  const showPanel = (ui: PanelUi | null) => { panelRef.current = ui; setPanel(ui); };
+  const openPanel = (arg: string) => {
+    const want = arg.trim();
+    const view = want ? parseView(want) : (obs.defaultView() as ReturnType<typeof parseView>);
+    if (!view) { note(`unknown panel \`${want}\` (council, epic, forge, agents, spend, archives)`); return; }
+    const ui = panelInit(view);
+    showPanel(ui);
+    if (view === 'forge') refreshDiff(ui);
+  };
+  const refreshDiff = (ui: PanelUi) => {
+    const b = selectedBuild(ui, obs);
+    if (!b) return;
+    cmd.call('observe.diff', { task_id: b.taskId }).then((d: any) => { if (panelRef.current) showPanel({ ...panelRef.current, diff: d }); }).catch(() => {});
+  };
+  const searchKb = (q: string) => {
+    cmd.call('kb.search', { query: q }).then((hits: any) => {
+      const list = Array.isArray(hits) ? hits : [];
+      if (panelRef.current) showPanel({ ...panelRef.current, kb: { ...panelRef.current.kb, hits: list, sel: 0, note: list.length ? '' : 'no results' } });
+    }).catch((e) => { if (panelRef.current) showPanel({ ...panelRef.current, kb: { ...panelRef.current.kb, hits: [], note: e?.message ?? JSON.stringify(e) } }); });
+  };
+
+  // While a panel is open: the budget ceiling and the live diff are polled, the rest arrives as events.
+  const panelView = panel?.view;
+  useEffect(() => {
+    if (!panelView) return;
+    const poll = () => {
+      cmd.call('budget.get', { mission_id: mission }).then((b: any) => { if (typeof b?.cap_usd === 'number') setCap(b.cap_usd); }).catch(() => {});
+      if (panelView === 'forge' && panelRef.current) refreshDiff(panelRef.current);
+    };
+    poll();
+    const t = setInterval(poll, 2000);
+    return () => clearInterval(t);
+  }, [panelView]);
 
   const showInbox = (ui: InboxUi) => { inboxRef.current = ui; setInbox(ui); };
 
@@ -145,6 +190,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
     if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
     if (name === '/operator' || name === '/decide') { setDeck(2); return; }
+    if (['/panel', '/observe', '/narrator', '/visualize'].includes(name)) { openPanel(line.slice(name.length)); return; }
     if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
     if (name === '/export') {
       try {
@@ -181,6 +227,16 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
         if (e.t === 'key' && e.k === 'backspace') { const q = sr.q.slice(0, -1); setS({ q, ...find(q, hist.length) }); return; }
         if (e.t === 'key' && e.k === 'esc') { setS(null); return; }
         if (e.t === 'key' && e.k === 'enter') { if (sr.match) upd((c) => C.insert(C.empty(c.hist), sr.match!)); setS(null); return; }
+        return;
+      }
+
+      if (panelRef.current && !(e.t === 'ctrl' || e.t === 'bg')) {
+        if (e.t === 'wheel') { const u = panelRef.current; showPanel({ ...u, scroll: Math.max(0, u.scroll + (e.dir === 'up' ? -3 : 3)) }); return; }
+        const r = panelKey(panelRef.current, e, obs);
+        showPanel(r.ui);
+        if (r.act?.t === 'close') showPanel(null);
+        else if (r.act?.t === 'search') searchKb(r.act.q);
+        else if (r.act?.t === 'diff') refreshDiff({ ...r.ui, pick: r.ui.pick });
         return;
       }
 
@@ -267,7 +323,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, obs, panel: panel ? { ui: panel, cap, pending: pending0, mission } : null };
   const lineCount = useMemo(() => transcript(base, size.w).length, [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -277,7 +333,7 @@ export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
 
   const comps = search ? null : completions(C.textOf(composer), composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode]);
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, obsV, cap]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>

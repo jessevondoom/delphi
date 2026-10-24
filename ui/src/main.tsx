@@ -6,6 +6,7 @@ import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
 import { initial, replay } from './fold.ts';
+import { Observer } from './observer.ts';
 import type { Info } from './theme.ts';
 
 function readInfo(): Info {
@@ -19,6 +20,8 @@ function readInfo(): Info {
 
 const info = readInfo();
 let cmd: Rpc, ev: Rpc, mission: string, history = initial(Date.now());
+let obs = new Observer(Object.keys(info.roles));
+let cap0 = 0, pending0 = 0;
 try {
   cmd = await Rpc.connect(info.console_socket);
   await cmd.attachAsConsole();
@@ -28,6 +31,10 @@ try {
   await ev.call('events.subscribe', {});
   const snap = await cmd.call('observe.snapshot', { mission_id: mission }).catch(() => ({ events: [] }));
   history = replay(initial(Date.now()), snap.events ?? []);
+  if (Array.isArray(snap.enabled_agents)) obs = new Observer(snap.enabled_agents);
+  for (const e of snap.events ?? []) obs.apply(e);
+  cap0 = Number(snap.budget?.cap_usd) || 0;
+  pending0 = Number(snap.pending_proposals) || 0;
   const live = await cmd.call('session.snapshot', { mission_id: mission }).catch(() => ({ running_tasks: [] }));
   for (const t of live.running_tasks ?? []) history.running[String(t.task_id)] = { since: Date.now() - Number(t.seconds ?? 0) * 1000 };
 } catch (e: any) {
@@ -43,7 +50,7 @@ await new Promise<void>((done) => {
   const t = setTimeout(done, 250);
   term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
 });
-const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} />, {
+const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} obs={obs} cap0={cap0} pending0={pending0} />, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });

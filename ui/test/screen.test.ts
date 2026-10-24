@@ -5,6 +5,7 @@ import { frame, header, footer, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { addBlock, fold, initial } from '../src/fold.ts';
 import { badge, sanitize, type Info } from '../src/theme.ts';
+import { Observer } from '../src/observer.ts';
 import { inboxInit } from '../src/inbox.ts';
 import { completions } from '../src/complete.ts';
 
@@ -17,7 +18,7 @@ const info: Info = {
   },
 };
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'default', ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'default', obs: new Observer(['orchestrator', 'architect', 'red-team']), panel: null, ...over });
 
 test('every badge is five columns, in every state, dark and light', () => {
   for (const role of Object.keys(info.roles)) for (const st of ['idle', 'running', 'waiting on you', 'escalated'] as const) for (const dark of [true, false]) {

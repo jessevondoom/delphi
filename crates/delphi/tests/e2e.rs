@@ -892,3 +892,59 @@ fn the_decision_inbox_denies_a_card_and_shift_tab_toggles_the_approval_mode_in_t
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn the_observer_panels_open_inside_the_full_screen_console_and_read_the_real_daemon() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_text("Panels are fed by events.")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 36, 110, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Say something");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Panels are fed by events.");
+    // Spend: the one model call the task made.
+    c.type_keys("/panel spend");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("SPEND TELEMETRY");
+    c.wait_for("1 call(s)");
+    // Epic is next in the cycle back; the agents view lists the roster.
+    c.type_keys("4");
+    c.wait_for("AGENTS · mission");
+    c.wait_for("1 call(s)");
+    // Archives: a search goes to the daemon's knowledge base and comes back, with or without hits.
+    c.type_keys("6");
+    c.wait_for("press / to search");
+    c.type_keys("/");
+    c.type_keys("constitution");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("last search: constitution");
+    // Esc returns to the chat with the draft prompt and the transcript intact.
+    c.type_keys("\x1b");
+    std::thread::sleep(Duration::from_millis(400));
+    let screen = c.visible();
+    assert!(!screen.contains("ARCHIVES · mission") && screen.contains("Panels are fed by events."), "{}", screen);
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
