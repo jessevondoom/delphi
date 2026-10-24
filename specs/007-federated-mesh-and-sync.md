@@ -112,7 +112,7 @@ To prevent a compromised or hallucinating peer instance from poisoning another o
 | **$L_5$** | `user_ratified` | Explicitly ratified by the **local** operator (the **operator**). | **Yes** |
 | **$L_4$** | `internal_empirical` | Verified locally by **Builder** deterministic tests/scripts in this workspace. | **Yes** |
 | **$L_3$** | `internal_generated` | Written locally by an agent with no test evidence (D-08). | **No** (requires local test → $L_4$, or the **operator** ratification → $L_5$). |
-| **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
+| **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. **Or** (amendment 007-A1, proposed with `specs/011`): a xenia `memory` record validly endorsed by a steward other than its author's person, under a current freshness statement (`specs/011` §5.1). | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
 | **$L_1$** | `federated_peer` | Unattested A2A response or `delphi://` slice from a federated peer. | **Strictly Forbidden (`[H-004]`)** |
 | **$L_0$** | `external_untrusted` | Scraped web pages, third-party repos, or transitive `external_untrusted` data forwarded by a peer. | **Strictly Forbidden (`[H-004]`)** |
 

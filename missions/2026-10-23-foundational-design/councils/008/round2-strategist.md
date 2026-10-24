@@ -179,8 +179,8 @@ Xenia is an **architectural extension of Spec 007 Plane 3**, not an incompatible
 
 ### Go / No-Go Gate Criteria (Milestone 1 Exit)
 To exit Milestone 1 and begin implementation of skills, the following automated gates must pass:
-1. **[GATE-SEC-01] Pre-Parse Rejection:** Verification suite confirms that malformed YAML, oversized payloads (>16 KiB), and invalid signatures fail at the raw-byte layer without invoking YAML parsers ([spec 012 test 13](../../../../specs/012-xenia-record-schema.md#L321-L323)).
-2. **[GATE-SEC-02] Cross-Store Replay Immunity:** Verifier rejects records copied between store repositories due to cryptographic domain separation ([spec 012 test 12](../../../../specs/012-xenia-record-schema.md#L320)).
+1. **[GATE-SEC-01] Pre-Parse Rejection:** Verification suite confirms that malformed YAML, oversized payloads (>16 KiB), and invalid signatures fail at the raw-byte layer without invoking YAML parsers ([spec 012 test 13](../../../../specs/012-xenia-record-schema.md)).
+2. **[GATE-SEC-02] Cross-Store Replay Immunity:** Verifier rejects records copied between store repositories due to cryptographic domain separation ([spec 012 test 12](../../../../specs/012-xenia-record-schema.md)).
 3. **[GATE-SEC-03] Revocation Propagation:** Removing a member's key from the roster epoch immediately downgrades all unendorsed records by that author to $L_0$ upon the next sync ([spec 011 test 2](../../../../specs/011-xenia-trust-model.md#L224)).
 4. **[GATE-SEC-04] Pointer Taint Isolation:** Resolving a pointer target from Drive, HTTPS, or an external git remote stamps content as $L_0$ regardless of the record's $L_2$ status ([spec 011 test 8](../../../../specs/011-xenia-trust-model.md#L230-L232)).
 5. **[GATE-PERF-01] Sync Latency:** Syncing and indexing 1,000 records takes $<1.5$ seconds locally.

@@ -1,295 +1,310 @@
 ---
 id: spec-011-xenia-trust-model
-title: "011: Xenia Trust Model: Identity, Roster, Trust Classes & Adoption Gates"
+title: "011: Xenia Trust Model: Identity, Roster, Freshness, Trust Classes & Gates"
 author: architect
 timestamp: 2026-10-24T00:00:00Z
-status: draft   # post-v1 design; Council 008 approve-with-fixes (homogeneous), fixes applied; awaiting operator ratification
+status: draft   # v2 after Councils 008 and 009; awaiting a confirming review and operator ratification
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
-confidence: low
+confidence: medium
 source_mission: xenia-org-memory
 tags: [spec, xenia, security, post-v1]
 ---
 
-# Spec 011: Xenia Trust Model
+# Spec 011: Xenia Trust Model (v2)
 
-> **Status: draft, post-v1.** Xenia is the org-level sharing layer (memory, skills, progress, requests) described by the operator on 2026-10-24. The core editor and harness take priority. This spec fixes the trust model first because the [record schema](012-xenia-record-schema.md) and every later piece (store, MCP surface, librarian agent) depend on it. Nothing here is binding until the operator ratifies it after Strategist and Red-Team review (GOVERNANCE §1.3).
+> **Status: draft v2, post-v1.** Xenia is the org-level sharing layer (memory, and later skills and requests) described by the operator on 2026-10-24. The core editor and harness take priority. This revision follows Council 008 (Gemini, three rounds) and Council 009 (Claude Opus and Sonnet), see `missions/2026-10-23-foundational-design/councils/008-verdict.md` and `009-verdict.md`. Its main change is a **smaller Phase 1**: the normative text covers only what Phase 1 builds; everything else is in §11 as provisional and is re-reviewed when its phase starts. Nothing here is binding until the operator ratifies it (GOVERNANCE §1.3).
 
 ## 1. Scope & Objectives
-Xenia lets many operators in one **org** publish compact records (summaries plus pointers) to a shared **store** and pull each other's records into their own Delphi installs. This spec defines:
-1. **Principals** and how they are identified (§2).
-2. **Who may write** to the store, and how that is proven (§3).
-3. **How much a received record is trusted**, expressed in the existing taint lattice (§4).
-4. **What a pointer does and does not prove** (§5).
-5. **Gates** for publishing, adopting skills and answering requests (§6).
-6. **Revocation, rollback and compromise handling** (§7).
-7. A **threat table** with the control for each threat (§8) and a verification plan (§9).
+Operators in one **org** publish compact signed **records** to a shared git **store** and pull each other's records into their own Delphi installs. Phase 1 shares one kind of knowledge (`memory`) with human endorsement. This spec defines:
+1. **Principals**, their identity and the role matrix (§2).
+2. **Write authority**: the roster chain, quorum, joining, and record validity (§3).
+3. **Freshness**: how an install notices a store that withholds or rewrites history (§4).
+4. **Trust classes** mapped onto the existing taint lattice (§5).
+5. **Pointers** (§6), **gates** (§7) and **rotation, removal and compromise** (§8).
+6. A **threat table** (§9) and **verification plan** (§10).
 
 ### 1.1 Non-Goals
-- Record fields (spec 012), the store's wire protocol and the MCP surface (a later spec).
-- Replacing `specs/007`. Xenia reuses its lattice, its DID identities and its Plane 3 posture; it does **not** require Planes 1 and 2 (live peer transport), which stay deferred (D-06). Xenia is asynchronous and store-mediated.
-- Per-record read ACLs inside one store (§4.4 explains why not).
+- Record fields and store layout ([`specs/012`](012-xenia-record-schema.md)); the store's MCP surface (a later spec).
+- Replacing [`specs/007`](007-federated-mesh-and-sync.md). Xenia reuses its lattice and identities and does **not** need Planes 1–2 (live peer transport, deferred by D-06).
+- Per-record read ACLs inside one store (§5.4).
+- Skills, requests, progress, signed invites, drive pointers, multi-store (all §11).
 
 ### 1.2 Simpler Alternative Considered
 - **Alternative:** a shared folder or wiki everyone can edit, with no signatures.
-- **Why Rejected:** the first poisoned note reaches every operator's agents with no attribution, no way to tell a reviewed record from a drive-by edit, and no way to remove a departed member's contributions. Signed, append-only records in git give attribution, history and revocation for little extra machinery.
-
-### 1.2a Phase Mapping & Go/No-Go (Council 008)
-Xenia is built in three slices so the core editor and harness are never starved. Each phase ships alone and is useful alone.
-
-| Phase | Delivers | Sections built | Tests |
-| :--- | :--- | :--- | :--- |
-| **1. Trust & memory** | Roster chain and majority rule, verify-before-parse, store-bound signatures, kinds `memory` + `endorsement` + `tombstone`, publish gate with secret canaries, deterministic sync into a local index, quarantine reads, pointer schemes `git`, `https`, `xenia` | 011 §2–§5, §6.1–6.2, §7, §8; 012 §2–§3, §5.1, §5.6, §6–§9 | 011: 1–8, 10, 13–18, 20, 22–26; 012: 1–6, 8–13, 15–22 |
-| **2. Skill sharing** | Kind `skill`, pinned git trees, namespaced install, adoption diff viewer and permission ceiling, multiple joined stores | 011 §6.3; 012 §5.2 | 011: 9, 19, 27; 012: 7 |
-| **3. Collaboration** | Kinds `progress`, `request`, `claim`, per-member quotas, `drive` pointers (when the Drive connector from `specs/010` ships) | 011 §6.4; 012 §5.3–5.5, `drive` scheme | 011: 11, 21; 012: pointer tests for `drive` |
-| **Later** | The librarian agent | 011 §6.5 | 011: 12 |
-
-**Go/No-Go for Phase 1 → Phase 2** (all automated): (1) pre-parse rejection holds (012 test 13); (2) cross-store replay is rejected (012 test 12); (3) removing a member downgrades their unendorsed records to $L_0$ on the next sync (011 tests 2 and 14); (4) pointer content is $L_0$ regardless of record tier (011 test 8); (5) roster chain verification passes for an install offline across several epochs (011 test 16); (6) the Phase 1 CLI (`delphi xenia join | publish | sync | status | endorse`) is exercised by an end-to-end test on a temporary store with two admins, one steward and two members. Initial performance target, to be re-measured: syncing and indexing 1,000 records in under 1.5 seconds. Any failure is No-Go for the next phase, not for Phase 1 itself.
-
-**Relation to `specs/007` Plane 3.** Xenia **reuses** Plane 3's posture and primitives (a separate git store, `did:key` identities, the six-tier lattice, deterministic offline sync that never calls an LLM, snapshot-before-sync) but is a **distinct subcommand family** (`delphi xenia …`). `delphi sync` edits the workspace's active rule files through ratified proposals; `delphi xenia` manages an org knowledge store and touches active workspace files only through skill adoption (§6.3). They share code for identity, signature checking and the lattice, and share no state.
+- **Why Rejected:** the first poisoned note reaches every operator's agents with no attribution, no way to tell a reviewed record from a drive-by edit, and no way to remove a departed member's contributions.
+- **Second, simpler alternative considered in Council 009:** drop endorsement and treat every member-signed record as equal. Rejected: every record would then be $L_1$ (§5.2), and org memory would taint every agent that reads it.
 
 ### 1.3 Design Principles
-1. **Pull, not push.** Nothing from the store changes an install's behavior until that install's operator adopts it. Publishing is deliberate and previewed; consuming is gated by the taint lattice.
-2. **The store is untrusted storage; the roster is the root of trust.** A record is believed because of who signed it and who endorsed it, never because of where it sits.
+1. **Pull, not push.** Nothing from the store changes an install's behavior until its operator adopts or reads it. Publishing is deliberate and previewed; consuming is gated by the taint lattice.
+2. **The store is untrusted storage; the roster is the root of trust.** A record is believed because of who signed it and who endorsed it, never because of where it sits or whether the store says it is current.
 3. **Humans sign; agents don't.** Every record is signed by an operator key after the operator approved the exact bytes. Agents appear only as a canonical `author_role` label (D-17).
-4. **No new trust tier above $L_2$.** Xenia content never exceeds `federated_verified`. Only the local operator's ratification (existing `delphi` flow) produces $L_5$.
-5. **Summaries are data, never instructions.** Same rule as every other federated payload (`specs/007` §3.2).
+4. **No tier above $L_2$.** Xenia content never exceeds `federated_verified`. Only the local operator's ratification produces $L_5$.
+5. **Summaries are data, never instructions** (`specs/007` §3.2).
+6. **Fail closed and visible.** Anything that cannot be verified is quarantined and listed, never silently dropped or silently accepted.
 
----
-
-## 2. Principals & Identity
-| Principal | Is | Holds | Can |
+### 1.4 Phase Mapping & Go/No-Go
+| Phase | Delivers | Sections | Tests |
 | :--- | :--- | :--- | :--- |
-| **Operator** | A human in the org, one Ed25519 `did:key` per install (reuses `specs/007` §2.1 identity) | Private key in the install's keystore (never in the store) | Sign and publish records after approval; adopt records locally |
-| **Member** | An operator listed in the signed roster | Role `member` | Publish `memory`, `progress`, `request`, `claim`; propose `skill` records |
-| **Steward** | A member with the `steward` flag, per topic area or org-wide | Role `steward`, with named `steward_areas` | Everything a member can, plus sign `endorsement` and `tombstone` records **for records within those areas only** |
-| **Admin** | A member with the `admin` flag (small set, default 2–3) | Role `admin` | Change the roster, with the quorum rule in §3.2 |
-| **Librarian** (later) | An agent run by an operator | No key of its own | *Propose* dedupe, staleness and routing changes; every change is signed by the operator who accepts it. It has no write authority of its own (§6.5) |
+| **1. Trust & memory** | Roster chain, join pinning, freshness statements, verify-before-parse, store-bound signatures, kinds `memory` + `endorsement` + `tombstone`, display-only pointers, publish gate, deterministic sync, quarantine reads, rotation by re-signing | 011 §2–§10; 012 §2–§10 | all of 011 §10 and 012 §10 |
+| **2. Skills & hardening** | Kind `skill`, adoption gate, multiple stores, signed invites, pointer resolver (SSRF guards), optional vouch lists | 011 §11.1–11.4; 012 §11 | defined when Phase 2 is specified |
+| **3. Collaboration** | `progress`, `request`, `claim`, quotas, `drive` pointers, the librarian | 011 §11.5–11.7; 012 §11 | defined when Phase 3 is specified |
 
-**Area matching (deterministic).** A steward's `steward_areas` is a list of tags, or the single wildcard `*` for an org-wide steward. A record is *within a steward's areas* if the record's `tags` intersect `steward_areas` or the steward holds `*`. An `endorsement` or `tombstone` is valid only if that holds at the install's current epoch; the `scope` field of an endorsement (spec 012 §5.6) must be a subset of that intersection. A record with no tags can be endorsed only by a `*` steward.
+**Phase 1 command set:** `delphi xenia join | whoami | publish | sync | status | endorse [--all-pending] | withdraw | republish --resign` and the admin set `delphi xenia admin propose | sign | publish | refresh | rotate`.
 
-Identity binding: a roster entry maps `did` → `handle`, `roles`, `added_by`, `added_at`. Display names and theme names never appear in signed material (D-17).
+**Go/No-Go for Phase 1 → Phase 2** (all automated unless noted): (1) 011 tests 1–26 pass; (2) 012 tests 1–20 pass; (3) a 3-admin, 2-of-3 roster chain test passes, including a fork (same epoch number, different file) and an install offline across several epochs; (4) the freshness tests (§10 tests 12–15) pass, including a hidden newest epoch; (5) signature verification uses strict Ed25519 with the published test vectors; (6) a fuzz run of the sidecar and frontmatter parsers finds no crash or accepted malformed record; (7) a **live recovery drill** of the re-pin path (§8.4) succeeds on a scratch store; (8) a **dogfood gate**: at least 3 humans use it for 2 weeks and the team records endorsement latency and the share of records at $L_2$, with thresholds agreed beforehand (suggested: median endorsement within 3 working days; at least 70% of records read at $L_2$). Any failure is No-Go for the next phase, not for Phase 1.
 
----
-
-## 3. Write Authority: the Roster
-### 3.1 What the store enforces and what it can't
-Git hosting enforces who can *push*, but the push permission is not the security boundary. A compromised hosting account, a misconfigured branch rule or a malicious maintainer can push anything. **Every install therefore verifies signatures itself** on every record, roster change and endorsement, and ignores anything that fails. Hosting-level auth is an extra layer that limits noise.
-
-### 3.2 Roster changes
-- The roster is an **immutable chain**: one file per epoch, `roster/epochs/<n>.json` with detached admin signatures `roster/epochs/<n>.sigs.json`. Epoch files are never overwritten, so an install that was offline across several changes can fetch every intermediate epoch and verify the chain link by link.
-- A change (add, remove, change roles) is valid only if signed by **a majority of the admins of the previous epoch**: $\lfloor n_{admin}/2 \rfloor + 1$. With $n_{admin} = 1$ the single admin signs (a single point of failure); with $n_{admin} = 2$ both must sign (a lost key deadlocks the roster). `delphi doctor` warns for $n_{admin} < 3$ and recommends 3 (2-of-3), the smallest set that tolerates one lost or compromised key. Small teams may run with fewer after reading the warning; the deadlock recovery is the out-of-band re-pin of §7.3.
-- Each install **pins the org root**: on first join, the operator confirms the admin DIDs out-of-band (shown as a short fingerprint, like SSH host keys). From then on, the install verifies the chain from its last accepted epoch to the target epoch; every link must be signed by a majority of the previous epoch's admins. A target epoch with a missing or invalid link is refused and the install stays on its last good epoch.
-- Epochs are numbered consecutively from 1. **Genesis (`1.json`) has no previous epoch, so it must be signed by every founding admin named in it.** A joiner runs `delphi xenia join <store-url> --admin-fingerprint <fingerprint>`; the command checks that the fingerprint matches one of the signing admins of `1.json` and shows the full admin list for confirmation before pinning. An install rejects any epoch lower than the one it has seen (rollback protection, §7.2).
-- **Invites (O-4).** An admin invites a joiner with a small signed JSON file `{ "org", "store", "admin": "<did>", "invitee": "<did>", "expires": "<UTC, at most 14 days out>", "sig" }`, where `sig` is Ed25519 over `xenia-invite/1\n<org>\n<store>\n<admin did>\n<invitee did>\n<expires>`. `delphi xenia join` accepts it only if the signing admin is in the pinned roster, the invitee is the joiner's own DID, the org and store match, and it has not expired. **An invite grants no membership and no write access:** the joiner becomes a member only when an admin-majority roster epoch lists their DID, and hosting access is granted separately. The invite exists so the joiner and the admins confirm the same DID before the roster change, and the fingerprint confirmation below stops a swapped store URL.
-- **Store binding.** Every epoch file names the `org` and `store` it belongs to and is signed over a domain string that includes both (spec 012 §3), so a roster or record copied from another store does not verify.
-
-### 3.3 Record validity
-A record is **valid** at an install only if all of these hold, checked by `delphi-core` (not a model), **in this order, with no YAML or Markdown parsing before step 3**:
-1. The raw file size is within the limit and the small sidecar (strict JSON, fixed fields) parses.
-2. The hash matches the raw bytes, the Ed25519 signature verifies over the store-bound domain string (spec 012 §3), **and the signer has standing at the install's current epoch**, which means one of:
-   - **(a) member:** the sidecar's `kid` is a member of the current roster; or
-   - **(b) vouched:** the `kid` was retired or removed in an epoch whose admin-signed **grandfather list** lists this exact `(id, rev, hash)` as `vouched` (§7.1); or
-   - **(c) endorsed orphan:** the exact `(id, rev, hash)` is on that same list as `eligible`, and a current steward has endorsed it with a `target_hash` equal to this record's hash. Such a record is valid **only as an endorsed orphan**: it has no standing of its own, and it is quarantined again the moment that endorsement lapses.
-   Anything else is quarantined. **A record the key signed after the list was made can never be on the list**, so a stolen or removed key cannot create a new `id` or a higher `rev` that survives, even if a steward is tricked or colludes: the list, signed by an admin majority, is the only door.
-3. Only now is the frontmatter parsed. The schema validates (spec 012 §6), `author` equals the sidecar `kid`, and `org`/`store` match the store.
-4. `rev` is greater than any `rev` this install has seen for the same `id` from the same signer, and the `id` was first created by that signer (nobody else can overwrite a record).
-5. The kind is allowed for the signer's role (§2). For a **member** this is the current role. For a **vouched** record (b) it is the role the member held in the epoch before their retirement or removal (`removed_at_epoch` minus one). For an **endorsed orphan** (c) only the non-administrative kinds `memory`, `progress`, `request` and `claim` are allowed; an orphaned `skill` must be re-published by a current member before it can be adopted.
-
-**Signer standing is judged at the install's current epoch, never from the record's own claims.** `signed_at` and `roster_epoch` in the sidecar are informational and are not trusted for any validity or revocation decision, because the author controls them (a stolen key could backdate both). A record whose signer is no longer a member (removed or compromised) is therefore not valid on its own; §7.1 gives the one way it stays usable.
-
-Invalid records are **quarantined**, never loaded, and listed by `delphi xenia status`. They are not silently dropped, so tampering is visible.
-
-**Tiers are a pure function of verified inputs.** An install computes every record's tier from (valid records, current roster, valid endorsements, tombstones) on each sync and on each roster change. It never carries a tier forward across a roster change, so revocation takes effect at the next sync (§7.1).
+**Relation to `specs/007` Plane 3.** Xenia reuses Plane 3's posture (a separate git store, `did:key` identities, the six-tier lattice, deterministic offline sync that never calls an LLM). It is a distinct subcommand family: `delphi sync` edits active workspace rule files through ratified proposals; `delphi xenia` manages an org knowledge store and never edits active workspace files in Phase 1. They share code for identity, signature checking and the lattice, and share no state. The $L_2$ definition conflict is resolved by amendment 007-A1 (§5.1).
 
 ---
 
-## 4. Trust Classes and the Taint Lattice
-### 4.1 Mapping
-The receiving install computes a record's tier. The record never states its own tier.
+## 2. Principals, Identity & Roles
+| Principal | Is | Can |
+| :--- | :--- | :--- |
+| **Operator** | A human with one or more installs; each install has an Ed25519 `did:key` (reuses `specs/007` §2.1) | Sign and publish after approval; read records |
+| **Member** | A DID with an `active` roster entry | Publish `memory`; sign `endorsement` with `verdict: dispute`; sign `tombstone` for their own records |
+| **Steward** | A member with named `steward_areas` (or `*`) | Everything a member can, plus `endorsement` (`endorse`, `withdraw`) and `tombstone` for records within their areas |
+| **Admin** | A member with the `admin` role | Propose, sign and publish roster epochs and freshness statements |
+| **Librarian** (Phase 3) | An agent run by an operator, no key | Proposes only (§11.7) |
+
+### 2.1 Person identity
+Operators can have several installs and rotate keys, so rules about "different people" cannot compare DIDs. Each roster entry carries a **`person`** field (a short stable identifier assigned by the admins, covered by the admin-majority signature). All DIDs of one human share one `person`; a `successor` DID keeps its predecessor's `person`. Whenever this spec says *same person* it means the same `person` value; *different people* means different `person` values. Quorum counts people (§3.2); the self-endorsement ban (§7.3) compares people.
+
+### 2.2 Role matrix (checked by `delphi-core`)
+| Kind / action | member | steward (within areas) | admin |
+| :--- | :-: | :-: | :-: |
+| `memory`, new `id` | ✓ | ✓ | ✓ |
+| new `rev` of an `id` | own records (§3.4) | own records | own records |
+| `endorsement` `endorse` / `withdraw` | ✗ | ✓ | ✓ if also steward |
+| `endorsement` `dispute` | ✓ | ✓ | ✓ |
+| `tombstone` | own records only | records within areas, plus own | own records only |
+| roster epoch, freshness statement | ✗ | ✗ | ✓ |
+
+### 2.3 Area matching
+A steward's `steward_areas` is a list of tags, or the wildcard `*`. A record is *within* a steward's areas if its `tags` intersect `steward_areas` or the steward holds `*`. For **endorsement** the check uses the tags of the exact revision endorsed. For **tombstone** it uses the **union of tags across all revisions** of the record, so an author cannot escape a steward's tombstone by publishing a new rev with different tags. **Areas are routing, not an authority boundary:** an author chooses tags, so a colluding steward can endorse anything the author tags for them. The real controls are the no-self-endorsement rule (§7.3), a stewards' review expectation, and removal by admins. Records with no tags can be endorsed only by a `*` steward.
+
+---
+
+## 3. Write Authority
+### 3.1 The store is untrusted
+Git hosting enforces who may push, but a compromised hosting account or maintainer can push anything or withhold anything. Every install verifies signatures itself and decides what is current from signed statements (§4), never from the store's say-so. Hosting auth limits noise only.
+
+### 3.2 The roster chain
+- The roster is an **immutable chain** of epoch files `roster/epochs/<n>.json` with detached signature files `<n>.sigs.json` (spec 012 §7). Epoch files are never overwritten. Epochs are numbered from 1 and each names `prev_hash` (BLAKE3 of the previous epoch file).
+- Each epoch lists members as `{did, person, handle, roles, steward_areas, status, successor?, removed_at_epoch?, voids_tombstones?}`, where `status` is `active`, `retired` or `removed`. Entries are **never dropped** from later epochs. A `retired` or `removed` DID can never become `active` again; a returning human gets a new DID.
+- **Standing and quorum use `active` entries of the previous epoch only.** $n_{admin}$ is the number of distinct **persons** holding an `active` DID with the `admin` role in epoch $n-1$. Epoch $n$ is valid only if signed by **a majority of those people**, $\lfloor n_{admin}/2 \rfloor + 1$, one signature per person (two DIDs of one person count once). Signatures from `retired`/`removed` DIDs are ignored.
+- $n_{admin}=1$: the single admin signs (single point of failure). $n_{admin}=2$: both sign (a lost key deadlocks; recovery is §8.4). `delphi doctor` warns below 3 and recommends 3 (2-of-3).
+- **Genesis (`1.json`)** has no previous epoch and must be signed by every founding admin named in it.
+- **Collecting signatures (no ambiguity about the flow).** `delphi xenia admin propose` writes the draft epoch file to a pending branch `roster-proposal/<n>` in the store. Each admin runs `admin sign <n>`, which verifies the file's bytes and chain link, then commits their signature entry (the same `<n>.json` bytes are what every admin signs). `admin publish <n>` verifies the quorum and fast-forwards the main branch, never force-pushes. A signature over a different byte string counts for nothing.
+- **Pinned hashes (fork protection).** Every install persists the hash of every epoch it has accepted. A different file under an accepted epoch number is refused and reported (equivocation).
+
+### 3.3 Joining and pinning (O-4)
+1. An admin adds the joiner's DID by a roster epoch. The joiner runs `delphi xenia whoami` and sends the printed DID and a proposed handle to an admin, out of band.
+2. The joiner runs `delphi xenia join <store-url> --admin <fingerprint> --head <epoch>:<hash>`. The fingerprint is a **current** admin's (the 64-character lowercase hex BLAKE3 of the UTF-8 DID); the head pair is the current head epoch number and hash. Both come from an existing member, out of band.
+3. The client downloads the chain, verifies it **forward from genesis** under §3.2 and requires that (a) the head epoch hash equals the pinned one, and (b) the pinned admin is an `active` admin in the head. A chain that verifies but ends at another head, including one forged with retired founder keys, is refused.
+4. The client records `org`, `store`, the store URL and the pinned admin in `team/xenia/stores.toml`. **The store's own `org.toml` is advisory only**; a disagreement with the pinned values is refused.
+5. The store is cloned to `$DELPHI_HOME/xenia/<org>/<store>/`, **outside every workspace zone** (not under `team/`), read only by `delphi-core`. Files there never take the `team/` origin default tier; the only things agents ever see are the daemon's sanitized index entries (§7.2), each at its computed tier.
+
+### 3.4 Record validity and standing
+A record is **valid** at an install only if all of these hold, checked by `delphi-core`, **in this order**:
+1. The record file and sidecar are within size limits and the sidecar (strict JSON, fixed fields) parses. The record's `kind` and `id` are taken from its **path** `records/<kind>/<id>.md` (spec 012 §7).
+2. The hash matches the raw bytes and the **strict** Ed25519 signature verifies over the domain string, which includes `org`, `store`, `kind`, `id` and `kid` from the verifier's own configuration and path (spec 012 §3). **No YAML or Markdown is parsed before this step succeeds.**
+3. **Standing:** the sidecar's `kid` has an `active` entry in the roster at the install's **current epoch**. Standing never depends on `signed_at` or `roster_epoch`; those are informational because the author chooses them. Retired and removed DIDs have no standing: their records and endorsements are quarantined (§8).
+4. Only now is the frontmatter parsed. The schema validates (spec 012 §6); `id` equals the path id, `kind` equals the directory, `org` and `store` equal the pinned values, and `author` equals the sidecar `kid`.
+5. **Revisions and ownership.** `rev` is greater than any `rev` this install has seen for the same `id`. The `id` must have been first created by this signer **or by a predecessor in the signer's `successor` chain** (so a rotated member can continue their own records).
+6. The kind and action are allowed for the signer by the role matrix (§2.2), including the area check (§2.3) for endorsements and tombstones.
+
+Invalid records are **quarantined**, never loaded, and listed by `delphi xenia status`, so tampering is visible.
+
+### 3.5 Sticky state
+An install persists, per store and never forgets: the highest epoch and the hash of each accepted epoch; the highest `rev` seen per `id`; and every `tombstone`, `endorsement` (`withdraw`, `dispute`) it has validated (path, hash, signer, rev). A tombstone or withdrawal an install has seen **keeps its effect even if the file later disappears or is overwritten**, and its disappearance is reported as tampering. Sticky state is local, so it helps only installs that saw the file; §4 protects fresh installs and withheld updates.
+
+---
+
+## 4. Freshness: Detecting a Store That Withholds or Rewrites
+A hosting attacker can serve a stale view (no newest epoch, so a removed member is still valid) or a fast-forward commit that deletes a tombstone. Local rollback checks cannot catch either on a fresh install. Xenia therefore requires a signed statement of *what is current*.
+
+### 4.1 The freshness statement
+`roster/freshness.json` with `freshness.sigs.json` (spec 012 §7) holds `{org, store, epoch, epoch_hash, store_head, issued_at, expires_at}` and is signed by **one `active` admin** of the named epoch (one signature is enough because the statement confers no authority; it only attests currency, and a forged or stolen statement is bounded by its expiry). `store_head` is the git commit the admin verified when signing. Default validity is **14 days**; `delphi xenia admin refresh` re-issues it and may run from a scheduled job.
+
+### 4.2 What an install checks on every sync
+1. The chain verifies and its head equals `epoch_hash` of a statement that has not expired by the **install's own clock**.
+2. The fetched store head is a **descendant** of `store_head` (or equal to it).
+3. **No path under `records/` or `roster/` that existed at `store_head` is missing at the fetched head.** New files and new revisions of existing files are fine; a deletion is tampering. History before `store_head` is covered by the admin's signature on that head.
+4. The fetched head is a fast-forward of the last head this install accepted; a non-fast-forward (force-push) is refused.
+
+### 4.3 Failure behavior
+- **Statement expired or none:** the install keeps tombstones and withdrawals in force (fail hidden) but **counts no endorsements**, so every record reads at most $L_1$, and `status` shows a prominent "stale" warning with the statement age. Nothing is deleted.
+- **Check 2, 3 or 4 fails:** the whole sync is rejected and the previous accepted state remains, with a "possible tampering" report.
+- **Residual risk (stated, not hidden):** an attacker holding an old statement can hold an install at the stale state until that statement expires (default 14 days), and a stolen admin key can issue a statement for the epoch where that admin was still `active` until the next epoch is seen. Operators who want a tighter window shorten the validity. The install's `status` always shows "latest epoch seen" and "statement expires in …".
+
+---
+
+## 5. Trust Classes and the Taint Lattice
+### 5.1 Mapping
+The receiving install computes a record's tier. The record never states its own tier (spec 012 rejects such keys).
 
 | Condition at the receiving install | Tier | `source_type` |
 | :--- | :--- | :--- |
-| Valid, member-signed, not endorsed | $L_1$ | `federated_peer` |
-| Valid and **endorsed** (not by the author) by a steward whose areas cover the record, where the endorsement counts under §7.1: signed by a **current** steward, or listed `vouched` for a retired steward whose terminal `successor` (following `successor` links to the first `active` member) is a current steward with covering areas | $L_2$ | `federated_verified` |
-| Signer no longer a member and no valid endorsement (§7.1), or failing §3.3 | $L_0$ (quarantine) | `external_untrusted` |
-| Content the record's author marks `source_ceiling: external_untrusted` (derived from the web or third-party data) | $L_0$ | `external_untrusted` |
+| Valid (§3.4), member-signed, not endorsed | $L_1$ | `federated_peer` |
+| Valid, kind `memory`, and **endorsed** (§7.3) by a steward other than the author's person, whose areas cover the exact revision, with `target_hash` equal to the revision's hash, and the freshness statement is current (§4) | $L_2$ | `federated_verified` |
+| Failing §3.4, signer without standing, or quarantined | $L_0$ | `external_untrusted` |
 
-Effective tier is always $\min(\text{class tier},\ \text{source\_ceiling})$, which is the anti-laundering rule of `specs/007` §3.1 applied to xenia. The author's `source_ceiling` is stamped by the **publishing** daemon from the span ceilings of the content (spec 001 §5.1), not typed by the agent; a steward reviewing an endorsement is expected to spot-check it.
+Effective tier is $\min(\text{class tier},\ \text{source\_ceiling})$, the anti-laundering rule of `specs/007` §3.1: a record whose publishing span had read untrusted data is clamped to that ceiling. The author's `source_ceiling` is stamped by the publishing daemon from span ceilings (`specs/001` §5.1), not typed by an agent.
 
-**No xenia record ever exceeds $L_2$**, and **$L_2$ comes only from steward endorsement** in v1 (Council 008). An `evidence` pointer is not a path to $L_2$: v1 defines no attestation format or verifier, so a "checkable" claim would be a rule with no mechanism (any member could attach a URL and call it evidence). Evidence stays informational and is what a local replay uses to reach $L_4$. Evidence-based $L_2$ may return later, but only together with a signed attestation spec (for example in-toto) and a deterministic verifier in `delphi-core`.
+**No xenia record exceeds $L_2$, and $L_2$ comes only from steward endorsement.** `evidence` pointers are informational: v1 has no attestation format or verifier, and a "checkable" claim with no mechanism would let any member attach a URL and call it evidence. In Phase 1 **only `memory` can be endorsed to $L_2$**.
 
-Content reaches $L_4$ only if the local install replays a test, and $L_5$ only if the local operator ratifies it, both existing flows. The tier applies to the **signed record text** (title, summary, body). It does not apply to what a pointer leads to (§5.2).
+**Amendment 007-A1 (proposed).** `specs/007` §3 defines $L_2$ as "signed by a pinned teammate DID + verifiable git commit and CI test attestation". This spec adds a second route to $L_2$: a valid steward endorsement of a xenia `memory` record. `specs/007` §3 is amended to say so (the table row cites this section). Local use of $L_2$ content is unchanged: it never enters always-loaded files without replay ($L_4$) or ratification ($L_5$).
 
-### 4.2 Why steward endorsement must lift to $L_2$ (usability finding)
-The taint table (`specs/001` §5.2) forbids worktree writes, code execution and outbound calls for a span that has read $L_0$–$L_1$ data. If **every** org record were $L_1$, any agent that consulted org memory would lose the ability to edit code for the rest of that span. Org memory would be unusable in practice, and operators would route around the control.
+### 5.2 Why steward endorsement must lift to $L_2$
+`specs/001` §5.2 forbids worktree writes, code execution and outbound calls for a span that has read $L_0$–$L_1$ data. If every org record were $L_1$, any agent that consulted org memory would lose the ability to edit code for the rest of that span. Endorsement by a named human steward is the revocable path from $L_1$ to $L_2$. Unendorsed ($L_1$) records are readable only by an explicit **quarantine read** in the console (the span is tainted accordingly); agents never pull $L_1$ records automatically.
 
-Two consequences are built in:
-1. **Endorsement is the path from $L_1$ to $L_2$** for knowledge records. It is a human review by a named steward, and it is revocable.
-2. **Unendorsed records ($L_1$) are readable only through an explicit "quarantine read"** in the console: the operator sees the record, and the span that reads it is tainted accordingly. Agents never pull $L_1$ records automatically.
+*Cost, stated plainly (Council 009):* a new `rev` of a record needs a new endorsement, so edits drop a record to $L_1$ until re-endorsed; a departing steward's endorsements lapse together (§8); and in a team where all stewards are also authors, the self-endorsement ban leaves a sole steward's own records at $L_1$. The minimum useful roster is **two stewards**. `delphi xenia endorse --all-pending` lets a steward review and endorse a batch in one sitting.
 
-*Decision O-1 (resolved in Council 008, pending operator ratification):* steward endorsement alone justifies $L_2$ for the signed record text of `memory` and `progress`, because $L_2$ only unlocks reading without taint loss and never promotion. The Strategist seat proposed requiring endorsement **and** evidence; that is rejected because evidence has no verifier in v1 (§4.1) and the requirement would leave nearly every record at $L_1$, which is the unusable outcome this section exists to avoid.
-
-### 4.3 What each tier may do (summary of existing rules, applied)
+### 5.3 What each tier may do
 | Tier | May enter an agent's context | May become always-loaded (`heuristics.md`, `skills/`, `REVIEW.md`, lessons) |
 | :--- | :--- | :--- |
-| $L_2$ | Yes, as a spotlighted `<xenia_record>` data envelope, with the span ceiling lowered to $L_2$ | **No.** Needs local replay ($L_4$) or the operator's ratification ($L_5$) |
+| $L_2$ | Yes, as a bounded summary in a spotlighted `<xenia_record>` envelope; span ceiling lowered to $L_2$ | **No.** Needs local replay ($L_4$) or the operator's ratification ($L_5$) |
 | $L_1$ | Only by an explicit quarantine read | **No** |
 | $L_0$ | Only by an explicit quarantine read | **Never** (`[H-004]`) |
 
-### 4.4 Visibility is not trust, and the index is shared
-All principals with read access to a store can read every summary in it. Git cannot hide one file from a reader of the repo. So:
-- **A store is one audience.** Separate audiences (for example, a security team and the whole org) get separate stores, each with its own roster. An install can join several.
-- **Sensitive detail lives behind the pointer.** The summary must be safe for everyone who can read the store. The publish gate (§6.1) scans for this but cannot guarantee it; the operator's approval is the control.
-- `visibility` in a record (spec 012) is a *routing hint inside one store* (for example "team:payments"), used for relevance, not for secrecy.
+### 5.4 Visibility is not trust
+Every principal with read access to a store can read every summary in it; git cannot hide one file from a repo reader. A store is therefore **one audience**. Sensitive detail belongs behind a pointer (§6) in its original secure location, and a summary must be safe for everyone who can read the store. `visibility` in a record is a routing hint, not secrecy. Separate audiences use separate stores (Phase 2 supports joining several).
 
 ---
 
-## 5. Pointers: What They Prove
+## 6. Pointers (display-only in Phase 1)
 A pointer says "the full material is at X". It is **not** an authorization and **not** evidence the material says what the summary claims.
 
-1. **Pointers carry their own access.** Resolving one uses the *reader's* own credentials through the install's connectors (`specs/010` Drive, or git). Xenia mints no access and never stores tokens. A reader without access sees the summary and a "request access" hint, nothing more. This also avoids the confused-deputy problem: xenia cannot be used to read something the reader couldn't already read.
-2. **Pins prevent silent swaps; they confer no trust.** Every pointer has a `pin` (git commit/tree SHA, or a content hash plus Drive revision ID). The signed record binds the pin. At resolve time:
-   - **Pointed-to content never inherits the record's tier.** It is stamped at its own origin tier under `specs/001` §5.1 and `specs/010` §5.1: content from `drive`, `https` and any git remote other than this install's own tracked repositories is **$L_0$** (`external_untrusted`) and lowers the calling span's ceiling like any other untrusted read. A prompt injection in an endorsed record's Google Doc is still an injection. Only the signed record text is $L_2$.
-   - A pin match tells the operator "this is the exact content the signer saw", which is an integrity statement. It is shown as such.
-   - Following a pointer is therefore a **quarantine read**: logged, announced to the operator, and the span is tainted accordingly. To use the content in later work without tainting, the operator promotes a local note through the existing connector promotion flow (`specs/010` §5.1.3), which stamps the note's hash at $L_4$ via `provenance.stamp`.
-   - **A pin mismatch (the target changed after signing) fails closed.** Delphi reports an integrity error and shows the operator the difference when computable. It does **not** feed drifted content to a running span unless the operator explicitly opens it as a quarantine read. This also prevents a drifting pointer from being used to taint-trap an agent.
-3. **Unpinnable targets.** Mutable targets without revision IDs (a plain URL, a Drive file whose revision API is unavailable) are allowed only as `pin.kind: none`. They are always $L_0$ (like every pointer target) and the record shows "unpinned" next to them. Stewards are expected to decline to endorse records whose key claims rest on unpinned targets.
-4. **Summary-vs-target mismatch.** A lying summary is a social-engineering vector. Controls: the endorsement step (a steward is expected to open the target), the `evidence` field for claims, and a **report** action that any member can use to ask stewards for review (spec 012 `endorsement` kind with `verdict: dispute`). Xenia does not claim to detect lies automatically.
-5. **Allowed schemes** are an explicit list in spec 012. `file://` and any local path are never publishable (they leak the author's filesystem and are unresolvable by others).
+1. **Phase 1 never fetches pointer targets.** Delphi shows a pointer as text (scheme, locator, pin, label, `access_hint`). The operator opens it with their own tools. Anything they bring into a mission is external content under the existing rules (`specs/010` §5.1: $L_0$; promotion through the existing flow). This removes the pointer resolver, its SSRF surface and any question about which targets deserve which tier.
+2. **No exception for "our own" repositories.** A git URL pointing at the org's own repository is still just text; a commit pinned from a fork pull request is served by the same URL, so a locator can never prove a trusted origin.
+3. **Pins prevent silent swaps and confer no trust.** The pin (git commit/tree SHA, or content hash plus revision id) is covered by the record signature, so a changed pointer shows as a new `rev`. A pin means "the signer saw these bytes", never "these bytes are safe".
+4. **A lying summary** is a social-engineering risk. Controls: the steward review expectation, the `evidence` field for claims, and `dispute` endorsements any member may sign. Xenia does not claim to detect lies automatically.
+5. **Allowed schemes** are an explicit list (spec 012 §4). `file:` and local paths are never publishable. `xenia` pointers refer to another record in the same store and are resolved locally.
 
 ---
 
-## 6. Gates
-### 6.1 Publishing (outbound, Red-tier)
+## 7. Gates
+### 7.1 Publishing (outbound, Red-tier)
 Publishing sends data out of the install, so it follows `specs/004` §5.5 steps 2–3:
-1. Only content from **team or workspace scope** that has already been promoted by the operator can be published. **Operator scope never leaves the machine** (`specs/004` §5.7).
-2. `delphi-core` builds the record deterministically from approved inputs, runs the `[REV-SEC-05]` path and secret scan plus the workspace identifier filter, and attaches the result as `redaction` metadata. The preview also **flags** (does not block) summaries containing URLs, long high-entropy strings or customer-identifier patterns, so the operator's eyes go to them. The scan's pattern list is the one maintained under `[REV-SEC-05]` in `REVIEW.md`; this spec adds canary tests for it (§9) instead of a second list that could drift.
+1. Only content from **team or workspace scope** already promoted by the operator can be published. **Operator scope never leaves the machine** (`specs/004` §5.7).
+2. `delphi-core` builds the record deterministically, runs the `[REV-SEC-05]` path and secret scan and the workspace identifier filter, and attaches the result as `redaction` metadata. The preview **flags** (does not block) URLs, long high-entropy strings and customer-identifier patterns. The pattern list is maintained under `[REV-SEC-05]` in `REVIEW.md`; this spec adds canary tests (§10) rather than a second list.
 3. The operator previews the **exact bytes** and approves; the daemon signs and pushes exactly those bytes. **No model turn happens between preview and send.**
-4. A publish from a span below $L_4$ is allowed (an agent may *draft*), but the `source_ceiling` carries the span's taint into the record.
+4. **Publish protocol.** The client commits on a local branch, runs `fetch` and a fast-forward rebase onto the store head, **re-verifies signatures on the rebased head**, then pushes. Records are distinct files, so concurrent publishers rebase without content conflicts; a same-`id` race (only the same signer can create one) stops and asks the operator. The client never force-pushes.
+5. A draft from a span below $L_4$ is allowed, but `source_ceiling` carries the span's taint into the record. Deletion cannot un-leak: **a published secret must be rotated**, not just tombstoned.
 
-### 6.2 Reading and ingestion
-- Sync (`delphi xenia sync`) is deterministic and offline-capable like `delphi sync`: it fetches, verifies (§3.3), computes tiers (§4) and updates a local index. **It never calls an LLM.**
-- Ingress runs the `specs/007` §3.2 sanitizer on summaries (invisible Unicode, bidi controls, fake prompt tags) before any model sees them. As there, the sanitizer is defense in depth; the taint table is the control.
-- Records are retrieved into context as bounded summaries only. Following a pointer is a separate, logged read.
+### 7.2 Ingestion
+- `delphi xenia sync` is deterministic and offline-capable like `delphi sync`. It fetches, runs the §4 freshness checks, validates (§3.4), computes tiers (§5) and updates a local index. **It never calls an LLM.**
+- Ingress runs the `specs/007` §3.2 sanitizer on summaries (invisible Unicode, bidi controls, fake prompt tags). As there, the sanitizer is defense in depth; the taint table is the control.
+- Records reach a model only as bounded summaries (spec 012 §6). **Tiers are a pure function** of (valid records, current roster, validated endorsements and tombstones, freshness state), recomputed on each sync and on each roster change, never carried across one.
 
-### 6.3 Adopting a skill (the highest-risk path)
-A skill is executable guidance and can request tools, so it gets the strictest gate. A `skill` record can be *seen* at $L_1$/$L_2$ but only becomes usable through **adoption**:
-1. The operator runs `delphi xenia adopt <id>`. The install fetches the pinned skill tree and verifies the hash.
-2. The skill is lint-checked with the existing `delphi lint` (spec 001 §3.1 schema). Its requested access scope is shown **as a diff against the least-privilege default**.
-   The review shows **every file in the pinned tree as a diff**, including `scripts/` and any other executable content, not just the manifest. The requested access scope is recomputed from the fetched `SKILL.md` and compared with the record's `requires` (spec 012 §5.2).
-3. **Adoption is ratification.** The operator's approval stamps the local copy $L_5$ and records the pinned hash. This is the same proposal flow as `delphi sync --review`, and it is the only way an xenia skill enters `skills/`. **Extraction is hardened:** the tree is exported from git objects (never checked out in place), and extraction **rejects** any symlink, hardlink, submodule, device node, FIFO, `.git` path segment, absolute or `..` path, and any entry that is not a regular file; `org` and `skill_name` must match `^[a-z0-9-]{1,32}$` and `^[a-z0-9-]{1,48}$` and every path is resolved with the guard of `specs/001` §2.2 before writing. Files are written with no execute bit; the sandbox tier (`specs/008` §4) governs running anything. The skill installs only under its own namespace, `skills/custom/xenia/<org>/<skill_name>/`, and is referred to as `xenia/<org>/<skill_name>`; it can never shadow or overwrite a built-in or an operator's own skill, and an adoption whose name collides is refused. A role may use it only if the operator adds it to that role's `authorized_skills` in their own overrides.
-4. **Permissions cannot be widened by adoption.** A skill gets at most what the operator's own overrides allow (D-21 posture). A requested scope beyond it is refused, not prompted.
-5. **Updates re-adopt.** A new `rev` of an adopted skill is a new proposal showing the diff; the old pinned version keeps running until the operator accepts. A signer removed from the roster flags their adopted skills for re-review (§7.1).
-6. Skills from authors with no steward endorsement can be adopted only after an extra confirmation naming that fact.
+### 7.3 Endorsement
+- A steward reviews the exact revision and signs an `endorsement` with `target_hash` of its bytes. **An endorsement counts only if** the steward's `person` differs from the author's `person` (including any predecessor in the author's `successor` chain), the steward's areas cover the revision (§2.3), the steward has standing (§3.4), and the freshness statement is current (§4).
+- A new `rev` needs a new endorsement. `verdict: withdraw` retracts one; `verdict: dispute` (any member) flags a record to stewards and shows a warning but does not by itself change the tier.
+- The console shows, before the steward signs, what they attest: that they opened the record and its pointers, and that the summary matches.
 
-### 6.4 Requests and claims
-- A `request` is **data**. Receiving one never starts a task. It appears in the operator's inbox, like an inbound A2A task without a standing grant (`specs/007` §2.1).
-- A `claim` is a separate record signed by the claimant, referencing the request. Claiming is the claimant operator's explicit act. The requester cannot assign work to anyone.
-- Any resulting work is an ordinary local mission under the claimant's own governance. A requester gets back only what the claimant chooses to publish (a `memory` record or a pointer).
-- Inbound requests and claims are budgeted per sender (defaults: 20 open requests and 10 open claims per member), enforced deterministically on read. A request counts while `lifecycle: open` and unexpired; a claim counts while its latest `stance` is `offer` or `working`. When a sender is over quota, the **earliest** records by ULID are kept and the rest are hidden (not deleted), and the sender is named in `delphi xenia status` so stewards can act.
-
-### 6.5 The librarian agent (later)
-The librarian is a normal Delphi role with the normal sandbox. It may read $L_2$ summaries and draft proposed changes (merge duplicates, flag stale records, suggest routing). It has **no key**: each proposed change is a record the accepting operator signs. A librarian that has read an $L_1$ or $L_0$ record is tainted like any agent and cannot publish. The librarian is not a steward and cannot endorse.
+### 7.4 Tombstones
+A tombstone is data **about** a record; it never changes the record's bytes. Effective status is derived deterministically (spec 012 §5.3): the author's tombstone decides, except that a steward's `sensitive` withdraw can be reversed only by the steward who made it; otherwise covering stewards must agree, and if they disagree the status is **`contested`** (hidden, flagged to humans and admins). A `withdraw` keeps its effect (fail hidden) **after its signer is removed**, unless admins removed that signer **for cause** (`voids_tombstones: true` in the roster entry), which voids their tombstones. One rogue steward can therefore hide a record only until admins remove them for cause.
 
 ---
 
-## 7. Revocation, Rollback & Compromise
-### 7.1 Revocation
-- **Member removal, key rotation and key compromise** are roster changes (§3.2) and follow **one rule**: a record or endorsement whose signer is not a member at the install's current epoch has standing only if (b) the admins grandfathered it or (c) it is an endorsed orphan (§3.3 step 2). Otherwise it is quarantined ($L_0$). There is no timestamp-based exception, because `signed_at` is author-controlled (§3.3) and git commit order is not authenticated, so a stolen key has no window in which it can keep publishing.
-  - **The grandfather list.** When admins retire or remove a key, the new roster epoch carries, for that DID, `grandfathered_digest` and an accompanying list file `roster/epochs/<n>.grandfathered/<fingerprint>.txt`, where `<fingerprint>` is the 64-character lowercase hex BLAKE3 of the UTF-8 DID string (no colons, so it is a valid file name everywhere). The file has one line per **record and endorsement** the key signed that the admin tooling verified in the store at that moment: `id@rev:blake3 vouched` or `id@rev:blake3 eligible`, sorted by bytes (C locale), LF line endings. The epoch's majority admin signature covers the digest, so a thief cannot add lines.
-    - **`vouched`**: the admins vouch for it. It keeps the standing it had (a vouched record is $L_1$ unless endorsed; a vouched endorsement keeps counting, subject to the successor rule in §4.1).
-    - **`eligible`**: not vouched, but a current steward *may* endorse it, which makes it an endorsed orphan (§3.3 (c)). An `eligible` endorsement does **not** count.
-    - Anything the key signed after the list was made, or that is not on it, is quarantined with no path back. This is what stops a colluding or tricked steward from endorsing a record forged with a removed key.
-  - **Routine rotation is therefore free.** `delphi xenia admin rotate <member>` retires the old DID, adds the new one (with `successor` recorded) and writes the list with every entry `vouched`. A steward's endorsements survive rotation and no records drop. The same command with `--compromised` marks every entry `eligible`, so stewards re-endorse what is worth keeping.
-  - **Departures** default to all entries `eligible` (the deliberate cost: stewards re-endorse what is worth keeping). Admins may choose to vouch en masse, which is an explicit, signed act. Endorsements by a departed steward are `eligible`, so they lapse and the records they covered fall back to $L_1$ until re-endorsed.
-  Skills they authored and the operator adopted are flagged for re-review; they keep running only if the operator confirms (default: keep running the pinned hash, show a banner).
-- **Record withdrawal** by the author, or a `tombstone` from a steward **whose areas cover the record** (spec 012 §5.6), hides a record. A tombstone is data about the record, not an edit to it. Its effective status is derived deterministically (spec 012 §5.6): the author's tombstone decides; otherwise stewards must agree, and if they disagree the record is `contested` (hidden, flagged for humans). A mistaken or malicious tombstone is therefore **reversible**. An admin-majority roster action can remove a rogue steward, which voids their tombstones by the rule above. A `sensitive` tombstone is not restorable by anyone except the author. Installs hide a tombstoned record and keep the tombstone. Git history still holds the old bytes: **a secret that was published must be rotated, not just tombstoned.** The publish gate exists because deletion cannot un-leak.
-- **Endorsement revocation:** an endorsement record can be superseded with `verdict: withdraw`. The record's tier is recomputed on every sync.
+## 8. Rotation, Removal & Compromise
+One rule governs all of them: **a DID that is not `active` at the install's current epoch has no standing; its records and endorsements are quarantined** (§3.4). There is no timestamp exception (`signed_at` is author-controlled and git commit order is not authenticated).
 
-### 7.2 Rollback and fork protection
-- Installs remember the highest roster `epoch` and, per store, the last accepted head. They accept only fast-forward updates. A non-fast-forward (force-push) is refused and reported as a probable attack.
-- Signatures cover bytes, not commit position, so an attacker who replays an old valid record is stopped by the `rev` rule (§3.3.4), and a replayed old roster by the epoch rule.
+### 8.1 Routine rotation
+`delphi xenia admin rotate <member> --routine` writes a roster epoch that marks the old DID `retired` with `successor` set to the new DID (same `person`). The member (who holds both keys) then runs `delphi xenia republish --resign`:
+- **their records** are re-published as new revisions signed by the successor (ownership follows the `successor` chain, §3.4.5); they read at $L_1$ until re-endorsed, and the content may be unchanged;
+- **a steward's endorsements** are re-issued by the successor with the same `target_hash`, so the records they covered **keep their tier**; the tool does this in one pass.
+`--routine` or `--compromised` is **mandatory**; there is no default.
 
-### 7.3 Key compromise
-- A member who loses or suspects a key reports it; admins publish a roster change that removes the old DID and adds a new one. §7.1 then applies unchanged: the old key's records survive only where a current steward endorses them. There is no `compromised_since` boundary.
-- Admin key compromise is handled by the majority rule. If a majority is compromised, or the roster is deadlocked by a lost key (§3.2), the org rebuilds from a new root: operators re-pin out-of-band (§3.2). That re-pin is the break-glass path and is deliberately manual.
+### 8.2 Compromise
+`rotate --compromised` marks the old DID `retired` with `successor` and **no** automatic re-signing. Nothing the old key signed has standing, so everything it signed is quarantined. The successor re-publishes only records they reviewed; stewards re-endorse whatever is worth keeping.
+
+### 8.3 Removal and departure
+Admins mark the DID `removed`. Its records and endorsements lose standing; records it endorsed fall back to $L_1$ until re-endorsed (§5.2 cost). Admins mark `voids_tombstones` only for cause (§7.4).
+
+### 8.4 Break-glass re-pin
+If a majority of admins is compromised, or a lost key deadlocks the roster ($n_{admin}=2$), the org rebuilds from a new genesis and operators re-pin out of band (§3.3). The recovery path for a force-pushed store is similar but lighter: after investigation an admin issues a freshness statement for the new head, and each install's operator confirms with `delphi xenia sync --accept-rewritten-head`; without both, the rewrite stays refused. This path is deliberately manual and is exercised in the Go/No-Go drill (§1.4).
 
 ---
 
-## 8. Threat Table
+## 9. Threat Table
 | # | Threat | Control |
 | :-: | :--- | :--- |
-| T1 | Poisoned memory record (prompt injection in a summary) | Sanitizer (defense in depth); spotlighted envelope; taint-gated tools (the control); summaries length-capped; no auto-promotion to always-loaded files |
-| T2 | Backdoored shared skill | Adoption gate §6.3: lint, scope diff, pinned hash, ratification, no permission widening, re-adopt on update |
-| T3 | Compromised or malicious member | Signatures + attribution; removal drops their records to $L_0$; rate limits; steward endorsement required for $L_2$ |
-| T4 | Pointer swap after endorsement ("rug pull") | Pins bound by signature; drift makes content $L_0$ and visible |
-| T5 | Summary lies about target | Steward review expectation; `evidence`; `dispute` verdicts. Residual risk accepted, stated in §5.4 |
-| T6 | Exfiltration through publishing | Promoted-scope-only, scan, exact-bytes preview, no model turn after approval; deletion cannot un-leak, so rotation is mandatory |
-| T7 | Forged records / store tampering | Per-record detached signatures verified locally; roster pin; hosting auth is not trusted |
-| T8 | Rollback or replay of old records or roster | `rev` monotonicity, roster `epoch`, fast-forward-only heads |
-| T9 | Request used to hijack a teammate's agents | Requests are data; claims are explicit; no auto-start; inbound budgets |
-| T10 | Taint laundering through a trusted member | $\min$ with `source_ceiling`, stamped by the publishing daemon |
-| T11 | Librarian prompt injection | No key, no endorsement, tainted like any agent, proposals need an operator signature |
-| T12 | Sensitive detail in a summary visible to the whole store | Audience-per-store (§4.4), publish scan, operator preview |
-| T13 | Spam or flooding | Per-member quotas, enforced when reading |
-| T14 | Org-wide reputation gaming (collusion of members to self-endorse) | An endorser cannot be the author; stewards are named in the roster by admins, not elected by votes |
-| T15 | Denial of service via oversized or malformed records | Size check and signature verification happen before any YAML parse (§3.3); then field limits in spec 012 §6; quarantine on failure |
-| T16 | Stolen or removed key keeps publishing by backdating `signed_at` or `roster_epoch` | Signer standing judged at the install's current epoch; those fields are never trusted (§3.3); one removal rule with no time window (§7.1) |
-| T17 | Replay of a record or roster copied from another store (for example a confidential store into the org-wide one) | `org` and `store` are in the record and in the signed domain string (spec 012 §3); roster epochs name their store (§3.2) |
-| T18 | Prompt injection in an endorsed record's pointer target | Pointer content never inherits the record's tier; it is $L_0$ and a quarantine read (§5.2) |
-| T19 | Offline install cannot verify a roster that changed several times | Immutable epoch chain verified link by link (§3.2) |
-| T20 | Rogue or compromised steward tombstones everything | Tombstones scoped to the steward's areas, reversible, voided by removal (§7.1) |
-| T21 | Adopted skill shadows a built-in or hides executable scripts | Namespaced install path, full-tree diff, collision refused (§6.3) |
-| T22 | Claim flooding | Per-member open-claim quota enforced on read (§6.4) |
-| T23 | Endorsement reused for different bytes at the same `rev` | `target_hash` in every endorsement, recomputed by the verifier (spec 012 §5.6) |
-| T24 | Routine key rotation voids a steward's endorsements, or rotation is abused to keep a stolen key alive | Admin-signed grandfather list fixes the set of the old key's records at rotation; later signatures from the old key are quarantined (§7.1) |
-| T25 | Forged records from a removed member's key | Standing rules (a)-(c) in §3.3; an endorsed orphan needs a current steward's review of the exact hash |
-| T26 | Hostile skill tree (symlinks, traversal, `.git`) | Hardened extraction, name patterns, resolution guard (§6.3) |
-| T27 | SSRF through `https` or `git` pointers (loopback, metadata, private ranges) | Resolver guards in spec 012 §4; fetch only on an explicit quarantine read |
+| T1 | Poisoned memory record (prompt injection in a summary) | Sanitizer (defense in depth); spotlighted envelope; taint-gated tools (the control); bounded summaries; no promotion to always-loaded files |
+| T2 | Compromised or malicious member | Signatures + attribution; removal or rotation quarantines their records and endorsements (§8); endorsement required for $L_2$ |
+| T3 | Stale or withheld store (hidden epoch, hidden removal) | Freshness statement with expiry; stale ⇒ no endorsements count, warning (§4) |
+| T4 | Store deletes a tombstone, withdrawal or dispute | No-deletion check from the signed `store_head`; sticky local state; deletion reported (§3.5, §4.2) |
+| T5 | Forged records / store tampering | Per-record signatures verified locally; pinned roster; hosting auth not trusted |
+| T6 | Rollback or replay (old `rev`, old roster) | `rev` monotonic; pinned epoch hashes; fast-forward-only heads; strict domain string with `id` |
+| T7 | Cross-store replay | `org`, `store`, `kind`, `id`, `kid` in the signed domain from the verifier's own config; pinned locally, not from `org.toml` |
+| T8 | Backdating with a stolen or removed key | Standing at the current epoch only; `signed_at` ignored (§3.4) |
+| T9 | One person endorsing their own record (second install, rotated key) | `person` identity and ban by person across the successor chain (§2.1, §7.3); quorum counts people |
+| T10 | Collusion between a steward and an author (area shopping) | Documented as unmitigated by areas; no-self-endorsement, steward review, admin removal (§2.3) |
+| T11 | Endorsement reused for different bytes | `target_hash` of the exact revision (spec 012 §5.2) |
+| T12 | Taint laundering via a trusted member | $\min$ with `source_ceiling` stamped by the publishing daemon |
+| T13 | Pointer target injection | Pointers are never fetched in Phase 1 (§6) |
+| T14 | Exfiltration through publishing | Promoted-scope-only, scan, exact-bytes preview, no model turn after approval; rotate any leaked secret (§7.1) |
+| T15 | Sensitive detail visible to the whole store | One audience per store (§5.4); publish scan; operator preview |
+| T16 | Rogue steward tombstones everything | Area-bound; `contested` is visible; removal for cause voids their tombstones (§7.4) |
+| T17 | Joiner given a forged chain (retired founder keys) | Pin of a current admin and the head epoch hash; verify forward from genesis (§3.3) |
+| T18 | Store clone treated as trusted workspace content | Clone outside workspace zones, read only by the daemon (§3.3.5) |
+| T19 | Parser attacks on malformed records | Size and signature checks before any YAML parse (§3.4); strict schema (spec 012 §6) |
+| T20 | Lenient signature verification diverging between installs | Strict Ed25519 (RFC 8032, reject non-canonical S and small-order keys) with test vectors (§10) |
 
 ---
 
-## 9. Verification Plan
-1. **Signature test:** flip one byte in a record; it fails §3.3.1 and is quarantined, not loaded.
-2. **Removed-member test:** remove a member by quorum roster change; their records drop to $L_0$ on the next sync; their adopted skill is flagged.
-3. **Roster quorum test:** a roster change signed by fewer than the quorum is rejected; a lower `epoch` is rejected.
-4. **Rollback test:** replay an older valid record `rev`; rejected. Force-push the store head; refused and reported.
-5. **Tier computation test:** a member-signed record is $L_1$; with an `evidence` pointer attached it is still $L_1$; with a valid steward endorsement it is $L_2$; never above $L_2$; a record with `source_ceiling: external_untrusted` is $L_0$ even if endorsed; the same inputs produce the same tiers after deleting the local index.
-6. **Self-endorsement test:** an endorsement by the record's own author does not lift the tier.
-7. **Taint gate test:** a span that quarantine-reads an $L_1$ record cannot write to the worktree or call out without a Red approval; a span that reads an $L_2$ summary can (per its HITL tier).
-8. **Pointer tier and drift test:** a pinned pointer to a Drive file inside an $L_2$ record yields $L_0$ content and lowers the span ceiling to $L_0$ even though the pin matches; changing the target after signing fails closed with an integrity error and no content reaches a span without an explicit quarantine read.
-9. **Skill adoption test:** an adopted skill requesting write scope beyond the operator's overrides is refused; a new `rev` stays pending until accepted; the old hash keeps running.
-10. **Publish gate test:** a record containing a planted secret fails the scan and cannot be signed; operator-scope content cannot be selected for publish at all; a byte changed between preview and send aborts the send.
-11. **Request test:** a received `request` starts no mission and costs zero tokens until the operator claims it.
-12. **Librarian test:** the librarian role has no access to the signing key; its proposal has no effect until an operator signs it; after reading an $L_1$ record it cannot publish.
-13. **Ingress test:** a summary containing bidi controls, invisible tag characters and a fake `</governance>` tag is stripped and spotlighted; the span ceiling is still lowered.
-14. **Backdating test:** remove a member by roster change, then present a record signed by their key with `signed_at` and `roster_epoch` set before the removal; it is quarantined. The same record with a valid endorsement from a current steward is accepted at $L_2$. An endorsement signed by a removed steward does not count.
-15. **Cross-store replay test:** copy a valid record and sidecar from store A into store B of the same org; signature verification fails on the `store` binding.
-16. **Roster chain test:** an install pinned at epoch 1 syncs a store at epoch 4 and verifies 1→2→3→4; with epoch 3's file missing or its signatures short of a majority, it refuses and stays at epoch 2 or 1.
-17. **Parse-order test:** a record with an oversized or malformed body and an invalid signature is rejected without the YAML parser ever running (instrumented parser).
-18. **Tombstone scope and reversal test:** a steward outside the record's areas cannot tombstone it; a covering steward's tombstone is reversed by a `restore`; a `sensitive` tombstone is restorable only by the author.
-19. **Skill namespace test:** adopting a skill named like a built-in installs under `skills/custom/xenia/<org>/…` and is not usable by any role until added to `authorized_skills`; a tree containing `scripts/` shows those files in the adoption diff.
-20. **Secret canary test:** the publish scan rejects canary strings for each pattern class in `[REV-SEC-05]` (cloud keys, token prefixes, private-key headers, credentials in URLs) placed in the summary, body and pointer labels.
-21. **Claim quota test:** the eleventh open claim from one member is hidden on read (earliest ULIDs kept) and named in `delphi xenia status`; a `delivered` or `withdrawn` claim frees quota.
-22. **Rotation test:** rotate a steward's key with `delphi xenia admin rotate`; every record and endorsement the old key signed before the rotation keeps its tier (all `vouched`), nothing drops to $L_1$ because the successor is a steward with covering areas; a record the old key signs after the rotation is quarantined; rotate to a successor who is **not** a steward and the old endorsements stop counting; with `--compromised`, the old key's entries are `eligible` and drop unless a current steward endorses them.
-23. **Grandfather integrity test:** adding a line to a grandfather list file, removing one, or flipping `eligible` to `vouched` fails the epoch's digest check and the epoch is refused; a fingerprint file name containing a colon is refused.
-24. **Endorsed-orphan test:** an `eligible` record by a removed member is accepted only while a current steward's endorsement with a matching `target_hash` exists, and is re-quarantined when it lapses; a record the removed key signs after the list was made, **even with a current steward's endorsement**, is quarantined because it is not on the list; an `eligible` endorsement by a departed steward does not count; an orphaned `skill` or `endorsement` record is not accepted via (c); role checks for vouched records use the member's role in the epoch before removal.
-25. **Endorsement binding test:** replace a record's bytes at the same `rev` after endorsement; the endorsement no longer counts (hash mismatch) and the record is $L_1$.
-26. **Invite test:** an invite signed by a non-admin, for a different DID, for another store, or expired is refused; a valid invite alone grants no membership until a roster epoch lists the DID.
-27. **Hostile skill tree test:** a pinned tree containing a symlink, hardlink, submodule, `.git` segment, `..` path or executable file entry is refused whole; nothing is written outside `skills/custom/xenia/<org>/<skill_name>/`; `org` or `skill_name` outside the allowed patterns is refused.
-
+## 10. Verification Plan
+1. **Signature test:** flip one byte of a record; it is quarantined at step 2 and the YAML parser never runs (instrumented parser). The same for an oversized file and a non-member signer.
+2. **Standing test:** a record signed by a `retired` or `removed` DID is quarantined, with `signed_at` and `roster_epoch` set to predate the change; a record signed by an `active` DID is valid.
+3. **Roster quorum test:** a roster change signed by fewer than $\lfloor n_{admin}/2 \rfloor + 1$ **people** is rejected; two DIDs of one person count once; signatures by retired/removed DIDs are ignored.
+4. **Roster chain test:** an install pinned at epoch 1 syncs a store at epoch 4 and verifies 1→2→3→4; a missing link or short signatures refuses the target and keeps the last good epoch; a different file under accepted epoch 3 (fork) is refused.
+5. **Join pin test:** a chain forged with retired founder keys that ends at a different head is refused; a chain that verifies but whose head hash differs from the pinned one is refused; the pinned admin must be `active` at the head.
+6. **Store pin test:** an `org.toml` that disagrees with `stores.toml` is refused.
+7. **Tier test:** a member-signed `memory` record is $L_1$; with a valid steward endorsement it is $L_2$; an `evidence` pointer alone changes nothing; never above $L_2$; a record with `source_ceiling: external_untrusted` is $L_0$ even if endorsed; deleting the local index and re-syncing gives the same tiers.
+8. **Self-endorsement test:** a steward endorsing their own record is ignored; so is the same person endorsing from a second install, and a person endorsing after a key rotation (successor chain).
+9. **Endorsement binding test:** replacing a record's bytes at the same `rev`, or publishing a new `rev`, voids the earlier endorsement (hash mismatch); an endorsement without `target_hash` is rejected.
+10. **Area test:** a steward outside the revision's tags cannot endorse it; a tombstone by a covering steward still applies after the author publishes a new rev with different tags (union of tags).
+11. **Role matrix test:** a member cannot sign `endorse`; a member can sign `dispute` and a tombstone of their own record; a steward cannot tombstone outside their areas; an endorsement of a non-`memory` kind never lifts a tier.
+12. **Hidden-epoch test:** serve an install a store without the newest epoch while a valid freshness statement for the older epoch is still current; the install's `status` shows the statement age; after it expires, no endorsement counts and the stale warning appears.
+13. **Deletion test:** a fast-forward commit that deletes a tombstone, an endorsement `withdraw`, a `dispute`, or any roster file is rejected as tampering; a new `rev` overwriting a record file is accepted.
+14. **Rewrite test:** a force-pushed store is refused; `--accept-rewritten-head` works only with a fresh admin statement for the new head and operator confirmation.
+15. **Freshness validity test:** a statement signed by a non-admin, for another epoch or store, or expired by the install's clock, is ignored; a store head that is not a descendant of `store_head` is rejected.
+16. **Tombstone resolution test:** the author's tombstone decides; two stewards in disagreement give `contested` (hidden); a `sensitive` steward withdraw is reversed only by that steward; a far-future ULID gains no priority; one tombstone record per signer per target (a new `rev` of the same record is the only change).
+17. **Tombstone after departure test:** a removed author's `withdraw` still hides the record; a steward removed `voids_tombstones` has their tombstones voided.
+18. **Rotation test:** routine rotation then `republish --resign`: the member's records become new revs (at $L_1$ until re-endorsed) and a steward's re-issued endorsements keep the covered records at $L_2$; after `rotate --compromised` nothing the old key signed has standing; omitting `--routine`/`--compromised` is an error.
+19. **Authorship test:** a successor can publish a new `rev` of a predecessor's `id`; a different member cannot.
+20. **Publish gate test:** a planted secret fails the scan (canaries for each `[REV-SEC-05]` class in summary, body and pointer labels); operator-scope content cannot be selected; a byte changed between preview and send aborts the send; the publish rebase re-verifies signatures.
+21. **Ingress test:** a summary with bidi controls, invisible tag characters and a fake `</governance>` tag is stripped and spotlighted, and the span ceiling is still lowered.
+22. **Taint gate test:** a span that quarantine-reads an $L_1$ record cannot write to the worktree or call out without a Red approval; a span that reads an $L_2$ summary can (per its HITL tier).
+23. **Pointer test:** `file:`, local paths, `delphi://` URIs, userinfo URLs and signed-URL query tokens are rejected at publish and ingest; no pointer is fetched at any point in Phase 1 (network-denied test run).
+24. **Clone location test:** the store clone is created under `$DELPHI_HOME/xenia/`, not under `team/` or any workspace zone, and agents cannot read it.
+25. **Strict signature test:** the published Ed25519 test vectors (including non-canonical S and small-order keys) are rejected by the verifier.
+26. **Join flow test:** `whoami` prints the DID; an admin adds it by epoch; `join` succeeds only with the correct admin fingerprint and head pair, and a wrong fingerprint or head is refused with no state written.
 
 ---
 
-## 10. Open Decisions for the Operator
-Council 008 Round 1 positions are folded in. The operator approved the Council run and adopting these recommendations (2026-10-24); they remain **proposed** until the operator ratifies the spec itself.
+## 11. Deferred to Later Phases (provisional, not binding)
+Each item is re-reviewed before its phase starts. The earlier Councils' conclusions are kept here so they are not lost.
 
-| # | Question | Position after Round 1 |
+1. **Skill adoption (Phase 2).** Kind `skill` (spec 012 §11). A skill is seen like any record but usable only after `delphi xenia adopt <id>`: the pinned tree is fetched and hash-verified; `delphi lint` runs; the recomputed access scope is shown as a diff against least privilege and refused on mismatch with the record's `requires`; every file in the tree, including `scripts/`, is shown as a diff; adoption **is ratification** (stamps $L_5$ with the pinned hash); permissions are never widened beyond the operator's overrides (D-21); the skill installs only under `skills/custom/xenia/<org>/<skill_name>/` and is usable by a role only if the operator adds it to `authorized_skills`; updates re-adopt. Extraction rejects symlinks, hardlinks, submodules, device nodes, FIFOs, `.git` segments, absolute and `..` paths and non-regular files; `org` and `skill_name` match `^[a-z0-9-]{1,32}$` and `^[a-z0-9-]{1,48}$`; files are written without the execute bit.
+2. **Pointer resolver (Phase 2).** Optional fetching on an explicit quarantine read, with guards: `https` only (and `git` over `https`/`ssh`); own DNS resolution rejecting loopback, private, link-local, metadata and unspecified addresses, re-checked at connect to defeat rebinding and on each of at most 3 redirects; size and time caps; no ambient credentials. **Pointer content is always $L_0$**, whatever the pin and the record's tier; a pin mismatch fails closed.
+3. **Signed invites (Phase 2).** `{org, store, admin, invitee, expires (≤14 days), sig}` over `xenia-invite/1\n<org>\n<store>\n<admin did>\n<invitee did>\n<expires>`; grants nothing by itself; replaces the out-of-band DID paste of §3.3.
+4. **Vouch lists and multi-store (Phase 2).** If dogfooding shows the re-sign and re-endorse cost of §8 is real, admins may attach an admin-signed list of `id@rev:blake3` entries to a retirement epoch so a retired key's records keep their standing; Council 008/009 found this mechanism complicated, so it is deferred until evidence supports it. An install may join several stores, each pinned separately (§3.3).
+5. **Requests and claims (Phase 3).** Data only; never start a mission; a claim is the claimant's explicit act; per-member quotas (defaults 20 open requests, 10 open claims; a claim counts while `offer` or `working`; earliest ULIDs kept; excess hidden and named in `status`).
+6. **Progress and `drive` pointers (Phase 3).** `drive` needs the Drive connector (`specs/010`).
+7. **The librarian (Phase 3).** A normal role with the normal sandbox; reads $L_2$ summaries; proposes dedupe, staleness and routing changes; has no key, cannot endorse, and is tainted like any agent after reading $L_1$/$L_0$.
+
+---
+
+## 12. Open Decisions for the Operator
+| # | Question | Position after Councils 008 and 009 |
 | :-: | :--- | :--- |
-| O-1 | Does steward endorsement alone lift $L_1 \to L_2$ (§4.2)? | Yes, for the signed text of `memory` and `progress`, and **it is the only path to $L_2$ in v1**. Pointer targets never inherit it. Skills always need local ratification |
-| O-2 | One store per org, or one per audience from the start (§4.4)? | One store per audience, with `store` bound into records and signatures. Start with a single org-wide store; the client supports several |
-| O-3 | Admin quorum size and default steward assignment | Majority of the previous epoch's admins; `doctor` warns below 3 admins and recommends 2-of-3. Stewards are named by admins per topic area, and endorsements and tombstones are bound to those areas |
-| O-4 | Is out-of-band fingerprint pinning enough for org join (§3.2), or should join require an admin-signed invite? | Both: admin-signed invite plus operator confirmation of the admin fingerprint |
-| O-5 | May xenia run before federation Planes 1–2 ship (D-06)? | Yes. It needs only Plane 3-style git sync plus the existing identity and lattice |
+| O-1 | Does steward endorsement alone lift $L_1 \to L_2$? | Yes, for `memory` only in Phase 1, conditional on the person-level self-endorsement rule (§7.3); amend `specs/007` §3 (007-A1) |
+| O-2 | One store per audience? | Yes. Phase 1 is one store; the client pins each store separately so Phase 2 can join several |
+| O-3 | Admin quorum | Majority of active admins counted per person; `doctor` warns below 3; two stewards minimum for a useful roster |
+| O-4 | Org join | Phase 1: out-of-band pin of a current admin and the head epoch hash, admin adds the DID by epoch. Signed invites are deferred (§11.3) |
+| O-5 | Before federation Planes 1–2 (D-06)? | Yes. It needs only git sync plus the existing identity and lattice |
+| O-6 (new) | Freshness validity default | 14 days, one admin signature, refreshable by a scheduled job; operators may shorten it |
+| O-7 (new) | Phase 1 dogfood thresholds | Median endorsement latency ≤ 3 working days and ≥ 70% of records read at $L_2$; to be agreed before the run |
