@@ -377,6 +377,14 @@ pub(crate) mod tests {
         assert_eq!(parse_line(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","resetsAt":1790003600}}"#), vec![Event::RateLimit { utilization: 0.0, window: "five_hour".into(), status: "rejected".into(), resets_at: Some(1_790_003_600) }]);
         let res = parse_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"done","stop_reason":"end_turn","total_cost_usd":0.02,"usage":{"input_tokens":4,"output_tokens":80}}"#);
         assert!(matches!(&res[0], Event::Result { text, is_error: false, total_cost_usd, .. } if text == "done" && *total_cost_usd == 0.02));
+        // `claude` 2.1.310 with the session limit reached (a captured sample, `tests/fixtures/quota/`): the event has no
+        // top-level `utilization`, only `status` and the reset time, and the result is an error with a 429.
+        assert_eq!(
+            parse_line(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792864800,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":1792864800,"status":"rejected","surpassedThreshold":1},"seven_day":{"utilization":0.62,"resetsAt":1793365200,"status":"allowed"}}},"uuid":"u","session_id":"s"}"#),
+            vec![Event::RateLimit { utilization: 0.0, window: "five_hour".into(), status: "rejected".into(), resets_at: Some(1_792_864_800) }]
+        );
+        let res = parse_line(r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"api_error":"usage_limit_reached","result":"You've hit your session limit · resets 2pm (America/New_York)","stop_reason":"stop_sequence","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"duration_ms":268}"#);
+        assert!(matches!(&res[0], Event::Result { text, is_error: true, .. } if text.starts_with("You've hit your session limit")), "{:?}", res);
         // `agy` with the quota used up: the reason is in `error`, not `response` (a captured sample).
         let res = parse_agy_line(r#"{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Resets in 136h12m54s.","usage":{"input_tokens":0,"output_tokens":0}}}"#);
         assert!(matches!(&res[0], Event::Result { text, is_error: true, .. } if text == "Individual quota reached. Resets in 136h12m54s."), "{:?}", res);
