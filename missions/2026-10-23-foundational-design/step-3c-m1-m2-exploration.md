@@ -157,3 +157,5 @@ Still unsampled: Anthropic API (all rows), Gemini API (the `agy` sample is the s
 - Gemini API errors: <https://ai.google.dev/gemini-api/docs/api-errors>
 - Amazon Bedrock API error codes: <https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html>
 - Claude Code `rate_limit_event` (secondary): <https://claude-code.hexdocs.pm/ClaudeCode.Message.RateLimitEvent.html>
+
+**Finding from the `claude` sample (2026-10-24).** The classifier's text phrases missed "You've hit your session limit"; `hit your session limit` is now matched, and both real shapes are pinned in `exhaust.rs` tests. Still open for M3 wiring: `harness::parse_line` only emits a rate-limit event when `rate_limit_info.utilization` is present, but the real `rejected` event has no top-level `utilization` (only `unifiedWindows.*.utilization`), so it is dropped today and must be routed to `classify_rate_limit_event` (`status`, `resetsAt`, `rateLimitType`).
