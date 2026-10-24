@@ -9,12 +9,14 @@ mod lint;
 mod ratify_console;
 mod report;
 mod seed;
+mod setup;
 mod theme;
 
 use std::path::PathBuf;
 use std::process::exit;
 
 const USAGE: &str = "usage:
+  delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
@@ -30,6 +32,7 @@ fn main() {
         // The daemon and its maintenance commands run from this same executable.
         Some("__core") => delphi_engine::core_main::run(args[1..].to_vec()),
         Some("lint") => cmd_lint(&args[1..]),
+        Some("setup") => cmd_setup(&args[1..]),
         Some("init") => cmd_init(&args[1..]),
         Some("doctor") => cmd_doctor(&args[1..]),
         Some("chat") => cmd_chat(&args[1..]),
@@ -92,6 +95,24 @@ fn prompt(question: &str, default: &str) -> String {
     let _ = std::io::stdin().lock().read_line(&mut line);
     let v = line.trim();
     if v.is_empty() { default.to_string() } else { v.to_string() }
+}
+
+/// `delphi setup`: detect, ask, write, ratify, prove (see `setup.rs`).
+fn cmd_setup(args: &[String]) -> i32 {
+    let o = setup::Opts {
+        home: home::delphi_home(flag(args, "--home").as_deref()),
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        workspace: flag(args, "--workspace"),
+        yes: args.iter().any(|a| a == "--yes" || a == "-y"),
+        check: args.iter().any(|a| a == "--check"),
+    };
+    match setup::run(&mut setup::TerminalUi { auto: o.yes }, &setup::RealEnv, &o) {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("delphi setup: {:#}", e);
+            1
+        }
+    }
 }
 
 fn cmd_init(args: &[String]) -> i32 {

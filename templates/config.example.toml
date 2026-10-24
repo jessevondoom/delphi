@@ -65,9 +65,15 @@ per_watch_max_wakes_per_day = 10
 [hitl]
 approval_timeout_sec = 600           # Unanswered approvals resolve to DENY
 
-[sandbox]
-mode = "auto"                        # D-04: auto = sandbox-exec (macOS) / bwrap (Linux); falls back to none => execution is Amber, not Green
-network = false
+# Commands (D-24): the OS sandbox is optional. "off" (default): every command asks for approval unless an allow rule
+# covers it; "prefer": use the sandbox when there is one (sandboxed commands need no approval); "required".
+# This table is ratified: widening it is a Red-tier proposal. `delphi setup` fills in test_command for your project.
+[exec]
+sandbox = "off"
+# allow = ["cargo test*"]            # commands that need no approval (patterns over the argv; `*` matches anything)
+# deny = ["git push*"]               # commands that are refused outright
+# test_command = ["cargo", "test"]   # merge gate 1
+# check_command = ["cargo", "clippy"] # merge gate 2
 
 [rag]
 engine = "fts5"                      # D-01: BM25-only in v1; sqlite-hybrid (FTS5 + sqlite-vec + RRF) after the reopen trigger
