@@ -43,6 +43,7 @@ await new Promise<void>((done) => {
 });
 const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} />, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
+  interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });
 await app.waitUntilExit();
 term.stop();
