@@ -680,3 +680,44 @@ fn the_plain_console_is_still_there_and_gives_the_same_answers() {
     assert!(!out.contains('\x1b'), "plain output carries no escape sequences");
     kill_daemon(pid_in(&out));
 }
+
+#[test]
+fn a_long_reply_is_cut_to_a_screenful_saved_whole_and_available_with_more() {
+    let long: String = (1..=60).map(|i| format!("line {} of the long answer", i)).collect::<Vec<_>>().join("\n");
+    let m = mock(vec![reply_text(&long)]);
+    let e = setup(m.port);
+    let mut c = PtyConsole::start(&e.home, &["chat", "--workspace", "e2e"], 50, 100);
+    c.wait_for("daemon pid");
+    c.wait_for("/help for commands");
+    let pid = {
+        let txt = c.everything();
+        let rest = txt.split("daemon pid ").nth(1).unwrap();
+        rest.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>().parse::<i32>().unwrap()
+    };
+    c.type_keys("/ratify\r");
+    c.wait_for("pending proposal");
+    c.type_keys("/ratify apply 1\r");
+    c.wait_for("ratified ws:config.toml#access");
+    c.type_keys("Tell me everything\r");
+    c.wait_for("more lines");
+    c.wait_for("✓ t_0001 done");
+    let all = c.everything();
+    assert!(all.contains("line 24 of the long answer") && !all.contains("line 25 of the long answer"), "24 lines are shown and no more:\n{}", all);
+    assert!(all.contains("… 36 more lines · missions/") && all.contains("/more prints them"), "{}", all);
+    assert!(all.contains("⟦") && all.contains(" · ") , "the reply is introduced by its speaker's badge and the time");
+    // The whole reply is on disk, as a document with frontmatter, and its path was written as a link.
+    let saved = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().flat_map(|m| std::fs::read_dir(m.path().join("replies")).into_iter().flatten().flatten()).next().expect("a saved reply").path();
+    let text = std::fs::read_to_string(&saved).unwrap();
+    assert!(text.starts_with("---\n") && text.contains("line 60 of the long answer") && text.contains("source_type: internal_generated"), "{}", text);
+    let raw = String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
+    assert!(raw.contains("\x1b]8;;file://") && raw.contains(".md\x1b]8;;\x1b\\"), "the path is an OSC 8 link");
+    // /more prints the rest, and then there is nothing more.
+    c.type_keys("/more\r");
+    c.wait_for("line 60 of the long answer");
+    assert!(c.everything().contains("line 25 of the long answer"));
+    c.type_keys("/more\r");
+    c.wait_for("nothing more");
+    c.type_keys("/quit\r");
+    assert_eq!(c.wait_exit(), 0);
+    kill_daemon(pid);
+}

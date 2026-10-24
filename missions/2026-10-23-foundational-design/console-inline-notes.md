@@ -29,3 +29,10 @@ tags: [console, ui, spec-005c, slice-1]
 - Multi-line prompt is a single row with `↵` marks, because an inline viewport has a fixed height.
 - Long output is not yet shortened (slice 2), and there is no inbox, idle timeout or `Shift+Tab` (slice 3).
 - Wrapped help lines lose their hanging indent.
+
+## Slice 2: brevity (`specs/005c` §2.1 item 5)
+- A finished reply arrives at the console as one unit (`Out::Reply`) and is introduced by its speaker's badge and the time. At most **24 screen lines** are printed; the rest is saved whole to `missions/<mission>/replies/<task>.md` (a normal workspace document with frontmatter, marked `internal_generated`), the console prints `… N more lines · <path>   /more prints them` with the path as an OSC 8 link, and `/more` prints the remainder once (then says there is nothing more).
+- While a reply is being written, the console no longer streams it into the scrollback: the unfinished text shows dim on the live row, and the reply is printed whole when the task ends. The plain console still streams.
+- The console's root handoff now carries a constraint asking agents to be brief (about 20 lines) and put detail in a file.
+- Tool calls were already one line each.
+- Not done: the cap is on wrapped screen lines at the current width; a very narrow terminal shows fewer words per line and more `more lines`. A saved reply that the operator never reads stays on disk until the mission is cleaned up.

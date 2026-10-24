@@ -43,6 +43,8 @@ pub enum Input {
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
     /// `/narrator [view]`: open the read-only window (a tmux split when inside tmux, else the command to run).
     Narrator(Option<String>),
+    /// `/more`: the rest of a reply the inline console shortened.
+    More,
     Unknown(String),
 }
 
@@ -76,6 +78,7 @@ pub fn parse_input(line: &str) -> Input {
                 Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge, agents, spend, archives or tile, not `{}`", v)),
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
+            "more" => Input::More,
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
@@ -136,6 +139,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /narrator [council|epic|forge|agents|spend|archives|tile]   the read-only live window (a tmux split, or the command to run in a second terminal)
   /council <proposition>             a blind three-round Council (architect, strategist, red-team); you decide if it deadlocks
   /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
+  /more                              the rest of the last reply, when it was shortened
   /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
   /quit";
 
@@ -233,6 +237,29 @@ impl Renderer {
             out.push_str(text);
         }
         out
+    }
+
+    /// The new text of the working agents' replies, with no labels, for the inline console's live row.
+    pub fn live_text(&mut self, params: &Value) -> String {
+        let Some(spans) = params["spans"].as_object() else { return String::new() };
+        let mut keys: Vec<&String> = spans.keys().collect();
+        keys.sort();
+        keys.into_iter().filter(|k| !self.quiet.contains(k.as_str())).filter_map(|k| spans[k.as_str()]["text"].as_str()).collect::<Vec<_>>().concat()
+    }
+
+    /// A finished task's output as one unit, spoken by the newest top-level agent.
+    pub fn reply_for(&mut self, e: &Value) -> Reply {
+        self.last_span = None;
+        self.council = false;
+        let num = |k: &str| k.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+        let role = self.spans.iter().filter(|(_, (_, d))| *d == 0).max_by_key(|(k, _)| num(k)).map(|(_, (r, _))| r.clone()).unwrap_or_else(|| "orchestrator".into());
+        Reply {
+            task_id: e["task_id"].as_str().unwrap_or("").to_string(),
+            name: self.name(&role),
+            role,
+            text: delphi_engine::observe::sanitize(e["payload"]["text"].as_str().unwrap_or("")),
+            status: if e["payload"]["status"] == "escalated" { "escalated".into() } else { "done".into() },
+        }
     }
 
     /// One persisted event. `None` means nothing to show.
@@ -362,6 +389,8 @@ pub(crate) struct Shared {
     pub(crate) obs: Mutex<delphi_engine::observe::ObserverState>,
     renderer: Mutex<Renderer>,
     names: HashMap<String, String>,
+    /// The lines of the last reply that were cut for brevity, for `/more`.
+    pub(crate) more: Mutex<Vec<String>>,
     pub(crate) running: AtomicUsize,
     pub(crate) failures: AtomicUsize,
     pub(crate) closed: AtomicBool,
@@ -369,10 +398,42 @@ pub(crate) struct Shared {
 
 /// Where console output goes. Plain mode writes to stdout; the inline console installs a channel and prints
 /// the text above its pinned block.
-static SINK: Mutex<Option<std::sync::mpsc::Sender<String>>> = Mutex::new(None);
+static SINK: Mutex<Option<std::sync::mpsc::Sender<Out>>> = Mutex::new(None);
 
-pub fn set_sink(tx: Option<std::sync::mpsc::Sender<String>>) {
+/// What the console is asked to show. The plain console only ever sees `Text`; the inline one also gets the
+/// unfinished text of a reply (shown on its live row, never printed into the scrollback) and the finished
+/// reply as a unit, so it can keep it short.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Out {
+    Text(String),
+    Live(String),
+    LiveClear,
+    Reply(Reply),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reply {
+    pub task_id: String,
+    pub role: String,
+    pub name: String,
+    pub text: String,
+    /// `done` or `escalated`.
+    pub status: String,
+}
+
+pub fn set_sink(tx: Option<std::sync::mpsc::Sender<Out>>) {
     *SINK.lock().unwrap() = tx;
+}
+
+/// Is an inline console attached (so replies are delivered whole, not streamed)?
+fn inline() -> bool {
+    SINK.lock().unwrap().is_some()
+}
+
+fn emit(o: Out) {
+    if let Some(tx) = SINK.lock().unwrap().as_ref() {
+        let _ = tx.send(o);
+    }
 }
 
 /// Everything that reaches the screen passes through here: text from models and tools is stripped of terminal
@@ -380,7 +441,7 @@ pub fn set_sink(tx: Option<std::sync::mpsc::Sender<String>>) {
 pub fn say(s: &str) {
     let clean = delphi_engine::observe::sanitize(s);
     if let Some(tx) = SINK.lock().unwrap().as_ref() {
-        let _ = tx.send(clean);
+        let _ = tx.send(Out::Text(clean));
         return;
     }
     let mut out = std::io::stdout().lock();
@@ -406,9 +467,16 @@ fn reader(mut ev: Client, shared: Arc<Shared>) {
             Ok(n) => match n["method"].as_str() {
                 Some("delta.frame") => {
                     shared.obs.lock().unwrap().apply_frame(&n["params"]);
-                    let s = shared.renderer.lock().unwrap().frame(&n["params"]);
-                    if !s.is_empty() {
-                        say(&s);
+                    if inline() {
+                        let t = shared.renderer.lock().unwrap().live_text(&n["params"]);
+                        if !t.is_empty() {
+                            emit(Out::Live(delphi_engine::observe::sanitize(&t)));
+                        }
+                    } else {
+                        let s = shared.renderer.lock().unwrap().frame(&n["params"]);
+                        if !s.is_empty() {
+                            say(&s);
+                        }
                     }
                 }
                 Some("event") => handle_event(&shared, &n["params"]),
@@ -452,6 +520,12 @@ fn handle_event(shared: &Shared, e: &Value) {
             }
         }
         _ => {}
+    }
+    if inline() && kind == "task.output" {
+        let reply = shared.renderer.lock().unwrap().reply_for(e);
+        emit(Out::LiveClear);
+        emit(Out::Reply(reply));
+        return;
     }
     if let Some(s) = shared.renderer.lock().unwrap().event(e) {
         say(&s);
@@ -514,7 +588,7 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
             obs.apply(e);
         }
     }
-    let shared = Arc::new(Shared { card: Mutex::new(None), obs: Mutex::new(obs), renderer: Mutex::new(Renderer::new(names.clone())), names, running: AtomicUsize::new(0), failures: AtomicUsize::new(0), closed: AtomicBool::new(false) });
+    let shared = Arc::new(Shared { card: Mutex::new(None), obs: Mutex::new(obs), renderer: Mutex::new(Renderer::new(names.clone())), names, more: Mutex::new(Vec::new()), running: AtomicUsize::new(0), failures: AtomicUsize::new(0), closed: AtomicBool::new(false) });
     let s2 = shared.clone();
     std::thread::spawn(move || reader(ev, s2));
 
@@ -542,6 +616,10 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
 }
 
 impl Session {
+    pub(crate) fn ws_dir(&self) -> &Path {
+        &self.ws_dir
+    }
+
     /// Run one parsed input. `false` means the operator asked to quit.
     pub(crate) fn handle(&mut self, input: Input) -> bool {
         match input {
@@ -550,6 +628,10 @@ impl Session {
             Input::Help => say(&format!("{}\n", HELP)),
             Input::Unknown(m) => say(&format!("{}\n", m)),
             Input::Mission => say(&format!("mission {}\n", self.mission_id)),
+            Input::More => {
+                let rest = std::mem::take(&mut *self.shared.more.lock().unwrap());
+                say(&if rest.is_empty() { "nothing more: the last reply was shown whole\n".to_string() } else { format!("{}\n", rest.join("\n")) });
+            }
             Input::Resume(tasks) => match self.cmd.call("recovery.resume", json!({"mission_id": self.mission_id, "tasks": if tasks.is_empty() { Value::Null } else { json!(tasks) }})) {
                 Ok(v) => {
                     let n = v["resumed"].as_array().map(|a| a.len()).unwrap_or(0);

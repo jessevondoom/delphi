@@ -8,7 +8,7 @@
 //! Commands are the plain console's: both drive [`crate::chat::Session`], so they behave the same. This file is
 //! the screen, the prompt editor and the event loop around it.
 
-use crate::chat::{self, parse_input, Session};
+use crate::chat::{self, parse_input, Out, Reply, Session};
 use crate::observer::{badge, clip, hairline, kilo, ordered, role_color, state_color, Pal};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -340,6 +340,94 @@ fn style_line(l: &str, pal: Pal) -> Line<'static> {
 }
 
 /// Run the inline console. Returns the process exit code.
+/// A reply longer than this many screen lines is cut; the rest is saved and offered as a link and `/more`.
+pub const REPLY_LINES: usize = 24;
+
+/// Split `lines` into what is shown and what is held back.
+pub fn cap_lines(lines: Vec<String>, cap: usize) -> (Vec<String>, Vec<String>) {
+    if lines.len() <= cap {
+        return (lines, vec![]);
+    }
+    let mut shown = lines;
+    let rest = shown.split_off(cap);
+    (shown, rest)
+}
+
+/// `HH:MM:SS` in local time.
+fn clock() -> String {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as libc::time_t).unwrap_or(0);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&t, &mut tm) };
+    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
+/// Keep a whole reply as a document in the mission (`missions/<mission>/replies/<task>.md`). It is the agent's own
+/// output, so it is marked as generated, and it carries the frontmatter every workspace document has.
+pub fn save_reply(ws_dir: &Path, mission: &str, r: &Reply, now_rfc3339: &str) -> std::io::Result<std::path::PathBuf> {
+    let dir = ws_dir.join("local/missions").join(mission).join("replies");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.md", r.task_id));
+    let doc = format!(
+        "---\nid: reply-{task}\ntitle: \"Reply to {task}\"\nauthor: {role}\ntimestamp: {now}\nsource_type: internal_generated\nconfidence: medium\nstatus: active\nsource_mission: {mission}\ntags: [reply]\n---\n\n{text}\n",
+        task = r.task_id,
+        role = r.role,
+        now = now_rfc3339,
+        mission = mission,
+        text = r.text.trim_end()
+    );
+    std::fs::write(&path, doc)?;
+    Ok(path)
+}
+
+fn now_rfc3339() -> String {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as libc::time_t).unwrap_or(0);
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::gmtime_r(&t, &mut tm) };
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
+/// Print one finished reply: who said it and when, at most [`REPLY_LINES`] lines of it, how to get the rest,
+/// and how the task ended.
+fn print_reply(term: &mut ratatui::DefaultTerminal, session: &mut Session, r: &Reply, width: usize, pal: Pal) {
+    let body: Vec<String> = wrap_lines(r.text.trim_end(), width);
+    let (shown, rest) = cap_lines(body, REPLY_LINES);
+    let mut rows: Vec<Line> = Vec::new();
+    let mut badge_spans = vec![Span::raw("")];
+    badge_spans.extend(badge(&r.role, if r.status == "escalated" { "waiting on you" } else { "idle" }, pal));
+    badge_spans.push(Span::styled(format!(" {} · {}", r.name, clock()), Style::default().fg(pal.dim())));
+    rows.push(Line::from(vec![Span::raw("")]));
+    rows.push(Line::from(badge_spans));
+    rows.extend(shown.iter().map(|l| Line::styled(l.clone(), Style::default().fg(pal.text()))));
+    let mut link: Option<(usize, String, String, usize)> = None; // (line index, path text, url, column)
+    if !rest.is_empty() {
+        let logical = format!("missions/{}/replies/{}.md", session.mission_id, r.task_id);
+        let prefix = format!("… {} more line{} · ", rest.len(), if rest.len() == 1 { "" } else { "s" });
+        match save_reply(session.ws_dir(), &session.mission_id, r, &now_rfc3339()) {
+            Ok(p) => {
+                link = Some((rows.len(), logical.clone(), crate::observer::file_url(&p), prefix.width()));
+                rows.push(Line::styled(format!("{}{}   /more prints them", prefix, logical), Style::default().fg(pal.dim())));
+            }
+            Err(_) => rows.push(Line::styled(format!("{}/more prints them", prefix), Style::default().fg(pal.dim()))),
+        }
+    }
+    *session.shared.more.lock().unwrap() = rest;
+    let end = if r.status == "escalated" { format!("! {} needs you", r.task_id) } else { format!("✓ {} done", r.task_id) };
+    rows.push(Line::styled(end, Style::default().fg(if r.status == "escalated" { Color::Yellow } else { pal.dim() })));
+    let n = rows.len() as u16;
+    let total = rows.len();
+    let _ = term.insert_before(n, |buf| Paragraph::new(rows).render(buf.area, buf));
+    // The saved path becomes a link, written over the cells just printed.
+    if let Some((index, text, url, col)) = link {
+        let top = term.get_frame().area().y as usize;
+        let y = top.saturating_sub(total - index);
+        let seq = crate::observer::osc8(&[crate::observer::Link { x: col as u16, y: y as u16, text, url }]);
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(seq.as_bytes());
+        let _ = out.flush();
+    }
+}
+
 pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>) -> i32 {
     let pal = Pal { dark: crate::observer::detect_dark() };
     // One clear at the start, then never again: from here on the screen only grows.
@@ -358,7 +446,7 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
             return chat::run(home, ws_dir, mission, names);
         }
     };
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<Out>();
     chat::set_sink(Some(tx));
     let mut session = match chat::connect(home, ws_dir, mission, names.clone()) {
         Ok(s) => s,
@@ -385,9 +473,9 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
     code
 }
 
-fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &mpsc::Receiver<String>, names: &HashMap<String, String>, pal: Pal) -> i32 {
+fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &mpsc::Receiver<Out>, names: &HashMap<String, String>, pal: Pal) -> i32 {
     use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-    let (mut editor, mut asm) = (Editor::default(), Assembler::default());
+    let (mut editor, mut asm, mut live) = (Editor::default(), Assembler::default(), String::new());
     let cwd = std::env::current_dir().map(|p| p.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~")).unwrap_or_default();
     let mut mode = session.permission_mode();
     let (mut dirty, mut last_ctrl_c, mut notice): (bool, Option<Instant>, Option<(String, Instant)>) = (true, None, None);
@@ -395,8 +483,27 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
         // Output first: finished lines go above the block; the unfinished one stays on the live row.
         let width = term.size().map(|s| s.width as usize).unwrap_or(80).saturating_sub(1);
         let mut lines: Vec<String> = Vec::new();
-        while let Ok(s) = rx.try_recv() {
-            lines.extend(asm.push(&s));
+        let mut replies: Vec<Reply> = Vec::new();
+        while let Ok(o) = rx.try_recv() {
+            match o {
+                Out::Text(s) => lines.extend(asm.push(&s)),
+                Out::Live(s) => {
+                    live.push_str(&s);
+                    if live.len() > 4000 {
+                        let cut = live.len() - 2000;
+                        let at = (cut..live.len()).find(|i| live.is_char_boundary(*i)).unwrap_or(live.len());
+                        live.drain(..at);
+                    }
+                }
+                Out::LiveClear => live.clear(),
+                Out::Reply(r) => {
+                    // Anything printed before the reply stays before it.
+                    if !lines.is_empty() {
+                        let _ = print_lines(term, &std::mem::take(&mut lines), width, pal);
+                    }
+                    replies.push(r);
+                }
+            }
             dirty = true;
         }
         // A task that has finished leaves nothing half-written behind.
@@ -405,6 +512,9 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
         }
         if !lines.is_empty() && print_lines(term, &lines, width, pal).is_err() {
             return 1;
+        }
+        for r in replies {
+            print_reply(term, session, &r, width, pal);
         }
         if session.shared.closed.load(Ordering::SeqCst) {
             let _ = print_lines(term, &["(the daemon connection closed)".to_string()], width, pal);
@@ -415,7 +525,7 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
             let waiting = session.shared.card.lock().unwrap().as_ref().map(|c| c.tier.clone()).map(|t| if t == "red" { "red-tier; /y /n /d".to_string() } else { "/y /a /n /d".to_string() });
             let running = session.shared.running.load(Ordering::SeqCst);
             let note = notice.as_ref().filter(|(_, t)| t.elapsed() < Duration::from_secs(4)).map(|(n, _)| n.as_str());
-            let view = View { editor: &editor, live: asm.tail(), obs: &obs, names, mission: &session.mission_id, cwd: &cwd, waiting: waiting.as_deref(), running, mode: &mode, pal, notice: note };
+            let view = View { editor: &editor, live: if live.is_empty() { asm.tail() } else { &live }, obs: &obs, names, mission: &session.mission_id, cwd: &cwd, waiting: waiting.as_deref(), running, mode: &mode, pal, notice: note };
             if term.draw(|f| draw_block(f, f.area(), &view)).is_err() {
                 return 1;
             }
@@ -674,11 +784,37 @@ mod tests {
     }
 
     #[test]
+    fn a_long_reply_is_cut_at_the_cap_and_the_rest_is_kept() {
+        let lines: Vec<String> = (1..=60).map(|i| format!("line {}", i)).collect();
+        let (shown, rest) = cap_lines(lines.clone(), REPLY_LINES);
+        assert_eq!((shown.len(), rest.len(), shown[23].as_str(), rest[0].as_str()), (24, 36, "line 24", "line 25"));
+        assert_eq!([shown, rest].concat(), lines, "nothing is lost");
+        let (all, none) = cap_lines(lines[..24].to_vec(), REPLY_LINES);
+        assert_eq!((all.len(), none.len()), (24, 0), "exactly the cap is shown whole");
+    }
+
+    #[test]
+    fn a_saved_reply_is_a_proper_workspace_document_with_the_whole_text() {
+        let d = tempfile::tempdir().unwrap();
+        let r = Reply { task_id: "t_0007".into(), role: "architect".into(), name: "Daedalus".into(), text: "# Plan\n\nstep one\nstep two\n".into(), status: "done".into() };
+        let path = save_reply(d.path(), "m1", &r, "2026-10-24T12:00:00Z").unwrap();
+        assert!(path.ends_with("local/missions/m1/replies/t_0007.md"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (fm, body) = delphi_engine::workspace::split_frontmatter(&text);
+        let fm = fm.expect("frontmatter");
+        for (k, v) in [("author", "architect"), ("source_type", "internal_generated"), ("status", "active"), ("source_mission", "m1")] {
+            assert_eq!(fm.get(k).and_then(|x| x.as_str()), Some(v), "{}", k);
+        }
+        assert!(body.contains("# Plan") && body.contains("step two"));
+        assert!(clock().len() == 8 && now_rfc3339().ends_with('Z'));
+    }
+
+    #[test]
     fn model_text_cannot_reach_the_screen_with_control_sequences() {
         let (tx, rx) = std::sync::mpsc::channel();
         chat::set_sink(Some(tx));
         chat::say("ok \x1b[2J\x1b]8;;http://evil\x07link\x1b]8;;\x07 done\n");
         chat::set_sink(None);
-        assert_eq!(rx.try_recv().unwrap(), "ok link done\n");
+        assert_eq!(rx.try_recv().unwrap(), Out::Text("ok link done\n".to_string()));
     }
 }
