@@ -11,3 +11,7 @@ Each phase ends with the operator driving it in Terminal.app before the next sta
 6. **Hardening (~6 h).** Terminal matrix, resize, wide chars, long-session virtualization, panic-safe restore, pty snapshot tests, a scripted session.
 
 About 45 h; phases 0 to 2 (~20 h) give a daily-usable chat.
+
+## Status
+- Phase 0 done (PR #39). Phase 1 done in the next PR: history replay from `observe.snapshot`, syntax-highlighted code, follow-tail that holds the reading position, per-block render cache, the command set ported to the socket (`usage`, `budget`, `permissions`, `ratify`, `build`, `council`, `resume`, `pause`, `mission`, `/y /a /n /d` with the 300 ms guard and payload hash), approval cards in the transcript, and a pty end-to-end test against the real daemon. `/more` and the 24-line cap are gone: replies scroll.
+- Next: phase 2 (palette polish, `@` completion, `Ctrl+R`, `Esc` interrupt with daemon `task.cancel`, queueing, collapsible tool cards), then the Bun build in the release matrix.

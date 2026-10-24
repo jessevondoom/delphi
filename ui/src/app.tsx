@@ -2,22 +2,25 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useStdout } from 'ink';
 import * as C from './composer.ts';
 import { COMMANDS, filter } from './commands.ts';
-import { addBlock, fold, initial, type State } from './fold.ts';
-import { frame, type Model } from './screen.ts';
+import { addBlock, fold, type State } from './fold.ts';
+import { runSlash } from './run.ts';
+import { frame, transcript, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; history: State };
 
-export function App({ cmd, ev, term, info, mission, dark }: Props) {
+export function App({ cmd, ev, term, info, mission, dark, history }: Props) {
   const { exit } = useApp();
   const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
   const [now, setNow] = useState(Date.now());
   const [pal, setPal] = useState({ dark });
-  const [state, setState] = useState<State>(() => initial(Date.now()));
+  const [state, setState] = useState<State>(history);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [composer, setComposer] = useState(() => C.empty());
   const [deck, setDeck] = useState<0 | 1 | 2>(1);
   const [back, setBack] = useState(0);
@@ -56,16 +59,16 @@ export function App({ cmd, ev, term, info, mission, dark }: Props) {
       target = Object.entries(info.roles).find(([id, r]) => id === want || r.name.toLowerCase() === want)?.[0];
       if (target) prompt = m[2]!;
     }
-    setState((s) => addBlock(s, { kind: 'user', text, at: Date.now() }));
     setBack(0);
     cmd.call('task.submit', { mission_id: mission, prompt, ...(target ? { target } : {}) }).catch((e) => note('could not send: ' + (e?.message ?? JSON.stringify(e))));
   };
 
-  const run = (name: string) => {
+  const run = (line: string) => {
+    const name = line.split(/\s/)[0]!;
     if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
     if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
-    note(`${name} is not in the full-screen console yet; it is in \`delphi chat --inline\``);
+    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note });
   };
 
   useEffect(() => {
@@ -114,7 +117,7 @@ export function App({ cmd, ev, term, info, mission, dark }: Props) {
               const { text: t, next } = C.submit(comp.current);
               if (!t) return;
               comp.current = next; setComposer(next);
-              if (t.startsWith('/') && COMMANDS.some((c) => c.name === t.split(/\s/)[0])) run(t.split(/\s/)[0]!);
+              if (t.startsWith('/') && COMMANDS.some((c) => c.name === t.split(/\s/)[0])) run(t);
               else if (t.startsWith('/')) note(`unknown command ${t.split(/\s/)[0]}; / shows the list`);
               else send(t);
               return;
@@ -126,6 +129,15 @@ export function App({ cmd, ev, term, info, mission, dark }: Props) {
     term.on('ev', onEv);
     return () => { term.off('ev', onEv); };
   }, [term, help]);
+
+  // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
+  const total = useRef(0);
+  const lineCount = useMemo(() => transcript({ info, pal, state, now: 0, deck, composer, back: 0, menuSel: 0, help: false }, size.w).length, [state.blocks, state.live, size.w, pal]);
+  useEffect(() => {
+    const added = lineCount - total.current;
+    total.current = lineCount;
+    if (added > 0) setBack((b) => (b > 0 ? b + added : 0));
+  }, [lineCount]);
 
   const model: Model = { info, pal, state, now, deck, composer, back, menuSel, help };
   const lines = useMemo(() => frame(model, size.w, size.h), [model.state, now, deck, composer, back, menuSel, help, size, pal]);

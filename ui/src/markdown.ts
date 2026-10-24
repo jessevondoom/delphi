@@ -2,6 +2,7 @@
 import { Lexer, type Token, type Tokens } from 'marked';
 import chalk from 'chalk';
 import { sanitize } from './theme.ts';
+import { highlightLine } from './highlight.ts';
 import wrapAnsi from 'wrap-ansi';
 
 const inline = (toks: Token[] | undefined): string =>
@@ -23,7 +24,8 @@ function block(t: Token, indent = ''): string[] {
     case 'paragraph': return inline((t as Tokens.Paragraph).tokens).split('\n').concat('');
     case 'code': {
       const c = t as Tokens.Code;
-      return [chalk.dim(`  ${c.lang ?? ''}`), ...c.text.split('\n').map((l) => '  ' + chalk.green(l)), ''];
+      const lang = (c.lang ?? '').split(/\s/)[0]!;
+      return [chalk.dim(`  ${lang}`), ...c.text.split('\n').map((l) => '  ' + highlightLine(l, lang)), ''];
     }
     case 'list': {
       const l = t as Tokens.List;
