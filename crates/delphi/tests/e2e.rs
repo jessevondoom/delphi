@@ -894,9 +894,11 @@ fn the_decision_inbox_denies_a_card_and_shift_tab_toggles_the_approval_mode_in_t
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("approval needed [amber]");
-    // Shift+Tab flips the approval mode and back.
+    // Shift+Tab goes default -> accept-edits -> mission-auto -> default.
     c.type_keys("\x1b[Z");
     c.wait_for("approval mode: accept-edits");
+    c.type_keys("\x1b[Z");
+    c.wait_for("approval mode: mission-auto");
     c.type_keys("\x1b[Z");
     c.wait_for("approval mode: default");
     // The inbox: open it, look at the card, then deny it from there.
@@ -1100,11 +1102,11 @@ fn a_scripted_session_through_the_whole_full_screen_console_ends_with_the_termin
     c.type_keys("\x1b");
     std::thread::sleep(Duration::from_millis(300));
 
-    // Shift+Tab flips the approval mode and back.
-    c.type_keys("\x1b[Z");
-    c.wait_for("approval mode: accept-edits");
-    c.type_keys("\x1b[Z");
-    c.wait_for("approval mode: default");
+    // Shift+Tab goes round the approval modes and ends where it started.
+    for mode in ["accept-edits", "mission-auto", "default"] {
+        c.type_keys("\x1b[Z");
+        c.wait_for(&format!("approval mode: {}", mode));
+    }
 
     // The window shrinks and grows: the screen is always exactly the window, never wider, footer on the last row.
     c.resize(24, 70);

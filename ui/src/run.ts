@@ -46,6 +46,14 @@ export function parseCouncil(args: string): { proposition: string; seats: string
 /** The newest approval that is still waiting. */
 export const waiting = (s: State): Approval | undefined => Object.values(s.approvals).sort((a, b) => b.at - a.at)[0];
 
+/** The approval modes, in the order `Shift+Tab` goes through them and back to the start. */
+export const MODES = ['default', 'accept-edits', 'mission-auto'] as const;
+export const nextMode = (m: string): string => MODES[(MODES.indexOf(m as (typeof MODES)[number]) + 1) % MODES.length]!;
+/** What a mode skips, in a line, for the note shown when it is chosen. No mode ever approves a Red action. */
+export const modeNote = (m: string): string =>
+  m === 'accept-edits' ? 'accept-edits · Amber edits inside the worktree are approved for you' :
+  m === 'mission-auto' ? 'mission-auto · also approves dependency installs pinned in a lockfile' : 'default · every Amber action asks';
+
 export type Decision = 'allow' | 'allow_similar' | 'deny';
 
 /** Answer one approval card, bound to the payload hash it showed. Returns why it was not sent, or null once it was. */

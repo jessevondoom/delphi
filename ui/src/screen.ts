@@ -121,7 +121,7 @@ const HELP = [
   '  ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave',
   '  / opens the command menu · tab or enter completes',
   '  answer a waiting approval with /y /a /n /d · @architect … sends to one role · @specs/… points at a file',
-  '  shift+→ or /operator opens the decision inbox (y n a d, tab list/focus, esc back) · shift+tab toggles approvals/accept-edits',
+  '  shift+→ or /operator opens the decision inbox (y n a d, tab list/focus, esc back) · shift+tab cycles approvals, accept-edits and mission-auto',
   '  /panel [council|epic|forge|agents|spend|archives|sources|notebook|connectors] opens an Observer view here (1-9 jump, shift+←→ cycle, esc back)',
   '  /pin keeps the last reply in the mission notebook · /pin <text> keeps a note',
   '  esc stops what is running (when the prompt is empty) · ctrl+o shows tool details · ctrl+r searches history',

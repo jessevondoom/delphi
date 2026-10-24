@@ -21,7 +21,7 @@ emulator is not Terminal.app, so the table below is a checklist, not a claim.
 | Key | Needs | If it does not arrive |
 | :-- | :-- | :-- |
 | `Shift+←` `Shift+→` (decks, panels) | xterm modifier encoding (`ESC [ 1 ; 2 C`) | `Alt+←` `Alt+→` do the same; or `/operator`, `/panel <name>` |
-| `Shift+Tab` (approval mode) | `ESC [ Z` | `/permissions default` or `/permissions accept-edits` |
+| `Shift+Tab` (approval mode) | `ESC [ Z` | `/permissions default`, `accept-edits` or `mission-auto` |
 | `Alt+Enter` (new line) | `ESC CR` | `Ctrl+J` |
 | Mouse wheel | SGR mouse reporting | `PgUp` `PgDn` |
 | Paste | bracketed paste | pasting still works; a paste containing a return may be sent as separate lines |

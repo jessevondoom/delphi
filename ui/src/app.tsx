@@ -12,7 +12,7 @@ import { addPin, readNotebook, type Pin } from './notebook.ts';
 import type { Observer } from './observer.ts';
 import { collectSources, previewOf } from './sources.ts';
 import { panelInit, panelKey, parseView, selectedBuild, type PanelUi } from './panels.ts';
-import { answerCard, runSlash } from './run.ts';
+import { answerCard, modeNote, nextMode, runSlash } from './run.ts';
 import { frame, transcript, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
@@ -145,10 +145,10 @@ export function App({ cmd, ev, term, info, mission, dark, history, obs, cap0, pe
 
   useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => { if (v?.mode) { modeRef.current = v.mode; setMode(v.mode); } }).catch(() => {}); }, [cmd]);
 
-  /** Shift+Tab: approvals <-> accept-edits. `mission-auto` widens what is skipped, so it is only reachable by name. */
+  /** Shift+Tab: default, accept-edits, mission-auto, and round again. Red actions are never auto-approved in any of them. */
   const cycleMode = () => {
-    const next = modeRef.current === 'default' ? 'accept-edits' : 'default';
-    cmd.call('permissions.set', { mode: next }).then((v: any) => { modeRef.current = v?.mode ?? next; setMode(modeRef.current); note(`approval mode: ${modeRef.current}`); }).catch((e) => note('could not change the mode: ' + (e?.message ?? JSON.stringify(e))));
+    const next = nextMode(modeRef.current);
+    cmd.call('permissions.set', { mode: next }).then((v: any) => { modeRef.current = v?.mode ?? next; setMode(modeRef.current); note(`approval mode: ${modeNote(modeRef.current)} (Red is never auto-approved)`); }).catch((e) => note('could not change the mode: ' + (e?.message ?? JSON.stringify(e))));
   };
 
   const answer = async (id: string, d: 'allow' | 'allow_similar' | 'deny') => {

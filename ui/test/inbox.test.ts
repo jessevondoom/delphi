@@ -128,3 +128,10 @@ test('the footer names a non-default approval mode', () => {
   const m = { info, pal: { dark: true }, state: initial(0), now: 0, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, inbox: inboxInit(), mode: 'accept-edits', obs: new Observer(), panel: null } as Model;
   assert.match(plain(footer(m, 100)), /0 tokens · accept-edits · approvals|0 tokens · accept-edits · shortcuts/);
 });
+
+test('shift+tab goes round default, accept-edits, mission-auto and back, whatever it starts from', async () => {
+  const { nextMode, modeNote } = await import('../src/run.ts');
+  assert.deepEqual(['default', 'accept-edits', 'mission-auto', 'default'].map(nextMode), ['accept-edits', 'mission-auto', 'default', 'accept-edits']);
+  assert.equal(nextMode('something-new'), 'default', 'an unknown mode starts the round again');
+  assert.match(modeNote('mission-auto'), /lockfile/);
+});
