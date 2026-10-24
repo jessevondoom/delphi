@@ -31,9 +31,7 @@ D-28 committed the interface to Ink. Phases 0 to 6 of `ui/PLAN.md` are built and
 4. **Real use.** The Step 2 go/no-go (three real tasks through the console on a real project) is still yours.
 
 ## Decisions and approvals waiting for you
-- Ratify `specs/005d` with `/ratify` (it is a draft that describes what exists).
-- Push a release tag when you want `delphi-ui` shipped (the first tag exercises `release.yml`).
-- Housekeeping I did not do without asking: about 25 merged remote branches could be deleted.
+- Done 2026-10-24 at the operator's word: `specs/005d` approved; release v0.2.2 tagged (the first release built with the version handshake); merged remote branches deleted. Still open: looking at it in real terminals and the Step 2 go/no-go.
 
 ## Known limits
 - The transcript draws the newest 1,500 messages (the mission keeps all; `/export` writes all).
