@@ -1,5 +1,5 @@
 # Delphi Governance & Behavioral Charter (`GOVERNANCE.md`)
-> **Status:** Draft v0.4: amended by Council 001 (2026-10-23) and restated in canonical role terms (D-17); pending operator ratification  
+> **Status:** v0.4 (approved by the operator, 2026-10-24): amended by Council 001 (2026-10-23) and restated in canonical role terms (D-17)  
 > **Scope:** Governs all agent behavior, inter-agent collaboration, memory boundaries, security invariants, knowledge upkeep, learning loops, and spec-driven execution.
 
 ---

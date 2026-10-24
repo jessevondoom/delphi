@@ -3,7 +3,7 @@ id: spec-007-federated-mesh-and-sync
 title: "007: Federated Multi-Instance Mesh, Capability Pointers & Team Context Sync"
 author: architect
 timestamp: 2026-10-23T07:55:00Z
-status: draft
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

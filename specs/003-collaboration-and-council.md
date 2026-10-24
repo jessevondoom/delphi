@@ -3,14 +3,13 @@ id: spec-003-collaboration-and-council
 title: "003: Orchestrator DAG Execution & 3-Round Sparse Council State Machine"
 author: architect
 timestamp: 2026-10-23T07:50:00Z
-status: draft
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec]
-approved_sections: "§1.2, §2, §3 (operator pre-authorization, Council 004, 2026-10-23); §4 Council Mode remains draft (Step 4)"
 ---
 
 # Spec 003: Orchestrator DAG Execution & 3-Round Sparse Council State Machine

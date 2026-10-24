@@ -376,3 +376,5 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 4. **Timing:** xenia is post-v1. **No implementation starts until the core editor and harness are finished.** The specs and the Council record are merged to `main` now so the design is not lost.
 
 **Status:** ✅ APPROVED 2026-10-24 by the operator (design basis only; text pending, see 2 and 3).
+
+- **2026-10-24:** the operator said "ratify all". Approved as whole documents: `GOVERNANCE.md` (v0.4) and specs 002, 003, 004, 005, 005c, 007, 008, 011, 012 and 013. This waives two earlier conditions, both the operator's call: D-29's two-family confirming read before 011/012 are approved, and 013's §6 trigger. Building 011/012/013 still waits for the core, per D-29 and the roadmap. `ratified.lock` hashes are not yet refreshed: run `delphi update`.

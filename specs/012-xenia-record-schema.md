@@ -3,7 +3,7 @@ id: spec-012-xenia-record-schema
 title: "012: Xenia Record Schema: Envelope, Phase 1 Kinds, Signing & Store Layout"
 author: architect
 timestamp: 2026-10-24T00:00:00Z
-status: draft   # design basis ratified (D-29, 2026-10-24); this TEXT is not yet approved: needs a two-family confirming read before implementation
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
