@@ -13,7 +13,8 @@
 
 use crate::claude::{Assembler, Completed, SseDecoder, SseEvent, StreamError, StreamEvent};
 use crate::eventstream;
-use crate::platform::{HttpRequest, ResponseKind};
+use crate::gemini;
+use crate::platform::{Dialect, HttpRequest, ResponseKind};
 use futures_util::StreamExt;
 use std::time::{Duration, Instant};
 
@@ -80,6 +81,28 @@ fn error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["error"]["message"].as_str().or(v["message"].as_str()).map(String::from)).unwrap_or_else(|| body.chars().take(500).collect())
 }
 
+/// The stream assembler of whichever dialect the request spoke.
+enum Asm {
+    Claude(Assembler),
+    Gemini(gemini::Assembler),
+}
+
+impl Asm {
+    fn handle(&mut self, ev: &SseEvent) -> Result<Vec<StreamEvent>, StreamError> {
+        match self {
+            Asm::Claude(a) => a.handle(ev),
+            Asm::Gemini(a) => a.handle(ev),
+        }
+    }
+
+    fn finish(self) -> Result<Completed, StreamError> {
+        match self {
+            Asm::Claude(a) => a.finish(),
+            Asm::Gemini(a) => a.finish(),
+        }
+    }
+}
+
 /// One attempt. `on_event` receives live deltas and completed blocks as they arrive.
 pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Duration, redact: &(dyn Fn(&str) -> String + Sync), on_event: &mut (dyn FnMut(StreamEvent) + Send)) -> Result<Completed, CallError> {
     let mut builder = client.post(&req.url).body(req.body.clone());
@@ -111,7 +134,10 @@ pub async fn call(client: &reqwest::Client, req: &HttpRequest, idle_timeout: Dur
 
     let mut sse = SseDecoder::default();
     let mut aws = eventstream::Decoder::default();
-    let mut asm = Assembler::new();
+    let mut asm = match req.dialect {
+        Dialect::Claude => Asm::Claude(Assembler::new()),
+        Dialect::Gemini => Asm::Gemini(gemini::Assembler::new()),
+    };
     let mut stream = resp.bytes_stream();
     loop {
         let next = tokio::time::timeout(idle_timeout, stream.next()).await.map_err(|_| CallError::Transport("the stream went idle".into()))?;
@@ -399,6 +425,34 @@ mod tests {
         assert_eq!(req.path, "/v1/projects/proj-1/locations/us-east5/publishers/anthropic/models/claude-x@1:streamRawPredict");
         assert_eq!(hdr(&req, "authorization"), "Bearer ya29.x");
         assert_eq!(serde_json::from_slice::<Value>(&req.body).unwrap()["anthropic_version"], "vertex-2023-10-16");
+    }
+
+    #[tokio::test]
+    async fn gemini_streams_a_turn_with_the_key_in_a_header_and_never_the_url() {
+        use crate::gemini;
+        let chunks = [
+            serde_json::json!({"candidates": [{"content": {"parts": [{"text": "Checking.", "thought": true}]}}], "usageMetadata": {"promptTokenCount": 900, "candidatesTokenCount": 1, "thoughtsTokenCount": 7}}),
+            serde_json::json!({"candidates": [{"content": {"parts": [{"functionCall": {"name": "read_file", "args": {"path": "a.rs"}}, "thoughtSignature": "SIG-1"}]}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 900, "candidatesTokenCount": 20, "thoughtsTokenCount": 30}}),
+        ];
+        let body: String = chunks.iter().map(|c| format!("data: {}\r\n\r\n", c)).collect();
+        let (addr, log) = mock(vec![Reply::sse(&body)]).await;
+        let extra = format!("[[endpoints]]\nid = \"local-gemini\"\nfamily = \"gemini\"\npath = \"api\"\nbase_url = \"http://{}\"\ncredential = \"env:K\"\n", addr);
+        let cfg = cfg_for(addr, &extra);
+        let g = crate::claude::Target { provider: gemini::PROVIDER.into(), endpoint_id: "local-gemini".into(), model_id: "gemini-x".into() };
+        let compiled = gemini::compile(&ipr(), &[], &g, &opts(Some(1024)), &gemini::GeminiOptions::default()).unwrap();
+        let req = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("local-gemini").unwrap(), model_id: "models/gemini-x", compiled: &compiled, creds: &tok("AIza-test-key"), now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!(req.dialect, Dialect::Gemini);
+        let mut events = Vec::new();
+        let done = call_with_retry(&build_client(), &req, Duration::from_secs(5), &fast_policy(), &|s| s.to_string(), &mut |e| events.push(e)).await.unwrap();
+        assert_eq!(done.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!((done.usage.input_tokens, done.usage.output_tokens, done.usage.thinking_tokens), (900, 20, 30));
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::ThinkingDelta { text, .. } if text == "Checking.")));
+        let sent = log.lock().unwrap()[0].clone();
+        assert_eq!(sent.path, "/v1beta/models/gemini-x:streamGenerateContent?alt=sse");
+        assert_eq!(sent.headers.get("x-goog-api-key").map(String::as_str), Some("AIza-test-key"));
+        assert!(!sent.path.contains("AIza"), "the key is never in the URL");
+        let b: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+        assert!(b["contents"].is_array() && b["systemInstruction"].is_object());
     }
 
     #[tokio::test]

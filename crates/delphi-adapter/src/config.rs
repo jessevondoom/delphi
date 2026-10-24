@@ -71,6 +71,9 @@ pub struct Access {
     pub order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub allowed_endpoints: Option<Vec<String>>,
+    /// Role → model family (`claude` or `gemini`) for roles that should not use the default, Claude.
+    #[serde(default)]
+    pub role_family: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -259,7 +262,19 @@ impl Config {
                 }
             }
         }
+        for (role, family) in &self.access.role_family {
+            if !matches!(family.as_str(), "claude" | "gemini") {
+                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude` or `gemini`)", role, family));
+            } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
+                errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
+            }
+        }
         errs
+    }
+
+    /// The model family a role is served by.
+    pub fn family_for_role(&self, role: &str) -> &str {
+        self.access.role_family.get(role).map(String::as_str).unwrap_or("claude")
     }
 
     /// The compliance pin: endpoints a request may be sent to. Without `allowed_endpoints`, all of them.
@@ -449,6 +464,18 @@ order = { gemini = ["a"] }
         for needle in ["defined twice", "need a region", "need a project", "must be https", "whatever", "harness endpoints need", "unknown endpoint `ghost`", "belongs to family `claude`"] {
             assert!(errs.contains(needle), "missing `{}` in:\n{}", needle, errs);
         }
+    }
+
+    #[test]
+    fn role_family_must_name_a_known_family_with_an_allowed_endpoint() {
+        let base = "[[endpoints]]\nid = \"d\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        let gem = "[[endpoints]]\nid = \"g\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        let ok = Config::parse(&format!("{}{}[access]\nrole_family = {{ architect = \"gemini\" }}\n", base, gem)).unwrap();
+        assert_eq!((ok.family_for_role("architect"), ok.family_for_role("builder")), ("gemini", "claude"));
+        let errs = Config::parse(&format!("{}[access]\nrole_family = {{ architect = \"gemini\", scribe = \"gpt\" }}\n", base)).unwrap_err().join("\n");
+        assert!(errs.contains("no allowed endpoint serves that family") && errs.contains("unknown family `gpt`"), "{}", errs);
+        let pinned = Config::parse(&format!("{}{}[access]\nallowed_endpoints = [\"d\"]\nrole_family = {{ architect = \"gemini\" }}\n", base, gem)).unwrap_err().join("\n");
+        assert!(pinned.contains("no allowed endpoint serves that family"), "the pin counts: {}", pinned);
     }
 
     #[test]

@@ -20,7 +20,7 @@ use crate::recovery::{self, Call, NodeStatus, Recovered};
 use crate::tools::{self, ToolCtx};
 use crate::workspace::{AgentManifest, WorkspacePaths};
 use delphi_adapter::blocks::{ContentBlock, Turn};
-use delphi_adapter::claude::{compile, Compiled, CompileOptions, Completed, StreamEvent, Target, ToolDef};
+use delphi_adapter::claude::{Compiled, CompileOptions, Completed, StreamEvent, Target, ToolDef};
 use delphi_adapter::config::{Endpoint, SharedConfig};
 use delphi_adapter::ipr::{ContextSlice, Ipr};
 use delphi_core::event::EventEnvelope;
@@ -153,6 +153,8 @@ struct SpanCtx {
     span: Span,
     depth: u32,
     tier: String,
+    /// Which model family serves this span (`claude` unless the handoff says otherwise).
+    family: String,
     thinking: u32,
     /// Set when a dispatched child halted: the parent halts too, and the operator decides (specs/003 §3.2).
     child_escalation: Option<String>,
@@ -290,8 +292,9 @@ impl Engine {
             let manifest = self.ws.load_manifest(&role)?;
             let snapshot = self.ws.load_snapshot(&role)?;
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
+            let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, thinking, child_escalation: None };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None };
 
             if fresh {
                 let mut open = vec![
@@ -375,7 +378,7 @@ impl Engine {
                 };
                 interruptions = 0;
                 turns += 1;
-                history.push(Turn::assistant(turn_index, PROVIDER, &ep.id, &model_id, done.blocks.clone()));
+                history.push(Turn::assistant(turn_index, delphi_adapter::provider_for(&sc.family), &ep.id, &model_id, done.blocks.clone()));
                 let calls: Vec<Call> = done.blocks.iter().filter_map(|b| if let ContentBlock::ToolCall { id, name, arguments } = b { Some(Call { id: id.clone(), name: name.clone(), args: arguments.clone() }) } else { None }).collect();
                 if done.stop_reason.as_deref() != Some("tool_use") || calls.is_empty() {
                     let mut text = final_text(&done.blocks);
@@ -420,7 +423,7 @@ impl Engine {
             let Some(res) = events.iter().find(|e| e.kind == "budget.reserve" && e.payload["reservation_id"] == rid.as_str()) else { continue };
             // The usage of an interrupted call can't be known: charge the whole reservation.
             let usage = delphi_core::usage::UsagePayload {
-                provider: PROVIDER.into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+                provider: res.endpoint_id.as_deref().and_then(|id| self.cfg.get().endpoint(id).map(|e| delphi_adapter::provider_for(&e.family))).unwrap_or(PROVIDER).into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
                 cost_usd: amount as f64 / 1e6, reserved_usd: amount as f64 / 1e6, usage_source: "estimated".into(), cost_model: "metered".into(), outcome: "cancelled".into(), reservation_id: Some(rid.clone()),
             };
             let mut u = EventEnvelope::new(&m.id, "agent.usage", usage.to_value());
@@ -486,9 +489,9 @@ impl Engine {
     /// means stop and hand to the operator; `Err(EngineError)` (outer) is a fatal storage failure.
     async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32, prior_interruptions: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
         let cfg = self.cfg.get();
-        let endpoints: Vec<Endpoint> = cfg.endpoints_for(FAMILY).into_iter().cloned().collect();
+        let endpoints: Vec<Endpoint> = cfg.endpoints_for(&sc.family).into_iter().cloned().collect();
         if endpoints.is_empty() {
-            return Ok(Err(Escalate("no allowed Claude endpoint is configured (see `delphi doctor`)".into())));
+            return Ok(Err(Escalate(format!("no allowed {} endpoint is configured (see `delphi doctor`)", sc.family))));
         }
         let m = &sc.m;
         let mut interruptions = prior_interruptions;
@@ -508,13 +511,13 @@ impl Engine {
                 let thinking = cfg.clamp_thinking(&model_id, sc.thinking);
                 let max_tokens = self.settings.max_tokens.max(thinking.unwrap_or(0) as u64 + 2048).min(entry.max_output_tokens.max(thinking.unwrap_or(0) as u64 + 1025));
                 let opts = CompileOptions { max_tokens, thinking_budget: thinking, temperature: None, tools: defs.to_vec(), betas: ep.betas.clone() };
-                let target = Target { provider: PROVIDER.into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };
-                let compiled: Compiled = match compile(ipr, history, &target, &opts) {
+                let target = Target { provider: delphi_adapter::provider_for(&sc.family).into(), endpoint_id: ep.id.clone(), model_id: model_id.clone() };
+                let compiled: Compiled = match delphi_adapter::compile_for(&sc.family, ipr, history, &target, &opts) {
                     Ok(c) => c,
                     Err(e) => return Ok(Err(Escalate(format!("could not build the request: {}", e)))),
                 };
                 let body_bytes = serde_json::to_vec(&compiled.body).map(|b| b.len()).unwrap_or(0) as u64;
-                let system_bytes = serde_json::to_vec(&compiled.body["system"]).map(|b| b.len()).unwrap_or(0) as u64;
+                let system_bytes = serde_json::to_vec(delphi_adapter::system_of(&sc.family, &compiled.body)).map(|b| b.len()).unwrap_or(0) as u64;
                 let amount = price.worst_case_micro(body_bytes, system_bytes, max_tokens);
 
                 // Reserve before dispatch; the gate makes parallel spans see each other's reservations.
@@ -550,7 +553,7 @@ impl Engine {
                 let result = self.model.call(ep, &model_id, &compiled, &mut on_event).await;
                 match result {
                     Ok(done) => {
-                        let payload = done.usage.to_payload(Some(&price), amount as f64 / 1e6, Some(rid.clone()), "ok", "reported");
+                        let payload = done.usage.to_payload_for(delphi_adapter::provider_for(&sc.family), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "ok", "reported");
                         let mut batch: Vec<EventEnvelope> = done
                             .blocks
                             .iter()
@@ -558,7 +561,7 @@ impl Engine {
                             .map(|(i, b)| sc.agent_ev("agent.block.complete", json!({"turn_index": turn_index, "role": "assistant", "block_index": i, "block": serde_json::to_value(b).expect("blocks serialize")}), ep, &model_id))
                             .collect();
                         // The completion marker is last: a turn without it is discarded on recovery.
-                        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len()}), ep, &model_id));
+                        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": turn_index, "stop_reason": done.stop_reason, "blocks": done.blocks.len(), "provider": delphi_adapter::provider_for(&sc.family)}), ep, &model_id));
                         batch.push(sc.agent_ev("agent.usage", payload.to_value(), ep, &model_id));
                         m.append_batch(batch).await?;
                         return Ok(Ok((done, ep.clone(), model_id)));
@@ -570,7 +573,7 @@ impl Engine {
                     }
                     Err(ModelError::Interrupted(msg)) => {
                         // The usage of an interrupted call is unknowable: charge the full reservation.
-                        let mut u = delphi_adapter::claude::Usage::default().to_payload(Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
+                        let mut u = delphi_adapter::claude::Usage::default().to_payload_for(delphi_adapter::provider_for(&sc.family), Some(&price), amount as f64 / 1e6, Some(rid.clone()), "cancelled", "estimated");
                         u.input_tokens = body_bytes.div_ceil(4);
                         u.cost_usd = amount as f64 / 1e6;
                         m.append_batch(vec![sc.agent_ev("agent.usage", u.to_value(), ep, &model_id), sc.ev("turn.interrupted", json!({"turn_index": turn_index, "message": self.secrets.redact(&msg)}))]).await?;
@@ -763,7 +766,7 @@ mod tests {
                 ContentBlock::Thinking { thought: "let me check".into(), replayable: true, signature_dropped_reason: None, provider_meta: ProviderMeta { provider: Some("anthropic".into()), signature: Some("SIG-EXACT==".into()), data: None } },
                 ContentBlock::ToolCall { id: id.into(), name: name.into(), arguments: args },
             ],
-            usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 150 },
+            usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 150, thinking_tokens: 0 },
             stop_reason: "tool_use",
         }
     }
@@ -808,6 +811,40 @@ mod tests {
         }
         assert!(saw_delta);
         assert!(!k.iter().any(|x| x.contains("delta")));
+    }
+
+    /// The default roster config plus one Gemini endpoint that serves the `architect` role.
+    fn with_gemini(f: &crate::testkit::Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[models.gemini]\nfast = \"gem-fast\"\nworkhorse = \"gem-work\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_role_served_by_gemini_speaks_the_gemini_dialect_end_to_end() {
+        let sig = ContentBlock::Thinking { thought: String::new(), replayable: true, signature_dropped_reason: None, provider_meta: ProviderMeta { provider: Some("google".into()), signature: Some("GSIG==".into()), data: None } };
+        let call = Step::Reply {
+            blocks: vec![sig, ContentBlock::ToolCall { id: "dg-1".into(), name: "read_file".into(), arguments: json!({"path": "@project/app/src/lib.rs"}) }],
+            usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100, thinking_tokens: 50 },
+            stop_reason: "tool_use",
+        };
+        let f = setup(vec![call, Step::text("It defines `needle`.")], 5.0, |_| {});
+        with_gemini(&f);
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let reqs = f.model.requests();
+        assert_eq!((reqs[0].endpoint_id.as_str(), reqs[0].model_id.as_str()), ("gem", "gem-pro"), "a Gemini role never lands on a Claude endpoint");
+        assert!(reqs[0].body["contents"].is_array() && reqs[0].body["systemInstruction"].is_object() && reqs[0].body.get("messages").is_none());
+        let replay = reqs[1].body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(replay.iter().find(|p| p.get("functionCall").is_some()).unwrap()["thoughtSignature"], "GSIG==", "same endpoint and model: the signature is replayed on its call");
+        let usage = events_of(&f, "agent.usage");
+        assert!(usage.iter().all(|e| e.payload["provider"] == "google"));
+        assert_eq!(usage[0].payload["thinking_tokens"], 50);
+        // 1000 in @ $2/M + (100 out + 50 thinking) @ $12/M
+        assert!((usage[0].payload["cost_usd"].as_f64().unwrap() - (0.002 + 0.0018)).abs() < 1e-9, "{}", usage[0].payload["cost_usd"]);
+        let turns = events_of(&f, "agent.turn.complete");
+        assert_eq!(turns[0].payload["provider"], "google");
     }
 
     #[tokio::test]

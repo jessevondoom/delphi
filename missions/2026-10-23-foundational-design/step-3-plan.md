@@ -46,3 +46,16 @@ Step 3b (after Council 006 approves spec 010): `ConnectorHost` and MCP client, t
 
 ## Reordered again (2026-10-24, operator)
 The operator asked to keep thinking about the sandbox, consider other approaches, and wait for the full OAuth, API and MCP path if needed, skipping the CLIs. See `sandbox-review.md`. **M3 (harness mode) is paused.** New order: M6 (`oauth2`, Gemini dialect, compat gateway, probing) first, then the connector layer if spec 010 is approved, then sandbox hardening (resource limits, process-tree kill, Linux checks) for the Builder (M5), and harness mode last, with a VM option evaluated against what the API path has taught us.
+
+## M6 progress (2026-10-24)
+
+Done, against mocks only (no live Gemini call has been made):
+- `delphi-adapter/src/gemini.rs`: request compile (`contents`, `systemInstruction`, `functionDeclarations`, `generationConfig`, thinking budget or level) and the streaming assembler. Signatures ride as signed `Thinking` blocks placed before the part they signed; thought summaries are display-only; a missing signature in an open tool loop gets Google's documented placeholder and is reported; synthetic `dg-` call ids are never sent back; thought tokens are billed as output.
+- Platform envelopes for the Developer API, native gateways and Vertex; the key goes in a header, never the URL. `Dialect` on `HttpRequest` picks the assembler.
+- Engine: per-span model family (`[access] role_family`, or the handoff directive), dialect-aware compile, provider recorded on turns and usage, restart-safe (`provider` is in `agent.turn.complete`). Failover stays inside a family.
+
+Open, and why it matters:
+- Unverified against a live endpoint: whether `maxOutputTokens` includes thought tokens (the engine currently sizes it as for Claude), `parametersJsonSchema` on every model, placeholder-signature acceptance, and the `thinkingLevel` values. `doctor --probe` should check each.
+- Tool names with a dot (connector tools are `<connector>.<tool>`) are refused by both dialects; the connector layer needs a reversible wire-name mapping.
+- Gemini `thinkingLevel` is not yet reachable from config (the dialect supports it).
+- Next in M6: `oauth2` (device code, client credentials, loopback PKCE) with the token store and `delphi auth`; the compat gateway; endpoint probing.

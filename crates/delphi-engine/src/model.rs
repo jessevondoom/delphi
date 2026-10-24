@@ -103,11 +103,11 @@ pub enum Step {
 
 impl Step {
     pub fn text(text: &str) -> Step {
-        Step::Reply { blocks: vec![ContentBlock::Text { text: text.into() }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 200 }, stop_reason: "end_turn" }
+        Step::Reply { blocks: vec![ContentBlock::Text { text: text.into() }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 200, thinking_tokens: 0 }, stop_reason: "end_turn" }
     }
 
     pub fn tool(id: &str, name: &str, args: Value) -> Step {
-        Step::Reply { blocks: vec![ContentBlock::ToolCall { id: id.into(), name: name.into(), arguments: args }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100 }, stop_reason: "tool_use" }
+        Step::Reply { blocks: vec![ContentBlock::ToolCall { id: id.into(), name: name.into(), arguments: args }], usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100, thinking_tokens: 0 }, stop_reason: "tool_use" }
     }
 }
 
