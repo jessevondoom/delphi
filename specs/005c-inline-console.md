@@ -23,7 +23,7 @@ tags: [spec, ui, tui, console, interim]
 - a console that **does not own the screen**: chat prints into the terminal's normal scrollback, and only a small block at the bottom is pinned;
 - **brief output**, so there is little to scroll;
 - a **Decision Inbox** for approvals;
-- reasoning and rendering moved out of the console: the Observer shows reasoning, and a local file viewer renders documents.
+- reasoning and rendering moved out of the console: the Observer shows reasoning, and a native terminal viewer renders documents.
 
 ## 2. Scope
 
@@ -44,20 +44,21 @@ tags: [spec, ui, tui, console, interim]
 | Three decks, swiped | Two views: chat and inbox (two dots) | Left deck if the console becomes full-screen |
 | Left deck: live reasoning | `delphi observe thinking` (§3) | Folded into a left deck |
 | `less`-style pinned viewport | Truncation to 24 lines plus `/more` | With the full-screen console |
-| Chromeless web viewer, server, WebSocket, hot reload | `delphi view` (§4), no server | Only if a live-updating viewer is wanted |
+| Chromeless web viewer, server, WebSocket, hot reload | `delphi view` (§4), a native terminal viewer | Nothing: the browser path is dropped. Live reload only if wanted |
 | Recommendation plus numbered options on a card | One approval per option | If cards need richer structure |
 
 ## 3. Reasoning in the Observer
 `delphi observe thinking` is a seventh Observer view: a tail of live reasoning and tool calls per active span, newest at the bottom, labelled with the agent's badge, tier and model. It reads the `thinking` text the daemon already coalesces into frames. It is **context only**: it exists in the Observer's memory while the window is open, is never written to `events.jsonl` or anywhere else, and is not included in the snapshot a reopened window receives. Control sequences are stripped like all model text.
 
-## 4. Local viewing without a server
-`delphi view <path>` and `/view <path>` open a document without a server:
-- **Markdown** is rendered by Delphi (pulldown-cmark) to one self-contained HTML file under `$DELPHI_HOME/view/<blake3>.html`: inline CSS, light and dark by `prefers-color-scheme`, embedded images as data URLs, and a Content-Security-Policy of `default-src 'none'; style-src 'unsafe-inline'; img-src data:`. No script runs in the page, raw HTML in the markdown is escaped, and links to other workspace files become `delphi view` links or `file://` links. It opens in the default browser (`open` or `xdg-open`).
-- **PNG, SVG, JPEG** open directly with the system viewer; SVG is never rendered inline into an HTML page.
-- Only paths the operator could read through the path guard open (logical workspace paths and registered projects); a path outside is refused.
-- There is no hot reload. The rendered file is rebuilt on each `delphi view`, and the console's file links point at the rendered page.
+## 4. A native viewer, no browser
+`delphi view <path>` and `/view <path>` open a document in **Delphi's own viewer**, a full-window terminal view like the Observer (separate window or tmux pane; Delphi never splits a window). There is no web server, no browser and no generated HTML.
+- **Markdown** is parsed (pulldown-cmark) and drawn as styled terminal text: headings, emphasis, lists, block quotes, tables, fenced code with its language shown, hairline rules, and links as OSC 8. No boxes, no emoji-width glyphs, and the palette follows the terminal (dark or light). Raw HTML in the document is shown as plain text, never interpreted; control sequences in the text are stripped like all model text.
+- **Navigation:** `j`/`k`, arrows and `Space`/`PageDown` scroll; `/` searches; `g`/`G` jump to top and bottom; `n`/`N` move between headings; `r` re-reads the file (the way to see changes, since there is no hot reload); `q` quits. A table of contents is `t`.
+- **Images** (PNG, JPEG) are drawn in the terminal where it supports a graphics protocol (kitty, iTerm2, sixel), and otherwise opened with the system viewer. **SVG** is opened with the system viewer in this step; rasterizing it in Rust is a later option.
+- Only paths the operator could read through the path guard open (logical workspace paths and registered projects); a path outside is refused. Links between workspace documents open in the same viewer.
+- The console's file links (OSC 8) point at the file on disk as before; `/view` is the way to read it comfortably.
 
-Rendering in Rust rather than with a bundled script keeps the page free of any script surface and makes the output testable. Embedding a JavaScript renderer remains possible if live re-rendering becomes worth the cost.
+A Rust viewer keeps rendering in one language with the rest of Delphi, makes the output testable cell by cell, and avoids a script or network surface entirely. The browser path is dropped, not deferred.
 
 ## 5. Build slices
 | # | Slice | Estimate |
@@ -65,7 +66,7 @@ Rendering in Rust rather than with a bundled script keeps the page free of any s
 | 1 | Inline shell (§2.1 items 1 to 4, 8), including the shared command layer | 3 h |
 | 2 | Brevity (§2.1 item 5) | 1.5 h |
 | 3 | Inbox, header states and approval mode (§2.1 items 2, 6, 7) | 2.5 h |
-| 4 | `observe thinking` and `delphi view` (§3, §4) | 3 h |
+| 4 | `observe thinking` (1 h) and the native viewer (§4) | 4 h |
 
 Slices 1 to 3 are the core and ship first. After each, the operator drives it before the next begins.
 
@@ -79,7 +80,8 @@ Slices 1 to 3 are the core and ship first. After each, the operator drives it be
 7. **Eye contrast and widths.** Every badge is five columns and every mascot seven, in dark and light, with the red-team's alert eyes gold.
 8. **No boxes, no emoji.** No frame characters and no emoji-width glyphs in any console output (checked by test).
 9. **Reasoning is not kept.** After a Council runs, nothing in the mission's files or the Observer snapshot contains reasoning text; a reopened `observe thinking` starts empty.
-10. **View safety.** A markdown file containing `<script>`, `<img onerror=…>` and a `javascript:` link renders them as inert text; a path outside the workspace is refused; the generated page has no `<script>` element.
+10. **View safety.** A markdown file containing `<script>`, `<img onerror=…>`, a `javascript:` link and terminal escape sequences renders them as inert plain text; a path outside the workspace is refused; drawing never emits an escape sequence other than Delphi's own styling and OSC 8 links.
+10a. **View rendering.** Headings, lists, tables, code blocks and links in a sample document draw as specified in both palettes; `n`/`N` land on headings; `r` picks up an edited file.
 11. **`--plain`.** The same commands give the same results in both consoles.
 
 ## 7. Risks
