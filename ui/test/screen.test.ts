@@ -5,6 +5,7 @@ import { frame, header, footer, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { addBlock, fold, initial } from '../src/fold.ts';
 import { badge, sanitize, type Info } from '../src/theme.ts';
+import { completions } from '../src/complete.ts';
 
 const info: Info = {
   console_socket: '', narrator_socket: '', workspace: '', mission: null, version: '0.5', cwd: '/proj',
@@ -15,7 +16,7 @@ const info: Info = {
   },
 };
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menuSel: 0, help: false, ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], help: false, ...over });
 
 test('every badge is five columns, in every state, dark and light', () => {
   for (const role of Object.keys(info.roles)) for (const st of ['idle', 'running', 'waiting on you', 'escalated'] as const) for (const dark of [true, false]) {
@@ -57,10 +58,10 @@ test('footer has tokens, mode and shortcuts on the left, deck dots on the right,
 });
 
 test('typing / opens the command menu above the prompt, filtered', () => {
-  const lines = frame(model({ composer: C.insert(C.empty(), '/obs') }), 100, 30).map(plain);
-  const hit = lines.findIndex((l) => l.includes('/observe command'));
+  const lines = frame(model({ composer: C.insert(C.empty(), '/obs'), menu: { items: completions('/obs', 4, info, () => [])!.items, sel: 0 } }), 100, 30).map(plain);
+  const hit = lines.findIndex((l) => l.includes('/observe · '));
   assert.ok(hit > 0 && hit < lines.findIndex((l) => l.startsWith('❯ /obs')), 'menu is above the prompt');
-  assert.ok(!lines.join('\n').includes('/council command'), 'filtered out');
+  assert.ok(!lines.join('\n').includes('/council · '), 'filtered out');
 });
 
 test('scrolled up, a marker says how many lines are below', () => {
@@ -72,4 +73,30 @@ test('scrolled up, a marker says how many lines are below', () => {
 
 test('model text cannot move the cursor or set the title', () => {
   assert.equal(sanitize('a\x1b[2Jb\x1b]0;evil\x07c\x1b[31md'), 'abcd');
+});
+
+test('while a task runs the status row shows a spinner, the time, the queue and how to stop', () => {
+  const s = fold(initial(0), { method: 'event', params: { type: 'task.created', task_id: 't1', payload: { prompt: 'q' } } }, 1000);
+  const lines = frame(model({ state: s, now: 13_000, queue: ['next thing'] }), 100, 30).map(plain);
+  const row = lines.find((l) => l.includes('working')) ?? '';
+  assert.match(row, /^[◐◓◑◒] working · 12s · 1 queued\s+esc to stop$/);
+  assert.ok(lines.some((l) => l.includes('❯ next thing  (queued)')));
+  assert.ok(!frame(model(), 100, 30).map(plain).some((l) => l.includes('working')), 'idle: no status row text');
+});
+
+test('tool calls are one dim line, and ctrl+o opens their output', () => {
+  let s = initial(0);
+  s = fold(s, { method: 'event', params: { type: 'agent.block.complete', agent: 'architect', payload: { block: { type: 'tool_call', id: 'c1', name: 'read_file', arguments: { path: 'specs/005.md' } } } } }, 1);
+  s = fold(s, { method: 'event', params: { type: 'tool.result', payload: { tool_call_id: 'c1', is_error: false, content: 'line a\nline b' } } }, 2);
+  const shut = frame(model({ state: s }), 100, 30).map(plain).join('\n');
+  assert.match(shut, /→ read_file\(specs\/005\.md\) ✔/);
+  assert.ok(!shut.includes('line a'));
+  assert.ok(frame(model({ state: s, expandTools: true }), 100, 30).map(plain).join('\n').includes('line b'));
+});
+
+test('stopping ends the task, clears the spinner and says so', () => {
+  let s = fold(initial(0), { method: 'event', params: { type: 'task.created', task_id: 't1', payload: { prompt: 'q' } } }, 1);
+  assert.deepEqual(Object.keys(s.running), ['t1']);
+  s = fold(s, { method: 'event', params: { type: 'task.cancelled', task_id: 't1', payload: {} } }, 2);
+  assert.deepEqual([Object.keys(s.running), s.blocks.at(-1)?.text], [[], '■ stopped']);
 });

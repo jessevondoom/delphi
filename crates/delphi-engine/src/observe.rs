@@ -293,6 +293,12 @@ impl ObserverState {
                 }
                 self.say(format!("{} failed", task));
             }
+            "task.cancelled" => {
+                if let Some(t) = self.tasks.get_mut(&task) {
+                    t.status = "cancelled".into();
+                }
+                self.say(format!("{} stopped by the operator", task));
+            }
             "dag.node.added" => {
                 let id = s(&p["node_id"]);
                 let r = s(&p["role"]);

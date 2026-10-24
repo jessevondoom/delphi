@@ -28,6 +28,8 @@ try {
   await ev.call('events.subscribe', {});
   const snap = await cmd.call('observe.snapshot', { mission_id: mission }).catch(() => ({ events: [] }));
   history = replay(initial(Date.now()), snap.events ?? []);
+  const live = await cmd.call('session.snapshot', { mission_id: mission }).catch(() => ({ running_tasks: [] }));
+  for (const t of live.running_tasks ?? []) history.running[String(t.task_id)] = { since: Date.now() - Number(t.seconds ?? 0) * 1000 };
 } catch (e: any) {
   console.error('delphi-ui: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
   process.exit(1);

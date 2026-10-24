@@ -789,3 +789,54 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     drop(c2);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothing_runs() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Drafted.")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("@architect Draft a spec called 009-e2e");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("decision needed");
+    c.wait_for("approval needed [amber]");
+    c.wait_for("esc to stop");
+    // A message sent while the task waits is queued, not sent.
+    c.type_keys("and then another thing");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("(queued)");
+    c.wait_for("1 queued");
+    // Esc with an empty prompt stops the task.
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\x1b");
+    c.wait_for("■ stopped");
+    c.wait_for("1 queued message(s) were dropped");
+    std::thread::sleep(Duration::from_millis(500));
+    let screen = c.visible();
+    assert!(!screen.contains("esc to stop") && screen.contains("all agents idle"), "{}", screen);
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
+    assert_eq!(m.seen.lock().unwrap().len(), 1, "the queued message was never sent");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}

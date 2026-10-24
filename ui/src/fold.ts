@@ -1,7 +1,7 @@
 // The event fold: daemon notifications in, the console's state out. Pure, so it is tested without a terminal.
 import { sanitize, type AgentState } from './theme.ts';
 
-export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card'; role?: string; text: string; at: number; status?: string; ref?: string };
+export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string };
 export type Agent = { state: AgentState; doing: string };
 export type Approval = { id: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 export type State = {
@@ -15,10 +15,12 @@ export type State = {
   lastActivity: number;
   nextId: number;
   council: boolean;
+  /** Tasks the daemon is working on, by task id. */
+  running: Record<string, { since: number }>;
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false,
+  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {},
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
@@ -27,13 +29,23 @@ export function addBlock(s: State, b: Omit<Block, 'id'>): State {
   return { ...s, blocks: [...s.blocks, { ...b, id: s.nextId }], nextId: s.nextId + 1 };
 }
 
+const without = (r: Record<string, { since: number }>, id?: string) => { if (!id) return r; const { [id]: _gone, ...rest } = r; return rest; };
+
+/** One short line for a tool call's arguments: the path or pattern if there is one, else the first string. */
+export function briefArgs(a: any): string {
+  const pick = ['path', 'pattern', 'role'].map((k) => a?.[k]).find((v) => typeof v === 'string') ?? Object.values(a ?? {}).find((v) => typeof v === 'string') ?? '';
+  const t = sanitize(String(pick)).replace(/\s+/g, ' ');
+  return t.length > 60 ? t.slice(0, 59) + '…' : t;
+}
+
 /** The event's own time when it has one (history), else the time it arrived. */
 const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? ''); return Number.isNaN(t) ? now : t; };
 
 /** Past events into blocks, for reopening a mission: what was said and done, not what was pending. */
 export function replay(s: State, events: any[]): State {
-  const KEEP = new Set(['task.created', 'task.output', 'task.failed', 'dag.node.added', 'council.started', 'council.barrier.released']);
-  return events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
+  const KEEP = new Set(['task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
+  const done = events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
+  return { ...done, running: {}, agents: {} }; // what is running now comes from the daemon's snapshot, not from old events
 }
 
 const setAgent = (s: State, role: string, a: Agent): State => ({ ...s, agents: { ...s.agents, [role]: a } });
@@ -60,8 +72,9 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       return setAgent(next, role, { state: 'running', doing: 'working' });
     }
     case 'task.created': {
-      if (pl.flow === 'build' && !pl.prompt) return s;
-      return addBlock({ ...s, lastActivity: now }, { kind: 'user', text: sanitize(String(pl.prompt ?? '')), at: stamp(e, now) });
+      const run = e.task_id ? { ...s.running, [e.task_id]: { since: now } } : s.running;
+      if (pl.flow === 'build' && !pl.prompt) return { ...s, running: run };
+      return addBlock({ ...s, running: run, lastActivity: now }, { kind: 'user', text: sanitize(String(pl.prompt ?? '')), at: stamp(e, now) });
     }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
@@ -71,12 +84,27 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const idle: Record<string, Agent> = {};
       for (const [r, a] of Object.entries(s.agents)) idle[r] = a.state === 'waiting on you' ? a : { state: 'idle', doing: '' };
       const escalated = pl.status === 'escalated';
-      const next = addBlock({ ...s, live: '', council: false, agents: idle, lastActivity: now }, {
+      const next = addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), lastActivity: now }, {
         kind: 'reply', role, text: sanitize(String(pl.text ?? '')), at: stamp(e, now), status: escalated ? 'escalated' : 'done',
       });
       return escalated ? setAgent(next, role, { state: 'escalated', doing: '' }) : next;
     }
-    case 'task.failed': return addBlock({ ...s, live: '', lastActivity: now }, { kind: 'note', text: '✖ task failed: ' + sanitize(String(pl.error ?? '')), at: now });
+    case 'task.cancelled': {
+      const idle: Record<string, Agent> = {};
+      for (const r of Object.keys(s.agents)) idle[r] = { state: 'idle', doing: '' };
+      return addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), alert: null, lastActivity: now }, { kind: 'note', text: '■ stopped', at: stamp(e, now) });
+    }
+    case 'agent.block.complete': {
+      const b = pl.block;
+      if (b?.type !== 'tool_call') return s;
+      return addBlock(s, { kind: 'tool', role: e.agent, text: `${b.name}(${briefArgs(b.arguments)})`, at: now, status: 'pending', ref: String(b.id ?? '') });
+    }
+    case 'tool.result': {
+      const ref = String(pl.tool_call_id ?? '');
+      const detail = sanitize(String(pl.content ?? '')).split('\n').slice(0, 40).join('\n');
+      return { ...s, blocks: s.blocks.map((x) => (x.kind === 'tool' && x.ref === ref ? { ...x, status: pl.is_error ? 'error' : 'ok', detail } : x)) };
+    }
+    case 'task.failed': return addBlock({ ...s, live: '', running: without(s.running, e.task_id), lastActivity: now }, { kind: 'note', text: '✖ task failed: ' + sanitize(String(pl.error ?? '')), at: now });
     case 'approval.requested': {
       const id = String(pl.approval_id ?? '');
       const role = String(pl.role ?? 'orchestrator');

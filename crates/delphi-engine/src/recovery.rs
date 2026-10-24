@@ -119,7 +119,7 @@ pub fn rebuild_with(events: &[EventEnvelope], payload: &dyn Fn(&str) -> Option<S
                 rec.tasks.insert(tid.clone(), TaskState { task_id: tid, target: p["target"].as_str().unwrap_or("").into(), prompt: p["prompt"].as_str().unwrap_or("").into(), completed: false, root_span: None });
             }
             // A recorded failure is as final as a completion: recovery never re-runs it (specs/005 §2.5).
-            "task.completed" | "task.failed" => {
+            "task.completed" | "task.failed" | "task.cancelled" => {
                 if let Some(t) = e.task_id.as_ref().and_then(|id| rec.tasks.get_mut(id)) {
                     t.completed = true;
                 }

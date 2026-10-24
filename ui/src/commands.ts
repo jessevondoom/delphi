@@ -4,6 +4,7 @@ export type Command = { name: string; desc: string; local: boolean };
 export const COMMANDS: Command[] = [
   { name: '/help', desc: 'Show keys and commands', local: true },
   { name: '/clear', desc: 'Clear the screen (the history stays in the mission)', local: true },
+  { name: '/export', desc: 'Save this conversation as a markdown document in the mission', local: true },
   { name: '/quit', desc: 'Leave the console; the daemon keeps running', local: true },
   { name: '/build', desc: 'A Builder task: worktree, tests, audit, then your approval to merge', local: false },
   { name: '/council', desc: 'Convene a blind three-round council on a proposition', local: false },

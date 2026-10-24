@@ -546,6 +546,37 @@ impl Engine {
         })
     }
 
+    /// The operator stopped a task (`task.cancel`): close what it left open, then record the end. The in-flight
+    /// model call is charged its full reservation (its real usage can't be known), approvals waiting on the task
+    /// are closed, and `task.cancelled` ends it so recovery never offers it again.
+    pub async fn cancel_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<(), EngineError> {
+        let events = m.replay()?;
+        let open = m.budget.lock().unwrap().open_reservations();
+        let mut batch = Vec::new();
+        for (rid, amount) in open {
+            let Some(res) = events.iter().find(|e| e.kind == "budget.reserve" && e.payload["reservation_id"] == rid.as_str() && e.task_id.as_deref() == Some(task_id)) else { continue };
+            let usage = delphi_core::usage::UsagePayload {
+                provider: res.endpoint_id.as_deref().and_then(|id| self.cfg.get().endpoint(id).map(delphi_adapter::provider_for)).unwrap_or(PROVIDER).into(), input_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 0, thinking_tokens: 0,
+                cost_usd: amount as f64 / 1e6, reserved_usd: amount as f64 / 1e6, usage_source: "estimated".into(), cost_model: "metered".into(), outcome: "cancelled".into(), reservation_id: Some(rid.clone()),
+            };
+            let mut u = EventEnvelope::new(&m.id, "agent.usage", usage.to_value());
+            (u.task_id, u.span_id, u.agent, u.endpoint_id, u.access_path, u.model_tier, u.model_id, u.attempt, u.mode) =
+                (res.task_id.clone(), res.span_id.clone(), res.agent.clone(), res.endpoint_id.clone(), res.access_path.clone(), res.model_tier.clone(), res.model_id.clone(), res.attempt, res.mode.clone());
+            batch.push(u);
+        }
+        // Approvals still waiting for this task will never be acted on.
+        let before = recovery::rebuild_with(&events, &|h| self.connectors.read_payload(h));
+        for id in before.open_approvals.iter().filter(|id| events.iter().any(|e| e.kind == "approval.requested" && e.payload["approval_id"] == id.as_str() && e.task_id.as_deref() == Some(task_id))) {
+            batch.push(EventEnvelope::new(&m.id, "approval.resolved", json!({"approval_id": id, "resolution": "expired", "by": "operator", "reason": "the task was cancelled"})));
+        }
+        self.broker.end_task(task_id);
+        let mut c = EventEnvelope::new(&m.id, "task.cancelled", json!({"reason": "the operator stopped it"}));
+        c.task_id = Some(task_id.to_string());
+        batch.push(c);
+        m.append_batch(batch).await?;
+        Ok(())
+    }
+
     // ── recovery (`specs/005` §2.5) ─────────────────────────────────────────
 
     /// After a restart: charge the calls that died with the daemon their full reservation, close approval
