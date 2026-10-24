@@ -27,7 +27,7 @@ struct SpanRow {
 
 /// Event kinds that change what the projection shows.
 pub fn affects_status(kind: &str) -> bool {
-    matches!(kind, "task.created" | "task.completed" | "task.failed" | "dag.node.added" | "dag.node.state" | "approval.requested" | "approval.resolved" | "mission.recovered" | "budget.cap" | "budget.reserve" | "budget.release" | "agent.usage")
+    matches!(kind, "task.created" | "task.completed" | "task.failed" | "task.cancelled" | "dag.node.added" | "dag.node.state" | "approval.requested" | "approval.resolved" | "mission.recovered" | "budget.cap" | "budget.reserve" | "budget.release" | "agent.usage")
 }
 
 impl Status {
@@ -58,6 +58,11 @@ impl Status {
             "task.failed" => {
                 if let Some(t) = self.tasks.get_mut(&task) {
                     t.1 = "failed".into();
+                }
+            }
+            "task.cancelled" => {
+                if let Some(t) = self.tasks.get_mut(&task) {
+                    t.1 = "cancelled".into();
                 }
             }
             "dag.node.added" => {
