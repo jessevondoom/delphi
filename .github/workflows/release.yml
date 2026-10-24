@@ -1,0 +1,138 @@
+name: release
+
+# Push a tag like v0.2.0 (it must match the version in crates/delphi/Cargo.toml and be a commit on main) to build,
+# publish and attest binaries for macOS (arm64, x86_64) and Linux (x86_64, arm64). A separate job then updates the
+# Homebrew formula on main. Actions are pinned to commit SHAs; the Rust toolchain is pinned by rust-toolchain.toml.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: The tagged commit must be on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not a commit on main"; exit 1; }
+      - name: Tag must match the crate version
+        run: |
+          v="$(awk '/^\[package\]/{f=1} f && /^version/{gsub(/"/,"",$3); print $3; exit}' crates/delphi/Cargo.toml)"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match crate version $v"; exit 1; }
+      - name: Add the target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p delphi
+      - name: Package
+        run: |
+          name="delphi-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/delphi" LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          rm -rf "dist/$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # The tagged commit, not main: install.sh is released exactly as it was tagged.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp install.sh dist/install.sh
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+
+  formula:
+    # Its own job: the only one that can write to main, and it runs no third-party action.
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - name: Update the Homebrew formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"; ver="${tag#v}"
+          mkdir -p dist
+          for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            gh release download "$tag" --pattern "delphi-$tag-$t.tar.gz.sha256" --dir dist
+          done
+          sum() { s="$(cut -d' ' -f1 "dist/delphi-$tag-$1.tar.gz.sha256")"; printf '%s' "$s" | grep -Eq '^[0-9a-f]{64}$' || { echo "bad checksum for $1"; exit 1; }; printf '%s' "$s"; }
+          url() { echo "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/delphi-$tag-$1.tar.gz"; }
+          mkdir -p Formula
+          {
+            echo 'class Delphi < Formula'
+            echo '  desc "Terminal-first multi-agent working environment"'
+            echo "  homepage \"https://github.com/$GITHUB_REPOSITORY\""
+            echo "  version \"$ver\""
+            echo '  license "MIT"'
+            echo
+            echo '  on_macos do'
+            echo '    on_arm do'; echo "      url \"$(url aarch64-apple-darwin)\""; echo "      sha256 \"$(sum aarch64-apple-darwin)\""; echo '    end'
+            echo '    on_intel do'; echo "      url \"$(url x86_64-apple-darwin)\""; echo "      sha256 \"$(sum x86_64-apple-darwin)\""; echo '    end'
+            echo '  end'
+            echo '  on_linux do'
+            echo '    on_arm do'; echo "      url \"$(url aarch64-unknown-linux-gnu)\""; echo "      sha256 \"$(sum aarch64-unknown-linux-gnu)\""; echo '    end'
+            echo '    on_intel do'; echo "      url \"$(url x86_64-unknown-linux-gnu)\""; echo "      sha256 \"$(sum x86_64-unknown-linux-gnu)\""; echo '    end'
+            echo '  end'
+            echo
+            echo '  def install'
+            echo '    bin.install "delphi"'
+            echo '  end'
+            echo
+            echo '  test do'
+            echo '    assert_match version.to_s, shell_output("#{bin}/delphi --version")'
+            echo '  end'
+            echo 'end'
+          } > Formula/delphi.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/delphi.rb
+          git commit -m "brew: delphi $ver" || exit 0
+          git pull --rebase origin main
+          git push origin HEAD:main

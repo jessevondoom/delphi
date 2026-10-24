@@ -23,6 +23,17 @@ Requires Rust 1.85 or newer (developed on stable 1.99). Set `DELPHI_HOME` to use
 
 Step 2 adds the daemon (`delphi-core`) and the operator console. You can ask Orchestrator and the Architect, Red-Team and Strategist roles to read a project, plan, draft specs and review. Nothing changes your project: there are no worktrees and no code execution yet (Step 3).
 
+**Install** (macOS or Linux; once a release is published):
+
+```sh
+curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh
+# or: brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew install delphi
+delphi self-update            # later: fetch the latest release, verified; --check, --rollback
+```
+
+The installer checks the download against its published checksum and, if the `gh` CLI is signed in, against the
+build-provenance attestation made by this repository's release workflow. From source:
+
 ```sh
 cargo build --release                        # one executable: target/release/delphi (the daemon is `delphi __core`)
 cd ~/code/my-project && delphi setup         # detects Claude Code / agy, asks only for what it cannot find, writes and ratifies the config
