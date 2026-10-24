@@ -48,8 +48,18 @@ jobs:
         run: npm run typecheck
       - name: Test
         run: npm test
-      - name: Against the real daemon (pty end to end)
+      - name: Against the real daemon (pty end to end, from source)
         working-directory: .
+        run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops hands_over
+      - name: Build the executable exactly as the release does
+        run: |
+          v="$(awk '/^\[package\]/{f=1} f && /^version/{gsub(/"/,"",$3); print $3; exit}' ../crates/delphi/Cargo.toml)"
+          dev/build.sh "$v" "$PWD/dist/delphi-ui"
+          ./dist/delphi-ui --version
+      - name: Against the real daemon (pty end to end, with the compiled executable)
+        working-directory: .
+        env:
+          DELPHI_UI_COMPILED: ${{ github.workspace }}/ui/dist/delphi-ui
         run: cargo test --locked -p delphi --test e2e -- full_screen esc_stops
 
   # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
