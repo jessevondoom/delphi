@@ -10,6 +10,9 @@
 //! swap between writing it and applying it. The environment is cleared and rebuilt from an allowlist.
 
 pub mod egress;
+pub mod run;
+
+pub use run::{run_bounded, RunOptions, RunOutcome};
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -41,11 +44,33 @@ pub struct SandboxSpec {
     pub mach_services: Vec<String>,
     /// The entire environment of the process. Nothing is inherited.
     pub env: BTreeMap<String, String>,
+    pub limits: Limits,
+}
+
+/// Resource limits applied with `setrlimit` before the program starts. They bound what a runaway or
+/// hostile program can consume; they are not a substitute for the wall-clock timeout in [`run_bounded`].
+///
+/// Deliberately absent: a process-count limit (`RLIMIT_NPROC` counts every process of the user, so a low
+/// value breaks the sandbox's own `fork` and a high one stops nothing) and an address-space limit (not
+/// enforced on macOS). A fork bomb is stopped by the timeout killing the whole process group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// CPU seconds (the kernel signals `SIGXCPU` at the limit and kills five seconds later).
+    pub cpu_secs: Option<u64>,
+    /// The largest single file the program may write.
+    pub max_file_bytes: Option<u64>,
+    pub max_open_files: Option<u64>,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits { cpu_secs: Some(900), max_file_bytes: Some(512 << 20), max_open_files: Some(1024) }
+    }
 }
 
 impl SandboxSpec {
     pub fn new() -> SandboxSpec {
-        SandboxSpec { worktree: None, scratch: vec![], read_only: system_read_only(), network: Network::Off, mach_services: vec![], env: BTreeMap::new() }
+        SandboxSpec { worktree: None, scratch: vec![], read_only: system_read_only(), network: Network::Off, mach_services: vec![], env: BTreeMap::new(), limits: Limits::default() }
     }
 }
 
@@ -164,9 +189,29 @@ impl Sandbox {
         // Nothing the parent holds open may reach the child: the daemon passes its lock and readiness
         // descriptors across its own `exec`, and a sandboxed process must not inherit any of them.
         // SAFETY: only async-signal-safe calls (`fcntl`, `close`, `getdtablesize`) run between fork and exec.
+        let limits = spec.limits;
         unsafe {
             use std::os::unix::process::CommandExt;
-            cmd.pre_exec(|| {
+            cmd.pre_exec(move || {
+                // Its own session and process group: the whole tree can be signalled at once, and it has
+                // no controlling terminal to inject keystrokes into.
+                libc::setsid();
+                #[cfg(target_os = "linux")]
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                let set = |resource, soft: u64, hard: u64| {
+                    let rl = libc::rlimit { rlim_cur: soft as libc::rlim_t, rlim_max: hard as libc::rlim_t };
+                    libc::setrlimit(resource, &rl);
+                };
+                set(libc::RLIMIT_CORE, 0, 0);
+                if let Some(n) = limits.cpu_secs {
+                    set(libc::RLIMIT_CPU, n, n + 5);
+                }
+                if let Some(n) = limits.max_file_bytes {
+                    set(libc::RLIMIT_FSIZE, n, n);
+                }
+                if let Some(n) = limits.max_open_files {
+                    set(libc::RLIMIT_NOFILE, n, n);
+                }
                 let max = libc::getdtablesize().clamp(0, 65_536);
                 for fd in 3..max {
                     let flags = libc::fcntl(fd, libc::F_GETFD);
@@ -245,7 +290,7 @@ fn sbpl(r: &Resolved) -> String {
     }
     // dyld reads the root directory itself when a program starts (the names of top-level directories, nothing below them).
     s.push_str("(allow file-read-data (literal \"/\"))\n");
-    let _ = writeln!(s, "(allow file-read* (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\"))\n(allow file-write* (literal \"/dev/null\"))");
+    let _ = writeln!(s, "(allow file-read* (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"/dev/random\") (literal \"/private/var/select/sh\"))\n(allow file-write* (literal \"/dev/null\"))");
     // Read-write areas (and the programs inside them, so a build can run what it built).
     for p in r.writable() {
         let _ = writeln!(s, "(allow file-read* file-write* (subpath {q}))\n(allow process-exec* (subpath {q}))", q = sbpl_str(p));
