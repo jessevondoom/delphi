@@ -248,6 +248,15 @@ impl Worktrees {
         Ok(wt)
     }
 
+    /// `git status --porcelain` of a project checkout (empty when clean), or an error marker; used to prove a
+    /// harness left a project as it found it.
+    pub fn project_status(&self, project: &Path) -> String {
+        let Ok(home) = self.home() else { return "<no git home>".into() };
+        let mut c = git_command(None, None, home);
+        c.arg("-C").arg(project).args(["status", "--porcelain", "-z", "--untracked-files=all"]);
+        run(c, "status").unwrap_or_else(|e| format!("<{}>", e))
+    }
+
     /// Re-attach to a worktree this daemon created earlier (after a restart).
     pub fn adopt(&self, task_id: &str) -> Result<Worktree, GitError> {
         if !valid_task_id(task_id) {

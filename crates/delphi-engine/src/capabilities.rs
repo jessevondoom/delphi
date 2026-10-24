@@ -11,7 +11,9 @@
 //! Not probed in v1, and recorded as such: prompt caching (it needs a prefix over 1K tokens, which
 //! costs real money), effective context limits, and cross-endpoint `E1 → E2` replay.
 
+use crate::harness::{cli_env, Cli, Event, Launch, Session, Tools};
 use crate::model::{ModelClient, ModelError};
+use std::time::Duration;
 use delphi_adapter::blocks::{ContentBlock, Turn};
 use delphi_adapter::claude::{CompileOptions, Target, ToolDef};
 use delphi_adapter::config::{AccessPath, Config, Endpoint};
@@ -177,6 +179,75 @@ pub async fn probe(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_i
     cap
 }
 
+/// Probe a subscription harness endpoint: one capped call with no tools, which proves the CLI is installed,
+/// signed in and reachable, and records what it reports. Tool calling is not probed here (the Claude
+/// approval bridge was verified separately, and agy has none).
+pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64) -> Capability {
+    let mut cap = Capability {
+        endpoint_id: ep.id.clone(),
+        model_id: String::new(),
+        path: "harness".into(),
+        degraded: false,
+        probed_at: now,
+        auth: "not reached".into(),
+        usage_reported: None,
+        tool_calling: None,
+        reasoning: None,
+        signature_round_trip: None,
+        cache: "not applicable (subscription)".into(),
+        tokens_used: 0,
+        cost_usd: None,
+        notes: Vec::new(),
+    };
+    let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
+        cap.auth = format!("failed: the `{}` harness is not implemented", ep.harness.as_deref().unwrap_or("?"));
+        return cap;
+    };
+    // Any tier's model will do for a connectivity probe; the cheapest configured one.
+    let model = ["fast", "workhorse", "frontier"].iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
+    cap.model_id = model.clone();
+    if cli == Cli::Agy {
+        cap.degraded = true;
+        cap.notes.push("agy: no approval bridge, tools cannot be turned off, reads any file; usable for read-only roles only, and its output is untrusted (L0)".into());
+    }
+    let dir = std::env::temp_dir().join(format!("delphi-probe-{}", std::process::id()));
+    if std::fs::create_dir_all(&dir).is_err() {
+        cap.auth = "failed: no scratch directory".into();
+        return cap;
+    }
+    let l = Launch { cli, program: program.into(), model, system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: cli_env() };
+    match Session::start(&l).await {
+        Err(e) => cap.auth = format!("failed: {}", e),
+        Ok(mut s) => {
+            let mut got_result = false;
+            while let Some(ev) = s.next(Duration::from_secs(90)).await {
+                match ev {
+                    Event::Usage(t) => cap.tokens_used += t.metered(),
+                    Event::RateLimit { utilization, window } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
+                    Event::Result { is_error, text, usage, .. } => {
+                        got_result = true;
+                        cap.usage_reported = Some(usage.metered() + usage.cache_read > 0);
+                        cap.tokens_used = cap.tokens_used.max(usage.metered());
+                        cap.auth = if is_error { format!("failed: {}", text.chars().take(120).collect::<String>()) } else { "ok".into() };
+                        s.close_input();
+                    }
+                    Event::Exit { code } => {
+                        if !got_result {
+                            cap.auth = format!("failed: {} exited ({:?}) without a result; is it signed in?", program, code);
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            s.kill().await;
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    cap.notes.dedup();
+    cap
+}
+
 pub fn load(path: &Path) -> Vec<Capability> {
     std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
@@ -281,6 +352,37 @@ credential = "env:K"
         assert!(cap.notes.iter().any(|n| n.contains("degraded")));
         assert_eq!(model.requests().len(), 2);
         assert!(model.requests()[1].body.get("thinking").is_none());
+    }
+
+    const HARNESS_CFG: &str = r#"
+[models.claude]
+fast = "haiku-x"
+[[endpoints]]
+id = "sub"
+family = "claude"
+path = "harness"
+harness = "claude"
+credential = "harness-login"
+cost_model = "subscription"
+"#;
+
+    #[tokio::test]
+    async fn a_harness_probe_proves_the_cli_is_signed_in_and_reports_the_window() {
+        let cfg = Config::parse(HARNESS_CFG).unwrap();
+        let ep = cfg.endpoint("sub").unwrap().clone();
+        let d = tempfile::tempdir().unwrap();
+        let good = crate::harness::tests::fake_cli(d.path(), r#"echo '{"type":"system","subtype":"init","session_id":"s"}'
+echo '{"type":"rate_limit_event","rate_limit_info":{"utilization":0.32,"rateLimitType":"seven_day"}}'
+echo '{"type":"result","subtype":"success","result":"OK","usage":{"input_tokens":5,"output_tokens":3}}'"#);
+        let cap = probe_harness(&cfg, &ep, &good, 7).await;
+        assert_eq!((cap.auth.as_str(), cap.usage_reported, cap.model_id.as_str()), ("ok", Some(true), "haiku-x"));
+        assert!(cap.notes.iter().any(|n| n.contains("seven-day window 32% used")), "{:?}", cap.notes);
+        let d2 = tempfile::tempdir().unwrap();
+        let bad = crate::harness::tests::fake_cli(d2.path(), "exit 1");
+        let cap = probe_harness(&cfg, &ep, &bad, 7).await;
+        assert!(cap.auth.starts_with("failed") && cap.auth.contains("signed in"), "{}", cap.auth);
+        let cap = probe_harness(&cfg, &ep, "/nonexistent/claude", 7).await;
+        assert!(cap.auth.starts_with("failed: cannot start"), "{}", cap.auth);
     }
 
     #[test]

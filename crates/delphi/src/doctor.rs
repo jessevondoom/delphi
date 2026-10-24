@@ -143,6 +143,9 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 8. Hygiene: clean projects, orphaned worktrees.
     check_hygiene(ws, home, &mut r);
 
+    // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
+    check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
+
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
     match (delphi_sandbox::detect(), wanted.as_str()) {
@@ -153,6 +156,43 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
     }
     r
+}
+
+/// (exit code, stdout) of a program, or `None` if it cannot be started.
+type CliRun = Option<(i32, String)>;
+
+/// Run a program with arguments and capture (exit code, stdout); `None` if it cannot be started.
+fn run_cli(program: &str, args: &[&str]) -> CliRun {
+    let out = std::process::Command::new(program).args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    Some((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// For every `path = "harness"` endpoint: is its CLI installed, and is it signed in? Claude has
+/// `claude auth status`; `agy` has no status command, so its sign-in is proven by
+/// `delphi endpoints test --probe` (one tiny call). Account details such as the email are never printed.
+fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, require: bool, r: &mut Report) {
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let missing = |r: &mut Report, id: &str, msg: String| if require { r.fail("10 harness", id.to_string(), msg) } else { r.warn("10 harness", id.to_string(), msg) };
+    for e in list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness")) {
+        let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+        match e.get("harness").and_then(|h| h.as_str()) {
+            Some("claude") => match run("claude", &["--version"]) {
+                None => missing(r, id, "the `claude` program was not found on PATH; install Claude Code, or this endpoint is skipped (API endpoints take over if any)".into()),
+                Some((_, ver)) => match run("claude", &["auth", "status", "--json"]).and_then(|(_, out)| serde_json::from_str::<serde_json::Value>(&out).ok()) {
+                    Some(s) if s["loggedIn"] == true => r.push(Level::Ok, "10 harness", id.to_string(), format!("claude {} is signed in ({}, {} plan); the approval bridge needs no sandbox", ver.trim(), s["authMethod"].as_str().unwrap_or("?"), s["subscriptionType"].as_str().unwrap_or("?"))),
+                    Some(_) => missing(r, id, "`claude` is installed but not signed in: run `claude auth login`".into()),
+                    None => r.warn("10 harness", id.to_string(), "`claude auth status` gave no usable answer; run `delphi endpoints test --probe`"),
+                },
+            },
+            Some("agy") => match run("agy", &["--version"]) {
+                None => missing(r, id, "the `agy` program was not found on PATH; install the Antigravity CLI".into()),
+                Some((_, ver)) => r.push(Level::Ok, "10 harness", id.to_string(), format!("agy {} is installed; it has no status command, so run `delphi endpoints test --probe` to prove it is signed in. Read-only roles only: no approval bridge, output is untrusted", ver.trim())),
+            },
+            Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
+            other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
+        }
+    }
 }
 
 fn check_manifest_lock(base: &Path, label: &str, r: &mut Report) {
@@ -623,5 +663,41 @@ mod tests {
         let (_t, home, ws, _p) = setup();
         fs::write(ws.dir.join("base/extra.md"), "planted").unwrap();
         assert_eq!(run(&home, &ws, &Options::default()).exit_code(), 1);
+    }
+
+    #[test]
+    fn harness_endpoints_are_checked_with_the_clis_own_commands() {
+        let cfg = "[[endpoints]]\nid=\"c\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"claude\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"a\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"agy\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"g\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"gemini\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"api\"\nfamily=\"claude\"\npath=\"api\"\ncredential=\"env:K\"\n";
+        let run_ok = |p: &str, a: &[&str]| -> Option<(i32, String)> {
+            match (p, a.first().copied()) {
+                ("claude", Some("--version")) => Some((0, "2.1.310 (Claude Code)\n".into())),
+                ("claude", Some("auth")) => Some((0, r#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro","email":"secret@example.com"}"#.into())),
+                ("agy", Some("--version")) => Some((0, "1.4.6\n".into())),
+                _ => None,
+            }
+        };
+        let mut r = Report::default();
+        check_harnesses(cfg, &run_ok, false, &mut r);
+        let text: Vec<String> = r.findings.iter().map(|f| format!("{:?} {} {}", f.level, f.location, f.message)).collect();
+        assert!(text.iter().any(|t| t.starts_with("Ok c") && t.contains("signed in") && t.contains("pro plan")), "{:?}", text);
+        assert!(text.iter().any(|t| t.starts_with("Ok a") && t.contains("endpoints test --probe")), "{:?}", text);
+        assert!(text.iter().any(|t| t.starts_with("Warn g") && t.contains("Antigravity")), "{:?}", text);
+        assert!(!text.iter().any(|t| t.contains("secret@example.com")), "the account email is never printed");
+        assert_eq!(r.findings.len(), 3, "API endpoints are not harness checks");
+
+        let run_out = |p: &str, a: &[&str]| -> Option<(i32, String)> {
+            match (p, a.first().copied()) {
+                ("claude", Some("--version")) => Some((0, "2.1.310\n".into())),
+                ("claude", Some("auth")) => Some((0, r#"{"loggedIn":false}"#.into())),
+                _ => None,
+            }
+        };
+        let mut r = Report::default();
+        check_harnesses(cfg, &run_out, true, &mut r);
+        let level_of = |id: &str| r.findings.iter().find(|f| f.location == id).map(|f| f.level);
+        assert_eq!((level_of("c"), level_of("a")), (Some(Level::Fail), Some(Level::Fail)), "not signed in and not installed fail under --require-providers");
+        let mut r = Report::default();
+        check_harnesses(cfg, &run_out, false, &mut r);
+        assert!(r.findings.iter().filter(|f| f.location == "c" || f.location == "a").all(|f| f.level == Level::Warn));
     }
 }

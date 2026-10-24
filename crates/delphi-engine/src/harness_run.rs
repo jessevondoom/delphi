@@ -7,9 +7,9 @@
 //! task begins again from its saved request.
 
 use crate::approval::{Need, Tier as ApprovalTier};
-use crate::engine::{Engine, Escalate, SpanCtx};
+use crate::engine::{Engine, SpanCtx};
 use crate::exec::{self, GitGuard, Verdict};
-use crate::harness::{cli_env, Decision, Event, Launch, Permission, Session, Tools};
+use crate::harness::{cli_env, Cli, Decision, Event, Launch, Permission, Session, Tools};
 use crate::mission::{EngineError, LiveRedactor};
 use crate::tools::{ActionKind, Classified, ToolTier};
 use crate::worktree::Worktree;
@@ -67,11 +67,35 @@ fn summarize(name: &str, input: &Value) -> String {
     s.chars().take(200).collect()
 }
 
+/// Why a harness span did not finish, and whether the same span may be tried by another method (an API
+/// endpoint of the family) without repeating a side effect.
+#[derive(Debug)]
+pub(crate) struct HarnessErr {
+    pub reason: String,
+    pub retryable: bool,
+}
+
+impl HarnessErr {
+    fn retry(reason: impl Into<String>) -> HarnessErr {
+        HarnessErr { reason: reason.into(), retryable: true }
+    }
+}
+
 impl Engine {
     /// The harness endpoint that serves this family, if the ratified order puts one first.
     pub(crate) fn harness_endpoint(&self, family: &str) -> Option<Endpoint> {
         let cfg = self.cfg.get();
         cfg.endpoints_for(family).into_iter().next().filter(|e| e.path == AccessPath::Harness).cloned()
+    }
+
+    /// Any allowed harness endpoint of the family (the method to try when every API endpoint is down).
+    pub(crate) fn any_harness_endpoint(&self, family: &str) -> Option<Endpoint> {
+        self.cfg.get().endpoints_for(family).into_iter().find(|e| e.path == AccessPath::Harness).cloned()
+    }
+
+    /// Is there an API endpoint of the family to fall back to?
+    pub(crate) fn has_api_endpoint(&self, family: &str) -> bool {
+        self.cfg.get().endpoints_for(family).into_iter().any(|e| e.path != AccessPath::Harness)
     }
 
     /// One tool permission request, decided by the same rules as Delphi's own tools.
@@ -167,17 +191,34 @@ impl Engine {
         }
     }
 
-    /// Run the whole span in the Claude CLI.
-    pub(crate) async fn run_harness(&self, sc: &mut SpanCtx, ipr: &Ipr, ep: &Endpoint) -> Result<Result<String, Escalate>, EngineError> {
-        if ep.harness.as_deref() != Some("claude") {
-            return Ok(Err(Escalate(format!("the `{}` harness is not implemented yet (only `claude`)", ep.harness.as_deref().unwrap_or("?")))));
-        }
-        if sc.span.ceiling() <= Tier::L1 {
-            return Ok(Err(Escalate("launch refused: this span's inputs are untrusted (taint L1 or lower), and a harness runs its own loop".into())));
-        }
-        let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(Escalate(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
+    /// Run the whole span in the subscription CLI.
+    pub(crate) async fn run_harness(&self, sc: &mut SpanCtx, ipr: &Ipr, ep: &Endpoint) -> Result<Result<String, HarnessErr>, EngineError> {
+        let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
+            return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude` and `agy`)", ep.harness.as_deref().unwrap_or("?")))));
+        };
+        let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(HarnessErr::retry(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
         let wt: Option<Worktree> = self.exec.known_worktree(&sc.task_id);
         let builder = wt.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped");
+        match cli {
+            Cli::Claude => {
+                if sc.span.ceiling() <= Tier::L1 {
+                    return Ok(Err(HarnessErr::retry("launch refused: this span's inputs are untrusted (taint L1 or lower), and a harness runs its own loop")));
+                }
+            }
+            Cli::Agy => {
+                if builder {
+                    return Ok(Err(HarnessErr::retry("the agy harness has no approval bridge (its headless mode cannot ask), so it cannot run a Builder")));
+                }
+                // It can read any file the operator can and its tools cannot be turned off, so nothing it
+                // returns can be vouched for: the span is untrusted from the start.
+                if sc.span.observe_input(Tier::L0) {
+                    sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "agy harness can read any file"}))).await?;
+                }
+            }
+        }
+        // Projects must come out of an agy run exactly as they went in.
+        let project_state = |engine: &Engine| -> Vec<String> { engine.projects.iter().map(|(_, p)| engine.exec.worktrees.project_status(p)).collect() };
+        let projects_before = (cli == Cli::Agy).then(|| project_state(self));
         // A role without a worktree gets an empty directory and no tools: it sees only its prompt.
         let (cwd, tools) = match (&wt, builder) {
             (Some(w), true) => (w.path.clone(), Tools::Standard),
@@ -187,17 +228,19 @@ impl Engine {
                 (d, Tools::None)
             }
         };
-        let launch = Launch { program: self.settings.harness_program.clone(), model, system_prompt: ipr.system_sections().join("\n\n"), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env() };
+        let program = if cli == Cli::Agy { self.settings.agy_program.clone() } else { self.settings.harness_program.clone() };
+        let launch = Launch { cli, program, model, system_prompt: ipr.system_sections().join("\n\n"), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env() };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": if builder { "standard" } else { "none" }, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
         let mut session = match Session::start(&launch).await {
             Ok(s) => s,
-            Err(e) => return Ok(Err(Escalate(e))),
+            Err(e) => return Ok(Err(HarnessErr::retry(e))),
         };
         let (mut text_parts, mut final_text, mut result): (Vec<String>, Option<String>, Option<Event>) = (Vec::new(), None, None);
         let mut metered = 0u64;
-        let mut failure: Option<String> = None;
+        let mut failure: Option<(String, bool)> = None;
+        let mut used_tools = false;
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         while let Some(ev) = session.next(self.settings.harness_idle).await {
@@ -208,6 +251,7 @@ impl Engine {
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
+                    used_tools = true;
                     let line = self.secrets.redact(&summarize(&name, &input));
                     sc.m.append(sc.agent_ev("harness.tool", json!({"tool": name, "summary": line}), ep, &launch.model)).await?;
                 }
@@ -222,7 +266,7 @@ impl Engine {
                 Event::Permission(p) => {
                     let d = self.harness_decide(sc, &wt, &p).await?;
                     if session.decide(&p, &d).await.is_err() {
-                        failure = Some("the Claude CLI stopped listening before its permission request was answered".into());
+                        failure = Some(("the Claude CLI stopped listening before its permission request was answered".into(), false));
                         break;
                     }
                 }
@@ -230,13 +274,13 @@ impl Engine {
                     metered += t.metered();
                     if metered > self.settings.harness_token_cap {
                         session.kill().await;
-                        failure = Some(format!("the Claude CLI used {} tokens, over the {} cap for a span; stopped", metered, self.settings.harness_token_cap));
+                        failure = Some((format!("the CLI used {} tokens, over the {} cap for a span; stopped", metered, self.settings.harness_token_cap), false));
                         break;
                     }
                 }
                 Event::Result { ref text, is_error, ref usage, .. } => {
                     if is_error {
-                        failure = Some(format!("the Claude CLI reported an error: {}", text.chars().take(200).collect::<String>()));
+                        failure = Some((format!("the CLI reported an error: {}", text.chars().take(200).collect::<String>()), !used_tools));
                     }
                     metered = metered.max(usage.metered());
                     final_text = Some(text.clone());
@@ -245,10 +289,13 @@ impl Engine {
                 }
                 Event::Exit { code } => {
                     if result.is_none() && failure.is_none() {
-                        failure = Some(match code {
-                            Some(c) => format!("the Claude CLI exited ({}) without a result; is it signed in? Run `claude` once to log in", c),
-                            None => "the Claude CLI stopped responding and was killed".into(),
-                        });
+                        failure = Some((
+                            match code {
+                                Some(c) => format!("the {} CLI exited ({}) without a result; is it signed in? Run it once to log in", launch.program, c),
+                                None => format!("the {} CLI stopped responding and was killed", launch.program),
+                            },
+                            !used_tools,
+                        ));
                     }
                     break;
                 }
@@ -272,7 +319,7 @@ impl Engine {
             _ => (crate::harness::Tokens { output: metered, ..Default::default() }, 0.0),
         };
         let payload = UsagePayload {
-            provider: "anthropic".into(),
+            provider: if cli == Cli::Agy { "google" } else { "anthropic" }.into(),
             input_tokens: usage.input,
             cache_read_tokens: usage.cache_read,
             cache_write_tokens: usage.cache_write,
@@ -302,14 +349,21 @@ impl Engine {
                 batch.push(sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(Zone::Worktree, rel, &hash, tier)));
             }
         }
-        if let Some(why) = failure {
+        if failure.is_none() {
+            if let Some(before) = projects_before {
+                if project_state(self) != before {
+                    failure = Some(("the agy run changed a project checkout; its output is discarded (`git status` differs from before)".into(), false));
+                }
+            }
+        }
+        if let Some((reason, retryable)) = failure {
             sc.m.append_batch(batch).await?;
-            return Ok(Err(Escalate(why)));
+            return Ok(Err(HarnessErr { reason, retryable }));
         }
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
         batch.push(sc.agent_ev("agent.block.complete", json!({"turn_index": 1, "role": "assistant", "block_index": 0, "block": serde_json::to_value(&block).expect("serializes")}), ep, &launch.model));
-        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": "claude-cli"}), ep, &launch.model));
+        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": if cli == Cli::Agy { "agy-cli" } else { "claude-cli" }}), ep, &launch.model));
         sc.m.append_batch(batch).await?;
         Ok(Ok(text))
     }
@@ -327,10 +381,14 @@ mod tests {
 
     /// The testkit config with one subscription harness endpoint serving Claude.
     fn use_harness(f: &Fx) {
+        use_harness_with(f, "[\"claude-sub\"]", "[\"claude-sub\"]")
+    }
+
+    fn use_harness_with(f: &Fx, order: &str, allowed: &str) {
         let text = crate::testkit::CONFIG
             .replace("[access]", "[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n[access]")
-            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"claude-sub\", \"direct\"] }")
-            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"claude-sub\"]");
+            .replace("order = { claude = [\"direct\", \"backup\"] }", &format!("order = {{ claude = {} }}", order))
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", &format!("allowed_endpoints = {}", allowed));
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
     }
 
@@ -481,5 +539,111 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
             other => panic!("{:?}", other),
         }
         assert!(events_of(&g, "harness.started").is_empty());
+    }
+
+    fn two_methods(f: &Fx) {
+        use_harness_with(f, "[\"claude-sub\", \"direct\"]", "[\"direct\", \"claude-sub\"]");
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_cannot_start_work_falls_back_to_the_api_endpoint_and_says_so() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "exit 3");
+        let f = setup_with_exec(vec![crate::model::Step::text("Answered by the API.")], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        two_methods(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Answered by the API."), "{}", out.text);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("claude-sub"), Some("api")));
+        assert!(fb[0].payload["reason"].as_str().unwrap().contains("without a result"));
+        assert_eq!(f.model.requests()[0].endpoint_id, "direct", "the harness endpoint is never used for an API request");
+        // The failed harness attempt is still on the books, as an error.
+        assert!(events_of(&f, "agent.usage").iter().any(|e| e.payload["cost_model"] == "subscription" && e.payload["outcome"] == "error"));
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_already_acted_is_never_retried_by_another_method() {
+        let body = format!(
+            "{init}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"Bash\",\"input\":{{\"command\":\"ls\"}}}}]}}}}'\nexit 2",
+            init = INIT
+        );
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![crate::model::Step::text("must not be used")], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        two_methods(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(f.model.requests().is_empty() && events_of(&f, "harness.fallback").is_empty());
+    }
+
+    #[tokio::test]
+    async fn when_every_api_endpoint_is_down_the_harness_takes_the_span() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &format!("{}\n{}", INIT, FINISH));
+        let f = setup_with_exec(vec![crate::model::Step::Throttle], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_harness_with(&f, "[\"direct\", \"claude-sub\"]", "[\"direct\", \"claude-sub\"]");
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("api"), Some("claude-sub")));
+        assert_eq!(events_of(&f, "endpoint.throttled").len(), 1);
+    }
+
+    /// A Gemini-family harness endpoint on `agy`, serving the `architect` and `builder` roles.
+    fn use_agy(f: &Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\", builder = \"gemini\" }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_agy_harness_runs_read_only_roles_as_untrusted_and_never_a_builder() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{"model":"m","tools":[]}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Findings: none."}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":900,"output_tokens":12}}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.","usage":{"input_tokens":900,"output_tokens":12}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Findings: none."), "{}", out.text);
+        assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("agy")), "its output is untrusted");
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!((u["provider"].as_str(), u["cost_model"].as_str(), u["input_tokens"].as_u64()), (Some("google"), Some("subscription"), Some(900)));
+        assert_eq!(events_of(&f, "harness.started")[0].payload["tools"], "none");
+        // A Builder is refused: no way to ask the operator.
+        crate::testkit::ratify_spec(&f);
+        let b = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        match &b.status {
+            Status::Escalated(r) => assert!(r.contains("no approval bridge"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_agy_run_that_touches_a_project_checkout_is_discarded() {
+        let scripts = tempfile::tempdir().unwrap();
+        // The run starts in <root>/workspaces/w/scratch/<task>/harness-empty; the project is <root>/proj.
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+echo scribble > "$(pwd)/../../../../../proj/injected.txt"
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert!(f.root.join("proj/injected.txt").exists(), "the stand-in did write into the project");
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("changed a project checkout"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert!(!out.text.contains("ok"), "the output is discarded");
     }
 }

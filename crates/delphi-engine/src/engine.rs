@@ -53,6 +53,8 @@ pub struct Settings {
     pub enabled_agents: Vec<String>,
     /// The Claude CLI to launch for a harness endpoint.
     pub harness_program: String,
+    /// The Antigravity CLI to launch for an `agy` harness endpoint.
+    pub agy_program: String,
     /// Tokens (input, cache writes and output; not cache reads) one harness span may use before it is stopped.
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
@@ -69,6 +71,7 @@ impl Default for Settings {
             max_interruptions: 2,
             enabled_agents: ["orchestrator", "architect", "builder", "red-team", "strategist"].iter().map(|s| s.to_string()).collect(),
             harness_program: "claude".into(),
+            agy_program: "agy".into(),
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
         }
@@ -158,6 +161,9 @@ pub(crate) struct Asker<'a> {
     pub span_id: &'a str,
     pub role: &'a str,
 }
+
+/// The reason when every API endpoint of a family has been tried.
+pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
 
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
 pub(crate) struct Escalate(pub(crate) String);
@@ -389,11 +395,22 @@ impl Engine {
             }
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
-            let harness_ep = if setup_error.is_none() { self.harness_endpoint(&sc.family) } else { None };
-            let outcome = if let Some(hep) = harness_ep {
-                // The whole span runs inside the subscription CLI (`harness_run.rs`).
-                self.run_harness(&mut sc, &ipr, &hep).await?
-            } else { loop {
+            // A family whose first allowed endpoint is a harness runs the whole span in the subscription CLI
+            // (`harness_run.rs`). If that cannot be done without repeating a side effect, the same span is
+            // tried by the family's API endpoints; and the other way round when every API endpoint is down.
+            let mut harness_tried = false;
+            let mut harness_result: Option<Result<String, Escalate>> = None;
+            if let Some(hep) = if setup_error.is_none() { self.harness_endpoint(&sc.family) } else { None } {
+                harness_tried = true;
+                match self.run_harness(&mut sc, &ipr, &hep).await? {
+                    Ok(text) => harness_result = Some(Ok(text)),
+                    Err(f) if f.retryable && self.has_api_endpoint(&sc.family) => {
+                        m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": "api", "reason": self.secrets.redact(&f.reason)}))).await?;
+                    }
+                    Err(f) => harness_result = Some(Err(Escalate(f.reason))),
+                }
+            }
+            let outcome = if let Some(r) = harness_result { r } else { loop {
                 if let Some(e) = setup_error.take() {
                     break Err(Escalate(e));
                 }
@@ -424,7 +441,18 @@ impl Engine {
                 let turn_index = history.len() as u32 + 1;
                 let (done, ep, model_id) = match self.model_turn(&sc, &ipr, &history, &defs, turn_index, interruptions).await? {
                     Ok(t) => t,
-                    Err(esc) => break Err(esc),
+                    Err(esc) => {
+                        if esc.0.starts_with(EXHAUSTED) && !harness_tried {
+                            if let Some(hep) = self.any_harness_endpoint(&sc.family) {
+                                m.append(sc.ev("harness.fallback", json!({"from": "api", "to": hep.id, "reason": esc.0}))).await?;
+                                break match self.run_harness(&mut sc, &ipr, &hep).await? {
+                                    Ok(text) => Ok(text),
+                                    Err(f) => Err(Escalate(format!("{}; then the {} harness: {}", esc.0, hep.id, f.reason))),
+                                };
+                            }
+                        }
+                        break Err(esc);
+                    }
                 };
                 interruptions = 0;
                 turns += 1;
@@ -539,9 +567,10 @@ impl Engine {
     /// means stop and hand to the operator; `Err(EngineError)` (outer) is a fatal storage failure.
     async fn model_turn(&self, sc: &SpanCtx, ipr: &Ipr, history: &[Turn], defs: &[ToolDef], turn_index: u32, prior_interruptions: u32) -> Result<Result<(Completed, Endpoint, String), Escalate>, EngineError> {
         let cfg = self.cfg.get();
-        let endpoints: Vec<Endpoint> = cfg.endpoints_for(&sc.family).into_iter().cloned().collect();
+        // Harness endpoints run whole spans (`harness_run.rs`); the turn-by-turn loop uses API endpoints only.
+        let endpoints: Vec<Endpoint> = cfg.endpoints_for(&sc.family).into_iter().filter(|e| e.path != delphi_adapter::config::AccessPath::Harness).cloned().collect();
         if endpoints.is_empty() {
-            return Ok(Err(Escalate(format!("no allowed {} endpoint is configured (see `delphi doctor`)", sc.family))));
+            return Ok(Err(Escalate(format!("no allowed {} API endpoint is configured (see `delphi doctor`)", sc.family))));
         }
         let m = &sc.m;
         let mut interruptions = prior_interruptions;
@@ -644,7 +673,7 @@ impl Engine {
                 }
             }
         }
-        Ok(Err(Escalate("every allowed endpoint is throttled or unavailable; waiting would not help right now".into())))
+        Ok(Err(Escalate(format!("{}; waiting would not help right now", EXHAUSTED))))
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
