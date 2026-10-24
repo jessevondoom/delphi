@@ -1,6 +1,7 @@
 // Markdown to ANSI lines: the part of the UI where a library (marked) does the parsing and we only style.
 import { Lexer, type Token, type Tokens } from 'marked';
 import chalk from 'chalk';
+import { sanitize } from './theme.ts';
 import wrapAnsi from 'wrap-ansi';
 
 const inline = (toks: Token[] | undefined): string =>
@@ -8,8 +9,8 @@ const inline = (toks: Token[] | undefined): string =>
     switch (t.type) {
       case 'strong': return chalk.bold(inline((t as Tokens.Strong).tokens));
       case 'em': return chalk.italic(inline((t as Tokens.Em).tokens));
-      case 'codespan': return chalk.cyan((t as Tokens.Codespan).text);
-      case 'link': return chalk.underline.blue((t as Tokens.Link).text) + chalk.dim(` <${(t as Tokens.Link).href}>`);
+      case 'codespan': return chalk.hex('#38bdf8')((t as Tokens.Codespan).text);
+      case 'link': return chalk.underline.hex('#60a5fa')((t as Tokens.Link).text) + chalk.dim(` <${(t as Tokens.Link).href}>`);
       case 'br': return '\n';
       case 'text': return (t as Tokens.Text).tokens ? inline((t as Tokens.Text).tokens) : (t as Tokens.Text).text;
       default: return (t as any).raw ?? '';
@@ -18,7 +19,7 @@ const inline = (toks: Token[] | undefined): string =>
 
 function block(t: Token, indent = ''): string[] {
   switch (t.type) {
-    case 'heading': return ['', chalk.bold.yellow(inline((t as Tokens.Heading).tokens)), ''];
+    case 'heading': return ['', chalk.bold.hex('#facc15')(inline((t as Tokens.Heading).tokens)), ''];
     case 'paragraph': return inline((t as Tokens.Paragraph).tokens).split('\n').concat('');
     case 'code': {
       const c = t as Tokens.Code;
@@ -46,6 +47,6 @@ function block(t: Token, indent = ''): string[] {
 
 /** Markdown to lines no wider than `width` (ANSI styling preserved across the wrap). */
 export function renderMarkdown(src: string, width: number): string[] {
-  const lines = new Lexer().lex(src).flatMap((t) => block(t));
+  const lines = new Lexer().lex(sanitize(src)).flatMap((t) => block(t));
   return lines.flatMap((l) => (l === '' ? [''] : wrapAnsi(l, Math.max(10, width), { hard: true, trim: false }).split('\n')));
 }

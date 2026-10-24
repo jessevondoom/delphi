@@ -27,6 +27,25 @@ jobs:
       - name: Repo lint
         run: cargo run -q --locked -p delphi -- lint --repo .
 
+  # The full-screen console (D-28): typecheck, unit tests, and the dependency gate. Runners ship Node.
+  ui:
+    name: ui (node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: node --version
+      - name: Install (pinned, no install scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Dependency gate
+        run: npm run check-deps
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+
   # The Linux sandbox (bubblewrap) is only exercised where it exists: install it, allow unprivileged user
   # namespaces (Ubuntu 24.04 restricts them by default), and require the sandbox tests to really run.
   linux-sandbox:

@@ -226,6 +226,12 @@ fn theme_names(ws: &home::Workspace) -> std::collections::HashMap<String, String
     theme::parse(&text).map(|t| t.roles.into_iter().map(|(role, name, _, _)| (role, name)).collect()).unwrap_or_default()
 }
 
+/// The full-screen console (D-28): `$DELPHI_UI`, or `delphi-ui` next to this executable. Absent, the inline console runs.
+fn ui_executable() -> Option<std::path::PathBuf> {
+    let p = std::env::var_os("DELPHI_UI").map(std::path::PathBuf::from).or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("delphi-ui"))))?;
+    p.is_file().then_some(p)
+}
+
 fn cmd_chat(args: &[String]) -> i32 {
     let (home, ws) = match resolve_ws("chat", args) {
         Ok(v) => v,
@@ -234,6 +240,11 @@ fn cmd_chat(args: &[String]) -> i32 {
     let names = theme_names(&ws);
     // The inline console on a terminal; the plain line console when piped, or when asked for with --plain.
     let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    if on_terminal && !args.iter().any(|a| a == "--plain" || a == "--inline") {
+        if let Some(ui) = ui_executable() {
+            return chat::launch_ui(&ui, &home, &ws.dir, flag(args, "--mission"), &names);
+        }
+    }
     if on_terminal && !args.iter().any(|a| a == "--plain") {
         console::run(&home, &ws.dir, flag(args, "--mission"), names)
     } else {

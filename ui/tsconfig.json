@@ -11,14 +11,15 @@
     "types": [
       "node"
     ],
-    "baseUrl": ".",
     "paths": {
       "react-devtools-core": [
         "./src/devtools-stub.ts"
       ]
-    }
+    },
+    "allowImportingTsExtensions": true
   },
   "include": [
-    "src"
+    "src",
+    "test"
   ]
 }

@@ -16,6 +16,9 @@ net.createServer((s) => {
       if (m.method === 'events.subscribe') { subs.add(s); ok({}); }
       else if (m.method === 'task.submit') {
         ok({ task_id: 't_1' });
+        const send = (type, payload) => { for (const c of subs) c.write(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type, payload } }) + '\n'); };
+        send('dag.node.added', { node_id: 'n_1', role: 'orchestrator', depth: 0 });
+        setTimeout(() => send('dag.node.added', { node_id: 'n_2', role: 'architect', depth: 1 }), 300);
         const text = doc(1); let k = 0;
         const t = setInterval(() => {
           const chunk = text.slice(k, k += 12);
@@ -23,12 +26,11 @@ net.createServer((s) => {
           if (k >= text.length) {
             clearInterval(t);
             for (const c of subs) {
-              c.write(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'council.started', payload: { seats: [{ role: 'architect', family: 'a' }, { role: 'red-team', family: 'b' }] } } }) + '\n');
               c.write(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'task.output', payload: { text, status: 'done' } } }) + '\n');
             }
           }
         }, 8);
-      } else ok({ token: 'x', mission_id: 'spike' });
+      } else ok({ token: 'x', mission_id: 'demo-mission' });
     }
   });
   s.on('close', () => subs.delete(s));
