@@ -40,8 +40,7 @@ Read-only exploration for [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan
 | Gemini API | Codes `rate_limit_exceeded`, `quota_exceeded` (daily quota), `too_many_requests` on a newer docs page | Would separate per-minute from daily | No | **Conflicts** with the `RESOURCE_EXHAUSTED` status the adapter and its test assume. Needs a real sample. |
 | Bedrock | `429` `ThrottlingException` | Account quota; per-minute or longer, not distinguishable | No | Documented |
 | Bedrock | `503` `ServiceUnavailable`, `529` `overloaded_error` | Capacity, explicitly *not* a quota | No | Documented |
-| `claude` harness | `rate_limit_event` with `status` of `allowed`, `allowed_warning` or `rejected` and a reset timestamp | `rejected` is a hard limit | Yes (unit disputed: seconds in one source, milliseconds in another) | **Secondary sources only; sources disagree on whether `rejected` stops the run** |
-| `claude` harness | Text such as "Claude usage limit reached. Your limit will reset at 1pm" | Subscription window used up | Yes, in prose | One third-party report |
+| `claude` harness | Exit code 1; stream-json: `rate_limit_event` with `status: rejected`, `rateLimitType: five_hour` and `resetsAt` in **epoch seconds**, then a synthetic assistant message with `api_error: usage_limit_reached`, `api_error_status: 429`, and a `result` with `is_error: true`, `terminal_reason: api_error`. Text mode: "You've hit your session limit · resets 2pm (America/New_York)" | Subscription window used up (`seven_day` is a separate window) | Yes: epoch seconds in the event, a local clock time in the text | **Captured live 2026-10-24** ([fixture](../../crates/delphi-engine/tests/fixtures/quota/claude-cli-session-limit.md)). The run stops; `allowed_warning` still unsampled. |
 | `agy` harness | Exit code 3; stderr `error: Individual quota reached… Resets in 136h12m57s.` plus an `AGY_ERROR` JSON with `status: RESOURCE_EXHAUSTED`, `error_code: 429`, **`retryable: true`**; in stream-json mode the `result` event has `status: ERROR` and the same text in `result.error` | Individual (subscription) quota used up | Yes, a Go-style duration in the text | **Captured live 2026-10-24** ([fixture](../../crates/delphi-engine/tests/fixtures/quota/agy-gemini-individual-quota.md)) |
 
 Two patterns matter more than any single row:
@@ -147,7 +146,7 @@ M1 stays at 6 h and M2 at 9 h; the steps below add up to 14 of those 15 hours, l
 2. **Saved output**: none kept, but the operator's `agy` Gemini models are exhausted now, so a live sample was captured instead (§1.5).
 3. **$1 spend limit** on a throwaway Anthropic workspace to capture a real API `400`: approved. It needs an Anthropic API key and a throwaway workspace from the operator; neither has been seen configured, so this waits until the Anthropic API path is available.
 
-Still unsampled: Anthropic API (all rows), Gemini API (the `agy` sample is the subscription path and may differ from the API's `429` body), Bedrock, and the `claude` harness. The `claude` CLI could be tested the same way as `agy` if its limit is ever reached.
+Still unsampled: Anthropic API (all rows), Gemini API (the `agy` sample is the subscription path and may differ from the API's `429` body), and Bedrock. The `claude` harness was captured 2026-10-24 (§1.2).
 
 ## Sources
 
