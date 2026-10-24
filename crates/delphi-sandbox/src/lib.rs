@@ -9,6 +9,8 @@
 //! The profile is passed inline (`sandbox-exec -p`), never through a temp file, so there is nothing to
 //! swap between writing it and applying it. The environment is cleared and rebuilt from an allowlist.
 
+pub mod egress;
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
