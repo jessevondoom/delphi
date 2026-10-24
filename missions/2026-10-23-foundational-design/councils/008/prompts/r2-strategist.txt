@@ -1,0 +1,9 @@
+You are the STRATEGIST seat (agents/strategist/AGENT.md). Round 1 from your seat did not answer the assigned focus. Answer these numbered questions about specs/011 and specs/012 only, each in at most 150 words, grounded in the file text:
+1. SCOPE: What is the smallest first slice that delivers real value to a team of 3-10 operators (for example: signed `memory` records plus steward endorsement, nothing else)? Which parts of 011/012 should be deferred past that slice (candidates: `skill`, `request`/`claim`, `progress`, multiple stores, the librarian, tombstone restore)? Name each as keep-in-slice or defer.
+2. RELATION TO SPEC 007: Should xenia be a new subsystem or an extension of 007 Plane 3 (`delphi sync`, team registry)? What would be duplicated or in conflict (identity, lattice, proposals, ratification)? Quote section numbers.
+3. USABILITY: Now that pointer content is always read as L0 (011 §5.2) and unendorsed records need an explicit quarantine read (011 §4.2), will operators actually use shared memory, or will they route around it? Estimate steward workload for a 5-person team publishing 5 records a week each, including re-endorsement after a member leaves (011 §7.1). Propose at most two changes that reduce friction without weakening the trust rules.
+4. PHASE MAPPING AND GO/NO-GO: Draft a phase-mapping table (phase, sections built, test numbers from 011 §9 and 012 §10) and a Go/No-Go gate for starting implementation, in the style of specs/001 §1.2 and roadmap.md.
+5. GOLD-PLATING: List anything in 011/012 that is over-engineered for v1 and the simpler alternative.
+6. Positions on O-1..O-5 and S-1..S-5 (one line each).
+7. Verdict per spec: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0).
+At most 1,100 words in total. Repo-relative paths only. No praise.
