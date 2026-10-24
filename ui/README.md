@@ -18,7 +18,7 @@ Written for **Terminal.app** first (256 colours, no kitty keyboard protocol), an
 
 | | |
 | :-- | :-- |
-| Checked in CI | a pseudo-terminal and a terminal emulator (Linux and macOS): layout at many sizes and with wide characters, bracketed paste, the mouse wheel, resize-safe drawing, the screen restored on exit, a daemon restart, golden screens (`test/snapshots`, `UPDATE_SNAPSHOTS=1` to accept a deliberate change) |
+| Checked in CI | a pseudo-terminal and a terminal emulator (Linux and macOS): layout at many sizes and with wide characters, bracketed paste, the mouse wheel, resize-safe drawing, the screen restored on exit, a daemon restart, golden screens (`test/snapshots-screens` and `test/snapshots`, `UPDATE_SNAPSHOTS=1` to accept a deliberate change) |
 | Not checked | any real terminal program (Terminal.app, iTerm2, Ghostty, tmux): please look |
 | Newline in the prompt | `Alt+Enter` or `Ctrl+J` everywhere; `Shift+Enter` where the terminal reports it (modifyOtherKeys or kitty) |
 | Mouse | the wheel scrolls the transcript; `delphi chat --no-mouse` or `/mouse` leaves the mouse to the terminal so text can be selected and copied |

@@ -1,6 +1,7 @@
 // Look and feel: the palette, the five-column badge and the hairline, following skills/tui-design and spec 005a.
 import chalk from 'chalk';
 import stringWidth from 'string-width';
+import { graphemes } from './text.ts';
 
 export type RoleInfo = { name: string; chassis: string; face: string; crown?: string; crown_rgb?: string };
 /**
@@ -96,21 +97,23 @@ export function spread(left: string, right: string, w: number): string {
   if (width(right) >= w) return clip(right, w);
   const gap = w - width(left) - width(right);
   if (gap >= 1) return left + ' '.repeat(gap) + right;
-  if (w - width(right) - 1 < 2) return clip(right, w); // no room for both: the right side (the navigation) wins
-  return clip(left, w - width(right) - 1) + ' ' + right;
+  const room = w - width(right) - 1;
+  if (room < 8) return clip(left, w); // too narrow for both: the status on the left matters more than the hint on the right
+  return clip(left, room) + ' ' + right;
 }
 
 /** Cut to `w` display columns, keeping styling and adding an ellipsis when something was cut. */
 export function clip(s: string, w: number): string {
   if (width(s) <= w) return s;
-  let out = '', used = 0, i = 0;
-  while (i < s.length && used < w - 1) {
-    const m = /^\x1b\[[0-9;]*m/.exec(s.slice(i));
-    if (m) { out += m[0]; i += m[0].length; continue; }
-    const cp = String.fromCodePoint(s.codePointAt(i)!);
-    const cw = stringWidth(cp);
-    if (used + cw > w - 1) break;
-    out += cp; used += cw; i += cp.length;
+  let out = '', used = 0;
+  for (const m of s.matchAll(/\x1b\[[0-9;]*m|[^\x1b]+|\x1b/g)) {
+    const tok = m[0];
+    if (tok.length > 2 && tok.startsWith('\x1b[') && tok.endsWith('m')) { out += tok; continue; }
+    for (const g of graphemes(tok)) { // whole characters only: never half of an emoji or a wide glyph
+      const cw = stringWidth(g);
+      if (used + cw > w - 1) return out + '\x1b[0m…';
+      out += g; used += cw;
+    }
   }
   return out + '\x1b[0m…';
 }
@@ -122,5 +125,5 @@ export function tilde(path: string): string {
 
 /** Strip anything a terminal would act on from text that came from a model. */
 export function sanitize(s: string): string {
-  return s.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)?/g, '').replace(/\x1b[@-Z\\-_]|\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+  return s.replace(/[\u202a-\u202e\u2066-\u2069]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)?/g, '').replace(/\x1b[@-Z\\-_]|\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
 }

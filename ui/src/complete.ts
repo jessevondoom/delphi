@@ -1,5 +1,6 @@
 // What Tab completes: slash commands at the start, and after an `@` the roles and files a request can point at.
 import { COMMANDS, filter } from './commands.ts';
+import { graphemes } from './text.ts';
 import type { Info } from './theme.ts';
 
 export type Item = { label: string; desc: string; insert: string };
@@ -8,11 +9,16 @@ export type Completion = { items: Item[]; from: number; to: number };
 /** `listDir('specs')` names the entries of a directory under the team root (injected so this stays pure). */
 export type ListDir = (rel: string) => { name: string; dir: boolean }[];
 
-export function completions(text: string, cur: number, info: Info, listDir: ListDir): Completion | null {
+/**
+ * `chars` are the prompt's characters (graphemes) and `cur` an index into them, which is how the composer counts. A
+ * plain string is split the same way. `from` and `to` of the result are indexes into the same array.
+ */
+export function completions(input: string | string[], cur: number, info: Info, listDir: ListDir): Completion | null {
+  const chars = typeof input === 'string' ? graphemes(input) : input;
   let from = cur;
-  while (from > 0 && !/\s/.test(text[from - 1]!)) from--;
-  const tok = text.slice(from, cur);
-  if (tok.startsWith('/') && from === 0 && !text.includes('\n')) {
+  while (from > 0 && !/\s/.test(chars[from - 1]!)) from--;
+  const tok = chars.slice(from, cur).join('');
+  if (tok.startsWith('/') && from === 0 && !chars.includes('\n')) {
     const items = filter(tok).map((c) => ({ label: c.name, desc: c.desc, insert: c.name }));
     return items.length ? { items, from, to: cur } : null;
   }

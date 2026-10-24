@@ -1,0 +1,30 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle                              navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+
+  Search the knowledge base
+  “retry”
+
+  ❯ specs/003-collaboration-and-council.md  Retry ladder
+  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+  three attempts, then escalate to the operator
+
+  # Collaboration
+
+  A council has three rounds.
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+↑↓ choose · enter put @path in the prompt · p pin to notes · / new search · esc close
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · shortcuts: ?                                   navigate: shift+arrows · ○ ● ○

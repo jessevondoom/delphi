@@ -1,0 +1,24 @@
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                     navigate: shift+arrows · ○ ○ ●
+delphi v0.5 · /proj
+
+
+  Pending decisions (2)
+
+  ❯ 1. RED  Ratify spec 011 into the canonical repository                      ⟦•_•⟧ daedalus  09:58
+    2. AMB  Write crates/queue.rs (+84)                                      ⟦•─•⟧ hephaestus  09:58
+
+  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+  Selected: #1 · ratify
+  Reason: Red-tier gate: Ratify spec 011 into the canonical repository
+
+
+
+
+
+
+
+◐ working · 2s                                                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+enter open card · y approve · n reject · a approve all amber · tab focus mode · esc chat
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ○ ●

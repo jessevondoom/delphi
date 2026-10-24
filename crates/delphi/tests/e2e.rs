@@ -503,6 +503,9 @@ struct PtyConsole {
     bytes: Arc<Mutex<Vec<u8>>>,
     rows: u16,
     cols: u16,
+    /// Window size changes as (byte offset in `bytes`, rows, cols), so the emulator replays them where they happened.
+    resizes: Vec<(usize, u16, u16)>,
+    start_size: (u16, u16),
 }
 
 impl PtyConsole {
@@ -553,7 +556,37 @@ impl PtyConsole {
                 }
             }
         });
-        PtyConsole { child, writer, bytes, rows, cols }
+        PtyConsole { child, writer, bytes, rows, cols, resizes: Vec::new(), start_size: (rows, cols) }
+    }
+
+    /// Change the terminal's size, as dragging a window corner does: the child gets SIGWINCH.
+    fn resize(&mut self, rows: u16, cols: u16) {
+        use std::os::fd::AsRawFd;
+        let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        assert_eq!(unsafe { libc::ioctl(self.writer.as_raw_fd(), libc::TIOCSWINSZ as _, &ws as *const _) }, 0);
+        self.resizes.push((self.bytes.lock().unwrap().len(), rows, cols));
+        self.rows = rows;
+        self.cols = cols;
+    }
+
+    /// The emulator after everything the console wrote, with the size changes applied where they happened.
+    fn replay(&self, scrollback: usize) -> vt100::Parser {
+        let bytes = self.bytes.lock().unwrap();
+        let (r0, c0) = self.resizes.first().map(|_| (self.initial_size().0, self.initial_size().1)).unwrap_or((self.rows, self.cols));
+        let mut p = vt100::Parser::new(r0, c0, scrollback);
+        let mut at = 0;
+        for &(off, r, c) in &self.resizes {
+            p.process(&bytes[at..off.min(bytes.len())]);
+            at = off.min(bytes.len());
+            p.set_size(r, c);
+        }
+        p.process(&bytes[at..]);
+        p
+    }
+
+    fn initial_size(&self) -> (u16, u16) {
+        // The size at start is the one before the first recorded change; it is kept in the first entry's predecessor.
+        self.start_size
     }
 
     fn type_keys(&mut self, s: &str) {
@@ -563,8 +596,7 @@ impl PtyConsole {
 
     /// What a person sees by scrolling back as far as the emulator allows (one screen of history), then the screen.
     fn everything(&self) -> String {
-        let mut p = vt100::Parser::new(self.rows, self.cols, 5000);
-        p.process(&self.bytes.lock().unwrap());
+        let mut p = self.replay(5000);
         let cols = self.cols;
         p.set_scrollback(self.rows as usize);
         let n = p.screen().scrollback();
@@ -576,15 +608,13 @@ impl PtyConsole {
 
     /// How many lines have scrolled off the top of the screen into the terminal's history (up to one screen).
     fn lines_in_scrollback(&self) -> usize {
-        let mut p = vt100::Parser::new(self.rows, self.cols, 5000);
-        p.process(&self.bytes.lock().unwrap());
+        let mut p = self.replay(5000);
         p.set_scrollback(self.rows as usize);
         p.screen().scrollback()
     }
 
     fn visible(&self) -> String {
-        let mut p = vt100::Parser::new(self.rows, self.cols, 5000);
-        p.process(&self.bytes.lock().unwrap());
+        let p = self.replay(5000);
         p.screen().contents()
     }
 
@@ -1010,6 +1040,94 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     c.wait_for("no connectors are configured");
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// One long, scripted sitting at the full-screen console against the real daemon: a task that needs approval, the
+/// decision inbox, a pin and an export, the approval mode, two window resizes, and a clean exit that gives the
+/// terminal back. Each step waits for what it expects, so a regression names the step that broke.
+#[test]
+fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_given_back() {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    if !ui.join("node_modules/ink").exists() || Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: ui/node_modules or node is missing (run `npm ci` in ui/)");
+        return;
+    }
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Understood, nothing was written.")]);
+    let e = setup(m.port);
+    let wrapper = e._t.path().join("delphi-ui");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ncd '{}' && exec node --import tsx src/main.tsx \"$@\"\n", ui.canonicalize().unwrap().display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 36, 110, &envs);
+    let raw = c.bytes.clone();
+    let line = |c: &mut PtyConsole, text: &str| {
+        c.type_keys(text);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+    };
+    c.wait_for("shortcuts: ?");
+    line(&mut c, "/ratify");
+    c.wait_for("pending proposal");
+    line(&mut c, "/ratify apply 1");
+    c.wait_for("ratified ws:config.toml#access");
+
+    // A task that needs the operator, answered from the inbox.
+    line(&mut c, "@architect Draft a spec called 009-e2e");
+    c.wait_for("approval needed [amber]");
+    c.type_keys("\x1b[1;2C"); // Shift+Right
+    c.wait_for("Pending decisions (1)");
+    std::thread::sleep(Duration::from_millis(400)); // the 300 ms guard
+    c.type_keys("n");
+    c.wait_for("nothing needs you");
+    c.type_keys("\x1b");
+    c.wait_for("Understood, nothing was written.");
+    c.wait_for("· architect ·"); // the text streams dim first; the finished reply (its badge line) is what /pin keeps
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the denied action never ran");
+
+    // Keep the reply, save the conversation.
+    line(&mut c, "/pin");
+    c.wait_for("pinned to the mission notebook");
+    let notes = std::fs::read_dir(e.ws.join("local/missions")).unwrap().flatten().map(|m| m.path().join("notes.md")).find(|p| p.exists()).expect("a notebook");
+    assert!(std::fs::read_to_string(&notes).unwrap().contains("Understood, nothing was written."));
+    line(&mut c, "/export");
+    c.wait_for("exported to local/missions/");
+
+    // Shift+Tab goes round the approval modes and ends where it started.
+    for footer in ["tokens · accept edits", "tokens · auto", "tokens · approvals"] {
+        c.type_keys("\x1b[Z");
+        c.wait_for(footer);
+    }
+
+    // The window shrinks and grows: the screen is always exactly the window, never wider, footer on the last row.
+    c.resize(24, 70);
+    std::thread::sleep(Duration::from_millis(600));
+    let small = c.visible();
+    let rows: Vec<&str> = small.lines().collect();
+    assert_eq!(rows.len(), 24, "{}", small);
+    assert!(rows.iter().all(|l| l.chars().count() <= 70), "{}", small);
+    assert!(rows[23].contains("shortcuts: ?"), "the footer is on the last row after shrinking:\n{}", small);
+    c.resize(36, 110);
+    std::thread::sleep(Duration::from_millis(600));
+    let big = c.visible();
+    let rows: Vec<&str> = big.lines().collect();
+    assert_eq!(rows.len(), 36, "{}", big);
+    assert!(rows[35].contains("shortcuts: ?") && rows[35].contains("navigate: shift+arrows"), "{}", big);
+    assert!(!big.contains("Pending decisions"), "no leftovers from the inbox:\n{}", big);
+
+    // Leave, and the terminal comes back: alternate screen off, cursor on, mouse and paste modes off.
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    std::thread::sleep(Duration::from_millis(200));
+    let out = String::from_utf8_lossy(&raw.lock().unwrap()).to_string();
+    let (on, off) = (out.rfind("\x1b[?1049h").expect("took over the screen"), out.rfind("\x1b[?1049l").expect("gave the screen back"));
+    assert!(off > on, "the last thing was leaving the alternate screen");
+    for seq in ["\x1b[?2004l", "\x1b[?1006l", "\x1b[?1000l", "\x1b[?25h"] {
+        assert!(out[on..].contains(seq), "restored {:?}", seq);
+    }
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 

@@ -7,7 +7,8 @@ const SCREEN = '\x1b[?1049h';
 const PASTE = '\x1b[?2004h';
 const MOUSE = '\x1b[?1000h\x1b[?1006h';
 const KEYS = '\x1b[>4;1m'; // modifyOtherKeys, level 1: Shift+Enter becomes distinguishable where the terminal knows it
-const OFF = '\x1b[>4;0m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h';
+export const OFF = '\x1b[>4;0m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h';
+export const ON = SCREEN + PASTE + KEYS + MOUSE;
 
 export class Term extends EventEmitter {
   private parser = new InputParser();
@@ -38,9 +39,11 @@ export class Term extends EventEmitter {
     if (this.wired) return;
     this.wired = true;
     process.stdin.on('data', (d: string) => { for (const e of this.parser.feed(d)) this.input(e); });
-    process.stdin.on('end', () => { this.stop(); process.exit(0); }); // the terminal went away
+    if (process.stdin.isTTY) process.stdin.on('end', () => { this.stop(); process.exit(0); }); // the terminal went away
     process.on('exit', () => this.stop());
-    for (const sig of ['SIGTERM', 'SIGHUP'] as const) process.on(sig, () => { this.stop(); process.exit(1); });
+    // Say what went wrong only after the screen is given back: anything printed on the alternate screen is gone
+    // the moment it is left.
+    for (const sig of ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT'] as const) process.on(sig, () => { this.stop(); process.exit(128 + (sig === 'SIGHUP' ? 1 : sig === 'SIGINT' ? 2 : sig === 'SIGQUIT' ? 3 : 15)); });
     const die = (e: unknown) => { this.stop(); console.error(e); process.exit(1); };
     process.on('uncaughtException', die);
     process.on('unhandledRejection', die);

@@ -96,8 +96,17 @@ function block(b: Block, m: Model, w: number): string[] {
 
 /** Every transcript line, oldest first. The unfinished reply is dim at the bottom. */
 /** The transcript as pieces (each finished block is cached), so a long session costs a sum, not a copy. */
+/**
+ * How many of the newest blocks are drawn. A session can run for days; the mission keeps every event, `/export` writes
+ * them all, and scrolling back past this window shows where it stops.
+ */
+export const WINDOW = 1500;
+
 function parts(m: Model, w: number): string[][] {
-  const out: string[][] = m.state.blocks.map((b) => block(b, m, w));
+  const blocks = m.state.blocks;
+  const from = Math.max(0, blocks.length - WINDOW);
+  const out: string[][] = from > 0 ? [['', T.dim(`  … ${from} earlier messages are not drawn; the mission keeps them and /export saves them all`)]] : [];
+  for (let i = from; i < blocks.length; i++) out.push(block(blocks[i]!, m, w));
   for (const q of m.queue) out.push(['', T.dim('❯ ' + q.split('\n')[0] + '  (queued)')]);
   if (m.state.live) out.push(['', ...renderMarkdown(m.state.live.slice(-3000), w - 2).map((l) => '  ' + chalk.dim(l))]);
   return out;

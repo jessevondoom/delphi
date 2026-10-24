@@ -1,5 +1,6 @@
 // The prompt editor: text, a cursor, history and the editing keys. Pure functions over an immutable value.
 import stringWidth from 'string-width';
+import { graphemes } from './text.ts';
 
 export type Composer = { chars: string[]; cur: number; hist: string[]; histAt: number | null; draft: string };
 
@@ -9,7 +10,7 @@ export const textOf = (c: Composer) => c.chars.join('');
 const set = (c: Composer, chars: string[], cur: number): Composer => ({ ...c, chars, cur, histAt: null });
 
 export function insert(c: Composer, s: string): Composer {
-  const add = [...s];
+  const add = graphemes(s);
   return set(c, [...c.chars.slice(0, c.cur), ...add, ...c.chars.slice(c.cur)], c.cur + add.length);
 }
 export const backspace = (c: Composer) => (c.cur === 0 ? c : set(c, [...c.chars.slice(0, c.cur - 1), ...c.chars.slice(c.cur)], c.cur - 1));
@@ -40,7 +41,7 @@ export function up(c: Composer): Composer {
   }
   if (!c.hist.length) return c;
   const at = c.histAt === null ? c.hist.length - 1 : Math.max(0, c.histAt - 1);
-  const chars = [...c.hist[at]!];
+  const chars = graphemes(c.hist[at]!);
   return { ...c, chars, cur: chars.length, histAt: at, draft: c.histAt === null ? textOf(c) : c.draft };
 }
 export function down(c: Composer): Composer {
@@ -52,7 +53,7 @@ export function down(c: Composer): Composer {
   }
   if (c.histAt === null) return c;
   const at = c.histAt + 1;
-  const chars = [...(at >= c.hist.length ? c.draft : c.hist[at]!)];
+  const chars = graphemes(at >= c.hist.length ? c.draft : c.hist[at]!);
   return { ...c, chars, cur: chars.length, histAt: at >= c.hist.length ? null : at };
 }
 

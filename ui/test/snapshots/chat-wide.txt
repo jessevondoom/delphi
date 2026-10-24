@@ -1,0 +1,34 @@
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                     navigate: shift+arrows · ○ ● ○
+delphi v0.5 · /proj
+
+
+  Use a table. It gives you:
+
+  • transactions
+  • one place to query
+
+    rust
+    fn enqueue(job: Job) -> Result<()> { Ok(()) }
+
+  See specs/002-adapter-and-routing.md#4 for the ladder.
+
+
+❯ Now write it
+
+── approval needed [amber] · hephaestus
+  Write crates/queue.rs (+84)
+    + fn enqueue()
+    + fn dequeue()
+  /y approve once · /a allow similar this task · /n reject · /d view all
+
+── approval needed [RED — never auto-approved] · daedalus
+  Ratify spec 011 into the canonical repository
+    ratify specs/011
+  /y approve once · /n reject · /d view all
+
+❯ one more thing  (queued)
+◐ working · 2s · 1 queued                                                                esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ and then?
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○

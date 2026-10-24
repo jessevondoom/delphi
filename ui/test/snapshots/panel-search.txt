@@ -1,17 +1,11 @@
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle                              navigate: shift+arrows · ○ ● ○
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                     navigate: shift+arrows · ○ ● ○
 delphi v0.5 · /proj
 
 
   Search the knowledge base
   “retry”
 
-  ❯ specs/003-collaboration-and-council.md  Retry ladder
-  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
-  three attempts, then escalate to the operator
-
-  # Collaboration
-
-  A council has three rounds.
+  specs, context, REVIEW.md, lessons and mission notes; every hit is a pointer you can cite
 
 
 
@@ -23,8 +17,8 @@ delphi v0.5 · /proj
 
 
 
-
+◐ working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ↑↓ choose · enter put @path in the prompt · p pin to notes · / new search · esc close
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · shortcuts: ?                                   navigate: shift+arrows · ○ ● ○
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○
