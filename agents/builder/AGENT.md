@@ -13,6 +13,7 @@ authorized_skills:
   - safe-refactoring
   - git-pr-packaging
   - ci-triage
+  - tui-design
 memory_scope: "memory/agents/builder/"
 max_turn_budget: 40
 ---

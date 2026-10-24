@@ -57,6 +57,7 @@ skills/<skill-name>/
 | `diagram-generation` | Generates syntax-validated Mermaid diagrams (`flowchart`, `sequenceDiagram`, `stateDiagram-v2`). | `validate_mermaid.py` (checks syntax & quoted labels) |
 | `api-contract-design` | Designs provider-neutral interfaces, IPC schemas, and CLI grammars. | `validate_json_schema.py` (verifies draft-2020-12 compatibility) |
 | `trade-off-matrix` | Evaluates competing designs across weighted criteria (latency, lock-in, complexity). | `score_matrix.py` (computes weight sensitivity analysis) |
+| `tui-design` | Designs calm, high-focus terminal interfaces, deck navigation, and character-cell invariants in Ratatui. | `validate_tui_invariants.py` (verifies font immunity, 5-char badge widths & borderless layout) |
 
 ### 4. **Investigator** (Precision Hunter, Bug Tracker & Benchmark Specialist)
 | Skill | Purpose | Deterministic Helper (`scripts/`) |
