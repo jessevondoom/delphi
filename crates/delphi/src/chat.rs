@@ -302,6 +302,7 @@ impl Renderer {
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
             "span.taint" => Some(format!("\n  ! {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
             "endpoint.throttled" => Some(format!("\n  ! {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
+            "model.homogeneous" => Some(format!("\n  ! no model outside {} was usable; this review is by the same family as the author\n", p["avoided"])),
             "task.blocked" => Some(format!("\n  ! waiting for a model: {}{}\n", p["why"].as_str().unwrap_or("?"), p["back_at"].as_i64().map(|t| format!(" (back at {})", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
             "task.unblocked" => Some(if p["resumed"] == true { "\n  a model is back; resuming\n".to_string() } else { "\n  ! stopped waiting for a model\n".to_string() }),
             "model.degraded_confirm" if p["state"] == "asked" => Some("\n  ! no model as capable as the target is available; approve or decline the weaker one below\n".to_string()),

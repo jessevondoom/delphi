@@ -33,6 +33,10 @@ pub struct RoutingDirective {
     pub thinking_budget_tokens: Option<u32>,
     #[serde(default)]
     pub attempt_number: u32,
+    /// Families to stay out of if there is a choice (the author's, for a critic; `[H-007]`, `[H-008]`). A preference:
+    /// with no other family usable the span runs anyway and reports itself `homogeneous`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avoid_families: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,7 +79,7 @@ impl HandoffEnvelope {
                 vec!["Read-only work: you cannot run code or change the project; write only the notes and drafts your tools allow.".into(), "Be brief: the operator reads your answer in a terminal. Answer in about 20 lines; if more detail is worth keeping, write it to a file under your mission folder and point to it.".into()]
             },
             expected_output: if target == "builder" { ExpectedOutput { artifact_type: "the change made in the worktree, plus a short summary of what you changed".into(), required_fields: vec![] } } else { ExpectedOutput { artifact_type: "answer".into(), required_fields: vec![] } },
-            routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1 },
+            routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1, avoid_families: vec![] },
         }
     }
 
