@@ -25,6 +25,9 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Notify};
 
+/// The only methods the narrator socket answers (besides the `hello` handshake). Read-only, by name.
+pub const NARRATOR_METHODS: [&str; 11] = ["session.ping", "events.subscribe", "session.snapshot", "observe.snapshot", "observe.diff", "kb.search", "usage.get", "budget.get", "approval.list", "permissions.get", "ratify.list"];
+
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
 
@@ -85,6 +88,7 @@ pub struct Daemon {
     pub amber_active: AtomicBool,
     uid: u32,
     shutdown: Notify,
+    stopped: AtomicBool,
     extension: Mutex<Option<Arc<dyn Extension>>>,
 }
 
@@ -142,6 +146,7 @@ impl Daemon {
             amber_active: AtomicBool::new(false),
             uid: unsafe { libc::geteuid() },
             shutdown: Notify::new(),
+            stopped: AtomicBool::new(false),
             extension: Mutex::new(None),
         }))
     }
@@ -161,6 +166,8 @@ impl Daemon {
     }
 
     pub fn request_shutdown(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.shutdown.notify_waiters();
         self.shutdown.notify_one();
     }
 
@@ -177,22 +184,40 @@ impl Daemon {
         }
     }
 
-    /// Accept connections until shutdown is requested.
+    /// Accept console connections until shutdown is requested.
     pub async fn serve(self: Arc<Self>, listener: UnixListener) {
+        self.serve_sockets(listener, None).await
+    }
+
+    /// Serve the console socket and, if given, the narrator socket. The socket a client connects to fixes its
+    /// scope, whatever it says in `hello`: a narrator token is refused on the console socket and the other way
+    /// round, and the narrator socket's dispatcher offers read-only methods and nothing else.
+    pub async fn serve_sockets(self: Arc<Self>, console: UnixListener, narrator: Option<UnixListener>) {
         tokio::spawn(self.hub.clone().run_coalescer());
+        if let Some(l) = narrator {
+            let me = self.clone();
+            tokio::spawn(async move { me.accept_loop(l, Scope::Narrator).await });
+        }
+        self.accept_loop(console, Scope::Console).await
+    }
+
+    async fn accept_loop(self: Arc<Self>, listener: UnixListener, scope: Scope) {
         loop {
+            if self.stopped.load(Ordering::SeqCst) {
+                return;
+            }
             tokio::select! {
                 _ = self.shutdown.notified() => return,
                 accepted = listener.accept() => {
                     let Ok((stream, _)) = accepted else { continue };
                     let me = self.clone();
-                    tokio::spawn(async move { let _ = me.handle(stream).await; });
+                    tokio::spawn(async move { let _ = me.handle(stream, scope).await; });
                 }
             }
         }
     }
 
-    async fn handle(self: Arc<Self>, stream: UnixStream) -> io::Result<()> {
+    async fn handle(self: Arc<Self>, stream: UnixStream, socket_scope: Scope) -> io::Result<()> {
         let cred = stream.peer_cred()?;
         if cred.uid() != self.uid {
             return Ok(()); // another OS user: drop without a word
@@ -210,12 +235,13 @@ impl Daemon {
             let Ok(req) = serde_json::from_str::<Request>(&line) else { return Ok(()) };
             match req.method.as_str() {
                 "auth.issue" => {
-                    let resp = self.auth_issue(&req, peer_pid);
+                    let resp = self.auth_issue(&req, peer_pid, socket_scope);
                     write_line(&mut wr, &resp).await?;
                 }
                 "hello" => {
                     let token = req.params["token"].as_str().unwrap_or("");
-                    let Some(scope) = self.scope_for(token) else { return Ok(()) };
+                    // The token must be the one for the socket it came in on.
+                    let Some(scope) = self.scope_for(token).filter(|s| *s == socket_scope) else { return Ok(()) };
                     let major = req.params["protocol_version"].as_u64();
                     if major != Some(PROTOCOL_MAJOR as u64) {
                         let mut r = Response::err(req.id.clone(), code::VERSION_SKEW, &format!("protocol major mismatch (daemon {}, client {:?}); {}", PROTOCOL_MAJOR, major, RESTART_HINT));
@@ -269,12 +295,15 @@ impl Daemon {
         Ok(())
     }
 
-    fn auth_issue(&self, req: &Request, peer_pid: Option<i32>) -> Response {
+    fn auth_issue(&self, req: &Request, peer_pid: Option<i32>, socket_scope: Scope) -> Response {
         let scope = match req.params["scope"].as_str() {
             Some("console") => Scope::Console,
             Some("narrator") => Scope::Narrator,
             _ => return Response::err(req.id.clone(), code::INVALID_PARAMS, "scope must be `console` or `narrator`"),
         };
+        if scope != socket_scope {
+            return Response::err(req.id.clone(), code::FORBIDDEN, &format!("this socket issues {} tokens only", socket_scope.as_str()));
+        }
         match self.cfg.tty_policy {
             TtyPolicy::Required => {
                 let tty = peer_pid.and_then(controlling_tty);
@@ -297,6 +326,11 @@ impl Daemon {
 
     async fn dispatch(&self, req: Request, scope: Scope, client_id: u64) -> Response {
         let id = req.id.clone();
+        // The narrator socket offers a fixed list of read methods. A new method is unreachable from it until
+        // someone adds it here on purpose, so nothing mutating can get through by being left off a deny list.
+        if scope == Scope::Narrator && !NARRATOR_METHODS.contains(&req.method.as_str()) {
+            return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the read-only narrator socket", req.method));
+        }
         // The server's own methods first; everything else may belong to the engine.
         if matches!(req.method.as_str(), "session.ping" | "events.subscribe" | "daemon.shutdown") {
             return self.dispatch_builtin(req, scope, client_id);

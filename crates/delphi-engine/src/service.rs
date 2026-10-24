@@ -440,24 +440,34 @@ mod tests {
 
     struct Served {
         sock: PathBuf,
+        narrator_sock: PathBuf,
         console: String,
         narrator: String,
         _dir: tempfile::TempDir,
     }
 
     async fn serve(f: &Fx) -> Served {
+        serve_with(f, None).await
+    }
+
+    async fn serve_with(f: &Fx, queue_cap: Option<usize>) -> Served {
         let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
         let sock = dir.path().join("d.sock");
+        let narrator_sock = dir.path().join("n.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let narrator_listener = tokio::net::UnixListener::bind(&narrator_sock).unwrap();
         let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
         cfg.tty_policy = TtyPolicy::Disabled;
+        if let Some(c) = queue_cap {
+            cfg.queue_cap = c;
+        }
         let daemon = Daemon::with_hub(cfg, f.engine.hub.clone()).unwrap();
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         daemon.set_extension(svc.extension());
         let (console, narrator) = (daemon.console_token().to_string(), daemon.narrator_token().to_string());
-        tokio::spawn(daemon.serve(listener));
-        Served { sock, console, narrator, _dir: dir }
+        tokio::spawn(daemon.serve_sockets(listener, Some(narrator_listener)));
+        Served { sock, narrator_sock, console, narrator, _dir: dir }
     }
 
     async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -507,7 +517,7 @@ mod tests {
     async fn the_narrator_scope_can_read_but_never_change_anything() {
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
         let s = serve(&f).await;
-        let (sock, tok) = (s.sock.clone(), s.narrator.clone());
+        let (sock, tok) = (s.narrator_sock.clone(), s.narrator.clone());
         blocking(move || {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -518,7 +528,7 @@ mod tests {
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.diff"] {
                 assert!(c.call(m, json!({})).is_ok(), "{} should be readable", m);
             }
-            assert_eq!(rpc_code(c.call("no.such.method", json!({}))), Some(code::METHOD_NOT_FOUND));
+            assert_eq!(rpc_code(c.call("no.such.method", json!({}))), Some(code::FORBIDDEN), "an unknown method is refused, not looked up");
             assert_eq!(c.call("session.ping", json!({})).unwrap(), json!("pong"));
         })
         .await;
@@ -526,11 +536,105 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn the_socket_decides_the_scope_and_a_token_for_the_other_socket_gets_nothing() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (c_sock, n_sock, c_tok, n_tok) = (s.sock.clone(), s.narrator_sock.clone(), s.console.clone(), s.narrator.clone());
+        blocking(move || {
+            // The console token on the narrator socket, and the narrator token on the console socket: closed, no answer.
+            let mut c = Client::connect(&n_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert!(c.hello(&c_tok).is_err(), "a console token is no use on the narrator socket");
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert!(c.hello(&n_tok).is_err(), "a narrator token is no use on the console socket");
+            // A client cannot ask the narrator socket for a console token, whatever it is attached to.
+            let mut c = Client::connect(&n_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "console"}))), Some(code::FORBIDDEN));
+            assert!(c.issue_token(delphi_core::proto::Scope::Narrator).is_ok(), "it will issue its own kind");
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "narrator"}))), Some(code::FORBIDDEN));
+            // The granted scope is the socket's: the handshake reports it.
+            let mut c = Client::connect(&n_sock).unwrap();
+            assert_eq!(c.hello(&n_tok).unwrap()["scope"], "narrator");
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_narrator_socket_answers_a_fixed_list_and_everything_else_is_refused_by_name() {
+        // The list is part of the contract: adding a method here is a decision, so this test names it.
+        let mut listed: Vec<&str> = delphi_core::server::NARRATOR_METHODS.to_vec();
+        listed.sort();
+        assert_eq!(listed, vec!["approval.list", "budget.get", "events.subscribe", "kb.search", "observe.diff", "observe.snapshot", "permissions.get", "ratify.list", "session.ping", "session.snapshot", "usage.get"]);
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.narrator_sock.clone(), s.narrator.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "approval.resolve", "budget.set", "permissions.set", "mission.open", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            for m in every_mutating_method_the_daemon_has {
+                assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
+            }
+            for m in delphi_core::server::NARRATOR_METHODS {
+                assert_ne!(rpc_code(c.call(m, json!({}))), Some(code::FORBIDDEN), "{} is on the list, so it must be answered", m);
+            }
+        })
+        .await;
+        assert_eq!(f.model.requests().len(), 0);
+        assert!(f.m.replay().unwrap().iter().all(|e| e.kind != "task.created"), "nothing was started");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_narrator_that_stops_reading_is_bounded_and_told_to_resync_without_slowing_the_console() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve_with(&f, Some(16)).await;
+        let (c_sock, n_sock, c_tok, n_tok) = (s.sock.clone(), s.narrator_sock.clone(), s.console.clone(), s.narrator.clone());
+        let hub = f.engine.hub.clone();
+        blocking(move || {
+            let mut stalled = Client::connect(&n_sock).unwrap();
+            stalled.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            stalled.hello(&n_tok).unwrap();
+            stalled.call("events.subscribe", json!({})).unwrap();
+            let mut console = Client::connect(&c_sock).unwrap();
+            console.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            console.hello(&c_tok).unwrap();
+            console.call("events.subscribe", json!({})).unwrap();
+            // Far more events than the queue holds; the narrator reads none of them.
+            let filler = "x".repeat(16 * 1024); // enough bytes that the socket's own buffer fills and the queue behind it must hold
+            for i in 0..400 {
+                hub.publish_event(&json!({"type": "mission.note", "payload": {"i": i, "filler": filler}}));
+                // The console keeps up, one event at a time.
+                let n = console.next_notification().unwrap();
+                assert_eq!(n["params"]["payload"]["i"], i);
+            }
+            // The stalled narrator did not hold the daemon up; when it reads again it is told to start over from a snapshot.
+            let mut saw_resync = false;
+            for _ in 0..600 {
+                match stalled.next_notification() {
+                    Ok(n) if n["method"] == "resync_required" => {
+                        saw_resync = true;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            assert!(saw_resync, "an overflowing narrator gets resync_required");
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_narrator_that_attaches_late_rebuilds_the_same_picture_from_the_snapshot() {
         let f = setup(vec![Step::text("The ladder has three attempts.")], 5.0, |_| {});
         f.engine.run_task(&f.m, "orchestrator", "Explain the retry ladder").await.unwrap();
         let s = serve(&f).await;
-        let (sock, tok) = (s.sock.clone(), s.narrator.clone());
+        let (sock, tok) = (s.narrator_sock.clone(), s.narrator.clone());
         let snap = blocking(move || {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -635,7 +739,7 @@ mod tests {
         let s = serve(&f).await;
         let live = f.root.join("workspaces/w/team/context/team-heuristics.md");
         fs::write(&live, "---\nid: t\n---\n### [T-001] changed rule\n- be thorough\n").unwrap();
-        let (c_sock, c_tok, n_sock, n_tok) = (s.sock.clone(), s.console.clone(), s.sock.clone(), s.narrator.clone());
+        let (c_sock, c_tok, n_sock, n_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
         let (listed, narrator_denied, stale, applied, after, snap) = blocking(move || {
             let mut nar = Client::connect(&n_sock).unwrap();
             nar.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
@@ -686,6 +790,8 @@ mod tests {
         let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
         let sock = dir.path().join("d.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let nsock = dir.path().join("n.sock");
+        let nlistener = tokio::net::UnixListener::bind(&nsock).unwrap();
         let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
         cfg.tty_policy = TtyPolicy::Disabled;
         let daemon = Daemon::with_hub(cfg, f2.engine.hub.clone()).unwrap();
@@ -697,8 +803,8 @@ mod tests {
         svc.recovery.lock().unwrap().insert("m1".into(), PlanState { plan: Arc::new(plan), resumed: Default::default() });
         daemon.set_extension(svc.extension());
         let (ctok, ntok) = (daemon.console_token().to_string(), daemon.narrator_token().to_string());
-        tokio::spawn(daemon.serve(listener));
-        let (sock2, sock3) = (sock.clone(), sock.clone());
+        tokio::spawn(daemon.serve_sockets(listener, Some(nlistener)));
+        let (sock2, sock3) = (nsock.clone(), sock.clone());
         let (snap, denied, resumed, again, out) = blocking(move || {
             let mut nar = Client::connect(&sock2).unwrap();
             nar.set_read_timeout(Some(Duration::from_secs(10))).unwrap();

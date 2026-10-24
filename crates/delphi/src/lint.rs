@@ -30,7 +30,7 @@ pub struct Tree {
 }
 
 /// Directories never walked in a source repo.
-const SKIP_DIRS: [&str; 4] = [".git", "target", "node_modules", ".delphi"];
+const SKIP_DIRS: [&str; 5] = [".git", "target", "node_modules", ".delphi", ".claude"];
 /// Markdown under these logical prefixes (or at these exact paths) must carry §5 provenance
 /// frontmatter. Manifests, skills and theme packs have their own schemas (§2.1, §3.1, §6.2).
 const GOVERNED: [&str; 8] = ["context/", "missions/", "specs/", "memory/agents/", "operator/memory/", "operator/profile.md", "operator/heuristics.md", "heuristics.md"];

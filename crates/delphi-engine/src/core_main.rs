@@ -45,13 +45,18 @@ pub fn run(args: Vec<String>) -> ! {
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap_or_else(|e| die(&format!("runtime: {}", e)));
     rt.block_on(async move {
-        let _ = std::fs::remove_file(&l.sock);
-        // No window where the socket exists with looser permissions.
-        let old = unsafe { libc::umask(0o177) };
-        let listener = tokio::net::UnixListener::bind(&l.sock);
-        unsafe { libc::umask(old) };
-        let listener = listener.unwrap_or_else(|e| die(&format!("bind {}: {}", l.sock.display(), e)));
-        std::fs::set_permissions(&l.sock, std::fs::Permissions::from_mode(0o600)).unwrap_or_else(|e| die(&format!("chmod socket: {}", e)));
+        // Two sockets, each 0600 from the moment it exists: the console's, and the read-only one the Narrator uses.
+        let bind_private = |path: &std::path::Path| {
+            let _ = std::fs::remove_file(path);
+            let old = unsafe { libc::umask(0o177) };
+            let listener = tokio::net::UnixListener::bind(path);
+            unsafe { libc::umask(old) };
+            let listener = listener.unwrap_or_else(|e| die(&format!("bind {}: {}", path.display(), e)));
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap_or_else(|e| die(&format!("chmod socket: {}", e)));
+            listener
+        };
+        let listener = bind_private(&l.sock);
+        let narrator_listener = bind_private(&l.narrator_sock);
 
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let daemon = Daemon::new(DaemonConfig::new(home.clone(), canon.clone())).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
@@ -62,8 +67,9 @@ pub fn run(args: Vec<String>) -> ! {
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);
         eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
-        daemon.serve(listener).await;
+        daemon.serve_sockets(listener, Some(narrator_listener)).await;
         let _ = std::fs::remove_file(&l.sock);
+        let _ = std::fs::remove_file(&l.narrator_sock);
     });
     std::process::exit(0);
 }

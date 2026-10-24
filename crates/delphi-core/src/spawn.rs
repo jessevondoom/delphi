@@ -24,6 +24,8 @@ pub const LAUNCH_WAIT: Duration = Duration::from_secs(5);
 pub struct Layout {
     pub run_dir: PathBuf,
     pub sock: PathBuf,
+    /// The read-only socket the Narrator attaches to (`D-25`).
+    pub narrator_sock: PathBuf,
     pub lock: PathBuf,
     pub log: PathBuf,
 }
@@ -38,7 +40,7 @@ pub fn workspace_hash(workspace: &Path) -> io::Result<String> {
 pub fn layout(home: &Path, workspace: &Path) -> io::Result<Layout> {
     let h = workspace_hash(workspace)?;
     let run_dir = home.join("run");
-    Ok(Layout { sock: run_dir.join(format!("{}.sock", h)), lock: run_dir.join(format!("{}.lock", h)), log: run_dir.join(format!("{}.log", h)), run_dir })
+    Ok(Layout { sock: run_dir.join(format!("{}.sock", h)), narrator_sock: run_dir.join(format!("{}.narrator.sock", h)), lock: run_dir.join(format!("{}.lock", h)), log: run_dir.join(format!("{}.log", h)), run_dir })
 }
 
 /// Create `run/` with mode 0700 (and tighten it if it already exists).

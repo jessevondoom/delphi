@@ -313,7 +313,7 @@ Follows D-22 (Council 005 rejected harness connectors). The operator asked for h
 
 **Decision (operator, 2026-10-24): A.** The Narrator (`delphi observe`, also `delphi narrator`) is its own process with a narrator-scope token; the daemon rejects every mutating call on that scope.
 
-**Follow-ups the Council made conditions, still open:**
+**Follow-ups the Council made conditions (done 2026-10-24: items 1 to 3 in `delphi-core`'s `server.rs` and the engine's `core_main.rs`, items 4 and 5 in spec 005 §2.1; item 3 was already the hub's behavior and is now tested on the narrator socket):**
 1. **Role fixed at accept time, not by a client claim.** Today the role comes from the token presented in `hello`. Move to a dedicated narrator socket (mode 0600, in the 0700 run directory) whose listener fixes the scope, with no role in the handshake.
 2. **Deny by construction.** The narrator socket's dispatcher should contain only read handlers (subscribe, snapshot, usage, observe, kb search), so a new mutating verb cannot be reachable by omission. A test must try every mutating verb and expect refusal.
 3. **Bounded per-client queues with resync.** A stalled Narrator must not starve the daemon: a bounded queue, and on overflow drop the subscriber and force a snapshot resync (the Narrator already handles `resync_required`).
