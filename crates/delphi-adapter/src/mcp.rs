@@ -192,6 +192,13 @@ pub struct CallResult {
     pub is_error: bool,
 }
 
+/// What the connector host needs from an initialized MCP session: list the server's tools and call one. The real
+/// implementation is [`crate::mcp_rmcp::RmcpClient`]; tests supply a scripted one.
+pub trait McpSession: Send + Sync {
+    fn list_tools(&self) -> BoxFuture<'_, Result<Vec<RemoteTool>, McpError>>;
+    fn call_tool<'a>(&'a self, name: &'a str, arguments: &'a Value) -> BoxFuture<'a, Result<CallResult, McpError>>;
+}
+
 /// An initialized MCP session.
 pub struct McpClient {
     transport: Box<dyn McpTransport>,

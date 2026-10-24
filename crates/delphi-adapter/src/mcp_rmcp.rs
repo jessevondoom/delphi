@@ -17,8 +17,8 @@
 //! - rmcp also gives session recovery on a 404, stdio and child-process transports, and an OAuth module, none of
 //!   which `mcp.rs` has.
 
-use crate::mcp::{CallResult, McpError, RemoteTool, MIN_PROTOCOL_VERSION};
-use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock, Implementation};
+use crate::mcp::{BoxFuture, CallResult, McpError, McpSession, RemoteTool, MIN_PROTOCOL_VERSION};
+use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock, Implementation, PaginatedRequestParams};
 use rmcp::service::{ClientInitializeError, RoleClient, RunningService, ServiceError, ServiceExt};
 use rmcp::transport::DynamicTransportError;
 use rmcp::transport::streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError};
@@ -26,6 +26,8 @@ use rmcp::transport::StreamableHttpClientTransport;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+const MAX_TOOL_PAGES: usize = 10;
 
 type Refused = Arc<Mutex<Option<String>>>;
 
@@ -133,7 +135,17 @@ impl RmcpClient {
     }
 
     pub async fn list_tools(&self) -> Result<Vec<RemoteTool>, McpError> {
-        let tools = self.service.list_all_tools().await.map_err(|e| map_error(e, &self.refused))?;
+        // At most MAX_TOOL_PAGES pages: a server cannot keep the host listing forever.
+        let mut tools = Vec::new();
+        let mut cursor = None;
+        for _ in 0..MAX_TOOL_PAGES {
+            let page = self.service.list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor))).await.map_err(|e| map_error(e, &self.refused))?;
+            tools.extend(page.tools);
+            cursor = page.next_cursor.filter(|c| !c.is_empty());
+            if cursor.is_none() {
+                break;
+            }
+        }
         Ok(tools.into_iter().map(|t| RemoteTool { name: t.name.to_string(), description: t.description.map(|d| d.to_string()).unwrap_or_default(), input_schema: Value::Object((*t.input_schema).clone()) }).collect())
     }
 
@@ -152,6 +164,16 @@ impl RmcpClient {
             }
         }
         Ok(CallResult { text: parts.join("\n"), is_error: r.is_error == Some(true) })
+    }
+}
+
+impl McpSession for RmcpClient {
+    fn list_tools(&self) -> BoxFuture<'_, Result<Vec<RemoteTool>, McpError>> {
+        Box::pin(RmcpClient::list_tools(self))
+    }
+
+    fn call_tool<'a>(&'a self, name: &'a str, arguments: &'a Value) -> BoxFuture<'a, Result<CallResult, McpError>> {
+        Box::pin(RmcpClient::call_tool(self, name, arguments))
     }
 }
 
