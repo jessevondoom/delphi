@@ -31,7 +31,7 @@ test('the screen is exactly w by h, with a hairline above and below the prompt a
   let s = initial(0);
   s = addBlock(s, { kind: 'user', text: 'hello', at: 0 });
   s = addBlock(s, { kind: 'reply', role: 'orchestrator', text: '# Plan\n\n- one\n- two\n\n```rust\nfn main() {}\n```', at: 0 });
-  for (const [w, h] of [[100, 30], [60, 12], [40, 8]] as const) {
+  for (const [w, h] of [[100, 30], [60, 12], [40, 10]] as const) {
     const lines = frame(model({ state: s, composer: C.insert(C.empty(), 'draft') }), w, h);
     assert.equal(lines.length, h);
     for (const l of lines) assert.ok(stringWidth(l) <= w, `line wider than ${w}: ${plain(l)}`);

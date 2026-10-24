@@ -1,0 +1,30 @@
+⟦x?x⟧ ares: 2 decisions pending · 09:56 remaining                     navigate: shift+arrows · ○ ○ ●
+delphi v0.5 · /proj
+
+
+  Approval required · 1 of 2 pending · Red-tier gate · 09:56 left
+
+  Ratify spec 005b into the canonical repository
+  Requester: ⟦•_•⟧ daedalus (architect) · Task: t_1 · Tool: write_file
+
+  ❯ 1. Approve once
+    2. Reject
+
+  --- a/x
+  +++ b/x
+  @@ -1 +1 @@
+  -old
+  +new
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+enter select · 1-3 choose · ←→ other cards · d payload · tab list mode · esc chat
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ○ ●

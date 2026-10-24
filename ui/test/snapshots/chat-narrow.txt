@@ -1,0 +1,20 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle     ○ ● ○
+delphi v0.5 · /proj
+
+    rust
+    fn claim(id: u64) -> Result<(), Error> {
+        // lock the row
+        Ok(())
+    }
+
+  See
+  specs/003-collaboration-and-council.md#ladder.
+
+  → read_file(specs/003.md) ✔
+
+  ■ stopped
+
+──────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────
+0 tokens · approvals · shortcuts: ?          ○ ● ○

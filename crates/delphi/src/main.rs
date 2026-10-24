@@ -30,14 +30,14 @@ const USAGE: &str = "usage:
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
-  delphi chat [--plain] [--workspace <name>] [--mission <id>] [--home <dir>]
+  delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi models [--probe] [--workspace <name>] [--home <dir>]
   delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
   delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
-  delphi observe [council|epic|forge|agents|spend|archives] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
+  delphi observe [council|epic|forge|agents|spend|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi --version";
 
@@ -246,6 +246,10 @@ fn cmd_chat(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     let names = theme_names(&ws);
+    if args.iter().any(|a| a == "--no-mouse") {
+        // SAFETY: set before any thread exists; the full-screen console reads it at start.
+        unsafe { std::env::set_var("DELPHI_NO_MOUSE", "1") };
+    }
     // The inline console on a terminal; the plain line console when piped, or when asked for with --plain.
     let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
     if on_terminal && !args.iter().any(|a| a == "--plain" || a == "--inline") {
@@ -304,11 +308,14 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
-    let view = match args.iter().find(|a| !a.starts_with("--") && Some(a.as_str()) != flag(args, "--workspace").as_deref() && Some(a.as_str()) != flag(args, "--home").as_deref()) {
+    let view_arg = args.iter().find(|a| !a.starts_with("--") && Some(a.as_str()) != flag(args, "--workspace").as_deref() && Some(a.as_str()) != flag(args, "--home").as_deref());
+    // `thinking` exists only in the full-screen Observer: live reasoning is context, kept in that window's memory.
+    let thinking = view_arg.is_some_and(|v| matches!(v.to_lowercase().as_str(), "thinking" | "reasoning" | "7"));
+    let view = match view_arg.filter(|_| !thinking) {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge, agents, spend or archives)", v);
+                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge, agents, spend, archives or thinking)", v);
                 return 2;
             }
         },
@@ -318,11 +325,15 @@ fn cmd_narrator(args: &[String]) -> i32 {
     let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
     if on_terminal && !args.iter().any(|a| a == "--once" || a == "--classic") {
         if let Some(ui) = ui_executable() {
-            let code = chat::launch_ui_observer(&ui, &home, &ws.dir, view.map(observer::View::name), &theme_names(&ws));
+            let code = chat::launch_ui_observer(&ui, &home, &ws.dir, if thinking { Some("thinking") } else { view.map(observer::View::name) }, &theme_names(&ws));
             if code != 3 {
                 return code;
             }
         }
+    }
+    if thinking {
+        eprintln!("delphi observe thinking needs the full-screen Observer (the delphi-ui program, on a terminal)");
+        return 1;
     }
     observer::run(&home, &ws.dir, view, theme_names(&ws), args.iter().any(|a| a == "--once"))
 }
