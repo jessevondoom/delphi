@@ -23,7 +23,7 @@ tags: [spec, ui, tui, console, interim]
 - a console that **does not own the screen**: chat prints into the terminal's normal scrollback, and only a small block at the bottom is pinned;
 - **brief output**, so there is little to scroll;
 - a **Decision Inbox** for approvals;
-- reasoning and rendering moved out of the console: the Observer shows reasoning, and a native terminal viewer renders documents.
+- reasoning and rendering moved out of the console: the Observer shows reasoning, and a native viewer window renders documents.
 
 ## 2. Scope
 
@@ -44,21 +44,23 @@ tags: [spec, ui, tui, console, interim]
 | Three decks, swiped | Two views: chat and inbox (two dots) | Left deck if the console becomes full-screen |
 | Left deck: live reasoning | `delphi observe thinking` (§3) | Folded into a left deck |
 | `less`-style pinned viewport | Truncation to 24 lines plus `/more` | With the full-screen console |
-| Chromeless web viewer, server, WebSocket, hot reload | `delphi view` (§4), a native terminal viewer | Nothing: the browser path is dropped. Live reload only if wanted |
+| Chromeless web viewer, server, WebSocket, hot reload | `delphi view` (§4), a native Rust window | Nothing: the browser path is dropped. Live reload only if wanted |
 | Recommendation plus numbered options on a card | One approval per option | If cards need richer structure |
 
 ## 3. Reasoning in the Observer
 `delphi observe thinking` is a seventh Observer view: a tail of live reasoning and tool calls per active span, newest at the bottom, labelled with the agent's badge, tier and model. It reads the `thinking` text the daemon already coalesces into frames. It is **context only**: it exists in the Observer's memory while the window is open, is never written to `events.jsonl` or anywhere else, and is not included in the snapshot a reopened window receives. Control sequences are stripped like all model text.
 
-## 4. A native viewer, no browser
-`delphi view <path>` and `/view <path>` open a document in **Delphi's own viewer**, a full-window terminal view like the Observer (separate window or tmux pane; Delphi never splits a window). There is no web server, no browser and no generated HTML.
-- **Markdown** is parsed (pulldown-cmark) and drawn as styled terminal text: headings, emphasis, lists, block quotes, tables, fenced code with its language shown, hairline rules, and links as OSC 8. No boxes, no emoji-width glyphs, and the palette follows the terminal (dark or light). Raw HTML in the document is shown as plain text, never interpreted; control sequences in the text are stripped like all model text.
-- **Navigation:** `j`/`k`, arrows and `Space`/`PageDown` scroll; `/` searches; `g`/`G` jump to top and bottom; `n`/`N` move between headings; `r` re-reads the file (the way to see changes, since there is no hot reload); `q` quits. A table of contents is `t`.
-- **Images** (PNG, JPEG) are drawn in the terminal where it supports a graphics protocol (kitty, iTerm2, sixel), and otherwise opened with the system viewer. **SVG** is opened with the system viewer in this step; rasterizing it in Rust is a later option.
-- Only paths the operator could read through the path guard open (logical workspace paths and registered projects); a path outside is refused. Links between workspace documents open in the same viewer.
-- The console's file links (OSC 8) point at the file on disk as before; `/view` is the way to read it comfortably.
+## 4. A native viewer window, no browser
+`delphi view <path>` and `/view <path>` open a document in a **small native window drawn by Rust**: its own window on the desktop, outside the terminal, with no web engine, no server and no generated HTML.
+- **Toolkit:** `egui` through `eframe` (immediate-mode, pure Rust, one dependency tree), with `egui_commonmark` for Markdown and `egui_extras`' image loaders. SVG is rasterized in-process with `resvg`; PNG and JPEG use the `image` crate. Nothing in the window executes scripts or touches the network.
+- **Markdown:** headings, emphasis, lists, block quotes, tables, fenced code (with a copy button), rules, inline images and links. Raw HTML in a document is shown as plain text, never interpreted. A link to another workspace document opens it in the same window; any other link is shown, not followed, unless the operator clicks it (then it goes to the system's default handler).
+- **Media:** PNG, JPEG and SVG open directly, fit to the window, with zoom (`+`/`-`/`0`) and pan.
+- **Look:** a plain, calm window: no menu bar, system light or dark appearance, a monospace font option for code, the same palette family as the terminal views. Keys: `j`/`k` and arrows scroll, `Space`/`PageDown` page, `/` searches, `r` reloads the file from disk (changes are picked up when the window regains focus, so there is no watcher and no server), `q` or `Cmd/Ctrl+W` closes.
+- **Where it runs:** the same `delphi` executable, started as `delphi __viewer <file>` in its own process so a crash never takes the console down. A `viewer` cargo feature (on in release builds for macOS and Linux) keeps the GUI dependencies out of builds that do not want them; without it `delphi view` opens the file with the system's default application instead.
+- **Safety:** only paths the operator could read through the path guard open (logical workspace paths and registered projects); a path outside is refused before the window starts. The window process receives a file path and nothing else, and has no daemon connection.
+- The console's file links (OSC 8) still point at files on disk; `/view` is how to read them comfortably.
 
-A Rust viewer keeps rendering in one language with the rest of Delphi, makes the output testable cell by cell, and avoids a script or network surface entirely. The browser path is dropped, not deferred.
+Costs worth knowing: the GUI stack adds a few megabytes to the executable and several minutes to a cold build, and on Linux it needs a display server at runtime (X11 or Wayland), which CI cannot provide, so the window itself is tested by rendering to an offscreen image and not by clicking.
 
 ## 5. Build slices
 | # | Slice | Estimate |
@@ -66,7 +68,7 @@ A Rust viewer keeps rendering in one language with the rest of Delphi, makes the
 | 1 | Inline shell (§2.1 items 1 to 4, 8), including the shared command layer | 3 h |
 | 2 | Brevity (§2.1 item 5) | 1.5 h |
 | 3 | Inbox, header states and approval mode (§2.1 items 2, 6, 7) | 2.5 h |
-| 4 | `observe thinking` (1 h) and the native viewer (§4) | 4 h |
+| 4 | `observe thinking` (1 h) and the native viewer window (§4; 4 to 5 h including the build-time and CI work) | 5 to 6 h |
 
 Slices 1 to 3 are the core and ship first. After each, the operator drives it before the next begins.
 
@@ -80,8 +82,8 @@ Slices 1 to 3 are the core and ship first. After each, the operator drives it be
 7. **Eye contrast and widths.** Every badge is five columns and every mascot seven, in dark and light, with the red-team's alert eyes gold.
 8. **No boxes, no emoji.** No frame characters and no emoji-width glyphs in any console output (checked by test).
 9. **Reasoning is not kept.** After a Council runs, nothing in the mission's files or the Observer snapshot contains reasoning text; a reopened `observe thinking` starts empty.
-10. **View safety.** A markdown file containing `<script>`, `<img onerror=…>`, a `javascript:` link and terminal escape sequences renders them as inert plain text; a path outside the workspace is refused; drawing never emits an escape sequence other than Delphi's own styling and OSC 8 links.
-10a. **View rendering.** Headings, lists, tables, code blocks and links in a sample document draw as specified in both palettes; `n`/`N` land on headings; `r` picks up an edited file.
+10. **View safety.** A markdown file containing `<script>`, `<img onerror=…>`, a `javascript:` link and terminal escape sequences renders them as inert text; a path outside the workspace is refused before any window starts; the window process opens no network socket (checked by test) and has no daemon connection.
+10a. **View rendering.** A sample document (headings, lists, a table, a code block, a relative link, an SVG and a PNG) renders offscreen to an image that matches a stored reference within a tolerance, in light and dark; `r` after an edit shows the new text; zoom keys change the image scale.
 11. **`--plain`.** The same commands give the same results in both consoles.
 
 ## 7. Risks
