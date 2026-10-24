@@ -7,7 +7,7 @@ import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
 import { initial, replay } from './fold.ts';
 import { Observer } from './observer.ts';
-import type { Info } from './theme.ts';
+import { envTheme, type Info } from './theme.ts';
 
 function readInfo(): Info {
   const a = process.argv.indexOf('--info');
@@ -44,14 +44,18 @@ try {
 }
 
 const term = new Term();
-let dark = true;
+// Light or dark: DELPHI_THEME if set, else what the terminal answers to the background query, else COLORFGBG, else dark.
+const env = envTheme();
+let dark = env?.dark ?? true;
 term.once('ev', () => {}); // keep the emitter alive until the app subscribes
 term.start();
-await new Promise<void>((done) => {
-  const t = setTimeout(done, 250);
-  term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
-});
-const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} history={history} obs={obs} cap0={cap0} pending0={pending0} />, {
+if (!env?.forced) {
+  await new Promise<void>((done) => {
+    const t = setTimeout(done, 250);
+    term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
+  });
+}
+const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} themeForced={Boolean(env?.forced)} history={history} obs={obs} cap0={cap0} pending0={pending0} />, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });

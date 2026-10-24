@@ -5,9 +5,27 @@ import { graphemes } from './text.ts';
 
 /** `crown`, `crown_rgb` and `mascot_face` draw the roster mascot; an older `delphi` that does not send them gets a plain figure. */
 export type RoleInfo = { name: string; chassis: string; face: string; crown?: string; crown_rgb?: string; mascot_face?: string };
+/**
+ * The look of every role, as data from the Rust avatar library (`avatar::ui_spec`, mirrored in
+ * test/fixtures/avatar-spec.json). The console draws only what is in here: a new role or face added to the library
+ * reaches it without a change to this file.
+ */
+export type AvatarRole = {
+  chassis: string; crown: string; crown_rgb: string; mascot_face: string;
+  /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
+  badge: Record<string, { cells: string; mouth: number | null }>;
+  /** Per activity: the seven cells of the mascot's face row. */
+  mascot: Record<string, string>;
+  /** Eye colour while the role waits on the operator, by terminal background. */
+  alert_eye?: { dark: string; light: string };
+};
+export type AvatarSpec = { version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole> };
+
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
   version: string; cwd: string; roles: Record<string, RoleInfo>;
+  /** Absent when an older `delphi` started the console; the built-in faces below are used then. */
+  avatar?: AvatarSpec;
 };
 
 export type Pal = { dark: boolean };
@@ -25,24 +43,51 @@ export const hairline = (p: Pal, w: number) => rule(p)('─'.repeat(w));
 /** The state a badge shows: what an agent is doing, in the words the Observer uses. */
 export type AgentState = 'idle' | 'running' | 'waiting on you' | 'escalated';
 
-function faceFor(role: string, state: AgentState, info: Info): string {
-  if (state === 'waiting on you') return 'x?x';
-  if (state === 'escalated') return 'x_x';
-  if (state === 'running') return role === 'scout' ? '···' : '•─•';
-  return info.roles[role]?.face ?? '•_•';
+/** The library's name for what each console state looks like. */
+export const ACTIVITY: Record<AgentState, string> = { idle: 'idle', running: 'working', 'waiting on you': 'waiting_approval', escalated: 'escalated' };
+
+/** The three cells and the mouth's index: from the library's data, or the built-in faces for an older `delphi`. */
+function badgeCells(role: string, state: AgentState, info: Info): { cells: string[]; mouth: number | null } {
+  const spec = info.avatar?.roles[role]?.badge[ACTIVITY[state]];
+  if (spec) return { cells: [...spec.cells], mouth: spec.mouth };
+  const cells = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '···' : '•─•') : (info.roles[role]?.face ?? '•_•');
+  return { cells: [...cells], mouth: role === 'scout' || state === 'waiting on you' ? null : 1 };
 }
 
-/** `⟦•─•⟧`: brackets and mouth in the role's colour, eyes bright (white on dark, slate on light, gold for the red-team's alert). */
+/** The eye colour for a role in a state on a dark or light terminal. */
+export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): string {
+  const alert = state === 'waiting on you' ? info.avatar?.roles[role]?.alert_eye ?? (role === 'red-team' ? { dark: '#facc15', light: '#a16207' } : undefined) : undefined;
+  if (alert) return p.dark ? alert.dark : alert.light;
+  const eye = info.avatar?.eye ?? { dark: '#ffffff', light: '#0f172a' };
+  return p.dark ? eye.dark : eye.light;
+}
+
+/**
+ * `⟦•─•⟧`: brackets and mouth in the role's colour, eyes bright on a dark terminal and deep slate on a light one.
+ * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
+ */
 export function badge(role: string, state: AgentState, info: Info, p: Pal): string {
-  const chassis = chalk.hex(info.roles[role]?.chassis ?? '#94a3b8');
-  const alert = role === 'red-team' && state === 'waiting on you';
-  const eye = alert ? chalk.hex('#facc15') : p.dark ? chalk.hex('#ffffff') : chalk.hex('#0f172a');
-  const body = [...faceFor(role, state, info)].map((c) => (c === '─' || c === '_' || c === '-' ? chassis(c) : eye(c))).join('');
-  return chassis('⟦') + body + chassis('⟧');
+  const chassis = chalk.hex(info.avatar?.roles[role]?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
+  const eye = chalk.hex(eyeColor(role, state, info, p));
+  const { cells, mouth } = badgeCells(role, state, info);
+  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : eye(c))).join('') + chassis('⟧');
 }
 
 export const roleName = (role: string, info: Info) => info.roles[role]?.name ?? role;
 export const roleColor = (role: string, info: Info) => chalk.hex(info.roles[role]?.chassis ?? '#94a3b8');
+
+/**
+ * Dark or light from the environment, as the Rust console decides it (`observer::detect_dark`): `DELPHI_THEME` wins
+ * outright; `COLORFGBG` (`fg;bg`, set by several terminals) is the fallback when the terminal does not answer the
+ * background-colour query. `null` when neither says.
+ */
+export function envTheme(env: Record<string, string | undefined> = process.env): { dark: boolean; forced: boolean } | null {
+  if (env.DELPHI_THEME === 'light') return { dark: false, forced: true };
+  if (env.DELPHI_THEME === 'dark') return { dark: true, forced: true };
+  const bg = Number((env.COLORFGBG ?? '').split(';').pop());
+  if (env.COLORFGBG && Number.isInteger(bg)) return { dark: !(bg === 7 || bg >= 9), forced: false };
+  return null;
+}
 
 export const width = (s: string) => stringWidth(s);
 

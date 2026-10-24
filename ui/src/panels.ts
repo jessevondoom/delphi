@@ -8,6 +8,7 @@ import type { Pin } from './notebook.ts';
 import { ordered, totalTokens, type Build, type Council, type Observer } from './observer.ts';
 import type { Source } from './sources.ts';
 import * as T from './theme.ts';
+import { ACTIVITY, type AgentState } from './theme.ts';
 
 export type View = 'council' | 'epic' | 'forge' | 'agents' | 'spend' | 'archives' | 'sources' | 'notebook' | 'connectors';
 export const VIEWS: View[] = ['council', 'epic', 'forge', 'agents', 'spend', 'archives', 'sources', 'notebook', 'connectors'];
@@ -233,14 +234,18 @@ function forgeView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {
 const MASCOT_W = 7;
 function mascot(role: string, state: string, c: PanelCtx): string[] {
   const color = chalk.hex(c.info.roles[role]?.chassis ?? '#94a3b8');
-  const r = c.info.roles[role];
-  // The scout has three eyes and the builder a wide mouth when idle, as in the Observer; any role shows its alert faces.
-  const idle = role === 'scout' ? '• • •' : role === 'builder' && r?.mascot_face ? r.mascot_face : (r?.face ?? '•_•');
-  const face = state === 'waiting on you' ? (role === 'scout' ? 'x ? x' : 'x?x') : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '· · ·' : role === 'builder' ? '•───•' : '•─•') : idle;
-  const pad = Math.max(0, MASCOT_W - [...face].length);
-  const mid = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
-  const crown = [...(r?.crown ?? '')].slice(0, MASCOT_W).map((ch, i) => (ch === '▄' ? chalk.hex(role === 'builder' && i >= 1 && i <= 5 ? '#ffffff' : (r?.crown_rgb ?? '#94a3b8'))('▄') : ' ')).join('');
-  return [crown + ' '.repeat(MASCOT_W - [...(r?.crown ?? '')].slice(0, MASCOT_W).length), chalk.bgHex(c.info.roles[role]?.chassis ?? '#94a3b8').hex('#0f172a')(mid), color('▀'.repeat(MASCOT_W))];
+  const r = c.info.roles[role], lib = c.info.avatar?.roles[role];
+  // From the library's data when the console has it; otherwise a built-in approximation for an older `delphi`.
+  const builtIn = () => {
+    const idle = role === 'scout' ? '• • •' : role === 'builder' && r?.mascot_face ? r.mascot_face : (r?.face ?? '•_•');
+    const face = state === 'waiting on you' ? (role === 'scout' ? 'x ? x' : 'x?x') : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '· · ·' : role === 'builder' ? '•───•' : '•─•') : idle;
+    const pad = Math.max(0, MASCOT_W - [...face].length);
+    return ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
+  };
+  const mid = lib?.mascot[ACTIVITY[state as AgentState]] ?? builtIn();
+  const crownSlice = lib?.crown ?? r?.crown ?? '', crownRgb = lib?.crown_rgb ?? r?.crown_rgb ?? '#94a3b8';
+  const crown = [...crownSlice].slice(0, MASCOT_W).map((ch, i) => (ch === '▄' ? chalk.hex(role === 'builder' && i >= 1 && i <= 5 ? '#ffffff' : crownRgb)('▄') : ' ')).join('');
+  return [crown + ' '.repeat(MASCOT_W - [...crownSlice].slice(0, MASCOT_W).length), chalk.bgHex(c.info.roles[role]?.chassis ?? '#94a3b8').hex('#0f172a')(mid), color('▀'.repeat(MASCOT_W))];
 }
 
 function agentsView(ui: PanelUi, c: PanelCtx, w: number, h: number): string[] {

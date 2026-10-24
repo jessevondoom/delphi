@@ -53,3 +53,21 @@ drag the window narrow and wide, `Ctrl+C`, and confirm the shell prompt and scro
 - Only the newest 1,500 messages are drawn; older ones are in the mission and in `/export`.
 - With an older `delphi` that does not send the crown, the Agents mascot is a plain three-line figure; the console draws the
   crown when it is told it.
+
+## Light and dark
+
+The eyes on a badge are white on a dark terminal and deep slate (`#0f172a`) on a light one. The console decides which with,
+in order: `DELPHI_THEME=light|dark`; the terminal's answer to the background-colour query (`OSC 11`); `COLORFGBG`; dark.
+A terminal that does not answer the query and sets no `COLORFGBG` is assumed dark, so set `DELPHI_THEME=light` there.
+
+## Adding an agent or a face
+
+Faces, colours, crowns and mascot rows live in `crates/delphi/src/avatar.rs` and nowhere else. `delphi chat` sends them to
+the console as `avatar` in its start-up info (`avatar::ui_spec`), and the console draws only what it is sent.
+
+1. Edit `avatar.rs` (a role in `ROLES`, a face in `badge_cells` or `mascot_row`, an activity in `ACTIVITIES`).
+2. `DELPHI_WRITE_UI_SPEC=1 cargo test -p delphi ui_spec` rewrites `ui/test/fixtures/avatar-spec.json`; read the diff.
+3. `npm test` in `ui/` then checks the new role or face in every state on dark and light terminals (width, eye colour by
+   position, contrast of alert eyes) with no new TypeScript test.
+
+The mouth of a badge is named by position in the spec, not guessed from the character: the red-team's `-_-` has `-` eyes.

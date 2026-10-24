@@ -835,7 +835,7 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
         })
         .collect();
     let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();
-    json!({"console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles})
+    json!({"console_socket": console, "narrator_socket": narrator, "workspace": ws_dir, "mission": mission, "version": env!("CARGO_PKG_VERSION"), "cwd": cwd, "roles": roles, "avatar": crate::avatar::ui_spec()})
 }
 
 /// `delphi daemon status|stop|restart`.
