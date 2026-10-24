@@ -3,10 +3,10 @@ id: spec-010-connectors-and-tool-access
 title: "010: Native Connectors (MCP) & the Tool Access Layer"
 author: architect
 timestamp: 2026-10-24T16:00:00Z
-status: draft   # revised after Council 006 rounds 1 and 2 (2026-10-24); awaiting operator approval (D-23)
+status: approved   # by the operator, 2026-10-24, after Council 006 rounds 1 and 2 (D-23)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
-source_type: internal_generated
+source_type: user_ratified
 confidence: medium   # provider facts in §7 come from secondary sources and must be probed (§9)
 source_mission: 2026-10-23-foundational-design
 tags: [spec, connectors, mcp, auth, tools]

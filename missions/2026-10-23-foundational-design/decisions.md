@@ -283,13 +283,13 @@ Supporting rules:
 
 ---
 
-## 🟡 D-23 — Native connectors through MCP (Slack, Google Drive, Google Calendar, Gmail, Zoom)
+## ✅ D-23 — Native connectors through MCP (Slack, Google Drive, Google Calendar, Gmail, Zoom)
 Follows D-22 (Council 005 rejected harness connectors). The operator asked for high-quality access to these five services, with Claude and Gemini first.
 
 - **A. Native MCP connector layer in the daemon, ratified catalog, browser OAuth login, one tool pipeline** (recommended; drafted as `specs/010`)
 - **B. Defer all connectors to post-v1**
 
-**Status:** 🟡 draft `specs/010` written 2026-10-24 (PR #3 merged and approved by the operator 2026-10-24; the spec's frontmatter stays `draft` until it is ratified with `/ratify`); needs a Council and operator approval before any code. Proposed phasing: Step 3 builds the prerequisites (oauth2, token store, data-driven tool registry); Step 3b builds the connector layer before Step 4.
+**Status:** ✅ APPROVED 2026-10-24 by the operator: A, `specs/010` (after Council 006 rounds 1 and 2; provider facts in §7 stay unverified until probed, §9). Phasing as in the spec: Step 3 builds the prerequisites (oauth2, token store, data-driven tool registry: done), slice 1 is the host, client, login and Google (Drive, Calendar, Gmail), then Slack, then Zoom.
 
 ---
 
