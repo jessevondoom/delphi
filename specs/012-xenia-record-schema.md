@@ -3,7 +3,7 @@ id: spec-012-xenia-record-schema
 title: "012: Xenia Record Schema: Envelope, Phase 1 Kinds, Signing & Store Layout"
 author: architect
 timestamp: 2026-10-24T00:00:00Z
-status: draft   # v2 after Councils 008 and 009; awaiting a confirming review and operator ratification
+status: draft   # design basis ratified (D-29, 2026-10-24); this TEXT is not yet approved: needs a two-family confirming read before implementation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,9 @@ tags: [spec, xenia, schema, post-v1]
 
 # Spec 012: Xenia Record Schema (v2)
 
-> **Status: draft v2, post-v1.** Depends on [`specs/011`](011-xenia-trust-model.md); every field exists to support a rule there. Phase 1 kinds (`memory`, `endorsement`, `tombstone`) are normative; the other kinds are in §11 as provisional and are re-reviewed when their phase starts.
+> **Ratification record (D-29, 2026-10-24).** The operator ratified the design basis shared with [`specs/011`](011-xenia-trust-model.md) (see its ratification record). This exact text is **not** approved: it stays `draft`, the v2.1 fixes are not yet re-reviewed, a two-family confirming read must pass before implementation, and **no implementation starts until the core editor and harness are finished.**
+>
+> **Status: draft v2.1, post-v1.** Depends on [`specs/011`](011-xenia-trust-model.md); every field exists to support a rule there. Phase 1 kinds (`memory`, `endorsement`, `tombstone`) are normative; the other kinds are in §11 as provisional and are re-reviewed when their phase starts.
 
 ## 1. Scope & Objectives
 Defines the on-disk shape of everything Phase 1 shares:
@@ -313,4 +315,6 @@ Re-reviewed before their phase starts. Common envelope (§2) applies.
 | S-3 | 16 KiB / 500-character caps? | Start strict; relaxing later is safe, tightening is breaking |
 | S-4 | Skills as pinned git trees only? | Yes, Phase 2 |
 | S-5 | Claims public in v1? | Yes, Phase 3; per-member quotas |
-| S-6 (new) | Which kinds can be lifted to $L_2$ in Phase 1? | `memory` only |
+| S-6 | Which kinds can be lifted to $L_2$ in Phase 1? | `memory` only |
+
+S-1 to S-6 are **ratified as the design basis** (D-29) with the positions above.

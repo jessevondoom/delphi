@@ -3,7 +3,7 @@ id: spec-011-xenia-trust-model
 title: "011: Xenia Trust Model: Identity, Roster, Freshness, Trust Classes & Gates"
 author: architect
 timestamp: 2026-10-24T00:00:00Z
-status: draft   # v2 after Councils 008 and 009; awaiting a confirming review and operator ratification
+status: draft   # design basis ratified (D-29, 2026-10-24); this TEXT is not yet approved: needs a two-family confirming read before implementation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,9 @@ tags: [spec, xenia, security, post-v1]
 
 # Spec 011: Xenia Trust Model (v2)
 
-> **Status: draft v2, post-v1.** Xenia is the org-level sharing layer (memory, and later skills and requests) described by the operator on 2026-10-24. The core editor and harness take priority. This revision follows Council 008 (Gemini, three rounds) and Council 009 (Claude Opus and Sonnet), see `missions/2026-10-23-foundational-design/councils/008-verdict.md` and `009-verdict.md`. Its main change is a **smaller Phase 1**: the normative text covers only what Phase 1 builds; everything else is in §11 as provisional and is re-reviewed when its phase starts. Nothing here is binding until the operator ratifies it (GOVERNANCE §1.3).
+> **Ratification record (D-29, 2026-10-24).** The operator ratified the **design basis** of this spec and of [`specs/012`](012-xenia-record-schema.md): the roster-rooted signed store, humans-sign, endorsement as the only route to $L_2$ with nothing above it, display-only pointers, freshness plus history walk, person identity, and the smaller Phase 1, with O-1 to O-7 as stated in §12. The operator did **not** ratify this exact text: it stays `draft`, and the v2.1 fixes are not yet re-reviewed. **Before any implementation**, a confirming read by two model families (at least one non-Claude) must pass and the operator must then ratify the text. **No implementation starts until the core editor and harness are finished.**
+>
+> **Status: draft v2.1, post-v1.** Xenia is the org-level sharing layer (memory, and later skills and requests) described by the operator on 2026-10-24. The core editor and harness take priority. This revision follows Council 008 (Gemini, three rounds) and Council 009 (Claude Opus and Sonnet), see `missions/2026-10-23-foundational-design/councils/008-verdict.md` and `009-verdict.md`. Its main change is a **smaller Phase 1**: the normative text covers only what Phase 1 builds; everything else is in §11 as provisional and is re-reviewed when its phase starts. Nothing here is binding until the operator ratifies it (GOVERNANCE §1.3).
 
 ## 1. Scope & Objectives
 Operators in one **org** publish compact signed **records** to a shared git **store** and pull each other's records into their own Delphi installs. Phase 1 shares one kind of knowledge (`memory`) with human endorsement. This spec defines:
@@ -338,5 +340,7 @@ Each item is re-reviewed before its phase starts. The earlier Councils' conclusi
 | O-3 | Admin quorum | Majority of active admins counted per person; `doctor` warns below 3; two stewards minimum for a useful roster |
 | O-4 | Org join | Phase 1: out-of-band pin of a current admin and the head epoch hash, admin adds the DID by epoch. Signed invites are deferred (§11.3) |
 | O-5 | Before federation Planes 1–2 (D-06)? | Yes. It needs only git sync plus the existing identity and lattice |
-| O-6 (new) | Freshness validity default | 14 days, one admin signature, refreshable by a scheduled job; operators may shorten it |
-| O-7 (new) | Phase 1 dogfood thresholds | Median endorsement latency ≤ 3 working days and ≥ 70% of records read at $L_2$; to be agreed before the run |
+| O-6 | Freshness validity default | **Confirmed (D-29):** capped at 14 days by the verifier, one admin signature, refreshed by hand in Phase 1 (scheduled refresh needs a freshness-only key, §11.8); operators may shorten it |
+| O-7 | Phase 1 dogfood thresholds | **Confirmed (D-29):** median endorsement latency ≤ 3 working days and ≥ 70% of records read at $L_2$; to be agreed again before the run |
+
+O-1 to O-5 are **ratified as the design basis** (D-29) with the positions in the table above.
