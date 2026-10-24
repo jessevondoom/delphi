@@ -725,8 +725,16 @@ fn a_long_reply_is_cut_to_a_screenful_saved_whole_and_available_with_more() {
     c.wait_for("line 60 of the long answer");
     // Everything the console wrote, not the two screens `everything()` can show: whether line 25 is still within
     // them depends on how much more output (the redrawn block) has arrived, which is a race.
-    let raw = String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
-    assert!(raw.contains("line 25 of the long answer"), "/more printed lines 25 to 60");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut raw = String::new();
+    while Instant::now() < deadline {
+        raw = String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
+        if raw.contains("line 25 of the long answer") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(raw.contains("line 25 of the long answer"), "/more printed lines 25 to 60:\n{}", raw.escape_debug());
     c.type_keys("/more\r");
     c.wait_for("nothing more");
     c.type_keys("/quit\r");
