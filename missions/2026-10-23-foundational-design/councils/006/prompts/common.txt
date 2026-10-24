@@ -1,0 +1,11 @@
+Delphi Council 006, ROUND 1 (BLIND). READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply.
+
+Under review: draft specs/010-connectors-and-tool-access.md (native MCP connectors for Slack, Google Drive, Google Calendar, Gmail and Zoom) and decision D-23 in missions/2026-10-23-foundational-design/decisions.md. It replaces the harness-connector design that Council 005 rejected (missions/2026-10-23-foundational-design/councils/005-verdict.md, councils/005/round1-*.md; read them so you do not repeat settled points). Question: can it be approved as written for Step 3b implementation, and if not, exactly what must change? Answer its five open questions (§12).
+
+Read first: GOVERNANCE.md, REVIEW.md, specs/009 (§4 credentials, §5 policy, §7 containment), specs/001 §5 (provenance and taint), specs/005 §3.1 (approvals) and §2.5 (recovery), specs/004 (retrieval and context pointers), decisions.md. The Step 2 implementation exists in crates/ (tool pipeline in crates/delphi-engine/src/tools.rs and engine.rs; taint in crates/delphi-core/src/provenance.rs; ratified config pinning in crates/delphi-core/src/lock.rs; credential handling in crates/delphi-adapter/src/credential.rs): check whether the spec's claims about integrating with it are true. Provider facts in spec 010 §7 are flagged unverified; judge the design assuming they may differ, and say what the design must tolerate.
+
+Output (Markdown, at most 1,000 words, repo-relative paths only):
+1. Findings: each `[P0|P1|P2]` location, title, concrete falsifiable failure mode, exact remediation.
+2. Answers to the five open questions.
+3. Verdict: `approve` | `approve-with-fixes` | `reject`, and `concur: true|false` (true only if no unresolved P0).
+No style nits, no praise.

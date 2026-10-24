@@ -280,3 +280,13 @@ Supporting rules:
   - an editorial change to approved spec 005 §4 (the agents-pane example no longer names a theme character), required by the stricter canonical-name check;
   - drafting amendment 009-A2 (D-22) for Council review.
 - **2026-10-24:** implementing Step 2 milestone 2 found that spec 005 §2.4 keyed `usage_ledger` on `seq` alone, but `seq` is per mission, so two missions would collide. Clarified in the spec: primary key `(mission_id, seq)`, plus an `applied` position table; `agent.usage` gains `provider` and `reservation_id`, and the `budget.reserve` / `budget.release` payloads are defined. **Ratified by the operator 2026-10-24** (an edit to approved §2.4; no behavior change beyond the fix).
+
+---
+
+## 🟡 D-23 — Native connectors through MCP (Slack, Google Drive, Google Calendar, Gmail, Zoom)
+Follows D-22 (Council 005 rejected harness connectors). The operator asked for high-quality access to these five services, with Claude and Gemini first.
+
+- **A. Native MCP connector layer in the daemon, ratified catalog, browser OAuth login, one tool pipeline** (recommended; drafted as `specs/010`)
+- **B. Defer all connectors to post-v1**
+
+**Status:** 🟡 draft `specs/010` written 2026-10-24; needs a Council and operator approval before any code. Proposed phasing: Step 3 builds the prerequisites (oauth2, token store, data-driven tool registry); Step 3b builds the connector layer before Step 4.

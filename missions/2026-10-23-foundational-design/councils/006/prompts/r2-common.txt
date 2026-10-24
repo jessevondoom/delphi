@@ -1,0 +1,10 @@
+Delphi Council 006, ROUND 2. READ-ONLY: use only file-reading tools; do NOT run shell commands, edit files, write plans, ask questions or create artifacts. Deliver your review as your final reply.
+
+Round 1 (councils/006/round1-red-team.md and round1-strategist.md) rejected the first draft of specs/010-connectors-and-tool-access.md. The draft has been revised (see its §12 for what changed). Amendment 001-A3 (specs/001 §5.2 note) and the code for it exist: crates/delphi-core/src/provenance.rs (Action::ConnectorWrite), crates/delphi-core/src/lock.rs (connectors pinned), crates/delphi-engine/src/tools.rs (Registry::register_external).
+
+Your task:
+1. For each Round 1 finding (both reviews): `resolved` | `partly` | `not resolved`, one clause why, checking the revised spec and code, not the summary.
+2. Any NEW defect introduced by the revision or missed in Round 1 (max 5, each with a falsifiable failure mode and exact remediation, severity P0/P1/P2).
+3. The two open points in §12: your position.
+4. Verdict: `approve` | `approve-with-fixes` | `reject`, `concur: true|false` (true only if no unresolved P0).
+At most 800 words. Repo-relative paths only. No praise.
