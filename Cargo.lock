@@ -235,6 +235,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "delphi-core",
+ "delphi-sandbox",
  "include_dir",
  "libc",
  "regex",
@@ -300,6 +301,13 @@ dependencies = [
  "tokio",
  "toml",
  "walkdir",
+]
+
+[[package]]
+name = "delphi-sandbox"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

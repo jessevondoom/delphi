@@ -126,6 +126,12 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
     // 8. Hygiene: clean projects, orphaned worktrees.
     check_hygiene(ws, home, &mut r);
+
+    // 9. Sandbox (D-04): proven by running a trivial program under it, not by finding the binary.
+    match delphi_sandbox::detect() {
+        Some(mode) => r.push(Level::Ok, "9 sandbox", "", format!("{} is active: sandboxed execution is Green, harness mode is available", mode.name())),
+        None => r.warn("9 sandbox", "", "no OS sandbox is available (sandbox-exec on macOS, bubblewrap on Linux): code execution falls back to Amber and harness mode is unavailable"),
+    }
     r
 }
 
