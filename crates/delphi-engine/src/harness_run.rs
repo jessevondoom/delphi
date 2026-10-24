@@ -375,6 +375,7 @@ impl Engine {
 
         if let Some(x) = &exhaustion {
             batch.push(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": launch.model, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)})));
+            self.pool.record_exhausted(&ep.id, &launch.model, x);
         }
 
         // Files the run created or changed take this span's tier, as with any other execution.
@@ -408,6 +409,9 @@ impl Engine {
         batch.push(sc.agent_ev("agent.block.complete", json!({"turn_index": 1, "role": "assistant", "block_index": 0, "block": serde_json::to_value(&block).expect("serializes")}), ep, &launch.model));
         batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": if cli == Cli::Agy { "agy-cli" } else { "claude-cli" }}), ep, &launch.model));
         sc.m.append_batch(batch).await?;
+        if self.pool.record_success(&ep.id, &launch.model) {
+            sc.m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": launch.model}))).await?;
+        }
         Ok(Ok(text))
     }
 }
