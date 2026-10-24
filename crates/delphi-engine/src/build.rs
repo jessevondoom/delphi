@@ -346,6 +346,24 @@ mod tests {
         assert!(!f.root.join("proj/src/new.rs").exists());
     }
 
+    // specs/002 §4.1 test 7: promoting to another model is not a verification attempt.
+    #[tokio::test]
+    async fn a_model_running_out_mid_build_is_promoted_without_using_a_retry_attempt() {
+        let f = fixture(vec![Step::Exhaust, write("good\n"), Step::text("done"), Step::text("AUDIT COMPLETE")], "grep -q good src/new.rs");
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        let out = run(&f).await;
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        assert!(out.text.contains("Merged") && out.text.contains("1 attempt"), "it still passed on the first attempt: {}", out.text);
+        let attempts = events_of(&f, "build.attempt");
+        assert_eq!((attempts.len(), attempts[0].payload["tier"].as_str()), (1, None), "no upscale, no second attempt");
+        assert_eq!(events_of(&f, "model.exhausted").len(), 1);
+        let reqs = f.model.requests();
+        assert_eq!((reqs[0].endpoint_id.as_str(), reqs[1].endpoint_id.as_str()), ("direct", "backup"), "the same attempt moved to the next endpoint");
+        assert_eq!(reqs[0].model_id, reqs[1].model_id, "the same tier, so nothing was upscaled");
+    }
+
     #[tokio::test]
     async fn a_second_family_is_used_for_attempt_three_when_one_is_allowed() {
         let steps = (0..3).flat_map(|_| vec![write("x\n"), Step::text("done")]).collect();

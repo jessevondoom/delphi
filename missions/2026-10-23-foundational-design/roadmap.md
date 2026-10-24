@@ -58,7 +58,7 @@ Scope (D-06, D-07, D-13, D-14, D-15), budgets (D-10), learning autonomy (D-11), 
 | **3. Builder & access** | 002 (Gemini, §2.2 compat, rate limits), 003 §3, 008 §4, 009 Step 3 rows, 005 Step 3 rows | Gemini (direct API, Vertex), compat gateways, `oauth2` login, endpoint probing; then, on the new sandbox, subscription CLIs (egress proxy, per-span approval bridge); Builder in sandboxed worktrees outside the repo (`.git/` write-denied, host-exec badge); unified retry ladder; 5 merge gates; local and GitHub merge-back | Gemini signature replay; hook-planting test fails safely; retry ladder test passes; a spec-linked change goes from approved spec to merged branch |
 | **4. Council** | 003 §4 | `/council` with in-memory barrier, heterogeneous seats, daemon-filled Minority Report, deterministic escalation | Barrier, fabricated-dissent and heterogeneous-assignment tests pass; one real decision taken through a Council |
 | **5. Observe & recall** | 005 §4, 004 (FTS5), 006 §2 | `delphi narrator` agents pane (models, tokens, spend) + 4 views (Epic, Council, Forge, Archives); `delphi kb search` (two FTS tables + triggers); signed release + Homebrew; simplified `update` (`.upstream` files) | `kb search "[REV-SEC-04]"` ranks #1; FTS sync and rebuild tests pass; tampered-binary and constitution-gate tests pass |
-| **3c. Model pool (D-26)** | 002 §3.1 r5, §4.1; 003 §3.2, §4; 005 §2.3–2.5 | `[routing.pool]` and `[routing.targets]`; exhaustion distinguished from rate limits; pool state with re-probe; capability-based route resolution; mid-span promotion across families; confirm-or-park for weaker substitutes; Council and retry ladder read the pool; `delphi models` | Spec 002 §4.1 tests 1–7 and 6a pass; an unchanged config routes as before; a real two-family run finishes on the substitute with `model.promoted` in the log. Eight milestones, about 72 h: [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) |
+| **3c. Model pool (D-26)** (built 2026-10-24) | 002 §3.1 r5, §4.1; 003 §3.2, §4; 005 §2.3–2.5 | `[routing.pool]` and `[routing.targets]`; exhaustion distinguished from rate limits; pool state with re-probe; capability-based route resolution; mid-span promotion across families; confirm-or-park for weaker substitutes; Council and retry ladder read the pool; `delphi models` | Spec 002 §4.1 tests 1–7 and 6a pass; an unchanged config routes as before; a real two-family run finishes on the substitute with `model.promoted` in the log. Eight milestones, about 72 h: [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) |
 | **6. Usage-gated** | 004 vectors + coaching, 006 diff3, 007 Plane 3, 008 §2–3 | Each item starts only when a recorded usage need justifies it | The relevant spec's verification plan |
 | **7. Deferred** | 007 Planes 1–2; direct OpenAI API and local drivers | Not scheduled | Revisit at a future roadmap review |
 
@@ -71,20 +71,12 @@ Hours are focused build time including tests (the unit `specs/005c` uses). The *
 | 60+ h | Federation planes 1–2 (`specs/007`) | Deferred; needs a second operator or machine | rough |
 | ~30 h | First live connector run and what it shows, formatters, promotion card, harness bridge (`specs/010`) | Needs the operator's Google OAuth client | rough |
 | ~30 h each | Step 6: `sync`, watches, `/rewind` | Each starts only when `delphi needs` says so | rough |
-| 16 h | **3c M4** Engine integration and mid-span promotion | After M3 | plan |
 | ~15 h | Console half of `specs/005b` (decks, inbox, header states) | After the Narrator trial | stated (`005c`) |
 | ~14 h each | Slack connector, Zoom connector | Need admin steps from the operator | rough |
 | ~14 h | Open red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`) | None | rough |
 | ~14 h | Fixes from the Narrator trial, then the group-chat Council view | Needs the operator to try the Narrator | rough |
 | ~12 h each | Step 6: vectors, coaching automation, diff3 update | Each gated by `delphi needs` | rough |
-| 11 h | **3c M5** Confirmation and parking | After M4 | plan |
-| 10 h | **3c M3** Capability-based route resolution | After M1 and M2 (can start on its own: pure code) | plan |
-| 9 h | **3c M2** Pool config and state | None | plan |
-| 8 h | **3c M7** Surfaces and spec 005 amendment | After M5; spec 005 amendment needs ratification | plan |
 | ~8 h | Direct OpenAI API driver | Deferred; needs a key to test | stated (review: "roughly a day") |
-| 7 h | **3c M8** Fault-injection tests and red-team sweep | After M6 and M7 | plan |
-| 6 h | **3c M1** Exhaustion signal | None; starts with a spike on real error bodies | plan |
-| 5 h | **3c M6** Council and retry ladder read the pool | After M4 | plan |
 | not sized | Harness session resumption (deferred); Gemini Builder (blocked on `gemini --acp`) | Deferred / blocked outside Delphi | n/a |
 
-**Step 3c in total is 72 h** (50–95 h). It has two stopping points that are useful on their own: Slice A (M1–M4, about 41 h) promotes an exhausted target to a similar model across families, and Slice B (adds M5, about 52 h) adds confirmation for weaker substitutes and parking when nothing is eligible.
+**Step 3c (the model pool, D-26) is built** (M1 to M8, 2026-10-24, about 72 h of planned work): see [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) for what each milestone did and what is left. What remains of it: ratify spec 005 amendment 005-A6, `/models` in the full-screen console (`ui/`), the Narrator's target-versus-actual strip, and live samples for the Anthropic API, the Gemini API and Bedrock exhaustion signals.

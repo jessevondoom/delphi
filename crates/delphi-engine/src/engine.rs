@@ -1901,6 +1901,62 @@ mod tests {
         assert_eq!((h[0].payload["avoided"][0].as_str(), h[0].payload["used"]["family"].as_str()), (Some("claude"), Some("claude")));
     }
 
+    // M8 sweep: the endpoint policy is a wall. An endpoint outside `allowed_endpoints` is never in the pool and never called,
+    // however many models fail.
+    #[tokio::test]
+    async fn an_endpoint_outside_the_pin_is_never_called_however_many_models_fail() {
+        let f = setup(vec![Step::Exhaust, Step::Exhaust, Step::Throttle, Step::Throttle, Step::Exhaust, Step::Exhaust], 5.0, |s| s.degrade_wait = Duration::from_millis(30));
+        let text = crate::testkit::CONFIG.replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        assert!(f.engine.cfg.get().pool_entries().iter().all(|k| k.endpoint_id != "gem"), "not allowed, so not in the pool");
+        for prompt in ["one", "two", "three"] {
+            let out = f.engine.run_task(&f.m, "architect", prompt).await.unwrap();
+            assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        }
+        assert!(f.model.requests().iter().all(|r| r.endpoint_id == "direct" || r.endpoint_id == "backup"), "{:?}", f.model.requests().iter().map(|r| r.endpoint_id.clone()).collect::<Vec<_>>());
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+    }
+
+    // M8 sweep: a promotion is charged at the substitute's prices, and the exhausted call is released, not charged.
+    #[tokio::test]
+    async fn a_promotion_is_charged_at_the_substitutes_prices_and_the_exhausted_call_costs_nothing() {
+        let f = setup(vec![Step::Exhaust, Step::text("ok")], 5.0, |_| {});
+        two_families(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        // One reply of 1000 input and 200 output tokens on gem-pro at $2 and $12 per million: $0.0044.
+        let b = f.m.budget.lock().unwrap();
+        assert_eq!((b.spent(), b.reserved()), (4400, 0));
+        drop(b);
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!(usage.len(), 1, "the exhausted call recorded no usage");
+        assert_eq!((usage[0].endpoint_id.as_deref(), usage[0].model_id.as_deref()), (Some("gem"), Some("gem-pro")));
+        assert!((f.engine.ledger.lock().unwrap().mission_cost_usd(&f.m.id).unwrap() - 0.0044).abs() < 1e-9, "the ledger agrees with the budget");
+    }
+
+    // M8 sweep: cancelling a task that is waiting for a model ends it cleanly, with nothing reserved and nothing left open.
+    #[tokio::test]
+    async fn cancelling_a_task_that_is_waiting_for_a_model_leaves_nothing_open() {
+        let f = setup(vec![Step::text("never reached")], 5.0, |s| {
+            s.park_max = None;
+        });
+        opus_out(&f, 3600);
+        let task = spawn_task(&f, "architect", "Plan the change");
+        let card = wait_for_card(&f).await;
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "wait".into() }, "console-1").unwrap();
+        wait_for_event(&f, "task.blocked").await;
+        let tid = events_of(&f, "task.created")[0].task_id.clone().unwrap();
+        task.abort();
+        f.engine.cancel_task(&f.m, &tid).await.unwrap();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(events_of(&f, "task.cancelled").len(), 1);
+        assert!(f.engine.broker.pending().is_empty() && f.m.budget.lock().unwrap().reserved() == 0 && f.model.requests().is_empty());
+        // The mission is still usable afterwards: a later task runs normally once the target is back.
+        f.advance(3601);
+        let out = f.engine.run_task(&f.m, "architect", "Again").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "never reached"));
+    }
+
     #[tokio::test]
     async fn outcomes_are_recorded_in_the_pool_per_endpoint_and_model() {
         use crate::pool::State;
