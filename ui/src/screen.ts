@@ -110,13 +110,41 @@ const HELP = [
 
 function deckBody(m: Model, w: number, h: number): string[] {
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
-  if (m.deck === 0) return pad(['', T.dim('  Activity and thinking stream'), '', ...(m.state.live ? renderMarkdown(m.state.live.slice(-2000), w - 2).map((l) => '  ' + chalk.dim(l)) : [T.dim('  nothing running')]), '', T.dim('  Reasoning and tool parameters belong here, never in the chat. Lands in a later phase.')]);
+  if (m.deck === 0) return activityView(m, w, h);
   if (m.deck === 2) return I.view(m.state, m.inbox, m.info, m.pal, m.now, w, h);
-  const pend = Object.entries(m.state.approvals);
-  return pad(['', T.dim('  Plan and decisions'), '', ...(pend.length ? pend.map(([id, a]) => `  ${T.badge(a.role, 'waiting on you', m.info, m.pal)} ${T.roleName(a.role, m.info)} · ${a.tool || 'approval'} ${T.dim('(' + id + ')')}`) : [T.dim('  nothing needs you')]), '', T.dim('  The decision inbox and plan progress land in a later phase.')]);
+  return pad([]);
 }
 
 /** The whole screen: exactly `h` lines. */
+/** The left deck: what the agents are thinking and calling, newest at the bottom. Only ever on screen; PgUp scrolls. */
+export function activityLines(m: Model, w: number): string[] {
+  const out: string[] = [];
+  let last = '';
+  for (const a of m.state.activity) {
+    const who = a.role + ':' + a.span;
+    if (who !== last && (a.kind === 'thinking' || a.kind === 'text')) {
+      last = who;
+      out.push('', '  ' + T.badge(a.role, 'running', m.info, m.pal) + ' ' + T.roleColor(a.role, m.info).bold(T.roleName(a.role, m.info)) + T.dim(` · ${a.role}`));
+    }
+    if (a.kind === 'thinking') out.push(...a.text.split('\n').flatMap((l) => wrap(l, w - 6)).map((l) => '    ' + chalk.italic(T.dim(l))));
+    else if (a.kind === 'text') out.push(...a.text.split('\n').flatMap((l) => wrap(l, w - 6)).map((l) => '    ' + T.text(m.pal)(l)));
+    else if (a.kind === 'tool') out.push('  ' + T.dim('→ ') + T.link(a.text));
+    else out.push('    ' + T.crimson(a.text));
+  }
+  return out;
+}
+
+function activityView(m: Model, w: number, h: number): string[] {
+  const lines = activityLines(m, w);
+  if (!lines.length) return ['', '  ' + chalk.bold(T.text(m.pal)('Activity and thinking stream')), '', '  ' + T.dim('nothing running'), '', '  ' + T.dim('Reasoning, replies and tool calls appear here as they happen.'), '  ' + T.dim('They live only in this window: nothing is saved.')];
+  const maxBack = Math.max(0, lines.length - h);
+  const back = Math.min(m.back, maxBack);
+  const body = lines.slice(Math.max(0, lines.length - h - back), lines.length - back);
+  while (body.length < h) body.unshift('');
+  if (back > 0) body[h - 1] = T.spread('', chalk.hex('#facc15')(`↓ ${back} lines below · pgdn`), w);
+  return body;
+}
+
 const SPIN = ['◐', '◓', '◑', '◒'];
 
 function statusRow(m: Model, w: number): string {

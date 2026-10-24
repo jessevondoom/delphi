@@ -1,4 +1,5 @@
 // The info document `delphi chat` hands the UI, for the fake daemon.
+const crown = { orchestrator: '  ▄▄▄  ', architect: ' ▄ ▄ ▄ ', builder: ' ▄▄▄▄▄ ', 'red-team': '▄     ▄', strategist: '  ▄ ▄  ', scout: '   ▄   ' };
 const roles = {
   orchestrator: { name: 'athena', chassis: '#a855f7', face: '•─•' },
   architect: { name: 'daedalus', chassis: '#38bdf8', face: '•_•' },
@@ -7,4 +8,5 @@ const roles = {
   strategist: { name: 'odysseus', chassis: '#22c55e', face: '•_•' },
   scout: { name: 'hermes', chassis: '#eab308', face: '•••' },
 };
+for (const [r, v] of Object.entries(roles)) { v.crown = crown[r]; v.crown_rgb = '#facc15'; }
 console.log(JSON.stringify({ console_socket: process.argv[2], narrator_socket: process.argv[2], workspace: '.', mission: null, version: '0.5', cwd: process.cwd(), roles }));

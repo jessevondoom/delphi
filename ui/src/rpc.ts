@@ -50,6 +50,12 @@ export class Rpc extends EventEmitter {
     });
   }
 
+  /** Attach as the read-only Narrator (the daemon refuses anything that would change state). */
+  async attachAsNarrator() {
+    const t = await this.call('auth.issue', { scope: 'narrator' });
+    return this.call('hello', { protocol_version: 1, binary_version: 'delphi-ui', token: t.token });
+  }
+
   /** Attach as a console: ask for a token (the daemon requires a terminal), then say hello. */
   async attachAsConsole() {
     const t = await this.call('auth.issue', { scope: 'console' });

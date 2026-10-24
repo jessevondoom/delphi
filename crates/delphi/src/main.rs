@@ -314,6 +314,16 @@ fn cmd_narrator(args: &[String]) -> i32 {
         },
         None => None,
     };
+    // The full-screen Observer (D-28) on a terminal, unless asked for the classic one or a single text frame.
+    let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    if on_terminal && !args.iter().any(|a| a == "--once" || a == "--classic") {
+        if let Some(ui) = ui_executable() {
+            let code = chat::launch_ui_observer(&ui, &home, &ws.dir, view.map(observer::View::name), &theme_names(&ws));
+            if code != 3 {
+                return code;
+            }
+        }
+    }
     observer::run(&home, &ws.dir, view, theme_names(&ws), args.iter().any(|a| a == "--once"))
 }
 

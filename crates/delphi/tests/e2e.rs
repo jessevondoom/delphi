@@ -904,3 +904,42 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket() {
+    let m = mock(vec![reply_text("Observed answer.")]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("shortcuts: ?");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Say something");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Observed answer.");
+    c.wait_for("orchestrator ·");
+    // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
+    let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
+    o.wait_for("MASCOT ROSTER");
+    o.wait_for("1 call(s)");
+    let roster = o.visible();
+    assert!(roster.contains("DELPHI OBSERVER") && roster.contains("orchestrator") && roster.contains("▀▀▀▀▀▀▀"), "{}", roster);
+    assert!(roster.contains("spend $") && roster.contains("navigate: shift+arrows"), "{}", roster);
+    o.type_keys("\x1b[1;2C");
+    o.wait_for("SPEND TELEMETRY");
+    o.wait_for("Spend per call");
+    o.type_keys("2");
+    o.wait_for("EPIC DAG");
+    o.wait_for("Say something");
+    o.type_keys("q");
+    assert_eq!(o.wait_exit(), 0);
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}

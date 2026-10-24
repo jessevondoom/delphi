@@ -824,13 +824,42 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
     }
 }
 
+/// The full-screen Observer: the same UI executable in its read-only mode. It needs a running daemon (it only watches).
+/// Exit code 3 means the UI is not this release and the classic Observer should run instead.
+pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&str>, names: &HashMap<String, String>) -> i32 {
+    let l = match layout(home, ws_dir) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("delphi observe: {}", e);
+            return 1;
+        }
+    };
+    if std::os::unix::net::UnixStream::connect(&l.narrator_sock).is_err() {
+        eprintln!("delphi observe: no daemon is running for this workspace. Start the console (`delphi chat`) first: the Observer only watches.");
+        return 1;
+    }
+    let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names);
+    let mut cmd = std::process::Command::new(ui);
+    cmd.arg("--info").arg(info.to_string()).arg("--observe");
+    if let Some(v) = view {
+        cmd.arg(v);
+    }
+    match cmd.status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("delphi observe: cannot start the full-screen Observer ({}); try `delphi observe --classic`", e);
+            1
+        }
+    }
+}
+
 /// What the UI needs to know that only this program knows: where things are, and how roles look.
 pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: Option<String>, names: &HashMap<String, String>) -> Value {
     let roles: serde_json::Map<String, Value> = crate::avatar::ROLES
         .iter()
         .map(|t| {
             let (r, g, b) = t.chassis_rgb;
-            (t.role_id.to_string(), json!({"name": names.get(t.role_id).cloned().unwrap_or_else(|| t.role_id.to_string()), "chassis": format!("#{:02x}{:02x}{:02x}", r, g, b), "face": t.badge_face}))
+            (t.role_id.to_string(), json!({"name": names.get(t.role_id).cloned().unwrap_or_else(|| t.role_id.to_string()), "chassis": format!("#{:02x}{:02x}{:02x}", r, g, b), "face": t.badge_face, "crown": t.crown_slice, "crown_rgb": format!("#{:02x}{:02x}{:02x}", t.crown_rgb.0, t.crown_rgb.1, t.crown_rgb.2)}))
         })
         .collect();
     let cwd = std::env::current_dir().ok().map(|p| p.display().to_string()).unwrap_or_default();

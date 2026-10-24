@@ -22,11 +22,42 @@ function readInfo(): Info {
 }
 
 const info = readInfo();
+const observeAt = process.argv.indexOf('--observe');
 if (VERSION !== 'dev' && VERSION !== info.version) {
   // Exit code 3 tells `delphi chat` to use the inline console instead.
   console.error(`delphi-ui ${VERSION} does not match delphi ${info.version}; run \`delphi self-update\` (using the inline console for now)`);
   process.exit(3);
 }
+if (observeAt >= 0) {
+  const { Observer } = await import('./observer.tsx');
+  const { parseView } = await import('./observe-screen.ts');
+  const arg = process.argv[observeAt + 1];
+  const view = arg && !arg.startsWith('--') ? parseView(arg) : null;
+  let cmd: Rpc, ev: Rpc;
+  try {
+    cmd = await Rpc.connect(info.narrator_socket);
+    await cmd.attachAsNarrator();
+    ev = await Rpc.connect(info.narrator_socket);
+    await ev.attachAsNarrator();
+    await ev.call('events.subscribe', {});
+  } catch (e: any) {
+    console.error('delphi observe: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
+    process.exit(1);
+  }
+  const term = new Term();
+  let dark = true;
+  term.start();
+  await new Promise<void>((done) => {
+    const t = setTimeout(done, 250);
+    term.on('ev', (e) => { if (e.t === 'bg') { dark = e.dark; clearTimeout(t); done(); } });
+  });
+  const app = render(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} view={view} />, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
+  await app.waitUntilExit();
+  term.stop();
+  cmd.close(); ev.close();
+  process.exit(0);
+}
+
 let cmd: Rpc, ev: Rpc, mission: string, history = initial(Date.now());
 try {
   cmd = await Rpc.connect(info.console_socket);

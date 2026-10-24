@@ -2,7 +2,7 @@
 import chalk from 'chalk';
 import stringWidth from 'string-width';
 
-export type RoleInfo = { name: string; chassis: string; face: string };
+export type RoleInfo = { name: string; chassis: string; face: string; crown?: string; crown_rgb?: string };
 export type Info = {
   console_socket: string; narrator_socket: string; workspace: string; mission: string | null;
   version: string; cwd: string; roles: Record<string, RoleInfo>;

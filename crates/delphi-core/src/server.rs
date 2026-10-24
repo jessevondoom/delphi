@@ -26,7 +26,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Notify};
 
 /// The only methods the narrator socket answers (besides the `hello` handshake). Read-only, by name.
-pub const NARRATOR_METHODS: [&str; 11] = ["session.ping", "events.subscribe", "session.snapshot", "observe.snapshot", "observe.diff", "kb.search", "usage.get", "budget.get", "approval.list", "permissions.get", "ratify.list"];
+pub const NARRATOR_METHODS: [&str; 12] = ["session.ping", "events.subscribe", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "kb.search", "usage.get", "budget.get", "approval.list", "permissions.get", "ratify.list"];
 
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;

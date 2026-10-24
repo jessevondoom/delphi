@@ -62,7 +62,7 @@ pub fn sanitize(s: &str) -> String {
     out
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Tokens {
     pub input: u64,
     pub cache_read: u64,
@@ -86,7 +86,7 @@ impl Tokens {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct AgentRow {
     pub role: String,
     /// `idle`, `running`, `waiting on you`, `escalated`.
@@ -102,7 +102,7 @@ pub struct AgentRow {
     pub calls: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Node {
     pub id: String,
     pub role: String,
@@ -114,7 +114,7 @@ pub struct Node {
     pub cost_usd: f64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Task {
     pub id: String,
     pub flow: String,
@@ -124,20 +124,20 @@ pub struct Task {
     pub output: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Seat {
     pub role: String,
     pub family: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Stance {
     pub role: String,
     pub answered: bool,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Critique {
     pub role: String,
     pub recommendation: String,
@@ -146,7 +146,7 @@ pub struct Critique {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Council {
     pub task_id: String,
     pub proposition: String,
@@ -163,14 +163,14 @@ pub struct Council {
     pub synthesis: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct GateRow {
     pub name: String,
     pub state: String,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Build {
     pub task_id: String,
     pub branch: String,
@@ -182,7 +182,7 @@ pub struct Build {
     pub merge: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ObserverState {
     pub last_seq: u64,
     pub agents: BTreeMap<String, AgentRow>,
