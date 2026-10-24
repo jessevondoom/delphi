@@ -4,6 +4,7 @@ pub mod approval;
 pub mod auth_cli;
 pub mod boot;
 pub mod core_main;
+pub mod council;
 pub mod build;
 pub mod capabilities;
 pub mod endpoints_cli;

@@ -39,6 +39,8 @@ pub enum Input {
     Prompt { target: Option<String>, text: String },
     /// `/build …`: a Builder task under the retry ladder, audit and merge gates.
     Build(String),
+    /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
+    Council { proposition: String, seats: Vec<String>, author: Option<String> },
     Unknown(String),
 }
 
@@ -68,6 +70,7 @@ pub fn parse_input(line: &str) -> Input {
                 let text = cmd.trim_start().strip_prefix("build").unwrap_or("").trim();
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
+            "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
             "n" | "no" => Input::Answer(Decision::Deny),
@@ -92,6 +95,30 @@ pub fn parse_input(line: &str) -> Input {
     Input::Prompt { target: None, text: line.to_string() }
 }
 
+fn parse_council(args: &str) -> Input {
+    const USAGE: &str = "/council needs a proposition, for example `/council Should the retry queue be a table or a file?` (optional: --seats architect,strategist,red-team --author claude)";
+    let (mut seats, mut author) = (Vec::new(), None);
+    let mut words = args.split_whitespace().peekable();
+    let mut rest: Vec<&str> = Vec::new();
+    while let Some(w) = words.next() {
+        match w {
+            "--seats" if rest.is_empty() => match words.next() {
+                Some(v) => seats = v.split(',').filter(|x| !x.is_empty()).map(String::from).collect(),
+                None => return Input::Unknown(USAGE.into()),
+            },
+            "--author" if rest.is_empty() => match words.next() {
+                Some(v) => author = Some(v.to_string()),
+                None => return Input::Unknown(USAGE.into()),
+            },
+            _ => rest.push(w),
+        }
+    }
+    if rest.is_empty() {
+        return Input::Unknown(USAGE.into());
+    }
+    Input::Council { proposition: rest.join(" "), seats, author }
+}
+
 pub const HELP: &str = "\
 Type a request and press Enter. Reference files with @project/<name>/path or @specs/…; route to a role with `@architect …`.
   /usage [mission|role|task|model]   token and cost totals
@@ -100,6 +127,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
   /build <request>                   a Builder task: worktree, tests, audit, then your approval to merge
+  /council <proposition>             a blind three-round Council (architect, strategist, red-team); you decide if it deadlocks
   /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
   /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
   /quit";
@@ -151,6 +179,9 @@ pub struct Renderer {
     spans: HashMap<String, (String, u64)>,
     streamed: HashSet<String>,
     last_span: Option<String>,
+    /// Council seats answer in parallel, so their live text is not streamed; their stances are shown whole.
+    council: bool,
+    quiet: HashSet<String>,
 }
 
 fn brief(args: &Value) -> String {
@@ -165,7 +196,7 @@ fn brief(args: &Value) -> String {
 
 impl Renderer {
     pub fn new(names: HashMap<String, String>) -> Renderer {
-        Renderer { names, spans: HashMap::new(), streamed: HashSet::new(), last_span: None }
+        Renderer { names, spans: HashMap::new(), streamed: HashSet::new(), last_span: None, council: false, quiet: HashSet::new() }
     }
 
     fn name(&self, role: &str) -> String {
@@ -184,7 +215,7 @@ impl Renderer {
         keys.sort();
         for k in keys {
             let text = spans[k.as_str()]["text"].as_str().unwrap_or("");
-            if text.is_empty() {
+            if text.is_empty() || self.quiet.contains(k.as_str()) {
                 continue;
             }
             if self.last_span.as_deref() != Some(k.as_str()) {
@@ -205,7 +236,32 @@ impl Renderer {
             "dag.node.added" => {
                 let (role, depth) = (p["role"].as_str().unwrap_or("?").to_string(), p["depth"].as_u64().unwrap_or(0));
                 self.spans.insert(p["node_id"].as_str().unwrap_or("").to_string(), (role.clone(), depth));
+                if self.council {
+                    self.quiet.insert(p["node_id"].as_str().unwrap_or("").to_string());
+                    return None;
+                }
                 (depth > 0).then(|| format!("\n  ↳ {} takes this on\n", self.name(&role)))
+            }
+            "council.started" => {
+                self.council = true;
+                let seats = p["seats"].as_array().map(|a| a.iter().map(|s| format!("{} ({})", self.name(s["role"].as_str().unwrap_or("?")), s["family"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+                Some(format!("\n⚖ Council convened — {}{}\n  Round 1 is blind: nobody sees anyone else's answer until all are in.\n", seats, if p["homogeneous"] == true { " · one model family only (homogeneous)" } else { "" }))
+            }
+            "council.barrier.released" => Some("\n  Round 1 is in; the stances are now visible to every seat.\n".to_string()),
+            "council.stance" => {
+                let who = self.name(p["role"].as_str().unwrap_or("?"));
+                let text = p["text"].as_str().unwrap_or("");
+                Some(match p["status"].as_str() {
+                    Some("answered") => format!("\n  {}: {}\n", who, text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(140).collect::<String>()),
+                    _ => format!("\n  {} abstained: {}\n", who, text.chars().take(140).collect::<String>()),
+                })
+            }
+            "council.critique" => {
+                let who = self.name(p["role"].as_str().unwrap_or("?"));
+                Some(match p["recommendation"].as_str() {
+                    Some(rec) => format!("  {} → {}{}\n", who, rec, match p["findings"].as_array().map(|f| f.len()).unwrap_or(0) { 0 => String::new(), n => format!(" · {} finding(s)", n) }),
+                    None => format!("  {} → no readable critique\n", who),
+                })
             }
             "agent.block.complete" if p["block"]["type"] == "tool_call" => Some(format!("\n  → {}({})", p["block"]["name"].as_str().unwrap_or("?"), brief(&p["block"]["arguments"]))),
             "tool.result" if p["is_error"] == true => Some(format!("\n    ✗ {}", p["content"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(120).collect::<String>())),
@@ -219,6 +275,7 @@ impl Renderer {
                 let root_streamed = self.streamed.iter().any(|s| self.spans.get(s).map(|(_, d)| *d == 0).unwrap_or(false));
                 let tid = e["task_id"].as_str().unwrap_or("");
                 self.last_span = None;
+                self.council = false;
                 let text = p["text"].as_str().unwrap_or("");
                 Some(match p["status"].as_str() {
                     Some("escalated") => format!("\n⚠ {} needs you: {}\n", tid, text),
@@ -520,6 +577,13 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
                 Ok(v) => {
                     shared.running.fetch_add(1, Ordering::SeqCst);
                     say(&format!("({} build started; you will be asked before anything is merged)\n", v["task_id"].as_str().unwrap_or("task")));
+                }
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
+            Input::Council { proposition, seats, author } => match cmd.call("council.start", json!({"mission_id": mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
+                Ok(v) => {
+                    shared.running.fetch_add(1, Ordering::SeqCst);
+                    say(&format!("({} council convened; the seats answer blind, then critique each other)\n", v["task_id"].as_str().unwrap_or("task")));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },

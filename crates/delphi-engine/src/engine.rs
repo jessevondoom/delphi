@@ -30,7 +30,7 @@ use delphi_core::ledger::Ledger;
 use delphi_core::pathguard::{Guard, Zones};
 use delphi_core::provenance::{gate, Action, Gate, OriginRules, OutputCheck, Span};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -63,6 +63,10 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// `council_budget_usd` (D-10): a separate ceiling for one Council.
+    pub council_budget_usd: f64,
+    /// A Council seat that has not answered by then abstains.
+    pub council_seat_timeout: Duration,
 }
 
 impl Default for Settings {
@@ -80,6 +84,8 @@ impl Default for Settings {
             agy_program: "agy".into(),
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            council_budget_usd: 20.0,
+            council_seat_timeout: Duration::from_secs(600),
         }
     }
 }
@@ -149,6 +155,8 @@ pub struct Engine {
     pub tools: Arc<tools::Registry>,
     /// Sandboxed execution and task worktrees (`exec.rs`).
     pub exec: Arc<exec::ExecEnv>,
+    /// Context slices a driver hands a span directly, by handoff id (Council Round 2 peers' stances).
+    pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
 }
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -240,7 +248,7 @@ fn dispatch_def() -> ToolDef {
 }
 
 impl Engine {
-    fn now(&self) -> String {
+    pub(crate) fn now(&self) -> String {
         (self.clock)()
     }
 
@@ -381,6 +389,9 @@ impl Engine {
                     Ok((text, tier)) => slices.push(ContextSlice { label: p.uri.clone(), tier: tier.as_str().into(), text }),
                     Err(e) => slices.push(ContextSlice { label: p.uri.clone(), tier: "unavailable".into(), text: format!("(could not be read: {})", e) }),
                 }
+            }
+            if let Some(extra) = self.injected.lock().unwrap().get(&handoff.handoff_id) {
+                slices.extend(extra.iter().cloned());
             }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
