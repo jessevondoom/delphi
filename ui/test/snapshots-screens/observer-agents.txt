@@ -5,11 +5,11 @@ delphi v0.5 · agents
 
     ▄▄▄     athena  orchestrator  ● running
     •─•     frontier · claude-x · t_1
-  ▀▀▀▀▀▀▀   350 tokens
+            350 tokens
 
   ▄     ▄   ares  red-team  ► waiting on you
     x?x     frontier · claude-x · t_1
-  ▀▀▀▀▀▀▀   350 tokens
+            350 tokens
 
 
 
