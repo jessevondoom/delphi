@@ -1,0 +1,107 @@
+name: dev
+
+# Every push to main publishes the build as the rolling `dev` prerelease, which `delphi self-update --dev` installs.
+# Same targets, checksums and provenance attestations as a release; the version is `<crate version>-dev.g<commit>`
+# so every build is distinct (the daemon and the console compare versions). The release is replaced on each push,
+# so for a minute or so while it is being swapped `--dev` finds nothing. Homebrew and install.sh are not touched.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-build
+  cancel-in-progress: true
+
+jobs:
+  model:
+    name: embedding model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Fetch, check and pack
+        run: dev/fetch-model.sh "$RUNNER_TEMP/embed.dlphmdl"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: embedmodel
+          path: ${{ runner.temp }}/embed.dlphmdl
+          compression-level: 0
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: model
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin, bun: bun-darwin-arm64 }
+          - { os: macos-14, target: x86_64-apple-darwin, bun: bun-darwin-x64 }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, bun: bun-linux-x64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, bun: bun-linux-arm64 }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Stamp the version
+        id: ver
+        run: |
+          echo "version=$(dev/stamp-version.sh "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+      - name: Add the target
+        run: rustup target add ${{ matrix.target }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: embedmodel
+          path: ${{ runner.temp }}/model
+      - name: Build
+        env:
+          DELPHI_EMBED_MODEL_FILE: ${{ runner.temp }}/model/embed.dlphmdl
+        run: cargo build --release --locked --target ${{ matrix.target }} -p delphi --features embedded-model
+      - name: Build the console
+        working-directory: ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm rebuild bun
+          ./node_modules/.bin/bun build --compile --define "BUILD_VERSION=\"${{ steps.ver.outputs.version }}\"" --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
+          test -x dist/delphi-ui
+      - name: Package
+        run: |
+          name="delphi-v${{ steps.ver.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/delphi" ui/dist/delphi-ui LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          rm -rf "dist/$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          pattern: "*-*-*"
+          merge-multiple: true
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Replace the dev release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Only the newest push matters; an older run that finishes late must not replace a newer build.
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          [ "$latest" = "$GITHUB_SHA" ] || { echo "main has moved on to $latest; not publishing $GITHUB_SHA"; exit 0; }
+          gh release delete dev --cleanup-tag --yes 2>/dev/null || true
+          gh release create dev dist/* --prerelease --target "$GITHUB_SHA" --title "dev (main@${GITHUB_SHA::7})" \
+            --notes "Rolling build of main at $GITHUB_SHA, for \`delphi self-update --dev\`. Not a release: it is replaced on every push to main."

@@ -3,7 +3,7 @@ id: spec-006-installer-and-updater
 title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
-status: approved   # by the operator, 2026-10-23, after Council 002. The embedded-model note in §2.1 and doctor check 6 in §5 (Amendment 004-A1) approved by the operator, 2026-10-25
+status: approved   # by the operator, 2026-10-23, after Council 002. The embedded-model note in §2.1 and doctor check 6 in §5 (Amendment 004-A1) approved by the operator, 2026-10-25; Amendment 006-A5 (development channel) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified
@@ -157,6 +157,13 @@ $DELPHI_HOME/                     # default ~/.delphi (override with DELPHI_HOME
 > - **`delphi doctor --fix`** (terminal only) prints the report, then offers one remedy per fixable finding, asking before each: run the guided setup (no endpoints); sign in to Claude Code (installed, signed out); probe the endpoints (no or stale probe results); and review a changed endpoint/access block, showing its diff (Red tier, never defaulted or implied by `--yes`). It then reports again. It **never ratifies files in bulk**: changed or new protected files stay pending proposals and are reviewed one at a time with `/ratify`, and the doctor says so. Plain `delphi doctor` stays read-only and offline.
 > - **The full-screen console ships with the binary** (`delphi-ui`, a standalone executable built per target). The release tarball contains both files; `install.sh`, the Homebrew formula and `delphi self-update` install and replace them together, and `self-update --rollback` restores both. A release without it leaves the installed console alone, and with none installed `delphi` uses the inline console.
 
+
+### 3.6 Amendment 006-A5: The Development Channel (approved by the operator 2026-10-25)
+> This amendment is part of the approved spec. It adds a second update channel that follows `main`, beside the stable releases. Nothing about the stable channel changes.
+> - **Rolling build.** Every push to `main` builds the release matrix and publishes it as the GitHub prerelease `dev` (`.github/workflows/dev.yml`), replacing the previous one. Each tarball is named for the exact version it reports, `delphi-v<crate version>-dev.g<commit>-<target>.tar.gz`, with its `.sha256` and a build-provenance attestation, and contains `delphi` and `delphi-ui` as a release does. The version is stamped into the build (`dev/stamp-version.sh`), so the daemon's and the console's version checks treat each dev build as a different release. A build of an older push never replaces a newer one. `install.sh` and Homebrew do not follow it.
+> - **`delphi self-update --dev`** installs that build. It runs the same checks as a stable update (checksum before unpacking, the new binary must run and report the version it claims, old files kept as `.prev`, `delphi-ui` replaced with it, `--rollback` restores both) and `--check` works with it. It installs whenever the published build differs from the running one (not only when newer), and cannot be combined with `--version`. The stable channel is unchanged: it never offers a prerelease, and a dev build moves to the stable release of its version (or any later one) with a plain `delphi self-update`.
+> - **Trust.** A dev build is whatever is on `main` at that moment, merged after review and CI, but it is not a release: it is not tagged and the formula and installer do not move. The checksum and attestation protect against a damaged download, as for releases, not against a compromised repository.
+
 ---
 
 ## 4. `delphi update` State Machine
@@ -206,3 +213,4 @@ Running `delphi doctor` executes a fast, read-only, offline verification suite. 
 11. **Bare-Launch Test (006-A4):** in a fresh `$DELPHI_HOME`, bare `delphi` in a git repo with no workspace creates one named for the directory, prints one line saying so, opens the console, and leaves the repo with zero new files; run again, it prints no creation line. In a directory outside any repo it creates and uses `default`. `--workspace <missing>` exits `2` and creates nothing.
 12. **Doctor-Fix Test (006-A4):** remedies are chosen from findings once each (no endpoints → setup; signed-out Claude → sign-in; stale probes → probe; changed access block → diff review, omitted when setup is offered). Changed protected files produce only the `/ratify` hint. Without a terminal, `doctor --fix` refuses with exit `2`.
 13. **Console-Packaging Test (006-A4):** `self-update` installs `delphi-ui` beside `delphi` and keeps `delphi-ui.prev`; `--rollback` restores both; a release without `delphi-ui` leaves the installed one untouched.
+14. **Dev-Channel Test (006-A5):** with a fake release server, `self-update --dev` installs the `dev` build named for the version it reports, keeps `.prev`, and does nothing when that build is already installed; it refuses a `dev` release with no build for this machine, or one that is not a dev version; `--dev` with `--version` is an error; the stable channel still skips prereleases. `dev/stamp-version.sh` yields a version `cargo build --locked` accepts, also for a commit starting with `0`.
