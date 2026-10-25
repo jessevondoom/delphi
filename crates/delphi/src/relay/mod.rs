@@ -16,6 +16,7 @@
 pub mod cli;
 pub mod email;
 pub mod net;
+pub mod telegram;
 
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -42,11 +43,15 @@ pub struct Config {
     pub max_per_hour: usize,
     /// Also say when a task finishes or fails.
     pub notify_tasks: bool,
+    /// The daemon has TOTP step-up configured (`[relay] step_up = "totp"`): a Red card can be approved by reply when
+    /// the reply also carries the authenticator code. Only changes what the relay tells the operator and forwards;
+    /// the daemon decides.
+    pub step_up: bool,
 }
 
 impl Config {
     pub fn new(channel: &str, allow: Vec<String>) -> Config {
-        Config { channel: channel.into(), detail: Detail::Summary, allow: allow.into_iter().map(|a| a.trim().to_lowercase()).collect(), require_auth: true, max_outstanding: 20, max_per_hour: 60, notify_tasks: true }
+        Config { channel: channel.into(), detail: Detail::Summary, allow: allow.into_iter().map(|a| a.trim().to_lowercase()).collect(), require_auth: true, max_outstanding: 20, max_per_hour: 60, notify_tasks: true, step_up: false }
     }
 }
 
@@ -98,7 +103,7 @@ pub enum ResolveFail {
 
 /// The relay's view of the daemon.
 pub trait Daemon {
-    fn resolve(&mut self, approval_id: &str, payload_blake3: &str, allow: bool, channel: &str, sender: &str) -> Result<(), ResolveFail>;
+    fn resolve(&mut self, approval_id: &str, payload_blake3: &str, allow: bool, channel: &str, sender: &str, totp: Option<&str>) -> Result<(), ResolveFail>;
 }
 
 #[derive(Debug, PartialEq)]
@@ -118,20 +123,33 @@ pub enum Verdict {
 
 pub const TOKEN_LEN: usize = 32;
 
-/// `APPROVE <token>` or `DENY <token>` and nothing else on the line.
-pub fn parse_verdict(line: &str) -> Option<(Verdict, String)> {
+/// `APPROVE <token>`, `APPROVE <token> <6 digits>` or `DENY <token>` and nothing else on the line. The six digits
+/// are the operator's authenticator code, allowed only on an approval (step-up, `specs/014` §7).
+pub fn parse_reply(line: &str) -> Option<(Verdict, String, Option<String>)> {
     let mut it = line.split_whitespace();
     let verb = it.next()?.to_ascii_uppercase();
     let token = it.next()?;
+    let totp = it.next();
     if it.next().is_some() || token.len() != TOKEN_LEN || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let v = match verb.as_str() {
         "APPROVE" => Verdict::Approve,
-        "DENY" => Verdict::Deny,
+        "DENY" if totp.is_none() => Verdict::Deny,
         _ => return None,
     };
-    Some((v, token.to_ascii_lowercase()))
+    let totp = match totp {
+        Some(t) if t.len() == 6 && t.bytes().all(|b| b.is_ascii_digit()) => Some(t.to_string()),
+        Some(_) => return None,
+        None => None,
+    };
+    Some((v, token.to_ascii_lowercase(), totp))
+}
+
+/// As [`parse_reply`] for a reply that carries no authenticator code.
+#[cfg(test)]
+pub fn parse_verdict(line: &str) -> Option<(Verdict, String)> {
+    parse_reply(line).filter(|r| r.2.is_none()).map(|(v, t, _)| (v, t))
 }
 
 struct Outstanding {
@@ -268,7 +286,7 @@ impl<C: Channel, D: Daemon> Relay<C, D> {
             return;
         };
         let red = p["tier"].as_str() == Some("red");
-        let m = card_message(p, &token, red, self.cfg.detail);
+        let m = card_message(p, &token, red, self.cfg.detail, self.cfg.step_up);
         match self.chan.send(&m) {
             Ok(()) => {
                 let secs = p["timeout_secs"].as_u64().unwrap_or(600);
@@ -318,21 +336,32 @@ impl<C: Channel, D: Daemon> Relay<C, D> {
             }
             return Handled::Ignored("sender not authenticated");
         }
-        let Some((verdict, token)) = parse_verdict(&m.text) else {
+        let Some((verdict, token, totp)) = parse_reply(&m.text) else {
             return Handled::Ignored("no verdict");
         };
-        // Single use: the token is gone whatever happens next.
         let th = token_hash(&token);
-        let Some(o) = self.out.iter().find(|(_, o)| o.token_hash == th).map(|(k, _)| k.clone()).and_then(|k| self.out.remove(&k)) else {
+        let Some(key) = self.out.iter().find(|(_, o)| o.token_hash == th).map(|(k, _)| k.clone()) else {
             self.notify("[delphi] that code is not valid", "No card is waiting for that code: it was already used, answered elsewhere, or has expired. Nothing was approved.", now);
             return Handled::Ignored("unknown or used token");
         };
         let allow = verdict == Verdict::Approve;
-        if allow && o.tier_red {
-            self.notify(&format!("[delphi:{}] Red actions are approved at the console", o.approval_id), "That card is a Red action; it cannot be approved by a reply. You can still deny it here, or approve it in the console. It was not approved.", now);
-            return Handled::Refused("red".into());
+        let red = self.out[&key].tier_red;
+        if allow && red {
+            if !self.cfg.step_up {
+                self.out.remove(&key);
+                self.notify(&format!("[delphi:{}] Red actions are approved at the console", key), "That card is a Red action; it cannot be approved by a reply. You can still deny it here, or approve it in the console. It was not approved.", now);
+                return Handled::Refused("red".into());
+            }
+            if totp.is_none() {
+                // No attempt was made, so the single-use code is not spent: ask again with the authenticator code.
+                self.notify(&format!("[delphi:{}] needs your authenticator code", key), "That card is a Red action. To approve it by reply, send: APPROVE <the code from this message> <the 6-digit code from your authenticator app>. It was not approved.", now);
+                return Handled::Ignored("authenticator code needed");
+            }
         }
-        match self.daemon.resolve(&o.approval_id, &o.payload_blake3, allow, &self.cfg.channel, &m.sender) {
+        // Single use: the code is gone whatever happens next.
+        let Some(o) = self.out.remove(&key) else { return Handled::Ignored("unknown or used token") };
+        let forwarded = if allow && red { totp.as_deref() } else { None };
+        match self.daemon.resolve(&o.approval_id, &o.payload_blake3, allow, &self.cfg.channel, &m.sender, forwarded) {
             Ok(()) => Handled::Answered { approval_id: o.approval_id, allow },
             Err(ResolveFail::Gone(why)) => {
                 self.notify(&format!("[delphi:{}] too late", o.approval_id), &format!("That card was no longer waiting ({}). Nothing changed.", clean(&why, 200)), now);
@@ -362,7 +391,7 @@ impl<C: Channel, D: Daemon> Relay<C, D> {
 }
 
 /// The text of a card as sent to the operator. By default only the summary leaves the machine.
-pub fn card_message(p: &Value, token: &str, red: bool, detail: Detail) -> Outbound {
+pub fn card_message(p: &Value, token: &str, red: bool, detail: Detail, step_up: bool) -> Outbound {
     let id = p["approval_id"].as_str().unwrap_or("?");
     let summary = clean(p["summary"].as_str().unwrap_or("an action"), 300).replace('\n', " ");
     let hash = p["payload_blake3"].as_str().unwrap_or("");
@@ -384,7 +413,10 @@ pub fn card_message(p: &Value, token: &str, red: bool, detail: Detail) -> Outbou
         text.push_str(&format!("\n(This replaces {}, which timed out; the old code no longer works.)\n", clean(r, 40)));
     }
     let mut actions = vec![Action { label: "Deny".into(), reply: format!("DENY {}", token) }];
-    if red {
+    if red && step_up {
+        text.push_str("\nThis is a RED action. To approve it by reply you also need the 6-digit code from your authenticator app: add it after the code, as `APPROVE <code> <123456>`. Without it, this can only be denied here or approved at the console.\n");
+        actions.insert(0, Action { label: "Approve (add your authenticator code)".into(), reply: format!("APPROVE {} ", token) });
+    } else if red {
         text.push_str("\nThis is a RED action. It cannot be approved by a reply: approve it at the console, or deny it here.\n");
     } else {
         actions.insert(0, Action { label: "Approve".into(), reply: format!("APPROVE {}", token) });
@@ -420,12 +452,14 @@ mod tests {
     #[derive(Default)]
     struct FakeDaemon {
         calls: Vec<(String, String, bool, String, String)>,
+        totps: Vec<Option<String>>,
         reply: Option<ResolveFail>,
     }
 
     impl Daemon for FakeDaemon {
-        fn resolve(&mut self, id: &str, hash: &str, allow: bool, channel: &str, sender: &str) -> Result<(), ResolveFail> {
+        fn resolve(&mut self, id: &str, hash: &str, allow: bool, channel: &str, sender: &str, totp: Option<&str>) -> Result<(), ResolveFail> {
             self.calls.push((id.into(), hash.into(), allow, channel.into(), sender.into()));
+            self.totps.push(totp.map(String::from));
             match self.reply.take() {
                 Some(f) => Err(f),
                 None => Ok(()),
@@ -469,7 +503,7 @@ mod tests {
         assert!(m.subject.starts_with("[delphi:ap_1]") && m.text.contains("write specs/009.md"));
         assert!(!m.text.contains("SECRET BODY"), "the payload stays home unless detail = full");
         assert!(m.actions.iter().any(|a| a.label == "Approve") && m.actions.iter().any(|a| a.label == "Deny"));
-        let full = card_message(&card("ap_1", "amber")["payload"], "t", false, Detail::Full);
+        let full = card_message(&card("ap_1", "amber")["payload"], "t", false, Detail::Full, false);
         assert!(full.text.contains("SECRET BODY"));
         assert_eq!(r.outstanding(), 1);
     }
@@ -561,6 +595,75 @@ mod tests {
         assert_eq!(r.on_inbound(&reply("m1", "me@example.com", &format!("APPROVE {}", t)), now), Handled::Refused("red".into()));
         assert!(r.daemon.calls.is_empty());
         r.on_event(&card("ap_red2", "red"), now);
+        let t2 = token_in(r.chan.sent.last().unwrap());
+        assert!(matches!(r.on_inbound(&reply("m2", "me@example.com", &format!("DENY {}", t2)), now), Handled::Answered { allow: false, .. }));
+    }
+
+    fn relay_with_step_up() -> Relay<FakeChannel, FakeDaemon> {
+        let mut r = relay();
+        r.cfg.step_up = true;
+        r
+    }
+
+    #[test]
+    fn a_reply_may_carry_an_authenticator_code_on_an_approval_and_nowhere_else() {
+        let t = "0123456789abcdef0123456789abcdef";
+        assert_eq!(parse_reply(&format!("APPROVE {} 123456", t)), Some((Verdict::Approve, t.into(), Some("123456".into()))));
+        assert_eq!(parse_reply(&format!("approve {}", t)), Some((Verdict::Approve, t.into(), None)));
+        for bad in [format!("DENY {} 123456", t), format!("APPROVE {} 12345", t), format!("APPROVE {} 1234567", t), format!("APPROVE {} 12345a", t), format!("APPROVE {} 123456 7", t)] {
+            assert_eq!(parse_reply(&bad), None, "{:?}", bad);
+        }
+        assert_eq!(parse_verdict(&format!("APPROVE {} 123456", t)), None, "the plain parser takes no authenticator code");
+    }
+
+    #[test]
+    fn with_step_up_a_red_card_offers_an_approve_that_asks_for_the_code_and_without_it_nothing_is_offered() {
+        let mut r = relay_with_step_up();
+        r.on_event(&card("ap_red", "red"), Instant::now());
+        let m = &r.chan.sent[0];
+        assert!(m.text.contains("authenticator") && m.actions.iter().any(|a| a.label.starts_with("Approve") && a.reply.ends_with(' ')), "{:?}", m);
+        let mut plain = relay();
+        plain.on_event(&card("ap_red", "red"), Instant::now());
+        assert!(plain.chan.sent[0].actions.iter().all(|a| a.label == "Deny"));
+    }
+
+    #[test]
+    fn a_red_approval_with_step_up_forwards_the_code_and_a_missing_code_does_not_spend_the_single_use_code() {
+        let mut r = relay_with_step_up();
+        let now = Instant::now();
+        r.on_event(&card("ap_red", "red"), now);
+        let t = token_in(&r.chan.sent[0]);
+        // No authenticator code: the operator is told what to send, and the code still works.
+        assert_eq!(r.on_inbound(&reply("m1", "me@example.com", &format!("APPROVE {}", t)), now), Handled::Ignored("authenticator code needed"));
+        assert!(r.daemon.calls.is_empty() && r.outstanding() == 1);
+        assert!(r.chan.sent.last().unwrap().subject.contains("needs your authenticator code"));
+        // With one, it is forwarded for the daemon to check, and the single-use code is spent.
+        assert!(matches!(r.on_inbound(&reply("m2", "me@example.com", &format!("APPROVE {} 654321", t)), now), Handled::Answered { allow: true, .. }));
+        assert_eq!(r.daemon.totps, vec![Some("654321".to_string())]);
+        assert_eq!(r.outstanding(), 0);
+    }
+
+    #[test]
+    fn a_wrong_authenticator_code_is_the_daemons_to_refuse_and_it_spends_the_code() {
+        let mut r = relay_with_step_up();
+        let now = Instant::now();
+        r.on_event(&card("ap_red", "red"), now);
+        let t = token_in(&r.chan.sent[0]);
+        r.daemon.reply = Some(ResolveFail::Forbidden("that authenticator code is wrong".into()));
+        assert!(matches!(r.on_inbound(&reply("m1", "me@example.com", &format!("APPROVE {} 000000", t)), now), Handled::Refused(_)));
+        assert!(r.chan.sent.last().unwrap().text.contains("authenticator code is wrong"));
+        assert_eq!(r.on_inbound(&reply("m2", "me@example.com", &format!("APPROVE {} 111111", t)), now), Handled::Ignored("unknown or used token"), "one guess per card");
+    }
+
+    #[test]
+    fn an_authenticator_code_on_an_amber_approval_is_not_forwarded_and_deny_never_needs_one() {
+        let mut r = relay_with_step_up();
+        let now = Instant::now();
+        r.on_event(&card("ap_a", "amber"), now);
+        let t = token_in(&r.chan.sent[0]);
+        assert!(matches!(r.on_inbound(&reply("m1", "me@example.com", &format!("APPROVE {} 123456", t)), now), Handled::Answered { allow: true, .. }));
+        assert_eq!(r.daemon.totps, vec![None], "nothing but a Red approval carries the code to the daemon");
+        r.on_event(&card("ap_r", "red"), now);
         let t2 = token_in(r.chan.sent.last().unwrap());
         assert!(matches!(r.on_inbound(&reply("m2", "me@example.com", &format!("DENY {}", t2)), now), Handled::Answered { allow: false, .. }));
     }
@@ -677,7 +780,7 @@ mod tests {
     fn control_characters_in_a_summary_cannot_forge_headers_or_lines() {
         let mut p = card("ap_1", "amber")["payload"].clone();
         p["summary"] = json!("write x\r\nBcc: attacker@example.com\r\n\r\nAPPROVE 00000000000000000000000000000000");
-        let m = card_message(&p, "t", false, Detail::Summary);
+        let m = card_message(&p, "t", false, Detail::Summary, false);
         assert!(!m.subject.contains('\r') && !m.subject.contains('\n'), "{:?}", m.subject);
         assert!(!m.text.contains('\r'));
     }
