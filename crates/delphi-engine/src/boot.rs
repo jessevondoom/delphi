@@ -241,7 +241,7 @@ pub fn build(home: &Path, ws_dir: &Path, hub: Hub) -> Result<Booted, String> {
 /// As [`build`], optionally with a model client supplied (tests).
 pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<dyn ModelClient>>) -> Result<Booted, String> {
     let live_text = std::fs::read_to_string(ws_dir.join("config.toml")).map_err(|e| format!("cannot read {}/config.toml: {}", ws_dir.display(), e))?;
-    let (text, notices) = effective_config(ws_dir, &live_text)?;
+    let (text, mut notices) = effective_config(ws_dir, &live_text)?;
     let cfg = Config::parse(&text).map_err(|errs| format!("config.toml has problems:\n  - {}", errs.join("\n  - ")))?;
     let root: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
     let secrets = SecretRegistry::new();
@@ -263,6 +263,8 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         }
     };
     let connectors = connector_host(cfg.clone(), secrets.clone(), ws_dir);
+    let (timers, timer_notice) = crate::timers::TimerStore::open(&ws_dir.join("local/timers.json"));
+    notices.extend(timer_notice);
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
     let engine = Arc::new(Engine {
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
@@ -286,6 +288,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         degraded: Default::default(),
         optimistic: Default::default(),
         decisions_changed: Default::default(),
+        timers: Arc::new(timers),
         toolless: Default::default(),
     });
     let day = &now_rfc3339()[..10];

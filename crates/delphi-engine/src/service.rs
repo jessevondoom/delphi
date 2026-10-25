@@ -9,12 +9,14 @@ use crate::engine::{Engine, RecoveryPlan};
 use crate::mission::{EngineError, MissionState};
 use delphi_core::event::EventEnvelope;
 use delphi_core::ledger::GroupBy;
+use crate::timers::{self, Fired};
 use delphi_core::proto::{code, RpcError, Scope};
+use delphi_core::provenance::Tier;
 use delphi_core::server::{CallContext, Extension, RpcFuture, RpcOutcome};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct Running {
     target: String,
@@ -161,11 +163,22 @@ impl EngineService {
         if !self.engine.settings.enabled_agents.contains(&target) {
             return Err(err(code::INVALID_PARAMS, format!("`{}` is not an enabled role (enabled: {})", target, self.engine.settings.enabled_agents.join(", "))));
         }
+        let task_id = self.spawn_task(&m, &target, &prompt, None);
+        Ok(json!({"task_id": task_id, "mission_id": m.id}))
+    }
+
+    /// Start a task in the background and track it for `task.cancel` and the snapshot. A `ceiling` starts it
+    /// below full trust (a timer's wake carries its setter's).
+    fn spawn_task(&self, m: &Arc<MissionState>, target: &str, prompt: &str, ceiling: Option<Tier>) -> String {
         let task_id = m.next_task_id();
-        self.running.lock().unwrap().insert(task_id.clone(), Running { target: target.clone(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
-        let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
+        self.running.lock().unwrap().insert(task_id.clone(), Running { target: target.to_string(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
+        let (engine, running, tid, m, target, prompt) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.clone(), target.to_string(), prompt.to_string());
         let h = tokio::spawn(async move {
-            if let Err(e) = engine.run_task_with_id(&m, tid.clone(), &target, &prompt).await {
+            let run = match ceiling {
+                Some(c) => engine.run_task_woken(&m, tid.clone(), &target, &prompt, c).await,
+                None => engine.run_task_with_id(&m, tid.clone(), &target, &prompt).await,
+            };
+            if let Err(e) = run {
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
                 let _ = m.append(ev).await;
@@ -173,7 +186,81 @@ impl EngineService {
             running.lock().unwrap().remove(&tid);
         });
         self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
-        Ok(json!({"task_id": task_id, "mission_id": mid}))
+        task_id
+    }
+
+    /// Run the timers whose time has come (`specs/017`): start each one's task, log `timer.fired`, then record the
+    /// firing, in that order, so a crash in between fires it again (reported late) and never loses it. The daemon calls
+    /// this every second; tests call it directly.
+    pub async fn timer_tick(&self) {
+        let now = (self.engine.clock_unix)();
+        for t in self.engine.timers.due(now) {
+            let Ok(m) = self.mission(Some(&t.mission_id)).await else { continue };
+            if !self.engine.settings.enabled_agents.contains(&t.target) {
+                let _ = m.append(EventEnvelope::new(&m.id, "timer.failed", json!({"timer_id": t.id, "reason": format!("`{}` is no longer an enabled role", t.target)}))).await;
+                let _ = self.engine.timers.abandon(&t.id, "role not enabled");
+                continue;
+            }
+            let fired = Fired::of(&t, now);
+            let task_id = self.spawn_task(&m, &t.target, &timers::wake_prompt(&t, &fired), Some(Tier::parse(&t.ceiling).unwrap_or(Tier::L0)));
+            let mut ev = EventEnvelope::new(&m.id, "timer.fired", json!({"timer_id": t.id, "task_id": task_id, "target": t.target, "creator": t.creator, "note": t.note, "due_unix": t.due_unix, "late_by_secs": fired.late_by_secs, "missed": fired.missed, "every_secs": t.every_secs}));
+            ev.task_id = Some(task_id);
+            let _ = m.append(ev).await;
+            if let Err(e) = self.engine.timers.mark_fired(&t.id, now) {
+                let _ = m.append(EventEnvelope::new(&m.id, "timer.failed", json!({"timer_id": t.id, "reason": e.0}))).await;
+            }
+        }
+    }
+
+    /// Start the once-a-second timer loop on the current runtime.
+    pub fn start_timers(self: &Arc<Self>) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(Duration::from_secs(1));
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                every.tick().await;
+                svc.timer_tick().await;
+            }
+        });
+    }
+
+    fn timers_json(&self) -> Value {
+        let now = (self.engine.clock_unix)();
+        let one = |t: &timers::Timer| {
+            let mut v = t.to_json();
+            v["relative"] = json!(timers::relative(t.due_unix, now));
+            v
+        };
+        json!({"now": delphi_core::time::format_unix_millis(now, 0).replace(".000Z", "Z"), "timers": self.engine.timers.list().iter().map(one).collect::<Vec<_>>()})
+    }
+
+    /// `timer.set`: the operator sets a wake for a role. Console only.
+    async fn timer_set(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let target = p["target"].as_str().unwrap_or("orchestrator").to_string();
+        if !self.engine.settings.enabled_agents.contains(&target) {
+            return Err(err(code::INVALID_PARAMS, format!("`{}` is not an enabled role (enabled: {})", target, self.engine.settings.enabled_agents.join(", "))));
+        }
+        let at_unix = match p["at"].as_str() {
+            Some(s) => Some(delphi_core::time::parse_rfc3339(s).ok_or_else(|| err(code::INVALID_PARAMS, "`at` must be an RFC 3339 time"))?),
+            None => None,
+        };
+        let req = timers::NewTimer { mission_id: m.id.clone(), target, note: p["note"].as_str().unwrap_or("").into(), creator: timers::OPERATOR.into(), ceiling: Tier::L5.as_str().into(), in_secs: p["in_secs"].as_i64(), at_unix, every_secs: p["every_secs"].as_i64() };
+        let t = self.engine.timers.set(req, (self.engine.clock_unix)()).map_err(|e| err(code::INVALID_PARAMS, e.0))?;
+        let _ = m.append(EventEnvelope::new(&m.id, "timer.set", t.to_json())).await;
+        Ok(t.to_json())
+    }
+
+    /// `timer.cancel`: the operator cancels any pending timer. Console only.
+    async fn timer_cancel(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let t = self.engine.timers.cancel(p["id"].as_str().unwrap_or(""), timers::OPERATOR).map_err(|e| err(code::NOT_FOUND, e.0))?;
+        if let Ok(m) = self.mission(Some(&t.mission_id)).await {
+            let _ = m.append(EventEnvelope::new(&m.id, "timer.cancelled", t.to_json())).await;
+        }
+        Ok(t.to_json())
     }
 
     /// `task.cancel`: stop one running task (or every one) at the operator's word. What was started is left in a
@@ -565,6 +652,7 @@ impl EngineService {
             "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(),
             "notices": self.notices.lock().unwrap().clone(),
             "running_tasks": running,
+            "timers": self.timers_json()["timers"].as_array().cloned().unwrap_or_default().into_iter().filter(|t| t["state"] == "pending").collect::<Vec<_>>(),
             "enabled_agents": self.engine.settings.enabled_agents,
         }))
     }
@@ -595,6 +683,9 @@ impl Extension for ServiceExt {
                 })(),
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "task.cancel" => svc.task_cancel(params, ctx).await,
+                "timer.list" => Ok(svc.timers_json()),
+                "timer.set" => svc.timer_set(params, ctx).await,
+                "timer.cancel" => svc.timer_cancel(params, ctx).await,
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "decisions.list" => svc.decisions_list(params).await,
@@ -739,6 +830,42 @@ mod tests {
         })
         .await;
         assert_eq!(f.model.requests().len(), 0, "the narrator started nothing");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_console_sets_lists_and_cancels_timers_and_nothing_else_can() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok, rsock, rtok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let t = c.call("timer.set", json!({"target": "orchestrator", "in_secs": 600, "note": "look at CI"})).unwrap();
+            assert_eq!((t["id"].as_str(), t["creator"].as_str(), t["ceiling"].as_str()), (Some("tm_0001"), Some("operator"), Some("L5")));
+            assert_eq!(rpc_code(c.call("timer.set", json!({"target": "nobody", "in_secs": 60, "note": "x"}))), Some(code::INVALID_PARAMS), "an unknown role");
+            assert_eq!(rpc_code(c.call("timer.set", json!({"target": "orchestrator", "in_secs": 0, "note": "x"}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("timer.set", json!({"target": "orchestrator", "at": "later", "note": "x"}))), Some(code::INVALID_PARAMS));
+            let l = c.call("timer.list", json!({})).unwrap();
+            assert_eq!((l["timers"].as_array().unwrap().len(), l["timers"][0]["state"].as_str()), (1, Some("pending")));
+            assert!(l["timers"][0]["relative"].as_str().unwrap().starts_with("in 10m"), "{}", l["timers"][0]);
+            assert_eq!(c.call("session.snapshot", json!({})).unwrap()["timers"][0]["id"], "tm_0001", "the snapshot carries pending timers for the console");
+            assert_eq!(rpc_code(c.call("timer.cancel", json!({"id": "tm_9999"}))), Some(code::NOT_FOUND));
+            assert_eq!(c.call("timer.cancel", json!({"id": "tm_0001"})).unwrap()["state"], "cancelled");
+            assert!(c.call("session.snapshot", json!({})).unwrap()["timers"].as_array().unwrap().is_empty());
+
+            for (path, token) in [(nsock, ntok), (rsock, rtok)] {
+                let mut other = Client::connect(&path).unwrap();
+                other.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                other.hello(&token).unwrap();
+                for (m, p) in [("timer.set", json!({"target": "orchestrator", "in_secs": 60, "note": "x"})), ("timer.cancel", json!({"id": "tm_0001"})), ("timer.list", json!({}))] {
+                    assert_eq!(rpc_code(other.call(m, p)), Some(code::FORBIDDEN), "{} on {}", m, path.display());
+                }
+            }
+        })
+        .await;
+        assert_eq!(events_of(&f, "timer.set").len(), 1);
+        assert_eq!(events_of(&f, "timer.cancelled").len(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

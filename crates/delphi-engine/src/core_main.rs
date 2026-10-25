@@ -71,6 +71,7 @@ pub fn run(args: Vec<String>) -> ! {
         // The engine publishes through the daemon's hub, so attached clients see its events.
         let booted = crate::boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
         daemon.set_extension(booted.service.extension());
+        booted.service.start_timers();
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);

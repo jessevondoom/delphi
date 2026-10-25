@@ -404,3 +404,17 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 7. **A live trial of the relay against a real mailbox is a future project task,** not part of this decision (roadmap §4).
 
 **Status:** ✅ APPROVED 2026-10-25 by the operator.
+
+---
+
+## ✅ D-31 — Timers
+
+**Context.** A role that says it will check back later has no clock and no way to wake, so the promise is a hallucination unless something outside the model keeps it. The same mechanism gives the orchestrator and the operator one place to see what the daemon will do later. The design is [`specs/017`](../../specs/017-timers.md).
+
+**Decision (operator, 2026-10-25):**
+1. **Spec 017 is approved**, including the new `timers` capability under `execute` in `agents/orchestrator/AGENT.md`, which gives the orchestrator (and no other role) the `timer` tool.
+2. **A timer wakes a role; it never runs a command.** It wakes only its creator, starts at its creator's trust ceiling, and every approval applies as for any task.
+3. **No cron syntax for now.** One-shot `in`/`at` and a fixed `every` (at least 60 s) only; calendar expressions wait for a recorded need.
+4. **The zero-token watch engine (`specs/008` §2) stays unbuilt.** When it is built it keeps its schedule in the timer store.
+
+**Status:** ✅ APPROVED 2026-10-25 by the operator.
