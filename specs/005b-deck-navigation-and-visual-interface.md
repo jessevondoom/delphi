@@ -74,6 +74,21 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 - `Esc`: Clear prompt, dismiss modal peek, or return focus to prompt from an active card.
 - `/operator` or `/decide`: Immediately opens the **Right Deck** (Decision Inbox).
 
+### 2.2 Amendment 005b-A1: Arrow Keys on an Empty Prompt (approved by the operator 2026-10-24)
+> This amendment is part of the approved spec. Where §2.1 and the `navigate:` hint in §1.3 and §3 differ from it, this amendment governs.
+
+**Rule.** In the full-screen console, `←` and `→` with **nothing typed in the prompt** move one deck, left to right: Left Deck, Center Deck, Right Deck. They stop at the ends (no wrap-around). With **any text in the prompt** they move the cursor, as in any line editor.
+
+1. `Shift+Left` and `Shift+Right` (§2.1) are unchanged: they move one deck whatever the prompt holds, and a half-written message stays in the prompt while the operator looks at another deck.
+2. `Alt` and `Ctrl` combinations with the arrow keys are not deck keys; they are left to the line editor.
+3. **Right Deck.** The deck owns the keyboard (005, "a card never captures keystrokes typed into the prompt"), so the rule applies as follows: in List Mode `←` returns to the Center Deck and `→` does nothing; in Focus Mode `←` and `→` move to the previous and next card (card review takes precedence over deck navigation), and `Esc` or `Tab` leaves Focus Mode. `Shift+Left` returns to the Center Deck from either mode.
+4. **Footer hint.** The right-aligned indicator reads `navigate: arrows · ○ ● ○` (it was `navigate: shift+arrows · ○ ● ○`). It is shown at 64 columns and wider; below that only the dots are shown. The wireframes in §1.3 and §3 that show `shift+arrows` are illustrative of layout only.
+5. **Unchanged.** Observer windows (§4) have no prompt and keep `Shift+Left` / `Shift+Right` between views. The inline console (005c) is not a deck console and is not affected.
+
+**Why.** Some terminals send nothing distinct for a shifted arrow, and an operator should not have to hunt for a modifier to look at the Thinking Stream or the Inbox. An arrow in an empty prompt had no other meaning, so nothing is taken away.
+
+**Verification** (extends §6, test 1). With an empty prompt `←` and `→` switch decks and stop at the ends. With text typed, `←` moves the cursor and the deck does not change. `Shift+Left` and `Shift+Right` switch decks with text typed, and the draft is intact on return. `Alt+←` does not switch decks. In the Right Deck, List Mode `←` returns to the chat and Focus Mode `←` `→` change card. These are covered by `ui/test/decknav.test.ts` and the scripted session in `crates/delphi/tests/e2e.rs`.
+
 ---
 
 ## 3. High-Fidelity Text Wireframes
