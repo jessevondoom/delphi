@@ -368,7 +368,19 @@ mod tests {
         let seg = t.path().join("events").join(segment_name(1));
         OpenOptions::new().append(true).open(&seg).unwrap().write_all(br#"{"v":1,"seq":4,"timesta"#).unwrap();
         assert_eq!(replay(t.path()).unwrap().len(), 3, "replay ignores a torn tail");
-        let mut log = open(t.path(), DEFAULT_MAX_SEGMENT_BYTES);
+        // Other tests in this process may be between `fork` and `exec`, holding a copy of the lock descriptor for a moment.
+        let mut log = None;
+        for _ in 0..200 {
+            match EventLog::open(t.path(), LogOptions { max_segment_bytes: DEFAULT_MAX_SEGMENT_BYTES }) {
+                Ok(l) => {
+                    log = Some(l);
+                    break;
+                }
+                Err(LogError::Locked(_)) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(e) => panic!("{}", e),
+            }
+        }
+        let mut log = log.expect("the lock must be released once the first writer is dropped");
         assert_eq!(log.append(ev(4)).unwrap(), 4);
         drop(log);
         let events = replay(t.path()).unwrap();
