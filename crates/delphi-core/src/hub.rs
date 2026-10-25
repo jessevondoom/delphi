@@ -18,6 +18,10 @@ use tokio::sync::Notify;
 pub const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 pub const DEFAULT_QUEUE_CAP: usize = 1024;
 
+/// The only event kinds a relay client is sent (`specs/014` §2). The list is the contract: adding a kind is a
+/// decision. None of these carries model text; an approval card's payload is what the operator is asked to judge.
+pub const RELAY_EVENTS: [&str; 5] = ["approval.requested", "approval.resolved", "approval.parked", "task.completed", "task.failed"];
+
 pub struct ClientQueue {
     inner: Mutex<QueueInner>,
     notify: Notify,
@@ -166,10 +170,12 @@ impl Hub {
         }
     }
 
-    /// Send a durable event (already appended and fsync'd) to every subscribed client.
+    /// Send a durable event (already appended and fsync'd) to every subscribed client. A relay client gets
+    /// only the kinds in [`RELAY_EVENTS`]: it carries cards to a person and has no need to see what agents say.
     pub fn publish_event(&self, event: &Value) {
         let h = self.inner.lock().unwrap();
-        for c in h.clients.values().filter(|c| c.subscribed) {
+        let kind = event["type"].as_str().unwrap_or("");
+        for c in h.clients.values().filter(|c| c.subscribed && (c.scope != Scope::Relay || RELAY_EVENTS.contains(&kind))) {
             c.queue.push(Notification::new("event", event.clone()));
         }
     }
@@ -185,7 +191,8 @@ impl Hub {
             .map(|(span, b)| (span, json!({"text": b.text, "thinking": b.thinking})))
             .collect();
         let spans = Value::Object(spans);
-        for c in h.clients.values_mut().filter(|c| c.subscribed) {
+        // Live text is model output; a relay never receives it.
+        for c in h.clients.values_mut().filter(|c| c.subscribed && c.scope != Scope::Relay) {
             c.frame_seq += 1;
             c.queue.push(Notification::new("delta.frame", json!({"frame_from": c.frame_seq, "frame_to": c.frame_seq, "spans": spans})));
         }

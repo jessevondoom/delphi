@@ -27,7 +27,7 @@ Nothing here is ratified or committed work. Competitor details came from seconda
 | Direct drivers exist for Claude (also Bedrock and Vertex), Gemini and OpenAI-compatible chat. Spec 009 calls API keys "the least common configuration". | `crates/delphi-adapter/src/{claude,gemini,openai}.rs`, spec 009 | "API readiness" is mostly about what is proven live, not what is written. I did not check which paths have run live. |
 | Harness mode has no failover to an API endpoint inside a span, and harness spans are not resumable. | spec 009 §7 "As built" | A subscription running dry mid-task is a hard stop today. |
 | Skills are `SKILL.md` with `name` and `description` plus Delphi fields (`authorized_agents`, schemas, `required_permissions`). | `skills/*/SKILL.md` | `name` and `description` match what the competitors' skills use. Whether the rest is compatible with the agentskills.io standard is unverified. |
-| Several red-team sweep findings are still open: blank price silently disables budget reservation, harness reader hangs on a non-UTF-8 line, `agy` tool states, system prompt in argv. | roadmap review §2 | These are API-readiness and provider-dependence bugs. They are folded into phase 2 below. |
+| The roadmap review's list of open sweep findings is mostly stale. Checked against the code on 2026-10-25: blank prices, the harness reader and `agy` states were fixed in 2e09bc9. Still open: the system prompt in argv; `install.sh` skipping attestation when `gh` is absent. | `git show 2e09bc9`, `engine.rs`, `route.rs` | Phase 2 shrinks: it is the live suite, contract pinning and the `PATH`-scrubbed mission, not bug fixing. |
 
 ## 1. Gap 1: away mode
 
@@ -156,8 +156,8 @@ Written before the code, using a fake channel adapter (the email tests above run
    - usage accounting checked against the provider's reported usage,
    - the key never appearing in events.
 3. **`delphi doctor --providers`.** One tiny live call per endpoint, reporting tool use, thinking signatures, caching, streaming and usage reporting. `probe.rs` is the starting point.
-4. **Price must be present.** A blank or missing price on an API endpoint becomes a hard setup error. Today it silently disables budget reservation, which would make API mode unsafe to run unattended.
-5. **Harness contract pinning.** Record stream fixtures per `claude` and `agy` CLI version and replay them in CI. `doctor` warns on an unrecognised CLI version. Fix the open harness findings (non-UTF-8 line hang, `agy` states, system prompt in argv).
+4. **Price must be present.** *Already done in the code* (checked 2026-10-25): setup needs an explicit "treat as free", the engine refuses an unpriced model, routing skips it, and `doctor` flags it. The earlier roadmap review listed this as open and this plan repeated it; both were stale. Nothing to build; keep it as a stated criterion.
+5. **Harness contract pinning.** Record stream fixtures per `claude` and `agy` CLI version and replay them in CI. `doctor` warns on an unrecognised CLI version. Most of the harness sweep findings were fixed in 2e09bc9; the one still open is the system prompt travelling in argv (low severity).
 6. **Failover from subscription to metered.** Falling from a harness endpoint to an API endpoint turns cost from $0 into real dollars. Do it at task boundaries only (not mid-span), and require an Amber card that states the change in cost. `exhaust.rs` already detects exhaustion.
 7. **Third family.** Promote the OpenAI-compatible driver after items 1 to 4 pass. It is a hedge against one vendor changing under us and adds Council diversity.
 
@@ -169,7 +169,11 @@ Written before the code, using a fake channel adapter (the email tests above run
 ## 3. Smaller gaps
 
 ### 3.1 Skills: portable, and safe to ratify
-- **Compatibility check (do first):** fetch the agentskills.io specification and diff it against our frontmatter. I haven't read it. Delphi's extra fields should be additive, so a plain standard skill loads in Delphi and a Delphi skill degrades cleanly elsewhere.
+- **Compatibility check (done 2026-10-25):** I read the agentskills.io specification and audited all 43 built-in skills against its rules. Every skill passes the core rules: `name` is lowercase letters, digits and single hyphens, at most 64 characters and equal to its directory name; `description` is present and under 1,024 characters; each file is under 155 lines (the guidance is 500). The differences are two:
+  1. Delphi adds four top-level fields, `authorized_agents`, `input_schema`, `output_schema` and `required_permissions`. The standard offers only `metadata` for extensions, and it is a map of string keys to string values, so these structured fields cannot move into it as they are. A strict validator may reject unknown top-level fields; I did not run the reference validator (`skills-ref`) to find out.
+  2. Skills with templates keep them in `templates/`, where the standard suggests `assets/`. Cosmetic.
+
+  So a plain standard skill loads in Delphi (the extra fields are Delphi's to require on import, see below), and **export** has to choose: drop the four fields, or encode them as JSON strings under `delphi.*` keys in `metadata`. I recommend the second, so a round trip loses nothing. The standard's experimental `allowed-tools` has no equivalent here (Delphi's tools are not Claude Code's), so import ignores it and says so.
 - **`delphi skills import <path|url>`:** the skill lands in `skills/custom/`, marked `external_untrusted`, with `authorized_agents` empty until the operator assigns it. A skill that ships scripts is Red, because scripts are host-executed. Ratification is required before any agent can load it.
 - **`delphi skills export`:** strips the Delphi extensions.
 - **Counter ratification fatigue.** Agent-proposed skills and lessons arrive through `/retro` as one batch. Mitigations: cap batch size, sort by risk, show the evidence (test-verified or not) and what changes if the operator says no, and record dwell time and accept rate. If someone accepts everything in seconds, warn once and say so.

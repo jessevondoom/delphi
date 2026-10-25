@@ -44,6 +44,10 @@ pub const PROVIDER: &str = "anthropic";
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub approval_timeout: Duration,
+    /// `[away] approval_park_max_sec`: how long a card may stay outstanding across re-raises (`specs/014` §3).
+    /// A card that times out is still denied and its id is dead, but the task is not failed: a fresh card with a
+    /// new id is raised, and nothing is spent while it waits. Zero (the default) means a timeout ends the wait.
+    pub approval_park_max: Duration,
     /// Output budget per call, raised to leave room above the thinking budget.
     pub max_tokens: u64,
     pub max_dispatch_depth: u32,
@@ -81,6 +85,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             approval_timeout: crate::approval::DEFAULT_TIMEOUT,
+            approval_park_max: Duration::ZERO,
             max_tokens: 8192,
             max_dispatch_depth: 2,
             mission_budget_usd: 5.0,
@@ -1229,19 +1234,39 @@ impl Engine {
             e.agent = Some(who.role.to_string());
             e
         };
-        let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: timeout.unwrap_or(self.settings.approval_timeout) };
-        let waiting = self.broker.request(req);
-        let id = waiting.approval_id.clone();
-        if let Some(raised) = self.broker.get(&id) {
-            who.m.append(ev("approval.requested", raised.event_payload())).await?;
+        let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
+        let started = std::time::Instant::now();
+        let mut reraised_from: Option<String> = None;
+        loop {
+            let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: base_timeout };
+            let waiting = self.broker.request(req);
+            let id = waiting.approval_id.clone();
+            if let Some(raised) = self.broker.get(&id) {
+                let mut p = raised.event_payload();
+                if let Some(prev) = &reraised_from {
+                    p["reraised_from"] = json!(prev);
+                }
+                who.m.append(ev("approval.requested", p)).await?;
+            }
+            let resolution = waiting.wait().await;
+            // The log says who actually answered: a console client, or a relay and the sender it vouched for.
+            let by = match &resolution {
+                Resolution::TimedOut => "timeout".to_string(),
+                _ => self.broker.resolved_by(&id).unwrap_or_else(|| "console".to_string()),
+            };
+            who.m.append(ev("approval.resolved", resolution.event_payload(&id, &by))).await?;
+            // Away mode: the timed-out card stays denied (its id is dead, so a late answer cannot revive it), but
+            // the task waits on a fresh card instead of being told no, until the park window is used up.
+            if matches!(resolution, Resolution::TimedOut) && !self.settings.approval_park_max.is_zero() {
+                let parked = started.elapsed();
+                if parked + base_timeout <= self.settings.approval_park_max {
+                    who.m.append(ev("approval.parked", json!({"approval_id": id, "parked_secs": parked.as_secs(), "park_max_secs": self.settings.approval_park_max.as_secs()}))).await?;
+                    reraised_from = Some(id);
+                    continue;
+                }
+            }
+            return Ok(resolution);
         }
-        let resolution = waiting.wait().await;
-        let by = match &resolution {
-            Resolution::TimedOut => "timeout",
-            _ => "console",
-        };
-        who.m.append(ev("approval.resolved", resolution.event_payload(&id, by))).await?;
-        Ok(resolution)
     }
 
     /// A dispatched child's report as the parent's tool result.
@@ -2190,6 +2215,66 @@ mod tests {
         assert!(!g.root.join("workspaces/w/team/specs/009-new.md").exists(), "no console attached: the timeout denied it");
         assert!(g.model.requests()[1].body["messages"].to_string().contains("timed out"));
         assert_eq!(events_of(&g, "approval.resolved")[0].payload["resolution"], "timed_out");
+    }
+
+    /// The next pending card whose id is not `not`.
+    async fn next_card_after(f: &Fx, not: &str) -> Request {
+        for _ in 0..400 {
+            if let Some(r) = f.engine.broker.pending().into_iter().find(|r| r.approval_id != not) {
+                return r;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no second approval card appeared");
+    }
+
+    #[tokio::test]
+    async fn away_mode_re_raises_a_timed_out_card_under_a_new_id_and_the_old_id_stays_dead() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "# Parked\nbody"})), Step::text("Drafted.")], 5.0, |s| {
+            s.approval_timeout = Duration::from_millis(120);
+            s.approval_park_max = Duration::from_secs(30);
+        });
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let first = wait_for_card(&f).await;
+        // Nobody answers. The first card times out; the task is not failed, and a new card appears.
+        let second = next_card_after(&f, &first.approval_id).await;
+        assert_ne!(second.approval_id, first.approval_id);
+        assert_eq!(second.payload_blake3, first.payload_blake3, "it is the same action");
+        // A late answer to the dead card is refused, whoever sends it and whatever it says.
+        let late = f.engine.broker.resolve(&first.approval_id, &first.payload_blake3, Answer::Allow, "relay-email");
+        assert!(matches!(late, Err(crate::approval::ResolveError::Gone { resolution: Some(Resolution::TimedOut), .. })), "{:?}", late);
+        assert!(!f.root.join("workspaces/w/team/specs/009-park.md").exists(), "nothing ran while parked");
+        // Only the fresh card can approve it.
+        f.engine.broker.resolve(&second.approval_id, &second.payload_blake3, Answer::Allow, "relay-email").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        assert!(f.root.join("workspaces/w/team/specs/009-park.md").exists());
+        let req = events_of(&f, "approval.requested");
+        assert!(req.len() >= 2 && req.last().unwrap().payload["reraised_from"].is_string(), "the re-raise says what it replaces");
+        assert!(!events_of(&f, "approval.parked").is_empty());
+        assert_eq!(f.model.requests().len(), 2, "no model call was made while the card was parked");
+    }
+
+    #[tokio::test]
+    async fn away_mode_still_denies_once_the_park_window_is_used_up() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "x"})), Step::text("Understood.")], 5.0, |s| {
+            s.approval_timeout = Duration::from_millis(60);
+            s.approval_park_max = Duration::from_millis(200);
+        });
+        let out = f.engine.run_task(&f.m, "architect", "Draft a spec").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(!f.root.join("workspaces/w/team/specs/009-park.md").exists());
+        let asked = events_of(&f, "approval.requested").len();
+        assert!((2..=4).contains(&asked), "re-raised a few times and then stopped: {}", asked);
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("timed out"), "the model is finally told it was denied");
+        assert_eq!(events_of(&f, "approval.resolved").last().unwrap().payload["resolution"], "timed_out");
+    }
+
+    #[tokio::test]
+    async fn without_a_park_window_a_timeout_ends_the_wait_as_before() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "x"})), Step::text("Understood.")], 5.0, |s| s.approval_timeout = Duration::from_millis(60));
+        f.engine.run_task(&f.m, "architect", "Draft a spec").await.unwrap();
+        assert_eq!(events_of(&f, "approval.requested").len(), 1);
+        assert!(events_of(&f, "approval.parked").is_empty());
     }
 
     #[tokio::test]

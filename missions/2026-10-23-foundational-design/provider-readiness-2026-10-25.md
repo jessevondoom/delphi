@@ -41,7 +41,7 @@ Quota exhaustion fixtures exist for both CLIs (`tests/fixtures/quota/`), capture
 An operator who has only API keys (or Bedrock or Vertex) should be able to run everything Delphi does. The proposed definition, checked in order:
 
 1. **Each API row has one recorded live run** of a tool loop, with the date, the model, the cost, and the provider's own usage figures compared to the ledger.
-2. **Pricing is mandatory.** An API endpoint without a price for its model refuses to start. Today a blank price silently disables budget reservation (an open item from the red-team sweep, `setup.rs`).
+2. **Pricing is mandatory.** Already true in the code, and worth keeping as a stated criterion: setup does not write a free price unless the operator says so (commit 2e09bc9), the engine refuses to call a model with no catalog price (`engine.rs`), routing skips unpriced models (`route.rs`), and `doctor` flags them (`config.rs`). The earlier roadmap review listed this as open; it is not.
 3. **A full mission with no harness available.** Builder, tests, cross-family audit, a Council and the merge card run end to end with `claude` and `agy` removed from `PATH`. This is the single test that proves the claim.
 4. **Failure behaviour is exercised live, not just mocked:** a 429 with backoff, an expired credential, cancellation mid-stream, an unreachable endpoint.
 5. **No secret leaks:** the key does not appear in events, the usage ledger, logs or the summary of a headless run, checked after the live runs.
@@ -66,11 +66,13 @@ None of these has been written. They need keys, so they are gated on the operato
 The CLI paths are the only live-proven ones, and they depend on output formats Google and Anthropic can change. Needed:
 - Recorded stream fixtures per CLI version, replayed in CI, so a changed format fails a test.
 - `doctor` warns on an unrecognised CLI version.
-- The open sweep findings in `harness.rs`: a non-UTF-8 line ends the reader and can hang a session; the 8 MiB line cap applies after buffering; `agy` states other than ACTIVE are reported as completed; `Tools::None` is ignored for `agy`; the system prompt travels in argv.
+- Harness findings from the red-team sweep: all but one were fixed in commit 2e09bc9 (a non-UTF-8 line no longer ends the reader, the line cap applies while reading, a CLI that closes its output but stays alive is killed, unfinished `agy` tool steps are not reported as completed, `agy` with no tools is told so). **Still open:** the system prompt travels in the process arguments (`--append-system-prompt`), where other users on the machine can see it with `ps`. The prompt holds governance text and role instructions, not secrets, so this is low severity; moving it to a file or stdin depends on what each CLI accepts.
 
 ## 5. Order of work
-1. Make pricing mandatory for API endpoints (small, safe, testable now).
-2. Fix the harness reader findings (testable with scripted streams).
-3. Write the live suite behind environment gates, so it is ready when keys exist.
-4. Record the first live runs when the operator supplies keys and a spend cap, and fill the "Live" column.
-5. The `PATH`-scrubbed full mission.
+1. Write the live suite behind environment gates, so it is ready when keys exist.
+2. Record the first live runs when the operator supplies keys and a spend cap, and fill the "Live" column.
+3. The `PATH`-scrubbed full mission.
+4. Harness contract pinning (§4): recorded stream fixtures per CLI version, and the `doctor` version warning.
+5. The system prompt in argv, if the CLIs allow another route.
+
+Steps 1 and 4 need no keys and can proceed now.

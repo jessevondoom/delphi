@@ -7,8 +7,10 @@
 //!   terminal or to the one that spawned it, so a script cannot attach to someone else's daemon. A run that
 //!   finds one already running without a terminal says so and stops; it never goes around that rule.
 //! * **Cards are answered by a written policy, never by guessing.** `--on-card deny` (the default) denies every
-//!   card. `--on-card policy:<file>` allows the Amber cards the file lists. A Red card is never allowed,
-//!   whatever the file says, so a headless build ends at "ready to merge" on its branch.
+//!   card. `--on-card policy:<file>` allows the Amber cards the file lists. `--on-card relay` answers nothing:
+//!   the cards wait for a person, through a relay (`delphi relay`) or a console, and the run waits with them.
+//!   A Red card is never allowed by the run, whatever the file says, and a merge card is always denied by the
+//!   run, so a headless build ends at "ready to merge" on its branch.
 //! * **The result is a summary object and an exit code**, so a caller can act on it.
 //!
 //! Exit codes: 0 completed or ready to merge · 1 gates failed or the task escalated · 2 stopped because a card
@@ -37,6 +39,8 @@ const MERGE_TOOLS: [&str; 2] = ["merge", "pull_request"];
 pub enum OnCard {
     Deny,
     Policy(Policy),
+    /// Answer nothing: leave every card (except the merge card) for the operator.
+    Leave,
 }
 
 #[derive(Debug, PartialEq)]
@@ -95,8 +99,8 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     let on_card = match value_of(args, "--on-card").as_deref() {
         None | Some("deny") => OnCard::Deny,
         Some(p) if p.starts_with("policy:") => OnCard::Policy(Policy::load(Path::new(&p["policy:".len()..]))?),
-        Some("park") | Some("relay") => return Err("--on-card park and relay arrive with the relay (specs/014); use deny or policy:<file> for now".into()),
-        Some(other) => return Err(format!("--on-card takes deny or policy:<file>, not `{}`", other)),
+        Some("relay") | Some("park") => OnCard::Leave,
+        Some(other) => return Err(format!("--on-card takes deny, relay or policy:<file>, not `{}`", other)),
     };
     let permissions = value_of(args, "--permissions");
     if let Some(p) = &permissions {
@@ -191,19 +195,19 @@ pub fn glob(pat: &str, text: &str) -> bool {
     true
 }
 
-/// The answer to a card: `(decision, reason)`. Red is never allowed, whatever the policy says.
-pub fn decide(on_card: &OnCard, card: &Value) -> (&'static str, String) {
+/// The answer to a card: `Some((decision, reason))`, or `None` to leave it for the operator (`--on-card relay`).
+/// Red is never allowed, whatever the policy says, and the merge card is always denied so the run can end.
+pub fn decide(on_card: &OnCard, card: &Value) -> Option<(&'static str, String)> {
     let (tier, tool, pattern) = (card["tier"].as_str().unwrap_or("amber"), card["tool"].as_str().unwrap_or(""), card["pattern"].as_str().unwrap_or(""));
     if MERGE_TOOLS.contains(&tool) {
-        return ("deny", "headless run: stopped before the merge, which is the operator's decision".into());
-    }
-    if tier == "red" {
-        return ("deny", "headless run: a Red action is never approved without the operator".into());
+        return Some(("deny", "headless run: stopped before the merge, which is the operator's decision".into()));
     }
     match on_card {
-        OnCard::Policy(p) if p.matches(tool, pattern) => ("allow", "allowed by the run's policy".into()),
-        OnCard::Policy(_) => ("deny", "headless run: no policy rule allows this".into()),
-        OnCard::Deny => ("deny", "headless run: --on-card deny".into()),
+        OnCard::Leave => None,
+        _ if tier == "red" => Some(("deny", "headless run: a Red action is never approved without the operator".into())),
+        OnCard::Policy(p) if p.matches(tool, pattern) => Some(("allow", "allowed by the run's policy".into())),
+        OnCard::Policy(_) => Some(("deny", "headless run: no policy rule allows this".into())),
+        OnCard::Deny => Some(("deny", "headless run: --on-card deny".into())),
     }
 }
 
@@ -239,6 +243,21 @@ impl Summary {
                     self.pr_url = Some(u.to_string());
                 }
             }
+            "approval.resolved" => {
+                // Whoever answered a card the run left alone: record how it ended.
+                let id = p["approval_id"].as_str().unwrap_or("");
+                if let Some(c) = self.cards.iter_mut().find(|c| c["approval_id"] == id && c["decision"] == "left") {
+                    let how = match p["resolution"].as_str().unwrap_or("") {
+                        "approved" => "allow",
+                        _ => "deny",
+                    };
+                    c["decision"] = json!(how);
+                    c["reason"] = json!(format!("{} by {}", p["resolution"].as_str().unwrap_or("resolved"), p["by"].as_str().unwrap_or("someone")));
+                    if how == "deny" && !MERGE_TOOLS.contains(&c["tool"].as_str().unwrap_or("")) {
+                        self.denied_non_merge = true;
+                    }
+                }
+            }
             "task.output" => self.text = p["text"].as_str().unwrap_or("").to_string(),
             "task.completed" => {
                 self.status = p["status"].as_str().map(String::from);
@@ -251,6 +270,10 @@ impl Summary {
 
     /// Record a card and what was done with it. A merge card also captures what is ready to merge.
     pub fn card(&mut self, card: &Value, decision: &str, reason: &str) {
+        if decision == "left" {
+            self.cards.push(json!({"approval_id": card["approval_id"], "tool": card["tool"], "tier": card["tier"], "summary": card["summary"], "decision": "left", "reason": reason}));
+            return;
+        }
         let tool = card["tool"].as_str().unwrap_or("");
         if MERGE_TOOLS.contains(&tool) {
             let pl = &card["payload"];
@@ -288,13 +311,14 @@ impl Summary {
 
     pub fn to_json(&self, outcome: &str, code: i32, wall: Duration, usage: Value) -> Value {
         let allowed = self.cards.iter().filter(|c| c["decision"] == "allow").count();
+        let denied = self.cards.iter().filter(|c| c["decision"] == "deny").count();
         json!({
             "type": "run.summary", "outcome": outcome, "exit_code": code,
             "mission_id": self.mission_id, "task_id": self.task_id,
             "ready_to_merge": self.ready, "merge_commit": self.merge_commit, "pr_url": self.pr_url,
             "gates": self.gates, "reason": self.reason, "error": self.failed,
             "text": self.text.chars().take(4000).collect::<String>(),
-            "cards": {"total": self.cards.len(), "allowed": allowed, "denied": self.cards.len() - allowed, "list": self.cards},
+            "cards": {"total": self.cards.len(), "allowed": allowed, "denied": denied, "left": self.cards.len() - allowed - denied, "list": self.cards},
             "usage": usage, "wall_secs": wall.as_secs_f64(),
         })
     }
@@ -434,15 +458,26 @@ fn drive(attached: &mut delphi_core::spawn::Attached, opts: &Opts, started: Inst
         let kind = e["type"].as_str().unwrap_or("");
         if kind == "approval.requested" && e["payload"]["task_id"].as_str() == Some(task_id.as_str()) {
             let card = &e["payload"];
-            let (decision, reason) = decide(&opts.on_card, card);
-            sum.card(card, decision, &reason);
-            if let Err(err) = cmd.call("approval.resolve", json!({"approval_id": card["approval_id"], "payload_blake3": card["payload_blake3"], "decision": decision, "reason": reason})) {
-                // A card that already timed out or was answered elsewhere is not an error for this run.
-                if !matches!(err, ClientError::Rpc { .. }) {
-                    lost = true;
-                    break;
+            match decide(&opts.on_card, card) {
+                Some((decision, reason)) => {
+                    sum.card(card, decision, &reason);
+                    if let Err(err) = cmd.call("approval.resolve", json!({"approval_id": card["approval_id"], "payload_blake3": card["payload_blake3"], "decision": decision, "reason": reason})) {
+                        // A card that already timed out or was answered elsewhere is not an error for this run.
+                        if !matches!(err, ClientError::Rpc { .. }) {
+                            lost = true;
+                            break;
+                        }
+                    }
+                }
+                None => {
+                    sum.card(card, "left", "left for the operator (--on-card relay)");
+                    say_err(&format!("waiting for the operator to answer: {} ({})", card["summary"].as_str().unwrap_or("a card"), card["approval_id"].as_str().unwrap_or("?")));
                 }
             }
+            continue;
+        }
+        if kind == "approval.resolved" {
+            sum.apply(&e);
             continue;
         }
         if mine {
@@ -526,7 +561,6 @@ mod tests {
             (vec!["x", "--permissions", "yolo"], "--permissions takes"),
             (vec!["x", "--timeout", "soon"], "not a duration"),
             (vec!["x", "--on-card", "yes"], "--on-card takes"),
-            (vec!["x", "--on-card", "park"], "arrive with the relay"),
             (vec!["x", "--json", "--jsonl"], "alternatives"),
         ] {
             let e = parse_args(&args(&a)).unwrap_err();
@@ -569,14 +603,40 @@ mod tests {
         let red_same_tool = json!({"tier": "red", "tool": "danger", "pattern": "x"});
         let merge = json!({"tier": "red", "tool": "merge", "pattern": "merge abc"});
         let unlisted = json!({"tier": "amber", "tool": "other", "pattern": "x"});
-        assert_eq!(decide(&policy, &amber).0, "allow");
-        assert_eq!(decide(&policy, &red_same_tool).0, "deny", "a policy that lists a Red tool still cannot allow it");
-        assert_eq!(decide(&policy, &merge).0, "deny");
-        assert_eq!(decide(&policy, &unlisted).0, "deny");
-        assert_eq!(decide(&OnCard::Deny, &amber).0, "deny");
+        let d = |on: &OnCard, c: &Value| decide(on, c).map(|x| x.0);
+        assert_eq!(d(&policy, &amber), Some("allow"));
+        assert_eq!(d(&policy, &red_same_tool), Some("deny"), "a policy that lists a Red tool still cannot allow it");
+        assert_eq!(d(&policy, &merge), Some("deny"));
+        assert_eq!(d(&policy, &unlisted), Some("deny"));
+        assert_eq!(d(&OnCard::Deny, &amber), Some("deny"));
         // Even if a card claims to be amber, a merge tool is never allowed.
         let sneaky = json!({"tier": "amber", "tool": "merge", "pattern": ""});
-        assert_eq!(decide(&policy, &sneaky).0, "deny");
+        assert_eq!(d(&policy, &sneaky), Some("deny"));
+    }
+
+    #[test]
+    fn relay_mode_answers_nothing_except_the_merge_card_which_always_ends_the_run() {
+        assert_eq!(parse_args(&args(&["x", "--on-card", "relay"])).unwrap().on_card, OnCard::Leave);
+        assert_eq!(parse_args(&args(&["x", "--on-card", "park"])).unwrap().on_card, OnCard::Leave);
+        let amber = json!({"tier": "amber", "tool": "write_file", "pattern": "p"});
+        let red = json!({"tier": "red", "tool": "gh_pr_create", "pattern": "p"});
+        let merge = json!({"tier": "red", "tool": "merge", "pattern": "merge abc"});
+        assert_eq!(decide(&OnCard::Leave, &amber), None);
+        assert_eq!(decide(&OnCard::Leave, &red), None, "a Red card waits for the operator, who can deny it by reply or approve it at the console");
+        assert_eq!(decide(&OnCard::Leave, &merge).map(|x| x.0), Some("deny"));
+    }
+
+    #[test]
+    fn a_card_left_for_the_operator_is_recorded_with_how_it_ended() {
+        let mut s = Summary::default();
+        s.card(&json!({"approval_id": "ap_1", "tool": "write_file", "tier": "amber"}), "left", "left");
+        s.card(&json!({"approval_id": "ap_2", "tool": "write_file", "tier": "amber"}), "left", "left");
+        s.apply(&json!({"type": "approval.resolved", "payload": {"approval_id": "ap_1", "resolution": "approved", "by": "relay:email:me@example.com"}}));
+        s.apply(&json!({"type": "approval.resolved", "payload": {"approval_id": "ap_2", "resolution": "timed_out", "by": "timeout"}}));
+        let j = s.to_json("completed", 0, Duration::from_secs(1), Value::Null);
+        assert_eq!((j["cards"]["allowed"].as_u64(), j["cards"]["denied"].as_u64(), j["cards"]["left"].as_u64()), (Some(1), Some(1), Some(0)));
+        assert!(j["cards"]["list"][0]["reason"].as_str().unwrap().contains("relay:email:me@example.com"));
+        assert!(s.denied_non_merge, "a timeout the operator never answered counts as a refusal");
     }
 
     fn done() -> Summary {

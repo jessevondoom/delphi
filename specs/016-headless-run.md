@@ -43,12 +43,13 @@ Every approval card for the run's task is answered by `--on-card`:
 | :-- | :-- |
 | `deny` (default) | Every card is denied with a recorded reason. |
 | `policy:<file>` | Cards matching an `[[allow]]` rule are allowed (tool name, optional `*` pattern on the card's pattern). Everything else is denied. |
+| `relay` (alias `park`) | Answers nothing. The cards wait for a person, through `delphi relay` (`specs/014`) or an attached console, and the run waits with them, bounded by `--timeout`. A line on stderr says what it is waiting for. The merge card is still denied by the run. |
 
 Invariants, tested:
 1. **Red is never allowed.** A card of the Red tier is denied whatever the policy says.
 2. **Merge tools are never allowed.** A card whose tool is `merge` or `pull_request` is denied even if it claims to be Amber, and a policy file that names either tool, or any tier other than Amber, does not load.
 3. **Stopping at the merge card is the design.** When a build reaches the merge card, the run records the branch, commit and gate report from the card, denies the card, and reports `ready_to_merge`. The operator merges later from the console. Denying the card keeps the branch and worktree, which is what the engine already does for a declined merge.
-4. `--on-card park` and `relay` are reserved for the relay (`specs/014`) and are refused until it exists.
+4. With `--on-card relay` a Red card that is not a merge card is left for the operator, who can deny it by reply and approve it only at the console (`specs/014` §3). How each left card ended (approved, denied, timed out, and by whom) is filled into the summary from the log.
 
 ## 4. Output and exit codes
 - default: a short human summary on stdout.
@@ -71,7 +72,7 @@ A budget stop outranks a denied card, and an outright task failure outranks ever
 `--permissions <mode>` sets the daemon's permission mode for the run and restores the previous mode afterwards. `--budget <usd>` sets the mission ceiling. `--timeout <dur>` cancels the task and exits 4 after the given time. `--mission <id>` continues an existing mission.
 
 ## 6. Verification Plan
-Unit tests (in `run.rs`): argument parsing and refusals; durations; policy loading refuses Red tiers, merge tools and unknown keys; glob matching; **Red and merge cards are never allowed under any policy**; outcome and exit-code ordering; the summary's card counts and ready-to-merge capture.
+Unit tests (in `run.rs`): argument parsing and refusals; durations; policy loading refuses Red tiers, merge tools and unknown keys; glob matching; **Red and merge cards are never allowed under any policy**; outcome and exit-code ordering; the summary's card counts (allowed, denied, left) and ready-to-merge capture; relay mode leaves every card but the merge card, and records how each ended.
 
 End-to-end tests (`tests/e2e.rs`, mock model, real daemon, no terminal): a read-only task completes with a summary and cost; a card is denied by default and nothing is written; a policy allows exactly the tool it names; a policy naming `merge` is refused before the daemon is touched.
 

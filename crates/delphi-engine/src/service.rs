@@ -271,6 +271,37 @@ impl EngineService {
         }
     }
 
+    /// `approval.relay_resolve`: the answer a relay brings back from the operator's other channel (`specs/014` §2).
+    /// Narrower than `approval.resolve` on purpose: it needs the relay scope, takes only `allow` or `deny` (never
+    /// "allow similar"), and **cannot allow a Red card**, whatever the channel, so a stolen mailbox or chat
+    /// account can deny anything but approve only what the operator already treats as routine. The answer is
+    /// still bound to the payload hash and still loses to an earlier answer or a timeout.
+    fn approval_relay_resolve(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        if ctx.scope != Scope::Relay {
+            return Err(err(code::FORBIDDEN, "this method is for the relay scope; the console uses approval.resolve"));
+        }
+        let (Some(id), Some(hash)) = (p["approval_id"].as_str(), p["payload_blake3"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`approval_id` and `payload_blake3` are required"));
+        };
+        let allow = match p["decision"].as_str() {
+            Some("allow") => true,
+            Some("deny") => false,
+            _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow or deny")),
+        };
+        if allow && self.engine.broker.get(id).is_some_and(|r| r.tier == crate::approval::Tier::Red) {
+            return Err(err(code::FORBIDDEN, "a Red action is answered at the console, not through a relay (it can still be denied here)"));
+        }
+        // Who answered, for the log: the channel and the sender it vouches for, printable and short.
+        let clean = |v: &Value, max: usize| -> String { v.as_str().unwrap_or("").chars().take(max).map(|c| if c.is_ascii_alphanumeric() || "@._:+-".contains(c) { c } else { '_' }).collect() };
+        let by = format!("relay:{}:{}", clean(&p["channel"], 24), clean(&p["sender"], 80));
+        let answer = if allow { Answer::Allow } else { Answer::Deny { reason: p["reason"].as_str().unwrap_or("").chars().take(500).collect() } };
+        match self.engine.broker.resolve(id, hash, answer, &by) {
+            Ok(r) => Ok(r.event_payload(id, &by)),
+            Err(ResolveError::Gone { resolution, by: who }) => Err(RpcError { code: code::NOT_FOUND, message: format!("{}", ResolveError::Gone { resolution: resolution.clone(), by: who.clone() }), data: Some(json!({"by": who, "resolution": resolution.map(|r| r.event_payload(id, "")) })) }),
+            Err(e) => Err(err(code::INVALID_PARAMS, e.to_string())),
+        }
+    }
+
     /// `models.get`: the pool as `delphi models` prints it, from the daemon's live state.
     fn models_get(&self) -> RpcOutcome {
         let cfg = self.engine.cfg.get();
@@ -489,6 +520,7 @@ impl Extension for ServiceExt {
                 "kb.index" => svc.kb_index(ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
+                "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
                 "usage.get" => svc.usage_get(params).await,
                 "models.get" => svc.models_get(),
                 "budget.get" => svc.mission(params["mission_id"].as_str()).await.map(|m| EngineService::budget_json(&m)),
@@ -524,8 +556,10 @@ mod tests {
     struct Served {
         sock: PathBuf,
         narrator_sock: PathBuf,
+        relay_sock: PathBuf,
         console: String,
         narrator: String,
+        relay: String,
         _dir: tempfile::TempDir,
     }
 
@@ -537,8 +571,10 @@ mod tests {
         let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
         let sock = dir.path().join("d.sock");
         let narrator_sock = dir.path().join("n.sock");
+        let relay_sock = dir.path().join("r.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         let narrator_listener = tokio::net::UnixListener::bind(&narrator_sock).unwrap();
+        let relay_listener = tokio::net::UnixListener::bind(&relay_sock).unwrap();
         let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
         cfg.tty_policy = TtyPolicy::Disabled;
         if let Some(c) = queue_cap {
@@ -548,9 +584,9 @@ mod tests {
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         daemon.set_extension(svc.extension());
-        let (console, narrator) = (daemon.console_token().to_string(), daemon.narrator_token().to_string());
-        tokio::spawn(daemon.serve_sockets(listener, Some(narrator_listener)));
-        Served { sock, narrator_sock, console, narrator, _dir: dir }
+        let (console, narrator, relay) = (daemon.console_token().to_string(), daemon.narrator_token().to_string(), daemon.relay_token().to_string());
+        tokio::spawn(daemon.serve_all(listener, Some(narrator_listener), Some(relay_listener)));
+        Served { sock, narrator_sock, relay_sock, console, narrator, relay, _dir: dir }
     }
 
     async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -670,6 +706,156 @@ mod tests {
         .await;
         assert_eq!(f.model.requests().len(), 0);
         assert!(f.m.replay().unwrap().iter().all(|e| e.kind != "task.created"), "nothing was started");
+    }
+
+    // ── the relay scope (specs/014) ──────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_socket_accepts_only_its_own_token_and_the_relay_socket_issues_only_relay_tokens() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (c_sock, n_sock, r_sock) = (s.sock.clone(), s.narrator_sock.clone(), s.relay_sock.clone());
+        let (c_tok, n_tok, r_tok) = (s.console.clone(), s.narrator.clone(), s.relay.clone());
+        blocking(move || {
+            let try_hello = |sock: &PathBuf, tok: &str| {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                c.hello(tok).is_ok()
+            };
+            assert!(try_hello(&r_sock, &r_tok) && try_hello(&c_sock, &c_tok) && try_hello(&n_sock, &n_tok));
+            for (sock, tok, what) in [(&r_sock, &c_tok, "console token on the relay socket"), (&r_sock, &n_tok, "narrator token on the relay socket"), (&c_sock, &r_tok, "relay token on the console socket"), (&n_sock, &r_tok, "relay token on the narrator socket")] {
+                assert!(!try_hello(sock, tok), "{} must be refused", what);
+            }
+            let mut c = Client::connect(&r_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "console"}))), Some(code::FORBIDDEN), "the relay socket cannot hand out a console token");
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "narrator"}))), Some(code::FORBIDDEN));
+            assert!(c.issue_token(delphi_core::proto::Scope::Relay).is_ok(), "it issues its own kind");
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "relay"}))), Some(code::FORBIDDEN), "and the console socket cannot issue one");
+            let mut c = Client::connect(&r_sock).unwrap();
+            assert_eq!(c.hello(&r_tok).unwrap()["scope"], "relay");
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_relay_socket_answers_a_fixed_short_list_and_refuses_everything_else_by_name() {
+        let mut listed: Vec<&str> = delphi_core::server::RELAY_METHODS.to_vec();
+        listed.sort();
+        assert_eq!(listed, vec!["approval.list", "approval.relay_resolve", "budget.get", "events.subscribe", "session.ping"], "the list is the contract; adding to it is a decision");
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            for m in everything_a_relay_must_not_reach {
+                assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
+            }
+            for m in delphi_core::server::RELAY_METHODS {
+                assert_ne!(rpc_code(c.call(m, json!({}))), Some(code::FORBIDDEN), "{} is on the list, so it must be answered", m);
+            }
+        })
+        .await;
+        assert_eq!(f.model.requests().len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_relay_is_sent_cards_and_outcomes_but_never_what_an_agent_says() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-relay.md", "content": "# Relay\nbody"})), Step::text("A very private model reply.")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (c_sock, r_sock, c_tok, r_tok) = (s.sock.clone(), s.relay_sock.clone(), s.console.clone(), s.relay.clone());
+        let kinds = blocking(move || {
+            let mut relay = Client::connect(&r_sock).unwrap();
+            relay.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            relay.hello(&r_tok).unwrap();
+            relay.call("events.subscribe", json!({})).unwrap();
+            let mut console = Client::connect(&c_sock).unwrap();
+            console.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            console.hello(&c_tok).unwrap();
+            console.call("task.submit", json!({"target": "architect", "prompt": "Draft a spec"})).unwrap();
+            let mut kinds: Vec<String> = Vec::new();
+            let mut answered = false;
+            loop {
+                let n = relay.next_notification().unwrap();
+                assert_ne!(n["method"], "delta.frame", "live model text must not reach a relay");
+                if n["method"] != "event" {
+                    continue;
+                }
+                let e = &n["params"];
+                kinds.push(e["type"].as_str().unwrap().to_string());
+                assert!(!e.to_string().contains("private model reply"), "model text leaked to the relay: {}", e);
+                if e["type"] == "approval.requested" && !answered {
+                    answered = true;
+                    let p = &e["payload"];
+                    let r = relay.call("approval.relay_resolve", json!({"approval_id": p["approval_id"], "payload_blake3": p["payload_blake3"], "decision": "allow", "channel": "email", "sender": "me@example.com"})).unwrap();
+                    assert_eq!(r["resolution"], "approved");
+                }
+                if e["type"] == "task.completed" {
+                    break;
+                }
+            }
+            kinds
+        })
+        .await;
+        for k in &kinds {
+            assert!(delphi_core::hub::RELAY_EVENTS.contains(&k.as_str()), "a relay was sent `{}`", k);
+        }
+        assert!(kinds.contains(&"approval.requested".to_string()) && kinds.contains(&"approval.resolved".to_string()) && kinds.contains(&"task.completed".to_string()), "{:?}", kinds);
+        assert!(f.root.join("workspaces/w/team/specs/009-relay.md").exists(), "the relay's answer approved the write");
+        let resolved = events_of(&f, "approval.resolved");
+        assert_eq!(resolved[0].payload["by"], "relay:email:me@example.com", "the log says who answered: {}", resolved[0].payload);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_relay_can_approve_amber_deny_anything_and_never_approve_red() {
+        use crate::approval::{Request, Tier};
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let mk = |tier: Tier, tool: &str| Request { approval_id: String::new(), task_id: "t_0001".into(), span_id: "sp1".into(), role: "architect".into(), tier, tool: tool.into(), pattern: tool.into(), worktree: None, summary: "s".into(), payload: json!({"tool": tool}), payload_blake3: String::new(), timeout: Duration::from_secs(60) };
+        let amber = f.engine.broker.request(mk(Tier::Amber, "write_file"));
+        let red = f.engine.broker.request(mk(Tier::Red, "merge"));
+        let red2 = f.engine.broker.request(mk(Tier::Red, "pull_request"));
+        let amber2 = f.engine.broker.request(mk(Tier::Amber, "write_file"));
+        let hash = |id: &str| f.engine.broker.get(id).unwrap().payload_blake3;
+        let ids = [amber.approval_id.clone(), red.approval_id.clone(), red2.approval_id.clone(), amber2.approval_id.clone()];
+        let hashes: Vec<String> = ids.iter().map(|i| hash(i)).collect();
+        let (r_sock, r_tok, c_sock, c_tok) = (s.relay_sock.clone(), s.relay.clone(), s.sock.clone(), s.console.clone());
+        let ids_in = ids.clone();
+        blocking(move || {
+            let ids = ids_in;
+            let mut r = Client::connect(&r_sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&r_tok).unwrap();
+            let call = |r: &mut Client, i: usize, decision: &str| r.call("approval.relay_resolve", json!({"approval_id": ids[i], "payload_blake3": hashes[i], "decision": decision, "channel": "email", "sender": "me@example.com"}));
+            // Red: allow is refused by the daemon, whoever asks; the card is still waiting.
+            assert_eq!(rpc_code(call(&mut r, 1, "allow")), Some(code::FORBIDDEN));
+            assert_eq!(rpc_code(call(&mut r, 2, "allow")), Some(code::FORBIDDEN));
+            // "Allow similar" is not a relay decision at all.
+            assert_eq!(rpc_code(call(&mut r, 0, "allow_similar")), Some(code::INVALID_PARAMS));
+            // A wrong payload hash approves nothing.
+            let bad = r.call("approval.relay_resolve", json!({"approval_id": ids[0], "payload_blake3": "0000", "decision": "allow", "channel": "email", "sender": "x"}));
+            assert!(bad.is_err(), "a changed payload is a new approval");
+            // Amber: allowed. Red: denied is fine.
+            assert_eq!(call(&mut r, 0, "allow").unwrap()["resolution"], "approved");
+            assert!(call(&mut r, 1, "deny").is_ok());
+            // The first answer wins: a second answer to the same card learns it lost.
+            assert_eq!(rpc_code(call(&mut r, 0, "deny")), Some(code::NOT_FOUND));
+            // The console's method is not the relay's, and the relay's is not the console's.
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            assert_eq!(rpc_code(c.call("approval.relay_resolve", json!({"approval_id": ids[3], "payload_blake3": hashes[3], "decision": "allow"}))), Some(code::FORBIDDEN), "a console uses approval.resolve");
+        })
+        .await;
+        assert!(matches!(amber.wait().await, crate::approval::Resolution::Approved { .. }));
+        assert!(matches!(red.wait().await, crate::approval::Resolution::Denied { .. }));
+        assert!(f.engine.broker.get(&ids[2]).is_some() && f.engine.broker.get(&ids[3]).is_some(), "the refused and untouched cards are still waiting");
+        drop((red2, amber2));
     }
 
     #[tokio::test(flavor = "multi_thread")]
