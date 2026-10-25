@@ -12,6 +12,8 @@ tags: [plan, optimistic, provisional-decisions, approvals, governance]
 
 # Optimistic workflow (exploration, draft)
 
+> **Status:** O1 is built; see [`specs/015`](../../specs/015-provisional-decisions.md) for what exists. This exploration's approver is the Strategist; the first approver actually built is rule-based, and the Strategist remains a later step. The charter amendments in §3 are still unapplied.
+
 **The idea, as requested:** when the operator asks for it, the Orchestrator may answer approval cards itself on a non-merged branch. Every such decision is recorded, and the merge is blocked until the operator has reviewed and approved every one of them.
 
 This is an exploration. It is not ratified and it changes the charter, so §3 lists what would need amending. It builds on [`gap-closure-plan-2026-10-25.md`](gap-closure-plan-2026-10-25.md) (the relay and parking) and is a candidate arm in [`evaluation-plan-2026-10-25.md`](evaluation-plan-2026-10-25.md). The code facts below come from `approval.rs`, `finalize.rs`, `tools.rs` and `GOVERNANCE.md`; I read only parts of them, and §2.1 flags the places where I have not seen the whole picture.

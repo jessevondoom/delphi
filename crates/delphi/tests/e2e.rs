@@ -687,10 +687,24 @@ fn the_inline_console_pins_a_block_prints_into_scrollback_and_never_takes_over_t
     for _ in 0..3 {
         c.type_keys("/help\r");
     }
+    // Wait for what this means, not for a line of help text (which scrolls out of the visible history as help grows):
+    // lines have scrolled into the terminal's history, and then the screen has stopped changing.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while c.everything().matches("/usage [mission|role|task|model]").count() < 2 {
+    while c.lines_in_scrollback() < 10 {
         assert!(Instant::now() < deadline, "{}", c.everything());
         std::thread::sleep(Duration::from_millis(60));
+    }
+    let (mut last, mut stable) = (c.visible(), 0);
+    while stable < 6 {
+        assert!(Instant::now() < deadline, "the screen never settled:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+        let now = c.visible();
+        if now == last {
+            stable += 1;
+        } else {
+            stable = 0;
+            last = now;
+        }
     }
     assert!(c.lines_in_scrollback() >= 10, "output scrolled into the terminal's scrollback ({} lines), it was not redrawn over:\n{}", c.lines_in_scrollback(), c.everything());
     let tail = c.visible();

@@ -116,6 +116,15 @@ The **code is the secret; the address is a filter**. A message that fails any st
 6. In a terminal or tmux pane: `delphi relay`. Leave it running.
 7. For unattended work: `delphi run "…" --on-card relay`, optionally with `[away] approval_park_max_sec = 14400` so a card that nobody answers for a while is raised again instead of failing the task.
 
+### 8.1 Running Delphi on another machine
+There is no remote execution backend, on purpose (a second sandbox is a second thing to get wrong). The same result comes from running all of Delphi on the machine that should do the work, over `ssh`, with the relay as the way back to you:
+1. On the remote machine: install Delphi, `delphi init` and set up model access as usual, and do §8 steps 1 to 5 there.
+2. In a `tmux` session: one pane with `delphi relay`, which keeps running when you disconnect (it needs a terminal, and a `tmux` pane is one).
+3. In another pane, start work with `delphi run "…" --on-card relay` (optionally with `--timeout` and `[away] approval_park_max_sec`), or `delphi run "/build --optimistic …"` to review everything at the end.
+4. Detach. Cards and notices arrive by email; Amber cards are answered by reply; a merge, any Red card and the review of provisional decisions are done in the console when you next attach (`tmux attach`, then `delphi`).
+
+Nothing here opens a port. Whether a true backend is worth building is a question for `delphi needs`, once this has been used for real work.
+
 ## 9. Verification Plan
 Unit tests (`relay/`): verdict parsing; a card goes out with a token and, by default, only its summary; the token approves once and only once; strangers get no answer and no reply; the right address without authentication is refused and the operator told once, and the forgery does not use up the real code; a wrong token approves nothing and a duplicate message id is not processed twice; replies that are not a verdict or are auto-generated do nothing; a Red card can be denied but never approved (and has no approve link); what the daemon says back (too late, refused, down) reaches the operator; a card resolved elsewhere is closed and its code is dead; a re-raised card has a new code and the old one stays dead; caps hold; header injection through a summary is neutralised.
 

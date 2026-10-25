@@ -4,6 +4,7 @@ mod avatar;
 mod check;
 mod chat;
 mod console;
+mod decisions;
 mod doctor;
 mod frontmatter;
 mod home;
@@ -34,6 +35,7 @@ const USAGE: &str = "usage:
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
+  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>] [--workspace <name>] [--home <dir>]   (review an optimistic build's provisional decisions)
   delphi relay [check] [--workspace <name>] [--home <dir>]   (send approval cards to your email and take your replies; run it in a terminal or tmux pane)
   delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>] [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]   (no terminal needed; exit 0 ok · 1 gates · 2 card denied · 3 budget · 4 infrastructure)
   delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
@@ -71,6 +73,7 @@ fn main() {
         Some("chat") => cmd_chat(&args[1..]),
         Some("run") => cmd_run(&args[1..]),
         Some("relay") => cmd_relay(&args[1..]),
+        Some("decisions") => cmd_decisions(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
         Some("needs") => cmd_needs(&args[1..]),
@@ -304,6 +307,16 @@ fn cmd_chat(args: &[String]) -> i32 {
     } else {
         chat::run(&home, &ws.dir, flag(args, "--mission"), names)
     }
+}
+
+/// `delphi decisions …`: review an optimistic build's provisional decisions from a shell (`decisions.rs`).
+fn cmd_decisions(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("decisions", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let rest: Vec<String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !matches!(args[*i - 1].as_str(), "--workspace" | "--home" | "--mission"))).map(|(_, a)| a.clone()).collect();
+    decisions::cli(&home, &ws.dir, flag(args, "--mission"), &rest)
 }
 
 /// `delphi relay [check]`: the email relay for approval cards (`relay/`, `specs/014`).

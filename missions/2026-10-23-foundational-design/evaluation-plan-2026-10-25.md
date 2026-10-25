@@ -109,6 +109,8 @@ Delphi is justified, as a team and not just a wrapper, if **all** of these hold 
 
 ## 7. The runner
 
+> **Built (skeleton):** [`dev/bench/bench.py`](../../dev/bench/bench.py) with a README, example arms and a policy file; its self-test runs in CI against fake arms and a real git repository. It does the fresh clone per run, the seeded arm order, the hidden-test patch after the arm finishes, and the JSONL rows, and it runs a Delphi arm as a copy of a pre-ratified template home via `delphi run`. **Nothing paid has been run.** Open: the spec-step operator proxy (a large change stops at gate 3), restricting network egress, and the task sets themselves.
+
 - Lives under `dev/bench/` (a Rust `xtask` or a script, to decide). It checks out each task at its base commit in a fresh worktree, runs the arm, applies the hidden tests, and writes one result row per run.
 - Arms are config, not code: an arm is a command line plus a Delphi config overlay. Adding an ablation means adding a config.
 - Results go to `missions/.../bench/results/` as JSONL with the event-log path and the ledger totals for every run. Raw prompts and outputs stay out of the repository if they contain anything sensitive.

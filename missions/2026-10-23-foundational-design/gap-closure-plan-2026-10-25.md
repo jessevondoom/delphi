@@ -16,6 +16,17 @@ This follows a comparison of Delphi with Claude Code, `agy`, `hermes-agent` and 
 
 Nothing here is ratified or committed work. Competitor details came from secondary sources and need checking against official docs before anything depends on them. Where this plan says "unverified", I did not confirm it in the code or the docs.
 
+## Build status (2026-10-25, branch `worktree-gap-plan`)
+
+| Item | State | Where |
+| :-- | :-- | :-- |
+| Headless `delphi run` (P1) | **Built and tested**, including `--on-card deny / policy:<file> / relay`, the JSON summary and exit codes 0 to 5 | [`specs/016`](../../specs/016-headless-run.md) |
+| Relay scope, parking, the email channel (R0 to R2) | **Built and tested** against fake SMTP and IMAP servers and a real daemon. **Not yet run against a real mailbox.** TOTP step-up and chat channels are not built | [`specs/014`](../../specs/014-relay-and-away-mode.md) |
+| Provisional decisions (O0, O1) | **Built and tested**: the ledger, gate 6, the review wait, `/decisions`, `/merge`, `delphi decisions`, the rule-based approver. Not built: the Strategist as a model-backed approver, the optional second seat, caps, rollback after a rejection, review by email. The charter amendments are drafted and **not applied** | [`specs/015`](../../specs/015-provisional-decisions.md) |
+| Readiness matrix and the agentskills.io audit (P0) | **Done** (documents). The live conformance suite, harness contract pinning and the `PATH`-scrubbed mission are **not built** and need keys | [`provider-readiness`](provider-readiness-2026-10-25.md) |
+| Skills import/export, observe hooks, remote recipe (P6) | Not started | §3 |
+| Benchmark runner and pilot (P3) | Not started | [`evaluation-plan`](evaluation-plan-2026-10-25.md) |
+
 ## 0. Ground truth in the code today
 
 | Fact | Where | Why it matters here |

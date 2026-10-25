@@ -225,6 +225,17 @@ impl<C: Channel, D: Daemon> Relay<C, D> {
                 }
             }
             "approval.parked" => {} // a fresh card follows; the old token is already gone with its resolution
+            "decisions.review_requested" => {
+                // Summaries only: what was allowed, how risky, and why. Reviewing happens at the console.
+                let task = e["task_id"].as_str().unwrap_or("?");
+                let n = p["count"].as_u64().unwrap_or(0);
+                let mut text = format!("Task {} made {} provisional decision(s) that you must review before anything can merge. Nothing has reached your checkout.\n\n", task, n);
+                for d in p["decisions"].as_array().into_iter().flatten().take(15) {
+                    text.push_str(&format!("  [{}] {} ({})\n    {}\n", clean(d["risk"].as_str().unwrap_or("routine"), 12), clean(d["summary"].as_str().unwrap_or("?"), 120).replace('\n', " "), clean(d["decision_id"].as_str().unwrap_or("?"), 24), clean(d["rationale"].as_str().unwrap_or(""), 160).replace('\n', " ")));
+                }
+                text.push_str("\nReview them in the console: /decisions, then /decisions ratify <id> (or reject), then /merge <task>.\n");
+                self.notify(&format!("[delphi] {} awaits your review of {} decision(s)", task, n), &text, now);
+            }
             "task.completed" if self.cfg.notify_tasks => {
                 let task = e["task_id"].as_str().unwrap_or("?");
                 let status = p["status"].as_str().unwrap_or("?");
@@ -647,6 +658,19 @@ mod tests {
         let n = r.chan.sent.len();
         r.on_event(&json!({"type": "task.completed", "task_id": "t_0008", "payload": {"status": "done", "reason": ""}}), now);
         assert_eq!(r.chan.sent.len(), n);
+    }
+
+    #[test]
+    fn the_operator_is_told_when_decisions_await_review_with_summaries_and_no_payload() {
+        let mut r = relay();
+        let now = Instant::now();
+        r.on_event(&json!({"type": "decisions.review_requested", "task_id": "t_0004", "payload": {"count": 2, "decisions": [
+            {"decision_id": "dec_a", "summary": "write src/a.rs (3 bytes)", "risk": "routine", "rationale": "an ordinary edit"},
+            {"decision_id": "dec_b", "summary": "write Cargo.toml (9 bytes)", "risk": "elevated", "rationale": "a dependency manifest"}]}}), now);
+        let m = r.chan.sent.last().unwrap();
+        assert!(m.card.is_none() && m.subject.contains("t_0004") && m.subject.contains("2 decision(s)"), "{:?}", m);
+        assert!(m.text.contains("[elevated] write Cargo.toml") && m.text.contains("/decisions") && m.text.contains("Nothing has reached your checkout"), "{}", m.text);
+        assert!(m.actions.is_empty(), "there is nothing to answer by reply: reviewing happens at the console");
     }
 
     #[test]

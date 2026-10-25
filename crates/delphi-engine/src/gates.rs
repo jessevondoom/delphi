@@ -101,7 +101,7 @@ const DEPENDENCY_FILES: [&str; 28] = [
     "cargo.toml", "cargo.lock", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "go.mod", "go.sum", "pyproject.toml", "pipfile", "pipfile.lock", "poetry.lock", "gemfile", "gemfile.lock", "composer.json", "composer.lock", "requirements.txt",
 ];
 
-fn is_dependency_file(path: &str) -> bool {
+pub(crate) fn is_dependency_file(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
     DEPENDENCY_FILES.contains(&name.as_str()) || (name.starts_with("requirements") && name.ends_with(".txt"))
 }
@@ -202,10 +202,48 @@ pub fn approval(sha: &str, approved_shas: &[String]) -> Gate {
     Gate::new(5, "operator", approved_shas.iter().any(|s| s == sha), if approved_shas.iter().any(|s| s == sha) { "the operator approved this commit" } else { "waiting for the operator's approval of this commit" })
 }
 
+/// What the ledger of provisional decisions (`specs/015`) says about a task, for gate 6.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DecisionCounts {
+    /// Provisional decisions that allowed something: only these enabled work, so only these need review.
+    pub allowed: usize,
+    /// Ids of allowed decisions the operator has not yet reviewed.
+    pub pending: Vec<String>,
+    /// Ids of allowed decisions the operator rejected.
+    pub rejected: Vec<String>,
+}
+
+/// Gate 6: every provisional decision that allowed something has been reviewed and ratified by the operator.
+/// A task that made none is green. A rejection is red and says so: the work built on it is suspect.
+pub fn decisions(c: &DecisionCounts) -> Gate {
+    if !c.rejected.is_empty() {
+        return Gate::new(6, "decisions", false, format!("{} provisional decision(s) were rejected by the operator: {}", c.rejected.len(), c.rejected.iter().take(5).cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if !c.pending.is_empty() {
+        return Gate::new(6, "decisions", false, format!("{} provisional decision(s) await the operator's review: {}", c.pending.len(), c.pending.iter().take(5).cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if c.allowed == 0 {
+        Gate::new(6, "decisions", true, "no provisional decisions were made")
+    } else {
+        Gate::new(6, "decisions", true, format!("{} provisional decision(s), all reviewed and ratified by the operator", c.allowed))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::worktree::FileChange;
+
+    #[test]
+    fn gate_six_is_green_with_no_decisions_or_all_ratified_and_red_for_pending_or_rejected() {
+        assert_eq!(decisions(&DecisionCounts::default()).state, State::Green);
+        let all = decisions(&DecisionCounts { allowed: 3, ..Default::default() });
+        assert!(all.state == State::Green && all.detail.contains("3 provisional") && all.n == 6);
+        let pending = decisions(&DecisionCounts { allowed: 3, pending: vec!["dec_a".into()], rejected: vec![] });
+        assert!(pending.state == State::Red && pending.detail.contains("await") && pending.detail.contains("dec_a"));
+        let rejected = decisions(&DecisionCounts { allowed: 3, pending: vec!["dec_a".into()], rejected: vec!["dec_b".into()] });
+        assert!(rejected.state == State::Red && rejected.detail.contains("rejected") && rejected.detail.contains("dec_b"), "a rejection outranks a pending review");
+    }
 
     fn fc(path: &str, added: u64, removed: u64, host_exec: bool) -> FileChange {
         FileChange { path: path.into(), status: 'M', added, removed, host_exec, special: None }

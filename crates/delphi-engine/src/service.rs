@@ -214,6 +214,11 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "the builder role is not enabled"));
         }
         let task_id = m.next_task_id();
+        let optimistic = p["optimistic"].as_bool().unwrap_or(false);
+        if optimistic {
+            // Refused before anything starts: the mode runs work ahead of the operator's review and needs the sandbox.
+            self.engine.mark_optimistic(&task_id).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        }
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "builder".into(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
         let h = tokio::spawn(async move {
@@ -225,7 +230,86 @@ impl EngineService {
             running.lock().unwrap().remove(&tid);
         });
         self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
-        Ok(json!({"task_id": task_id, "mission_id": mid}))
+        Ok(json!({"task_id": task_id, "mission_id": mid, "optimistic": optimistic}))
+    }
+
+    /// `decisions.list`: the provisional decisions of a mission (or one task), with their reviews.
+    async fn decisions_list(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let ds: Vec<_> = match p["task_id"].as_str() {
+            Some(t) => crate::provisional::ledger(&events, t),
+            None => crate::provisional::ledger_all(&events),
+        };
+        let pending = ds.iter().filter(|d| d.outcome == "allow" && d.review.is_none()).count();
+        Ok(json!({"mission_id": m.id, "decisions": ds.iter().map(|d| d.to_json()).collect::<Vec<_>>(), "pending": pending}))
+    }
+
+    /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
+    /// decision's payload hash, so a review of one thing cannot ratify another, and only an allowed decision (the
+    /// kind that enabled work) is reviewed.
+    async fn decisions_review(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let (Some(id), Some(hash)) = (p["decision_id"].as_str(), p["payload_blake3"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`decision_id` and `payload_blake3` are required"));
+        };
+        let resolution = match p["resolution"].as_str() {
+            Some(r @ ("ratified" | "rejected")) => r,
+            _ => return Err(err(code::INVALID_PARAMS, "`resolution` must be ratified or rejected")),
+        };
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let Some(d) = crate::provisional::ledger_all(&events).into_iter().find(|d| d.id == id) else {
+            return Err(err(code::NOT_FOUND, format!("no provisional decision `{}`", id)));
+        };
+        if d.outcome != "allow" {
+            return Err(err(code::INVALID_PARAMS, "that decision refused something; there is nothing to review"));
+        }
+        if d.payload_blake3 != hash {
+            return Err(err(code::INVALID_PARAMS, result_msg(id)));
+        }
+        let note: String = p["note"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(500).collect();
+        let by = format!("console-{}", ctx.client_id);
+        let mut e = EventEnvelope::new(&m.id, "decision.reviewed", json!({"decision_id": id, "resolution": resolution, "note": note, "by": by, "payload_blake3": hash}));
+        e.task_id = Some(d.task_id.clone());
+        m.append(e).await.map_err(|e| err(-32000, e.to_string()))?;
+        self.engine.decisions_changed.notify_one();
+        Ok(json!({"decision_id": id, "resolution": resolution, "task_id": d.task_id}))
+    }
+
+    /// `build.merge`: run the gates and the merge card again for a build whose branch was kept, for example after
+    /// the operator reviewed its provisional decisions. The result is logged as `build.merge_finished`.
+    async fn build_merge(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let Some(task_id) = p["task_id"].as_str().filter(|t| t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !t.is_empty()).map(String::from) else {
+            return Err(err(code::INVALID_PARAMS, "`task_id` is required (for example t_0003)"));
+        };
+        if self.running.lock().unwrap().contains_key(&task_id) {
+            return Err(err(code::INVALID_PARAMS, format!("{} is still running", task_id)));
+        }
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        if !events.iter().any(|e| e.kind == "worktree.created" && e.task_id.as_deref() == Some(task_id.as_str())) {
+            return Err(err(code::NOT_FOUND, format!("{} has no kept branch in this mission", task_id)));
+        }
+        self.running.lock().unwrap().insert(task_id.clone(), Running { target: "builder".into(), prompt: format!("merge {}", task_id), started: Instant::now() });
+        let (engine, running, tid) = (self.engine.clone(), self.running.clone(), task_id.clone());
+        let mm = m.clone();
+        let h = tokio::spawn(async move {
+            let (outcome, detail) = match engine.finalize_build(&mm, &tid).await {
+                Ok(o) => {
+                    let (a, b) = o.headline();
+                    (a.to_string(), b)
+                }
+                Err(e) => ("failed".to_string(), engine.secrets.redact(&e.to_string())),
+            };
+            let mut ev = EventEnvelope::new(&mm.id, "build.merge_finished", json!({"outcome": outcome, "detail": detail}));
+            ev.task_id = Some(tid.clone());
+            let _ = mm.append(ev).await;
+            running.lock().unwrap().remove(&tid);
+        });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
+        Ok(json!({"task_id": task_id, "mission_id": m.id}))
     }
 
     /// `council.start`: a three-round Council on a proposition (`council.rs`), in the background.
@@ -512,6 +596,9 @@ impl Extension for ServiceExt {
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "task.cancel" => svc.task_cancel(params, ctx).await,
                 "build.start" => svc.build_start(params, ctx).await,
+                "build.merge" => svc.build_merge(params, ctx).await,
+                "decisions.list" => svc.decisions_list(params).await,
+                "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
@@ -856,6 +943,82 @@ mod tests {
         assert!(matches!(red.wait().await, crate::approval::Resolution::Denied { .. }));
         assert!(f.engine.broker.get(&ids[2]).is_some() && f.engine.broker.get(&ids[3]).is_some(), "the refused and untouched cards are still waiting");
         drop((red2, amber2));
+    }
+
+    // ── provisional decisions (specs/015) ────────────────────────────────────
+
+    async fn seed_decision(f: &Fx, id: &str, allow: bool) -> String {
+        let c = crate::tools::Classified { tool: "write_file".into(), tier: crate::tools::ToolTier::Amber, kind: crate::tools::ActionKind::WorktreeEdit, summary: format!("write src/{}.rs", id), payload: json!({"tool": "write_file", "path": format!("@worktree/src/{}.rs", id), "bytes": 3, "blake3": "ab"}), pattern: "write_file @worktree/src/*".into() };
+        let v = crate::provisional::Verdict { allow, rationale: "ok".into(), risk: crate::provisional::Risk::Routine };
+        let ev = crate::provisional::decision_event(id, &c, crate::approval::Tier::Amber, &v, "builder");
+        let hash = ev["payload_blake3"].as_str().unwrap().to_string();
+        let mut e = EventEnvelope::new(&f.m.id, "decision.provisional", ev);
+        e.task_id = Some("t_0001".into());
+        e.agent = Some("builder".into());
+        f.m.append(e).await.unwrap();
+        hash
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn decisions_are_listed_and_reviewed_by_the_console_only_and_a_review_is_bound_to_the_payload_hash() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let hash_a = seed_decision(&f, "dec_a", true).await;
+        let _ = seed_decision(&f, "dec_b", false).await;
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let l = c.call("decisions.list", json!({})).unwrap();
+            assert_eq!((l["pending"].as_u64(), l["decisions"].as_array().unwrap().len()), (Some(1), 2), "the refusal is listed but needs no review: {}", l);
+            let review = |c: &mut Client, id: &str, hash: &str, res: &str| c.call("decisions.review", json!({"decision_id": id, "payload_blake3": hash, "resolution": res, "note": "looked fine"}));
+            assert_eq!(rpc_code(review(&mut c, "dec_missing", &hash_a, "ratified")), Some(code::NOT_FOUND));
+            assert_eq!(rpc_code(review(&mut c, "dec_a", "0000", "ratified")), Some(code::INVALID_PARAMS), "a changed payload is a new decision");
+            assert_eq!(rpc_code(review(&mut c, "dec_a", &hash_a, "maybe")), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(review(&mut c, "dec_b", "x", "ratified")), Some(code::INVALID_PARAMS), "there is nothing to review in a refusal");
+            let ok = review(&mut c, "dec_a", &hash_a, "ratified").unwrap();
+            assert_eq!((ok["decision_id"].as_str(), ok["resolution"].as_str()), (Some("dec_a"), Some("ratified")));
+            let l = c.call("decisions.list", json!({"task_id": "t_0001"})).unwrap();
+            assert_eq!(l["pending"], 0);
+            assert_eq!(l["decisions"][0]["review"]["resolution"], "ratified");
+            assert_eq!(l["decisions"][0]["review"]["note"], "looked fine");
+            // The narrator and the relay cannot review (the methods are not on their lists), and cannot even list.
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("decisions.review", json!({"decision_id": "dec_a", "payload_blake3": "x", "resolution": "ratified"}))), Some(code::FORBIDDEN));
+                assert_eq!(rpc_code(c.call("build.merge", json!({"task_id": "t_0001"}))), Some(code::FORBIDDEN));
+            }
+        })
+        .await;
+        let reviewed = events_of(&f, "decision.reviewed");
+        assert_eq!(reviewed.len(), 1);
+        assert!(reviewed[0].payload["by"].as_str().unwrap().starts_with("console-") && reviewed[0].task_id.as_deref() == Some("t_0001"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_merge_needs_a_task_with_a_kept_branch() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            assert_eq!(rpc_code(c.call("build.merge", json!({}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("build.merge", json!({"task_id": "../x"}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("build.merge", json!({"task_id": "t_0099"}))), Some(code::NOT_FOUND), "no such branch in this mission");
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_relay_is_told_that_decisions_await_review_and_the_list_of_relay_events_is_pinned() {
+        let mut listed: Vec<&str> = delphi_core::hub::RELAY_EVENTS.to_vec();
+        listed.sort();
+        assert_eq!(listed, vec!["approval.parked", "approval.requested", "approval.resolved", "decisions.review_requested", "task.completed", "task.failed"], "the list is the contract; adding to it is a decision");
     }
 
     #[tokio::test(flavor = "multi_thread")]

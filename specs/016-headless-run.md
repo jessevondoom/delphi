@@ -65,6 +65,7 @@ The summary (`"type": "run.summary"`) carries: `outcome`, `exit_code`, `mission_
 | 2 | `denied`: the task escalated after a non-merge card was denied |
 | 3 | `budget_exceeded` |
 | 4 | `failed`, `incomplete`, `timeout`, or the run could not start (bad arguments, no daemon, connection lost) |
+| 5 | `awaiting_decision_review`: an optimistic build (`/build --optimistic …`, `specs/015`) finished and its provisional decisions wait for the operator. The run cancels the waiting task and keeps the branch and ledger; `/decisions` then `/merge <task>` finish it. |
 
 A budget stop outranks a denied card, and an outright task failure outranks everything.
 

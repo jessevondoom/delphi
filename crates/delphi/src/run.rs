@@ -14,7 +14,8 @@
 //! * **The result is a summary object and an exit code**, so a caller can act on it.
 //!
 //! Exit codes: 0 completed or ready to merge · 1 gates failed or the task escalated · 2 stopped because a card
-//! was denied · 3 budget exceeded · 4 infrastructure (no daemon, lost connection, timeout, bad arguments).
+//! was denied · 3 budget exceeded · 4 infrastructure (no daemon, lost connection, timeout, bad arguments) ·
+//! 5 an optimistic build's provisional decisions await the operator's review (the branch and ledger are kept).
 
 use crate::chat::{self, Input};
 use delphi_core::client::{Client, ClientError};
@@ -29,6 +30,8 @@ pub const EXIT_GATES: i32 = 1;
 pub const EXIT_DENIED: i32 = 2;
 pub const EXIT_BUDGET: i32 = 3;
 pub const EXIT_INFRA: i32 = 4;
+/// An optimistic build finished and its provisional decisions wait for the operator's review (`specs/015`).
+pub const EXIT_REVIEW: i32 = 5;
 
 /// Tools whose card is the merge decision itself. A headless run stops here and reports the branch.
 const MERGE_TOOLS: [&str; 2] = ["merge", "pull_request"];
@@ -224,6 +227,8 @@ pub struct Summary {
     pub merge_commit: Option<String>,
     pub pr_url: Option<String>,
     pub status: Option<String>,
+    /// Set when an optimistic build is waiting for the operator to review its provisional decisions.
+    pub review_pending: Option<Value>,
     pub reason: String,
     pub text: String,
     pub failed: Option<String>,
@@ -258,6 +263,7 @@ impl Summary {
                     }
                 }
             }
+            "decisions.review_requested" => self.review_pending = Some(p.clone()),
             "task.output" => self.text = p["text"].as_str().unwrap_or("").to_string(),
             "task.completed" => {
                 self.status = p["status"].as_str().map(String::from);
@@ -293,6 +299,9 @@ impl Summary {
         if self.failed.is_some() {
             return ("failed", EXIT_INFRA);
         }
+        if self.review_pending.is_some() && self.merge_commit.is_none() {
+            return ("awaiting_decision_review", EXIT_REVIEW);
+        }
         if self.merge_commit.is_some() {
             return ("merged", EXIT_OK);
         }
@@ -315,7 +324,7 @@ impl Summary {
         json!({
             "type": "run.summary", "outcome": outcome, "exit_code": code,
             "mission_id": self.mission_id, "task_id": self.task_id,
-            "ready_to_merge": self.ready, "merge_commit": self.merge_commit, "pr_url": self.pr_url,
+            "ready_to_merge": self.ready, "merge_commit": self.merge_commit, "pr_url": self.pr_url, "decisions_awaiting_review": self.review_pending,
             "gates": self.gates, "reason": self.reason, "error": self.failed,
             "text": self.text.chars().take(4000).collect::<String>(),
             "cards": {"total": self.cards.len(), "allowed": allowed, "denied": denied, "left": self.cards.len() - allowed - denied, "list": self.cards},
@@ -416,7 +425,10 @@ fn drive(attached: &mut delphi_core::spawn::Attached, opts: &Opts, started: Inst
     }
 
     let (method, params) = match chat::parse_input(&opts.input) {
-        Input::Build(t) => ("build.start", json!({"mission_id": mission_id, "prompt": t})),
+        Input::Build(t) => {
+            let (optimistic, text) = chat::split_build_flags(&t);
+            ("build.start", json!({"mission_id": mission_id, "prompt": text, "optimistic": optimistic}))
+        }
         Input::Prompt { target, text } => ("task.submit", chat::submit_params(&mission_id, target.as_deref(), &text)),
         Input::Council { proposition, seats, author } => ("council.start", json!({"mission_id": mission_id, "proposition": proposition, "seats": seats, "author_family": author})),
         _ => {
@@ -480,6 +492,13 @@ fn drive(attached: &mut delphi_core::spawn::Attached, opts: &Opts, started: Inst
             sum.apply(&e);
             continue;
         }
+        if mine && kind == "decisions.review_requested" {
+            // The build is finished and only the operator can go on. A script cannot review, so the run ends here and
+            // stops the waiting task: the branch and the ledger stay, and `/decisions` then `/merge` finish it later.
+            sum.apply(&e);
+            let _ = cmd.call("task.cancel", json!({"task_id": task_id}));
+            break;
+        }
         if mine {
             sum.apply(&e);
             if kind == "task.completed" || kind == "task.failed" || kind == "task.cancelled" {
@@ -518,6 +537,9 @@ fn human(s: &Value) -> String {
     }
     if let Some(c) = s["merge_commit"].as_str() {
         out.push_str(&format!("merged: {}\n", c));
+    }
+    if let Some(d) = s["decisions_awaiting_review"].as_object() {
+        out.push_str(&format!("{} provisional decision(s) await your review: /decisions in the console, then /merge {}\n", d.get("count").and_then(|c| c.as_u64()).unwrap_or(0), s["task_id"].as_str().unwrap_or("<task>")));
     }
     if let Some(u) = s["pr_url"].as_str() {
         out.push_str(&format!("pull request: {}\n", u));
@@ -624,6 +646,21 @@ mod tests {
         assert_eq!(decide(&OnCard::Leave, &amber), None);
         assert_eq!(decide(&OnCard::Leave, &red), None, "a Red card waits for the operator, who can deny it by reply or approve it at the console");
         assert_eq!(decide(&OnCard::Leave, &merge).map(|x| x.0), Some("deny"));
+    }
+
+    #[test]
+    fn a_build_waiting_for_review_ends_the_run_with_its_own_exit_code_and_names_the_next_step() {
+        let mut s = done();
+        s.task_id = Some("t_0007".into());
+        s.apply(&json!({"type": "decisions.review_requested", "payload": {"count": 3, "decisions": []}}));
+        assert_eq!(s.outcome(), ("awaiting_decision_review", EXIT_REVIEW));
+        let j = s.to_json("awaiting_decision_review", EXIT_REVIEW, Duration::from_secs(1), Value::Null);
+        assert_eq!(j["decisions_awaiting_review"]["count"], 3);
+        let text = human(&j);
+        assert!(text.contains("3 provisional decision(s) await your review") && text.contains("/merge t_0007"), "{}", text);
+        // A failure still outranks it, and a merge that happened afterwards outranks the wait.
+        s.apply(&json!({"type": "task.failed", "payload": {"error": "boom"}}));
+        assert_eq!(s.outcome().1, EXIT_INFRA);
     }
 
     #[test]

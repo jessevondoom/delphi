@@ -20,7 +20,7 @@ pub const DEFAULT_QUEUE_CAP: usize = 1024;
 
 /// The only event kinds a relay client is sent (`specs/014` §2). The list is the contract: adding a kind is a
 /// decision. None of these carries model text; an approval card's payload is what the operator is asked to judge.
-pub const RELAY_EVENTS: [&str; 5] = ["approval.requested", "approval.resolved", "approval.parked", "task.completed", "task.failed"];
+pub const RELAY_EVENTS: [&str; 6] = ["approval.requested", "approval.resolved", "approval.parked", "task.completed", "task.failed", "decisions.review_requested"];
 
 pub struct ClientQueue {
     inner: Mutex<QueueInner>,

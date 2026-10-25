@@ -79,6 +79,9 @@ pub struct Settings {
     /// How long a "run on a weaker model?" card waits for the operator. No answer is not a no: the task
     /// looks again (the target may be back) and asks again if not.
     pub degrade_wait: Duration,
+    /// `[optimistic] review_wait_sec`: how long a finished optimistic build waits for the operator to review its
+    /// provisional decisions before it stops and keeps its branch (`specs/015`).
+    pub decision_review_wait: Duration,
 }
 
 impl Default for Settings {
@@ -102,6 +105,7 @@ impl Default for Settings {
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),
+            decision_review_wait: Duration::from_secs(24 * 3600),
         }
     }
 }
@@ -181,6 +185,11 @@ pub struct Engine {
     pub clock_unix: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// Per task, the weaker substitutes the operator confirmed or declined (`specs/002` §4.1). A confirmation covers that task only.
     pub(crate) degraded: Mutex<HashMap<String, DegradedTask>>,
+    /// Tasks started with `--optimistic` (`specs/015`): their eligible cards are decided provisionally and the
+    /// merge waits for the operator's review of every decision.
+    pub(crate) optimistic: Mutex<HashSet<String>>,
+    /// Woken when the operator reviews a decision, so a task waiting for review looks again at once.
+    pub(crate) decisions_changed: tokio::sync::Notify,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -1059,7 +1068,7 @@ impl Engine {
             }
         }
         if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
-            if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
+            if let Some(denied) = self.ask_classified(sc, tier, &c).await? {
                 return Ok(denied);
             }
         }
@@ -1206,6 +1215,32 @@ impl Engine {
         sc.m.append_batch(events).await?;
         let (text, is_error) = exec::render(&report, &argv);
         Ok(tools::ToolResult { content: text, is_error })
+    }
+
+    /// As [`Engine::ask`] for a classified tool call. In an optimistic task an eligible call is decided provisionally
+    /// (`provisional.rs`) instead of raising a card; anything else, and every other task, asks as before.
+    pub(crate) async fn ask_classified(&self, sc: &SpanCtx, tier: ApprovalTier, c: &tools::Classified) -> Result<Option<tools::ToolResult>, EngineError> {
+        if self.optimistic.lock().unwrap().contains(sc.task_id.as_str()) && crate::provisional::eligible(c, tier) {
+            let verdict = crate::provisional::RuleApprover { host_exec: &self.exec.cfg.host_exec_paths }.decide(c);
+            let id = crate::provisional::new_decision_id();
+            sc.m.append(sc.ev("decision.provisional", crate::provisional::decision_event(&id, c, tier, &verdict, &sc.role))).await?;
+            return Ok(if verdict.allow {
+                None
+            } else {
+                Some(tool_result_error(format!("This action was refused ({}). Do not retry it; propose an alternative or ask.", verdict.rationale)))
+            });
+        }
+        self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await
+    }
+
+    /// Mark a task optimistic. Refused unless the OS sandbox is on: everything an optimistic task does happens
+    /// before the operator's review, and a worktree is not a sandbox (GOVERNANCE).
+    pub fn mark_optimistic(&self, task_id: &str) -> Result<(), String> {
+        if self.exec.sandbox.is_none() {
+            return Err("optimistic mode needs the OS sandbox, and none is available on this machine (everything it does runs before you review it)".into());
+        }
+        self.optimistic.lock().unwrap().insert(task_id.to_string());
+        Ok(())
     }
 
     /// Raise an approval card and wait for the answer. `None` means approved; `Some(result)` is the denial
