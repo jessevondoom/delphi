@@ -1002,6 +1002,39 @@ fn a_long_reply_is_pinned_at_its_label_row_and_space_pages_and_enter_jumps_to_th
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
+/// `specs/005e` §8: the left deck is a ticker. When a span ends it leaves the running zone and one `✔ finished` entry
+/// joins the history; the chat never shows that chip.
+#[test]
+fn a_finished_span_becomes_a_history_entry_in_the_activity_deck_and_never_shows_in_the_chat() {
+    let m = mock(vec![reply_text("Done and dusted.")]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Say something.");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Done and dusted.");
+    assert!(!c.visible().contains("finished"), "the chat never shows the chip:\n{}", c.visible());
+    c.type_keys("\x1b[1;2D"); // Shift+Left: the activity deck
+    c.wait_for("✔ finished");
+    let deck = c.visible();
+    assert!(deck.contains("· activity") && deck.contains(r#"answered "Say something.""#), "one history entry says what was answered:\n{}", deck);
+    c.type_keys("\x1b[1;2C"); // back to the chat
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!c.visible().contains("✔ finished"), "{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
 #[test]
 fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothing_runs() {
     let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# never written"})), reply_text("Drafted.")]);

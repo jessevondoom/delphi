@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•••⟧
+delphi v0.5 · /proj · activity
+
+  ↑ 11 earlier · pgup
+
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
+
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
+
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
+
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
+
+  ⟦•─•⟧ athena · thinking · 01:22
+    The question is whether claims need transactional guarantees. A table
+    gives row locks for free; a file needs a lock file and careful fsync
+    ordering. Leaning table, but check what 003 already decided about the
+                                                          ↓ 6 lines below · pgdn
+
+◐ working · 130s · 5 tasks                                           esc to stop
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+12.4k tokens  ·  auto                                          ← / ? →  ·  ● ○ ○
