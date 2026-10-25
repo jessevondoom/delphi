@@ -22,7 +22,7 @@ export type Model = {
   queue: string[];
   inbox: I.Inbox;
   panel: P.Panel | null;
-  /** permissions mode: default, accept-edits or mission-auto */
+  /** permissions mode: default, accept-edits mission-auto or optimistic */
   mode: string;
   /** The daemon says the workspace has no model at all (`models.get`): the welcome becomes the no-model card, and the footer says so. */
   noModel?: boolean;
@@ -59,7 +59,7 @@ function faceOf(m: Model, role: string): AgentState {
 }
 
 const PANE = ['activity', 'chat', 'decisions'] as const;
-const MODE: Record<string, string> = { 'accept-edits': 'accept edits', 'mission-auto': 'auto' };
+const MODE: Record<string, string> = { 'accept-edits': 'accept edits', 'mission-auto': 'auto', optimistic: 'auto · optimistic' };
 
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);

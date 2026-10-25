@@ -161,7 +161,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /models                            the model pool: which models are usable, out of quota, or cooling down
   /agents                            every agent running now and the model it is on
   /budget [dollars]                  show or change this mission's cost ceiling
-  /permissions [default|accept-edits|mission-auto]
+  /permissions [default|accept-edits|mission-auto|optimistic]
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
   /build [--optimistic] <request>    a Builder task: worktree, tests, audit, then your approval to merge. --optimistic decides

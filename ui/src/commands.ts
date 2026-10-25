@@ -17,7 +17,7 @@ export const COMMANDS: Command[] = [
   { name: '/timer', desc: 'Wake a role later: /timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>', local: false },
   { name: '/usage', desc: 'Tokens and spend by role, task, model or mission', local: false },
   { name: '/budget', desc: 'Show or change this mission\'s cost ceiling', local: false },
-  { name: '/permissions', desc: 'Approval mode: default, accept-edits, mission-auto', local: false },
+  { name: '/permissions', desc: 'Approval mode: default, accept-edits, mission-auto, optimistic', local: false },
   { name: '/ratify', desc: 'Review and approve pending changes', local: false },
   { name: '/resume', desc: 'Continue tasks a restart interrupted', local: false },
   { name: '/pause', desc: 'Leave interrupted tasks as they are', local: false },
