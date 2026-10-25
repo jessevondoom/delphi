@@ -335,6 +335,37 @@ fn agy_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut DocumentM
     Some("agy-sub")
 }
 
+/// A local Ollama server: slow, but it costs nothing and never runs out, so it is declared last and the pool falls to it
+/// when the paid families are exhausted. Nothing leaves the machine.
+fn ollama_local(ui: &mut dyn Ui, env: &dyn Env, doc: &mut DocumentMut) -> Option<&'static str> {
+    if has_endpoint(doc, "ollama") {
+        return None;
+    }
+    let (status, body) = env.http_get("http://localhost:11434/api/tags", &[]).ok()?;
+    if status != 200 {
+        return None;
+    }
+    let models = pick_ollama_models(&body);
+    let first = models.first()?;
+    if !ui.yes_no("Ollama is running here. Use it as a slow local fallback for when your other models run out? (free; nothing leaves this machine)", true) {
+        return None;
+    }
+    let model = ui.line(&format!("  Ollama model ({} installed)", models.join(", ")), first);
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    add_endpoint(doc, "local", "ollama", &[("path", "gateway-compat"), ("base_url", "http://localhost:11434"), ("credential", "none"), ("cost_model", "local")], &[("fast", model), ("workhorse", model), ("frontier", model)]);
+    set_catalog(doc, model, 8192, 0.0, 0.0);
+    Some("ollama")
+}
+
+/// Installed Ollama models that can chat (embedding models are left out), in the server's order.
+fn pick_ollama_models(tags: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(tags).unwrap_or(Value::Null);
+    v["models"].as_array().into_iter().flatten().filter_map(|m| m["name"].as_str()).filter(|n| !n.contains("embed")).map(String::from).collect()
+}
+
 /// A Gemini API key from AI Studio: one page, one paste.
 fn gemini_key(ui: &mut dyn Ui, env: &dyn Env, doc: &mut DocumentMut) -> Result<Option<&'static str>> {
     if has_endpoint(doc, "gemini-key") {
@@ -580,6 +611,10 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
         std::fs::write(&cfg_path, doc.to_string())?;
         ui.say(&format!("\nStopped: {}\nWhat was set up before that is saved ({}), but not yet ratified: run `delphi setup` again to continue.", e, if added.is_empty() { "nothing".to_string() } else { added.join(", ") }));
         return Err(e);
+    }
+    // After every paid endpoint, so the pool reaches it last.
+    if let Some(id) = ollama_local(ui, env, &mut doc) {
+        added.push(id.into());
     }
     // Both families available: have Gemini review what Claude builds (no author-family self-review, [H-008]).
     let has_claude = has_endpoint(&doc, "claude-sub") || has_endpoint(&doc, "anthropic-key");
@@ -864,6 +899,29 @@ mod tests {
         assert!(eff.contains("claude-sub") && eff.contains("agy-sub"));
         // Nothing was written into the project.
         assert!(!proj.join(".delphi").exists());
+    }
+
+    #[test]
+    fn a_running_ollama_becomes_the_last_resort_local_endpoint() {
+        let t = tempfile::tempdir().unwrap();
+        let proj = project(t.path(), true);
+        let mut env = machine(true, true, false);
+        env.http.insert("http://localhost:11434/api/tags".into(), (200, r#"{"models":[{"name":"nomic-embed-text:latest"},{"name":"qwen3:8b"}]}"#.into()));
+        let out = run(&mut Script::default(), &env, &opts(t.path(), &proj)).unwrap();
+        assert_eq!(out.added, ["claude-sub", "ollama"]);
+        let cfg = config(t.path());
+        let parsed = delphi_adapter::config::Config::parse(&cfg).expect("the written config is valid");
+        let ids: Vec<_> = parsed.pool_entries().iter().map(|k| (k.endpoint_id.clone(), k.model_id.clone())).collect();
+        assert_eq!(ids.last().unwrap(), &("ollama".to_string(), "qwen3:8b".to_string()), "{:?}", ids);
+        assert!(parsed.problems().iter().all(|p| !p.contains("ollama")), "a free local model needs no prices: {:?}", parsed.problems());
+        // Re-running changes nothing.
+        let before = config(t.path());
+        assert!(run(&mut Script::default(), &env, &opts(t.path(), &proj)).unwrap().added.is_empty());
+        assert_eq!(config(t.path()), before);
+        // Not running: not offered.
+        let t2 = tempfile::tempdir().unwrap();
+        let proj2 = project(t2.path(), true);
+        assert_eq!(run(&mut Script::default(), &machine(true, true, false), &opts(t2.path(), &proj2)).unwrap().added, ["claude-sub"]);
     }
 
     #[test]

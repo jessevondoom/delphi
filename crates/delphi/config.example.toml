@@ -114,6 +114,19 @@ default_peer_trust_ceiling = "federated_peer"
 # region = "us-east-1"
 # credential = "aws:work-sso"
 #
+# A slow local fallback for when paid quota runs out (Ollama; free, nothing leaves the machine). Declare it AFTER the paid
+# endpoints: the pool reaches families in declaration order. `credential = "none"` is accepted only for a loopback base_url.
+# [[endpoints]]
+# id = "ollama"
+# family = "local"
+# path = "gateway-compat"
+# base_url = "http://localhost:11434"
+# credential = "none"
+# cost_model = "local"
+# models = { fast = "qwen3:8b", workhorse = "qwen3:8b", frontier = "qwen3:8b" }
+# [models.catalog."qwen3:8b"]
+# max_output_tokens = 8192
+#
 # [access]
 # order = { claude = ["bedrock-us"] }
 # allowed_endpoints = ["bedrock-us"]

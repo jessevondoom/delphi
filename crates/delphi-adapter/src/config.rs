@@ -302,7 +302,7 @@ pub struct Access {
     pub order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub allowed_endpoints: Option<Vec<String>>,
-    /// Role → model family (`claude` or `gemini`) for roles that should not use the default, Claude.
+    /// Role → model family (`claude`, `gemini` or `local`) for roles that should not use the default, Claude.
     #[serde(default)]
     pub role_family: BTreeMap<String, String>,
 }
@@ -427,7 +427,8 @@ const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 
 pub(crate) fn is_loopback(url: &str) -> bool {
     let rest = url.strip_prefix("http://").unwrap_or("");
-    let host = rest.split(['/', ':']).next().unwrap_or("");
+    // A bracketed IPv6 literal contains colons, so it is taken whole before the port is split off.
+    let host = if rest.starts_with('[') { rest.split_inclusive(']').next().unwrap_or("") } else { rest.split(['/', ':']).next().unwrap_or("") };
     host == "127.0.0.1" || host == "localhost" || host == "[::1]"
 }
 
@@ -544,6 +545,9 @@ impl Config {
             }
             if let Err(m) = CredentialRef::parse(&e.credential) {
                 errs.push(format!("endpoint `{}`: {}", e.id, m));
+            }
+            if e.credential == "none" && !(e.path == AccessPath::GatewayCompat && e.base_url.as_deref().is_some_and(is_loopback)) {
+                errs.push(format!("endpoint `{}`: credential \"none\" is only for a local server: a gateway-compat endpoint whose base_url is http://localhost, 127.0.0.1 or [::1]", e.id));
             }
             match e.path {
                 AccessPath::Cloud => {
@@ -714,8 +718,8 @@ impl Config {
             }
         }
         for (role, family) in &self.access.role_family {
-            if !matches!(family.as_str(), "claude" | "gemini") {
-                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude` or `gemini`)", role, family));
+            if !matches!(family.as_str(), "claude" | "gemini" | "local") {
+                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude`, `gemini` or `local`)", role, family));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
             }
@@ -876,7 +880,7 @@ impl Config {
                 if let Some(model) = self.resolve_model(e, tier) {
                     match self.catalog.get(&model) {
                         None => out.push(format!("endpoint `{}`: model `{}` ({}) has no [models.catalog] entry", e.id, model, tier)),
-                        Some(c) if !c.has_prices() && e.cost_model.as_deref() != Some("subscription") => {
+                        Some(c) if !c.has_prices() && !matches!(e.cost_model.as_deref(), Some("subscription" | "local")) => {
                             out.push(format!("endpoint `{}`: model `{}` has no prices; budget reservation is impossible", e.id, model))
                         }
                         Some(_) => {}
@@ -1100,6 +1104,26 @@ order = { gemini = ["a"] }
     fn loopback_http_is_allowed_for_local_gateways_and_tests() {
         let t = "[[endpoints]]\nid=\"l\"\nfamily=\"claude\"\npath=\"gateway-native\"\nbase_url=\"http://127.0.0.1:9999\"\ncredential=\"env:K\"\n";
         assert!(Config::parse(t).is_ok());
+    }
+
+    #[test]
+    fn credential_none_is_only_for_a_loopback_compat_endpoint() {
+        let ep = |path: &str, url: &str| format!("[[endpoints]]\nid=\"o\"\nfamily=\"local\"\npath=\"{}\"\nbase_url=\"{}\"\ncredential=\"none\"\n", path, url);
+        assert!(Config::parse(&ep("gateway-compat", "http://localhost:11434")).is_ok());
+        assert!(Config::parse(&ep("gateway-compat", "http://[::1]:11434")).is_ok());
+        for bad in [ep("gateway-compat", "https://gw.example.internal"), ep("gateway-native", "http://127.0.0.1:1"), ep("api", "http://127.0.0.1:1")] {
+            let errs = Config::parse(&bad).unwrap_err().join("\n");
+            assert!(errs.contains("only for a local server"), "{}", errs);
+        }
+    }
+
+    #[test]
+    fn a_local_family_is_declared_last_so_it_is_the_last_resort() {
+        let cfg = "[[endpoints]]\nid=\"c\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"claude\"\ncredential=\"harness-login\"\ncost_model=\"subscription\"\n[endpoints.models]\nworkhorse=\"sonnet\"\n[[endpoints]]\nid=\"ollama\"\nfamily=\"local\"\npath=\"gateway-compat\"\nbase_url=\"http://localhost:11434\"\ncredential=\"none\"\n[endpoints.models]\nworkhorse=\"qwen3:8b\"\n[access]\nrole_family = { scribe = \"local\" }\n";
+        let c = Config::parse(cfg).unwrap();
+        let ids: Vec<_> = c.pool_entries().iter().map(|k| k.endpoint_id.clone()).collect();
+        assert_eq!(ids, ["c", "ollama"]);
+        assert_eq!(c.family_for_role("scribe"), "local");
     }
 
     #[test]
