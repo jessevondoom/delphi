@@ -1,9 +1,10 @@
- DELPHI OBSERVER  ·  ARCHIVES  ·  mission 2026-10-24-ui
- ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus running   ⟦x?x⟧ ares waiting on you   ⟦•_•⟧ odyss…
-────────────────────────────────────────────────────────────────────────────────────────────────────
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · archives
+
+ ▼ needs you   council t_2 needs a decision                                   answer in the console
+
 ── Knowledge base ──────────────────────────────────────────────────────────────────────────────────
- press / to search specs, context, REVIEW.md and lessons
-
+ Search specs, context, REVIEW.md and lessons from the console: ctrl+k
 
 
 
@@ -26,5 +27,4 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- Archives 6/7 · ← Spend · → Thinking · 1-7 jump · q quit     navigate: shift+arrows · ○ ○ ○ ○ ○ ● ○
- spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 1
+1 running  ·  3500 tokens                                                        ← →  ·  ○ ○ ○ ○ ● ○

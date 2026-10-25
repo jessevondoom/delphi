@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
+import { faceOf, STRIP_ROLES } from './motion.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -14,15 +15,16 @@ export type OState = {
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
-  cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
+  pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
-export const VIEWS = ['council', 'epic', 'forge', 'agents', 'spend', 'archives', 'thinking'] as const;
+/** The six views, in order (`005e` §9.2). The narrator shows no money, so there is no spend view. */
+export const VIEWS = ['council', 'epic', 'forge', 'agents', 'archives', 'thinking'] as const;
 export type View = (typeof VIEWS)[number];
-const TITLE: Record<View, string> = { council: 'COUNCIL CHAMBER', epic: 'EPIC DAG', forge: 'FORGE DIFFS', agents: 'MASCOT ROSTER', spend: 'SPEND TELEMETRY', archives: 'ARCHIVES', thinking: 'THINKING' };
-const SHORT: Record<View, string> = { council: 'Council', epic: 'Epic DAG', forge: 'Forge Diffs', agents: 'Agents', spend: 'Spend', archives: 'Archives', thinking: 'Thinking' };
-export const parseView = (s: string): View | null => {
-  const m: Record<string, View> = { council: 'council', chamber: 'council', '1': 'council', epic: 'epic', dag: 'epic', '2': 'epic', forge: 'forge', diffs: 'forge', '3': 'forge', agents: 'agents', roster: 'agents', '4': 'agents', spend: 'spend', telemetry: 'spend', '5': 'spend', archives: 'archives', kb: 'archives', '6': 'archives', thinking: 'thinking', reasoning: 'thinking', '7': 'thinking' };
+/** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
+export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
+export const parseView =(s: string): View | null => {
+  const m: Record<string, View> = { council: 'council', chamber: 'council', epic: 'epic', forge: 'forge', diffs: 'forge', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', thinking: 'thinking', reasoning: 'thinking' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -34,6 +36,8 @@ export type OModel = {
   live: Record<string, string>; connected: boolean;
   /** Reasoning per running span, in memory only: never written anywhere, not in the snapshot a reopened window receives. */
   think?: Record<string, string>;
+  /** The clock for badge animation, and whether animation is off (`DELPHI_REDUCE_MOTION`, `NO_COLOR`); the strip is static without them. */
+  now?: number; still?: boolean;
 };
 
 export const emptyState = (): OState => ({
@@ -43,7 +47,6 @@ export const emptyState = (): OState => ({
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
 const ordered = (st: OState) => Object.values(st.agents).sort((a, b) => (ORDER.indexOf(a.role) + 99) % 99 - (ORDER.indexOf(b.role) + 99) % 99);
-const money = (v: number) => (v >= 100 ? `$${v.toFixed(0)}` : v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`);
 const kilo = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const tokTotal = (t: Tokens) => t.input + t.cache_read + t.cache_write + t.output + t.thinking;
 const bar = (f: number, w: number) => { const n = Math.round(Math.min(1, Math.max(0, f)) * w); return '▓'.repeat(n) + '░'.repeat(Math.max(0, w - n)); };
@@ -156,7 +159,7 @@ function epic(m: OModel, w: number, h: number): string[] {
       const t = m.st.tasks[n.task_id];
       lines.push(chalk.bold(text(m)(` ${n.task_id} ${t?.flow ?? ''}${t ? ` · ${clean(t.prompt, 60)}` : ''}`)));
     }
-    const row = `${name(m, n.role).padEnd(12)} ${n.state.padEnd(10)} ${kilo(n.tokens).padStart(7)} tok  ${money(n.cost_usd)}`;
+    const row = `${name(m, n.role).padEnd(12)} ${n.state.padEnd(10)} ${kilo(n.tokens).padStart(7)} tok`;
     lines.push('  ' + '  '.repeat(depth) + colored(glyph(n.state) + ' ', stateColor(n.state)) + (i === sel ? chalk.inverse(roleCol(m, n.role)(row)) : roleCol(m, n.role)(name(m, n.role).padEnd(12)) + text(m)(row.slice(12))));
   });
   const storyH = 9;
@@ -196,8 +199,8 @@ function agents(m: OModel, _w: number, _h: number): string[] {
     const nm = name(m, a.role);
     const meta = [
       roleCol(m, a.role).bold(nm) + colored(`  ${nm === a.role ? '' : a.role + '  '}${glyph(a.state)} ${a.state}`, stateColor(a.state)),
-      text(m)(model),
-      dim(`in ${kilo(a.tokens.input)} · cache ${kilo(a.tokens.cache_read)} · out ${kilo(a.tokens.output)} · think ${kilo(a.tokens.thinking)} · ${money(a.cost_usd)} · ${a.calls} call(s)`),
+      text(m)(model + (a.task_id && a.state !== 'idle' ? ` · task ${a.task_id}` : '')),
+      dim(`in ${kilo(a.tokens.input)} · cache ${kilo(a.tokens.cache_read)} · out ${kilo(a.tokens.output)} · think ${kilo(a.tokens.thinking)} · ${a.calls} call(s)`),
     ];
     mk.forEach((line, i) => out.push('  ' + line + '   ' + meta[i]!));
     out.push('');
@@ -205,27 +208,10 @@ function agents(m: OModel, _w: number, _h: number): string[] {
   return out;
 }
 
-function spend(m: OModel, w: number, _h: number): string[] {
-  const st = m.st, cap = st.budget.cap_usd;
-  const out = [
-    rule(m, w, 'Spend per call'), T.accent('  ' + spark(st.series, w - 4)),
-    dim(`  ${st.series.length} call(s) · total ${money(st.spent_usd)} · ${cap > 0 ? `${((st.spent_usd / cap) * 100).toFixed(0)}% of the ${money(cap)} ceiling` : 'no ceiling known'}`),
-    '', rule(m, w, 'Tokens'),
-  ];
-  const tk = st.tokens, total = Math.max(1, tokTotal(tk));
-  for (const [label, n] of [['input', tk.input], ['cache read', tk.cache_read], ['cache write', tk.cache_write], ['output', tk.output], ['thinking', tk.thinking]] as const) {
-    out.push(text(m)(`  ${label.padEnd(12)}${kilo(n).padStart(9)}  `) + T.accent(bar(n / total, 30)));
-  }
-  out.push(dim(`  prompt cache hit ${(st.cache_hit_ratio * 100).toFixed(0)}% of input-side tokens · retries ${st.retries}`), '', rule(m, w, 'By agent'));
-  const spent = Math.max(st.spent_usd, Number.MIN_VALUE);
-  for (const a of ordered(st)) out.push(roleCol(m, a.role)(`  ${name(m, a.role).padEnd(13)}${bar(a.cost_usd / spent, 24)}`) + text(m)(`  ${money(a.cost_usd)}  ${kilo(tokTotal(a.tokens))} tok`));
-  return out;
-}
-
 function archives(m: OModel, w: number, _h: number): string[] {
   const s = m.search;
   const out = [rule(m, w, 'Knowledge base')];
-  out.push(chalk.bold(text(m)(s.editing ? ` search› ${s.query}▏` : s.query ? ` last search: ${s.query}` : ' press / to search specs, context, REVIEW.md and lessons')));
+  out.push(chalk.bold(text(m)(s.query ? ` last search: ${s.query}` : ' Search specs, context, REVIEW.md and lessons from the console: ctrl+k')));
   if (s.note) out.push(dim(` ${s.note}`));
   s.hits.forEach((hit, i) => {
     out.push(text(m)(` ${i + 1}. ${sanitize(hit.pointer)}`) + dim(`  ${clean(hit.heading, 60)}`));
@@ -248,36 +234,66 @@ function thinking(m: OModel, w: number, h: number): string[] {
   return out.slice(-h);
 }
 
-function header(m: OModel, w: number): string[] {
-  const conn = m.connected ? '' : '   (disconnected)';
-  const l1 = chalk.bold(text(m)(' DELPHI OBSERVER')) + dim(`  ·  ${TITLE[m.view]}  ·  mission ${m.st.mission_id || '…'}${conn}`);
-  const badges = ordered(m.st).map((a) => {
-    const st = a.state as T.AgentState;
-    const label = a.state === 'idle' ? dim(` ${name(m, a.role)}   `) : colored(` ${name(m, a.role)} ${a.state}   `, stateColor(a.state));
-    return T.badge(a.role, st, m.info, m.pal) + label;
-  }).join('');
-  return [T.clip(l1, w), T.clip(' ' + badges, w), T.hairline(m.pal, w)];
+/** The strip: the six badges only, in the fixed order, each animated by what its agent is doing (`005e` §10.2). */
+function strip(m: OModel, w: number): string {
+  const now = m.now ?? 0, still = m.still ?? true;
+  const thinkingRoles = new Set(Object.entries(m.think ?? {}).filter(([, t]) => t.trim()).map(([id]) => m.st.nodes[id]?.role));
+  const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
+  return T.clip(roles.map((r) => {
+    const a = m.st.agents[r];
+    const f = faceOf(a ? { state: a.state as never, doing: '', thinkingAt: thinkingRoles.has(r) ? now : undefined } : undefined, r, now, still);
+    return T.badge(r, f.state, m.info, m.pal, f.frame);
+  }).join(' '), w);
 }
 
+/** `delphi v0.5 · epic`: directly under the strip, no path and no mission id. */
+function titleRow(m: OModel, w: number): string {
+  const name = chalk.bold(text(m)('delphi'));
+  const conn = m.connected ? '' : ' · disconnected';
+  return T.clip(w < 48 ? name + dim(` · ${m.view}${conn}`) : name + dim(` v${m.info.version} · ${m.view}${conn}`), w);
+}
+
+const header = (m: OModel, w: number): string[] => [strip(m, w), titleRow(m, w), ''];
+
+const running = (m: OModel) => Object.values(m.st.agents).filter((a) => a.state === 'running').length;
+
 function footer(m: OModel, w: number): string[] {
-  const i = VIEWS.indexOf(m.view), st = m.st, cap = st.budget.cap_usd;
+  const i = VIEWS.indexOf(m.view);
   const dots = VIEWS.map((_, n) => (n === i ? T.accent('●') : dim('○'))).join(' ');
-  const prev = SHORT[VIEWS[(i + VIEWS.length - 1) % VIEWS.length]!], next = SHORT[VIEWS[(i + 1) % VIEWS.length]!];
-  const left = dim(` ${SHORT[m.view]} ${i + 1}/${VIEWS.length} · ← ${prev} · → ${next} · 1-${VIEWS.length} jump · q quit`);
-  const frac = cap > 0 ? st.spent_usd / cap : 0;
-  const col = frac >= 0.9 ? T.alert : frac >= 0.75 ? T.warn : T.ok;
-  const sp = text(m)(` spend ${money(st.spent_usd)} / ${cap > 0 ? money(cap) : '?'} `) + colored(bar(frac, 12), col) + text(m)(` · tokens ${kilo(tokTotal(st.tokens))} · cache hit ${(st.cache_hit_ratio * 100).toFixed(0)}% · retries ${st.retries}${st.pending_proposals > 0 ? ` · ${st.pending_proposals} proposal(s) await /ratify` : ''}`);
-  return [T.hairline(m.pal, w), T.spread(left, dim('navigate: shift+arrows · ') + dots + ' ', w), T.clip(sp, w)];
+  const seats = m.view === 'council' ? m.st.councils[Math.min(m.pick, m.st.councils.length - 1)]?.seats.length ?? 0 : 0;
+  const left = dim(`${seats ? `${seats} agents` : `${running(m)} running`}  ·  ${kilo(tokTotal(m.st.tokens))} tokens`);
+  const right = (w >= 64 ? dim('← →  ·  ') : '') + dots;
+  return [T.hairline(m.pal, w), T.spread(left, right, w)];
+}
+
+/** What needs the operator, from the daemon's own lists; the count of the rest is appended. */
+export function attention(st: OState): string | null {
+  const items: string[] = [];
+  for (const summary of Object.values(st.pending_approvals ?? {})) items.push(clean(summary, 80));
+  for (const c of st.councils) if (c.escalation && c.phase !== 'round 1' && c.phase !== 'round 2') items.push(`council ${c.task_id} needs a decision`);
+  if (st.pending_proposals > 0) items.push(`${st.pending_proposals} proposal(s) await /ratify`);
+  if (!items.length) return null;
+  return items[0] + (items.length > 1 ? `  (+${items.length - 1} more)` : '');
+}
+
+/** Body row 1 of every view, never removed so the body does not jump (`005e` §9.2). */
+function slot(m: OModel, w: number): string {
+  const what = attention(m.st);
+  if (!what) return ' ' + colored('✔', T.ok) + dim(' nothing needs you');
+  const left = ` ▼ needs you   ${what}`, right = w >= 64 ? 'answer in the console ' : '';
+  const row = T.spread(left, right, w);
+  return T.band(row + ' '.repeat(Math.max(0, w - T.width(row))), m.pal.bg);
 }
 
 export function observeFrame(m: OModel, w: number, h: number): string[] {
-  if (w < 28 || h < 9) return [`observer needs 28x9`, `window is ${w}x${h}`].map((l) => [...l].slice(0, Math.max(0, w)).join('')).concat(Array(Math.max(0, h - 2)).fill('')).slice(0, Math.max(0, h));
+  if (w < 28 || h < 9) return [`narrator needs 28x9`, `window is ${w}x${h}`].map((l) => [...l].slice(0, Math.max(0, w)).join('')).concat(Array(Math.max(0, h - 2)).fill('')).slice(0, Math.max(0, h));
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
-  const fn = { council, epic, forge, agents, spend, archives, thinking }[m.view];
-  let body = fn(m, w, bodyH);
+  const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
+  const fn = { council, epic, forge, agents, archives, thinking }[m.view];
+  let body = fn(m, w, inner);
   if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'forge' && m.view !== 'thinking') body = body.slice(m.scroll);
-  body = body.slice(0, bodyH).map((l) => T.clip(l, w));
+  body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);
 }

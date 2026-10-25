@@ -54,7 +54,7 @@ const USAGE: &str = "usage:
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
   delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
-  delphi observe [council|epic|forge|agents|spend|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
+  delphi observe [council|epic|forge|agents|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi xenia whoami [--home <dir>]
   delphi help [<command>]   (also: <command> --help)
@@ -582,38 +582,44 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
 }
 
 fn cmd_narrator(args: &[String]) -> i32 {
+    // The classic Rust Observer is retired (`specs/005e` §9.2): the narrator is the full-screen window.
+    if let Some(bad) = args.iter().find(|a| a.starts_with("--") && !matches!(a.as_str(), "--once" | "--workspace" | "--home")) {
+        eprintln!("delphi narrator: unknown option `{}` (see `delphi observe --help`)", bad);
+        return 2;
+    }
     let (home, ws) = match resolve_ws("narrator", args) {
         Ok(v) => v,
         Err(code) => return code,
     };
     let view_arg = args.iter().find(|a| !a.starts_with("--") && Some(a.as_str()) != flag(args, "--workspace").as_deref() && Some(a.as_str()) != flag(args, "--home").as_deref());
-    // `thinking` exists only in the full-screen Observer: live reasoning is context, kept in that window's memory.
-    let thinking = view_arg.is_some_and(|v| matches!(v.to_lowercase().as_str(), "thinking" | "reasoning" | "7"));
+    // `thinking` exists only in the full-screen window: live reasoning is context, kept in that window's memory.
+    let thinking = view_arg.is_some_and(|v| matches!(v.to_lowercase().as_str(), "thinking" | "reasoning"));
     let view = match view_arg.filter(|_| !thinking) {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge, agents, spend, archives or thinking)", v);
+                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge, agents, archives or thinking)", v);
                 return 2;
             }
         },
         None => None,
     };
-    // The full-screen Observer (D-28) on a terminal, unless asked for the classic one or a single text frame.
+    let once = args.iter().any(|a| a == "--once");
     let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
-    if on_terminal && !args.iter().any(|a| a == "--once" || a == "--classic") {
-        if let Some(ui) = ui_executable() {
-            let code = chat::launch_ui_observer(&ui, &home, &ws.dir, if thinking { Some("thinking") } else { view.map(observer::View::name) }, &theme_names(&ws));
-            if code != 3 {
-                return code;
-            }
-        }
-    }
-    if thinking {
-        eprintln!("delphi observe thinking needs the full-screen Observer (the delphi-ui program, on a terminal)");
+    if !once && !on_terminal {
+        eprintln!("delphi narrator: needs a terminal; `--once` prints one frame without one");
         return 1;
     }
-    observer::run(&home, &ws.dir, view, theme_names(&ws), args.iter().any(|a| a == "--once"))
+    let Some(ui) = ui_executable() else {
+        eprintln!("delphi narrator: the narrator is the delphi-ui program, which was not found next to `delphi`; run `delphi update` to get it");
+        return 1;
+    };
+    let code = chat::launch_ui_observer(&ui, &home, &ws.dir, if thinking { Some("thinking") } else { view.map(observer::View::name) }, &theme_names(&ws), once);
+    if code == 3 {
+        eprintln!("delphi narrator: delphi-ui is a different release from this program; run `delphi update`");
+        return 1;
+    }
+    code
 }
 
 fn cmd_needs(args: &[String]) -> i32 {

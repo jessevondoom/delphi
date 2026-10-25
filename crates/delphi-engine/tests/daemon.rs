@@ -139,8 +139,11 @@ async fn token_issue_requires_a_terminal_and_no_running_amber_command() {
     // Production policy: this test process has no tty-attached socket peer in the CI sense of the word,
     // but the peer here is the test process itself; use a setsid'd child to be sure.
     let f = start(TtyPolicy::Required, 1024).await;
-    let out = run_child_without_tty(&f.sock);
+    let out = run_child_without_tty(&f.sock, "console");
     assert!(out.contains(&code::TTY_REQUIRED.to_string()), "expected TTY_REQUIRED, got {}", out);
+    // The read-only narrator scope needs no terminal; a script can watch (`delphi observe --once`).
+    let out = run_child_without_tty(&f.narrator_sock, "narrator");
+    assert!(out.contains("PROBE ok"), "the narrator is issued without a terminal, got {}", out);
 
     let g = start(TtyPolicy::Disabled, 1024).await;
     let mut c = Client::connect(&g.sock).unwrap();
@@ -161,7 +164,8 @@ fn token_probe_child() {
     let Ok(sock) = std::env::var("DELPHI_PROBE_SOCK") else { return };
     let mut c = Client::connect(Path::new(&sock)).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    match c.issue_token(Scope::Console) {
+    let scope = if std::env::var("DELPHI_PROBE_SCOPE").as_deref() == Ok("narrator") { Scope::Narrator } else { Scope::Console };
+    match c.issue_token(scope) {
         Ok(_) => println!("PROBE ok"),
         Err(ClientError::Rpc { code, .. }) => println!("PROBE rpc {}", code),
         Err(e) => println!("PROBE err {}", e),
@@ -169,10 +173,10 @@ fn token_probe_child() {
 }
 
 /// A process in its own session with no controlling terminal.
-fn run_child_without_tty(sock: &Path) -> String {
+fn run_child_without_tty(sock: &Path, scope: &str) -> String {
     use std::os::unix::process::CommandExt;
     let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
-    cmd.args(["--exact", "token_probe_child", "--nocapture", "--test-threads=1"]).env("DELPHI_PROBE_SOCK", sock).stdin(std::process::Stdio::null());
+    cmd.args(["--exact", "token_probe_child", "--nocapture", "--test-threads=1"]).env("DELPHI_PROBE_SOCK", sock).env("DELPHI_PROBE_SCOPE", scope).stdin(std::process::Stdio::null());
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();

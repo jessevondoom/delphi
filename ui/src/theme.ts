@@ -121,6 +121,18 @@ const luma = (c: Rgb) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
  * (light) when that differs from the background. `null` means no tint: the rail fallback. An unknown background
  * (`bg` null) is `null` at every depth, which is the safe answer to open question 3 of `005e` §16.
  */
+/**
+ * The attention band of the narrator (`005e` §9.2): the row in the warning colour over a warning-tinted background
+ * (18 % of the warning colour over the terminal background). Without true colour or a known background it is bold
+ * reverse video, which also serves `NO_COLOR`.
+ */
+export function band(row: string, bg: Rgb | null | undefined): string {
+  if (caps.color !== 'truecolor' || !bg) return chalk.bold(chalk.inverse(row));
+  const warnRgb: Rgb = [234, 179, 8];
+  const mixed = warnRgb.map((v, i) => Math.round(v * 0.18 + bg[i]! * 0.82)) as Rgb;
+  return chalk.bgRgb(...mixed).rgb(...warnRgb)(row);
+}
+
 export function tint(bg: Rgb | null, isDark: boolean, color: Capabilities['color'] = caps.color): Tint | null {
   if (!bg || color === 'none') return null;
   if (color === 'truecolor') {

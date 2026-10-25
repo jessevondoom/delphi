@@ -1,10 +1,11 @@
- DELPHI OBSERVER  ·  EPIC DAG  ·  mission 2026-10-24-ui
- ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus runni…
-────────────────────────────────────────────────────────
- t_1 build · Implement the deck router
-  ● athena       running       1200 tok  $0.100
-    ✔ hephaestus   done          8000 tok  $0.200
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · epic
 
+ ▼ needs you   council t_2 needs a decision
+
+ t_1 build · Implement the deck router
+  ● athena       running       1200 tok
+    ✔ hephaestus   done          8000 tok
 
 
 
@@ -20,5 +21,4 @@
 
 
 ────────────────────────────────────────────────────────
- Epic DAG 2/7 ·… navigate: shift+arrows · ○ ● ○ ○ ○ ○ ○
- spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cach…
+1 running  ·  3500 tokens                    ○ ● ○ ○ ○ ○

@@ -302,10 +302,14 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     s.send("/budget");
     s.wait_for("ceiling $5.00");
     // A second window attaches read-only and draws what just happened, without a console token.
-    let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "agents");
-    assert_eq!(ncode, 0, "{}\n{}", screen, nerr);
-    for want in ["DELPHI OBSERVER", "MASCOT ROSTER", "Athena", "opus-t", "spend $", "/ $5.00"] {
-        assert!(screen.contains(want), "missing `{}` in\n{}", want, screen);
+    // (`--once` is drawn by the full-screen window's own renderer, so it needs the UI program; skipped without it.)
+    if let Some(launcher) = ui_launcher(e._t.path()) {
+        let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "agents", Some(&launcher));
+        assert_eq!(ncode, 0, "{}\n{}", screen, nerr);
+        for want in ["delphi v", "· agents", "Athena", "opus-t", "nothing needs you", "running  ·"] {
+            assert!(screen.contains(want), "missing `{}` in\n{}", want, screen);
+        }
+        assert!(!screen.contains('$') && !screen.contains("mission 2"), "the narrator shows no money and no mission id:\n{}", screen);
     }
     let (code, out) = s.finish();
     assert_eq!(code, 0, "{}", out);
@@ -333,7 +337,7 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
 
 /// Run `delphi narrator <view> --once` with a controlling terminal (the daemon only hands a Narrator token to
 /// a peer that has one) and return the screen it drew.
-fn narrator_once(home: &Path, workspace: &str, view: &str) -> (i32, String, String) {
+fn narrator_once(home: &Path, workspace: &str, view: &str, ui: Option<&Path>) -> (i32, String, String) {
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::os::unix::process::CommandExt;
     let (mut master, mut slave) = (0, 0);
@@ -342,6 +346,9 @@ fn narrator_once(home: &Path, workspace: &str, view: &str) -> (i32, String, Stri
     }
     let mut cmd = Command::new(DELPHI);
     cmd.args(["narrator", view, "--once", "--workspace", workspace, "--home"]).arg(home);
+    if let Some(ui) = ui {
+        cmd.env("DELPHI_UI", ui);
+    }
     cmd.stdin(unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(slave))) }).stdout(Stdio::piped()).stderr(Stdio::piped());
     unsafe {
         cmd.pre_exec(|| {
@@ -1334,22 +1341,60 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     c.wait_for("Athena · ");
     // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
     let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
-    o.wait_for("MASCOT ROSTER");
+    o.wait_for("· agents");
     o.wait_for("1 call(s)");
     let roster = o.visible();
-    assert!(roster.contains("DELPHI OBSERVER") && roster.contains("orchestrator") && roster.contains("▀▀▀▀▀▀▀"), "{}", roster);
-    assert!(roster.contains("spend $") && roster.contains("navigate: shift+arrows"), "{}", roster);
-    o.type_keys("\x1b[1;2C");
-    o.wait_for("SPEND TELEMETRY");
-    o.wait_for("Spend per call");
+    assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("▀▀▀▀▀▀▀"), "{}", roster);
+    assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
+    // Only the arrows change the view: Right to archives, Left twice back to epic; digits, Tab and q do nothing.
+    o.type_keys("\x1b[C");
+    o.wait_for("from the console: ctrl+k");
     o.type_keys("2");
-    o.wait_for("EPIC DAG");
-    o.wait_for("Say something");
-    o.type_keys("7");
-    o.wait_for("THINKING");
-    o.wait_for("Nothing is thinking right now");
+    o.type_keys("\t");
     o.type_keys("q");
-    assert_eq!(o.wait_exit(), 0);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(o.visible().contains("· archives"), "digits, Tab and q are not bound:\n{}", o.visible());
+    for _ in 0..3 {
+        o.type_keys("\x1b[D");
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    o.wait_for("· epic");
+    o.wait_for("Say something");
+    for _ in 0..6 {
+        o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    o.wait_for("· thinking");
+    o.wait_for("Nothing is thinking right now");
+    assert_eq!(o.ctrl_c_out(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `delphi observe --once` from a process with no controlling terminal (a script, cron): the narrator scope is
+/// read-only, so the daemon issues it without one; the same process asking for a console token is refused.
+#[test]
+fn observe_once_prints_a_frame_without_any_terminal() {
+    use std::os::unix::process::CommandExt;
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    let mut cmd = Command::new(DELPHI);
+    cmd.args(["observe", "council", "--once", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_UI", &launcher).stdin(Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid(); // a session of its own: no controlling terminal
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    let (code, frame) = (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned());
+    assert_eq!(code, 0, "{}\n{}", frame, String::from_utf8_lossy(&out.stderr));
+    assert!(frame.contains("delphi v") && frame.contains("· council") && frame.contains("needs you"), "{}", frame);
+    assert_eq!(frame.lines().count(), 24, "no terminal means 80x24:\n{}", frame);
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }

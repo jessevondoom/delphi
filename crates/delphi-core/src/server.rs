@@ -330,8 +330,11 @@ impl Daemon {
         }
         match self.cfg.tty_policy {
             TtyPolicy::Required => {
+                // The narrator scope is read-only (the daemon refuses anything that starts work or approves
+                // anything for it), so it needs no terminal: `delphi observe --once` works from a script. The
+                // scopes that can act, console and relay, keep the rule (operator decision, 2026-10-25).
                 let tty = peer_pid.and_then(controlling_tty);
-                if tty.is_none() {
+                if tty.is_none() && scope != Scope::Narrator {
                     return Response::err(req.id.clone(), code::TTY_REQUIRED, "tokens are issued only to a client attached to an interactive terminal");
                 }
             }

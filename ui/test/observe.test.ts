@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
-import { emptyState, mascot, observeFrame, parseView, VIEWS, type OModel, type OState } from '../src/observe-screen.ts';
+import { emptyState, mascot, observeFrame, parseView, stepView, VIEWS, type OModel, type OState } from '../src/observe-screen.ts';
 import type { Info } from '../src/theme.ts';
 
 const crown: Record<string, string> = { orchestrator: '  ▄▄▄  ', architect: '▄▄▄▄▄▄▄', builder: '▄▄▄▄▄▄▄', 'red-team': '▄     ▄', strategist: '▄▄ ▄ ▄▄', scout: '   ▄   ' };
@@ -39,13 +39,52 @@ test('every view fits the window exactly, with no boxes and no money-free surpri
   }
 });
 
-test('the header names the view and mission and shows one badge per role; the footer shows spend and the dots', () => {
-  const l = observeFrame(model('agents'), 110, 34).map(plain);
-  assert.match(l[0]!, /DELPHI OBSERVER\s+·\s+MASCOT ROSTER\s+·\s+mission 2026-10-24-ui/);
-  assert.match(l[1]!, /⟦•─•⟧ athena/);
-  assert.match(l[1]!, /⟦x\?x⟧ ares waiting on you/);
-  assert.match(l.at(-2)!, /Agents 4\/7 · ← Forge Diffs · → Spend.*navigate: shift\+arrows · ○ ○ ○ ● ○ ○ ○/);
-  assert.match(l.at(-1)!, /spend \$0\.420 \/ \$5\.00 .* tokens .* cache hit 50% · retries 1/);
+test('the chrome: a badges-only strip, the title row right under it, a blank row, the attention slot, a hairline and the footer', () => {
+  const l = observeFrame(model('agents'), 80, 24).map(plain);
+  assert.match(l[0]!, /^⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x\?x⟧ ⟦•_•⟧ ⟦•••⟧\s*$/, 'the strip: badges and single spaces, nothing else');
+  assert.equal(l[1]!.trimEnd(), 'delphi v0.5 · agents', 'no path, no mission id');
+  assert.equal(l[2], '', 'one blank row');
+  assert.match(l[3]!, /^ ▼ needs you/, 'an approval is waiting in the sample, so the slot is the band');
+  assert.match(l.at(-2)!, /^─+$/);
+  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ○ ● ○ ○$/);
+  const all = l.join('\n');
+  assert.ok(!/\$\d/.test(all) && !/spend|\bcost\b/i.test(all), 'no money anywhere');
+  assert.ok(!/ \/ |\?|mission 2026/.test(l.at(-1)!) && !all.includes('2026-10-24-ui'), 'no / or ? in the footer, no mission id');
+});
+
+test('the title row drops the version below 48 columns, the footer drops the arrows below 64', () => {
+  const narrow = observeFrame(model('epic'), 40, 14).map(plain);
+  assert.equal(narrow[1]!.trimEnd(), 'delphi · epic');
+  assert.doesNotMatch(narrow.at(-1)!, /←/);
+  assert.match(narrow.at(-1)!, /○ ● ○ ○ ○ ○$/);
+  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ● ○ ○ ○ ○$/);
+});
+
+test('the attention slot is body row 1 of every view: "nothing needs you" or the band, with what and where', () => {
+  const quiet = sample(); quiet.agents['red-team']!.state = 'idle'; quiet.councils[0]!.escalation = null;
+  for (const view of VIEWS) {
+    const l = observeFrame(model(view, { st: quiet }), 80, 24).map(plain);
+    assert.equal(l[3]!.trimEnd(), ' ✔ nothing needs you', view);
+  }
+  const waiting = sample(); waiting.councils[0]!.escalation = null; waiting.pending_approvals = { ap_1: 'write specs/009.md', ap_2: 'run cargo test' };
+  for (const w of [80, 100, 40]) {
+    const row = observeFrame(model('epic', { st: waiting }), w, 24).map(plain)[3]!;
+    assert.match(row, /^ ▼ needs you {3}write specs\/009/, String(w));
+    if (w >= 80) assert.match(row, /write specs\/009\.md {2}\(\+1 more\) +answer in the console $/);
+    assert.equal(stringWidth(row) <= w, true);
+  }
+  const ratify = sample(); ratify.councils[0]!.escalation = null; ratify.pending_proposals = 2;
+  assert.match(observeFrame(model('forge', { st: ratify }), 80, 24).map(plain)[3]!, /2 proposal\(s\) await \/ratify/);
+  assert.match(observeFrame(model('council', { st: sample() }), 80, 24).map(plain)[3]!, /council t_2 needs a decision/, 'an escalated council');
+});
+
+test('views: six, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
+  assert.deepEqual([...VIEWS], ['council', 'epic', 'forge', 'agents', 'archives', 'thinking']);
+  for (const gone of ['spend', 'dag', 'telemetry', '1', '4', '7']) assert.equal(parseView(gone), null, gone);
+  assert.equal(stepView('council', -1), 'council');
+  assert.equal(stepView('thinking', 1), 'thinking');
+  assert.equal(stepView('epic', 1), 'forge');
+  assert.equal(stepView('forge', -1), 'epic');
 });
 
 test('mascots are seven columns in every state; the builder keeps its white crown', () => {
@@ -55,7 +94,7 @@ test('mascots are seven columns in every state; the builder keeps its white crow
   const roster = observeFrame(model('agents'), 110, 40).map(plain).join('\n');
   assert.match(roster, /athena\s+orchestrator\s+○ idle/);
   assert.match(roster, /frontier · claude-x · direct/);
-  assert.match(roster, /in 100 · cache 200 · out 50 · think 0 · \$0\.070 · 1 call\(s\)/);
+  assert.match(roster, /in 100 · cache 200 · out 50 · think 0 · 1 call\(s\)/);
 });
 
 test('council: one open column per seat, blind notes, critiques, verdict and minority report', () => {
@@ -86,7 +125,7 @@ test('epic: the tree with indentation, the selected row, and the narrative', () 
   const t = observeFrame(model('epic'), 110, 34).map(plain).join('\n');
   assert.match(t, /t_1 build · Implement the deck router/);
   assert.match(t, /● athena\s+running/);
-  assert.match(t, /\n\s{4}✔ hephaestus\s+done\s+8000 tok  \$0\.200/);
+  assert.match(t, /\n\s{4}✔ hephaestus\s+done\s+8000 tok/);
   assert.match(t, /── Narrative/);
   assert.match(t, /builder finished/);
 });
@@ -105,15 +144,10 @@ test('forge: gates, attempts, findings, the flaky note and a coloured live diff'
   assert.match(observeFrame(model('forge', { diff: { available: false } }), 110, 34).map(plain).join('\n'), /no live worktree for this build/);
 });
 
-test('spend: sparkline, token bars, per-agent bars; archives: search prompt and hits', () => {
-  const t = observeFrame(model('spend'), 110, 34).map(plain).join('\n');
-  assert.match(t, /── Spend per call ─*\n\s+[▁▂▃▄▅▆▇█]+/);
-  assert.match(t, /5 call\(s\) · total \$0\.420 · 8% of the \$5\.00 ceiling/);
-  assert.match(t, /cache read\s+2000\s+▓+░*/);
-  assert.match(t, /prompt cache hit 50%/);
-  assert.match(t, /── By agent/);
+test('archives: the hits of a search and where to search from', () => {
+  assert.match(observeFrame(model('archives'), 110, 34).map(plain).join('\n'), /from the console: ctrl\+k/);
   const a = observeFrame(model('archives', { search: { editing: true, query: 'retry', hits: [{ pointer: 'specs/003.md#retry', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' }], note: '' } }), 110, 34).map(plain).join('\n');
-  assert.match(a, /search› retry▏/);
+  assert.match(a, /last search: retry/);
   assert.match(a, /1\. specs\/003\.md#retry\s+Retry ladder/);
   assert.match(a, /three attempts/);
 });
@@ -122,16 +156,15 @@ test('model text cannot move the cursor, and view names parse', () => {
   const s = sample(); s.narrative = ['evil \x1b[2J\x1b]0;x\x07done'];
   const t = observeFrame(model('epic', { st: s }), 110, 34).join('\n');
   assert.ok(!t.includes('\x1b[2J') && !t.includes('\x1b]0;'));
-  assert.deepEqual([parseView('Council'), parseView('4'), parseView('kb'), parseView('nope')], ['council', 'agents', 'archives', null]);
+  assert.deepEqual([parseView('Council'), parseView('roster'), parseView('kb'), parseView('nope')], ['council', 'agents', 'archives', null]);
 });
 
 test('thinking: reasoning per running agent with its badge, tier and model; empty when nothing thinks; nothing from other spans', () => {
   const s = sample();
   s.nodes['n_7'] = { id: 'n_7', role: 'architect', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 0, cost_usd: 0, started_ms: 0, ended_ms: null, after: [] };
   const t = observeFrame(model('thinking', { st: s, think: { n_7: 'Weighing a table against a file.\nThe table indexes.' } }), 110, 30).map(plain).join('\n');
-  assert.match(t, /THINKING/);
   assert.match(t, /⟦•─•⟧ daedalus\s+frontier · claude-x · t_1/);
   assert.match(t, /Weighing a table against a file\.\n\s+The table indexes\./);
   assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /Nothing is thinking right now[\s\S]*never saved/);
-  assert.equal(parseView('7'), 'thinking');
+  assert.equal(parseView('reasoning'), 'thinking');
 });
