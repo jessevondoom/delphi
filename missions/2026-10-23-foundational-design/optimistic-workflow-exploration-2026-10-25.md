@@ -184,7 +184,7 @@ Recorded per optimistic mission and added to the benchmark's secondary metrics:
 
 ## 8. Open decisions for the operator
 1. ~~Is the "provisional decision is not an approval" framing acceptable?~~ **Accepted by the operator, 2026-10-25.** The charter edits in §3 still need Red-tier ratification.
-2. ~~Which role approves?~~ **Proposed: the Strategist** (§2.2). Awaiting the operator's confirmation. The Builder is ruled out because it is the requester.
+2. ~~Which role approves?~~ **The Strategist** (§2.2), confirmed by the operator in D-30, 2026-10-25. The Builder is ruled out because it is the requester.
 3. ~~Second-seat concurrence~~ **Optional, per operator.** Not required, because some operators have one provider (§2.2 item 3). Awaiting a decision on the default for `unseconded` (proposed: `park`).
 4. Draft-spec building (§2.8): in scope for O2 or later?
 5. Spend and decision-count caps: starting values.
