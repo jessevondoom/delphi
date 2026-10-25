@@ -360,6 +360,48 @@ pub fn run(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
     Registry::builtin().run(ctx, tool, args)
 }
 
+/// A file with a known non-text signature (PDF, zip, ...). Unrecognised bytes without a NUL keep showing as
+/// lossy text, as they always did.
+fn is_document(head: &[u8], path: &str) -> bool {
+    let f = delphi_docs::detect(head, path);
+    !f.is_text() && f != delphi_docs::Format::Unknown
+}
+
+/// A document is read whole (up to the document input cap, `specs/014` §5.1) so its tier is the tier of
+/// exactly these bytes; only the text handed back is capped. The guard's checks apply unchanged: the
+/// converters receive bytes, never a path.
+fn read_document(ctx: &mut ToolCtx, path: &str) -> ToolResult {
+    let limits = delphi_docs::Limits::default();
+    let (bytes, truncated) = match ctx.guard.read_file(path, limits.max_input) {
+        Ok(r) => r,
+        Err(d) => return denied(d),
+    };
+    let tier = observe(ctx, path, &bytes);
+    if truncated {
+        return ToolResult::err(format!("{} is larger than {} bytes; documents that large are not read", path, limits.max_input));
+    }
+    match delphi_docs::extract(&bytes, path, &delphi_docs::Request::default(), &limits) {
+        Ok(e) => {
+            let mut text = e.text;
+            let mut cut = e.truncated;
+            if text.len() > limits.max_output {
+                let mut n = limits.max_output;
+                while !text.is_char_boundary(n) {
+                    n -= 1;
+                }
+                text.truncate(n);
+                cut = true;
+            }
+            let mut out = format!("[{} · tier {} · {}{}]\n{}\n", path, tier_note(tier), e.format.name(), if cut { " · output truncated" } else { "" }, text.trim_end());
+            for l in &e.loss {
+                out.push_str(&format!("(not read: {})\n", l));
+            }
+            ToolResult::ok(out)
+        }
+        Err(e) => ToolResult::err(e.0),
+    }
+}
+
 fn read_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let path = match str_arg(args, "path") {
         Ok(p) => p,
@@ -369,8 +411,8 @@ fn read_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         Ok(r) => r,
         Err(d) => return denied(d),
     };
-    if bytes.contains(&0) {
-        return ToolResult::err("binary file; not shown");
+    if bytes.contains(&0) || is_document(&bytes, path) {
+        return read_document(ctx, path);
     }
     let tier = observe(ctx, path, &bytes);
     let text = String::from_utf8_lossy(&bytes);
@@ -685,6 +727,37 @@ mod tests {
         assert_eq!(f.span.ceiling(), Tier::L0);
         let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\nsummary"}));
         assert!(!w.is_error && w.content.contains("tier L0"), "{}", w.content);
+    }
+
+    #[test]
+    fn a_document_is_named_with_its_tier_and_says_when_its_format_is_not_built() {
+        let mut f = fx(&[]);
+        fs::write(f.root.join("proj/src/spec.pdf"), b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n").unwrap();
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/src/spec.pdf"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert!(r.content.contains("L4 internal_empirical") && r.content.contains("PDF") && r.content.contains("not built yet") && r.content.contains("(not read:"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L5, "a base-commit document is local input");
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/bin.dat"}));
+        assert!(r.content.contains("unrecognised binary"), "{}", r.content);
+    }
+
+    #[test]
+    fn reading_an_untrusted_document_lowers_the_ceiling_like_reading_untrusted_text() {
+        let mut f = fx(&["missions/**"]);
+        fs::write(f.root.join("proj/vendor/lib/doc.zip"), b"PK\x03\x04\x14\0\0\0").unwrap();
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/vendor/lib/doc.zip"}));
+        assert!(r.content.contains("L0 external_untrusted") && r.content.contains("untrusted data") && r.content.contains("zip archive"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L0);
+        let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\nfrom a zip"}));
+        assert!(w.content.contains("tier L0"), "{}", w.content);
+    }
+
+    #[test]
+    fn text_files_are_unchanged_by_document_detection() {
+        let mut f = fx(&[]);
+        fs::write(f.root.join("proj/src/t.csv"), "a,b\n1,2\n").unwrap();
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/src/t.csv"}));
+        assert!(r.content.contains("lines 1-2 of 2") && r.content.contains("    2  1,2"), "{}", r.content);
     }
 
     #[test]

@@ -818,6 +818,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "delphi-docs"
+version = "0.1.0"
+
+[[package]]
 name = "delphi-engine"
 version = "0.1.0"
 dependencies = [
@@ -828,6 +832,7 @@ dependencies = [
  "candle-transformers",
  "delphi-adapter",
  "delphi-core",
+ "delphi-docs",
  "delphi-sandbox",
  "libc",
  "regex",
