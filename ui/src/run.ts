@@ -3,7 +3,7 @@
 import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
 import type { Approval, State } from './fold.ts';
-import type { Info } from './theme.ts';
+import { roleName, type Info } from './theme.ts';
 import { parseView, VIEWS } from './observe-screen.ts';
 import { openWindow } from './window.ts';
 
@@ -161,6 +161,12 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (v) { ctx.post(`(${v.task_id ?? 'task'} council convened; the seats answer blind, then critique each other)`); ctx.started?.(); } return;
     }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
+    case 'models': { const v = await call('models.get'); if (v) ctx.post(String(v.text ?? '').trimEnd() || 'no models are configured'); return; }
+    case 'agents': {
+      const running = ctx.state().activity.running;
+      ctx.post(running.length ? running.map((s) => `${'  '.repeat(s.depth)}${roleName(s.role, ctx.info)} · ${s.task} · ${s.tool ?? 'working'}`).join('\n') : 'Nothing is running.');
+      return;
+    }
     case 'decisions': { ctx.post(await decisions(ctx.cmd, ctx.mission, rest)); return; }
     case 'merge': {
       if (!rest[0]) { ctx.post('/merge needs the build\'s task id, for example `/merge t_0003`'); return; }

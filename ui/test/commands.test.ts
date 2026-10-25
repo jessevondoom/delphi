@@ -10,7 +10,7 @@ import type { Info } from '../src/theme.ts';
 
 // The two consoles are meant to answer the same commands. Rust-only commands the full-screen console has not
 // gained yet (005f slice 6) are named here; anything else in the Rust HELP missing from COMMANDS fails the test.
-const NOT_YET = new Set(['/models', '/agents', '/more', '/narrator']);
+const NOT_YET = new Set(['/more']);
 
 test('every command in the Rust console help is in the full-screen console, or is listed as not yet', () => {
   const src = readFileSync(join(import.meta.dirname, '../../crates/delphi/src/chat.rs'), 'utf8');
@@ -93,4 +93,13 @@ test('windowCommand: Terminal.app by default, iTerm when that is the terminal', 
   assert.ok(windowCommand(['a b', "c'd"], 'darwin', {})!.join('\n').includes('tell application "Terminal"'));
   assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with default profile'));
   assert.equal(windowCommand(['x'], 'win32', {}), null);
+});
+
+test('/models prints the daemon\'s pool text; /agents lists what is running', async () => {
+  const m = ctx((method) => (method === 'models.get' ? { text: 'claude  usable\n' } : {}));
+  await runSlash('/models', m.c);
+  assert.equal(m.out[0], 'claude  usable');
+  assert.deepEqual(m.calls[0], ['models.get', { mission_id: 'm1' }]);
+  await runSlash('/agents', m.c);
+  assert.equal(m.out[1], 'Nothing is running.');
 });

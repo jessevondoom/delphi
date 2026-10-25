@@ -68,6 +68,22 @@ test('typing / opens the command menu above the prompt, filtered', () => {
   assert.ok(!lines.join('\n').includes('/council · '), 'filtered out');
 });
 
+test('a long command menu shows eight rows and says how many more there are', () => {
+  const items = completions('/', 1, info, () => [])!.items;
+  assert.ok(items.length > 9, 'the command list is longer than the menu');
+  const lines = frame(model({ composer: C.insert(C.empty(), '/'), menu: { items, sel: 0 } }), 120, 40).map(plain);
+  assert.equal(lines.filter((l) => /^ ?[❯ ] ?\/\S+ · /.test(l) || /^ {1,3}\/\S+ · /.test(l)).length, 8);
+  assert.ok(lines.some((l) => l.trim() === `· ${items.length - 8} more`), lines.join('\n'));
+});
+
+test('below 100 columns a long description wraps instead of clipping', () => {
+  const items = completions('/mouse', 6, info, () => [])!.items;
+  const lines = frame(model({ composer: C.insert(C.empty(), '/mouse'), menu: { items, sel: 0 } }), 70, 30).map(plain);
+  const at = lines.findIndex((l) => l.includes('/mouse'));
+  assert.ok(lines[at + 1]!.startsWith('    '), 'the description continues on the next row: ' + lines.slice(at, at + 3).join('|'));
+  assert.ok(!lines[at]!.includes('…'), 'the first row is not clipped');
+});
+
 test('scrolled up, a marker says how many lines are below', () => {
   let s = initial(0);
   for (let i = 0; i < 30; i++) s = addBlock(s, { kind: 'note', text: `note ${i}`, at: 0 });
