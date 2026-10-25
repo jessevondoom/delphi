@@ -49,8 +49,8 @@ Effort is focused build hours including tests, the unit `specs/005c` uses. They 
 
 | # | Milestone | Specs | Effort | Needs from the operator |
 | :-- | :--- | :--- | ---: | :--- |
-| X0 | **Settle status.** Answer §0; fix the 011/012 banners; make 007's A1 row "accepted" rather than "proposed"; refresh `ratified.lock` (`delphi update`). | 011 header, 007 §3 | 2 h | The two answers in §0 |
-| X1 | **Primitives.** Install identity (Ed25519 key in the keychain or a `0600` file under `$DELPHI_HOME`, `did:key` encode and decode, 64-hex fingerprint), `whoami`; strict verification (`verify_strict`) with the RFC 8032 and known-bad vectors (non-canonical S, small-order keys); domain-string builders; ULID; sidecar parser (strict JSON, fixed fields, 1 KiB). Key is separate from any future peer-transport key (see §5.2). | 011 §3.4, 012 §3 | 10 h | nothing |
+| X0 ✅ | **Settle status.** Answer §0; fix the 011/012 banners; make 007's A1 row "accepted" rather than "proposed"; refresh `ratified.lock` (`delphi update`). | 011 header, 007 §3 | 2 h | The two answers in §0 |
+| X1 ✅ | **Primitives.** Install identity (Ed25519 key in the keychain or a `0600` file under `$DELPHI_HOME`, `did:key` encode and decode, 64-hex fingerprint), `whoami`; strict verification (`verify_strict`) with the RFC 8032 and known-bad vectors (non-canonical S, small-order keys); domain-string builders; ULID; sidecar parser (strict JSON, fixed fields, 1 KiB). Key is separate from any future peer-transport key (see §5.2). | 011 §3.4, 012 §3 | 10 h | nothing |
 | X2 | **Record validation.** Envelope and the three kinds as types; the validation order of 012 §6 with an instrumented parser proving YAML never runs before steps 1–3; strict frontmatter subset (R1); NFC, bidi and tag-character rejection; limits; pointer allowlist; rejected trust keys. | 012 §2, §4–§6; tests 1–5, 10, 12, 18, 20 | 14 h | nothing |
 | X3 | **Roster chain and joining.** Epoch files, `prev_hash`, genesis, per-person quorum, `person` immutability, never-dropped entries, pinned epoch hashes, `join` with the admin fingerprint and head pair, `pins.toml`. | 011 §3.2–§3.3; 011 tests 3–6, 26, 29, 31; 012 tests 13–14 | 14 h | nothing |
 | X4a | **Store and sticky state.** Clone outside every workspace zone with hooks, filters, LFS, submodules and fsmonitor disabled; `.gitattributes` check; fast-forward-only fetch; sticky state per path (highest `rev` and hash); idempotent re-sync. | 011 §3.3.5, §3.5; tests 24, 27, 28; 012 test 16 | 12 h | nothing |
@@ -64,6 +64,16 @@ Effort is focused build hours including tests, the unit `specs/005c` uses. They 
 | X11 | **Dogfood gate.** At least 3 humans use it for 2 weeks; record endorsement latency and the share of records read at L2. Thresholds are agreed again beforehand (O-7: median endorsement ≤ 3 working days, ≥ 70% at L2). | 011 §1.4 gate 8 | 4 h of ours, 2 weeks elapsed | Three humans, a store, two stewards |
 
 **Total about 150 h** (range roughly 110–200), about twice the model pool. Critical path: X1 → X2 → X3 → X4a → X4b → X5, then X6 and X7 in parallel, then X8, X9, X10, X11. The first thing that works end to end is after X6: an install can join a hand-built test store, sync, and search endorsed records. The first thing a second human can use is after X8.
+
+### Built so far
+
+- **X0 (2026-10-25):** banners, D-29 item 4 lifted, 007-A1 and 007-A2 applied. `ratified.lock` hashes are not refreshed; `delphi update` in the operator's home does that.
+- **X1 (2026-10-25):** crate `delphi-xenia` (34 tests) and `delphi xenia whoami`. Choices the spec left open, recorded here:
+  - Every hash anywhere (sidecar `hash`, roster `prev_hash`, the hash inside the roster and freshness signing domains, `target_hash`) is spelled `blake3:` plus 64 lowercase hex. Spec 012 §3 wrote "blake3 of `<n>.json`" for the roster domain without a spelling.
+  - A signature can only be made over a `Domain`, which only the three validated constructors can build. The install key cannot be asked to sign free text, and a newline in `org`, `store` or `id` cannot shift the signed fields.
+  - Key custody is a `0600` file in a `0700` directory under `$DELPHI_HOME/xenia/`, refused if group- or world-readable, a symlink, or damaged, and never overwritten. An OS-keychain backend is later (R4).
+  - The strict-verification tests include a check that a lenient verifier accepts the identity-key forgery, so the test proves it discriminates.
+  - Still to do in X2: the record envelope, the strict frontmatter parser, and the schema limits. `verify_record` already enforces spec 012 §6 steps 1–3 on raw bytes, so YAML is never reached for a bad record.
 
 ## 4. Risks that decide the estimate
 
