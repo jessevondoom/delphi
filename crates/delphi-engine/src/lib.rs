@@ -18,6 +18,8 @@ pub mod checks;
 pub mod frontmatter;
 pub mod gates;
 pub mod handoff;
+pub mod hooks;
+pub mod hooks_run;
 pub mod harness;
 pub mod harness_run;
 pub mod embed;

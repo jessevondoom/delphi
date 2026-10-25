@@ -2,10 +2,9 @@
 // `delphi chat --inline`, ported so the full-screen console depends on nothing but the socket.
 import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
+import { openNarrator } from './narrator.ts';
 import type { Approval, State } from './fold.ts';
 import { roleName, type Info } from './theme.ts';
-import { parseView, VIEWS } from './observe-screen.ts';
-import { openWindow } from './window.ts';
 
 export type Ctx = {
   cmd: Rpc; mission: string; info: Info; state: () => State;
@@ -174,15 +173,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (v) { ctx.post(`(${v.task_id ?? rest[0]} is being checked again; if the gates are green you will be asked to merge)`); ctx.started?.(); }
       return;
     }
-    case 'observe': case 'narrator': case 'visualize': {
-      const view = rest[0] ?? '';
-      if (view && !parseView(view)) { ctx.post(`/observe takes ${VIEWS.join(', ')}, not \`${view}\``, 'error'); return; }
-      const argv = [ctx.info.delphi_exe ?? 'delphi', 'observe', ...(view ? [view] : []), '--workspace', ctx.info.workspace_name ?? '', '--home', ctx.info.home ?? ''];
-      const why = await (ctx.open ?? openWindow)(argv);
-      if (why === null) ctx.post(`(Observer opened in a new window${view ? `: ${view}` : ''})`, 'ok');
-      else ctx.post(`could not open a window (${why}). The Observer only watches; run this in another terminal:\n  delphi observe ${view}`.trimEnd(), 'error');
-      return;
-    }
+    case 'observe': case 'narrator': case 'visualize': ctx.post(await openNarrator(rest[0], ctx.info, process.env, undefined, ctx.open)); return;
     case 'y': case 'yes': case 'a': case 'always': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
       const key = name === 'approve' ? rest[0] : name;
       const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;
