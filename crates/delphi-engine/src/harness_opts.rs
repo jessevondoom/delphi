@@ -1,4 +1,4 @@
-//! The CLI features a `[harness.claude]` or `[harness.agy]` block switches on (`specs/020`).
+//! The CLI features a `[harness.claude]` or `[harness.agy]` block switches on (`specs/021`).
 //!
 //! These keys sit in the ratified `[harness.*]` block, so a local edit cannot widen what a span reaches
 //! (subagents, extra directories, hooks, a spend limit) without the operator ratifying it. Nothing here is
@@ -163,6 +163,14 @@ PreToolUse = [{ matcher = "Bash", hooks = [{ type = "command", command = "/usr/l
         let (o, bad) = parse(&r, Cli::Agy);
         assert!(bad.is_empty());
         assert_eq!((o.mode.as_deref(), o.sandbox, o.print_timeout_secs, o.effort.as_deref(), o.max_turns), (Some("plan"), true, Some(90), Some("low"), None));
+    }
+
+    #[test]
+    fn a_config_with_these_keys_still_parses_because_the_ratified_profile_declares_them() {
+        let text = format!("{}\n[harness.claude]\neffort = \"low\"\nbridge = true\n[harness.claude.agents.r]\ndescription = \"d\"\n[harness.agy]\nmode = \"plan\"\nsandbox = true\n", crate::testkit::CONFIG);
+        let cfg = delphi_adapter::config::Config::parse(&text).unwrap_or_else(|e| panic!("{:?}", e));
+        assert_eq!(cfg.harness["claude"].effort.as_ref().and_then(|v| v.as_str()), Some("low"));
+        assert!(cfg.harness["claude"].bridge, "the bridge profile keys still work beside them");
     }
 
     #[test]

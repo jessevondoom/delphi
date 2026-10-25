@@ -163,6 +163,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
+    check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
     // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
     check_pool(ws, &cfg, &mut r);
@@ -190,6 +191,23 @@ fn run_cli(program: &str, args: &[&str]) -> CliRun {
     Some((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
+/// Does the organization's managed MCP policy let Delphi's tool bridge load (`specs/020` §7)? Only the policy files on this
+/// machine can be read; a policy delivered from the admin console cannot, which the finding says.
+fn check_mcp_policy(cfg_text: &str, policy: &delphi_engine::policy::McpPolicy, exe: &std::path::Path, r: &mut Report) {
+    use delphi_engine::policy::McpPolicy;
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let has_claude = v.get("endpoints").and_then(|e| e.as_array()).is_some_and(|l| l.iter().any(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness") && e.get("harness").and_then(|h| h.as_str()) == Some("claude")));
+    let bridge_on = v.get("harness").and_then(|h| h.get("claude")).and_then(|c| c.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true);
+    if !has_claude || !bridge_on {
+        return;
+    }
+    match (policy, delphi_engine::policy::explain(policy, exe)) {
+        (McpPolicy::NoLocalPolicy, _) => r.push(Level::Ok, "10 harness", "mcp policy", "no managed Claude Code settings on this machine. An organization can also deliver them from its admin console, which cannot be read from here: `delphi endpoints test --probe` shows whether the Delphi tool bridge and the account's connectors actually load"),
+        (_, None) => r.push(Level::Ok, "10 harness", "mcp policy", "managed Claude Code settings are present and do not keep the Delphi tool bridge out"),
+        (_, Some(why)) => r.warn("10 harness", "mcp policy", why),
+    }
+}
+
 /// For every `path = "harness"` endpoint: is its CLI installed, and is it signed in? Claude has
 /// `claude auth status`; `agy` has no status command, so its sign-in is proven by
 /// `delphi endpoints test --probe` (one tiny call). Account details such as the email are never printed.
@@ -203,7 +221,13 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             Some("claude") => match run("claude", &["--version"]) {
                 None => missing(r, id, "the `claude` program was not found on PATH; install Claude Code, or this endpoint is skipped (API endpoints take over if any)".into()),
                 Some((_, ver)) => match run("claude", &["auth", "status", "--json"]).and_then(|(_, out)| serde_json::from_str::<serde_json::Value>(&out).ok()) {
-                    Some(s) if s["loggedIn"] == true => r.push(Level::Ok, "10 harness", id.to_string(), format!("claude {} is signed in ({}, {} plan); the approval bridge needs no sandbox", ver.trim(), s["authMethod"].as_str().unwrap_or("?"), s["subscriptionType"].as_str().unwrap_or("?"))),
+                    Some(s) if s["loggedIn"] == true => {
+                        // The ratified profile (`specs/020`): what Delphi will ask this CLI to do. Whether an organization's own
+                        // MCP policy lets the bridge load can only be seen by starting the CLI: `endpoints test --probe`.
+                        let p = v.get("harness").and_then(|h| h.get("claude"));
+                        let (bridge, approvals, connectors) = (p.and_then(|p| p.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true), p.and_then(|p| p.get("approvals")).and_then(|a| a.as_str()).unwrap_or("delegate"), p.and_then(|p| p.get("claudeai_connectors")).and_then(|b| b.as_bool()).unwrap_or(true));
+                        r.push(Level::Ok, "10 harness", id.to_string(), format!("claude {} is signed in ({}, {} plan); the approval bridge needs no sandbox. Profile: Delphi tool bridge {}, approvals by {}, account connectors {}. `delphi endpoints test --probe` confirms the bridge loads under your organization's MCP policy", ver.trim(), s["authMethod"].as_str().unwrap_or("?"), s["subscriptionType"].as_str().unwrap_or("?"), if bridge { "on" } else { "off (roles run text-only)" }, approvals, if connectors { "on" } else { "off" }))
+                    }
                     Some(_) => missing(r, id, "`claude` is installed but not signed in: run `claude auth login`".into()),
                     None => r.warn("10 harness", id.to_string(), "`claude auth status` gave no usable answer; run `delphi endpoints test --probe`"),
                 },
@@ -771,6 +795,27 @@ mod tests {
     }
 
     #[test]
+    fn the_organizations_mcp_policy_is_reported_with_a_snippet_an_administrator_can_use() {
+        use delphi_engine::policy::McpPolicy;
+        let cfg = "[[endpoints]]\nid=\"c\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"claude\"\ncredential=\"harness-login\"\n";
+        let exe = std::path::Path::new("/opt/delphi/bin/delphi");
+        let run = |policy: McpPolicy, cfg: &str| {
+            let mut r = Report::default();
+            check_mcp_policy(cfg, &policy, exe, &mut r);
+            r.findings.iter().map(|f| (f.level, f.message.clone())).collect::<Vec<_>>()
+        };
+        let none = run(McpPolicy::NoLocalPolicy, cfg);
+        assert!(none.len() == 1 && none[0].0 == Level::Ok && none[0].1.contains("admin console") && none[0].1.contains("endpoints test --probe"), "{:?}", none);
+        assert_eq!(run(McpPolicy::Allowed, cfg)[0].0, Level::Ok);
+        let blocked = run(McpPolicy::NotListed, cfg);
+        assert!(blocked[0].0 == Level::Warn && blocked[0].1.contains("allowedMcpServers") && blocked[0].1.contains("\"serverName\": \"delphi\"") && blocked[0].1.contains("/opt/delphi/bin/delphi"), "{:?}", blocked);
+        assert_eq!(run(McpPolicy::Denied("x".into()), cfg)[0].0, Level::Warn);
+        // Nothing to say without a Claude harness endpoint, or with the bridge turned off.
+        assert!(run(McpPolicy::NotListed, "[[endpoints]]\nid=\"a\"\nfamily=\"claude\"\npath=\"api\"\ncredential=\"env:K\"\n").is_empty());
+        assert!(run(McpPolicy::NotListed, &format!("{}\n[harness.claude]\nbridge = false\n", cfg)).is_empty());
+    }
+
+    #[test]
     fn harness_endpoints_are_checked_with_the_clis_own_commands() {
         let cfg = "[[endpoints]]\nid=\"c\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"claude\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"a\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"agy\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"g\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"gemini\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"api\"\nfamily=\"claude\"\npath=\"api\"\ncredential=\"env:K\"\n";
         let run_ok = |p: &str, a: &[&str]| -> Option<(i32, String)> {
@@ -784,7 +829,10 @@ mod tests {
         let mut r = Report::default();
         check_harnesses(cfg, &run_ok, false, &mut r);
         let text: Vec<String> = r.findings.iter().map(|f| format!("{:?} {} {}", f.level, f.location, f.message)).collect();
-        assert!(text.iter().any(|t| t.starts_with("Ok c") && t.contains("signed in") && t.contains("pro plan")), "{:?}", text);
+        assert!(text.iter().any(|t| t.starts_with("Ok c") && t.contains("signed in") && t.contains("pro plan") && t.contains("Delphi tool bridge on, approvals by delegate, account connectors on")), "{:?}", text);
+        let mut r2 = Report::default();
+        check_harnesses(&format!("{}\n[harness.claude]\nbridge = false\napprovals = \"delphi\"\nclaudeai_connectors = false\n", cfg), &run_ok, false, &mut r2);
+        assert!(r2.findings.iter().any(|f| f.location == "c" && f.message.contains("bridge off (roles run text-only), approvals by delphi, account connectors off")), "{:?}", r2.findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>());
         assert!(text.iter().any(|t| t.starts_with("Ok a") && t.contains("endpoints test --probe")), "{:?}", text);
         assert!(text.iter().any(|t| t.starts_with("Warn g") && t.contains("Antigravity")), "{:?}", text);
         assert!(!text.iter().any(|t| t.contains("secret@example.com")), "the account email is never printed");

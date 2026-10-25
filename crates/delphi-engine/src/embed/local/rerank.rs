@@ -20,7 +20,7 @@ const CPU_BATCH: usize = 2;
 /// the embedder, which reads a query once, is faster on the GPU. `DELPHI_RERANK_DEVICE=metal` overrides.
 fn rerank_device() -> (Device, DType) {
     if std::env::var("DELPHI_RERANK_DEVICE").is_ok_and(|v| v == "metal") {
-        if let Ok(gpu) = Device::new_metal(0) {
+        if let Some(gpu) = super::metal_device() {
             return (gpu, DType::F32);
         }
     }

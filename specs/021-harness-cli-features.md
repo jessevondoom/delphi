@@ -1,6 +1,6 @@
 ---
-id: spec-020-harness-cli-features
-title: "020: Harness CLI Features and API-Key Mode"
+id: spec-021-harness-cli-features
+title: "021: Harness CLI Features and API-Key Mode"
 author: architect
 timestamp: 2026-10-25T17:00:00Z
 status: draft   # not yet reviewed by the operator
@@ -12,7 +12,7 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, harness, claude, agy, api-key]
 ---
 
-# Spec 020: Harness CLI Features and API-Key Mode
+# Spec 021: Harness CLI Features and API-Key Mode
 
 Extends `specs/009` §7 and §7B. The harness drove `claude` and `agy` with a model, a prompt and an approval bridge. Both CLIs can do more in headless mode. This spec turns on the parts that make a span cheaper, safer or more useful, and adds API-key authentication for operators who get a key later.
 

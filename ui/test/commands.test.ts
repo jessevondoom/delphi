@@ -8,19 +8,32 @@ import { renderList } from '../src/decisions.ts';
 import { initial } from '../src/fold.ts';
 import type { Info } from '../src/theme.ts';
 
-// The two consoles are meant to answer the same commands. Rust-only commands the full-screen console has not
-// gained yet (005f slice 6) are named here; anything else in the Rust HELP missing from COMMANDS fails the test.
-const NOT_YET = new Set(['/models', '/agents', '/more', '/narrator']);
+// The two consoles answer the same commands because they read one list: `src/commands.json`. This checks the list
+// itself and that this console really handles what the list promises it handles.
+import raw from '../src/commands.json' with { type: 'json' };
+import { lookup } from '../src/commands.ts';
 
-test('every command in the Rust console help is in the full-screen console, or is listed as not yet', () => {
-  const src = readFileSync(join(import.meta.dirname, '../../crates/delphi/src/chat.rs'), 'utf8');
-  const help = src.slice(src.indexOf('pub const HELP'), src.indexOf('/quit";') + 7);
-  const names = new Set([...help.matchAll(/^ {2}(\/[a-z]+)/gm)].map((m) => m[1]!));
-  assert.ok(names.size > 10, 'found the help block');
-  const have = new Set(COMMANDS.map((c) => c.name));
-  const missing = [...names].filter((n) => !have.has(n) && !NOT_YET.has(n));
-  assert.deepEqual(missing, []);
-  for (const n of NOT_YET) assert.ok(!have.has(n), `${n} now exists: remove it from NOT_YET`);
+type Entry = { name: string; desc: string; ink: boolean; rust: boolean; local: boolean; aliases?: string[]; args?: string };
+const LIST = raw as Entry[];
+
+test('the shared list is well formed, with only /more left to the Rust consoles', () => {
+  const names = LIST.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+  assert.equal(new Set(names).size, names.length, 'no name or alias twice');
+  for (const c of LIST) { assert.match(c.name, /^\/[a-z]+$/); assert.ok(c.desc.length > 8, c.name); assert.ok(c.ink || c.rust, `${c.name} is on some console`); }
+  assert.deepEqual(LIST.filter((c) => c.rust && !c.ink).map((c) => c.name), ['/more'], 'the only command this console lacks');
+  assert.deepEqual(COMMANDS.map((c) => c.name), LIST.filter((c) => c.ink).map((c) => c.name).sort((a, b) => a.localeCompare(b)), 'the menu is the list, alphabetical');
+});
+
+test('every command of this console is handled: a daemon call in run.ts, or a local one in app.tsx; aliases resolve', async () => {
+  const app = readFileSync(join(import.meta.dirname, '../src/app.tsx'), 'utf8');
+  for (const c of LIST.filter((x) => x.ink)) {
+    if (c.local) { assert.ok(app.includes(`'${c.name}'`), `${c.name} is local but app.tsx does not handle it`); continue; }
+    const r = ctx(() => ({}));
+    await runSlash(c.name, r.c);
+    assert.ok(!r.out.some((t) => t.startsWith('unknown command')), `${c.name}: ${r.out.join(' | ')}`);
+  }
+  for (const c of LIST.filter((x) => x.ink)) for (const a of c.aliases ?? []) assert.equal(lookup(a)?.name, c.name, `${a} means ${c.name}`);
+  assert.equal(lookup('/nope'), undefined);
 });
 
 const info = { roles: {} } as unknown as Info;
@@ -66,4 +79,41 @@ test('/decisions reject carries the reason; /merge needs a task id and asks the 
   assert.match(m.out[0]!, /needs the build's task id/);
   await runSlash('/merge t_1', m.c);
   assert.deepEqual(m.calls[0], ['build.merge', { mission_id: 'm1', task_id: 't_1' }]);
+});
+
+test('the slash menu lists commands alphabetically', () => {
+  const names = COMMANDS.map((c) => c.name);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+});
+
+test('/observe opens a new window on every call, with the view', async () => {
+  const opened: string[][] = [];
+  delete process.env.TMUX;
+  const { c, out } = ctx(() => ({}));
+  const full = { ...c, info: { roles: {}, delphi_exe: '/bin/delphi', workspace_name: 'w', home: '/h' } as unknown as Info, open: async (a: string[]) => { opened.push(a); return null; } };
+  await runSlash('/observe council', full);
+  await runSlash('/observe council', full);
+  assert.equal(opened.length, 2);
+  assert.deepEqual(opened[0], ['sh', '-c', '/bin/delphi observe council --workspace w --home /h']);
+  assert.match(out[0]!, /new terminal window/);
+  await runSlash('/observe nonsense', full);
+  assert.equal(opened.length, 2);
+  await runSlash('/observe', { ...full, open: async () => 'no terminal' });
+  assert.match(out.at(-1)!, /could not open a terminal window \(no terminal\)/);
+});
+
+test('windowCommand: Terminal.app by default, iTerm when that is the terminal', async () => {
+  const { windowCommand } = await import('../src/window.ts');
+  assert.ok(windowCommand(['a b', "c'd"], 'darwin', {})!.join('\n').includes('tell application "Terminal"'));
+  assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with default profile'));
+  assert.equal(windowCommand(['x'], 'win32', {}), null);
+});
+
+test('/models prints the daemon\'s pool text; /agents lists what is running', async () => {
+  const m = ctx((method) => (method === 'models.get' ? { text: 'claude  usable\n' } : {}));
+  await runSlash('/models', m.c);
+  assert.equal(m.out[0], 'claude  usable');
+  assert.deepEqual(m.calls[0], ['models.get', { mission_id: 'm1' }]);
+  await runSlash('/agents', m.c);
+  assert.equal(m.out[1], 'Nothing is running.');
 });

@@ -68,9 +68,11 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
-    /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/020`).
+    /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
+    /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
+    pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
     pub council_budget_usd: f64,
     /// A Council seat that has not answered by then abstains.
@@ -97,6 +99,9 @@ pub struct Settings {
     /// `[optimistic] max_approver_calls`: model calls (Strategist and second seat) one task may spend on decisions.
     /// Past it, cards go to the operator.
     pub max_approver_calls: u32,
+    /// `[hooks]` (ratified): deny hooks the daemon runs before an approval (`hooks.rs`). Observe hooks are run by
+    /// `delphi hooks`, not here.
+    pub hooks: crate::hooks::Hooks,
     /// `[relay] step_up = "totp"` with `totp_credential`: the reference to the secret behind the operator's
     /// authenticator (`keychain:…`, `env:…`, `command:[…]`). With it, a relay may approve a Red card when the answer
     /// carries a valid code; without it a relay can only deny Red (`specs/014` §3).
@@ -121,6 +126,7 @@ impl Default for Settings {
             harness_idle: Duration::from_secs(300),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
+            connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
             park_poll: Duration::from_secs(5),
@@ -132,6 +138,7 @@ impl Default for Settings {
             unseconded: crate::provisional::Unseconded::Park,
             max_decisions: 200,
             max_approver_calls: 100,
+            hooks: Default::default(),
             relay_totp_credential: None,
         }
     }
@@ -219,6 +226,8 @@ pub struct Engine {
     pub(crate) decisions_changed: tokio::sync::Notify,
     /// Durable timers (`specs/017`): wakes the daemon keeps on behalf of roles and the operator.
     pub timers: Arc<crate::timers::TimerStore>,
+    /// What each subscription CLI last reported it could do (`specs/020` §4), shown to roles that dispatch work.
+    pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
@@ -540,6 +549,10 @@ impl Engine {
             if let Some(extra) = self.injected.lock().unwrap().get(&handoff.handoff_id) {
                 slices.extend(extra.iter().cloned());
             }
+            // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
+            if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
+                slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });
+            }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
             }
@@ -554,20 +567,7 @@ impl Engine {
                 reminder: Some(handoff.reminder_text()),
                 nonce,
             };
-            let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
-            if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
-                defs.push(dispatch_def());
-            }
-            if sc.manifest.execute.iter().any(|e| e == "timers") {
-                defs.push(timer_def());
-            }
-            if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
-                defs.push(run_command_def());
-            }
-            defs.extend(self.connector_defs(&sc).await?);
-            if sc.toolless {
-                defs.clear();
-            }
+            let defs = self.span_tool_defs(&sc).await?;
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             // A family whose first allowed endpoint is a harness runs the whole span in the subscription CLI
@@ -1106,8 +1106,29 @@ impl Engine {
         matches!(resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, true)), Route::Target { .. } | Route::Similar { .. } | Route::Weaker { .. })
     }
 
+    /// The tools this span is offered: the built-ins its scope allows, then the ones its manifest's `execute` list
+    /// adds, then connector tools. An API span sends them with every turn; a harness span gets them over the bridge
+    /// (`bridge.rs`), so both seats have the same Delphi tools for the same role.
+    pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
+        let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
+        if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
+            defs.push(dispatch_def());
+        }
+        if sc.manifest.execute.iter().any(|e| e == "timers") {
+            defs.push(timer_def());
+        }
+        if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+            defs.push(run_command_def());
+        }
+        defs.extend(self.connector_defs(sc).await?);
+        if sc.toolless {
+            defs.clear();
+        }
+        Ok(defs)
+    }
+
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
-    async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+    pub(crate) async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
         if sc.toolless {
             return Ok(tool_result_error("this span answers in text only; it has no tools"));
         }
@@ -1145,6 +1166,12 @@ impl Engine {
         if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
             if let Some(denied) = self.ask_classified(sc, tier, &c).await? {
                 return Ok(denied);
+            }
+        } else if c.tier == tools::ToolTier::Amber && !self.settings.hooks.deny.is_empty() {
+            // Allowed without a card (a permission mode, "allow similar"): a deny hook can still say no.
+            let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+            if let Some((hook, why)) = self.hook_denial(&who, &c.tool, &c.pattern, &c.summary, "amber", &c.payload).await? {
+                return Ok(tool_result_error(format!("This action was blocked by the hook `{}`: {}. Do not retry it; propose an alternative or ask.", hook, why)));
             }
         }
         let before = sc.span.ceiling();
@@ -1296,6 +1323,12 @@ impl Engine {
     /// (`provisional.rs`) instead of raising a card; anything else, and every other task, asks as before.
     pub(crate) async fn ask_classified(self: &Arc<Self>, sc: &SpanCtx, tier: ApprovalTier, c: &tools::Classified) -> Result<Option<tools::ToolResult>, EngineError> {
         if self.optimistic.lock().unwrap().contains(sc.task_id.as_str()) && crate::provisional::eligible(c, tier) {
+            if !self.settings.hooks.deny.is_empty() {
+                let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+                if let Some((hook, why)) = self.hook_denial(&who, &c.tool, &c.pattern, &c.summary, tier.as_str(), &c.payload).await? {
+                    return Ok(Some(tool_result_error(format!("This action was blocked by the hook `{}`: {}. Do not retry it; propose an alternative or ask.", hook, why))));
+                }
+            }
             let id = crate::provisional::new_decision_id();
             if let crate::provisional_run::Provisional::Decided(verdict) = self.decide_provisionally(sc, c, &id).await? {
                 sc.m.append(sc.ev("decision.provisional", crate::provisional::decision_event(&id, c, tier, &verdict, &sc.role))).await?;
@@ -1331,6 +1364,7 @@ impl Engine {
     pub(crate) async fn ask_as(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
         Ok(match self.ask_resolution(who, tier, tool, pattern, summary, payload, None).await? {
             Resolution::Approved { .. } => None,
+            Resolution::Denied { reason } if reason.starts_with("blocked by the hook") => Some(tool_result_error(format!("This action was {}. Do not retry it; propose an alternative or ask.", reason))),
             Resolution::Denied { reason } => Some(tool_result_error(format!("The operator denied this action{}. Do not retry it; propose an alternative or ask.", if reason.is_empty() { String::new() } else { format!(": {}", reason) }))),
             Resolution::TimedOut => Some(tool_result_error("The approval timed out and was denied. Do not retry it; propose an alternative.")),
         })
@@ -1346,6 +1380,11 @@ impl Engine {
             e.agent = Some(who.role.to_string());
             e
         };
+        if !self.settings.hooks.deny.is_empty() {
+            if let Some((hook, why)) = self.hook_denial(who, tool, pattern, summary, tier.as_str(), payload).await? {
+                return Ok(Resolution::Denied { reason: format!("blocked by the hook `{}`: {}", hook, why) });
+            }
+        }
         let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
         let started = std::time::Instant::now();
         let mut reraised_from: Option<String> = None;

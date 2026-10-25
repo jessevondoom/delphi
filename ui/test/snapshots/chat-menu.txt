@@ -16,7 +16,7 @@ delphi v0.5 · /proj · chat
 ── approval needed [RED — never auto-approved] · daedalus
   Ratify spec 011 into the canonical repository
     ratify specs/011
- ❯ /pause · Leave interrupted tasks as they are
+ ❯ /pause · After a restart: leave the interrupted tasks as they are
 ◐ working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ /pa

@@ -449,14 +449,24 @@ export function frame(m: Model, w: number, h: number): string[] {
     if (m.help) body = [...helpOverlay(m, w), ...Array(bodyH).fill('')].slice(0, bodyH);
     if (back > 0 && !m.help) body[bodyH - 1] = T.spread('', T.warn(`↓ ${back} more lines · pgdn or space · enter jumps to the end`), w);
     if (m.menu) {
-      const MAX = 5, items = m.menu.items, sel = Math.min(m.menu.sel, items.length - 1);
+      // Up to 8 rows, fewer when the body is short; a last dim row says how many more there are (`005e` §10.4).
+      const items = m.menu.items, sel = Math.min(m.menu.sel, items.length - 1);
+      const MAX = Math.max(1, Math.min(8, bodyH - 2));
       const start = Math.max(0, Math.min(sel - MAX + 1, items.length - MAX));
       const shown = items.slice(start, start + MAX);
-      shown.forEach((c, i) => {
+      const more = items.length - shown.length;
+      const rows = shown.map((c, i) => {
         const on = start + i === sel;
-        const row = (on ? T.accent('❯ ') : '  ') + (on ? chalk.bold(T.link(c.label)) : T.link(c.label)) + T.dim(` · ${c.desc}`);
-        body[bodyH - shown.length + i] = T.clip(' ' + row, w);
+        const label = (on ? T.accent('❯ ') : '  ') + (on ? chalk.bold(T.link(c.label)) : T.link(c.label));
+        // Below 100 columns a long description wraps to a second dim line instead of clipping mid-word.
+        const room = w - 1 - T.width(label) - 3;
+        const wrapped = w < 100 && T.width(c.desc) > room ? wrap(c.desc, Math.max(10, w - 6)) : [c.desc];
+        const first = w < 100 && wrapped.length > 1 ? [label] : [label + T.dim(` · ${c.desc}`)];
+        return [...first, ...(w < 100 && wrapped.length > 1 ? wrapped.slice(0, 2).map((l) => '    ' + T.dim(l)) : [])];
       });
+      const lines = rows.flat();
+      if (more > 0) lines.push('  ' + T.dim(`· ${more} more`));
+      lines.slice(-Math.max(1, bodyH - 1)).forEach((l, i, a) => { body[bodyH - a.length + i] = T.clip(' ' + l, w); });
     }
   }
   const out = [...head, ...(h < 16 ? [] : ['']), ...body.map((l) => T.clip(l, w)), statusRow(m, w), T.hairline(m.pal, w), ...prompt.map((l) => T.clip(l, w)), T.hairline(m.pal, w), footer(m, w)];

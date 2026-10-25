@@ -57,6 +57,25 @@ pub enum Tools {
     Standard,
 }
 
+/// What a profile (`[harness.<cli>]`, `specs/020`) changes about how the Claude CLI is started.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchProfile {
+    /// The MCP config file that starts the Delphi tool bridge (`bridge.rs`).
+    pub mcp_config: Option<PathBuf>,
+    /// The CLI's built-in tools given to a span with `Tools::None`. Empty means none.
+    pub native_tools: Vec<String>,
+    /// Start in the CLI's auto permission mode, so its own policy and classifier answer first.
+    pub auto_approve: bool,
+    /// Do not pass `--strict-mcp-config`: the signed-in account's own connectors load too.
+    pub claudeai_connectors: bool,
+    /// With account connectors on: how long to wait, before the first turn, for them to finish loading. They load in the
+    /// background and can arrive after the first model request, so a model asked at once may not be offered them. Zero
+    /// does not wait (tests, and a CLI that does not answer).
+    pub settle: Duration,
+    /// MCP servers a previous session of this CLI had connected, which the wait holds out for until its cap.
+    pub expect_servers: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Launch {
     pub cli: Cli,
@@ -68,6 +87,7 @@ pub struct Launch {
     pub cwd: PathBuf,
     pub tools: Tools,
     pub env: BTreeMap<String, String>,
+    pub profile: LaunchProfile,
     pub opts: Opts,
 }
 
@@ -158,7 +178,8 @@ impl Tokens {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    Init { session_id: String },
+    /// `tools` are the names the CLI will offer the model; `mcp_servers` are `(name, status)`.
+    Init { session_id: String, tools: Vec<String>, mcp_servers: Option<Vec<(String, String)>> },
     Text(String),
     /// A fragment of the answer as it is written (Claude with `partial_messages`). The finished text still arrives as
     /// [`Event::Text`], so a consumer that shows deltas must not show that too.
@@ -172,6 +193,8 @@ pub enum Event {
     /// Share of the subscription's window used, 0 to 1.
     /// `status` is `allowed`, `allowed_warning` or `rejected` (empty when the CLI does not say); `resets_at` is Unix seconds or milliseconds, as the CLI sent it.
     RateLimit { utilization: f64, window: String, status: String, resets_at: Option<i64> },
+    /// The answer to Delphi's own `mcp_status` request: `(server, status)`. Only the connector wait asks.
+    McpStatus(Vec<(String, String)>),
     /// `subtype` is the CLI's own ending (`success`, `error_max_turns`, `error_max_budget_usd`, ...); `structured` is the
     /// schema-validated answer when a `json_schema` was given.
     Result { text: String, is_error: bool, stop_reason: Option<String>, total_cost_usd: f64, usage: Tokens, subtype: String, structured: Option<Value> },
@@ -184,7 +207,11 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
     let mut out = Vec::new();
     match m["type"].as_str() {
-        Some("system") if m["subtype"] == "init" => out.push(Event::Init { session_id: m["session_id"].as_str().unwrap_or("").into() }),
+        Some("system") if m["subtype"] == "init" => out.push(Event::Init {
+            session_id: m["session_id"].as_str().unwrap_or("").into(),
+            tools: names_of(&m["tools"]),
+            mcp_servers: m["mcp_servers"].as_array().map(|a| a.iter().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect()),
+        }),
         Some("assistant") => {
             for b in m["message"]["content"].as_array().into_iter().flatten() {
                 match b["type"].as_str() {
@@ -203,6 +230,10 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                     out.push(Event::ToolResult { id: b["tool_use_id"].as_str().unwrap_or("").into(), is_error: b["is_error"].as_bool().unwrap_or(false) });
                 }
             }
+        }
+        Some("control_response") if m["response"]["request_id"].as_str().is_some_and(|id| id.starts_with(MCP_STATUS_ID)) => {
+            let servers = m["response"]["response"]["mcpServers"].as_array().into_iter().flatten().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect();
+            out.push(Event::McpStatus(servers));
         }
         // Only the top-level agent's text; a subagent's deltas carry a parent and are not the answer.
         Some("stream_event") if m["parent_tool_use_id"].is_null() && m["event"]["delta"]["type"] == "text_delta" => {
@@ -243,13 +274,21 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     out
 }
 
+/// The id prefix of Delphi's own `mcp_status` requests, so their answers are told from the CLI's other replies.
+const MCP_STATUS_ID: &str = "delphi-mcp-";
+
+/// Tool names from a list that holds either strings or objects with a `name`.
+fn names_of(v: &Value) -> Vec<String> {
+    v.as_array().into_iter().flatten().filter_map(|t| t.as_str().or_else(|| t["name"].as_str()).map(String::from)).collect()
+}
+
 /// `agy` output. Events: `init`, `step_update` (user input, agent response deltas, tool steps) and `result`.
 pub fn parse_agy_line(line: &str) -> Vec<Event> {
     let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
     let usage_of = |u: &Value| Tokens { input: u["input_tokens"].as_u64().unwrap_or(0), cache_read: u["cache_read_tokens"].as_u64().unwrap_or(0), cache_write: 0, output: u["output_tokens"].as_u64().unwrap_or(0) + u["thinking_tokens"].as_u64().unwrap_or(0) };
     let mut out = Vec::new();
     match m["event"].as_str() {
-        Some("init") => out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into() }),
+        Some("init") => out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into(), tools: names_of(&m["init"]["tools"]), mcp_servers: None }),
         Some("step_update") => {
             let s = &m["step_update"];
             let id = s["step_index"].as_u64().unwrap_or(0).to_string();
@@ -384,7 +423,9 @@ fn args(l: &Launch) -> Vec<String> {
         }
         return a;
     }
-    let mut a = strings(&["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", "manual", "--setting-sources", "", "--strict-mcp-config"]);
+    let p = &l.profile;
+    let mode = if p.auto_approve { "auto" } else { "manual" };
+    let mut a = strings(&["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", mode, "--setting-sources", ""]);
     match &o.session {
         SessionMode::Ephemeral => a.push("--no-session-persistence".into()),
         SessionMode::Persist => {}
@@ -395,9 +436,17 @@ fn args(l: &Launch) -> Vec<String> {
             }
         }
     }
+    // By default every MCP server but ours stays out (condition 5 of `specs/009` §7). A profile that lets the account's
+    // own connectors in drops the flag; their calls then reach Delphi's permission bridge like any other tool.
+    if !p.claudeai_connectors {
+        a.push("--strict-mcp-config".into());
+    }
+    if let Some(cfg) = &p.mcp_config {
+        a.extend(["--mcp-config".into(), cfg.display().to_string()]);
+    }
     a.extend(["--model".into(), l.model.clone(), "--append-system-prompt".into(), l.system_prompt.clone()]);
     if l.tools == Tools::None {
-        a.extend(["--tools".into(), String::new()]);
+        a.extend(["--tools".into(), p.native_tools.join(",")]);
     }
     push_flag(&mut a, "--effort", o.effort.clone());
     push_flag(&mut a, "--max-turns", o.max_turns.map(|n| n.to_string()));
@@ -415,6 +464,37 @@ fn args(l: &Launch) -> Vec<String> {
         }
     }
     a
+}
+
+/// Wait for the account's connectors to finish loading: ask for the MCP status until nothing is pending, every server
+/// a previous session had is connected, and three answers in a row agree; or until `cap`. A CLI that does not answer a
+/// status request (a stand-in, or an older release) is not waited on.
+async fn settle_connectors(stdin: &mut ChildStdin, rx: &mut mpsc::Receiver<Event>, cap: Duration, expect: &[String]) {
+    let deadline = tokio::time::Instant::now() + cap;
+    let (mut last, mut agree, mut n): (Option<Vec<(String, String)>>, u32, u32) = (None, 0, 0);
+    while tokio::time::Instant::now() < deadline {
+        n += 1;
+        let req = json!({"type": "control_request", "request_id": format!("{}{}", MCP_STATUS_ID, n), "request": {"subtype": "mcp_status"}}).to_string() + "\n";
+        if stdin.write_all(req.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+            return;
+        }
+        let answer = loop {
+            match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+                Ok(Some(Event::McpStatus(s))) => break Some(s),
+                Ok(Some(_)) => continue,
+                _ => break None,
+            }
+        };
+        let Some(mut servers) = answer else { return };
+        servers.sort();
+        let ready = servers.iter().all(|(_, st)| st != "pending") && expect.iter().all(|e| servers.iter().any(|(n, st)| n == e && st == "connected"));
+        agree = if ready && last.as_ref() == Some(&servers) { agree + 1 } else { 0 };
+        last = Some(servers);
+        if ready && agree >= 2 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+    }
 }
 
 /// A running CLI session.
@@ -443,9 +523,7 @@ impl Session {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let first = first_turn(l);
         let cli = l.cli;
-        stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
-        stdin.flush().await.map_err(|e| e.to_string())?;
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, mut rx) = mpsc::channel(256);
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut buf = Vec::new();
@@ -463,6 +541,12 @@ impl Session {
                 }
             }
         });
+        // The CLI says nothing until it has a first turn, but it answers control requests: settle the connectors first.
+        if cli == Cli::Claude && l.profile.claudeai_connectors && !l.profile.settle.is_zero() {
+            settle_connectors(&mut stdin, &mut rx, l.profile.settle, &l.profile.expect_servers).await;
+        }
+        stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
+        stdin.flush().await.map_err(|e| e.to_string())?;
         Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false })
     }
 
@@ -532,8 +616,13 @@ impl Drop for Session {
 /// An allowlisted environment for the CLI: enough to find its login and configuration, nothing else.
 /// Notably absent: `ANTHROPIC_API_KEY` (it would switch the CLI off the subscription), `AWS_*`, tokens.
 pub fn cli_env() -> BTreeMap<String, String> {
+    cli_env_with(&[])
+}
+
+/// [`cli_env`] plus the variable names a ratified `[harness.<cli>] env_allow` lists (`specs/020` §3).
+pub fn cli_env_with(extra: &[String]) -> BTreeMap<String, String> {
     const KEEP: [&str; 9] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "XDG_CONFIG_HOME"];
-    std::env::vars().filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_") || k == "CLAUDE_CONFIG_DIR").collect()
+    std::env::vars().filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_") || k == "CLAUDE_CONFIG_DIR" || extra.iter().any(|e| e == k)).collect()
 }
 
 #[cfg(test)]
@@ -543,7 +632,7 @@ pub(crate) mod tests {
     #[test]
     fn real_cli_lines_become_events() {
         let init = parse_line(r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/x","tools":["Bash"]}"#);
-        assert_eq!(init, vec![Event::Init { session_id: "s1".into() }]);
+        assert_eq!(init, vec![Event::Init { session_id: "s1".into(), tools: vec!["Bash".into()], mcp_servers: None }]);
         let asst = parse_line(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"},{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"touch a"}}],"usage":{"input_tokens":4,"cache_creation_input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":20}}}"#);
         assert_eq!(asst.len(), 3);
         assert_eq!(asst[0], Event::Text("hi".into()));
@@ -573,7 +662,7 @@ pub(crate) mod tests {
 
     #[test]
     fn agy_lines_become_the_same_events_and_its_args_use_stdin_for_the_prompt() {
-        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new() }]);
+        assert_eq!(parse_agy_line(r#"{"event":"init","init":{"model":"m","tools":[]}}"#), vec![Event::Init { session_id: String::new(), tools: vec![], mcp_servers: None }]);
         let delta = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"po"}}"#);
         assert_eq!(delta, vec![Event::Text("po".into())]);
         let done = parse_agy_line(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":6801,"output_tokens":1,"thinking_tokens":3,"cache_read_tokens":10}}}"#);
@@ -586,7 +675,7 @@ pub(crate) mod tests {
         assert!(matches!(&res[0], Event::Result { text, is_error: false, stop_reason: Some(r), .. } if text == "pong\n" && r.contains("denied")), "{:?}", res);
         let bad = parse_agy_line(r#"{"event":"result","result":{"status":"ERROR","error":"x"}}"#);
         assert!(matches!(&bad[0], Event::Result { is_error: true, .. }));
-        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), opts: Opts::default() };
+        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), profile: Default::default(), opts: Opts::default() };
         let a = args(&l);
         assert_eq!(a, ["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--disable-slash-commands", "--model", "gemini-3.8-flash-low"]);
         assert!(!a.iter().any(|x| x.contains("dangerously")), "never the bypass flag");
@@ -606,7 +695,7 @@ pub(crate) mod tests {
 
     #[test]
     fn agy_with_no_tools_is_told_so_in_its_first_turn() {
-        let mk = |tools| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), opts: Opts::default() };
+        let mk = |tools| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), profile: Default::default(), opts: Opts::default() };
         assert!(first_turn(&mk(Tools::None)).contains("Do not call any tools"));
         assert!(!first_turn(&mk(Tools::Standard)).contains("Do not call any tools"));
     }
@@ -671,7 +760,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_launch_arguments_isolate_the_cli_and_turn_the_bridge_on() {
-        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), opts: Opts::default() };
+        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), profile: Default::default(), opts: Opts::default() };
         let a = args(&l);
         let pos = |f: &str| a.iter().position(|x| x == f).unwrap();
         assert_eq!(a[pos("--permission-prompt-tool") + 1], "stdio");
@@ -700,7 +789,7 @@ pub(crate) mod tests {
     }
 
     fn claude_launch(tools: Tools, opts: Opts) -> Launch {
-        Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), opts }
+        Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), profile: Default::default(), opts }
     }
 
     #[test]
@@ -740,7 +829,7 @@ pub(crate) mod tests {
 
     #[test]
     fn agy_options_become_its_flags_and_a_resume_names_the_conversation() {
-        let mk = |tools, opts| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), opts };
+        let mk = |tools, opts| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), profile: Default::default(), opts };
         let o = Opts { mode: Some("plan".into()), effort: Some("low".into()), json_schema: Some("{}".into()), print_timeout_secs: Some(90), sandbox: true, add_dirs: vec![PathBuf::from("/srv/a")], session: SessionMode::Resume { id: "c1".into(), fork: true }, ..Opts::default() };
         let a = args(&mk(Tools::Standard, o.clone()));
         let value = |f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
@@ -759,7 +848,7 @@ pub(crate) mod tests {
         assert!(matches!(&res[0], Event::Result { structured: Some(v), subtype, .. } if v["n"] == 3 && subtype == "success"), "{:?}", res);
         let res = parse_line(r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}"#);
         assert!(matches!(&res[0], Event::Result { subtype, structured: None, is_error: true, .. } if subtype == "error_max_turns"));
-        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into() }]);
+        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into(), tools: vec![], mcp_servers: None }]);
         let res = parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"x","structured_output":{"n":3},"usage":{"input_tokens":1,"output_tokens":1}}}"#);
         assert!(matches!(&res[0], Event::Result { structured: Some(v), .. } if v["n"] == 3), "{:?}", res);
     }
@@ -824,7 +913,75 @@ echo '{"type":"result","subtype":"success","result":"fin","usage":{"input_tokens
     }
 
     fn launch(program: String, dir: &std::path::Path) -> Launch {
-        Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env(), opts: Opts::default() }
+        Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env(), profile: Default::default(), opts: Opts::default() }
+    }
+
+    #[tokio::test]
+    async fn the_first_turn_waits_until_the_accounts_connectors_have_stopped_loading() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("log.txt");
+        // A stand-in that answers `mcp_status` (two pending answers, then connected) and notes what arrived when.
+        let prog = d.path().join("fake-claude-slow");
+        std::fs::write(
+            &prog,
+            format!(
+                r#"#!/bin/sh
+n=0
+while read line; do
+  case "$line" in
+    *mcp_status*)
+      n=$((n+1))
+      id=$(echo "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      if [ $n -lt 3 ]; then st=pending; else st=connected; fi
+      echo "status $n $st" >> '{log}'
+      echo "{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{{\"mcpServers\":[{{\"name\":\"claude.ai Docs\",\"status\":\"$st\"}}]}}}}}}";;
+    *'"type":"user"'*)
+      echo "first turn after $n status answers" >> '{log}'
+      echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[],"mcp_servers":[{{"name":"claude.ai Docs","status":"connected"}}]}}'
+      echo '{{"type":"result","subtype":"success","result":"fin","usage":{{}}}}'
+      exit 0;;
+  esac
+done
+"#,
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut l = launch(prog.display().to_string(), d.path());
+        l.tools = Tools::None;
+        l.profile = LaunchProfile { claudeai_connectors: true, settle: Duration::from_secs(20), ..Default::default() };
+        let mut s = Session::start(&l).await.unwrap();
+        let mut saw_init = false;
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            match ev {
+                Event::Init { mcp_servers, .. } => saw_init = mcp_servers.is_some_and(|m| m == vec![("claude.ai Docs".to_string(), "connected".to_string())]),
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(saw_init);
+        let log = std::fs::read_to_string(&log).unwrap();
+        // pending, pending, connected, then two more equal answers; only then the first turn.
+        assert!(log.contains("status 5 connected") && log.trim_end().ends_with("first turn after 5 status answers"), "{}", log);
+
+        // Without account connectors, or with no wait configured, the first turn goes out at once.
+        let d2 = tempfile::tempdir().unwrap();
+        let quick = fake_cli(d2.path(), r#"echo '{"type":"system","subtype":"init","session_id":"s2"}'
+echo '{"type":"result","subtype":"success","result":"fin","usage":{}}'"#);
+        for profile in [LaunchProfile { claudeai_connectors: false, settle: Duration::from_secs(20), ..Default::default() }, LaunchProfile { claudeai_connectors: true, settle: Duration::ZERO, ..Default::default() }] {
+            let mut l = launch(quick.clone(), d2.path());
+            l.profile = profile;
+            let started = std::time::Instant::now();
+            let mut s = Session::start(&l).await.unwrap();
+            while let Some(ev) = s.next(Duration::from_secs(10)).await {
+                if matches!(ev, Event::Exit { .. }) {
+                    break;
+                }
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "no wait: {:?}", started.elapsed());
+        }
     }
 
     #[tokio::test]
@@ -855,7 +1012,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
                 }
                 seen.push(ev);
             }
-            assert!(seen.iter().any(|e| matches!(e, Event::Init { session_id } if session_id == "s9")));
+            assert!(seen.iter().any(|e| matches!(e, Event::Init { session_id, .. } if session_id == "s9")));
             assert!(seen.iter().any(|e| matches!(e, Event::Text(t) if t == want)), "{:?}", seen);
             assert!(seen.iter().any(|e| matches!(e, Event::Result { text, .. } if text == "fin")));
             assert!(matches!(seen.last(), Some(Event::Exit { code: Some(0) })));
@@ -883,7 +1040,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     async fn live_claude_round_trip_with_the_approval_bridge() {
         let d = tempfile::tempdir().unwrap();
         let dir = std::fs::canonicalize(d.path()).unwrap();
-        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Use the Bash tool to run exactly: touch live.txt   Then reply with the single word done.".into(), cwd: dir.clone(), tools: Tools::Standard, env: cli_env(), opts: Opts::default() };
+        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Use the Bash tool to run exactly: touch live.txt   Then reply with the single word done.".into(), cwd: dir.clone(), tools: Tools::Standard, env: cli_env(), profile: Default::default(), opts: Opts::default() };
         let mut s = Session::start(&l).await.unwrap();
         let (mut asked, mut text, mut result, mut metered) = (0, String::new(), false, 0);
         while let Some(ev) = s.next(Duration::from_secs(90)).await {
@@ -913,7 +1070,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     #[ignore]
     async fn live_agy_round_trip() {
         let d = tempfile::tempdir().unwrap();
-        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Reply with the single word pong.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env(), opts: Opts::default() };
+        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Reply with the single word pong.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env(), profile: Default::default(), opts: Opts::default() };
         let mut s = Session::start(&l).await.unwrap();
         let (mut text, mut result, mut metered) = (String::new(), false, 0);
         while let Some(ev) = s.next(Duration::from_secs(60)).await {

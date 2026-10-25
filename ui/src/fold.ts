@@ -44,6 +44,8 @@ export type State = {
   blocks: Block[];
   live: string;
   spans: Record<string, { role: string; depth: number }>;
+  /** Spans that have ended. Streaming frames and events travel on different sockets, so a frame can arrive after its task's last event; it must not bring the finished reply back as a live one. */
+  ended: Record<string, true>;
   agents: Record<string, Agent>;
   tokens: number;
   approvals: Record<string, Approval>;
@@ -64,7 +66,7 @@ export type State = {
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: emptyActivity(), prompts: {}, sources: {}, started: false,
+  blocks: [], live: '', spans: {}, ended: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: emptyActivity(), prompts: {}, sources: {}, started: false,
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
@@ -103,6 +105,16 @@ function endSpan(a: Activity, span: string, ok: boolean, now: number, prompts: R
 }
 
 /** Spans of a task that is over without having said so (cancelled, failed): they go without a chip. */
+/** Remember that these spans are over (the newest thousand: a session can run for days). */
+const endedWith = (ended: State['ended'], ids: string[]): State['ended'] => {
+  if (!ids.length) return ended;
+  const all = { ...ended, ...Object.fromEntries(ids.map((i) => [i, true as const])) };
+  const keys = Object.keys(all);
+  return keys.length > 2000 ? Object.fromEntries(keys.slice(-1000).map((k) => [k, true as const])) : all;
+};
+/** The running spans of `task` (every running span when there is none), by id. */
+const spansOf = (a: Activity, task?: string): string[] => a.running.filter((r) => !task || r.task === task).map((r) => r.span);
+
 const dropTask = (a: Activity, task?: string): Activity => (task ? { ...a, running: a.running.filter((r) => r.task !== task) } : { ...a, running: [] });
 
 const without = (r: Record<string, { since: number }>, id?: string) => { if (!id) return r; const { [id]: _gone, ...rest } = r; return rest; };
@@ -121,7 +133,7 @@ const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? '')
 export function replay(s: State, events: any[]): State {
   const KEEP = new Set(['task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
   const done = events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
-  return { ...done, running: {}, agents: {}, activity: emptyActivity() }; // what is running now comes from the daemon's snapshot, not from old events
+  return { ...done, running: {}, agents: {}, ended: {}, activity: emptyActivity() }; // what is running now comes from the daemon's snapshot, not from old events
 }
 
 /** The block for a task that stopped: the reason without the engine's wrapper, and the console's own words for it. */
@@ -148,6 +160,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     let activity = s.activity;
     let agents = s.agents;
     for (const k of Object.keys(spans).sort()) {
+      if (s.ended[k]) continue; // late: the span is over and its words are already in a block
       const who = s.spans[k]?.role;
       // Reasoning is only noted as "thinking", never shown, so even a blind council round pans its badges.
       if (who && spans[k]?.thinking && agents[who]) agents = { ...agents, [who]: { ...agents[who]!, thinkingAt: now } };
@@ -169,7 +182,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     }
     case 'dag.node.state': {
       if (pl.state !== 'done' && pl.state !== 'escalated') return s;
-      return { ...s, activity: endSpan(s.activity, String(pl.node_id), pl.state === 'done', now, s.prompts) };
+      return { ...s, ended: endedWith(s.ended, [String(pl.node_id)]), activity: endSpan(s.activity, String(pl.node_id), pl.state === 'done', now, s.prompts) };
     }
     case 'task.created': {
       const run = e.task_id ? { ...s.running, [e.task_id]: { since: now } } : s.running;
@@ -187,7 +200,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       for (const [r, a] of Object.entries(s.agents)) idle[r] = a.state === 'waiting on you' ? a : { state: 'idle', doing: '' };
       const escalated = pl.status === 'escalated';
       const said = sanitize(String(pl.text ?? ''));
-      const base = { ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), activity: dropTask(s.activity, e.task_id), lastActivity: now };
+      const base = { ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), ended: endedWith(s.ended, spansOf(s.activity, e.task_id)), activity: dropTask(s.activity, e.task_id), lastActivity: now };
       if (escalated) return setAgent(addBlock(base, attention(role, said, stamp(e, now))), role, { state: 'escalated', doing: '', since: now });
       const done = addBlock({ ...base, sources: noteSources(s.sources, citations(said), 'cited', role, stamp(e, now)) }, { kind: 'reply', role, text: said, at: stamp(e, now), status: 'done' });
       return setAgent(done, role, { state: 'idle', doing: '', successAt: now });
@@ -195,7 +208,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     case 'task.cancelled': {
       const idle: Record<string, Agent> = {};
       for (const r of Object.keys(s.agents)) idle[r] = { state: 'idle', doing: '' };
-      return addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), activity: dropTask(s.activity, e.task_id), alert: null, lastActivity: now }, { kind: 'note', text: '■ stopped', at: stamp(e, now) });
+      return addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), ended: endedWith(s.ended, spansOf(s.activity, e.task_id)), activity: dropTask(s.activity, e.task_id), alert: null, lastActivity: now }, { kind: 'note', text: '■ stopped', at: stamp(e, now) });
     }
     case 'agent.block.complete': {
       const b = pl.block;
@@ -215,7 +228,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       return { ...s, activity: act, blocks: s.blocks.map((x) => (x.kind === 'tool' && x.ref === ref ? { ...x, status: pl.is_error ? 'error' : 'ok', detail } : x)) };
     }
     case 'task.failed': {
-      return addBlock({ ...s, live: '', running: without(s.running, e.task_id), activity: dropTask(s.activity, e.task_id), lastActivity: now }, attention(speakerOf(s), sanitize(String(pl.error ?? '')), now));
+      return addBlock({ ...s, live: '', running: without(s.running, e.task_id), ended: endedWith(s.ended, spansOf(s.activity, e.task_id)), activity: dropTask(s.activity, e.task_id), lastActivity: now }, attention(speakerOf(s), sanitize(String(pl.error ?? '')), now));
     }
     case 'approval.requested': {
       const id = String(pl.approval_id ?? '');

@@ -51,7 +51,7 @@ pub trait ModelClient: Send + Sync {
     fn call<'a>(&'a self, endpoint: &'a Endpoint, model_id: &'a str, compiled: &'a Compiled, on_event: OnEvent<'a>) -> CallFuture<'a>;
 
     /// The API key a harness endpoint authenticates its CLI with, when its `credential` is a key source (`keychain:`,
-    /// `env:`, `command:`) rather than `harness-login`. `None` leaves the CLI on its own login (`specs/020` §4).
+    /// `env:`, `command:`) rather than `harness-login`. `None` leaves the CLI on its own login (`specs/021` §4).
     fn harness_key<'a>(&'a self, _endpoint: &'a Endpoint) -> KeyFuture<'a> {
         Box::pin(async { Ok(None) })
     }
