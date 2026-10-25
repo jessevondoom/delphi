@@ -35,7 +35,8 @@ test('every view fits the window exactly, with no boxes and no money-free surpri
     const lines = observeFrame(model(view), w, h);
     assert.equal(lines.length, h, `${view} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= w, `${view}: line wider than ${w}: ${plain(l)}`);
-    assert.ok(!/[┌┐└┘│]/.test(lines.map(plain).join('\n')), `${view}: no box characters`);
+    // The council's cards are tinted blocks; without a tint (these models have no known background) each row is a rail `│`.
+    assert.ok(!(view === 'council' ? /[┌┐└┘]/ : /[┌┐└┘│]/).test(lines.map(plain).join('\n')), `${view}: no box characters`);
   }
 });
 
@@ -97,28 +98,25 @@ test('mascots are seven columns in every state; the builder keeps its white crow
   assert.match(roster, /in 100 · cache 200 · out 50 · think 0 · 1 call\(s\)/);
 });
 
-test('council: one open column per seat, blind notes, critiques, verdict and minority report', () => {
+test('council: the question, the track, a card per seat and the verdict card; an escalation says what you can choose', () => {
   const t = observeFrame(model('council'), 110, 34).map(plain).join('\n');
-  assert.match(t, /Council 1\/1 · t_2 · verdict/);
-  assert.match(t, /athena|daedalus \(a\)/);
-  assert.match(t, /Round 1 \(blind\)/);
-  assert.match(t, /abstained: no answer/);
-  assert.match(t, /Round 2 → revise · does not concur/);
-  assert.match(t, /P1 lost updates/);
-  assert.match(t, /Escalated to you: seats deadlocked/);
-  assert.match(t, /option: table — architect/);
-  assert.match(t, /\[P0\] red-team: the race/);
-  assert.match(t, /saved: missions\/m\/councils\/008\.md/);
+  assert.match(t, /question\s+Table or file\?/);
+  assert.match(t, /✔ blind .* ✔ debate .* ● verdict|✔ blind .* ✔ debate .* ○ verdict/);
+  assert.match(t, /needs you\s*$/m, 'the track says the council waits for you');
+  assert.match(t, /verdict\s+needs you/);
+  assert.match(t, /options\s+table \(\w+\)/);
+  assert.match(t, /▼ needs you/, 'and the attention slot is the band');
+  assert.ok(!/Round 1 \(blind\)|Minority report/.test(t), 'the open columns of the old view are gone');
 });
 
-test('the blind seat shows the live text of its own node only', () => {
+test('the blind seat is sealed: its live text is never shown', () => {
   const s = sample();
   s.councils[0]!.phase = 'round 1'; s.councils[0]!.stances = [];
   s.nodes['n_9'] = { id: 'n_9', role: 'architect', parent: null, depth: 1, task_id: 't_2', state: 'running', tokens: 0, cost_usd: 0, started_ms: 0, ended_ms: null, after: [] };
   const t = observeFrame(model('council', { st: s, live: { n_9: 'thinking about the index' } }), 110, 34).map(plain).join('\n');
-  assert.match(t, /writing… \(blind\)\s/);
-  assert.match(t, /thinking about the index/);
-  assert.match(t, /Round 1 is blind/);
+  assert.match(t, /● thinking|○ thinking/);
+  assert.ok(!t.includes('thinking about the index'), 'sealed until every seat has answered');
+  assert.match(t, /sealed until all three answer/);
 });
 
 test('epic: the tree with indentation, the selected row, and the narrative', () => {

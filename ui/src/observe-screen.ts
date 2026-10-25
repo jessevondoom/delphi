@@ -5,6 +5,7 @@ import wrapAnsi from 'wrap-ansi';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
+import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -89,54 +90,7 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
 const name = (m: OModel, role: string) => T.roleName(role, m.info);
 const roleCol = (m: OModel, role: string) => T.roleColor(role, m.info);
 
-function council(m: OModel, w: number, h: number): string[] {
-  const n = m.st.councils.length;
-  if (!n) return ['', dim('  No Council yet.'), '', dim('  Convene one in the console:  /council <proposition>')];
-  const idx = Math.min(m.pick, n - 1), c = m.st.councils[idx]!;
-  const live = c.phase === 'round 1' || c.phase === 'round 2';
-  const out: string[] = [
-    chalk.bold(text(m)(` Council ${idx + 1}/${n} · ${c.task_id} · ${c.phase}${c.homogeneous ? ' · homogeneous (one model family)' : ''}`)),
-    text(m)(' ' + clean(c.proposition, w - 3)),
-    '',
-  ];
-  const cols = c.seats.length || 1, gap = 2, cw = Math.floor((w - gap * (cols - 1)) / cols);
-  const columns = c.seats.map((seat) => {
-    const L: string[] = [roleCol(m, seat.role).bold(`${name(m, seat.role)} (${seat.family})`), rule(m, cw)];
-    const s = c.stances.find((x) => x.role === seat.role);
-    if (s?.answered) { L.push(dim('Round 1 (blind)'), ...sanitize(s.text).split('\n').map((l) => text(m)(l))); }
-    else if (s) L.push(dim(`abstained: ${clean(s.text, 80)}`));
-    else {
-      L.push(dim('writing… (blind)'));
-      const node = Object.values(m.st.nodes).find((nd) => nd.task_id === c.task_id && nd.role === seat.role);
-      const lt = node ? m.live[node.id] : undefined;
-      if (lt) L.push(...sanitize(lt).split('\n').slice(-8).map((l) => text(m)(l)));
-    }
-    const cr = c.critiques.find((x) => x.role === seat.role);
-    if (cr) {
-      L.push('', chalk.bold(text(m)(`Round 2 → ${cr.recommendation || 'unreadable'}${cr.concur === true ? ' · concurs' : cr.concur === false ? ' · does not concur' : ''}`)));
-      for (const [sev, title] of cr.findings) L.push(colored(`${sev} ${title}`, sevColor(sev, m)));
-    }
-    return L.flatMap((l) => wrap(l, cw));
-  });
-  const verdict: string[] = [rule(m, w, 'Verdict')];
-  if (c.phase === 'round 1') verdict.push(dim(' Round 1 is blind: stances appear when every seat has answered.'));
-  else if (c.phase === 'round 2') verdict.push(dim(" Round 2: seats are critiquing each other's stances."));
-  else {
-    if (c.escalation) {
-      verdict.push(chalk.bold(colored(` Escalated to you: ${clean(c.escalation, 100)}`, T.warn)));
-      for (const [label, seats] of c.options) verdict.push(text(m)(`   option: ${label} — ${seats.join(', ')}`));
-    } else verdict.push(colored(' Verdict reached; no deterministic escalation.', T.ok));
-    verdict.push(chalk.bold(text(m)(' Minority report:')));
-    if (!c.unresolved.length) verdict.push(dim('   none open'));
-    for (const [sev, seat, title] of c.unresolved.slice(0, 3)) verdict.push(colored(`   [${sev}] ${seat}: ${clean(title, w - 16)}`, sevColor(sev, m)));
-    if (c.path) verdict.push(dim(` saved: ${c.path}`));
-  }
-  const room = Math.max(3, h - out.length - verdict.length);
-  const rows = Math.min(room, Math.max(0, ...columns.map((x) => x.length)));
-  const body = Array.from({ length: rows }, (_, i) => columns.map((col) => { const l = col[i + m.scroll] ?? ''; return l + ' '.repeat(Math.max(0, cw - T.width(l))); }).join(' '.repeat(gap)));
-  void live;
-  return [...out, ...body, ...Array(Math.max(0, room - rows)).fill(''), ...verdict];
-}
+const council = weave;
 
 export function epicOrder(st: OState): { n: OState['nodes'][string]; depth: number }[] {
   const kids = (id: string) => Object.values(st.nodes).filter((x) => x.parent === id);
@@ -238,10 +192,16 @@ function thinking(m: OModel, w: number, h: number): string[] {
 function strip(m: OModel, w: number): string {
   const now = m.now ?? 0, still = m.still ?? true;
   const thinkingRoles = new Set(Object.entries(m.think ?? {}).filter(([, t]) => t.trim()).map(([id]) => m.st.nodes[id]?.role));
+  // The council view: seats still answering pan their badges; on a verdict every seat shows success (`005e` §9.2).
+  const c = m.view === 'council' ? councilNow(m) : undefined;
+  const seatsThinking = c ? seatsNow(m, c).thinking : new Set<string>();
+  const seatsDone = c && phaseOf(c) === 'verdict' ? new Set(c.seats.map((x) => x.role)) : new Set<string>();
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
   return T.clip(roles.map((r) => {
+    if (seatsDone.has(r)) return T.badge(r, 'idle', m.info, m.pal, 'success');
     const a = m.st.agents[r];
-    const f = faceOf(a ? { state: a.state as never, doing: '', thinkingAt: thinkingRoles.has(r) ? now : undefined } : undefined, r, now, still);
+    const hot = thinkingRoles.has(r) || seatsThinking.has(r);
+    const f = faceOf(a || hot ? { state: (hot ? 'running' : a!.state) as never, doing: '', thinkingAt: hot ? now : undefined } : undefined, r, now, still);
     return T.badge(r, f.state, m.info, m.pal, f.frame);
   }).join(' '), w);
 }
