@@ -362,6 +362,8 @@ impl EngineService {
                 kb.sync_lexical(&crate::kb::sources(&ws), "")?;
             }
             if crate::kb::attach_default(&home, &mut kb)? {
+                // Vectors shipped with the release for the built-in documents are applied before this search.
+                kb.apply_seed_vectors()?;
                 let (vectors, chunks) = kb.vector_counts()?;
                 if vectors < chunks {
                     crate::kb::embed_in_background(&home, &ws);
@@ -383,8 +385,10 @@ impl EngineService {
         let rep = tokio::task::spawn_blocking(move || -> Result<crate::kb::IndexReport, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
             let rep = kb.sync_lexical(&crate::kb::sources(&ws), "")?;
-            // The words are searchable now; the vectors follow in the background.
+            // The words are searchable now, and so are the built-in documents' preloaded vectors; the rest follow
+            // in the background.
             if crate::kb::attach_default(&home, &mut kb)? {
+                kb.apply_seed_vectors()?;
                 crate::kb::embed_in_background(&home, &ws);
             }
             Ok(rep)

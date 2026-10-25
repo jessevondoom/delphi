@@ -17,6 +17,7 @@ pub trait Embedder: Send + Sync {
 
 #[cfg(feature = "local-embeddings")]
 pub mod local;
+pub mod vectors;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
