@@ -40,7 +40,7 @@ const UNSEEDED: [&str; 5] = ["specs/", "missions/", "OVERVIEW.md", "README.md", 
 /// Text files scanned for absolute home paths (REV-SEC-05).
 const TEXT_EXTS: [&str; 11] = [".md", ".toml", ".rs", ".sh", ".py", ".json", ".yaml", ".yml", ".txt", ".js", ".ts"];
 const COGNITIVE: [&str; 4] = ["deep-reasoning", "code-craft", "high-context-discovery", "fast-triage"];
-const BODY_LINE_CAP: usize = 500;
+pub const BODY_LINE_CAP: usize = 500;
 const RULE_CHARS: usize = 350;
 const RULE_COUNT: usize = 25;
 const RULE_BYTES: usize = 6144;
@@ -241,6 +241,11 @@ fn skill_package(tree: &Tree, skill: &str) -> Option<String> {
         .find(|k| tree.files.contains_key(k))
 }
 
+/// Frontmatter of a document's text, when it has a parseable one.
+pub fn frontmatter_of(text: &str) -> Option<Mapping> {
+    frontmatter::parse(text).ok().and_then(|d| d.frontmatter)
+}
+
 pub fn load_fm(tree: &Tree, logical: &str) -> Option<Mapping> {
     tree.read(logical).and_then(|t| frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter)
 }
@@ -306,7 +311,37 @@ fn check_skills(tree: &Tree, r: &mut Report) {
         if lines > BODY_LINE_CAP {
             r.fail("skill", path.clone(), format!("body is {} lines (cap {})", lines, BODY_LINE_CAP));
         }
+        let pkg = path.trim_end_matches("SKILL.md");
+        for e in skill_package_errors(&doc.body, &fm, &|rel| tree.files.contains_key(&format!("{}{}", pkg, rel))) {
+            r.fail("skill", path.clone(), e);
+        }
     }
+}
+
+/// What a `SKILL.md` promises about its own package: every `templates/` file and declared script it names exists, and
+/// every `delphi check <kind>` it tells an agent to run is a kind the binary has. `has` probes the package directory.
+pub fn skill_package_errors(body: &str, fm: &Mapping, has: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let mut errs = Vec::new();
+    let template = Regex::new(r"\btemplates/[A-Za-z0-9_.-]+").unwrap();
+    for m in template.find_iter(body) {
+        if !has(m.as_str()) {
+            errs.push(format!("names `{}`, which is not in the package", m.as_str()));
+        }
+    }
+    let check = Regex::new(r"delphi check ([a-z][a-z-]*)").unwrap();
+    for c in check.captures_iter(body) {
+        if !crate::check::KINDS.contains(&&c[1]) {
+            errs.push(format!("runs `delphi check {}`, which is not a check kind ({})", &c[1], crate::check::KINDS.join(", ")));
+        }
+    }
+    for sc in fm.get(Value::String("deterministic_scripts".into())).and_then(|v| v.as_sequence()).into_iter().flatten() {
+        if let Some(p) = sc.as_mapping().and_then(|m| get_str(m, "path")) {
+            if !has(p) {
+                errs.push(format!("declares script `{}`, which is not in the package", p));
+            }
+        }
+    }
+    errs
 }
 
 pub fn skill_errors(fm: &Mapping, dir: &str, custom: bool) -> Vec<String> {
