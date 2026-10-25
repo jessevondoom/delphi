@@ -1,6 +1,8 @@
- DELPHI OBSERVER  ·  COUNCIL CHAMBER  ·  mission 2026-1…
- ⟦•─•⟧ athena   ⟦•_•⟧ daedalus   ⟦•─•⟧ hephaestus runni…
-────────────────────────────────────────────────────────
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · council
+
+ ▼ needs you   council t_2 needs a decision
+
  Council 1/1 · t_2 · verdict
  Table or file?
 
@@ -11,7 +13,6 @@ Use a table.       answer
 It indexes.
 
 Round 2 → revise
-· does not concur
 ── Verdict ─────────────────────────────────────────────
  Escalated to you: seats deadlocked
    option: table — architect
@@ -20,5 +21,4 @@ Round 2 → revise
    [P0] red-team: the race
  saved: missions/m/councils/008.md
 ────────────────────────────────────────────────────────
- Council 1/7 · … navigate: shift+arrows · ● ○ ○ ○ ○ ○ ○
- spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cach…
+3 agents  ·  3500 tokens                     ● ○ ○ ○ ○ ○

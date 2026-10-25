@@ -1,14 +1,15 @@
- DELPHI OBSERVER  ·  MASCOT ROSTER  ·  mission 2026-10-24-ui
- ⟦•─•⟧ athena running   ⟦x?x⟧ ares waiting on you
-────────────────────────────────────────────────────────────────────────────────────────────────────
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧
+delphi v0.5 · agents
+
+ ✔ nothing needs you
+
     ▄▄▄     athena  orchestrator  ● running
-    •─•     frontier · claude-x · direct
-  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · $0.070 · 2 call(s)
+    •─•     frontier · claude-x · direct · task t_1
+  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · 2 call(s)
 
   ▄     ▄   ares  red-team  ► waiting on you
-    x?x     frontier · claude-x · direct
-  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · $0.070 · 2 call(s)
-
+    x?x     frontier · claude-x · direct · task t_1
+  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · 2 call(s)
 
 
 
@@ -26,5 +27,4 @@
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- Agents 4/7 · ← Forge Diffs · → Spend · 1-7 jump · q quit    navigate: shift+arrows · ○ ○ ○ ● ○ ○ ○
- spend $0.420 / $5.00 ▓░░░░░░░░░░░ · tokens 3500 · cache hit 50% · retries 0
+1 running  ·  3500 tokens                                                        ← →  ·  ○ ○ ○ ● ○ ○
