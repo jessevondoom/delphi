@@ -7,11 +7,12 @@ import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
 import { initial } from './fold.ts';
 import { loadHistory } from './attach.ts';
-import { envTheme, type Info } from './theme.ts';
+import { capabilities, envTheme, useCapabilities, type Info } from './theme.ts';
 
 declare const BUILD_VERSION: string | undefined; // set by the release build (bun --define); absent when run from source
 const VERSION = typeof BUILD_VERSION === 'string' ? BUILD_VERSION : 'dev';
 if (process.argv.includes('--version')) { console.log(`delphi-ui ${VERSION}`); process.exit(0); }
+useCapabilities(capabilities()); // NO_COLOR and TERM=dumb, read once, for the console and the narrator alike
 
 /**
  * Light or dark: `DELPHI_THEME` if set; else what the terminal answers to the background query; else `COLORFGBG`;

@@ -1,6 +1,7 @@
 // Small syntax highlighter for the code in replies: strings, comments, numbers, keywords, diffs. Not a parser; it
 // only colours, so a wrong guess costs a colour, never text.
 import chalk from 'chalk';
+import { syntax } from './theme.ts';
 
 const KW: Record<string, string> = {
   rust: 'fn let mut pub struct enum impl trait use mod match if else for while loop return self Self crate as in where async await move const static type unsafe true false',
@@ -13,7 +14,7 @@ const KW: Record<string, string> = {
 const ALIAS: Record<string, string> = { rs: 'rust', py: 'python', javascript: 'js', typescript: 'js', ts: 'js', tsx: 'js', jsx: 'js', bash: 'sh', shell: 'sh', zsh: 'sh', yaml: 'toml', yml: 'toml' };
 const COMMENT: Record<string, RegExp> = { rust: /^\/\/.*/, js: /^\/\/.*/, python: /^#.*/, sh: /^#.*/, toml: /^#.*/ };
 
-const c = { kw: chalk.hex('#c4b5fd'), str: chalk.hex('#86efac'), num: chalk.hex('#fdba74'), com: chalk.hex('#64748b'), ty: chalk.hex('#38bdf8'), add: chalk.hex('#4ade80'), del: chalk.hex('#f87171'), hunk: chalk.hex('#38bdf8') };
+const c = syntax;
 
 export function highlightLine(line: string, lang: string): string {
   const l = ALIAS[lang.toLowerCase()] ?? lang.toLowerCase();

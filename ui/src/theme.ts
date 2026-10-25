@@ -1,5 +1,5 @@
 // Look and feel: the palette, the five-column badge and the hairline, following skills/tui-design and spec 005a.
-import chalk from 'chalk';
+import chalk, { type ChalkInstance } from 'chalk';
 import stringWidth from 'string-width';
 import { graphemes } from './text.ts';
 
@@ -31,15 +31,101 @@ export type Info = {
 
 export type Pal = { dark: boolean };
 
-export const text = (p: Pal) => (s: string) => (p.dark ? chalk.hex('#e2e8f0')(s) : chalk.hex('#0f172a')(s));
-export const dim = (s: string) => chalk.hex('#64748b')(s);
-export const rule = (p: Pal) => (s: string) => chalk.hex(p.dark ? '#334155' : '#cbd5e1')(s);
-export const link = (s: string) => chalk.hex('#60a5fa')(s);
-export const accent = (s: string) => chalk.hex('#38bdf8')(s);
-export const warn = (s: string) => chalk.hex('#facc15')(s);
-export const crimson = (s: string) => chalk.hex('#ef4444')(s);
+/**
+ * What the terminal can show (`005e` §5). `NO_COLOR` (set to anything) and `TERM=dumb` mean no colour at all;
+ * `TERM=dumb` also means no attributes (bold, dim, underline). Otherwise the colour depth comes from `COLORTERM`
+ * and `TERM`. Read once at start (`useCapabilities`); the Rust consoles make the same decision.
+ */
+export type Capabilities = { color: 'none' | '16' | '256' | 'truecolor'; attributes: boolean };
 
+export function capabilities(env: Record<string, string | undefined> = process.env, term: string | undefined = env.TERM): Capabilities {
+  const dumb = term === 'dumb';
+  if (dumb || env.NO_COLOR !== undefined) return { color: 'none', attributes: !dumb };
+  const ct = (env.COLORTERM ?? '').toLowerCase();
+  if (ct === 'truecolor' || ct === '24bit') return { color: 'truecolor', attributes: true };
+  return { color: /256color/.test(term ?? '') ? '256' : '16', attributes: true };
+}
+
+let caps: Capabilities = capabilities();
+export const currentCapabilities = (): Capabilities => caps;
+/** Adopt `c` and set how many colours chalk may write. Called once at start-up (and by tests). */
+export function useCapabilities(c: Capabilities): void {
+  caps = c;
+  chalk.level = !c.attributes ? 0 : c.color === 'truecolor' ? 3 : c.color === '256' ? 2 : 1;
+}
+
+type Style = (s: string) => string;
+const plainStyle = chalk as ChalkInstance;
+/** `colour` normally; `none` when there is no colour, so structure and emphasis survive. */
+const by = (colour: Style, none: Style = (s) => s): Style => (s) => (caps.color === 'none' ? none : colour)(s);
+
+// The semantic palette. Delphi draws with the terminal's own foreground and background, the ANSI colours and
+// attributes (`005e` §4.1), so every theme the person has chosen is the palette; role colours are the one exception.
+export const body: Style = (s) => s;
+export const muted: Style = (s) => chalk.dim(s);
+/** The operator's own words step back. */
+export const operator: Style = muted;
+export const accent: Style = by((s) => chalk.cyan(s));
+export const link: Style = by((s) => chalk.cyan.underline(s), (s) => chalk.underline(s));
+export const ok: Style = by((s) => chalk.green(s));
+export const warn: Style = by((s) => chalk.yellow(s), (s) => chalk.bold(s));
+export const alert: Style = by((s) => chalk.red.bold(s), (s) => chalk.bold(s));
+/** Approval mode `auto`: the warning-red colour, bold, never reverse video. */
+export const auto: Style = (s) => (caps.color === 'none' ? chalk.bold(s) : caps.color === 'truecolor' ? chalk.bold.hex('#f97316')(s) : chalk.bold.redBright(s));
+export const heading: Style = by((s) => chalk.bold.yellow(s), (s) => chalk.bold(s));
+
+/** Code and diffs in replies: colour only, never text. */
+export const syntax = {
+  kw: by((s) => chalk.magenta(s)), str: by((s) => chalk.green(s)), num: by((s) => chalk.yellow(s)), com: muted, ty: by((s) => chalk.cyan(s)),
+  add: ok, del: by((s) => chalk.red(s)), hunk: by((s) => chalk.cyan(s)),
+};
+
+// The older names the screens use; same functions.
+export const text = (_p: Pal): Style => body;
+export const dim: Style = muted;
+export const crimson: Style = alert;
+export const rule = (_p: Pal): Style => muted;
 export const hairline = (p: Pal, w: number) => rule(p)('─'.repeat(w));
+
+/** A colour from data (a role's chassis, a crown): as itself where there is colour, plain where there is none. */
+export const tone = (hex: string): ChalkInstance => (caps.color === 'none' ? plainStyle : chalk.hex(hex));
+/** Colours drawn by the mascot that are not a role's own: the crown's default and highlight. */
+export const CROWN_DEFAULT = '#facc15';
+export const CROWN_LIGHT = '#ffffff';
+/** A mascot's face row: dark ink on the role-coloured body. */
+export const onChassis = (chassis: string, row: string): string => (caps.color === 'none' ? row : chalk.bgHex(chassis).hex('#0f172a')(row));
+
+export type Rgb = [number, number, number];
+/** A background for a block, a half-step away from the terminal's own (`005e` §5, §7.2). */
+export type Tint = { /** background styler */ fill: Style; /** foreground in the same colour, for the half-block caps */ ink: Style };
+
+const ANSI16: Rgb[] = [[0, 0, 0], [205, 0, 0], [0, 205, 0], [205, 205, 0], [0, 0, 238], [205, 0, 205], [0, 205, 205], [229, 229, 229], [127, 127, 127], [255, 0, 0], [0, 255, 0], [255, 255, 0], [92, 92, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255]];
+const dist = (a: Rgb, b: Rgb) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+const luma = (c: Rgb) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+
+/**
+ * The tint for a block on terminal background `bg`: truecolor, the background moved 8 % toward white (dark) or 6 %
+ * toward black (light); 256 colours, the grey-ramp entry (232-255) two steps from it; 16 colours, ANSI 8 (dark) or 7
+ * (light) when that differs from the background. `null` means no tint: the rail fallback. An unknown background
+ * (`bg` null) is `null` at every depth, which is the safe answer to open question 3 of `005e` §16.
+ */
+export function tint(bg: Rgb | null, isDark: boolean, color: Capabilities['color'] = caps.color): Tint | null {
+  if (!bg || color === 'none') return null;
+  if (color === 'truecolor') {
+    const k = isDark ? 0.08 : -0.06;
+    const c = bg.map((v) => Math.round(k > 0 ? v + (255 - v) * k : v * (1 + k))) as Rgb;
+    return { fill: (s) => chalk.bgRgb(...c)(s), ink: (s) => chalk.rgb(...c)(s) };
+  }
+  if (color === '256') {
+    const step = Math.max(0, Math.min(23, Math.round((luma(bg) - 8) / 10)));
+    const idx = 232 + Math.max(0, Math.min(23, step + (isDark ? 2 : -2)));
+    return { fill: (s) => chalk.bgAnsi256(idx)(s), ink: (s) => chalk.ansi256(idx)(s) };
+  }
+  const near = ANSI16.reduce((best, c, i) => (dist(c, bg) < dist(ANSI16[best]!, bg) ? i : best), 0);
+  const idx = isDark ? 8 : 7;
+  if (near === idx) return null;
+  return isDark ? { fill: (s) => chalk.bgBlackBright(s), ink: (s) => chalk.blackBright(s) } : { fill: (s) => chalk.bgWhite(s), ink: (s) => chalk.white(s) };
+}
 
 /** The state a badge shows: what an agent is doing, in the words the Observer uses. */
 export type AgentState = 'idle' | 'running' | 'waiting on you' | 'escalated';
@@ -68,8 +154,8 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
  * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
  */
 export function badge(role: string, state: AgentState, info: Info, p: Pal): string {
-  const chassis = chalk.hex(info.avatar?.roles[role]?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
-  const eye = chalk.hex(eyeColor(role, state, info, p));
+  const chassis = roleColor(role, info);
+  const eye = caps.color === 'none' ? chalk.bold : chalk.hex(eyeColor(role, state, info, p));
   const { cells, mouth } = badgeCells(role, state, info);
   return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : eye(c))).join('') + chassis('⟧');
 }
@@ -88,7 +174,9 @@ export function envTheme(env: Record<string, string | undefined> = process.env):
 }
 
 export const roleName = (role: string, info: Info) => info.roles[role]?.name ?? role;
-export const roleColor = (role: string, info: Info) => chalk.hex(info.roles[role]?.chassis ?? '#94a3b8');
+export const roleColor = (role: string, info: Info): ChalkInstance => tone(info.avatar?.roles[role]?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
+/** A role's colour (`005e` §5): its chassis from the theme under colour; plain, with the glyphs carrying it, under none. */
+export const role = roleColor;
 
 export const width = (s: string) => stringWidth(s);
 
@@ -111,11 +199,11 @@ export function clip(s: string, w: number): string {
     if (tok.length > 2 && tok.startsWith('\x1b[') && tok.endsWith('m')) { out += tok; continue; }
     for (const g of graphemes(tok)) { // whole characters only: never half of an emoji or a wide glyph
       const cw = stringWidth(g);
-      if (used + cw > w - 1) return out + '\x1b[0m…';
+      if (used + cw > w - 1) return out + (out.includes('\x1b[') ? '\x1b[0m' : '') + '…';
       out += g; used += cw;
     }
   }
-  return out + '\x1b[0m…';
+  return out + (out.includes('\x1b[') ? '\x1b[0m' : '') + '…';
 }
 
 export function tilde(path: string): string {

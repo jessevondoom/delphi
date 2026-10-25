@@ -52,12 +52,13 @@ const spark = (v: number[], w: number) => {
   return max <= 0 ? '▁'.repeat(r.length) : r.map((x) => '▁▂▃▄▅▆▇█'[Math.round((x / max) * 7)]).join('');
 };
 const glyph = (s: string) => ({ done: '✔', green: '✔', merged: '✔', running: '●', escalated: '✖', failed: '✖', red: '✖', refused: '✖', 'waiting on you': '►', pending: '○', idle: '○' } as Record<string, string>)[s] ?? '·';
-const stateColor = (s: string) => ({ done: '#4ade80', green: '#4ade80', merged: '#4ade80', running: '#22d3ee', escalated: '#ef4444', failed: '#ef4444', red: '#ef4444', refused: '#ef4444', 'waiting on you': '#facc15' } as Record<string, string>)[s] ?? '#64748b';
-const colored = (s: string, hex: string) => chalk.hex(hex)(s);
+const stateColor = (s: string): Paint => ({ done: T.ok, green: T.ok, merged: T.ok, running: T.accent, escalated: T.alert, failed: T.alert, red: T.alert, refused: T.alert, 'waiting on you': T.warn } as Record<string, Paint>)[s] ?? T.muted;
+type Paint = (s: string) => string;
+const colored = (s: string, paint: Paint) => paint(s);
 const clean = (s: string, n: number) => { const t = sanitize(s).replace(/\n/g, ' '); return [...t].length <= n ? t : [...t].slice(0, Math.max(0, n - 1)).join('') + '…'; };
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(4, w), { hard: true, trim: false }).split('\n');
 const rule = (m: OModel, w: number, title = '') => { const head = title ? `── ${title} ` : ''; return T.rule(m.pal)(head + '─'.repeat(Math.max(0, w - [...head].length))); };
-const sevColor = (sev: string, m: OModel) => (sev === 'P0' ? '#ef4444' : sev === 'P1' ? '#facc15' : '#64748b');
+const sevColor = (sev: string, _m: OModel): Paint => (sev === 'P0' ? T.alert : sev === 'P1' ? T.warn : T.muted);
 const dim = (s: string) => T.dim(s);
 const text = (m: OModel) => T.text(m.pal);
 
@@ -66,9 +67,9 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
   const r = info.roles[role], lib = info.avatar?.roles[role];
   const slice = lib?.crown ?? r?.crown;
   if (!slice) return [' '.repeat(7), ' '.repeat(7), ' '.repeat(7)];
-  const crownColor = lib?.crown_rgb ?? r?.crown_rgb ?? '#facc15';
+  const crownColor = lib?.crown_rgb ?? r?.crown_rgb ?? T.CROWN_DEFAULT;
   const chassis = lib?.chassis ?? r!.chassis;
-  const crown = [...slice].map((c, i) => (c !== '▄' ? ' ' : chalk.hex(role === 'builder' && i >= 1 && i <= 5 ? '#ffffff' : crownColor)('▄'))).join('');
+  const crown = [...slice].map((c, i) => (c !== '▄' ? ' ' : T.tone(role === 'builder' && i >= 1 && i <= 5 ? T.CROWN_LIGHT : crownColor)('▄'))).join('');
   // The face row comes from the library's data; the built-in rows serve an older `delphi` that does not send it.
   let row = lib?.mascot[T.ACTIVITY[state as T.AgentState] ?? 'idle'];
   if (!row) {
@@ -79,7 +80,7 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
     const pad = 7 - [...face].length;
     row = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
   }
-  return [crown, chalk.bgHex(chassis).hex('#0f172a')(row), chalk.hex(chassis)('▀▀▀▀▀▀▀')];
+  return [crown, T.onChassis(chassis, row), T.tone(chassis)('▀▀▀▀▀▀▀')];
 }
 
 const name = (m: OModel, role: string) => T.roleName(role, m.info);
@@ -119,9 +120,9 @@ function council(m: OModel, w: number, h: number): string[] {
   else if (c.phase === 'round 2') verdict.push(dim(" Round 2: seats are critiquing each other's stances."));
   else {
     if (c.escalation) {
-      verdict.push(chalk.bold(colored(` Escalated to you: ${clean(c.escalation, 100)}`, '#facc15')));
+      verdict.push(chalk.bold(colored(` Escalated to you: ${clean(c.escalation, 100)}`, T.warn)));
       for (const [label, seats] of c.options) verdict.push(text(m)(`   option: ${label} — ${seats.join(', ')}`));
-    } else verdict.push(colored(' Verdict reached; no deterministic escalation.', '#4ade80'));
+    } else verdict.push(colored(' Verdict reached; no deterministic escalation.', T.ok));
     verdict.push(chalk.bold(text(m)(' Minority report:')));
     if (!c.unresolved.length) verdict.push(dim('   none open'));
     for (const [sev, seat, title] of c.unresolved.slice(0, 3)) verdict.push(colored(`   [${sev}] ${seat}: ${clean(title, w - 16)}`, sevColor(sev, m)));
@@ -174,13 +175,13 @@ function forge(m: OModel, w: number, h: number): string[] {
   for (const a of b.attempts) head.push(text(m)(`   ${a}`));
   for (const g of b.gates) head.push(colored(`   ${glyph(g.state)} `, stateColor(g.state)) + text(m)(`${g.name.padEnd(10)} ${clean(g.detail, w - 18)}`));
   for (const [sev, title] of b.findings) head.push(colored(`   audit ${sev} ${clean(title, 100)}`, sevColor(sev, m)));
-  if (b.flaky) head.push(colored('   a test failed once and passed on a rerun (flaky)', '#facc15'));
+  if (b.flaky) head.push(colored('   a test failed once and passed on a rerun (flaky)', T.warn));
   const diff: string[] = [rule(m, w, 'Diff against the base commit')];
   const d = m.diff;
   if (d?.available) {
     for (const l of sanitize(d.stat ?? '').split('\n')) diff.push(text(m)(l));
-    for (const u of d.untracked ?? []) diff.push(colored(`?? ${sanitize(u)}`, '#facc15'));
-    for (const l of sanitize(d.diff ?? '').split('\n')) diff.push(l.startsWith('+') && !l.startsWith('+++') ? colored(l, '#4ade80') : l.startsWith('-') && !l.startsWith('---') ? colored(l, '#ef4444') : l.startsWith('@@') ? colored(l, '#22d3ee') : text(m)(l));
+    for (const u of d.untracked ?? []) diff.push(colored(`?? ${sanitize(u)}`, T.warn));
+    for (const l of sanitize(d.diff ?? '').split('\n')) diff.push(l.startsWith('+') && !l.startsWith('+++') ? colored(l, T.ok) : l.startsWith('-') && !l.startsWith('---') ? colored(l, T.syntax.del) : l.startsWith('@@') ? colored(l, T.accent) : text(m)(l));
   } else diff.push(dim('  no live worktree for this build (it finished, or has not started). r refreshes.'));
   const headH = Math.min(head.length + 1, Math.max(3, h - 4));
   const body = diff.slice(m.scroll === 0 ? 0 : 1 + m.scroll);
@@ -207,13 +208,13 @@ function agents(m: OModel, _w: number, _h: number): string[] {
 function spend(m: OModel, w: number, _h: number): string[] {
   const st = m.st, cap = st.budget.cap_usd;
   const out = [
-    rule(m, w, 'Spend per call'), chalk.hex('#22d3ee')('  ' + spark(st.series, w - 4)),
+    rule(m, w, 'Spend per call'), T.accent('  ' + spark(st.series, w - 4)),
     dim(`  ${st.series.length} call(s) · total ${money(st.spent_usd)} · ${cap > 0 ? `${((st.spent_usd / cap) * 100).toFixed(0)}% of the ${money(cap)} ceiling` : 'no ceiling known'}`),
     '', rule(m, w, 'Tokens'),
   ];
   const tk = st.tokens, total = Math.max(1, tokTotal(tk));
   for (const [label, n] of [['input', tk.input], ['cache read', tk.cache_read], ['cache write', tk.cache_write], ['output', tk.output], ['thinking', tk.thinking]] as const) {
-    out.push(text(m)(`  ${label.padEnd(12)}${kilo(n).padStart(9)}  `) + chalk.hex('#22d3ee')(bar(n / total, 30)));
+    out.push(text(m)(`  ${label.padEnd(12)}${kilo(n).padStart(9)}  `) + T.accent(bar(n / total, 30)));
   }
   out.push(dim(`  prompt cache hit ${(st.cache_hit_ratio * 100).toFixed(0)}% of input-side tokens · retries ${st.retries}`), '', rule(m, w, 'By agent'));
   const spent = Math.max(st.spent_usd, Number.MIN_VALUE);
@@ -264,7 +265,7 @@ function footer(m: OModel, w: number): string[] {
   const prev = SHORT[VIEWS[(i + VIEWS.length - 1) % VIEWS.length]!], next = SHORT[VIEWS[(i + 1) % VIEWS.length]!];
   const left = dim(` ${SHORT[m.view]} ${i + 1}/${VIEWS.length} · ← ${prev} · → ${next} · 1-${VIEWS.length} jump · q quit`);
   const frac = cap > 0 ? st.spent_usd / cap : 0;
-  const col = frac >= 0.9 ? '#ef4444' : frac >= 0.75 ? '#facc15' : '#4ade80';
+  const col = frac >= 0.9 ? T.alert : frac >= 0.75 ? T.warn : T.ok;
   const sp = text(m)(` spend ${money(st.spent_usd)} / ${cap > 0 ? money(cap) : '?'} `) + colored(bar(frac, 12), col) + text(m)(` · tokens ${kilo(tokTotal(st.tokens))} · cache hit ${(st.cache_hit_ratio * 100).toFixed(0)}% · retries ${st.retries}${st.pending_proposals > 0 ? ` · ${st.pending_proposals} proposal(s) await /ratify` : ''}`);
   return [T.hairline(m.pal, w), T.spread(left, dim('navigate: shift+arrows · ') + dots + ' ', w), T.clip(sp, w)];
 }
