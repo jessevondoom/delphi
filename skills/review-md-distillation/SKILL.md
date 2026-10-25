@@ -1,6 +1,6 @@
 ---
 name: review-md-distillation
-description: "Update REVIEW.md and heuristics from review outcomes within their budgets; flag rules violated twice for a deterministic check. Use after review rounds."
+description: "Keep the REVIEW.md rubric short: merge repeated findings, flag rules violated twice for a deterministic check. Use when the rubric nears its line budget or a review finding recurs."
 authorized_agents:
   - orchestrator
 input_schema:

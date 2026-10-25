@@ -1,6 +1,6 @@
 ---
 name: lesson-promotion
-description: "Turn a verified lesson into a role's lessons.md within the Rule of 25, merging or demoting to make room. Use after a retrospective."
+description: "Add, correct or retire a rule in a role's lessons.md or context/heuristics.md under the Rule of 25, merging to make room. Use after a retrospective, or when a rule file is full or wrong."
 authorized_agents:
   - orchestrator
 input_schema:

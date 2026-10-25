@@ -1,6 +1,6 @@
 ---
 name: tui-design
-description: "Principles and protocols for designing and building calm, high-focus, borderless terminal user interfaces in Delphi."
+description: "Design calm, borderless terminal interfaces: decks, headers, badges and character-cell rules. Use when adding or changing any TUI view, widget or layout in Ratatui."
 authorized_agents:
   - architect
   - builder
