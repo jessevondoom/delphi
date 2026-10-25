@@ -89,6 +89,11 @@ pub struct Settings {
     pub second_seat: crate::provisional::SecondSeat,
     /// `[optimistic] unseconded`: what happens to an elevated edit no second reviewer looked at.
     pub unseconded: crate::provisional::Unseconded,
+    /// `[optimistic] max_decisions`: provisional decisions one task may make. Past it, cards go to the operator.
+    pub max_decisions: u32,
+    /// `[optimistic] max_approver_calls`: model calls (Strategist and second seat) one task may spend on decisions.
+    /// Past it, cards go to the operator.
+    pub max_approver_calls: u32,
 }
 
 impl Default for Settings {
@@ -116,6 +121,8 @@ impl Default for Settings {
             approver: crate::provisional::ApproverKind::Strategist,
             second_seat: crate::provisional::SecondSeat::CrossFamily,
             unseconded: crate::provisional::Unseconded::Park,
+            max_decisions: 200,
+            max_approver_calls: 100,
         }
     }
 }
@@ -204,6 +211,8 @@ pub struct Engine {
     pub timers: Arc<crate::timers::TimerStore>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
+    /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
+    pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
