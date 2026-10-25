@@ -5,9 +5,16 @@
 //! bounded work, bounded output, and a panic becomes an error result instead of taking the daemon down.
 
 pub mod archive;
+mod csv;
+mod docx;
 pub mod limits;
+mod ooxml;
+mod pptx;
 pub mod sniff;
+pub mod table;
 pub mod tarfile;
+mod xlsx;
+pub mod xml;
 pub mod zipfile;
 
 pub use limits::Limits;
@@ -22,10 +29,14 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 pub struct Request {
     /// Archive member (`name` or `#N`); `outer.zip!/inner.txt` reaches into a nested archive.
     pub member: Option<String>,
-    /// First unit of a page, 0-based (archive members).
+    /// First unit of a page, inclusive: a member position (0-based, as in `#N`) or a slide number (1-based).
     pub start: Option<usize>,
     /// Last unit of a page, inclusive.
     pub end: Option<usize>,
+    /// Workbook sheet, by name or number from 1.
+    pub sheet: Option<String>,
+    /// Rows and columns of a sheet or CSV: `A1:F200`, `5:20`, `B:D`.
+    pub range: Option<String>,
 }
 
 /// The unit a document is paged in.
@@ -73,7 +84,7 @@ pub fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, DocError>) -> Result
 
 /// Readers that exist. Grows slice by slice (`specs/014` §10); anything else answers "not built yet".
 pub fn is_supported(format: Format) -> bool {
-    matches!(format, Format::Zip | Format::Tar | Format::Gzip) || format.is_text()
+    matches!(format, Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Tar | Format::Gzip) || format.is_text()
 }
 
 /// Extract text from `bytes`. `name` is the file name (a hint only).
@@ -93,13 +104,33 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
         match format {
             Format::Zip => {
                 let z = zipfile::Zip::parse(bytes, limits)?;
-                archive_extract(&z, format, req, limits, depth)
+                // Naming a member asks for the package's raw parts; otherwise an office file reads as a document.
+                // `member: "."` lists the parts.
+                match ooxml::kind_of(&z).filter(|_| req.member.is_none()) {
+                    Some(kind) => {
+                        let pkg = ooxml::Pkg { zip: &z, limits };
+                        let mut e = match kind {
+                            Format::Docx => docx::extract(&pkg)?,
+                            Format::Xlsx => xlsx::extract(&pkg, req)?,
+                            _ => pptx::extract(&pkg, req)?,
+                        };
+                        cap_output(&mut e, limits);
+                        Ok(e)
+                    }
+                    None if req.member.as_deref() == Some(".") => archive_extract(&z, format, &Request { member: None, ..req.clone() }, limits, depth),
+                    None => archive_extract(&z, format, req, limits, depth),
+                }
             }
             Format::Tar => {
                 let t = tarfile::Tar::parse(bytes, limits)?;
                 archive_extract(&t, format, req, limits, depth)
             }
             Format::Gzip => gzip_extract(bytes, name, req, limits, depth),
+            Format::Csv | Format::Tsv => {
+                let mut e = csv::extract(bytes, format, req)?;
+                cap_output(&mut e, limits);
+                Ok(e)
+            }
             f if f.is_text() => Ok(text_extract(bytes, f, limits)),
             _ => Ok(Extract {
                 format,
@@ -112,6 +143,18 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
             }),
         }
     })
+}
+
+/// Keep `e.text` within the output limit, on a character boundary.
+fn cap_output(e: &mut Extract, limits: &Limits) {
+    if e.text.len() > limits.max_output {
+        let mut n = limits.max_output;
+        while !e.text.is_char_boundary(n) {
+            n -= 1;
+        }
+        e.text.truncate(n);
+        e.truncated = true;
+    }
 }
 
 fn text_extract(bytes: &[u8], format: Format, limits: &Limits) -> Extract {
@@ -147,7 +190,7 @@ fn archive_extract(ar: &dyn Archive, format: Format, req: &Request, limits: &Lim
     };
     let item = &ar.items()[idx];
     let data = ar.read(idx, limits)?;
-    let inner_req = Request { member: rest, start: req.start, end: req.end };
+    let inner_req = Request { member: rest, ..req.clone() };
     let inner = extract_at(&data, &item.name, &inner_req, limits, depth + 1)?;
     let head = format!("member #{} `{}` ({})\n", idx, item.name, human(data.len() as u64));
     Ok(Extract { text: head + &inner.text, ..inner })
@@ -167,6 +210,9 @@ fn gzip_extract(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth:
     let inner = extract_at(&data, inner_name, req, limits, depth + 1)?;
     Ok(Extract { text: format!("gzip, {} expanded\n{}", human(data.len() as u64), inner.text), ..inner })
 }
+
+#[cfg(test)]
+mod office_tests;
 
 #[cfg(test)]
 mod tests {
