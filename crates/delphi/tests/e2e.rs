@@ -4,6 +4,8 @@
 //! the console, run a tool-using task, answer an approval card, read usage, and check that an unratified
 //! edit to the endpoint config never redirects traffic.
 
+mod common;
+
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -187,6 +189,8 @@ impl Session {
 // ── the workspace ───────────────────────────────────────────────────────────
 
 struct Env {
+    /// First, so it drops first: it stops the daemons while the directory is still there.
+    _reap: common::DaemonReaper,
     _t: tempfile::TempDir,
     home: PathBuf,
     ws: PathBuf,
@@ -261,7 +265,7 @@ fn setup(port: u16) -> Env {
     run(&["init", "--non-interactive", "--home", home.to_str().unwrap(), "--workspace", "e2e", "--project", proj.to_str().unwrap()]);
     let ws = home.join("workspaces/e2e");
     std::fs::write(ws.join("config.toml"), config_for(&proj, port)).unwrap();
-    Env { _t: t, home, ws }
+    Env { _reap: common::DaemonReaper::new(&home), _t: t, home, ws }
 }
 
 /// The daemon's pid, from the console banner (`daemon pid 1234`).
@@ -508,6 +512,16 @@ struct PtyConsole {
     start_size: (u16, u16),
 }
 
+impl Drop for PtyConsole {
+    /// However the test ends, the console it started does not outlive it.
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 impl PtyConsole {
     fn start(home: &Path, args: &[&str], rows: u16, cols: u16) -> PtyConsole {
         PtyConsole::start_env(home, args, rows, cols, &[])
@@ -525,6 +539,13 @@ impl PtyConsole {
         let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
         unsafe {
             assert_eq!(libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), &ws as *const _ as *mut _), 0);
+        }
+        // The master must not leak into the console we spawn: a copy held there keeps the pty open for good, so the
+        // console never gets its hangup when this test ends or fails, and the machine runs out of ptys.
+        unsafe {
+            for fd in [master, slave] {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
         }
         let dup = |fd| unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(fd))) };
         let mut cmd = Command::new(DELPHI);
@@ -555,6 +576,10 @@ impl PtyConsole {
                 }
                 let mut all = b2.lock().unwrap();
                 all.extend_from_slice(&buf[..n]);
+                // A real terminal answers the background-colour query (the full-screen console tints its blocks from it).
+                if buf[..n].windows(7).any(|w| w == b"\x1b]11;?\x07") {
+                    let _ = answer.write_all(b"\x1b]11;rgb:0f0f/1717/2a2a\x07");
+                }
                 // A real terminal answers "where is the cursor?"; the inline viewport asks at start-up.
                 if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
                     let mut p = vt100::Parser::new(rows, cols, 0);
@@ -629,6 +654,27 @@ impl PtyConsole {
     fn visible(&self) -> String {
         let p = self.replay(5000);
         p.screen().contents()
+    }
+
+    /// From `auto`, one Shift+Tab: optimistic needs the OS sandbox, so it is either `auto · optimistic` (then one more
+    /// press wraps to default) or refused and default at once. Either way the note for default must follow.
+    fn cycle_back_to_default(&mut self) {
+        self.type_keys("\x1b[Z");
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            let seen = self.everything();
+            if seen.contains("· approval mode: auto · optimistic") {
+                self.wait_for("tokens  ·  auto · optimistic");
+                self.type_keys("\x1b[Z");
+                break;
+            }
+            if seen.contains("· approval mode: default") {
+                return;
+            }
+            assert!(Instant::now() < deadline, "no mode note after Shift+Tab from auto:\n{}", seen);
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        self.wait_for("· approval mode: default");
     }
 
     fn wait_for(&self, needle: &str) {
@@ -841,11 +887,11 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c.type_keys("\r");
     c.wait_for("Hello from the daemon.");
     // The text first shows dim as it streams; the finished reply (badge line, rendered list) follows.
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     c.wait_for("• one");
     let screen = c.visible();
-    assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
-    assert!(screen.lines().nth(2).unwrap().contains("· chat"), "header: {}", screen);
+    assert!(screen.contains("you · ") && screen.contains("Tell me something") && screen.contains("• one") && screen.contains("Athena · "), "{}", screen);
+    assert!(screen.lines().nth(1).unwrap().contains("· chat"), "the title row is directly under the strip: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
@@ -853,7 +899,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     // Reopen: the conversation is replayed from the mission's events.
     let c2 = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     c2.wait_for("Hello from the daemon.");
-    assert!(c2.visible().contains("❯ Tell me something"), "{}", c2.visible());
+    assert!(c2.visible().contains("Tell me something") && c2.visible().contains("you · "), "{}", c2.visible());
     drop(c2);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
@@ -865,6 +911,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
 fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     let t = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
     let (home, proj) = (t.path().join("h"), t.path().join("app"));
+    let _reap = common::DaemonReaper::new(&home);
     std::fs::create_dir_all(proj.join(".git")).unwrap();
     let Some(wrapper) = ui_launcher(t.path()) else { return };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
@@ -885,7 +932,7 @@ fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     }
     assert_eq!(c.written("Run the guided setup now?"), 1, "the setup is offered once:\n{}", c.everything());
     c.wait_for("delphi · no model configured");
-    c.wait_for("0 tokens · no model");
+    c.wait_for("0 tokens  ·  default  ·  no model");
     c.type_keys("hello");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
@@ -897,6 +944,181 @@ fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "app", "--home"]).arg(&home).output();
+}
+
+/// `specs/005e` §10.1: the footer promises `?`, so `?` must do something. On an empty prompt it opens the key list;
+/// inside text it is a character; Esc closes the list.
+#[test]
+fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    c.type_keys("?");
+    c.wait_for("keys · esc closes");
+    let open = c.visible();
+    assert!(open.contains("shift+tab  approval mode") && !open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
+    c.type_keys("\x1b");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("keys · esc closes") {
+        assert!(Instant::now() < deadline, "Esc did not close the key list:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    c.type_keys("why");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("?");
+    c.wait_for("❯ why?");
+    assert!(!c.visible().contains("keys · esc closes"), "a ? inside text is a character:\n{}", c.visible());
+    c.type_keys("\x03"); // there is text in the prompt, so the first Ctrl+C asks
+    c.wait_for("press Ctrl+C again to quit");
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §7.2 and finding 6: a long reply starts at its label row instead of scrolling its beginning off the
+/// screen; a marker says how much waits below; `Space` pages, `Enter` on an empty prompt jumps to the end. The blocks
+/// are tinted from the terminal's own background, which the console asks for and this terminal answers.
+#[test]
+fn a_long_reply_is_pinned_at_its_label_row_and_space_pages_and_enter_jumps_to_the_end() {
+    let long = (1..=40).map(|i| format!("Paragraph {} of the long answer.", i)).collect::<Vec<_>>().join("\n\n");
+    let m = mock(vec![reply_text(&long)]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap()), ("COLORTERM", "")]; // 256 colours: the depth is decided by TERM alone
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Explain everything.");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("more lines · pgdn or space · enter jumps to the end");
+    std::thread::sleep(Duration::from_millis(300));
+    let screen = c.visible();
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[3].contains("Athena · "), "the first body row is the reply's label row:\n{}", screen);
+    assert!(rows[4].trim_start().starts_with('▄') && screen.contains("Paragraph 1 of the long answer."), "the block's top cap, then its beginning:\n{}", screen);
+    assert!(String::from_utf8_lossy(&c.bytes.lock().unwrap()).contains("48;5;"), "the tint reached the terminal as a 256-colour background");
+    c.type_keys(" ");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("Paragraph 1 of the long answer.") {
+        assert!(Instant::now() < deadline, "Space did not page down:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    assert!(c.visible().contains("more lines"), "still lines below after one page:\n{}", c.visible());
+    c.type_keys("\r");
+    c.wait_for("Paragraph 40 of the long answer.");
+    assert!(!c.visible().contains("more lines"), "at the end there is no marker:\n{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §8: the left deck is a ticker. When a span ends it leaves the running zone and one `✔ finished` entry
+/// joins the history; the chat never shows that chip.
+#[test]
+fn a_finished_span_becomes_a_history_entry_in_the_activity_deck_and_never_shows_in_the_chat() {
+    let m = mock(vec![reply_text("Done and dusted.")]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Say something.");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Done and dusted.");
+    assert!(!c.visible().contains("finished"), "the chat never shows the chip:\n{}", c.visible());
+    c.type_keys("\x1b[1;2D"); // Shift+Left: the activity deck
+    c.wait_for("✔ finished");
+    let deck = c.visible();
+    assert!(deck.contains("· activity") && deck.contains(r#"answered "Say something.""#), "one history entry says what was answered:\n{}", deck);
+    c.type_keys("\x1b[1;2C"); // back to the chat
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!c.visible().contains("✔ finished"), "{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §10.5, inline console: `Esc` clears the prompt first and, with it empty, stops the running task;
+/// `Ctrl+C` asks once when there is text or a task running, and leaves at once when nothing would be lost.
+#[test]
+fn the_inline_console_stops_a_task_with_esc_and_asks_before_ctrl_c_throws_anything_away() {
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec"}))]);
+    let e = setup(m.port);
+    let mut c = PtyConsole::start(&e.home, &["chat", "--workspace", "e2e"], 24, 100);
+    c.wait_for("shortcuts: ?");
+    c.type_keys("/ratify\r");
+    c.wait_for("pending proposal");
+    c.type_keys("/ratify apply 1\r");
+    c.wait_for("ratified ws:config.toml#access");
+    c.type_keys("@architect Draft a spec called 009-e2e\r");
+    c.wait_for("approval needed"); // the task now waits for the operator: it is running
+    // Typed text first: Esc clears it and does not stop the task.
+    c.type_keys("half a thought");
+    std::thread::sleep(Duration::from_millis(200));
+    c.type_keys("\x1b");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("half a thought") {
+        assert!(Instant::now() < deadline, "Esc did not clear the prompt:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    assert!(!c.everything().contains("stopping"), "the first Esc only cleared the prompt");
+    // Now the prompt is empty: Esc stops the task.
+    c.type_keys("\x1b");
+    c.wait_for("stopping");
+    c.wait_for("■ stopped");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
+    // Idle with text typed: Ctrl+C asks and keeps the text.
+    c.type_keys("abc");
+    std::thread::sleep(Duration::from_millis(200));
+    c.type_keys("\x03");
+    c.wait_for("press Ctrl+C again to quit");
+    assert!(c.visible().contains("abc"), "the text was not thrown away:\n{}", c.visible());
+    // Esc clears it; with nothing typed and nothing running, one Ctrl+C leaves at once.
+    c.type_keys("\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// The same rule in the full-screen console: text in the prompt means the first `Ctrl+C` asks.
+#[test]
+fn the_full_screen_console_asks_before_ctrl_c_throws_a_draft_away() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    c.type_keys("a draft");
+    std::thread::sleep(Duration::from_millis(200));
+    c.type_keys("\x03");
+    c.wait_for("press Ctrl+C again to quit");
+    assert!(c.visible().contains("a draft"), "the draft is still there:\n{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    // Empty prompt, nothing running: Ctrl+D leaves too.
+    let mut d = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    d.wait_for("← / ? →");
+    d.type_keys("\x04");
+    assert_eq!(d.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
 #[test]
@@ -916,7 +1138,7 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("decision needed");
+    c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     c.wait_for("approval needed [amber]");
     c.wait_for("esc to stop");
     // A message sent while the task waits is queued, not sent.
@@ -1045,15 +1267,17 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     }
     // Shift+Tab cycles the approval mode, shown in the footer, and the daemon agrees.
     c.type_keys("\x1b[Z");
-    c.wait_for("accept edits");
+    c.wait_for("· approval mode: accept edits — file edits run without asking");
+    c.wait_for("tokens  ·  accept edits");
     c.type_keys("\x1b[Z");
-    c.wait_for("· auto");
-    c.type_keys("\x1b[Z");
-    c.wait_for("tokens  "); // default mode: the footer names no mode
+    c.wait_for("· approval mode: auto — Amber actions run without asking this mission");
+    c.wait_for("tokens  ·  auto");
+    c.cycle_back_to_default(); // through `auto · optimistic` where the OS sandbox exists, straight to default where it does not
+    c.wait_for("tokens  ·  default"); // default mode is named too
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("decision needed");
+    c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
     c.type_keys("\x1b[1;2C");
     c.wait_for("Pending decisions (1)");
@@ -1093,7 +1317,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("Observed answer.");
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
     let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
     o.wait_for("MASCOT ROSTER");
@@ -1134,7 +1358,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     c.type_keys("Where is the retry ladder described?");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     // Where the answer came from: the reply cites two documents.
     c.type_keys("/sources");
     std::thread::sleep(Duration::from_millis(150));
@@ -1224,7 +1448,13 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Understood, nothing was written.");
-    c.wait_for("· architect ·"); // the text streams dim first; the finished reply (its badge line) is what /pin keeps
+    c.wait_for("Daedalus · ");
+    // The reply streams in a block labelled "writing"; the finished one (labelled with its time) is what /pin keeps.
+    let settled = Instant::now() + Duration::from_secs(20);
+    while c.visible().contains("Daedalus · writing") {
+        assert!(Instant::now() < settled, "the reply never finished:\n{}", c.everything());
+        std::thread::sleep(Duration::from_millis(60));
+    }
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the denied action never ran");
 
     // Arrows edit a prompt that has text and move between decks when it is empty; Shift+arrows always move a deck.
@@ -1233,19 +1463,19 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.type_keys("\x1b[D"); // Left, with text: the cursor moves, the deck stays
     std::thread::sleep(Duration::from_millis(300));
     let kept = c.visible();
-    assert!(kept.contains("❯ abc") && kept.contains("← / ? → · ○ ● ○"), "{}", kept);
+    assert!(kept.contains("❯ abc") && kept.contains("← / ? →  ·  ○ ● ○"), "{}", kept);
     c.type_keys("\x1b[1;2D"); // Shift+Left: the left deck, the draft waits
-    c.wait_for("← / ? → · ● ○ ○");
+    c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[1;2C");
     c.wait_for("❯ abc");
     c.type_keys("\x05\x15"); // End, then delete to the start: an empty prompt
     std::thread::sleep(Duration::from_millis(300));
     assert!(!c.visible().contains("❯ abc"), "{}", c.visible());
     c.type_keys("\x1b[D"); // Left, now empty: the left deck
-    c.wait_for("← / ? → · ● ○ ○");
+    c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[C"); // and back to the chat
     std::thread::sleep(Duration::from_millis(300));
-    assert!(c.visible().contains("← / ? → · ○ ● ○"), "{}", c.visible());
+    assert!(c.visible().contains("← / ? →  ·  ○ ● ○"), "{}", c.visible());
 
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
@@ -1256,10 +1486,12 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("exported to local/missions/");
 
     // Shift+Tab goes round the approval modes and ends where it started.
-    for footer in ["tokens · accept edits", "tokens · auto", "tokens  "] {
+    for footer in ["tokens  ·  accept edits", "tokens  ·  auto"] {
         c.type_keys("\x1b[Z");
         c.wait_for(footer);
     }
+    c.cycle_back_to_default();
+    c.wait_for("tokens  ·  default");
 
     // The window shrinks and grows: the screen is always exactly the window, never wider, footer on the last row.
     c.resize(24, 70);
@@ -1278,7 +1510,12 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     assert!(!big.contains("Pending decisions"), "no leftovers from the inbox:\n{}", big);
 
     // Leave, and the terminal comes back: alternate screen off, cursor on, mouse and paste modes off.
+    // A task may still be running here, in which case Ctrl+C asks once before leaving (`005e` §10.5).
     c.type_keys("\x03");
+    std::thread::sleep(Duration::from_millis(400));
+    if c.visible().contains("press Ctrl+C again to quit") {
+        c.type_keys("\x03");
+    }
     assert_eq!(c.wait_exit(), 0);
     std::thread::sleep(Duration::from_millis(200));
     let out = String::from_utf8_lossy(&raw.lock().unwrap()).to_string();
@@ -1338,7 +1575,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("First answer.");
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     // The daemon is stopped and started again behind the console's back.
     // (the CLI asks for a terminal, as the console does, so it runs in one)
     let restart = PtyConsole::start_env(&e.home, &["daemon", "restart", "--workspace", "e2e"], 10, 80, &[]);
@@ -1674,4 +1911,70 @@ fn an_unratified_relay_block_is_ignored_so_a_local_edit_cannot_add_an_approver()
     assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
     let err = String::from_utf8_lossy(&o.stderr).to_string();
     assert!(err.contains("no [relay] table in the ratified config"), "{}", err);
+}
+
+// ── delphi hooks: an observe hook runs when a task completes ────────────────
+
+fn hooks_block(log: &Path) -> String {
+    format!(
+        r#"
+[[hooks.observe]]
+name = "log-done"
+events = ["task.completed"]
+command = ["/bin/sh", "-c", "cat >> {log}; echo >> {log}"]
+"#,
+        log = log.display()
+    )
+}
+
+#[test]
+fn an_observe_hook_runs_when_a_task_completes_and_only_for_the_events_it_asked_for() {
+    let m = mock(vec![reply_text("Hello there.")]);
+    let e = setup(m.port);
+    let log = e._t.path().join("hook.log");
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, hooks_block(&log))).unwrap();
+
+    // A console keeps the daemon alive; the hooks process attaches to it from a terminal of its own.
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/ratify");
+    s.wait_for("pending proposal");
+    s.send("/ratify apply 1");
+    s.wait_for("ratified ws:config.toml#access");
+    let hooks = PtyConsole::start(&e.home, &["hooks", "--workspace", "e2e"], 24, 120);
+    hooks.wait_for("delphi hooks: ready (1 hook(s): log-done)");
+    std::thread::sleep(Duration::from_millis(500));
+
+    s.send("Say hello");
+    s.wait_for("✓ t_0001 done");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let seen = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("task.completed") {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "the hook never ran; hooks shows:\n{}", hooks.everything());
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let line = seen.lines().find(|l| l.contains("task.completed")).unwrap();
+    let ev: Value = serde_json::from_str(line).unwrap();
+    assert_eq!((ev["type"].as_str(), ev["task_id"].as_str(), ev["payload"]["status"].as_str()), (Some("task.completed"), Some("t_0001"), Some("done")));
+    assert_eq!(seen.matches("task.completed").count(), 1, "one completion, one run; other events did not trigger it:\n{}", seen);
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    kill_daemon(pid_in(&out));
+}
+
+#[test]
+fn hooks_that_are_not_ratified_do_not_run_and_the_command_says_so() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let log = e._t.path().join("hook.log");
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, hooks_block(&log))).unwrap();
+    let o = Command::new(DELPHI).args(["hooks", "--workspace", "e2e", "--home", e.home.to_str().unwrap()]).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("no observe hooks in the ratified [hooks] config"), "an edit to the file alone adds no hook: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(!log.exists());
 }

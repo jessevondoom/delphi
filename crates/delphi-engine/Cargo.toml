@@ -37,9 +37,10 @@ accelerate-src = { version = "0.3", optional = true }
 
 [features]
 default = ["local-embeddings"]
-# The embedding model runtime (specs/004 §3.5). Without it the knowledge base is lexical only.
+# The model runtime for embeddings and reranking (specs/004 §3.5, §3.7). Without it the knowledge base is lexical only.
 local-embeddings = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:accelerate-src"]
-# Compile the model package named by DELPHI_EMBED_MODEL_FILE into the binary (the release build does this).
+# Compile the model packages named by DELPHI_EMBED_MODEL_FILE, DELPHI_RERANK_MODEL_FILE and DELPHI_SEED_VECTORS_FILE
+# into the binary (the release build does this).
 embedded-model = ["local-embeddings"]
 
 [[bin]]

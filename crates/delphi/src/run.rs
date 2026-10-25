@@ -65,16 +65,17 @@ fn value_of(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
-/// `30`, `30s`, `5m`, `2h`.
+/// `30`, `30s`, `5m`, `2h`, `1d`.
 pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let s = s.trim();
     let (num, mult) = match s.chars().last() {
         Some('s') => (&s[..s.len() - 1], 1),
         Some('m') => (&s[..s.len() - 1], 60),
         Some('h') => (&s[..s.len() - 1], 3600),
+        Some('d') => (&s[..s.len() - 1], 86_400),
         _ => (s, 1),
     };
-    num.parse::<u64>().ok().filter(|n| *n > 0).map(|n| Duration::from_secs(n * mult)).ok_or_else(|| format!("`{}` is not a duration (use 90, 90s, 5m or 2h)", s))
+    num.parse::<u64>().ok().filter(|n| *n > 0).map(|n| Duration::from_secs(n * mult)).ok_or_else(|| format!("`{}` is not a duration (use 90, 90s, 5m, 2h or 1d)", s))
 }
 
 pub fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -107,8 +108,8 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     };
     let permissions = value_of(args, "--permissions");
     if let Some(p) = &permissions {
-        if !["default", "accept-edits", "mission-auto"].contains(&p.as_str()) {
-            return Err(format!("--permissions takes default, accept-edits or mission-auto, not `{}`", p));
+        if !["default", "accept-edits", "mission-auto", "optimistic"].contains(&p.as_str()) {
+            return Err(format!("--permissions takes default, accept-edits, mission-auto or optimistic, not `{}`", p));
         }
     }
     let budget = match value_of(args, "--budget") {
@@ -336,10 +337,7 @@ impl Summary {
 // ── driving the daemon ──────────────────────────────────────────────────────
 
 fn rpc(e: &ClientError) -> String {
-    match e {
-        ClientError::Rpc { message, .. } => message.clone(),
-        other => other.to_string(),
-    }
+    crate::chat::rpc_error(e)
 }
 
 fn say_err(m: &str) {
@@ -552,14 +550,37 @@ fn human(s: &Value) -> String {
     }
     out.push_str(&format!("cards: {} ({} allowed, {} denied) · {:.1}s\n", s["cards"]["total"], s["cards"]["allowed"], s["cards"]["denied"], s["wall_secs"].as_f64().unwrap_or(0.0)));
     let text = s["text"].as_str().unwrap_or("");
-    if !text.is_empty() {
-        out.push_str(&format!("\n{}\n", text));
+    let attention = crate::escalation::classify(if text.contains("[escalated to the operator:") { text } else { s["reason"].as_str().unwrap_or("") });
+    match attention.kind {
+        // The wrapper is engine plumbing (specs/005e §6.6); say the stop and what to do about it instead.
+        "no_model_configured" | "budget" | "reauth_required" | "exhausted" if text.contains("[escalated to the operator:") || s["outcome"] == "escalated" => {
+            out.push_str(&format!("\n{}\n", attention.headline));
+            // The hints name console commands; from `delphi run` the same remedies are flags and commands.
+            let next = match attention.kind {
+                "budget" => "raise the ceiling with --budget <usd>".to_string(),
+                "no_model_configured" => "run `delphi setup` to connect a model".to_string(),
+                _ => attention.hints.first().map(|h| h.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+            };
+            out.push_str(&format!("next: {}\n", next));
+        }
+        _ if !text.is_empty() => out.push_str(&format!("\n{}\n", crate::escalation::strip_wrapper(text))),
+        _ => {}
     }
     out
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stopped_run_says_what_to_do_not_the_engine_wrapper() {
+        let s = json!({"outcome": "escalated", "exit_code": 1, "cards": {"total": 0, "allowed": 0, "denied": 0}, "reason": "no_model_configured: none",
+            "text": "[escalated to the operator: no_model_configured: no model is configured for this workspace]"});
+        let out = super::human(&s);
+        assert!(!out.contains("[escalated"), "{}", out);
+        assert!(out.contains("Stopped: no model is configured"), "{}", out);
+        assert!(out.contains("next: run `delphi setup`"), "{}", out);
+    }
+
     use super::*;
 
     fn args(v: &[&str]) -> Vec<String> {
@@ -595,6 +616,7 @@ mod tests {
         assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
         assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
         assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
+        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86_400));
         assert!(parse_duration("0").is_err() && parse_duration("m").is_err());
     }
 

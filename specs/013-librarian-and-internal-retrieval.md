@@ -17,7 +17,7 @@ tags: [spec, librarian, retrieval, taxonomy, frontmatter, scoping]
 ## 1. Scope and Non-Goals
 This spec reserves a tenth role, `librarian`, and fixes its charter, its boundary with `scout`, and the conditions under which it should be built. It deliberately builds nothing.
 
-- **In scope:** the role's charter (§2), the scout/librarian boundary (§3), the Muse subagent pattern (§4), the frontmatter work that is worth doing before the role exists (§5), the build trigger (§6), and the path to vector search (§7).
+- **In scope:** the role's charter (§2), the scout/librarian boundary (§3), the Muse subagent pattern (§4), the frontmatter work that is worth doing before the role exists (§5), the build trigger (§6), and the retrieval index it takes over (§7).
 - **Not in scope:** an `AGENT.md` manifest, any Rust, any change to the nine-role schema in `specs/001` §6.2, or a theme figure for the role (§8).
 
 ### 1.1 Simpler Alternative Considered
@@ -30,7 +30,7 @@ The `librarian` is the primary source for **internal** knowledge: what Delphi al
 2. **Taxonomy:** the controlled vocabulary behind `tags` and any domain field (§5), plus merging near-duplicate tags.
 3. **Frontmatter hygiene:** proposing fixes for missing or inconsistent frontmatter. Fixes go through the normal write scope; the librarian does not bypass `delphi lint` or provenance rules.
 4. **Retrieval:** answering "what do we already have on X" with pointers and, on request, short excerpts. Answers obey the pointer-based handoff rule (`specs/001` §4): no raw dumps.
-5. **Search optimization:** tuning the lexical index first, and the vector index when §7 applies.
+5. **Search optimization:** tuning the keyword, vector and reranking parts of the index (`specs/004` §3) against the fixed question sets in `dev/kb-eval.json` and `dev/kb-eval-holdout.json`.
 
 It does **not** judge truth, write new heuristics, or promote anything. Promotion stays with the existing taint rules (`specs/001` §5.2): a retrieval result carries the provenance tier of its source, and the librarian never raises it.
 
@@ -70,13 +70,15 @@ Build the librarian (manifest, skill set, tests) when **any** of these holds, me
 
 The thresholds are initial guesses (`confidence: low`) and should be revised when real numbers exist.
 
-## 7. Path to Vector Search
-The architecture is already chosen in `context/domains/federation-rag-and-distribution.md`: `.delphi/state.db` with AST/heading-path chunking, FTS5, `sqlite-vec`, and reciprocal-rank fusion. The librarian is the **owner and primary consumer** of that index, not its inventor. Order of work:
+## 7. The Retrieval Index: What Exists, What the Librarian Takes Over
+The index is built and in use (`specs/004` §3, Amendments 004-A1 to 004-A3): `.delphi/state.db` with heading-path chunking, FTS5, local embeddings in `sqlite-vec`, a cross-encoder that reranks the best results, preloaded vectors for the shipped documents, and a refresh on every search. The librarian is the **owner and primary consumer** of that index, not its inventor. What was a plan here is done:
 
-1. Lexical (FTS5) over frontmatter plus headings, with `summary`/`domain`/`tags` as filterable columns.
-2. Measure recall on a fixed question set drawn from past missions.
-3. Embeddings were added once the set showed lexical recall was inadequate on questions worded differently from the documents (Amendment 004-A1; `delphi kb eval` prints the comparison). Retrieved chunks keep their source provenance tier.
+1. ~~Lexical (FTS5) over frontmatter plus headings~~: built for body text; agents and skills also get a chunk made from their frontmatter (`specs/004` §3.6).
+2. ~~Measure recall on a fixed question set~~: `delphi kb eval` over `dev/kb-eval.json`, and a held-out set (`dev/kb-eval-holdout.json`) that is never tuned on.
+3. ~~Embeddings only if lexical recall is inadequate~~: it was, on questions worded differently from the documents (recall in the top 10 went from 0.60 to 0.88; `specs/004` §3.5). Retrieved chunks keep their source provenance tier.
 4. Index is derived state: rebuildable from the Markdown, never a source of truth, never synced as authoritative (`specs/007`).
+
+What remains for the role once it is built: `summary`, `domain` and `tags` as filterable columns for every document (only agents and skills have a frontmatter summary today), growing the question sets from the misses the operator confirms (`delphi kb miss`), and re-running `delphi kb eval` after any change to the index.
 
 ## 8. Naming (decided: operator, 2026-10-24)
 Role ID is `librarian`; theme names never appear in persisted files (`specs/001` §6.1), so nothing below touches a manifest, path or log.
@@ -90,4 +92,4 @@ Role ID is `librarian`; theme names never appear in persisted files (`specs/001`
 2. A retrieval answer over an `external_untrusted` source carries tier L0, and a span that reads it cannot promote.
 3. Scout-boundary test: an internal query is answered by the librarian without invoking `web-search`.
 4. The index rebuilds byte-identically from the Markdown, and deleting it loses no information.
-5. Recall on the fixed question set is recorded before and after enabling embeddings.
+5. Recall on the fixed question sets (`delphi kb eval`) is recorded before and after any change the librarian makes to the index, and the held-out set is not tuned on.

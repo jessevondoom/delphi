@@ -9,6 +9,7 @@
 
 use super::email::{EmailChannel, EmailConfig};
 use super::net::{Encryption, ImapSmtp, NetConfig};
+use super::telegram::{ReqwestHttp, TelegramChannel, TelegramConfig, DEFAULT_API};
 use super::{Config, Daemon, Detail, Relay, ResolveFail};
 use delphi_core::client::{Client, ClientError};
 use delphi_core::proto::{code, Scope};
@@ -26,10 +27,18 @@ pub struct EmailSettings {
 }
 
 #[derive(Debug)]
+pub struct TelegramSettings {
+    pub cfg: TelegramConfig,
+    /// A credential reference for the bot token.
+    pub credential: String,
+}
+
+#[derive(Debug)]
 pub struct Settings {
     pub core: Config,
     pub poll: Duration,
     pub email: Option<EmailSettings>,
+    pub telegram: Option<TelegramSettings>,
 }
 
 fn str_of<'a>(t: &'a toml::Value, k: &str) -> Option<&'a str> {
@@ -40,14 +49,7 @@ fn need<'a>(t: &'a toml::Value, k: &str, table: &str) -> Result<&'a str, String>
     str_of(t, k).ok_or_else(|| format!("[{}] needs `{}`", table, k))
 }
 
-/// Read `[relay]` from a config's text. `Ok(None)` when there is no `[relay]` table.
-pub fn settings_from(text: &str) -> Result<Option<Settings>, String> {
-    let root: toml::Value = toml::from_str(text).map_err(|e| format!("config.toml is not valid TOML: {}", e))?;
-    let Some(r) = root.get("relay") else { return Ok(None) };
-    let channel = str_of(r, "channel").unwrap_or("email");
-    if channel != "email" {
-        return Err(format!("[relay] channel `{}` is not available; only `email` is built", channel));
-    }
+fn email_part(r: &toml::Value) -> Result<(Vec<String>, EmailSettings), String> {
     let e = r.get("email").ok_or("[relay] channel = \"email\" needs a [relay.email] table")?;
     let mailbox = need(e, "mailbox", "relay.email")?.to_lowercase();
     let operator = need(e, "operator", "relay.email")?.to_lowercase();
@@ -59,22 +61,6 @@ pub fn settings_from(text: &str) -> Result<Option<Settings>, String> {
     }
     let mut allow = vec![operator.clone()];
     allow.extend(e.get("also_allow").and_then(|a| a.as_array()).into_iter().flatten().filter_map(|v| v.as_str()).map(|s| s.trim().to_lowercase()));
-    let mut core = Config::new("email", allow);
-    core.detail = match str_of(r, "detail").unwrap_or("summary") {
-        "summary" => Detail::Summary,
-        "full" => Detail::Full,
-        other => return Err(format!("[relay] detail takes summary or full, not `{}`", other)),
-    };
-    core.require_auth = r.get("require_auth").and_then(|v| v.as_bool()).unwrap_or(true);
-    core.notify_tasks = r.get("notify_tasks").and_then(|v| v.as_bool()).unwrap_or(true);
-    let int = |k: &str| r.get(k).and_then(|v| v.as_integer()).filter(|v| *v > 0).map(|v| v as usize);
-    if let Some(v) = int("max_outstanding") {
-        core.max_outstanding = v;
-    }
-    if let Some(v) = int("max_per_hour") {
-        core.max_per_hour = v;
-    }
-    let poll = Duration::from_secs(int("poll_secs").unwrap_or(30).max(5) as u64);
     let tls = match str_of(e, "tls").unwrap_or("implicit") {
         "implicit" => Encryption::Implicit,
         "starttls" => Encryption::StartTls,
@@ -96,7 +82,61 @@ pub fn settings_from(text: &str) -> Result<Option<Settings>, String> {
         tls,
     };
     let cfg = EmailConfig { mailbox, operator, authserv_id: str_of(e, "authserv_id").map(String::from) };
-    Ok(Some(Settings { core, poll, email: Some(EmailSettings { cfg, net, credential: need(e, "credential", "relay.email")?.to_string() }) }))
+    Ok((allow, EmailSettings { cfg, net, credential: need(e, "credential", "relay.email")?.to_string() }))
+}
+
+fn telegram_part(r: &toml::Value) -> Result<(Vec<String>, TelegramSettings), String> {
+    let t = r.get("telegram").ok_or("[relay] channel = \"telegram\" needs a [relay.telegram] table")?;
+    let chat_id = t.get("chat_id").and_then(|v| v.as_integer()).ok_or("[relay.telegram] needs `chat_id`: your numeric Telegram user id (a number, not a username)")?;
+    let mut allow = vec![chat_id.to_string()];
+    allow.extend(t.get("also_allow").and_then(|a| a.as_array()).into_iter().flatten().filter_map(|v| v.as_integer()).map(|n| n.to_string()));
+    let cfg = TelegramConfig { api_base: str_of(t, "api_base").unwrap_or(DEFAULT_API).to_string(), bot_token: String::new(), chat_id };
+    Ok((allow, TelegramSettings { cfg, credential: need(t, "credential", "relay.telegram")?.to_string() }))
+}
+
+/// Read `[relay]` from a config's text. `Ok(None)` when there is no `[relay]` table.
+pub fn settings_from(text: &str) -> Result<Option<Settings>, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|e| format!("config.toml is not valid TOML: {}", e))?;
+    let Some(r) = root.get("relay") else { return Ok(None) };
+    let channel = str_of(r, "channel").unwrap_or("email");
+    let (allow, email, telegram) = match channel {
+        "email" => {
+            let (a, e) = email_part(r)?;
+            (a, Some(e), None)
+        }
+        "telegram" => {
+            let (a, t) = telegram_part(r)?;
+            (a, None, Some(t))
+        }
+        other => return Err(format!("[relay] channel `{}` is not available; email and telegram are built", other)),
+    };
+    let mut core = Config::new(channel, allow);
+    core.detail = match str_of(r, "detail").unwrap_or("summary") {
+        "summary" => Detail::Summary,
+        "full" => Detail::Full,
+        other => return Err(format!("[relay] detail takes summary or full, not `{}`", other)),
+    };
+    core.require_auth = r.get("require_auth").and_then(|v| v.as_bool()).unwrap_or(true);
+    core.notify_tasks = r.get("notify_tasks").and_then(|v| v.as_bool()).unwrap_or(true);
+    match str_of(r, "step_up") {
+        None => {}
+        Some("totp") => {
+            if str_of(r, "totp_credential").is_none() {
+                return Err("[relay] step_up = \"totp\" needs `totp_credential` (keychain:…, env:… or command:[…])".into());
+            }
+            core.step_up = true;
+        }
+        Some(other) => return Err(format!("[relay] step_up takes totp, not `{}`", other)),
+    }
+    let int = |k: &str| r.get(k).and_then(|v| v.as_integer()).filter(|v| *v > 0).map(|v| v as usize);
+    if let Some(v) = int("max_outstanding") {
+        core.max_outstanding = v;
+    }
+    if let Some(v) = int("max_per_hour") {
+        core.max_per_hour = v;
+    }
+    let poll = Duration::from_secs(int("poll_secs").unwrap_or(30).max(5) as u64);
+    Ok(Some(Settings { core, poll, email, telegram }))
 }
 
 /// The relay's connection to the daemon's relay socket.
@@ -105,8 +145,12 @@ pub struct Link {
 }
 
 impl Daemon for Link {
-    fn resolve(&mut self, approval_id: &str, payload_blake3: &str, allow: bool, channel: &str, sender: &str) -> Result<(), ResolveFail> {
-        match self.cmd.call("approval.relay_resolve", json!({"approval_id": approval_id, "payload_blake3": payload_blake3, "decision": if allow { "allow" } else { "deny" }, "channel": channel, "sender": sender})) {
+    fn resolve(&mut self, approval_id: &str, payload_blake3: &str, allow: bool, channel: &str, sender: &str, totp: Option<&str>) -> Result<(), ResolveFail> {
+        let mut params = json!({"approval_id": approval_id, "payload_blake3": payload_blake3, "decision": if allow { "allow" } else { "deny" }, "channel": channel, "sender": sender});
+        if let Some(t) = totp {
+            params["totp"] = json!(t);
+        }
+        match self.cmd.call("approval.relay_resolve", params) {
             Ok(_) => Ok(()),
             Err(ClientError::Rpc { code: c, message, .. }) if c == code::NOT_FOUND => Err(ResolveFail::Gone(message)),
             Err(ClientError::Rpc { code: c, message, .. }) if c == code::FORBIDDEN => Err(ResolveFail::Forbidden(message)),
@@ -173,8 +217,80 @@ fn load(ws_dir: &Path) -> Result<Settings, String> {
     settings_from(&text)?.ok_or_else(|| "there is no [relay] table in the ratified config. Add one to config.toml, then `/ratify` it in the console (see specs/014).".to_string())
 }
 
-/// `delphi relay [check]`. Returns the process exit code.
+/// `delphi relay totp-enroll`: make a secret for the authenticator and say where to put it. Shown once, here.
+fn totp_enroll(ws_dir: &Path) -> i32 {
+    let secret = match delphi_core::totp::new_secret() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("delphi relay: cannot read randomness: {}", e);
+            return 1;
+        }
+    };
+    let ws = ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "workspace".into());
+    let key = delphi_core::totp::base32_encode(&secret);
+    println!("Add this to your authenticator app (type the key, or open the link on the phone):");
+    println!("  key:  {}", key);
+    println!("  link: {}", delphi_core::totp::otpauth_uri(&ws, "Delphi", &secret));
+    println!();
+    println!("It is shown only here. Store the key where the daemon can read it, for example in the macOS keychain:");
+    println!("  security add-generic-password -s delphi -a delphi-relay-totp -w '{}'", key);
+    println!();
+    println!("Then add to config.toml, `/ratify` it in the console, and check it with `delphi relay totp-check <6 digits>`:");
+    println!("  [relay]");
+    println!("  step_up = \"totp\"");
+    println!("  totp_credential = \"keychain:delphi-relay-totp\"");
+    0
+}
+
+/// `delphi relay totp-check <code>`: does the code from the app match the stored secret? Uses no single-use state.
+fn totp_check(ws_dir: &Path, code: Option<&str>) -> i32 {
+    let live = match std::fs::read_to_string(ws_dir.join("config.toml")) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("delphi relay: cannot read config.toml: {}", e);
+            return 2;
+        }
+    };
+    let text = match delphi_engine::boot::effective_config(ws_dir, &live) {
+        Ok((t, _)) => t,
+        Err(e) => {
+            eprintln!("delphi relay: {}", e);
+            return 2;
+        }
+    };
+    let cred = toml::from_str::<toml::Value>(&text).ok().and_then(|v| v.get("relay").and_then(|r| r.get("totp_credential")).and_then(|c| c.as_str().map(String::from)));
+    let Some(cred) = cred else {
+        eprintln!("delphi relay: no `totp_credential` in the ratified [relay] config (run `delphi relay totp-enroll`, then ratify the settings)");
+        return 2;
+    };
+    let secret = match delphi_engine::service::totp_secret(&cred) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("delphi relay: {}", e);
+            return 1;
+        }
+    };
+    let Some(code) = code else {
+        eprintln!("usage: delphi relay totp-check <6-digit code from your authenticator>");
+        return 2;
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if delphi_core::totp::matching_step(&secret, code.trim(), now).is_some() {
+        println!("delphi relay: that code matches. Step-up is set up: a reply can approve a Red card with its card code and a current authenticator code.");
+        0
+    } else {
+        println!("delphi relay: that code does not match. Check the phone's clock and that the app holds the key you stored.");
+        1
+    }
+}
+
+/// `delphi relay [check|totp-enroll|totp-check <code>]`. Returns the process exit code.
 pub fn run(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    match args.first().map(|a| a.as_str()) {
+        Some("totp-enroll") => return totp_enroll(ws_dir),
+        Some("totp-check") => return totp_check(ws_dir, args.get(1).map(|s| s.as_str())),
+        _ => {}
+    }
     let mut s = match load(ws_dir) {
         Ok(s) => s,
         Err(m) => {
@@ -182,6 +298,49 @@ pub fn run(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
             return 2;
         }
     };
+    let check = args.first().map(|a| a.as_str()) == Some("check");
+    let l = match delphi_core::spawn::layout(home, ws_dir) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("delphi relay: {}", e);
+            return 2;
+        }
+    };
+    if let Some(mut ts) = s.telegram.take() {
+        ts.cfg.bot_token = match resolve_password(&ts.credential) {
+            Ok(p) => p.trim().to_string(),
+            Err(m) => {
+                eprintln!("delphi relay: {}", m);
+                return 2;
+            }
+        };
+        if let Err(m) = ts.cfg.validate() {
+            eprintln!("delphi relay: {}", m);
+            return 2;
+        }
+        let http = match ReqwestHttp::new(&ts.cfg.bot_token) {
+            Ok(h) => h,
+            Err(m) => {
+                eprintln!("delphi relay: {}", m);
+                return 2;
+            }
+        };
+        let chan = TelegramChannel::new(ts.cfg.clone(), http);
+        if check {
+            return match chan.whoami() {
+                Ok(name) => {
+                    println!("delphi relay: the bot @{} answers; cards go to Telegram user {}, replies are accepted from {}", name, ts.cfg.chat_id, s.core.allow.join(", "));
+                    println!("  note: open a chat with the bot and press Start first, or Telegram will not let it message you");
+                    0
+                }
+                Err(m) => {
+                    eprintln!("delphi relay: {}", m);
+                    1
+                }
+            };
+        }
+        return serve(&l.relay_sock, s.core, s.poll, chan);
+    }
     let Some(mut es) = s.email.take() else { return 2 };
     es.net.password = match resolve_password(&es.credential) {
         Ok(p) => p,
@@ -195,7 +354,7 @@ pub fn run(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
         return 2;
     }
     let transport = ImapSmtp { cfg: es.net.clone(), from: es.cfg.mailbox.clone() };
-    if args.first().map(|a| a.as_str()) == Some("check") {
+    if check {
         return match transport.check() {
             Ok(()) => {
                 println!("delphi relay: the mailbox {} accepts the login for sending and reading", es.cfg.mailbox);
@@ -211,13 +370,6 @@ pub fn run(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
             }
         };
     }
-    let l = match delphi_core::spawn::layout(home, ws_dir) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("delphi relay: {}", e);
-            return 2;
-        }
-    };
     let chan = EmailChannel { cfg: es.cfg.clone(), transport };
     serve(&l.relay_sock, s.core, s.poll, chan)
 }
@@ -313,11 +465,53 @@ authserv_id = "mx.google.com"
         assert_eq!((st.net.imap_port, st.net.smtp_port), (143, 587));
     }
 
+    const TELEGRAM: &str = r#"
+[relay]
+channel = "telegram"
+poll_secs = 10
+[relay.telegram]
+chat_id = 123456789
+also_allow = [987654321]
+credential = "keychain:delphi-relay-telegram"
+"#;
+
+    #[test]
+    fn a_telegram_config_allows_numeric_user_ids_and_defaults_to_the_public_api() {
+        let s = settings_from(TELEGRAM).unwrap().unwrap();
+        assert!(s.email.is_none());
+        assert_eq!(s.core.channel, "telegram");
+        assert_eq!(s.core.allow, vec!["123456789", "987654321"]);
+        assert_eq!(s.poll, Duration::from_secs(10));
+        let t = s.telegram.unwrap();
+        assert_eq!((t.cfg.chat_id, t.cfg.api_base.as_str(), t.credential.as_str()), (123456789, "https://api.telegram.org", "keychain:delphi-relay-telegram"));
+        assert!(t.cfg.bot_token.is_empty(), "the token is read from the credential at start, never from the file");
+        for (edit, want) in [
+            (("chat_id = 123456789", "chat_id = \"alice\""), "needs `chat_id`"),
+            (("chat_id = 123456789\n", ""), "needs `chat_id`"),
+            (("credential = \"keychain:delphi-relay-telegram\"", ""), "needs `credential`"),
+        ] {
+            let e = settings_from(&TELEGRAM.replace(edit.0, edit.1)).unwrap_err();
+            assert!(e.contains(want), "{:?} gave {}", edit, e);
+        }
+        assert!(settings_from("[relay]\nchannel = \"telegram\"\n").unwrap_err().contains("[relay.telegram]"));
+    }
+
+    #[test]
+    fn step_up_is_read_from_the_relay_table_and_needs_its_secret() {
+        let with = GOOD.replace("poll_secs = 20", "poll_secs = 20\nstep_up = \"totp\"\ntotp_credential = \"keychain:delphi-relay-totp\"");
+        assert!(settings_from(&with).unwrap().unwrap().core.step_up);
+        assert!(!settings_from(GOOD).unwrap().unwrap().core.step_up, "off unless asked for");
+        let e = settings_from(&GOOD.replace("poll_secs = 20", "poll_secs = 20\nstep_up = \"totp\"")).unwrap_err();
+        assert!(e.contains("needs `totp_credential`"), "{}", e);
+        let e = settings_from(&GOOD.replace("poll_secs = 20", "poll_secs = 20\nstep_up = \"sms\"")).unwrap_err();
+        assert!(e.contains("step_up takes totp"), "{}", e);
+    }
+
     #[test]
     fn no_relay_table_means_no_relay_and_mistakes_are_named() {
         assert!(settings_from("[budget]\nmission_budget_usd = 5\n").unwrap().is_none());
         for (edit, want) in [
-            (("channel = \"email\"", "channel = \"slack\""), "only `email` is built"),
+            (("channel = \"email\"", "channel = \"slack\""), "email and telegram are built"),
             (("detail = \"summary\"", "detail = \"everything\""), "summary or full"),
             (("operator = \"Me@Example.com\"", "operator = \"delphi.relay@gmail.com\""), "the relay would answer itself"),
             (("operator = \"Me@Example.com\"", "operator = \"not-an-address\""), "must be email addresses"),

@@ -75,6 +75,32 @@ pub fn handle(rpc: &mut dyn Rpc, mission: &str, args: &[String]) -> String {
     }
 }
 
+/// The words after `/timer` in a chat, as `delphi timers` arguments: `/timer 20m check CI` is
+/// `set orchestrator --in 20m check CI`, `/timer @architect at 2026-10-26T09:00:00Z review` names the role and the time.
+pub fn chat_args(words: &[String]) -> Vec<String> {
+    if matches!(words.first().map(String::as_str), None | Some("list") | Some("cancel")) {
+        return words.to_vec();
+    }
+    let (role, rest) = match words.first() {
+        Some(w) if w.starts_with('@') => (w[1..].to_string(), &words[1..]),
+        _ => ("orchestrator".to_string(), words),
+    };
+    let mut out = vec!["set".to_string(), role];
+    match rest.first().map(String::as_str) {
+        Some(flag @ ("at" | "in")) => {
+            out.push(format!("--{}", flag));
+            out.extend(rest[1..].iter().cloned());
+        }
+        Some(span) => {
+            out.push("--in".into());
+            out.push(span.to_string());
+            out.extend(rest[1..].iter().cloned());
+        }
+        None => {}
+    }
+    out
+}
+
 fn parse_set(args: &[String]) -> Result<Value, String> {
     let (mut role, mut note, mut p) = (None, Vec::new(), json!({}));
     let mut it = args.iter();
@@ -185,6 +211,22 @@ mod tests {
             let out = handle(&mut f, "m1", &args(&a));
             assert!(out.contains(why) && out.contains("usage:") && f.calls.is_empty(), "{:?}: {}", a, out);
         }
+    }
+
+    #[test]
+    fn chat_words_become_timers_arguments() {
+        let w = |v: &[&str]| chat_args(&args(v));
+        assert_eq!(w(&[]), Vec::<String>::new());
+        assert_eq!(w(&["list"]), args(&["list"]));
+        assert_eq!(w(&["cancel", "tm_0001"]), args(&["cancel", "tm_0001"]));
+        assert_eq!(w(&["20m", "check", "CI"]), args(&["set", "orchestrator", "--in", "20m", "check", "CI"]));
+        assert_eq!(w(&["in", "2h", "check"]), args(&["set", "orchestrator", "--in", "2h", "check"]));
+        assert_eq!(w(&["@architect", "1d", "review", "--every", "1d"]), args(&["set", "architect", "--in", "1d", "review", "--every", "1d"]));
+        assert_eq!(w(&["at", "2026-10-26T09:00:00Z", "standup"]), args(&["set", "orchestrator", "--at", "2026-10-26T09:00:00Z", "standup"]));
+        // And the result is something `set` accepts.
+        let mut f = Fake { calls: vec![] };
+        handle(&mut f, "m1", &w(&["@builder", "90s", "retry", "the", "build"]));
+        assert_eq!(f.calls[0].1, json!({"target": "builder", "in_secs": 90, "note": "retry the build", "mission_id": "m1"}));
     }
 
     #[test]

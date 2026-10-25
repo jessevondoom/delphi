@@ -144,7 +144,7 @@ delphi v0.5 · ~/projects/app · chat
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens  ·  no model                                          ← / ? →  ·  ○ ● ○
+0 tokens  ·  default  ·  no model                              ← / ? →  ·  ○ ● ○
 ```
 
 The same card at 120 columns is the same card: it is at most 76 columns wide with a two-column margin at the left, never stretched. The `▄` and `▀` rows stand for the tinted half-block caps of §7.2 (the tint itself cannot be shown in text).
@@ -175,7 +175,7 @@ delphi v0.5 · ~/projects/app · chat
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens  ·  no model                                          ← / ? →  ·  ○ ● ○
+0 tokens  ·  default  ·  no model                              ← / ? →  ·  ○ ● ○
 ```
 
 ### 6.5 Layout: a ready console with nothing said yet (replaces the blank screen)
@@ -204,7 +204,7 @@ delphi v0.5 · ~/projects/app · chat
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                       ← / ? →  ·  ○ ● ○
+0 tokens  ·  default                                           ← / ? →  ·  ○ ● ○
 ```
 
 The welcome text disappears at the first message and never comes back for that mission.
@@ -656,6 +656,7 @@ delphi v0.5 · ~/projects/app · chat
 
 - **One timer** drives all badge animation (every 150 ms it computes each badge's frame; the frame is redrawn only when it changed, so an idle window does not repaint). `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin every badge to its static frame (thinking shows `⟦•• ⟧`, idle never blinks).
 - **The pane name survives clipping** (finding 5). The title row clips the *path* from the left (`…/worktrees/agent-a42560a2ca3e1fc4b`) and never the pane name; at < 48 columns the title row is `delphi · <pane>`.
+- **The footer always names the mode** (`default` dim, `accept edits` plain, `auto` in the warning colour), directly after the token count; `no model` and `N waiting` follow it. (Decided 2026-10-25, after the first mockups, which showed no mode in the default state; the frames of §6.3 and §6.5 now agree.)
 - **Footer spacing.** Clusters are separated by `  ·  ` (two spaces, middle dot, two spaces) inside the left cluster, inside the right cluster, and between them the remainder is spaces. Console footer: `12.4k tokens  ·  auto` at the left, `← / ? →  ·  ○ ● ○` at the right. Narrator footer: `2 running  ·  14.2k tokens` and `← →  ·  ○ ● ○ ○ ○ ○`.
 
 ### 10.3 Approval mode (finding 3, decision of 2026-10-25)
@@ -732,6 +733,8 @@ About 71 h in all; slices 1-3 (18 h) remove every P0 and the misleading P1s.
 - **Hand checklist** (`ui/TERMINALS.md`, extended): the tint on light and dark themes in each target terminal (Terminal.app, iTerm2, Ghostty, tmux); the half-block caps join without a seam; badge animation does not flicker; the pulsing dot with `DELPHI_REDUCE_MOTION`.
 
 ## 15. Rendered mockups
+
+**Precedence.** A decision the operator gives after a mockup was drawn overrides the mockup, and the spec text and frames are updated to match; the PNGs and `mockups.html` are not redrawn for every such change. Known differences from the PNGs today: the footer names the mode in every state (above); the pending-decision alert is not drawn in the header (the `⟦x?x⟧` badge, the footer's `N waiting` and the approval card carry it).
 
 All rendered by `specs/assets/005e/render.sh` from `specs/assets/005e/mockups.html` (headless Chrome, JetBrains Mono; open the HTML in a browser to compare states with controls). They are mockups, not screenshots of the product; a real terminal draws the half-block caps and glyphs per cell and may differ by a pixel.
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fold, initial, status } from '../src/fold.ts';
+import { fold, initial } from '../src/fold.ts';
 
 const ev = (type: string, payload: any) => ({ method: 'event', params: { type, payload } });
 
@@ -25,12 +25,12 @@ test('a council keeps round one blind', () => {
   assert.equal(s.live, 'now visible');
 });
 
-test('header status: alert beats activity; activity gives way to the strip after 30 seconds', () => {
+test('a reasoning delta marks the agent as thinking, and a finished task marks it for success', () => {
   let s = fold(initial(0), ev('dag.node.added', { node_id: 'n_1', role: 'builder', depth: 0 }), 1000);
-  assert.equal(status(s, 2000).kind, 'active');
-  assert.equal(status(s, 40_000).kind, 'strip');
-  s = fold(s, ev('approval.requested', { approval_id: 'a1', role: 'red-team', timeout_s: 600 }), 2000);
-  assert.deepEqual(status(s, 62_000), { kind: 'alert', role: 'red-team', secs: 540 });
-  s = fold(s, ev('approval.resolved', { approval_id: 'a1' }), 3000);
-  assert.equal(status(s, 3500).kind, 'active');
+  assert.equal(s.agents['builder']!.thinkingAt, undefined);
+  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'hmm' } } } }, 2000);
+  assert.equal(s.agents['builder']!.thinkingAt, 2000);
+  assert.equal(s.live, '', 'reasoning is never shown, only noted');
+  s = fold(s, ev('task.output', { status: 'done', text: 'ok' }), 5000);
+  assert.deepEqual([s.agents['builder']!.state, s.agents['builder']!.successAt], ['idle', 5000]);
 });

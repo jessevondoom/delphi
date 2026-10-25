@@ -12,8 +12,8 @@ import { newInbox } from '../src/inbox.ts';
 import { info, plain, snapshot } from './helpers.ts';
 
 const model = (over: Partial<Model> = {}): Model => ({
-  info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
-  queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, ...over,
+  info, pal: { dark: true, bg: [15, 23, 42] }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
+  queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, still: true, ...over,
 });
 const ev = (type: string, payload: any, task = 't_0001') => ({ method: 'event', params: { type, task_id: task, payload } });
 const NO_MODEL = '[escalated to the operator: no_model_configured: no model is configured for this workspace]';
@@ -75,7 +75,7 @@ test('with no model: the card replaces the welcome, and the footer says so', () 
   const text = frame(model({ noModel: true }), 80, 24).map(plain).join('\n');
   assert.match(text, /delphi · no model configured/);
   assert.doesNotMatch(text, /Ask anything/);
-  assert.match(plain(footer(model({ noModel: true }), 80)), /^0 tokens · no model +/);
+  assert.match(plain(footer(model({ noModel: true }), 80)), /^0 tokens  ·  default  ·  no model +/);
   assert.doesNotMatch(plain(footer(model(), 80)), /no model/);
 });
 

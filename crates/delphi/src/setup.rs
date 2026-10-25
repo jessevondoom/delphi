@@ -295,7 +295,7 @@ fn report_detection(ui: &mut dyn Ui, d: &Detected) {
         Some(v) => ui.say(&format!("  ✓ agy (Gemini subscription CLI) {} — installed", v)),
         None => ui.say("  • agy (Antigravity CLI) — not installed"),
     }
-    ui.say(&format!("  {} gcloud", if d.gcloud { "✓" } else { "•" }));
+    ui.say(&format!("  {} gcloud — {}", if d.gcloud { "✓" } else { "•" }, if d.gcloud { "installed" } else { "not installed" }));
 }
 
 fn open_first(ui: &mut dyn Ui, what: &str, url: &str) {

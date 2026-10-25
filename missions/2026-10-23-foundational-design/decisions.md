@@ -72,7 +72,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
   3. Gemini driver and Builder in a sandboxed worktree.
   4. Council: in-memory barrier, both providers, deterministic Minority Report.
   5. Read-only Narrator tail and FTS5 knowledge-base search.
-  6. *(Gated on real usage)* Daemon, vectors, coaching automation, `update`/`sync`.
+  6. *(Gated on real usage)* Daemon, vectors, coaching automation, `update`/`sync`. *(Vectors were pulled forward by the operator on 2026-10-24: see D-01.)*
   7. *(Deferred)* 007 Planes 1–2 and 008 §5.
 - **B. Keep the current 6-phase roadmap.**
 
@@ -91,7 +91,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 **Recommendation:** **A.** Reopen when there are more than 50 missions *and* there's a logged search miss on a terminology-shift query.
 **Blocks:** spec 004 Part B, and the ExpeL deduplicator's similarity signal.
 **Status:** ✅ RATIFIED 2026-10-23: A — FTS5 BM25-only; reopen at >50 missions **and** a logged terminology-shift miss. **Superseded 2026-10-25:** reopened and built (below); the 50-mission rule no longer applies.
-**Reopened 2026-10-24 by the operator:** option B, with the size limit raised: up to 150 MB of model in the binary, chosen for retrieval accuracy over size, run with `candle`, with local vectors in `sqlite-vec` fused with the lexical rankings by RRF. The operator did not wait for the reopen trigger. Recorded as Amendment 004-A1 (`specs/004` §3.5); `delphi init` still works offline because the model is inside the binary, not downloaded. Why B is acceptable now: the "~10 MB static binary" was a goal, not a requirement, and the measured gain (`delphi kb eval`, §3.5) is large on questions worded differently from the documents.
+**Reopened 2026-10-24 by the operator:** option B, with the size limit raised: up to 150 MB of model in the binary, chosen for retrieval accuracy over size, run with `candle`, with local vectors in `sqlite-vec` fused with the lexical rankings by RRF. The operator did not wait for the reopen trigger. Recorded as Amendment 004-A1 (`specs/004` §3.5); `delphi init` still works offline because the model is inside the binary, not downloaded. Why B is acceptable now: the "~10 MB static binary" was a goal, not a requirement, and the measured gain (`delphi kb eval`, §3.5) is large on questions worded differently from the documents. Taken further the same day, still at the operator's direction: preloaded vectors for the shipped documents and `agents/` and `skills/` in the index (Amendment 004-A2), and a cross-encoder reranker, a refresh of the index on every search, and frontmatter summaries of agents and skills (Amendment 004-A3), all measured with `delphi kb eval` on a development set and a held-out set (`specs/004` §3.5 to §3.7).
 
 ## 🟠 D-02 — Gate 2: Where deterministic helpers live
 **Context:** The barrier, provenance gate, base-branch rubric loader, path guard, and DAG validator are what keep agents in bounds. As Python scripts in `skills/*/scripts/`, they could be edited by the very agents and syncs they constrain, and they'd make Python a runtime dependency.
@@ -418,3 +418,5 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 4. **The zero-token watch engine (`specs/008` §2) stays unbuilt.** When it is built it keeps its schedule in the timer store.
 
 **Status:** ✅ APPROVED 2026-10-25 by the operator.
+
+- **2026-10-25:** the operator asked to set timers directly in chat, since only the orchestrator could. Approved as **017-A1** (`specs/017` §5): `/timer` in the full-screen console and in `delphi chat --inline`, over the existing console-only `timer.*` calls. Also at the operator's request, the full-screen console and the Observer select text themselves (drag to select and copy, double-click a word, triple-click a line), because mouse reporting, which the wheel needs, stops the terminal selecting; `/mouse` still hands selection back to the terminal. No new dependency.

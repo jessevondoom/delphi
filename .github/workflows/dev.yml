@@ -1,6 +1,6 @@
 name: dev
 
-# Every push to main publishes the build as the rolling `dev` prerelease, which `delphi self-update --dev` installs.
+# Every push to main publishes the build as the rolling `dev` prerelease, which `delphi update --dev` installs.
 # Same targets, checksums and provenance attestations as a release; the version is `<crate version>-dev.g<commit>`
 # so every build is distinct (the daemon and the console compare versions). The release is replaced on each push,
 # so for a minute or so while it is being swapped `--dev` finds nothing. Homebrew and install.sh are not touched.
@@ -121,4 +121,4 @@ jobs:
           fi
           gh release delete dev --cleanup-tag --yes 2>/dev/null || true
           gh release create dev dist/* --prerelease --target "$GITHUB_SHA" --title "dev (main@${GITHUB_SHA::7})" \
-            --notes "Rolling build of main at $GITHUB_SHA, for \`delphi self-update --dev\`. Not a release: it is replaced on every push to main."
+            --notes "Rolling build of main at $GITHUB_SHA, for \`delphi update --dev\`. Not a release: it is replaced on every push to main."

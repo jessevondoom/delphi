@@ -1,24 +1,24 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining
-
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · activity
 
 
+  Activity and thinking stream
 
+  nothing running
 
-
-
-
-
-
-
-
-
-
-
-
-  → read_file(specs/002-adapter-and-routing.md)
+  Reasoning, replies and tool calls appear here as they happen.
+  They live only in this window: nothing is saved.
 ◐ working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · 2 waiting                                                                 ← / ? → · ● ○ ○
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ● ○ ○
+
+
+
+
+
+
+
+
+

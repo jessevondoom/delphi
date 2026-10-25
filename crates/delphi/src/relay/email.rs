@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn a_card_is_composed_as_plain_text_with_prefilled_reply_links_and_no_way_to_approve_red() {
         let card = serde_json::json!({"approval_id": "ap_1", "task_id": "t_1", "role": "architect", "tier": "amber", "tool": "write_file", "summary": "write specs/009.md", "payload_blake3": "abcdef0123456789", "timeout_secs": 600});
-        let o = crate::relay::card_message(&card, TOKEN, false, crate::relay::Detail::Summary);
+        let o = crate::relay::card_message(&card, TOKEN, false, crate::relay::Detail::Summary, false);
         let mail = compose(&cfg(), &o);
         assert_eq!(mail.to, "me@example.com");
         assert!(mail.message_id.starts_with("<delphi.") && mail.message_id.ends_with("@example.net>"));
@@ -274,7 +274,7 @@ mod tests {
         assert!(mail.body.contains(&format!("APPROVE {}", TOKEN)) && mail.body.contains(&format!("DENY {}", TOKEN)));
         assert!(mail.body.contains("mailto:delphi.relay@example.net?subject=Re%3A%20%5Bdelphi%3Aap_1%5D") && mail.body.contains(&format!("body=APPROVE%20{}", TOKEN)));
         assert!(!mail.body.contains("<html") && !mail.body.contains("http://") && !mail.body.contains("https://"), "plain text, no web links or trackers");
-        let red = compose(&cfg(), &crate::relay::card_message(&card, TOKEN, true, crate::relay::Detail::Summary));
+        let red = compose(&cfg(), &crate::relay::card_message(&card, TOKEN, true, crate::relay::Detail::Summary, false));
         assert!(!red.body.contains("APPROVE ") || red.body.contains("cannot be approved by a reply"));
         assert!(!red.body.contains(&format!("APPROVE {}", TOKEN)), "a Red card offers no approve line or link");
     }

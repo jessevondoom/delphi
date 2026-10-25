@@ -1,5 +1,4 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:56 remaining
-
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧
 delphi v0.5 · /proj · decisions
 
 
@@ -24,7 +23,8 @@ delphi v0.5 · /proj · decisions
 
 
 
+
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 enter select · 1-3 choose · ←→ other cards · d payload · tab list mode · esc chat
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · 2 waiting                                                                 ← / ? → · ○ ○ ●
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ○ ●

@@ -68,7 +68,7 @@ The relay is sent `decisions.review_requested` (and no other new event) and mail
 1. The Builder works; eligible edits are decided and logged, and no card is raised for them. Tests, checks, the spec gate and the audit run as usual.
 2. `finalize_build` reaches the review step with gates 1 to 4 green. **The merge card is not shown yet.** It raises `decisions.review_requested` and waits (default 24 h, `[optimistic] review_wait_sec`) for the operator, waking as soon as a review arrives.
 3. All ratified → the merge card appears (its payload lists the decisions and the sixth gate is green), as before. The operator answers it as before.
-4. Any rejected → the build stops with `DecisionsRejected`: nothing is merged, the card is never shown, the branch and worktree are kept, and the outcome names the rejected ids. (The work built on a rejected decision is suspect; rolling it back automatically is future work.)
+4. Any rejected → the merge card is never shown. If the build has attempts left, **the rejected edits are rolled back and the Builder tries again**: each rejected file goes back to the base commit (or is removed if the base never had it), every allowed decision on that file is marked `decision.reverted` (it enabled nothing that remains, so it no longer counts toward gate 6), the revert is committed, and the next attempt is told which edits the operator rejected and what they said. Decisions the operator has not yet reviewed stay pending. With no attempts left, the build stops with `DecisionsRejected`: nothing is merged, the branch is kept, and the outcome names the rejected ids.
 5. The window ends with decisions still unreviewed → `DecisionsPending`: nothing merged, branch kept.
 6. **Re-checked at answer time.** After the merge card is answered, gates 1 to 4 and gate 6 are evaluated again; a decision made or changed in the meantime refuses the merge ("gate 6 is no longer green… nothing was merged").
 7. A branch that was kept can be resumed: `/merge <task>` (`build.merge`) adopts the worktree again, re-evaluates every gate against the current ledger, and raises the merge card if they are green.
@@ -89,6 +89,8 @@ approver = "strategist"      # or "rules"
 second_seat = "cross-family" # or "any", "off"
 unseconded = "park"          # or "allow"
 review_wait_sec = 86400      # how long a finished build waits for your review
+max_decisions = 200          # provisional decisions one task may make; past it, cards go to you
+max_approver_calls = 100     # model calls (Strategist, second seat) one task may spend on decisions; past it, cards go to you
 ```
 These are ordinary (not pinned) settings: none of them can let anything reach your checkout without your review.
 
@@ -98,7 +100,7 @@ These are ordinary (not pinned) settings: none of them can let anything reach yo
 - Nothing eligible reaches the operator's checkout: the merge is gated on the review, the merge card, and the existing gates 1 to 5.
 - Taint still limits what a span may do; the approver does not read agent prose, only the daemon's classified card.
 
-Not yet built: caps on decisions and spend for an optimistic task; per-decision dwell-time recording; email review with a second factor; automatic rollback after a rejection; decisions for edits made by a CLI harness.
+Not yet built: a cap on spend (the mission budget still applies); per-decision dwell-time recording; email review with a second factor; decisions for edits made by a CLI harness.
 
 ## 8. Charter amendments (approved and applied 2026-10-25, D-30)
 All were Red-tier edits, approved by the operator and applied the same day; the mode is opt-in and weakens no existing gate.
@@ -114,6 +116,8 @@ Unit (`provisional.rs`, `gates.rs`): only an Amber worktree edit is eligible and
 Engine (`finalize.rs`, `build.rs`): an optimistic build raises no card for its edits, records them, and the merge card waits for every review before appearing, then merges; a rejection stops the merge and keeps the branch; a run that stops while decisions wait keeps the branch and `finalize_build` resumes after review; more work after the card was shown refuses the merge at answer time; the review window ending names the unreviewed ids; a spec draft in an optimistic task still raises its card; the approver refuses a `build.rs` edit and tells the Builder; the **whole ladder** (Builder, tests, audit, review wait, ratify, merge) runs in order. Without the sandbox the mode refuses to start.
 
 Approver (`provisional_run.rs`, scripted model): the Strategist allows a routine edit from a span offered no tools, with no card raised and the daemon's facts in the question; it can refuse what the rules allowed and the Builder is told why; an unreadable answer hands the card to the operator and records why; a rule refusal never reaches a model; a tool call by the approver is refused by the engine; an elevated edit with no second seat parks by default and is allowed flagged `unseconded` when told to; a concurring second seat is recorded and a disagreeing one parks the card; cross-family with one provider has no second seat and fakes none; `approver = "rules"` makes no model call. The answer parser and the question builder are unit-tested, including contradictory and malformed answers.
+
+Caps and rollback: past `max_decisions` or `max_approver_calls` the next edit goes to the operator with the reason logged; a rejected edit is removed (or restored) from the worktree, its decisions are marked reverted, the Builder's next attempt is told what was rejected and why, and the rest merges after review (the whole path, through two attempts, is tested). `restore_to_base` restores, removes, and refuses odd paths; a reverted decision no longer counts.
 
 Service: decisions are listed and reviewed by the console only; a review with the wrong hash, an unknown id, a bad resolution or a refusal is rejected; the narrator and relay cannot review or merge; `build.merge` needs a task with a kept branch; the relay event list is pinned. Console and CLI: the `--optimistic` flag, `/decisions` and `/merge` parse; the listing, show, ratify, reject and bulk commands send the hash that was shown. Run: a build awaiting review ends the run with exit code 5.
 

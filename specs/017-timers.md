@@ -73,6 +73,7 @@ Approvals are unchanged. A woken task asks the operator for everything any task 
 - **Log events:** `timer.set`, `timer.fired`, `timer.cancelled`, `timer.failed`, in the timer's mission. `timer.set` and `timer.cancelled` made by a role carry that role's span.
 - **RPC:** `timer.list` (anyone on the console socket), `timer.set` and `timer.cancel` (console scope only; the Narrator and the relay are refused). `session.snapshot` includes the pending timers.
 - **CLI:** `delphi timers [list]`, `delphi timers set <role> (--in 5m | --at <time>) [--every 5m] <note…>`, `delphi timers cancel <id>`. The operator may cancel any timer.
+- **Chat (017-A1):** `/timer <span> <note>` in the full-screen console and in `delphi chat --inline` sets a timer for the orchestrator. `/timer @role …` names another role, `at <RFC 3339 time>` replaces the span, `--every <span>` repeats, `/timer list` shows them and `/timer cancel <id>` cancels one. A span is `90s`, `20m`, `2h` or `1d`. It is the same `timer.set` / `timer.list` / `timer.cancel` calls as the CLI, so the same console-scope rule and limits apply. The operator is not limited to waking the orchestrator the way a role is limited to waking itself.
 - **A caution the CLI prints:** timers fire only while a daemon runs. A daemon started only to run `delphi timers` stops again. The command says so when timers are pending.
 
 ## 6. Verification Plan

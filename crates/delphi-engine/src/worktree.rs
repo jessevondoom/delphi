@@ -316,6 +316,28 @@ impl Worktree {
         Ok(Some(self.head()?))
     }
 
+    /// Put `path` (relative to the worktree) back as the base commit had it: restored if the base has it,
+    /// removed if it does not. Returns `"base"` or `"removed"`. A path that is not plain and inside the worktree,
+    /// or that has a `.git` segment, is refused. The change is left uncommitted for the caller to commit.
+    pub fn restore_to_base(&self, path: &str) -> Result<&'static str, GitError> {
+        let plain = !path.is_empty() && !path.starts_with('/') && !path.split('/').any(|s| s.is_empty() || s == ".." || s == "." || s.eq_ignore_ascii_case(".git"));
+        if !plain {
+            return Err(GitError::Failed { args: "restore".into(), stderr: format!("`{}` is not a plain path inside the worktree", path) });
+        }
+        if self.blob(&self.base_sha, path).is_ok() {
+            let mut c = self.git();
+            c.args(["checkout", &self.base_sha, "--", path]);
+            run(c, "checkout")?;
+            Ok("base")
+        } else {
+            let full = self.path.join(path);
+            if full.is_file() {
+                std::fs::remove_file(&full).map_err(|e| GitError::Io(e.to_string()))?;
+            }
+            Ok("removed")
+        }
+    }
+
     pub fn head(&self) -> Result<String, GitError> {
         let mut c = self.git();
         c.args(["rev-parse", "HEAD"]);
@@ -711,6 +733,25 @@ pub(crate) mod tests {
         fs::write(wt.path.join(file), content).unwrap();
         let sha = wt.commit_all("work", "builder").unwrap().unwrap();
         (wt, sha)
+    }
+
+    #[test]
+    fn restore_to_base_puts_a_file_back_removes_a_new_one_and_refuses_odd_paths() {
+        let (_d, p, w) = fx();
+        let wt = w.create(&p, "t_r1").unwrap();
+        fs::write(wt.path.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+        fs::write(wt.path.join("src/new.rs"), "pub fn n() {}\n").unwrap();
+        wt.commit_all("work", "builder").unwrap().unwrap();
+        assert_eq!(wt.restore_to_base("src/lib.rs").unwrap(), "base");
+        assert_eq!(wt.restore_to_base("src/new.rs").unwrap(), "removed");
+        assert_eq!(fs::read_to_string(wt.path.join("src/lib.rs")).unwrap(), "pub fn a() {}\n");
+        assert!(!wt.path.join("src/new.rs").exists());
+        assert!(wt.commit_all("revert", "delphi").unwrap().is_some(), "the restore is a change to commit");
+        assert!(wt.diff(&[]).unwrap().files.is_empty(), "nothing differs from the base any more");
+        assert_eq!(wt.restore_to_base("src/missing.rs").unwrap(), "removed", "a file that was never there is simply absent");
+        for bad in ["", "/etc/passwd", "../x", "src/../../x", ".git/config", "src/.GIT/x", "a//b", "./x"] {
+            assert!(wt.restore_to_base(bad).is_err(), "{:?}", bad);
+        }
     }
 
     #[test]

@@ -89,6 +89,18 @@ pub struct Settings {
     pub second_seat: crate::provisional::SecondSeat,
     /// `[optimistic] unseconded`: what happens to an elevated edit no second reviewer looked at.
     pub unseconded: crate::provisional::Unseconded,
+    /// `[optimistic] max_decisions`: provisional decisions one task may make. Past it, cards go to the operator.
+    pub max_decisions: u32,
+    /// `[optimistic] max_approver_calls`: model calls (Strategist and second seat) one task may spend on decisions.
+    /// Past it, cards go to the operator.
+    pub max_approver_calls: u32,
+    /// `[hooks]` (ratified): deny hooks the daemon runs before an approval (`hooks.rs`). Observe hooks are run by
+    /// `delphi hooks`, not here.
+    pub hooks: crate::hooks::Hooks,
+    /// `[relay] step_up = "totp"` with `totp_credential`: the reference to the secret behind the operator's
+    /// authenticator (`keychain:…`, `env:…`, `command:[…]`). With it, a relay may approve a Red card when the answer
+    /// carries a valid code; without it a relay can only deny Red (`specs/014` §3).
+    pub relay_totp_credential: Option<String>,
 }
 
 impl Default for Settings {
@@ -116,6 +128,10 @@ impl Default for Settings {
             approver: crate::provisional::ApproverKind::Strategist,
             second_seat: crate::provisional::SecondSeat::CrossFamily,
             unseconded: crate::provisional::Unseconded::Park,
+            max_decisions: 200,
+            max_approver_calls: 100,
+            hooks: Default::default(),
+            relay_totp_credential: None,
         }
     }
 }
@@ -204,6 +220,10 @@ pub struct Engine {
     pub timers: Arc<crate::timers::TimerStore>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
+    /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
+    pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
+    /// Single-use and rate-limit state for step-up codes.
+    pub(crate) totp: delphi_core::totp::Verifier,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -1125,6 +1145,12 @@ impl Engine {
             if let Some(denied) = self.ask_classified(sc, tier, &c).await? {
                 return Ok(denied);
             }
+        } else if c.tier == tools::ToolTier::Amber && !self.settings.hooks.deny.is_empty() {
+            // Allowed without a card (a permission mode, "allow similar"): a deny hook can still say no.
+            let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+            if let Some((hook, why)) = self.hook_denial(&who, &c.tool, &c.pattern, &c.summary, "amber", &c.payload).await? {
+                return Ok(tool_result_error(format!("This action was blocked by the hook `{}`: {}. Do not retry it; propose an alternative or ask.", hook, why)));
+            }
         }
         let before = sc.span.ceiling();
         let (result, stamps) = {
@@ -1275,6 +1301,12 @@ impl Engine {
     /// (`provisional.rs`) instead of raising a card; anything else, and every other task, asks as before.
     pub(crate) async fn ask_classified(self: &Arc<Self>, sc: &SpanCtx, tier: ApprovalTier, c: &tools::Classified) -> Result<Option<tools::ToolResult>, EngineError> {
         if self.optimistic.lock().unwrap().contains(sc.task_id.as_str()) && crate::provisional::eligible(c, tier) {
+            if !self.settings.hooks.deny.is_empty() {
+                let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
+                if let Some((hook, why)) = self.hook_denial(&who, &c.tool, &c.pattern, &c.summary, tier.as_str(), &c.payload).await? {
+                    return Ok(Some(tool_result_error(format!("This action was blocked by the hook `{}`: {}. Do not retry it; propose an alternative or ask.", hook, why))));
+                }
+            }
             let id = crate::provisional::new_decision_id();
             if let crate::provisional_run::Provisional::Decided(verdict) = self.decide_provisionally(sc, c, &id).await? {
                 sc.m.append(sc.ev("decision.provisional", crate::provisional::decision_event(&id, c, tier, &verdict, &sc.role))).await?;
@@ -1310,6 +1342,7 @@ impl Engine {
     pub(crate) async fn ask_as(&self, who: &Asker<'_>, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
         Ok(match self.ask_resolution(who, tier, tool, pattern, summary, payload, None).await? {
             Resolution::Approved { .. } => None,
+            Resolution::Denied { reason } if reason.starts_with("blocked by the hook") => Some(tool_result_error(format!("This action was {}. Do not retry it; propose an alternative or ask.", reason))),
             Resolution::Denied { reason } => Some(tool_result_error(format!("The operator denied this action{}. Do not retry it; propose an alternative or ask.", if reason.is_empty() { String::new() } else { format!(": {}", reason) }))),
             Resolution::TimedOut => Some(tool_result_error("The approval timed out and was denied. Do not retry it; propose an alternative.")),
         })
@@ -1325,6 +1358,11 @@ impl Engine {
             e.agent = Some(who.role.to_string());
             e
         };
+        if !self.settings.hooks.deny.is_empty() {
+            if let Some((hook, why)) = self.hook_denial(who, tool, pattern, summary, tier.as_str(), payload).await? {
+                return Ok(Resolution::Denied { reason: format!("blocked by the hook `{}`: {}", hook, why) });
+            }
+        }
         let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
         let started = std::time::Instant::now();
         let mut reraised_from: Option<String> = None;

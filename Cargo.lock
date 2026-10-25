@@ -763,6 +763,7 @@ dependencies = [
  "mail-parser",
  "ratatui",
  "regex",
+ "reqwest",
  "serde",
  "serde_derive",
  "serde_json",
@@ -806,11 +807,13 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "delphi-core",
+ "hmac",
  "libc",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha1",
  "tempfile",
  "tokio",
  "toml",
@@ -2974,6 +2977,7 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",
@@ -3427,6 +3431,17 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
 ]
 
 [[package]]

@@ -1,19 +1,19 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining
-
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
-  Use a table. It gives you:
+ • one place to query
 
-  • transactions
-  • one place to query
+   rust
+   fn enqueue(job: Job) -> Result<()> { Ok(()) }
 
-    rust
-    fn enqueue(job: Job) -> Result<()> { Ok(()) }
+ See specs/002-adapter-and-routing.md#4 for the ladder.
+ → read_file(specs/002-adapter-and-routing.md) ✔
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
-  See specs/002-adapter-and-routing.md#4 for the ladder.
-
-
-❯ Now write it
+                                                                                      you · 00:00:03
+                                                                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                                                       Now write it
+                                                                                      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 ── approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
@@ -31,4 +31,4 @@ delphi v0.5 · /proj · chat
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ and then?
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · 2 waiting                                                                 ← / ? → · ○ ● ○
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ● ○

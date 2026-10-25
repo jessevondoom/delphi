@@ -43,7 +43,7 @@ function convo(): State {
   s = addBlock(s, { kind: 'note', text: '■ stopped', at: T0 + 7000 });
   return s;
 }
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: convo(), now: T0 + 9000, deck: 1, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true, bg: [15, 23, 42] }, state: convo(), now: T0 + 9000, deck: 1, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, still: true, ...over });
 const req = (id: string, tier: string, summary: string, at: number) => ({ method: 'event', params: { type: 'approval.requested', task_id: 't_1', payload: { approval_id: id, role: tier === 'red' ? 'architect' : 'builder', tier, tool: 'write_file', summary, payload_blake3: 'h' + id, payload: { preview: '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new' }, timeout_secs: 600 } } }) as const;
 
 test('golden screens: the chat, the menu, the inbox in both modes, the stream and a panel', () => {
@@ -68,7 +68,7 @@ function ostate(): OState {
   s.agents['orchestrator'] = { role: 'orchestrator', state: 'running', task_id: 't_1', endpoint: 'direct', tier: 'frontier', model: 'claude-x', upscaled: false, tokens: { input: 100, cache_read: 200, cache_write: 0, output: 50, thinking: 0 }, cost_usd: 0.07, calls: 2 };
   s.agents['red-team'] = { ...s.agents['orchestrator']!, role: 'red-team', state: 'waiting on you' };
   s.tasks['t_1'] = { id: 't_1', flow: 'build', prompt: 'Implement the deck router', status: 'running' };
-  s.nodes['n_1'] = { id: 'n_1', role: 'orchestrator', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 1200, cost_usd: 0.1 };
+  s.nodes['n_1'] = { id: 'n_1', role: 'orchestrator', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 1200, cost_usd: 0.1, started_ms: 0, ended_ms: null, after: [] };
   s.narrative = ['t_1 started'];
   return s;
 }

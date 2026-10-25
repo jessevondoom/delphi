@@ -14,9 +14,9 @@ test('bracketed paste keeps its newlines and can span reads', () => {
   assert.deepEqual(p.feed('line two\x1b[201~x'), [{ t: 'paste', s: 'line one\nline two' }, { t: 'text', s: 'x' }]);
 });
 
-test('mouse wheel, several in one read; clicks are ignored', () => {
+test('mouse wheel, several in one read; a left press is a mouse event (selection), not a key', () => {
   assert.deepEqual(keys('\x1b[<64;10;10M\x1b[<64;10;10M\x1b[<65;1;1M\x1b[<0;5;5M'), [
-    { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'down' },
+    { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'down' }, { t: 'mouse', k: 'down', x: 4, y: 4 },
   ]);
 });
 
@@ -42,8 +42,8 @@ test('an escape sequence split across reads is completed, not dropped', () => {
 });
 
 test('the background colour reply says dark or light', () => {
-  assert.deepEqual(keys('\x1b]11;rgb:1a1a/1f1f/2929\x07'), [{ t: 'bg', dark: true }]);
-  assert.deepEqual(keys('\x1b]11;rgb:ffff/ffff/ffff\x1b\\'), [{ t: 'bg', dark: false }]);
+  assert.deepEqual(keys('\x1b]11;rgb:1a1a/1f1f/2929\x07'), [{ t: 'bg', dark: true, rgb: [26, 31, 41] }]);
+  assert.deepEqual(keys('\x1b]11;rgb:ffff/ffff/ffff\x1b\\'), [{ t: 'bg', dark: false, rgb: [255, 255, 255] }]);
 });
 
 test('escape then a control key in one read is two keypresses', () => {

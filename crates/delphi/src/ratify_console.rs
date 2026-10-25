@@ -44,10 +44,7 @@ pub fn format_show(p: &Value) -> String {
 }
 
 fn rpc_error(e: &ClientError) -> String {
-    match e {
-        ClientError::Rpc { message, .. } => message.clone(),
-        other => other.to_string(),
-    }
+    crate::chat::rpc_error(e)
 }
 
 /// `last` holds the list the operator last saw: applying uses exactly that version.
