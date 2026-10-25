@@ -48,5 +48,6 @@ path = "src/bin/delphi-core.rs"
 
 [dev-dependencies]
 delphi-core = { path = "../delphi-core", features = ["test-support"] }
+delphi-docs = { path = "../delphi-docs", features = ["test-support"] }
 tempfile = "3.8"
 libc = "0.2"

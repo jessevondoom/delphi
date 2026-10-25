@@ -8,5 +8,13 @@ license = "MIT"
 publish = false
 
 [dependencies]
+# Both are already in the workspace's dependency tree (specs/014 §1.1): inflate for zip members, gzip and
+# PDF streams; CRC-32 to catch a corrupt zip member.
+flate2 = "1"
+crc32fast = "1.5"
+
+[features]
+# Test-only: archive builders for other crates' tests. The real writers arrive with slice C0.
+test-support = []
 
 [dev-dependencies]
