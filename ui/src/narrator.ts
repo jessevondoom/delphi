@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import type { Info } from './theme.ts';
 
-export const NARRATOR_VIEWS = ['council', 'epic', 'forge', 'agents', 'spend', 'archives'] as const;
+export const NARRATOR_VIEWS = ['council', 'epic', 'forge', 'agents', 'archives'] as const;
 const TILE = ['council', 'epic', 'forge', 'agents'];
 
 /** A shell word: as it is when it is safe, else in single quotes. */
@@ -13,7 +13,7 @@ const sh = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, 
 export function narratorLines(view: string | undefined, info: Info): { lines: string[]; tile: boolean } | string {
   const v = view ?? '';
   const tile = v === 'tile';
-  if (v && !tile && !(NARRATOR_VIEWS as readonly string[]).includes(v)) return `/narrator takes council, epic, forge, agents, spend, archives or tile, not ${v}`;
+  if (v && !tile && !(NARRATOR_VIEWS as readonly string[]).includes(v)) return `/narrator takes council, epic, forge, agents, archives or tile, not ${v}`;
   const exe = info.delphi_exe ?? 'delphi';
   const lines = (tile ? TILE : [v]).map((x) => [sh(exe), 'observe', ...(x ? [x] : []), '--workspace', sh(info.workspace_name ?? ''), '--home', sh(info.home ?? '')].join(' '));
   return { lines, tile };

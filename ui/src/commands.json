@@ -14,7 +14,7 @@
   { "name": "/timer", "aliases": ["/timers"], "args": "<when> <note>", "desc": "Wake a role later: /timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>", "ink": true, "rust": true, "local": false },
   { "name": "/models", "desc": "The model pool: which models are usable, out of quota, or cooling down", "ink": true, "rust": true, "local": false },
   { "name": "/agents", "desc": "Every agent running now and what it is doing", "ink": true, "rust": true, "local": false },
-  { "name": "/narrator", "aliases": ["/observe", "/visualize"], "args": "[council|epic|forge|agents|spend|archives|tile]", "desc": "The read-only live window: a tmux split when inside tmux, else the command to run in a second terminal", "ink": true, "rust": true, "local": false },
+  { "name": "/narrator", "aliases": ["/observe", "/visualize"], "args": "[council|epic|forge|agents|archives|tile]", "desc": "The read-only live window: a tmux split when inside tmux, else the command to run in a second terminal", "ink": true, "rust": true, "local": false },
   { "name": "/usage", "args": "[mission|role|task|model]", "desc": "Tokens and spend by role, task, model or mission", "ink": true, "rust": true, "local": false },
   { "name": "/budget", "args": "[dollars]", "desc": "Show or change this mission's cost ceiling", "ink": true, "rust": true, "local": false },
   { "name": "/permissions", "aliases": ["/perm"], "args": "[default|accept-edits|mission-auto|optimistic]", "desc": "Approval mode (Shift+Tab cycles it)", "ink": true, "rust": true, "local": false },

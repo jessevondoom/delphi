@@ -19,7 +19,7 @@ test('each view is the command that opens it; tile is four', () => {
 test('a path with a space is quoted, and a view that does not exist is refused with the list', () => {
   const spaced = { ...info, home: "/srv/some one/it's" } as Info;
   assert.ok((narratorLines('epic', spaced) as { lines: string[] }).lines[0]!.endsWith(`--home '/srv/some one/it'\\''s'`));
-  assert.equal(narratorLines('nope', info), '/narrator takes council, epic, forge, agents, spend, archives or tile, not nope');
+  assert.equal(narratorLines('nope', info), '/narrator takes council, epic, forge, agents, archives or tile, not nope');
 });
 
 test('outside tmux it says what to run in a second terminal', () => {
@@ -47,5 +47,5 @@ test('the slash command goes through it', async () => {
   const saved = process.env.TMUX; delete process.env.TMUX;
   try { await runSlash('/narrator council', c); await runSlash('/observe nope', c); } finally { if (saved !== undefined) process.env.TMUX = saved; }
   assert.match(out[0]!, /^Run this in another terminal/);
-  assert.equal(out[1], '/narrator takes council, epic, forge, agents, spend, archives or tile, not nope');
+  assert.equal(out[1], '/narrator takes council, epic, forge, agents, archives or tile, not nope');
 });

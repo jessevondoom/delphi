@@ -957,7 +957,7 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
 }
 
 /// The full-screen Observer: the same UI executable in its read-only mode. It needs a running daemon (it only watches).
-/// Exit code 3 means the UI is not this release and the classic Observer should run instead.
+/// Exit code 3 means the UI is not this release.
 pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&str>, names: &HashMap<String, String>, once: bool) -> i32 {
     let l = match layout(home, ws_dir) {
         Ok(l) => l,
@@ -973,11 +973,11 @@ pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&s
     let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names);
     let mut cmd = std::process::Command::new(ui);
     cmd.arg("--info").arg(info.to_string()).arg("--observe");
-    if once {
-        cmd.arg("--once");
-    }
     if let Some(v) = view {
         cmd.arg(v);
+    }
+    if once {
+        cmd.arg("--once");
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),

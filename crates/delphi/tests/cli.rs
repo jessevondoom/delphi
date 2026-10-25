@@ -96,3 +96,17 @@ fn lint_outside_a_repository_is_an_error() {
     assert_eq!(o.status.code(), Some(2));
     assert!(text(&o.stderr).contains("not in a git repository"));
 }
+
+#[test]
+fn the_classic_observer_is_gone_and_the_retired_spend_view_is_refused() {
+    for args in [&["observe", "--classic"][..], &["narrator", "--classic"]] {
+        let (o, touched) = run(args);
+        assert_eq!(o.status.code(), Some(2), "{:?}", args);
+        assert!(text(&o.stderr).contains("unknown option `--classic`"), "{}", text(&o.stderr));
+        assert!(!touched);
+    }
+    let (o, touched) = run(&["observe", "spend", "--workspace", "none"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o.stderr).contains("unknown view `spend`") || text(&o.stderr).contains("no workspace"), "{}", text(&o.stderr));
+    assert!(!touched);
+}
