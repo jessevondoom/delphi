@@ -1,4 +1,5 @@
-//! `delphi self-update`: replace this executable with the latest release.
+//! The program step of `delphi update`: replace this executable with the latest release. (`main.rs` follows it with
+//! the workspace files and the daemons; see `cmd_update`.)
 //!
 //! * The release is found through the GitHub releases API (override with `DELPHI_RELEASES_URL` for a mirror).
 //! * The tarball for this machine is downloaded with its `.sha256`; the checksum must match before anything is
@@ -287,17 +288,36 @@ impl Net for RealNet {
     }
 }
 
-/// The command. Returns the process exit code.
+/// What the program step of `delphi update` did, for the caller to follow up on (workspace files, daemons).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Event {
+    /// A newer program is now at the destination.
+    Installed,
+    /// The previous program is back at the destination.
+    RolledBack,
+    /// This already is the newest release (or `--check` found nothing to install).
+    UpToDate,
+}
+
+/// The program step, ignoring what follows. Returns the process exit code.
+#[cfg(test)]
 pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
+    run_with(args, net, dest, api, &mut |_| {})
+}
+
+/// The program step of `delphi update`: `after` is told what happened once it is done and the executable at `dest`
+/// is the one to carry on with. It is not called after `--check` finds an update, or after an error.
+pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &mut dyn FnMut(Event)) -> i32 {
     let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
     if args.iter().any(|a| a == "--rollback") {
         return match rollback(dest) {
             Ok(()) => {
-                println!("Restored the previous version. Run `delphi daemon restart` so a running daemon matches.");
+                println!("Restored the previous version.");
+                after(Event::RolledBack);
                 0
             }
             Err(e) => {
-                eprintln!("delphi self-update: {:#}", e);
+                eprintln!("delphi update: {:#}", e);
                 1
             }
         };
@@ -306,11 +326,11 @@ pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
     let wanted = flag("--version");
     let dev = args.iter().any(|a| a == "--dev");
     if dev && wanted.is_some() {
-        eprintln!("delphi self-update: --dev and --version cannot be combined");
+        eprintln!("delphi update: --dev and --version cannot be combined");
         return 2;
     }
     let Some(target) = target() else {
-        eprintln!("delphi self-update: there is no build for this platform ({} {})", std::env::consts::OS, std::env::consts::ARCH);
+        eprintln!("delphi update: there is no build for this platform ({} {})", std::env::consts::OS, std::env::consts::ARCH);
         return 1;
     };
     let found = if dev { find_dev(net, api, current, target) } else { find(net, api, current, wanted.as_deref()) };
@@ -318,30 +338,30 @@ pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
         Ok(Some(r)) => r,
         Ok(None) => {
             println!("delphi {} is the latest {}.", current, if dev { "dev build" } else { "release" });
+            after(Event::UpToDate);
             return 0;
         }
         Err(e) => {
-            eprintln!("delphi self-update: {:#}", e);
+            eprintln!("delphi update: {:#}", e);
             return 1;
         }
     };
     println!("{} -> {}", current, rel.tag);
     if args.iter().any(|a| a == "--check") {
-        println!("An update is available. Run `delphi self-update{}` to install it.", if dev { " --dev" } else { "" });
+        println!("An update is available. Run `delphi update{}` to install it.", if dev { " --dev" } else { "" });
         return 0;
     }
     match install(net, &rel, target, dest) {
         Ok(i) => {
             if dev {
-                println!("This is a development build of main, not a release; `delphi self-update` returns to the latest release.");
+                println!("This is a development build of main, not a release; `delphi update` returns to the latest release.");
             }
-            println!("Installed {} at {} (the old version is kept as {}; `delphi self-update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
-            println!("A running daemon keeps the old version until it restarts: `delphi daemon restart`.");
-            println!("Then run `delphi update` to refresh the built-in agents, skills and themes in your workspaces.");
+            println!("Installed {} at {} (the old version is kept as {}; `delphi update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
+            after(Event::Installed);
             0
         }
         Err(e) => {
-            eprintln!("delphi self-update: {:#}", e);
+            eprintln!("delphi update: {:#}", e);
             1
         }
     }
@@ -383,8 +403,13 @@ mod tests {
 
     /// A release server with one version whose binary is a script that prints `version`.
     fn server(tag: &str, version_printed: &str, sum_override: Option<&str>) -> (Fake, String) {
+        server_for(T, tag, version_printed, sum_override)
+    }
+
+    /// The same, with the build named for `target` (the machine's own, for tests that go through `run_with`).
+    fn server_for(target: &str, tag: &str, version_printed: &str, sum_override: Option<&str>) -> (Fake, String) {
         let tgz = tarball(&format!("#!/bin/sh\necho 'delphi {}'\n", version_printed));
-        let name = format!("delphi-{}-{}.tar.gz", tag, T);
+        let name = format!("delphi-{}-{}.tar.gz", tag, target);
         let sum = sum_override.map(String::from).unwrap_or_else(|| sha256_hex(&tgz));
         let mut m = BTreeMap::new();
         m.insert(format!("https://dl/{}", name), tgz);
@@ -582,5 +607,27 @@ mod tests {
         assert_eq!(run(&["--check".into()], &net, &dest, &api), 0);
         assert!(!dest.exists(), "--check never installs");
         assert_eq!(run(&["--version".into(), "v7.7.7".into()], &net, &dest, &api), 1, "an unknown version is an error, not a silent success");
+    }
+
+    #[test]
+    fn the_caller_is_told_what_happened_after_an_install_a_rollback_or_when_nothing_was_newer() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("delphi");
+        std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.1.0'\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (net, api) = server_for(target().unwrap(), "v99.0.0", "99.0.0", None);
+        let mut seen: Vec<Event> = Vec::new();
+        assert_eq!(run_with(&["--check".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert!(seen.is_empty(), "--check that finds an update changes nothing and follows up on nothing");
+        assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(seen, vec![Event::Installed]);
+        assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(seen, vec![Event::Installed, Event::RolledBack]);
+        let (net, api) = server_for(target().unwrap(), "v0.1.0", "0.1.0", None);
+        assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(seen.last(), Some(&Event::UpToDate), "nothing newer: the workspaces are still refreshed against this program");
     }
 }
