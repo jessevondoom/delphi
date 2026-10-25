@@ -33,6 +33,12 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | no | n/a | post-v1; build waits for the core (D-29) |
 | 012 Xenia record schema | yes (text, by "ratify all") | no | n/a | same; Phase 1 is kinds `memory`, `endorsement`, `tombstone` |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
+| 022 The sharing layer (overview, plan, open questions) | **draft** (proposed 2026-10-25) | no | n/a | operator answers B-1 to B-15 (022 §7); amendments of 022 §5 applied on ratification |
+| 023 Org bundle standard | **draft** | no | n/a | slice B1 (`delphi-bundle` crate, `bundle check`, golden fixture) after B0 |
+| 024 Bundle trust, adoption, precedence | **draft** | no | n/a | slices B2, B4, B5 |
+| 025 Plugin, skill and tool compatibility | **draft** | no | n/a | slice B6; B11 (serve as MCP) only if B-8 is yes |
+| 026 Team alignment and strategist integration | **draft** | no | n/a | slices B3, B8 |
+| 027 Bundle authoring, distribution, evaluation | **draft** | no | n/a | slices B5, B7 (needs xenia X7/X8), B9, B10 |
 
 ## Roadmap steps, for cross-reference
 
