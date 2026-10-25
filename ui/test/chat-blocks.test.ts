@@ -64,16 +64,16 @@ test('golden: a reply streaming (005e 7.2), and the same without a tint (the rai
   check('chat-blocks-rail-80x24', model(conversation(), { pal: { dark: true, bg: null } }), 80, 24);
 });
 
-/** A block is the label row, a cap row of `▄`, text rows, a cap row of `▀`; read back from a rendered frame. */
+/** A block is the label row, a cap row of `▄`, text rows, a cap row of `▄` again (the lower half in the terminal's colour on the tint, which draws the same as an upper half); read back from a rendered frame. */
+/** Rows that are only `▄`: top and bottom caps alternate, so a frame cut mid-block starts on a bottom cap. */
+const capRows = (rows: string[]) => rows.flatMap((r, i) => (/^\s*▄+\s*$/.test(r) ? [i] : []));
 function blocksIn(rows: string[]) {
   const out: { label: number; top: number; bottom: number; col: number; width: number }[] = [];
-  rows.forEach((r, i) => {
-    const t = r.trim();
-    if (t.length && /^▄+$/.test(t)) {
-      const bottom = rows.findIndex((x, j) => j > i && /^\s*▀+\s*$/.test(x));
-      out.push({ label: i - 1, top: i, bottom, col: r.length - r.trimStart().length, width: t.length });
-    }
-  });
+  const caps = capRows(rows);
+  for (let k = 0; k + 1 < caps.length; k += 2) {
+    const top = caps[k]!, r = rows[top]!;
+    out.push({ label: top - 1, top, bottom: caps[k + 1]!, col: r.length - r.trimStart().length, width: r.trim().length });
+  }
   return out;
 }
 
@@ -130,8 +130,9 @@ test('the tint: the block is filled with it, the caps are its colour, and the en
   T.useCapabilities(T.capabilities({ COLORTERM: 'truecolor' }));
   try {
     const raw = frame(model(conversation(), { pal: { dark: true, bg: BG } }), 80, 24);
-    const cap = raw.find((l) => plain(l).includes('▄▄▄▄'))!;
-    assert.ok(cap.includes('38;2;34;42;59'), 'the cap is the tint colour (8 % toward white from the background)');
+    const caps = raw.filter((l) => plain(l).includes('▄▄▄▄'));
+    assert.ok(caps.some((l) => l.includes('38;2;34;42;59')), 'the top cap is the tint colour (8 % toward white from the background)');
+    assert.ok(caps.some((l) => l.includes('48;2;34;42;59') && l.includes('38;2;15;23;42')), 'the bottom cap is the tint behind a lower half in the terminal colour');
     const row = raw.find((l) => plain(l).includes('Now write it.'))!;
     assert.ok(row.includes('48;2;34;42;59'), 'the text row has the tint as its background');
     assert.equal(stringWidth(row), 80, 'a text row is as wide as the screen line');
@@ -191,7 +192,7 @@ test('a short window drops the blank rows between messages; the caps stay', () =
   assert.ok(blocksIn(short).length >= 1, 'caps stay');
   // Between the first block's bottom cap and the last block's top cap there is a message boundary at every cap pair.
   const gaps = (rows: string[]) => {
-    const from = rows.findIndex((l) => /^\s*▀/.test(l)), to = rows.length - 1 - [...rows].reverse().findIndex((l) => /^\s*▄/.test(l));
+    const caps = capRows(rows), from = caps[1]!, to = caps[caps.length - 2]!;
     return rows.slice(from, to).filter((l) => l === '').length;
   };
   assert.equal(gaps(short), 0, 'no blank row between messages');

@@ -1,4 +1,4 @@
-// Tinted blocks (`005e` §7.2): a label row above, then the text rows in a soft fill capped by half-block rows, with
+// Tinted blocks (`005e` §7.2): a label row above, then the text rows in a soft fill capped by half-block rows (the bottom one is `▄` on the tint, since some fonts draw `▀` thin and gapped), with
 // square edges. Where there is no tint (no colour, or a terminal that did not say what its background is) the block
 // is a rail: no fill, no caps, each row starting with a dim `│`. Shared by the chat, the attention cards, the
 // no-model card and the help overlay.
@@ -40,15 +40,13 @@ export type TintBlock = {
 export function tintCard(rows: string[], width: number, tint: T.Tint | null): string[] {
   const fit = (r: string) => r + ' '.repeat(Math.max(0, width - stringWidth(r)));
   if (!tint) return rows.map((r) => fit(T.dim('│') + r));
-  const cap = (ch: string) => tint.ink(ch.repeat(width));
-  return [cap('▄'), ...rows.map((r) => tint.fill(fit(r))), cap('▀')];
+  return [tint.ink('▄'.repeat(width)), ...rows.map((r) => tint.fill(fit(r))), tint.flip('▄'.repeat(width))];
 }
 
 export function tintBlock(o: TintBlock): string[] {
   const pad = ' '.repeat(Math.max(0, o.col));
   if (!o.tint) return [pad + o.label, ...o.rows.map((r) => pad + T.dim('│') + r)]; // the row's own padding column follows the rail
-  const { fill, ink } = o.tint;
-  const cap = (ch: string) => pad + ink(ch.repeat(o.width));
+  const { fill, ink, flip } = o.tint;
   const row = (r: string) => pad + fill(r + ' '.repeat(Math.max(0, o.width - stringWidth(r))));
-  return [pad + o.label, cap('▄'), ...o.rows.map(row), cap('▀')];
+  return [pad + o.label, pad + ink('▄'.repeat(o.width)), ...o.rows.map(row), pad + flip('▄'.repeat(o.width))];
 }
