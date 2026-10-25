@@ -1365,7 +1365,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("Daedalus · ");
     // The reply streams in a block labelled "writing"; the finished one (labelled with its time) is what /pin keeps.
     let settled = Instant::now() + Duration::from_secs(20);
-    while c.everything().contains("Daedalus · writing") {
+    while c.visible().contains("Daedalus · writing") {
         assert!(Instant::now() < settled, "the reply never finished:\n{}", c.everything());
         std::thread::sleep(Duration::from_millis(60));
     }
