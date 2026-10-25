@@ -337,10 +337,7 @@ impl Summary {
 // ── driving the daemon ──────────────────────────────────────────────────────
 
 fn rpc(e: &ClientError) -> String {
-    match e {
-        ClientError::Rpc { message, .. } => message.clone(),
-        other => other.to_string(),
-    }
+    crate::chat::rpc_error(e)
 }
 
 fn say_err(m: &str) {
@@ -553,14 +550,37 @@ fn human(s: &Value) -> String {
     }
     out.push_str(&format!("cards: {} ({} allowed, {} denied) · {:.1}s\n", s["cards"]["total"], s["cards"]["allowed"], s["cards"]["denied"], s["wall_secs"].as_f64().unwrap_or(0.0)));
     let text = s["text"].as_str().unwrap_or("");
-    if !text.is_empty() {
-        out.push_str(&format!("\n{}\n", text));
+    let attention = crate::escalation::classify(if text.contains("[escalated to the operator:") { text } else { s["reason"].as_str().unwrap_or("") });
+    match attention.kind {
+        // The wrapper is engine plumbing (specs/005e §6.6); say the stop and what to do about it instead.
+        "no_model_configured" | "budget" | "reauth_required" | "exhausted" if text.contains("[escalated to the operator:") || s["outcome"] == "escalated" => {
+            out.push_str(&format!("\n{}\n", attention.headline));
+            // The hints name console commands; from `delphi run` the same remedies are flags and commands.
+            let next = match attention.kind {
+                "budget" => "raise the ceiling with --budget <usd>".to_string(),
+                "no_model_configured" => "run `delphi setup` to connect a model".to_string(),
+                _ => attention.hints.first().map(|h| h.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+            };
+            out.push_str(&format!("next: {}\n", next));
+        }
+        _ if !text.is_empty() => out.push_str(&format!("\n{}\n", crate::escalation::strip_wrapper(text))),
+        _ => {}
     }
     out
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stopped_run_says_what_to_do_not_the_engine_wrapper() {
+        let s = json!({"outcome": "escalated", "exit_code": 1, "cards": {"total": 0, "allowed": 0, "denied": 0}, "reason": "no_model_configured: none",
+            "text": "[escalated to the operator: no_model_configured: no model is configured for this workspace]"});
+        let out = super::human(&s);
+        assert!(!out.contains("[escalated"), "{}", out);
+        assert!(out.contains("Stopped: no model is configured"), "{}", out);
+        assert!(out.contains("next: run `delphi setup`"), "{}", out);
+    }
+
     use super::*;
 
     fn args(v: &[&str]) -> Vec<String> {
