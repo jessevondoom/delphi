@@ -57,12 +57,12 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     let mut r = Report::default();
     let tree = overlay(ws, home);
 
-    // 1. Binary ↔ daemon version (no daemon until Step 2).
+    // 1. Binary ↔ daemon version .
     let socks = fs::read_dir(home.join("run")).map(|d| d.flatten().filter(|e| e.path().extension().map(|x| x == "sock").unwrap_or(false)).count()).unwrap_or(0);
     if socks == 0 {
         r.push(Level::Skipped, "1 daemon-version", "", "no daemon running");
     } else {
-        r.push(Level::Warn, "1 daemon-version", "", "socket present but the version handshake ships with the Step 2 daemon");
+        r.push(Level::Warn, "1 daemon-version", "", "a daemon socket is present; `delphi daemon status` shows which release it runs");
     }
 
     // 2. Zone 1 manifest lock integrity (workspace and operator release snapshots).
@@ -123,7 +123,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         r.push(Level::Skipped, "6 retrieval-index", "", "no state.db yet");
     }
 
-    // 7. Model access: offline, from config only (probing is `--probe`, Step 3).
+    // 7. Model access: offline, from config only (probing is `--probe`).
     let cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
     if endpoints == 0 && opts.require_providers {
@@ -171,6 +171,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, "prefer") => r.warn("9 sandbox", "", "`[exec] sandbox = \"prefer\"` but no OS sandbox is available: commands run directly and ask for approval"),
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
     }
+    // Checks are pushed as they are cheap to run; show them in their numbered order.
+    r.findings.sort_by_key(|f| f.check.split(' ').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
     r
 }
 
@@ -266,7 +268,7 @@ fn check_manifest_lock(base: &Path, label: &str, r: &mut Report) {
     }
     let signed = fs::read_to_string(&path).map(|t| !t.contains("unsigned-dev-build")).unwrap_or(false);
     if !signed && label == "base" {
-        r.warn("2 manifest-lock", "", "development build: release signature not present (signing ships with Step 5 packaging)");
+        r.warn("2 manifest-lock", "", "development build: not a signed release");
     }
     if bad == 0 {
         r.push(Level::Ok, "2 manifest-lock", "", format!("{} release files match {}/manifest.lock", lock.len(), label));

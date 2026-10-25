@@ -96,7 +96,7 @@ pub fn report(ws: &Path) -> Vec<Item> {
 }
 
 pub fn render(items: &[Item]) -> String {
-    let mut out = String::from("Roadmap items waiting on evidence (Step 6 and 7). A rule being met means it is worth discussing, not that it is scheduled.\n\n");
+    let mut out = String::from("Roadmap items waiting on evidence. A rule being met means it is worth discussing, not that it is scheduled.\n\n");
     for i in items {
         let mark = match i.met {
             Some(true) => "MET   ",
