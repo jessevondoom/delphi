@@ -11,9 +11,12 @@ mod data;
 mod docx;
 mod epub;
 mod html;
+pub mod htmllint;
+pub mod htmlpage;
 mod image;
 pub mod limits;
 mod mail;
+pub mod markdown;
 mod notebook;
 mod odf;
 mod ooxml;
@@ -29,6 +32,9 @@ pub mod tarfile;
 mod xlsx;
 pub mod xml;
 pub mod zipfile;
+mod zipwriter;
+
+pub use zipwriter::{safe_member_name, ZipWriter};
 
 pub use cache::{extract_cached, stats as cache_stats};
 pub use limits::Limits;

@@ -14,6 +14,7 @@ mod frontmatter {
 mod home;
 mod hooks_cmd;
 mod lint;
+mod missions;
 mod needs;
 mod xenia_cmd;
 mod observer;
@@ -26,6 +27,7 @@ mod selfupdate;
 mod setup;
 mod skills_cmd;
 mod start;
+mod status;
 mod theme;
 mod timers_cmd;
 mod update;
@@ -33,32 +35,84 @@ mod update;
 use std::path::PathBuf;
 use std::process::exit;
 
-const USAGE: &str = "usage:
-  delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]   (set up whatever is missing, then open the console)
-  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade] [--workspace <name>] [--home <dir>]   (the program, then the workspaces' built-in files, then running daemons; --dev: the latest build of main; --rollback undoes all three; --review leaves the release's changes pending for /ratify instead of ratifying them)
-  delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
-  delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
-  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
-  delphi lint --repo <path>
-  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
-  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role> [--description \"…\"] [--workspace <name>] [--home <dir>]   (agentskills.io skills in and out; an import is a pending proposal until you /ratify it)
-  delphi hooks [--workspace <name>] [--home <dir>]   (run your observe hooks on events; run it in a terminal or tmux pane; the hooks are in the ratified [hooks] config)
-  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>] [--workspace <name>] [--home <dir>]   (review an optimistic build's provisional decisions)
-  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>] [--mission <id>] [--workspace <name>] [--home <dir>]   (the wakes the daemon is keeping for roles)
-  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]   (send approval cards to your email or Telegram and take your replies; run it in a terminal or tmux pane)
-  delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>] [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]   (no terminal needed; exit 0 ok · 1 gates · 2 card denied · 3 budget · 4 infrastructure)
-  delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
-  delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
-  delphi models [--probe] [--workspace <name>] [--home <dir>]
-  delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]
-  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
-  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
-  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
-  delphi observe [council|epic|forge|agents|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
-  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
-  delphi xenia whoami [--home <dir>]
-  delphi help [<command>]   (also: <command> --help)
-  delphi --version";
+/// One command: where it is listed, the sentence beside it, its option lines, and what only `help <command>` says.
+struct Cmd {
+    group: &'static str,
+    /// The word after `delphi`; empty for bare `delphi`.
+    name: &'static str,
+    about: &'static str,
+    synopsis: &'static str,
+    detail: &'static str,
+}
+
+/// The one table behind `delphi --help`, `delphi help <command>` and the unknown-command message.
+const CMDS: &[Cmd] = &[
+    Cmd { group: "Start", name: "", about: "set up whatever is missing, then open the console", synopsis: "  delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Start", name: "chat", about: "the console, on today's mission or one you name", synopsis: "  delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]", detail: "`delphi missions` lists the missions you can reopen." },
+    Cmd { group: "Start", name: "run", about: "one task without a terminal, then a summary", synopsis: "  delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>]\n    [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]", detail: "Exit codes: 0 ok · 1 gates failed · 2 a card was denied · 3 budget · 4 infrastructure." },
+    Cmd { group: "Set up", name: "setup", about: "find the model tools you have and connect them", synopsis: "  delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Set up", name: "init", about: "create a workspace for a project", synopsis: "  delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Set up", name: "auth", about: "sign in to, or out of, a model endpoint", synopsis: "  delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Set up", name: "endpoints", about: "check that each model endpoint answers", synopsis: "  delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Set up", name: "relay", about: "send approval cards to your email or Telegram", synopsis: "  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]", detail: "Takes your replies too. Run it in a terminal or a tmux pane." },
+    Cmd { group: "Set up", name: "skills", about: "agentskills.io skills in and out", synopsis: "  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role>\n    [--description \"…\"] [--workspace <name>] [--home <dir>]", detail: "An import is a pending proposal until you /ratify it." },
+    Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
+    Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|forge|agents|archives|thinking] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
+    Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
+    Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
+    Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
+    Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
+    Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
+    Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
+    Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]", detail: "" },
+    Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
+];
+
+const ENV: &[(&str, &str)] = &[
+    ("DELPHI_HOME", "where Delphi keeps its files (default ~/.delphi); --home overrides it"),
+    ("DELPHI_WORKSPACE", "the workspace to use when --workspace is not given"),
+    ("DELPHI_UI", "the delphi-ui program to use (default: next to delphi)"),
+    ("DELPHI_THEME", "dark or light, when the terminal cannot say"),
+    ("NO_COLOR", "no colour at all; TERM=dumb also drops styling"),
+    ("DELPHI_REDUCE_MOTION", "1 stops the badge animation"),
+    ("DELPHI_NO_ONBOARD", "1 skips the first-run questions"),
+];
+
+/// `delphi --help`: the commands by purpose, one sentence each, then the environment.
+fn usage() -> String {
+    let mut out = String::from("usage: delphi [command] [options]\n");
+    let mut group = "";
+    for c in CMDS {
+        if c.group != group {
+            group = c.group;
+            out.push_str(&format!("\n{}\n", group));
+        }
+        out.push_str(&format!("  {:<22}{}\n", format!("delphi {}", c.name).trim_end(), c.about));
+    }
+    out.push_str("\n`delphi help <command>` (or `<command> --help`) shows a command's options.\n\nEnvironment\n");
+    for (k, v) in ENV {
+        out.push_str(&format!("  {:<22}{}\n", k, v));
+    }
+    out.push_str("\n  delphi --version      the release of this program");
+    out
+}
+
+/// One command's help: its option lines, the sentence, and what only this page says.
+fn usage_of(cmd: &str) -> Option<String> {
+    let c = CMDS.iter().find(|c| !c.name.is_empty() && c.name == cmd)?;
+    let mut out = format!("usage:\n{}\n\n{}.", c.synopsis, c.about[..1].to_uppercase() + &c.about[1..]);
+    if !c.detail.is_empty() {
+        out.push_str(&format!("\n{}", c.detail));
+    }
+    Some(out)
+}
 
 /// Flags that take a value, so the word after one is not the command (`delphi --home X doctor`).
 const VALUE_FLAGS: &[&str] = &["--home", "--workspace"];
@@ -79,17 +133,6 @@ fn command_index(args: &[String]) -> Option<usize> {
     None
 }
 
-/// The usage lines of one command (`delphi <cmd> …`), from the one table above.
-fn usage_of(cmd: &str) -> Option<String> {
-    let prefix = format!("  delphi {}", cmd);
-    let lines: Vec<&str> = USAGE.lines().filter(|l| l.starts_with(&prefix) && l[prefix.len()..].chars().next().is_none_or(|c| c == ' ')).collect();
-    if lines.is_empty() { None } else { Some(format!("usage:\n{}", lines.join("\n"))) }
-}
-
-const COMMANDS: &[&str] = &[
-    "lint", "check", "setup", "update", "init", "doctor", "chat", "run", "relay", "decisions", "timers", "daemon", "kb", "needs", "xenia", "connectors", "narrator", "observe", "auth",
-    "endpoints", "models", "version", "help",
-];
 
 /// Help is answered before anything runs: it never creates a workspace, starts a daemon or asks a question.
 /// Returns the exit code when `args` asked for help.
@@ -112,7 +155,7 @@ fn help_requested(args: &[String]) -> Option<i32> {
 fn print_help(cmd: Option<&str>) -> i32 {
     match cmd {
         None => {
-            println!("{}", USAGE);
+            println!("{}", usage());
             0
         }
         Some(c) => match usage_of(c) {
@@ -167,6 +210,8 @@ fn main() {
         Some("update") => cmd_update(&args),
         Some("init") => cmd_init(&args),
         Some("doctor") => cmd_doctor(&args),
+        Some("status") => cmd_status(&args),
+        Some("missions") => cmd_missions(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -189,7 +234,7 @@ fn main() {
         }
         Some(other) => {
             eprintln!("delphi: unknown command `{}`; `delphi --help` lists them", other);
-            eprintln!("commands: {}", COMMANDS.join(" "));
+            eprintln!("commands: {}", CMDS.iter().filter(|c| !c.name.is_empty()).map(|c| c.name).chain(["narrator", "version"]).collect::<Vec<_>>().join(" "));
             2
         }
     };
@@ -205,7 +250,7 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 fn cmd_check(args: &[String]) -> i32 {
     let positional: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[*i - 1] != "--repo")).map(|(_, a)| a).collect();
     let [kind, target] = positional[..] else {
-        eprintln!("{}", USAGE);
+        eprintln!("{}", usage());
         return 2;
     };
     let repo = flag(args, "--repo").map(PathBuf::from);
@@ -231,7 +276,7 @@ fn cmd_lint(args: &[String]) -> i32 {
         }
         None if args.iter().any(|a| a == "--repo") => PathBuf::from("."),
         None => {
-            eprintln!("{}", USAGE);
+            eprintln!("{}", usage());
             return 2;
         }
     };
@@ -548,7 +593,7 @@ fn cmd_run(args: &[String]) -> i32 {
 
 fn cmd_daemon(args: &[String]) -> i32 {
     let Some(action) = args.first().filter(|a| !a.starts_with("--")) else {
-        eprintln!("{}", USAGE);
+        eprintln!("{}", usage());
         return 2;
     };
     let (home, ws) = match resolve_ws("daemon", &args[1..]) {
@@ -700,6 +745,22 @@ fn cmd_start(args: &[String]) -> i32 {
         rest.extend(["--workspace".into(), ws.name]);
     }
     cmd_chat(&rest)
+}
+
+/// `delphi status`: workspace, daemon, models, health and mission in a few lines, with no terminal (see `status.rs`).
+fn cmd_status(args: &[String]) -> i32 {
+    match resolve_ws("status", args) {
+        Ok((home, ws)) => status::cli(&home, &ws),
+        Err(code) => code,
+    }
+}
+
+/// `delphi missions`: the workspace's missions, newest first (see `missions.rs`).
+fn cmd_missions(args: &[String]) -> i32 {
+    match resolve_ws("missions", args) {
+        Ok((_home, ws)) => missions::cli(&ws.dir),
+        Err(code) => code,
+    }
 }
 
 fn cmd_doctor(args: &[String]) -> i32 {

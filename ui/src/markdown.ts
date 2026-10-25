@@ -38,6 +38,7 @@ function block(t: Token, indent = ''): string[] {
     }
     case 'blockquote': return (t as Tokens.Blockquote).tokens.flatMap((x) => block(x)).map((l) => chalk.dim('│ ') + chalk.italic(l));
     case 'hr': return [chalk.dim('─'.repeat(40)), ''];
+    case 'text': return inline((t as Tokens.Text).tokens ?? [t]).split('\n'); // a tight list item's body
     case 'space': return [];
     case 'table': {
       const tb = t as Tokens.Table;
@@ -48,8 +49,23 @@ function block(t: Token, indent = ''): string[] {
   }
 }
 
+const ANSI = '(?:\\x1b\\[[0-9;]*m)*';
+const LEAD = new RegExp(`^(${ANSI})( *)((?:• |\\d+\\. )?)`);
+
+/**
+ * One line wrapped at `width`, continuation rows hanging under the text after its indent and list mark, and no space
+ * left at the start of a continuation row (the break falls on the space, which would otherwise sit before the next word).
+ */
+export function wrapLine(l: string, width: number): string[] {
+  const lead = LEAD.exec(l)!;
+  const hang = lead[2]!.length + lead[3]!.length;
+  const rows = wrapAnsi(l.slice(lead[0].length), Math.max(10, width - hang), { hard: true, trim: false }).split('\n');
+  const pad = ' '.repeat(hang);
+  return rows.map((r, i) => (i ? pad + r.replace(new RegExp(`^(${ANSI}) +`), '$1') : lead[1]! + lead[2]! + lead[3]! + r));
+}
+
 /** Markdown to lines no wider than `width` (ANSI styling preserved across the wrap). */
 export function renderMarkdown(src: string, width: number): string[] {
   const lines = new Lexer().lex(sanitize(src)).flatMap((t) => block(t));
-  return lines.flatMap((l) => (l === '' ? [''] : wrapAnsi(l, Math.max(10, width), { hard: true, trim: false }).split('\n')));
+  return lines.flatMap((l) => (l === '' ? [''] : wrapLine(l, width)));
 }

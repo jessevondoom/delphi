@@ -1,6 +1,6 @@
 // The screen as data: a pure function from the console's model to exactly `h` lines of `w` columns. Ink only paints
 // what this returns, so the whole look is testable without a terminal (see test/screen.test.ts).
-import { renderMarkdown } from './markdown.ts';
+import { renderMarkdown, wrapLine } from './markdown.ts';
 import { blockWidths, hugWidth, tintBlock } from './blocks.ts';
 import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
@@ -172,12 +172,12 @@ function render(b: Block, m: Model, w: number, tools: Block[] = []): string[] {
   const { text: tw } = blockWidths(w);
   if (b.kind === 'attention') return attentionCard(b, m, w);
   if (b.kind === 'user') {
-    const lines = b.text.split('\n').flatMap((l) => wrap(l, tw));
+    const lines = b.text.split('\n').flatMap((l) => wrapLine(l, tw));
     return ['', ...message(m, w, T.dim(`you · ${clock(b.at)}`), lines.map((l) => T.operator(l)), true)];
   }
   if (b.kind === 'note') {
     const own = /^[·✖✔■]/.test(b.text); // a note that brings its own mark keeps it
-    const lines = b.text.split('\n').flatMap((l) => wrap(l, w - 4));
+    const lines = b.text.split('\n').flatMap((l) => wrapLine(l, w - 4));
     return ['', ...lines.map((l, i) => '  ' + (i === 0 && !own ? MARK[b.tone ?? 'info']() + ' ' : '  ') + T.dim(l))];
   }
   if (b.kind === 'card') {

@@ -77,10 +77,10 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    fn ok(content: String) -> ToolResult {
+    pub(crate) fn ok(content: String) -> ToolResult {
         ToolResult { content, is_error: false }
     }
-    fn err(content: impl Into<String>) -> ToolResult {
+    pub(crate) fn err(content: impl Into<String>) -> ToolResult {
         ToolResult { content: content.into(), is_error: true }
     }
 }
@@ -172,6 +172,9 @@ impl Registry {
             classify: classify_write,
             exec: ToolExec::Local(write_file),
         });
+        for spec in crate::artifacts::specs() {
+            r.register(spec);
+        }
         r
     }
 
@@ -228,7 +231,7 @@ pub fn tool_defs(can_write: bool) -> Vec<ToolDef> {
     Registry::builtin().defs(can_write)
 }
 
-fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolError> {
+pub(crate) fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolError> {
     args.get(key).and_then(|v| v.as_str()).ok_or_else(|| ToolError(format!("missing string argument `{}`", key)))
 }
 
@@ -287,7 +290,7 @@ pub(crate) fn zone_of(logical: &str) -> (Zone, String) {
     (Zone::Release, l.to_string())
 }
 
-fn denied(d: Denied) -> ToolResult {
+pub(crate) fn denied(d: Denied) -> ToolResult {
     ToolResult::err(match d {
         Denied::NotInScope => "denied: this path is outside your role's access scope".to_string(),
         Denied::NeverReadable(w) => format!("denied: `{}` is never readable by agents", w),
@@ -308,7 +311,7 @@ fn project_root(ctx: &ToolCtx, logical: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Tier of the exact content just read; also lowers the span's ceiling if it is external input.
-fn observe(ctx: &mut ToolCtx, logical: &str, bytes: &[u8]) -> Tier {
+pub(crate) fn observe(ctx: &mut ToolCtx, logical: &str, bytes: &[u8]) -> Tier {
     // A stored connector result is someone else's content, whatever the file's hash says (`specs/010` §5.1).
     if logical.starts_with("@payload/") {
         ctx.span.observe_input(Tier::L0);
@@ -575,7 +578,7 @@ fn search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
 
 /// Enforce the header an agent cannot forge: author is the writing role, the source is
 /// `internal_generated`, and `status: approved` / `approved_sections` are refused.
-fn with_provenance_header(content: &str, role: &str, mission: &str, now: &str, path: &str) -> Result<String, String> {
+pub(crate) fn with_provenance_header(content: &str, role: &str, mission: &str, now: &str, path: &str) -> Result<String, String> {
     let (mut map, body) = if let Some(rest) = content.strip_prefix("---\n") {
         match rest.find("\n---\n") {
             Some(end) => {
@@ -664,7 +667,7 @@ mod tests {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
         assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -1056,6 +1059,6 @@ mod tests {
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
         assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html"]);
     }
 }

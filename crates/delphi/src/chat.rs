@@ -37,6 +37,7 @@ pub enum Input {
     Permissions(Option<String>),
     Ratify(Vec<String>),
     Mission,
+    Missions,
     Resume(Vec<String>),
     Pause,
     Answer(Decision),
@@ -89,6 +90,7 @@ pub fn parse_input(line: &str) -> Input {
             "permissions" | "perm" => Input::Permissions(rest.first().map(|s| s.to_string())),
             "ratify" => Input::Ratify(rest.iter().map(|s| s.to_string()).collect()),
             "mission" => Input::Mission,
+            "missions" => Input::Missions,
             "resume" => Input::Resume(rest.iter().map(|s| s.to_string()).collect()),
             "pause" => Input::Pause,
             "build" => {
@@ -727,6 +729,7 @@ impl Session {
             Input::Help => say(&format!("{}\n", help())),
             Input::Unknown(m) => say(&format!("{}\n", m)),
             Input::Mission => say(&format!("mission {}\n", self.mission_id)),
+            Input::Missions => say(&crate::missions::render(&crate::missions::list(&self.ws_dir), std::time::SystemTime::now())),
             Input::More => {
                 let rest = std::mem::take(&mut *self.shared.more.lock().unwrap());
                 say(&if rest.is_empty() { "nothing more: the last reply was shown whole\n".to_string() } else { format!("{}\n", rest.join("\n")) });
@@ -1066,11 +1069,11 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
                 }
             },
             Err(_) => {
-                // The socket answering but refusing a token means a daemon is there and this shell has no terminal.
-                if Client::connect(&l.sock).is_ok() {
-                    println!("running (asking it for details needs a terminal)");
-                } else {
-                    println!("not running");
+                // No console token without a terminal; the read-only narrator socket still tells the story.
+                match crate::status::daemon_info(&l) {
+                    Some(d) => println!("{}", crate::status::daemon_line(Some(&d))),
+                    None if Client::connect(&l.sock).is_ok() => println!("running (no details: it did not answer on the narrator socket)"),
+                    None => println!("not running"),
                 }
                 0
             }

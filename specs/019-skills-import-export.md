@@ -3,7 +3,7 @@ id: spec-019-skills-import-export
 title: "019: Skills Import and Export (agentskills.io)"
 author: architect
 timestamp: 2026-10-26T09:00:00Z
-status: draft   # approved when the operator merges the pull request that adds it
+status: approved   # by the operator, 2026-10-25, by merging the pull request that added it (commit 91eb352)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

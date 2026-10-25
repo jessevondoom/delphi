@@ -35,7 +35,8 @@ test('every view fits the window exactly, with no boxes and no money-free surpri
     const lines = observeFrame(model(view), w, h);
     assert.equal(lines.length, h, `${view} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= w, `${view}: line wider than ${w}: ${plain(l)}`);
-    assert.ok(!/[┌┐└┘│]/.test(lines.map(plain).join('\n')), `${view}: no box characters`);
+    // The council's cards are tinted blocks; without a tint (these models have no known background) each row is a rail `│`.
+    assert.ok(!(view === 'council' ? /[┌┐└┘]/ : /[┌┐└┘│]/).test(lines.map(plain).join('\n')), `${view}: no box characters`);
   }
 });
 
@@ -93,52 +94,48 @@ test('mascots are seven columns in every state; the builder keeps its white crow
   }
   const roster = observeFrame(model('agents'), 110, 40).map(plain).join('\n');
   assert.match(roster, /athena\s+orchestrator\s+○ idle/);
-  assert.match(roster, /frontier · claude-x · direct/);
-  assert.match(roster, /in 100 · cache 200 · out 50 · think 0 · 1 call\(s\)/);
+  assert.match(roster, /frontier · claude-x/);
+  assert.match(roster, /350 tokens/);
 });
 
-test('council: one open column per seat, blind notes, critiques, verdict and minority report', () => {
+test('council: the question, the track, a card per seat and the verdict card; an escalation says what you can choose', () => {
   const t = observeFrame(model('council'), 110, 34).map(plain).join('\n');
-  assert.match(t, /Council 1\/1 · t_2 · verdict/);
-  assert.match(t, /athena|daedalus \(a\)/);
-  assert.match(t, /Round 1 \(blind\)/);
-  assert.match(t, /abstained: no answer/);
-  assert.match(t, /Round 2 → revise · does not concur/);
-  assert.match(t, /P1 lost updates/);
-  assert.match(t, /Escalated to you: seats deadlocked/);
-  assert.match(t, /option: table — architect/);
-  assert.match(t, /\[P0\] red-team: the race/);
-  assert.match(t, /saved: missions\/m\/councils\/008\.md/);
+  assert.match(t, /question\s+Table or file\?/);
+  assert.match(t, /✔ blind .* ✔ debate .* ● verdict|✔ blind .* ✔ debate .* ○ verdict/);
+  assert.match(t, /needs you\s*$/m, 'the track says the council waits for you');
+  assert.match(t, /verdict\s+needs you/);
+  assert.match(t, /options\s+table \(\w+\)/);
+  assert.match(t, /▼ needs you/, 'and the attention slot is the band');
+  assert.ok(!/Round 1 \(blind\)|Minority report/.test(t), 'the open columns of the old view are gone');
 });
 
-test('the blind seat shows the live text of its own node only', () => {
+test('the blind seat is sealed: its live text is never shown', () => {
   const s = sample();
   s.councils[0]!.phase = 'round 1'; s.councils[0]!.stances = [];
   s.nodes['n_9'] = { id: 'n_9', role: 'architect', parent: null, depth: 1, task_id: 't_2', state: 'running', tokens: 0, cost_usd: 0, started_ms: 0, ended_ms: null, after: [] };
   const t = observeFrame(model('council', { st: s, live: { n_9: 'thinking about the index' } }), 110, 34).map(plain).join('\n');
-  assert.match(t, /writing… \(blind\)\s/);
-  assert.match(t, /thinking about the index/);
-  assert.match(t, /Round 1 is blind/);
+  assert.match(t, /● thinking|○ thinking/);
+  assert.ok(!t.includes('thinking about the index'), 'sealed until every seat has answered');
+  assert.match(t, /sealed until all three answer/);
 });
 
-test('epic: the tree with indentation, the selected row, and the narrative', () => {
+test('epic: a row per task with its state glyph, and the now/next/path narrative (the rail itself: epic-rail.test.ts)', () => {
   const t = observeFrame(model('epic'), 110, 34).map(plain).join('\n');
-  assert.match(t, /t_1 build · Implement the deck router/);
-  assert.match(t, /● athena\s+running/);
-  assert.match(t, /\n\s{4}✔ hephaestus\s+done\s+8000 tok/);
-  assert.match(t, /── Narrative/);
-  assert.match(t, /builder finished/);
+  assert.match(t, /\n ▶ athena\s/);
+  assert.match(t, /\n ✔ hephaestus\s/);
+  assert.match(t, /\n now {3}⟦•─•⟧ athena is working: Implement the deck router/);
+  assert.match(t, /\n next {2}nothing queued/);
 });
 
 test('forge: gates, attempts, findings, the flaky note and a coloured live diff', () => {
   const diff = { available: true, stat: ' a.rs | 2 +-', diff: '@@ -1 +1 @@\n-old\n+new', untracked: ['b.rs'] };
   const t = observeFrame(model('forge', { diff }), 110, 34).map(plain).join('\n');
-  assert.match(t, /Build 1\/1 · t_1 · branch delphi\/t_1 · commit abc1234 · in progress/);
+  assert.match(t, /build 1\/1 {2}t_1 {2}delphi\/t_1 · abc1234 · in progress/);
   assert.match(t, /✔ tests\s+12 passed/);
   assert.match(t, /✖ audit\s+1 finding/);
   assert.match(t, /audit P1 unchecked unwrap/);
   assert.match(t, /flaky/);
-  assert.match(t, /── Diff against the base commit/);
+  assert.match(t, /── diff ─/);
   assert.match(t, /\?\? b\.rs/);
   assert.match(t, /\n\+new/);
   assert.match(observeFrame(model('forge', { diff: { available: false } }), 110, 34).map(plain).join('\n'), /no live worktree for this build/);
@@ -165,6 +162,6 @@ test('thinking: reasoning per running agent with its badge, tier and model; empt
   const t = observeFrame(model('thinking', { st: s, think: { n_7: 'Weighing a table against a file.\nThe table indexes.' } }), 110, 30).map(plain).join('\n');
   assert.match(t, /⟦•─•⟧ daedalus\s+frontier · claude-x · t_1/);
   assert.match(t, /Weighing a table against a file\.\n\s+The table indexes\./);
-  assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /Nothing is thinking right now[\s\S]*never saved/);
+  assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /nothing is thinking right now[\s\S]*never saved/);
   assert.equal(parseView('reasoning'), 'thinking');
 });

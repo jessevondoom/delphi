@@ -109,7 +109,7 @@ export const onChassis = (chassis: string, row: string): string => (caps.color =
 
 export type Rgb = [number, number, number];
 /** A background for a block, a half-step away from the terminal's own (`005e` §5, §7.2). */
-export type Tint = { /** background styler */ fill: Style; /** foreground in the same colour, for the half-block caps */ ink: Style };
+export type Tint = { /** background styler */ fill: Style; /** foreground in the same colour, for the half-block caps */ ink: Style; /** the bottom cap: the lower half in the terminal's colour on the tint, so it does not lean on the `▀` glyph */ flip: Style };
 
 const ANSI16: Rgb[] = [[0, 0, 0], [205, 0, 0], [0, 205, 0], [205, 205, 0], [0, 0, 238], [205, 0, 205], [0, 205, 205], [229, 229, 229], [127, 127, 127], [255, 0, 0], [0, 255, 0], [255, 255, 0], [92, 92, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255]];
 const dist = (a: Rgb, b: Rgb) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
@@ -133,22 +133,23 @@ export function band(row: string, bg: Rgb | null | undefined): string {
   return chalk.bgRgb(...mixed).rgb(...warnRgb)(row);
 }
 
-export function tint(bg: Rgb | null, isDark: boolean, color: Capabilities['color'] = caps.color): Tint | null {
+/** `boost` > 1 is a brighter tint of the same kind: the council view lifts the seat that is speaking (`005e` §9.2). */
+export function tint(bg: Rgb | null, isDark: boolean, color: Capabilities['color'] = caps.color, boost = 1): Tint | null {
   if (!bg || color === 'none') return null;
   if (color === 'truecolor') {
-    const k = isDark ? 0.08 : -0.06;
+    const k = (isDark ? 0.08 : -0.06) * boost;
     const c = bg.map((v) => Math.round(k > 0 ? v + (255 - v) * k : v * (1 + k))) as Rgb;
-    return { fill: (s) => chalk.bgRgb(...c)(s), ink: (s) => chalk.rgb(...c)(s) };
+    return { fill: (s) => chalk.bgRgb(...c)(s), ink: (s) => chalk.rgb(...c)(s), flip: (s) => chalk.bgRgb(...c).rgb(...bg)(s) };
   }
   if (color === '256') {
     const step = Math.max(0, Math.min(23, Math.round((luma(bg) - 8) / 10)));
-    const idx = 232 + Math.max(0, Math.min(23, step + (isDark ? 2 : -2)));
-    return { fill: (s) => chalk.bgAnsi256(idx)(s), ink: (s) => chalk.ansi256(idx)(s) };
+    const idx = 232 + Math.max(0, Math.min(23, step + Math.round((isDark ? 2 : -2) * boost)));
+    return { fill: (s) => chalk.bgAnsi256(idx)(s), ink: (s) => chalk.ansi256(idx)(s), flip: (s) => chalk.bgAnsi256(idx).rgb(...bg)(s) };
   }
   const near = ANSI16.reduce((best, c, i) => (dist(c, bg) < dist(ANSI16[best]!, bg) ? i : best), 0);
   const idx = isDark ? 8 : 7;
   if (near === idx) return null;
-  return isDark ? { fill: (s) => chalk.bgBlackBright(s), ink: (s) => chalk.blackBright(s) } : { fill: (s) => chalk.bgWhite(s), ink: (s) => chalk.white(s) };
+  return isDark ? { fill: (s) => chalk.bgBlackBright(s), ink: (s) => chalk.blackBright(s), flip: (s) => chalk.bgBlackBright.rgb(...bg)(s) } : { fill: (s) => chalk.bgWhite(s), ink: (s) => chalk.white(s), flip: (s) => chalk.bgWhite.rgb(...bg)(s) };
 }
 
 /** The state a badge shows: what an agent is doing, in the words the Observer uses. */

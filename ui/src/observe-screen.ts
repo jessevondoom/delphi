@@ -5,6 +5,8 @@ import wrapAnsi from 'wrap-ansi';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
+import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
+import { epicRail } from './epic-rail.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -89,54 +91,7 @@ export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [
 const name = (m: OModel, role: string) => T.roleName(role, m.info);
 const roleCol = (m: OModel, role: string) => T.roleColor(role, m.info);
 
-function council(m: OModel, w: number, h: number): string[] {
-  const n = m.st.councils.length;
-  if (!n) return ['', dim('  No Council yet.'), '', dim('  Convene one in the console:  /council <proposition>')];
-  const idx = Math.min(m.pick, n - 1), c = m.st.councils[idx]!;
-  const live = c.phase === 'round 1' || c.phase === 'round 2';
-  const out: string[] = [
-    chalk.bold(text(m)(` Council ${idx + 1}/${n} · ${c.task_id} · ${c.phase}${c.homogeneous ? ' · homogeneous (one model family)' : ''}`)),
-    text(m)(' ' + clean(c.proposition, w - 3)),
-    '',
-  ];
-  const cols = c.seats.length || 1, gap = 2, cw = Math.floor((w - gap * (cols - 1)) / cols);
-  const columns = c.seats.map((seat) => {
-    const L: string[] = [roleCol(m, seat.role).bold(`${name(m, seat.role)} (${seat.family})`), rule(m, cw)];
-    const s = c.stances.find((x) => x.role === seat.role);
-    if (s?.answered) { L.push(dim('Round 1 (blind)'), ...sanitize(s.text).split('\n').map((l) => text(m)(l))); }
-    else if (s) L.push(dim(`abstained: ${clean(s.text, 80)}`));
-    else {
-      L.push(dim('writing… (blind)'));
-      const node = Object.values(m.st.nodes).find((nd) => nd.task_id === c.task_id && nd.role === seat.role);
-      const lt = node ? m.live[node.id] : undefined;
-      if (lt) L.push(...sanitize(lt).split('\n').slice(-8).map((l) => text(m)(l)));
-    }
-    const cr = c.critiques.find((x) => x.role === seat.role);
-    if (cr) {
-      L.push('', chalk.bold(text(m)(`Round 2 → ${cr.recommendation || 'unreadable'}${cr.concur === true ? ' · concurs' : cr.concur === false ? ' · does not concur' : ''}`)));
-      for (const [sev, title] of cr.findings) L.push(colored(`${sev} ${title}`, sevColor(sev, m)));
-    }
-    return L.flatMap((l) => wrap(l, cw));
-  });
-  const verdict: string[] = [rule(m, w, 'Verdict')];
-  if (c.phase === 'round 1') verdict.push(dim(' Round 1 is blind: stances appear when every seat has answered.'));
-  else if (c.phase === 'round 2') verdict.push(dim(" Round 2: seats are critiquing each other's stances."));
-  else {
-    if (c.escalation) {
-      verdict.push(chalk.bold(colored(` Escalated to you: ${clean(c.escalation, 100)}`, T.warn)));
-      for (const [label, seats] of c.options) verdict.push(text(m)(`   option: ${label} — ${seats.join(', ')}`));
-    } else verdict.push(colored(' Verdict reached; no deterministic escalation.', T.ok));
-    verdict.push(chalk.bold(text(m)(' Minority report:')));
-    if (!c.unresolved.length) verdict.push(dim('   none open'));
-    for (const [sev, seat, title] of c.unresolved.slice(0, 3)) verdict.push(colored(`   [${sev}] ${seat}: ${clean(title, w - 16)}`, sevColor(sev, m)));
-    if (c.path) verdict.push(dim(` saved: ${c.path}`));
-  }
-  const room = Math.max(3, h - out.length - verdict.length);
-  const rows = Math.min(room, Math.max(0, ...columns.map((x) => x.length)));
-  const body = Array.from({ length: rows }, (_, i) => columns.map((col) => { const l = col[i + m.scroll] ?? ''; return l + ' '.repeat(Math.max(0, cw - T.width(l))); }).join(' '.repeat(gap)));
-  void live;
-  return [...out, ...body, ...Array(Math.max(0, room - rows)).fill(''), ...verdict];
-}
+const council = weave;
 
 export function epicOrder(st: OState): { n: OState['nodes'][string]; depth: number }[] {
   const kids = (id: string) => Object.values(st.nodes).filter((x) => x.parent === id);
@@ -147,62 +102,60 @@ export function epicOrder(st: OState): { n: OState['nodes'][string]; depth: numb
   return out;
 }
 
+/** The epic as a rail, with its narrative and the pace row (`epic-rail.ts`). */
 function epic(m: OModel, w: number, h: number): string[] {
-  const order = epicOrder(m.st);
-  const lines: string[] = [];
-  if (!order.length) lines.push(dim('  No agents have run yet in this mission.'));
-  const sel = Math.min(m.selNode, Math.max(0, order.length - 1));
-  let last = '';
-  order.forEach(({ n, depth }, i) => {
-    if (n.task_id !== last) {
-      last = n.task_id;
-      const t = m.st.tasks[n.task_id];
-      lines.push(chalk.bold(text(m)(` ${n.task_id} ${t?.flow ?? ''}${t ? ` · ${clean(t.prompt, 60)}` : ''}`)));
-    }
-    const row = `${name(m, n.role).padEnd(12)} ${n.state.padEnd(10)} ${kilo(n.tokens).padStart(7)} tok`;
-    lines.push('  ' + '  '.repeat(depth) + colored(glyph(n.state) + ' ', stateColor(n.state)) + (i === sel ? chalk.inverse(roleCol(m, n.role)(row)) : roleCol(m, n.role)(name(m, n.role).padEnd(12)) + text(m)(row.slice(12))));
-  });
-  const storyH = 9;
-  const treeH = Math.max(3, h - storyH);
-  const tree = lines.slice(m.scroll, m.scroll + treeH);
-  while (tree.length < treeH) tree.push('');
-  const story = [rule(m, w, 'Narrative'), ...m.st.narrative.slice(-(storyH - 1)).map((l) => text(m)(' ' + clean(l, w - 3)))];
-  return [...tree, ...story];
+  return epicRail(m, w, h);
 }
+
+/** A full-width tinted band for the row that is running or selected; bold where there is no tint (`005f` slice 10). */
+const band = (m: OModel, line: string, w: number): string => {
+  const t = T.tint(m.pal.bg ?? null, m.pal.dark);
+  const padded = line + ' '.repeat(Math.max(0, w - T.width(line)));
+  return t ? t.fill(padded) : chalk.bold(line);
+};
 
 function forge(m: OModel, w: number, h: number): string[] {
   const n = m.st.builds.length;
-  if (!n) return ['', dim('  No builds yet.'), '', dim('  Start one in the console:  /build <request>')];
+  if (!n) return ['', dim('  no builds yet'), '', dim('  start one in the console: /build <request>')];
   const idx = Math.min(m.pick, n - 1), b = m.st.builds[idx]!;
-  const head: string[] = [chalk.bold(text(m)(` Build ${idx + 1}/${n} · ${b.task_id} · branch ${b.branch || '…'} · commit ${b.sha || '…'} · ${b.merge || 'in progress'}`))];
-  for (const a of b.attempts) head.push(text(m)(`   ${a}`));
-  for (const g of b.gates) head.push(colored(`   ${glyph(g.state)} `, stateColor(g.state)) + text(m)(`${g.name.padEnd(10)} ${clean(g.detail, w - 18)}`));
+  const head: string[] = [chalk.bold(text(m)(` build ${idx + 1}/${n}  ${b.task_id}`)) + dim(`  ${b.branch || '…'} · ${b.sha || '…'} · ${b.merge || 'in progress'}`)];
+  for (const a of b.attempts) head.push(dim(`   ${a}`));
+  for (const g of b.gates) {
+    const row = colored(`   ${glyph(g.state)} `, stateColor(g.state)) + text(m)(`${g.name.padEnd(10)} ${clean(g.detail, w - 18)}`);
+    head.push(g.state === 'running' ? band(m, row, w) : row);
+  }
   for (const [sev, title] of b.findings) head.push(colored(`   audit ${sev} ${clean(title, 100)}`, sevColor(sev, m)));
   if (b.flaky) head.push(colored('   a test failed once and passed on a rerun (flaky)', T.warn));
-  const diff: string[] = [rule(m, w, 'Diff against the base commit')];
+  const diff: string[] = [rule(m, w, 'diff')];
   const d = m.diff;
   if (d?.available) {
     for (const l of sanitize(d.stat ?? '').split('\n')) diff.push(text(m)(l));
     for (const u of d.untracked ?? []) diff.push(colored(`?? ${sanitize(u)}`, T.warn));
     for (const l of sanitize(d.diff ?? '').split('\n')) diff.push(l.startsWith('+') && !l.startsWith('+++') ? colored(l, T.ok) : l.startsWith('-') && !l.startsWith('---') ? colored(l, T.syntax.del) : l.startsWith('@@') ? colored(l, T.accent) : text(m)(l));
-  } else diff.push(dim('  no live worktree for this build (it finished, or has not started). r refreshes.'));
+  } else diff.push(dim('  no live worktree for this build: it has finished, or has not started'));
   const headH = Math.min(head.length + 1, Math.max(3, h - 4));
   const body = diff.slice(m.scroll === 0 ? 0 : 1 + m.scroll);
   return [...head.slice(0, headH), ...(head.length < headH ? Array(headH - head.length).fill('') : []), ...body];
 }
 
-function agents(m: OModel, _w: number, _h: number): string[] {
+/** The roster the strip no longer names: a mascot per agent with its name, role, state in words, model, task and tokens. */
+function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
   for (const a of ordered(m.st)) {
     const mk = mascot(a.role, a.state, m.info, m.pal);
-    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''} · ${a.endpoint || '—'}` : 'no call yet';
+    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : 'no call yet';
     const nm = name(m, a.role);
+    const total = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
     const meta = [
-      roleCol(m, a.role).bold(nm) + colored(`  ${nm === a.role ? '' : a.role + '  '}${glyph(a.state)} ${a.state}`, stateColor(a.state)),
-      text(m)(model + (a.task_id && a.state !== 'idle' ? ` · task ${a.task_id}` : '')),
-      dim(`in ${kilo(a.tokens.input)} · cache ${kilo(a.tokens.cache_read)} · out ${kilo(a.tokens.output)} · think ${kilo(a.tokens.thinking)} · ${a.calls} call(s)`),
+      roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)),
+      text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : ''),
+      dim(`${kilo(total)} tokens`),
     ];
-    mk.forEach((line, i) => out.push('  ' + line + '   ' + meta[i]!));
+    // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
+    mk.forEach((line, i) => {
+      const tail = '   ' + meta[i]!;
+      out.push('  ' + line + (a.state === 'running' ? band(m, tail, Math.max(0, w - 9)) : tail));
+    });
     out.push('');
   }
   return out;
@@ -210,8 +163,9 @@ function agents(m: OModel, _w: number, _h: number): string[] {
 
 function archives(m: OModel, w: number, _h: number): string[] {
   const s = m.search;
-  const out = [rule(m, w, 'Knowledge base')];
-  out.push(chalk.bold(text(m)(s.query ? ` last search: ${s.query}` : ' Search specs, context, REVIEW.md and lessons from the console: ctrl+k')));
+  const out = [rule(m, w, 'knowledge base')];
+  if (s.query) out.push(chalk.bold(text(m)(` last search: ${s.query}`)));
+  else out.push(dim(' search specs, context, REVIEW.md and lessons from the console: ctrl+k'), dim(' the files an agent read, and the documents it cited, are listed there too: ctrl+s'));
   if (s.note) out.push(dim(` ${s.note}`));
   s.hits.forEach((hit, i) => {
     out.push(text(m)(` ${i + 1}. ${sanitize(hit.pointer)}`) + dim(`  ${clean(hit.heading, 60)}`));
@@ -222,13 +176,14 @@ function archives(m: OModel, w: number, _h: number): string[] {
 
 function thinking(m: OModel, w: number, h: number): string[] {
   const spans = Object.entries(m.think ?? {}).filter(([, t]) => t.trim());
-  if (!spans.length) return ['', dim('  Nothing is thinking right now.'), '', dim('  Reasoning of running agents appears here as it streams. It lives only in this window:'), dim('  it is never saved, and a window opened later starts empty.')];
+  if (!spans.length) return ['', dim('  nothing is thinking right now'), '', dim('  the reasoning of running agents appears here as it streams'), dim('  it lives only in this window: never saved, and a window opened later starts empty')];
   const out: string[] = [];
   for (const [id, t] of spans) {
     const node = m.st.nodes[id];
     const role = node?.role ?? '?';
     const a = m.st.agents[role];
-    out.push('', ' ' + T.badge(role, 'running', m.info, m.pal) + ' ' + roleCol(m, role).bold(name(m, role)) + dim(`  ${a?.tier ?? ''} · ${a?.model ? clean(a.model, 28) : 'model unknown'} · ${node?.task_id ?? ''}`), rule(m, w));
+    const title = ' ' + T.badge(role, 'running', m.info, m.pal) + ' ' + roleCol(m, role).bold(name(m, role)) + dim(`  ${a?.tier ?? ''} · ${a?.model ? clean(a.model, 28) : 'model unknown'} · ${node?.task_id ?? ''}`);
+    out.push('', band(m, title, w));
     out.push(...sanitize(t).split('\n').flatMap((l) => wrap(l, w - 4)).slice(-Math.max(4, Math.floor(h / spans.length) - 3)).map((l) => '  ' + chalk.italic(dim(l))));
   }
   return out.slice(-h);
@@ -238,10 +193,16 @@ function thinking(m: OModel, w: number, h: number): string[] {
 function strip(m: OModel, w: number): string {
   const now = m.now ?? 0, still = m.still ?? true;
   const thinkingRoles = new Set(Object.entries(m.think ?? {}).filter(([, t]) => t.trim()).map(([id]) => m.st.nodes[id]?.role));
+  // The council view: seats still answering pan their badges; on a verdict every seat shows success (`005e` §9.2).
+  const c = m.view === 'council' ? councilNow(m) : undefined;
+  const seatsThinking = c ? seatsNow(m, c).thinking : new Set<string>();
+  const seatsDone = c && phaseOf(c) === 'verdict' ? new Set(c.seats.map((x) => x.role)) : new Set<string>();
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
   return T.clip(roles.map((r) => {
+    if (seatsDone.has(r)) return T.badge(r, 'idle', m.info, m.pal, 'success');
     const a = m.st.agents[r];
-    const f = faceOf(a ? { state: a.state as never, doing: '', thinkingAt: thinkingRoles.has(r) ? now : undefined } : undefined, r, now, still);
+    const hot = thinkingRoles.has(r) || seatsThinking.has(r);
+    const f = faceOf(a || hot ? { state: (hot ? 'running' : a!.state) as never, doing: '', thinkingAt: hot ? now : undefined } : undefined, r, now, still);
     return T.badge(r, f.state, m.info, m.pal, f.frame);
   }).join(' '), w);
 }
