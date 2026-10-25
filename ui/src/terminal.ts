@@ -14,6 +14,8 @@ export class Term extends EventEmitter {
   private parser = new InputParser();
   private active = false;
   private mouseOn: boolean;
+  private titled = false;
+  private titleNow = '';
 
   constructor(opts: { mouse?: boolean } = {}) {
     super();
@@ -28,6 +30,15 @@ export class Term extends EventEmitter {
     if (this.active) process.stdout.write(on ? MOUSE : '\x1b[?1006l\x1b[?1002l\x1b[?1000l');
   }
 
+  /** Name the terminal window or tab. The title it had is saved the first time and put back by `stop()`. Off with `DELPHI_NO_TITLE`. */
+  setTitle(text: string) {
+    if (process.env.DELPHI_NO_TITLE || !process.stdout.isTTY || text === this.titleNow) return;
+    this.titleNow = text;
+    if (!this.active) return;
+    if (!this.titled) { this.titled = true; process.stdout.write('\x1b[22;0t'); }
+    process.stdout.write(`\x1b]2;${text}\x07`);
+  }
+
   start() {
     if (this.active) return;
     this.active = true;
@@ -35,6 +46,7 @@ export class Term extends EventEmitter {
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
     process.stdin.setEncoding('utf8');
     process.stdin.resume();
+    if (this.titleNow) { this.titled = true; process.stdout.write(`\x1b[22;0t\x1b]2;${this.titleNow}\x07`); } // continued after a suspend
     process.stdout.write('\x1b]11;?\x07'); // ask for the background colour: the reply picks dark or light
     if (this.wired) return;
     this.wired = true;
@@ -68,6 +80,8 @@ export class Term extends EventEmitter {
   stop() {
     if (!this.active) return;
     this.active = false;
-    try { process.stdout.write(OFF); if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* the terminal is gone */ }
+    const pop = this.titled ? '\x1b[23;0t' : '';
+    this.titled = false;
+    try { process.stdout.write(pop + OFF); if (process.stdin.isTTY) process.stdin.setRawMode(false); } catch { /* the terminal is gone */ }
   }
 }

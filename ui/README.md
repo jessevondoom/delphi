@@ -23,6 +23,7 @@ Written for **Terminal.app** first (256 colours, no kitty keyboard protocol), an
 | Newline in the prompt | `Alt+Enter` or `Ctrl+J` everywhere; `Shift+Enter` where the terminal reports it (modifyOtherKeys or kitty) |
 | Mouse | the wheel scrolls the transcript; `delphi chat --no-mouse` or `/mouse` leaves the mouse to the terminal so text can be selected and copied |
 | Too small | below 28x9 the window says so instead of drawing |
+| Window title | `⟦•─•⟧ delphi v0.2.6: idle`, or `6 agents working, 3 missions`, or `6 agents working, 2 need your attention`, counted across every mission in the workspace; the old title is saved and restored on exit; `DELPHI_NO_TITLE=1` leaves it alone (tmux needs `set-titles on` to pass it on) |
 | Suspend | `Ctrl+Z` returns the terminal, `fg` brings the console back and redraws |
 | Daemon restarts | the console says so, retries, re-attaches and rebuilds the conversation from the mission log |
 | Colour | follows the terminal (`NO_COLOR`, 256-colour terminals); dark or light, and the background colour the message tint is computed from, are asked of the terminal at start; without that answer (or under `NO_COLOR`) messages are drawn with a dim `│` rail instead of a fill |
