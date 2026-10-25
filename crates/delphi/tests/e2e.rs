@@ -1226,8 +1226,12 @@ fn no_colour_session(full_screen: bool) {
     assert!(screen.contains("⟦"), "the badges are still there:\n{}", screen);
     let found = colour_codes(&c.bytes.lock().unwrap());
     assert!(found.is_empty(), "NO_COLOR=1 but the console wrote colour codes: {:?}", &found[..found.len().min(8)]);
-    c.type_keys(if full_screen { "\x03" } else { "/quit\r" });
-    assert_eq!(c.wait_exit(), 0);
+    if full_screen {
+        assert_eq!(c.ctrl_c_out(), 0);
+    } else {
+        c.type_keys("/quit\r");
+        assert_eq!(c.wait_exit(), 0);
+    }
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
