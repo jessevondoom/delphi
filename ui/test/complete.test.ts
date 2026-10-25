@@ -7,7 +7,7 @@ const info = { roles: { architect: { name: 'daedalus', chassis: '#0', face: 'x' 
 const fs = (rel: string) => (rel === 'specs' ? [{ name: '005b-decks.md', dir: false }, { name: '005c-inline.md', dir: false }, { name: 'assets', dir: true }, { name: '.hidden', dir: false }] : []);
 
 test('a slash at the start completes commands; elsewhere it does not', () => {
-  assert.ok(completions('/obs', 4, info, fs)!.items.some((i) => i.label === '/narrator'));
+  assert.ok(completions('/obs', 4, info, fs)!.items.some((i) => i.label === '/observe'));
   assert.equal(completions('see /obs', 8, info, fs), null);
 });
 

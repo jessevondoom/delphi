@@ -1,4 +1,4 @@
-// `/narrator` (`005e` finding 7): in tmux it opens the read-only window in splits, as the Rust consoles do; elsewhere it
+// `/observe` (`005e` finding 7): in tmux it opens the read-only window in splits, as the Rust consoles do; elsewhere it
 // says what to run in a second terminal. The words match `chat.rs` so the consoles answer alike.
 import { execFileSync } from 'node:child_process';
 import type { Info } from './theme.ts';
@@ -14,7 +14,7 @@ const sh = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, 
 export function narratorLines(view: string | undefined, info: Info): { lines: string[]; tile: boolean } | string {
   const v = view ?? '';
   const tile = v === 'tile';
-  if (v && !tile && !(NARRATOR_VIEWS as readonly string[]).includes(v)) return `/narrator takes council, epic, forge, agents, archives or tile, not ${v}`;
+  if (v && !tile && !(NARRATOR_VIEWS as readonly string[]).includes(v)) return `/observe takes council, epic, forge, agents, archives or tile, not ${v}`;
   const exe = info.delphi_exe ?? 'delphi';
   const lines = (tile ? TILE : [v]).map((x) => [sh(exe), 'observe', ...(x ? [x] : []), '--workspace', sh(info.workspace_name ?? ''), '--home', sh(info.home ?? '')].join(' '));
   return { lines, tile };

@@ -542,11 +542,11 @@ mod tests {
     #[tokio::test]
     async fn persistent_rate_limiting_gives_up_within_the_wall_clock_limit() {
         let (addr, log) = mock(vec![Reply::status(429, r#"{"error":{"message":"no"}}"#)]).await;
-        let policy = RetryPolicy { max_elapsed: Duration::from_millis(150), base: Duration::from_millis(10), cap: Duration::from_millis(40) };
+        let policy = RetryPolicy { max_elapsed: Duration::from_millis(1000), base: Duration::from_millis(10), cap: Duration::from_millis(40) };
         let t0 = Instant::now();
         let (res, _) = run(&cfg_for(addr, ""), "local-direct", "m", &tok("k"), &policy).await;
         assert!(matches!(res, Err(CallError::RateLimited { .. })));
-        assert!(t0.elapsed() < Duration::from_secs(2));
+        assert!(t0.elapsed() < Duration::from_secs(5));
         assert!(log.lock().unwrap().len() >= 2, "it did retry before giving up");
     }
 

@@ -779,7 +779,7 @@ Differences between this spec's mockups and the product, each decided while buil
 - **Tool lines** sit at the end of the agent block that follows them, not between its paragraphs (the event log cannot recover the interleaving of a finished reply).
 - **The activity deck's entries end on the node's `done`/`escalated` event**, not on every tool result, so the history is a list of work, not of calls; a stopped span shows a red `✖ stopped` chip.
 - **Council:** the agreement meter is proportional (a 2-1 split fills seven of ten cells); seats that have not yet spoken in the debate read `waiting`; the old open-column view with findings, minority report and saved path is gone (the record file keeps them).
-- **Command list:** `ui/src/commands.json` is the single list; the Rust consoles generate their help from it, and `/exit`, `/observe` and `/perm` are aliases of `/quit`, `/narrator` and `/permissions`.
+- **Command list:** `ui/src/commands.json` is the single list; the Rust consoles generate their help from it, and `/exit`, `/narrator` (unlisted) and `/perm` are aliases of `/quit`, `/observe` and `/permissions`.
 - **forge, agents, archives, thinking (slice 10):** lowercase section rules; a tinted band (bold without a tint) marks the running gate, agent or thought; the `agents` roster shows name, role, state in words, model, task and one token total (the endpoint, call count and the input/cache/output split are gone); `archives` points to `Ctrl+K` and `Ctrl+S` in the console.
 - **Inline console:** `Esc` clears the prompt, then stops the running task; `Ctrl+C` asks once when text is typed or a task runs.
 
