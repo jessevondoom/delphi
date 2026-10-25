@@ -35,7 +35,7 @@ use std::process::exit;
 
 const USAGE: &str = "usage:
   delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]   (set up whatever is missing, then open the console)
-  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--no-restart] [--allow-downgrade] [--workspace <name>] [--home <dir>]   (the program, then the workspaces' built-in files, then running daemons; --dev: the latest build of main; --rollback undoes all three)
+  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade] [--workspace <name>] [--home <dir>]   (the program, then the workspaces' built-in files, then running daemons; --dev: the latest build of main; --rollback undoes all three; --review leaves the release's changes pending for /ratify instead of ratifying them)
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
@@ -279,7 +279,7 @@ fn cmd_update(args: &[String]) -> i32 {
     let home = home::delphi_home(flag(args, "--home").as_deref());
     let only = flag(args, "--workspace");
     if has("--workspaces-only") {
-        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"));
+        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"), has("--review"));
     }
     let Ok(dest) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         eprintln!("delphi update: cannot locate this executable");
@@ -289,12 +289,12 @@ fn cmd_update(args: &[String]) -> i32 {
     let mut workspace_code = 0;
     let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |event| {
         if event == selfupdate::Event::UpToDate {
-            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false);
+            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false, has("--review"));
             return;
         }
         let mut step = vec!["update".to_string(), "--workspaces-only".into(), "--home".into(), home.to_string_lossy().to_string()];
         step.extend(only.iter().flat_map(|w| ["--workspace".to_string(), w.clone()]));
-        step.extend(["--allow-downgrade"].iter().filter(|f| has(f)).map(|f| f.to_string()));
+        step.extend(["--allow-downgrade", "--review"].iter().filter(|f| has(f)).map(|f| f.to_string()));
         if event == selfupdate::Event::RolledBack {
             step.push("--rollback".into());
         }
