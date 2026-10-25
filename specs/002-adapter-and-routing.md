@@ -226,6 +226,8 @@ Both thresholds are configuration constants. Exhaustion is recorded as `model.ex
 
 Promotion prefers a model whose reasoning is replayable from the failed one (same endpoint family, §3.1 rule 1), then another family.
 
+**A harness is a text-only method (ratified 2026-10-25).** A subscription harness runs the span in the CLI, which has none of Delphi's tools: the role answers in text. When a role that normally has tools (the Orchestrator dispatches, the Architect writes specs) is served by a harness, whether as its configured order or as a fallback, that is **not** treated as a capability loss needing the operator's confirmation: listing the harness in `allowed_endpoints` is the consent. It is shown, not asked about: the `harness.fallback` event says the role is text-only there. The weaker-model confirmation above is about model capability, not about the method.
+
 **Preferences degrade, constraints do not.**
 - *Preferences:* `[H-007]`/`[H-008]` family separation, the "≥2 families" Council rule, long-context routing and tier choice. If only one family or tier is left, the request degrades (a different tier of the same family, then a fresh-context pass of the same model) and the result is marked `homogeneous` or `degraded_tier`.
 - *Constraints:* taint rules, approvals, `[access]` endpoint policy, budgets, and the read-only limit of harnesses without an approval bridge (spec 009 §7B). Promotion never relaxes these.

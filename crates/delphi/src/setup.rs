@@ -392,9 +392,11 @@ fn anthropic_key(ui: &mut dyn Ui, env: &dyn Env, doc: &mut DocumentMut) -> Resul
     Ok(Some("anthropic-key"))
 }
 
-/// Delphi reserves budget before each metered call, so each model needs prices. Blank means "treat as free".
+/// Delphi reserves budget before each metered call, so each model needs prices. A blank price is not quietly
+/// turned into a near-zero one (that would switch the budget off for the model): the operator is asked whether it
+/// is really free, and if not the model is left without a price, which Delphi refuses to call until one is added.
 fn prices(ui: &mut dyn Ui, doc: &mut DocumentMut, models: &[&str], url: &str) {
-    ui.say(&format!("  Delphi needs a price per model to reserve budget (see {}). Enter dollars per million tokens, or press Enter for a near-zero placeholder (right for a free tier).", url));
+    ui.say(&format!("  Delphi needs a price per model to reserve budget (see {}). Enter dollars per million tokens.", url));
     let mut seen: Vec<&str> = Vec::new();
     for m in models {
         if seen.contains(m) {
@@ -404,7 +406,13 @@ fn prices(ui: &mut dyn Ui, doc: &mut DocumentMut, models: &[&str], url: &str) {
         let parse = |s: String| s.trim().trim_start_matches('$').parse::<f64>().ok().filter(|v| *v > 0.0);
         let input = parse(ui.line(&format!("  {} input $/Mtok", m), ""));
         let output = parse(ui.line(&format!("  {} output $/Mtok", m), ""));
-        set_catalog(doc, m, 64_000, input.unwrap_or(0.000_001), output.unwrap_or(0.000_001));
+        if let (Some(i), Some(o)) = (input, output) {
+            set_catalog(doc, m, 64_000, i, o);
+        } else if ui.yes_no(&format!("  No price entered for {}. Treat it as free (the budget will then not limit it; right for a free tier)?", m), false) {
+            set_catalog(doc, m, 64_000, input.unwrap_or(0.000_001), output.unwrap_or(0.000_001));
+        } else {
+            ui.say(&format!("  {} is left without a price: Delphi will not call it until you add [models.catalog.\"{}\"] prices to config.toml.", m, m));
+        }
     }
 }
 
@@ -548,12 +556,30 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
     if let Some(id) = agy_harness(ui, env, &detected, &mut doc) {
         added.push(id.into());
     }
+    // A step that fails late (after its secret is already in the keychain) must not throw away the endpoints the
+    // earlier steps set up: the config is written first and the error is returned after.
+    let mut late: Option<anyhow::Error> = None;
     if !o.yes {
-        for step in [gemini_key(ui, env, &mut doc), anthropic_key(ui, env, &mut doc), google_oauth(ui, env, &detected, &mut doc)] {
-            if let Some(id) = step? {
-                added.push(id.into());
+        for i in 0..3 {
+            let step = match i {
+                0 => gemini_key(ui, env, &mut doc),
+                1 => anthropic_key(ui, env, &mut doc),
+                _ => google_oauth(ui, env, &detected, &mut doc),
+            };
+            match step {
+                Ok(Some(id)) => added.push(id.into()),
+                Ok(None) => {}
+                Err(e) => {
+                    late = Some(e);
+                    break;
+                }
             }
         }
+    }
+    if let Some(e) = late {
+        std::fs::write(&cfg_path, doc.to_string())?;
+        ui.say(&format!("\nStopped: {}\nWhat was set up before that is saved ({}), but not yet ratified: run `delphi setup` again to continue.", e, if added.is_empty() { "nothing".to_string() } else { added.join(", ") }));
+        return Err(e);
     }
     // Both families available: have Gemini review what Claude builds (no author-family self-review, [H-008]).
     let has_claude = has_endpoint(&doc, "claude-sub") || has_endpoint(&doc, "anthropic-key");
@@ -565,6 +591,8 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
             t
         });
     }
+    // `[exec]` is one of the ratified access blocks (`lock::ACCESS_KEYS`): these defaults are shown in the diff
+    // below and are inactive until the operator ratifies them.
     exec_defaults(&mut doc, &kind);
     std::fs::write(&cfg_path, doc.to_string())?;
     if added.is_empty() && !has_claude && !has_gemini {
@@ -699,6 +727,8 @@ mod tests {
         logged_in: bool,
         stored: RefCell<Vec<(String, String)>>,
         http: BTreeMap<String, (u16, String)>,
+        /// A keychain name whose `secret_set` fails.
+        failing_secret: &'static str,
         tty_runs: RefCell<Vec<String>>,
     }
 
@@ -715,6 +745,9 @@ mod tests {
             true
         }
         fn secret_set(&self, name: &str, secret: &str) -> Result<(), String> {
+            if name == self.failing_secret {
+                return Err("the keychain is locked".into());
+            }
             self.stored.borrow_mut().push((name.into(), secret.into()));
             Ok(())
         }
@@ -869,7 +902,7 @@ mod tests {
         let mut env = machine(false, false, false);
         env.http.insert("https://generativelanguage.googleapis.com/v1beta/models".into(), (200, r#"{"models":[{"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent"]}]}"#.into()));
         let key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0";
-        let mut ui = Script { yes: VecDeque::from([true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "0.30".into(), "2.50".into(), "".into(), "".into()]), ..Default::default() };
+        let mut ui = Script { yes: VecDeque::from([true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "0.30".into(), "2.50".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
         let out = run(&mut ui, &env, &opts(t.path(), &proj)).unwrap();
         assert_eq!(out.added, ["gemini-key"]);
         assert_eq!(env.stored.borrow().as_slice(), [("gemini-api-key".to_string(), key.to_string())]);
@@ -881,6 +914,53 @@ mod tests {
         let flash = parsed.catalog_entry("gemini-2.5-flash").expect("priced");
         assert!(flash.has_prices() && flash.input_usd_per_mtok == 0.30 && flash.output_usd_per_mtok == 2.50);
         assert!(parsed.problems().is_empty(), "{:?}", parsed.problems());
+    }
+
+    const GEMINI_MODELS: &str = r#"{"models":[{"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent"]}]}"#;
+
+    #[test]
+    fn a_blank_price_is_not_quietly_made_free() {
+        let key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0";
+        // Declined: the unpriced model is left out of the catalog (so Delphi refuses to call it), the priced one is kept.
+        let t = tempfile::tempdir().unwrap();
+        let proj = project(t.path(), false);
+        let mut env = machine(false, false, false);
+        env.http.insert("https://generativelanguage.googleapis.com/v1beta/models".into(), (200, GEMINI_MODELS.into()));
+        let mut ui = Script { yes: VecDeque::from([true, false, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "".into(), "".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
+        run(&mut ui, &env, &opts(t.path(), &proj)).unwrap();
+        let parsed = delphi_adapter::config::Config::parse(&config(t.path())).unwrap();
+        assert!(parsed.catalog_entry("gemini-2.5-flash").is_none() && parsed.catalog_entry("gemini-2.5-pro").is_some_and(|e| e.has_prices()));
+        assert!(ui.said.iter().any(|s| s.contains("left without a price")));
+        assert!(parsed.problems().iter().any(|p| p.contains("gemini-2.5-flash")), "the gap is reported, not hidden: {:?}", parsed.problems());
+        // Confirmed free: a near-zero placeholder, on purpose.
+        let t = tempfile::tempdir().unwrap();
+        let proj = project(t.path(), false);
+        let mut ui = Script { yes: VecDeque::from([true, true, false, false]), secrets: VecDeque::from([key.to_string()]), lines: VecDeque::from(["proj".to_string(), "".into(), "".into(), "1.25".into(), "10.00".into()]), ..Default::default() };
+        run(&mut ui, &env, &opts(t.path(), &proj)).unwrap();
+        let parsed = delphi_adapter::config::Config::parse(&config(t.path())).unwrap();
+        assert!(parsed.catalog_entry("gemini-2.5-flash").is_some_and(|e| e.has_prices() && e.input_usd_per_mtok < 0.001));
+    }
+
+    #[test]
+    fn a_step_that_fails_late_keeps_the_endpoints_set_up_before_it() {
+        let t = tempfile::tempdir().unwrap();
+        let proj = project(t.path(), false);
+        let mut env = machine(false, false, false);
+        env.failing_secret = "anthropic-api-key";
+        env.http.insert("https://generativelanguage.googleapis.com/v1beta/models".into(), (200, GEMINI_MODELS.into()));
+        env.http.insert("https://api.anthropic.com/v1/models".into(), (200, r#"{"data":[{"id":"claude-sonnet-x","created_at":"2026-01-01"}]}"#.into()));
+        let mut ui = Script {
+            yes: VecDeque::from([true, true]),
+            secrets: VecDeque::from(["AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE0".to_string(), "sk-ant-fakefakefakefake".into()]),
+            lines: VecDeque::from(["proj".to_string(), "0.30".into(), "2.50".into(), "1.25".into(), "10.00".into()]),
+            ..Default::default()
+        };
+        let err = run(&mut ui, &env, &opts(t.path(), &proj)).unwrap_err();
+        assert!(err.to_string().contains("keychain"), "{}", err);
+        let cfg = config(t.path());
+        assert!(cfg.contains("gemini-key") && cfg.contains("gemini-2.5-flash"), "the earlier endpoint survives: {}", cfg);
+        assert!(!cfg.contains("anthropic-key"));
+        assert!(ui.said.iter().any(|s| s.contains("saved") && s.contains("gemini-key")));
     }
 
     #[test]
