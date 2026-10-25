@@ -241,6 +241,8 @@ pub(crate) struct SpanCtx {
     /// Families this span should stay out of if it can (from the handoff), and whether it already said it could not.
     pub(crate) avoid_families: Vec<String>,
     pub(crate) said_homogeneous: Mutex<bool>,
+    /// A harness was already tried for this span (and failed for a reason that is not a spent quota, so the pool does not know).
+    pub(crate) harness_tried: std::sync::atomic::AtomicBool,
 }
 
 impl SpanCtx {
@@ -419,7 +421,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false) };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false) };
 
             if fresh {
                 let mut open = vec![
@@ -497,6 +499,7 @@ impl Engine {
             let mut harness_result: Option<Result<String, Escalate>> = None;
             if let Some(hep) = if setup_error.is_none() { self.route_harness(&sc) } else { None } {
                 harness_tried = true;
+                sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
                 match self.run_harness(&mut sc, &ipr, &hep).await? {
                     Ok(text) => harness_result = Some(Ok(text)),
                     Err(f) if f.retryable && self.has_api_route(&sc) => {
@@ -542,9 +545,12 @@ impl Engine {
                 let (done, ep, model_id) = match self.model_turn(&sc, &ipr, &history, &defs, turn_index, interruptions).await? {
                     Ok(t) => t,
                     Err(esc) => {
-                        if esc.0.starts_with(EXHAUSTED) && !harness_tried {
+                        // A harness cannot resume a span: it starts from the first prompt. So the API -> harness fallback is only
+                        // for a span whose first turn failed; after any turn (and its tool calls) it would repeat them.
+                        if esc.0.starts_with(EXHAUSTED) && !harness_tried && turns == 0 {
                             if let Some(hep) = self.route_harness(&sc) {
-                                m.append(sc.ev("harness.fallback", json!({"from": "api", "to": hep.id, "reason": esc.0}))).await?;
+                                let tools = if !sc.manifest.write.is_empty() || sc.manifest.execute.iter().any(|e| e == "agent-dispatch") { " (a harness answers in text only: this role's Delphi tools are not available there)" } else { "" };
+                                m.append(sc.ev("harness.fallback", json!({"from": "api", "to": hep.id, "reason": format!("{}{}", esc.0, tools)}))).await?;
                                 break match self.run_harness(&mut sc, &ipr, &hep).await? {
                                     Ok(text) => Ok(text),
                                     Err(f) => Err(Escalate(format!("{}; then the {} harness: {}", esc.0, hep.id, f.reason))),
@@ -687,6 +693,7 @@ impl Engine {
         if t.completed {
             return Err(EngineError::Invalid(format!("task `{}` already completed", task_id)));
         }
+        self.reprobe_due(m).await?;
         let Some(root) = t.root_span.clone() else {
             // It never started a span: run it from the saved request.
             return self.start_task(m, task_id.to_string(), &t.target, &t.prompt, false).await;
@@ -698,6 +705,7 @@ impl Engine {
             NodeStatus::Escalated(r) => SpanOutcome { status: Status::Escalated(r.clone()), text: format!("[escalated to the operator: {}]", r), turns: 0, ceiling: st.ceiling },
         };
         self.broker.end_task(task_id);
+        self.degraded.lock().unwrap().remove(task_id);
         self.finish_task(m, task_id.to_string(), outcome).await
     }
 
@@ -727,18 +735,21 @@ impl Engine {
                 Route::Target { key, .. } => (key.clone(), None),
                 Route::Similar { key, target, why, .. } => (key.clone(), Some((target.clone(), why.clone()))),
                 // The API has nothing as capable as the target, but a subscription harness does: hand the span to it
-                // (the span loop does that on this signal) before asking about a weaker API model or waiting.
-                Route::Weaker { .. } | Route::NoModel { .. } if self.route_harness(sc).is_some() => {
+                // (the span loop does that on this signal) before asking about a weaker API model or waiting. Only for a span's first turn:
+                // a harness cannot resume, so later turns ask or wait instead.
+                Route::Weaker { .. } | Route::NoModel { .. } if turn_index == 1 && !sc.harness_tried.load(std::sync::atomic::Ordering::SeqCst) && self.route_harness(sc).is_some() => {
                     return Ok(Err(Escalate(format!("{}{}: a subscription harness can serve this span instead", EXHAUSTED, note))));
                 }
                 Route::Weaker { key, target, why, back_at, lost, .. } => {
                     // Only less capable models are usable. Never silently: the operator confirms for this task, or the task waits.
-                    let pair = (key.endpoint_id.clone(), key.model_id.clone());
-                    let (confirmed, declined) = self.degraded_decisions(m, &sc.task_id, &pair);
                     let (from, to) = (format!("{}/{}", target.endpoint_id, target.model_id), format!("{}/{}", key.endpoint_id, key.model_id));
+                    // What the operator answered covers this target being replaced by this substitute, with its particular losses:
+                    // consent to run sonnet instead of opus is not consent to run sonnet instead of a 1M-token model.
+                    let pair = (from.clone(), to.clone());
+                    let (confirmed, declined) = self.degraded_decisions(m, &sc.task_id, &pair);
                     let mut ok = confirmed;
                     if !confirmed && !declined {
-                        let summary = format!("{} is unavailable ({}). Run this task on {} instead? It has {}.", from, why, to, lost.join(" and "));
+                        let summary = self.secrets.redact(&format!("{} is unavailable ({}). Run this task on {} instead? It has {}.", from, why, to, lost.join(" and ")));
                         let detail = json!({"target": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "unavailable": self.secrets.redact(why), "lost": lost});
                         m.append(sc.ev("model.degraded_confirm", json!({"state": "asked", "detail": detail}))).await?;
                         let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
@@ -755,7 +766,7 @@ impl Engine {
                             let t = d.entry(sc.task_id.clone()).or_default();
                             if ok { t.confirmed.insert(pair.clone()); } else { t.declined.insert(pair.clone()); }
                         }
-                        m.append(sc.ev("model.degraded_confirm", json!({"state": state, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}}))).await?;
+                        m.append(sc.ev("model.degraded_confirm", json!({"state": state, "target": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}}))).await?;
                         if state == "timed_out" {
                             *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: Some(now), why: format!("no answer about running on {} instead of {}; looking again", to, from) });
                             return Ok(Err(Escalate(format!("{}{}: nobody answered whether to run on the weaker {} ({} is unavailable: {})", EXHAUSTED, note, to, from, why))));
@@ -778,11 +789,6 @@ impl Engine {
                 m.append(sc.ev("model.homogeneous", json!({"avoided": sc.avoid_families, "used": {"endpoint_id": key.endpoint_id, "model_id": key.model_id, "family": key.family}}))).await?;
             }
             let this_key = (key.endpoint_id.clone(), key.model_id.clone());
-            if let Some((target, why)) = passed_over {
-                if sc.last_key.lock().unwrap().as_ref() != Some(&this_key) {
-                    m.append(sc.ev("model.promoted", json!({"from": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "to": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "reason": self.secrets.redact(&why)}))).await?;
-                }
-            }
             loop {
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
                     return Ok(Err(Escalate(format!("model `{}` has no [models.catalog] entry, so its cost can't be reserved", model_id))));
@@ -850,6 +856,12 @@ impl Engine {
                         if self.pool.record_success(&ep.id, &model_id) {
                             m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": model_id}))).await?;
                         }
+                        // Said once the substitute has actually served a turn, so a candidate that fails at once is not reported as promoted.
+                        if let Some((target, why)) = &passed_over {
+                            if sc.last_key.lock().unwrap().as_ref() != Some(&this_key) {
+                                m.append(sc.ev("model.promoted", json!({"from": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "to": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "reason": self.secrets.redact(why)}))).await?;
+                            }
+                        }
                         *sc.last_key.lock().unwrap() = Some(this_key);
                         *sc.blocked_since.lock().unwrap() = None;
                         return Ok(Ok((done, ep.clone(), model_id)));
@@ -896,7 +908,7 @@ impl Engine {
         }
     }
 
-    /// What the operator already decided about this weaker pair for this task: `(confirmed, declined)`. The
+    /// What the operator already decided about this target being replaced by this substitute, for this task: `(confirmed, declined)`. The
     /// decisions live in the mission's log (`model.degraded_confirm`), so after a daemon restart in the same
     /// session (the same mission) a resumed task is not asked again. A new mission starts with no decisions.
     fn degraded_decisions(&self, m: &MissionState, task_id: &str, pair: &(String, String)) -> (bool, bool) {
@@ -907,16 +919,18 @@ impl Engine {
                 if e.kind != "model.degraded_confirm" || e.task_id.as_deref() != Some(task_id) {
                     continue;
                 }
-                let sub = &e.payload["substitute"];
-                let (Some(ep), Some(model)) = (sub["endpoint_id"].as_str(), sub["model_id"].as_str()) else { continue };
+                let (sub, tgt) = (&e.payload["substitute"], &e.payload["target"]);
+                // An answer recorded without its target (an older log) cannot be matched to a decision: ask again.
+                let (Some(ep), Some(model), Some(tep), Some(tmodel)) = (sub["endpoint_id"].as_str(), sub["model_id"].as_str(), tgt["endpoint_id"].as_str(), tgt["model_id"].as_str()) else { continue };
+                let key = (format!("{}/{}", tep, tmodel), format!("{}/{}", ep, model));
                 match e.payload["state"].as_str() {
                     Some("confirmed") => {
-                        restored.declined.remove(&(ep.to_string(), model.to_string()));
-                        restored.confirmed.insert((ep.to_string(), model.to_string()));
+                        restored.declined.remove(&key);
+                        restored.confirmed.insert(key);
                     }
                     Some("declined") => {
-                        restored.confirmed.remove(&(ep.to_string(), model.to_string()));
-                        restored.declined.insert((ep.to_string(), model.to_string()));
+                        restored.confirmed.remove(&key);
+                        restored.declined.insert(key);
                     }
                     _ => {}
                 }
@@ -955,7 +969,7 @@ impl Engine {
         let cfg = self.cfg.get();
         match resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, true)) {
             Route::Target { .. } | Route::Similar { .. } => true,
-            Route::Weaker { key, .. } => !self.degraded.lock().unwrap().get(&sc.task_id).is_some_and(|d| d.declined.contains(&(key.endpoint_id, key.model_id))),
+            Route::Weaker { key, target, .. } => !self.degraded.lock().unwrap().get(&sc.task_id).is_some_and(|d| d.declined.contains(&(format!("{}/{}", target.endpoint_id, target.model_id), format!("{}/{}", key.endpoint_id, key.model_id)))),
             Route::NoModel { .. } => false,
         }
     }
@@ -1009,7 +1023,8 @@ impl Engine {
     /// Is there an API pair that can serve this span turn by turn right now?
     pub(crate) fn has_api_route(&self, sc: &SpanCtx) -> bool {
         let cfg = self.cfg.get();
-        matches!(resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, true)), Route::Target { .. } | Route::Similar { .. })
+        // A weaker model counts: `model_turn` asks the operator before using it, so the fallback is not a dead end.
+        matches!(resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, true)), Route::Target { .. } | Route::Similar { .. } | Route::Weaker { .. })
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
@@ -1826,31 +1841,77 @@ mod tests {
     #[tokio::test]
     async fn what_the_operator_decided_about_a_weaker_model_is_rebuilt_from_the_mission_log() {
         let f = setup(vec![], 5.0, |_| {});
-        let note = |state: &str, task: &str, ep: &str, model: &str| {
-            let mut e = EventEnvelope::new(&f.m.id, "model.degraded_confirm", json!({"state": state, "substitute": {"endpoint_id": ep, "model_id": model}}));
+        // `note(state, task, target, substitute)`; each side is `endpoint/model`.
+        let note = |state: &str, task: &str, target: (&str, &str), sub: (&str, &str)| {
+            let mut e = EventEnvelope::new(&f.m.id, "model.degraded_confirm", json!({"state": state, "target": {"endpoint_id": target.0, "model_id": target.1}, "substitute": {"endpoint_id": sub.0, "model_id": sub.1}}));
             e.task_id = Some(task.to_string());
             e
         };
-        f.m.append(note("asked", "t_0042", "direct", "sonnet-x")).await.unwrap();
-        f.m.append(note("confirmed", "t_0042", "direct", "sonnet-x")).await.unwrap();
-        f.m.append(note("declined", "t_0042", "backup", "haiku-x")).await.unwrap();
-        f.m.append(note("confirmed", "t_0043", "direct", "haiku-x")).await.unwrap();
+        let (opus, gem) = (("direct", "opus-x"), ("gem", "gem-pro"));
+        f.m.append(note("asked", "t_0042", opus, ("direct", "sonnet-x"))).await.unwrap();
+        f.m.append(note("confirmed", "t_0042", opus, ("direct", "sonnet-x"))).await.unwrap();
+        f.m.append(note("declined", "t_0042", opus, ("backup", "haiku-x"))).await.unwrap();
+        f.m.append(note("confirmed", "t_0043", opus, ("direct", "haiku-x"))).await.unwrap();
         // A restarted daemon has nothing in memory.
         f.engine.degraded.lock().unwrap().clear();
-        let pair = |ep: &str, m: &str| (ep.to_string(), m.to_string());
-        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("direct", "sonnet-x")), (true, false), "confirmed before the restart");
-        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("backup", "haiku-x")), (false, true), "declined before the restart");
-        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("direct", "haiku-x")), (false, false), "another pair was never decided");
-        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0099", &pair("direct", "sonnet-x")), (false, false), "a confirmation covers one task only");
+        let pair = |t: (&str, &str), s: (&str, &str)| (format!("{}/{}", t.0, t.1), format!("{}/{}", s.0, s.1));
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair(opus, ("direct", "sonnet-x"))), (true, false), "confirmed before the restart");
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair(opus, ("backup", "haiku-x"))), (false, true), "declined before the restart");
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair(opus, ("direct", "haiku-x"))), (false, false), "another substitute was never decided");
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0099", &pair(opus, ("direct", "sonnet-x"))), (false, false), "a confirmation covers one task only");
+        // Consent to sonnet instead of opus is not consent to sonnet instead of a model with a far larger window.
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair(gem, ("direct", "sonnet-x"))), (false, false), "another target, same substitute: ask again");
         // A later answer wins: confirming what was declined.
-        f.m.append(note("confirmed", "t_0042", "backup", "haiku-x")).await.unwrap();
+        f.m.append(note("confirmed", "t_0042", opus, ("backup", "haiku-x"))).await.unwrap();
         f.engine.degraded.lock().unwrap().clear();
-        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair("backup", "haiku-x")), (true, false));
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair(opus, ("backup", "haiku-x"))), (true, false));
+        // An answer logged without its target (an older log) cannot be matched, so it is never trusted.
+        let mut old = EventEnvelope::new(&f.m.id, "model.degraded_confirm", json!({"state": "confirmed", "substitute": {"endpoint_id": "direct", "model_id": "fast-x"}}));
+        old.task_id = Some("t_0042".into());
+        f.m.append(old).await.unwrap();
+        f.engine.degraded.lock().unwrap().clear();
+        assert_eq!(f.engine.degraded_decisions(&f.m, "t_0042", &pair(opus, ("direct", "fast-x"))), (false, false));
         // A different mission (a new session) starts with no decisions at all.
         let other = tempfile::tempdir().unwrap();
         let fresh = MissionState::open(other.path(), "m2", Hub::new(), f.engine.ledger.clone(), SecretRegistry::new(), 5.0).unwrap();
         f.engine.degraded.lock().unwrap().clear();
-        assert_eq!(f.engine.degraded_decisions(&fresh, "t_0042", &pair("direct", "sonnet-x")), (false, false));
+        assert_eq!(f.engine.degraded_decisions(&fresh, "t_0042", &pair(opus, ("direct", "sonnet-x"))), (false, false));
+    }
+
+    // Independent review (Gemini, 2026-10-25): the card's text is redacted like the rest of what it carries.
+    #[tokio::test]
+    async fn the_downgrade_card_never_shows_a_registered_secret() {
+        let f = setup(vec![Step::text("done")], 5.0, |s| s.degrade_wait = Duration::from_millis(300));
+        f.engine.secrets.register("sk-live-REGISTERED-SECRET");
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        for ep in ["direct", "backup"] {
+            f.engine.pool.record_exhausted(ep, "opus-x", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached for key sk-live-REGISTERED-SECRET".into(), reset_at: Some(reset), raw: String::new() });
+        }
+        let task = spawn_task(&f, "architect", "Plan the change");
+        let card = wait_for_card(&f).await;
+        assert!(!card.summary.contains("REGISTERED-SECRET") && !card.payload.to_string().contains("REGISTERED-SECRET"), "{} {}", card.summary, card.payload);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        let logged = serde_json::to_string(&f.m.replay().unwrap()).unwrap();
+        assert!(logged.contains("approval.requested") && logged.contains("model.degraded_confirm"), "the events are there to be checked");
+        assert!(!logged.contains("REGISTERED-SECRET"), "not in the log either");
+    }
+
+    // Independent review (Gemini, 2026-10-25): a substitute that fails at once was reported as promoted into service.
+    #[tokio::test]
+    async fn a_substitute_that_fails_at_once_is_not_reported_as_promoted() {
+        let f = setup(vec![Step::Exhaust, Step::Throttle, Step::text("Served by the third.")], 5.0, |_| {});
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        let out = f.engine.run_task(&f.m, "architect", "Plan").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Served by the third."), "{}", out.text);
+        let served: Vec<&str> = f.model.requests().iter().map(|r| r.endpoint_id.as_str()).collect::<Vec<_>>().into_iter().map(|s| if s == "direct" { "direct" } else if s == "backup" { "backup" } else { "gem" }).collect();
+        assert_eq!(served, vec!["direct", "backup", "gem"], "direct ran out, backup throttled at once, gem served");
+        let promoted = events_of(&f, "model.promoted");
+        assert_eq!(promoted.len(), 1, "only the substitute that served is reported: {:?}", promoted.iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert_eq!(promoted[0].payload["to"]["endpoint_id"], "gem");
     }
 
     async fn wait_for_event_state(f: &Fx, state: &str) {
