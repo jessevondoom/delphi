@@ -3,10 +3,15 @@ name: release
 # Push a tag like v0.2.0 (it must match the version in crates/delphi/Cargo.toml and be a commit on main) to build,
 # publish and attest binaries for macOS (arm64, x86_64) and Linux (x86_64, arm64). A separate job then updates the
 # Homebrew formula on main. Actions are pinned to commit SHAs; the Rust toolchain is pinned by rust-toolchain.toml.
+#
+# Run it by hand (Actions > release > Run workflow) for a dry run: the models are fetched and packed, the preloaded
+# vectors are made and checked, all four executables are built with the models compiled in and smoke-tested where
+# they can run, and nothing is published, attested or written to main. Do this before tagging.
 
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,12 +24,14 @@ jobs:
   # The embedding model (specs/004 §3.5): fetched at a pinned revision with checked sums, packed once, and
   # compiled into every executable. Its artifact has no hyphen in its name so that `publish` does not collect it.
   model:
-    name: embedding model
+    name: models
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Fetch, check and pack
-        run: dev/fetch-model.sh "$RUNNER_TEMP/embed.dlphmdl"
+      - name: Fetch, check and pack the embedding model
+        run: dev/fetch-model.sh embed "$RUNNER_TEMP/embed.dlphmdl"
+      - name: Fetch, check and pack the reranking model
+        run: dev/fetch-model.sh rerank "$RUNNER_TEMP/rerank.dlphmdl"
       # Preloaded vectors for the shipped documents; the script fails if the cache does not cover them.
       - name: Preloaded vectors for the shipped documents
         run: dev/build-seed-vectors.sh "$RUNNER_TEMP/embed.dlphmdl" "$RUNNER_TEMP/seed.dlphvec"
@@ -33,6 +40,7 @@ jobs:
           name: embedmodel
           path: |
             ${{ runner.temp }}/embed.dlphmdl
+            ${{ runner.temp }}/rerank.dlphmdl
             ${{ runner.temp }}/seed.dlphvec
           compression-level: 0
 
@@ -44,22 +52,32 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin, bun: bun-darwin-arm64 }
-          - { os: macos-14, target: x86_64-apple-darwin, bun: bun-darwin-x64 }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, bun: bun-linux-x64 }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, bun: bun-linux-arm64 }
+          # `native` marks the targets whose executable can run on its own runner, for the smoke test below.
+          - { os: macos-14, target: aarch64-apple-darwin, bun: bun-darwin-arm64, native: true }
+          - { os: macos-14, target: x86_64-apple-darwin, bun: bun-darwin-x64, native: false }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, bun: bun-linux-x64, native: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, bun: bun-linux-arm64, native: true }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: The tagged commit must be on main
+        if: github.event_name == 'push'
         run: |
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag $GITHUB_REF_NAME is not a commit on main"; exit 1; }
       - name: Tag must match the crate version
+        if: github.event_name == 'push'
         run: |
           v="$(awk '/^\[package\]/{f=1} f && /^version/{gsub(/"/,"",$3); print $3; exit}' crates/delphi/Cargo.toml)"
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match crate version $v"; exit 1; }
+      # A tag names the release; a dry run takes its version from the crate.
+      - name: Release version
+        id: ver
+        run: |
+          v="$(awk '/^\[package\]/{f=1} f && /^version/{gsub(/"/,"",$3); print $3; exit}' crates/delphi/Cargo.toml)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
       - name: Add the target
         run: rustup target add ${{ matrix.target }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -69,8 +87,25 @@ jobs:
       - name: Build
         env:
           DELPHI_EMBED_MODEL_FILE: ${{ runner.temp }}/model/embed.dlphmdl
+          DELPHI_RERANK_MODEL_FILE: ${{ runner.temp }}/model/rerank.dlphmdl
           DELPHI_SEED_VECTORS_FILE: ${{ runner.temp }}/model/seed.dlphvec
         run: cargo build --release --locked --target ${{ matrix.target }} -p delphi --features embedded-model
+      # What the executable can do on a machine with nothing installed beside it: both models load and run, the
+      # preloaded vectors match the embedder, and a fresh workspace answers a question in other words on its first
+      # search. Cross-built targets are only built (their executable cannot run here).
+      - name: Smoke test the executable
+        if: matrix.native
+        run: |
+          d="target/${{ matrix.target }}/release/delphi"
+          "$d" --version
+          "$d" kb model info --check | tee "$RUNNER_TEMP/info.txt"
+          grep -q "embedding model: .*compiled into this binary" "$RUNNER_TEMP/info.txt"
+          grep -q "reranking model: .*compiled into this binary" "$RUNNER_TEMP/info.txt"
+          grep -q "preloaded vectors: [1-9]" "$RUNNER_TEMP/info.txt"
+          mkdir -p "$RUNNER_TEMP/proj"
+          (cd "$RUNNER_TEMP/proj" && printf 'smoke\n\n' | "$GITHUB_WORKSPACE/$d" init --home "$RUNNER_TEMP/home" >/dev/null)
+          "$d" kb search what stops one model family from reviewing its own work --home "$RUNNER_TEMP/home" --workspace smoke | tee "$RUNNER_TEMP/search.txt"
+          grep -q "heuristics.md" "$RUNNER_TEMP/search.txt"
       # The full-screen console: one standalone executable (the JS runtime is compiled in), built for this target.
       - name: Build the console
         working-directory: ui
@@ -79,11 +114,11 @@ jobs:
           # Install scripts stay off for everything, except bun's own, which fetches the bun executable.
           npm rebuild bun
           # The release version is baked in: a console of another release refuses to run beside this delphi.
-          ./node_modules/.bin/bun build --compile --define "BUILD_VERSION=\"${GITHUB_REF_NAME#v}\"" --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
+          ./node_modules/.bin/bun build --compile --define "BUILD_VERSION=\"${{ steps.ver.outputs.version }}\"" --target=${{ matrix.bun }} src/main.tsx --outfile dist/delphi-ui
           test -x dist/delphi-ui
       - name: Package
         run: |
-          name="delphi-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="delphi-${{ steps.ver.outputs.tag }}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/delphi" ui/dist/delphi-ui LICENSE README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
@@ -95,6 +130,7 @@ jobs:
           path: dist/*
 
   publish:
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -124,6 +160,7 @@ jobs:
 
   formula:
     # Its own job: the only one that can write to main, and it runs no third-party action.
+    if: github.event_name == 'push'
     needs: publish
     runs-on: ubuntu-latest
     permissions:

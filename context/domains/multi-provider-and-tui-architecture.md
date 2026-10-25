@@ -68,7 +68,7 @@ To allow Window 1 (`Console` — primary operator/chat interface) and Window 2 (
 2. **60Hz Frame Coalescing:** When 5 agents stream tokens in parallel during Council Mode, the daemon coalesces `*.delta` events into 16ms frames (60fps) before broadcasting to attached TUI clients.
 3. **Dual Persistence:**
    - **Append-Only `events.jsonl`:** Every event is written to `missions/<id>/events.jsonl` for crash recovery, auditability, and time-travel replay.
-   - **SQLite WAL + FTS5 (`.delphi/state.db`):** Stores coarse state transitions, token/cost ledgers, and full-text search indexes over `context/` and `memory/`.
+   - **SQLite WAL + FTS5 (`.delphi/state.db`):** Stores coarse state transitions, token/cost ledgers, and the knowledge-base search indexes (full-text and vectors; `specs/004` §3) over `context/`, `specs/`, `missions/`, `memory/`, and the agents and skills.
 4. **Attach-Anywhere + Multiplexer Auto-Spawn:**
    - Users can run `delphi narrator` in *any* second terminal window/monitor to attach instantly to the active session.
    - Running `delphi --dual` (or pressing `Ctrl+W` inside `Console`) auto-detects `$TMUX`, `$ZELLIJ`, `WezTerm`, `Kitty`, or macOS windowing to spawn the second window automatically, with an inline `Tab` toggle fallback for single-screen laptop/SSH sessions.
