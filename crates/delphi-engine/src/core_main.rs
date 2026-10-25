@@ -23,6 +23,10 @@ fn die(msg: &str) -> ! {
 pub fn run(args: Vec<String>) -> ! {
     // Before any credential is read: no core dump, no memory read by another process of this user.
     delphi_sandbox::harden_self().unwrap_or_else(|e| die(&format!("process hardening: {}", e)));
+    // The MCP relay a subscription CLI starts for the Delphi tool bridge (`bridge.rs`). It takes no workspace and reads no secret of ours.
+    if args.first().map(String::as_str) == Some("__mcp-bridge") {
+        std::process::exit(crate::bridge::run_relay(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("auth") {
         let workspace = PathBuf::from(arg(&args, "--workspace").unwrap_or_else(|| die("--workspace is required")));
         std::process::exit(crate::auth_cli::run(&workspace, &args[1..]));

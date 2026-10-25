@@ -11,7 +11,7 @@
 //! Not probed in v1, and recorded as such: prompt caching (it needs a prefix over 1K tokens, which
 //! costs real money), effective context limits, and cross-endpoint `E1 → E2` replay.
 
-use crate::harness::{cli_env, Cli, Event, Launch, Session, Tools};
+use crate::harness::{Cli, Event, Launch, Session, Tools};
 use crate::model::{ModelClient, ModelError};
 use std::time::Duration;
 use delphi_adapter::blocks::{ContentBlock, Turn};
@@ -194,6 +194,14 @@ pub async fn probe(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_i
 /// signed in and reachable, and records what it reports. Tool calling is not probed here (the Claude
 /// approval bridge was verified separately, and agy has none).
 pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64) -> Capability {
+    probe_harness_seat(cfg, ep, program, now, Duration::ZERO).await.0
+}
+
+/// [`probe_harness`], and what the CLI reported at start-up (its tools and MCP servers), for `local/harness-tools.json`.
+/// A Claude seat whose profile has the Delphi bridge on is started with it, so the probe shows whether an organization's
+/// MCP policy lets the bridge load, and which of the account's own connectors came with it.
+pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now: i64, settle: Duration) -> (Capability, Option<crate::inventory::SeatRecord>) {
+    let mut seat: Option<crate::inventory::SeatRecord> = None;
     let mut cap = Capability {
         endpoint_id: ep.id.clone(),
         model_id: String::new(),
@@ -212,7 +220,7 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
     };
     let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
         cap.auth = format!("failed: the `{}` harness is not implemented", ep.harness.as_deref().unwrap_or("?"));
-        return cap;
+        return (cap, None);
     };
     // Any tier's model will do for a connectivity probe; the cheapest configured one.
     let model = ["fast", "workhorse", "frontier"].iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
@@ -224,15 +232,53 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
     let dir = std::env::temp_dir().join(format!("delphi-probe-{}", std::process::id()));
     if std::fs::create_dir_all(&dir).is_err() {
         cap.auth = "failed: no scratch directory".into();
-        return cap;
+        return (cap, None);
     }
-    let l = Launch { cli, program: program.into(), model, system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: cli_env() };
+    let profile = cfg.harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
+    let connectors = cli == Cli::Claude && profile.claudeai_connectors;
+    // `settle`: the probe is the place to learn what loads, so a real probe waits for the account's connectors as a span does.
+    let mut lp = crate::harness::LaunchProfile { claudeai_connectors: connectors, settle: if connectors { settle } else { Duration::ZERO }, ..Default::default() };
+    let bridge_wanted = cli == Cli::Claude && profile.bridge;
+    // Kept alive for the probe; no call is expected, so the receiver is only held.
+    let mut _bridge = None;
+    if bridge_wanted {
+        let stub = vec![ToolDef { name: "probe".into(), description: "Connectivity probe; never call it.".into(), input_schema: json!({"type": "object"}) }];
+        match std::env::current_exe() {
+            Ok(exe) => match crate::bridge::Bridge::start(stub, String::new(), &exe).await {
+                Ok((b, rx)) => {
+                    lp.mcp_config = Some(b.config_path().to_path_buf());
+                    _bridge = Some((b, rx));
+                }
+                Err(e) => cap.notes.push(format!("could not start the Delphi tool bridge for the probe: {}", e)),
+            },
+            Err(e) => cap.notes.push(format!("could not start the Delphi tool bridge for the probe: {}", e)),
+        }
+    }
+    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp };
     match Session::start(&l).await {
         Err(e) => cap.auth = format!("failed: {}", e),
         Ok(mut s) => {
             let mut got_result = false;
             while let Some(ev) = s.next(Duration::from_secs(90)).await {
                 match ev {
+                    Event::Init { tools, mcp_servers, .. } => {
+                        if let (true, Some(servers)) = (_bridge.is_some(), &mcp_servers) {
+                            let state = servers.iter().find(|(n, _)| n == crate::bridge::SERVER_NAME).map(|(_, st)| st.as_str());
+                            if matches!(state, Some("connected" | "pending")) {
+                                cap.notes.push("Delphi tool bridge: loaded, so roles with tools can run on this seat".into());
+                            } else {
+                                cap.degraded = true;
+                                cap.notes.push(format!("Delphi tool bridge: NOT loaded (status: {}). An organization policy that allows only managed MCP servers would cause this; roles that need tools cannot run on this seat until the `delphi` MCP server is allowed", state.unwrap_or("absent")));
+                            }
+                        }
+                        if let Some(servers) = &mcp_servers {
+                            let others: Vec<String> = servers.iter().filter(|(n, _)| n != crate::bridge::SERVER_NAME).map(|(n, st)| format!("{} ({})", n, st)).collect();
+                            if !others.is_empty() {
+                                cap.notes.push(format!("account connectors loaded: {}", others.join(", ")));
+                            }
+                        }
+                        seat = Some(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: if cli == Cli::Agy { "agy" } else { "claude" }.into(), model: model.clone(), tools, mcp_servers: mcp_servers.unwrap_or_default(), bridge: _bridge.is_some(), seen_unix: now });
+                    }
                     Event::Usage(t) => cap.tokens_used += t.metered(),
                     Event::RateLimit { utilization, window, .. } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
                     Event::Result { is_error, text, usage, .. } => {
@@ -256,7 +302,7 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
     }
     let _ = std::fs::remove_dir_all(&dir);
     cap.notes.dedup();
-    cap
+    (cap, seat)
 }
 
 pub fn load(path: &Path) -> Vec<Capability> {
@@ -394,6 +440,33 @@ echo '{"type":"result","subtype":"success","result":"OK","usage":{"input_tokens"
         assert!(cap.auth.starts_with("failed") && cap.auth.contains("signed in"), "{}", cap.auth);
         let cap = probe_harness(&cfg, &ep, "/nonexistent/claude", 7).await;
         assert!(cap.auth.starts_with("failed: cannot start"), "{}", cap.auth);
+    }
+
+    #[tokio::test]
+    async fn the_probe_says_whether_the_delphi_bridge_loaded_and_which_account_connectors_came_with_it() {
+        let cfg = Config::parse(HARNESS_CFG).unwrap();
+        let ep = cfg.endpoint("sub").unwrap().clone();
+        let run = |servers: &str| {
+            let d = tempfile::tempdir().unwrap();
+            let body = format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s\",\"tools\":[\"mcp__delphi__probe\"],\"mcp_servers\":[{}]}}'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"OK\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}'", servers);
+            let prog = crate::harness::tests::fake_cli(d.path(), &body);
+            (d, prog)
+        };
+        let (_d, prog) = run(r#"{"name":"delphi","status":"connected"},{"name":"claude.ai Slack","status":"pending"}"#);
+        let (cap, seat) = probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("Delphi tool bridge: loaded")) && cap.notes.iter().any(|n| n.contains("account connectors loaded: claude.ai Slack (pending)")), "{:?}", cap.notes);
+        let seat = seat.expect("the seat's start-up report is returned");
+        assert_eq!((seat.endpoint_id.as_str(), seat.bridge, seat.tools.as_slice()), ("sub", true, &["mcp__delphi__probe".to_string()][..]));
+        // Policy keeps the bridge out: the seat is marked degraded and the note says what to do.
+        let (_d2, prog) = run(r#"{"name":"delphi","status":"failed"}"#);
+        let (cap, _) = probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("NOT loaded (status: failed)") && n.contains("organization policy")), "{:?}", cap.notes);
+        // A profile with the bridge off does not look for it.
+        let off = Config::parse(&format!("{}\n[harness.claude]\nbridge = false\n", HARNESS_CFG)).unwrap();
+        let (_d3, prog) = run(r#"{"name":"delphi","status":"failed"}"#);
+        let (cap, seat) = probe_harness_seat(&off, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(!cap.degraded && !cap.notes.iter().any(|n| n.contains("bridge")), "{:?}", cap.notes);
+        assert!(!seat.unwrap().bridge);
     }
 
     #[test]
