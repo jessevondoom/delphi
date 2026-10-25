@@ -133,7 +133,7 @@ body.shot .term{border:0;border-radius:0;margin:0;padding:14px 16px;overflow:hid
 
   /* ---------- console chrome (chat, activity): strip, one blank row, title ---------- */
   function consoleFrame(W,H,pane,states,body,spinner,dotsAt){
-    var out=[strip(states),blank(),[T('delphi v0.5 · ~/projects/app · '+pane,'dim')],blank()];
+    var out=[strip(states),[T('delphi v0.5 · ~/projects/app · '+pane,'dim')],blank()];
     var foot=[spinner||blank(),[T(rep('─',W),'rule')],[T('❯ ','acc b')],[T(rep('─',W),'rule')]];
     var modeSpan=st.mode==='auto'?T('auto','auto'):(st.mode==='accept-edits'?T('accept-edits',''):T('default','dim'));
     var left=[T('12.4k tokens','dim'),SEP(),modeSpan];
@@ -202,7 +202,7 @@ body.shot .term{border:0;border-radius:0;margin:0;padding:14px 16px;overflow:hid
   /* ---------- narrator chrome: faces only, no spend, arrows only ---------- */
   var NW=80,NH=24,VIEWS=6;
   function nframe(viewName,idx,states,body,leftStatus,anchorRight){
-    var out=[strip(states),blank(),[T('delphi v0.5 · '+viewName,'dim')],blank()];
+    var out=[strip(states),[T('delphi v0.5 · '+viewName,'dim')],blank()];
     var foot=[[T(rep('─',NW),'rule')]];
     var left=[T(leftStatus,'dim'),SEP(),T('14.2k tokens','dim')];
     var right=[T('← →','dim'),SEP(),T(DOTS(idx,VIEWS),'dim')];

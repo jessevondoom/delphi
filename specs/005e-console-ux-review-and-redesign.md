@@ -3,7 +3,8 @@ id: spec-005e-console-ux-review-and-redesign
 title: "005e: Console UX Review and Redesign (chat, activity ticker, narrator, first run)"
 author: architect
 timestamp: 2026-10-25T12:00:00Z
-status: draft
+status: approved   # by the operator, 2026-10-25, after reviewing the rendered mockups; amendments in §12 ratified the same day
+approved_by: operator (2026-10-25)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, ui, tui, console, observer, ink, review, d-28]
 
 # Spec 005e: Console UX Review and Redesign
 
-**Status.** Draft for the operator's approval. Part I (§§2-4) is a critical review of the interface as built under D-28 ([`005d`](005d-full-screen-console.md)), with evidence. Part II (§§5-17) is the buildable specification for the changes it recommends, **as decided by the operator on 2026-10-25 after reviewing rendered mockups** (`specs/assets/005e/`): chat as tinted square blocks with the speaker above, an activity *ticker* with finished history, the narrator window (the former Observer) as an epic rail and a live council weave, animated badge strip, colours derived from the terminal. The decisions are recorded in §16. The ordered build plan for an implementing model is [`005f`](005f-console-redesign-build-plan.md). Where this spec and [`005b`](005b-deck-navigation-and-visual-interface.md) or `005d` differ, this spec governs once approved; the amendments it needs are listed in §12.
+**Status.** Approved by the operator on 2026-10-25. Part I (§§2-4) is a critical review of the interface as built under D-28 ([`005d`](005d-full-screen-console.md)), with evidence. Part II (§§5-17) is the buildable specification for the changes it recommends, **as decided by the operator on 2026-10-25 after reviewing rendered mockups** (`specs/assets/005e/`): chat as tinted square blocks with the speaker above, an activity *ticker* with finished history, the narrator window (the former Observer) as an epic rail and a live council weave, animated badge strip, colours derived from the terminal. The decisions are recorded in §16. The ordered build plan for an implementing model is [`005f`](005f-console-redesign-build-plan.md). Where this spec and [`005b`](005b-deck-navigation-and-visual-interface.md) or `005d` differ, this spec governs once approved; the amendments it needs are listed in §12.
 
 ## 1. Scope
 
@@ -121,7 +122,6 @@ Findings 1, 2 and 9: the operator can decline setup twice, land in a console tha
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
   delphi · no model configured                                                  
@@ -140,6 +140,7 @@ delphi v0.5 · ~/projects/app · chat
                                                                                 
                                                                                 
                                                                                 
+                                                                                
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
@@ -152,7 +153,6 @@ The same card at 120 columns is the same card: it is at most 76 columns wide wit
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
                                                                    you · 09:10:02
@@ -171,6 +171,7 @@ delphi v0.5 · ~/projects/app · chat
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  
                                                                                 
                                                                                 
+                                                                                
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
@@ -181,7 +182,6 @@ delphi v0.5 · ~/projects/app · chat
 
 ```text
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
                                                                                 
@@ -192,6 +192,7 @@ delphi v0.5 · ~/projects/app · chat
     /council Should we …?               three seats argue it out blind          
                                                                                 
   / lists commands · ? shows the keys · ← → move between decks                  
+                                                                                
                                                                                 
                                                                                 
                                                                                 
@@ -248,7 +249,7 @@ The operator chose this from four studies (hairline, tail, soft fill, seam) on 2
 - **Width.** The block hugs its longest line, at least 12 text columns, at most `floor(w * 4 / 5)` columns including padding. Text wraps at `maxText = floor(w * 4 / 5) - 2`. The width is never padded out to the maximum.
 - **Alignment.** The operator's block is flush right; an agent's block is flush left.
 - **Label.** One row directly above the block, starting at the block's left edge, carries the speaker and the time. An agent: its badge, its theme name in `bold` + role colour, `·`, the time in `dim` (`⟦•_•⟧ architect · 09:00:05`). The operator: `you · 09:03:38`, all `dim`. The label is never inside the block. While a reply streams the time reads `writing` and becomes the clock time when the task ends.
-- **Rhythm.** One blank row between messages. The first message follows the blank row after the header (§10.2).
+- **Rhythm.** One blank row between messages. The first message follows the one blank row under the header (§10.2).
 - **Contrast.** Agent text: default foreground, normal weight (the brightest text on screen). Operator text: `dim`. Tool lines (`→ read_file(…) ✔`) are `dim` with a green `✔` and live inside the agent's block; `Ctrl+O` expands them as today. The agent's block is **not** role-coloured: the role colour lives in the label only.
 - **Streaming.** The block grows as text arrives and ends in an accent `▊`. The status row above the prompt shows `⠹ <name> · writing <what>`. There is no open or dashed frame.
 - **Anchoring (`less`-style, 005b §3.2).** Unchanged from the earlier draft: when a new reply begins and the operator is at the bottom, the viewport pins the *top* of that reply's label row at the top of the body. A yellow marker on the last body row reads `↓ N more lines · pgdn or space · enter jumps to the end` while lines wait below. `Space`/`PgDn` page; `Enter` with an empty prompt jumps to the end and resumes following; typing resumes following. Replies shorter than the body need no anchor.
@@ -266,9 +267,9 @@ The operator chose this from four studies (hairline, tail, soft fill, seam) on 2
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
+ • atomic claims                                                                
  • easy audit                                                                   
  → read_file(specs/003-collaboration.md) ✔                                      
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  
@@ -295,9 +296,9 @@ delphi v0.5 · ~/projects/app · chat
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                                                 
-                                                                                                    
 delphi v0.5 · ~/projects/app · chat                                                                 
                                                                                                     
+                                                      you · 09:00:01                                
                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                        Should the retry queue be a table or a file? 
                                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
@@ -334,9 +335,9 @@ delphi v0.5 · ~/projects/app · chat
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
+ • atomic claims                                                                
  • easy audit                                                                   
  → read_file(specs/003-collaboration.md) ✔                                      
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  
@@ -403,8 +404,8 @@ Rendered mockups: [`activity-dark-100x34.png`](assets/005e/activity-dark-100x34.
 
 ```text
 ⟦•• ⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · activity                                         
+                                                                                
                                                                                 
    ✔ finished   ⟦•_•⟧ builder · wrote crates/queue.rs · 12s                     
                                                                                 
@@ -453,11 +454,10 @@ Chosen from three directions (Rail, Strata, Weave) on 2026-10-25: **Rail** for `
 
 **Chrome (identical on every view).**
 1. Row 1: the agent strip, **badges only** (no names, no state words). Each badge animates according to its agent's state (§10.2). Details of who is doing what live in the `agents` view.
-2. Row 2: blank.
-3. Row 3: `delphi v<version> · <view>`, `dim`, no working directory, no mission id.
-4. Row 4: blank.
-5. Body.
-6. Hairline, then one footer row: left `<N> running  ·  <tokens> tokens` (`dim`; `3 agents` on the council view), right `← →  ·  ○ ● ○ ○ ○ ○` with the active view's dot filled. **No `/` and no `?`**: the narrator has no commands.
+2. Row 2: `delphi v<version> · <view>`, `dim`, directly under the strip (no blank row), no working directory, no mission id.
+3. Row 3: blank.
+4. Body.
+5. Hairline, then one footer row: left `<N> running  ·  <tokens> tokens` (`dim`; `3 agents` on the council view), right `← →  ·  ○ ● ○ ○ ○ ○` with the active view's dot filled. **No `/` and no `?`**: the narrator has no commands.
 
 **Keys.** `←` and `→` change view (no wrap, no other way: `Shift+arrows`, `Tab` and digits are removed). `↑` `↓` `PgUp` `PgDn` scroll or move the selection in views that scroll (`forge`, `agents`, `archives`, `thinking`). `Ctrl+C` leaves. Nothing else is bound and nothing else is advertised. The archives view's in-window search is removed (search stays in the console, `Ctrl+K`); this is listed as an open question in §16.
 
@@ -475,7 +475,6 @@ Chosen from three directions (Rail, Strata, Weave) on 2026-10-25: **Rail** for `
 
 ```text
 ⟦•• ⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · epic                                                              
                                                                                 
  ▼ needs you   approve the schema change in t_0003        answer in the console 
@@ -495,6 +494,7 @@ delphi v0.5 · epic
                                                                                 
                                                                                 
                                                                                 
+                                                                                
                                                              pace  ▁▂▃▅▆▇█▇▅▄▃▂ 
 ────────────────────────────────────────────────────────────────────────────────
 2 running  ·  14.2k tokens                                   ← →  ·  ○ ● ○ ○ ○ ○
@@ -510,7 +510,6 @@ delphi v0.5 · epic
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦…  ⟧                                             
-                                                                                
 delphi v0.5 · council                                                           
                                                                                 
  ✔ nothing needs you                                                            
@@ -531,13 +530,13 @@ delphi v0.5 · council
    2 of 3 answered  ▰▰▰▰▰▰▰▱▱▱                                                  
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
                                                                                 
+                                                                                
 ────────────────────────────────────────────────────────────────────────────────
 3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○
 ```
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦···⟧                                             
-                                                                                
 delphi v0.5 · council                                                           
                                                                                 
  ✔ nothing needs you                                                            
@@ -558,13 +557,13 @@ delphi v0.5 · council
    positions  table 2 · file 1   scout is replying                              
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
                                                                                 
+                                                                                
 ────────────────────────────────────────────────────────────────────────────────
 3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○
 ```
 
 ```text
 ⟦•_•⟧ ⟦^─^⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦^─^⟧ ⟦^^^⟧                                             
-                                                                                
 delphi v0.5 · council                                                           
                                                                                 
  ✔ nothing needs you                                                            
@@ -585,6 +584,7 @@ delphi v0.5 · council
    agreement  ▰▰▰▰▰▰▰▰▰▰   minority: scout, noted                               
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
                                                                                 
+                                                                                
 ────────────────────────────────────────────────────────────────────────────────
 3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○
 ```
@@ -597,7 +597,7 @@ delphi v0.5 · council
 `observe.state` (`crates/delphi-engine/src/observe.rs`) carries nodes, tasks, councils, builds and a cost `series`, but **no start or end times, no dependency edges, no estimates and no tokens-per-minute series**. The rail and the pace row need: per node `started_ms`, `ended_ms` (absent while running), `after: [node id]` (predecessors, from the plan; if the plan's edges are not in the event log, derive them from `parent` and creation order and say so in the build notes), and a `pace` array of twelve per-minute token counts. The engine's `Council.phase` is already enough for the council. See the build plan, slice 7.
 
 ### 9.4 Acceptance criteria
-- Every view's header is exactly: strip, blank, `delphi v<version> · <view>`, blank; the title has no path and no mission id.
+- Every view's header is exactly: strip, `delphi v<version> · <view>`, blank (no blank row between the strip and the title); the title has no path and no mission id.
 - The footer has no `/` and no `?`, and no money anywhere in the window.
 - `←` `→` change view and stop at the ends; `Shift+←`, `Tab` and digits do nothing.
 - The attention slot exists on every view and is the first body row.
@@ -616,7 +616,6 @@ With an empty prompt, `?` toggles a help overlay: a tinted card (§7.2, square),
 
 ```text
 ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
   keys · esc closes                                                             
@@ -635,6 +634,7 @@ delphi v0.5 · ~/projects/app · chat
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
                                                                                 
                                                                                 
+                                                                                
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
@@ -642,7 +642,7 @@ delphi v0.5 · ~/projects/app · chat
 ```
 
 ### 10.2 The header: animated badges, one blank row (finding 5)
-- **Rows.** Console and narrator share the first rows: the agent strip, **one blank row**, the title row, then one blank row, then the body. In the console the title row is `delphi v<version> · <path> · <pane>`; in the narrator it is `delphi v<version> · <view>`. (The current console emits the blank row after the title twice, once in `frame` and once as the first block's leading blank; the build removes the duplicate.)
+- **Rows.** Console and narrator share the first rows: the agent strip, then **the title row directly beneath it with no blank row between them** (the operator asked for a half-row gap; a terminal draws whole rows only, so the nearest equivalent is zero: the two rows then sit one text line apart, the tightest the grid allows), then one blank row, then the body. In the console the title row is `delphi v<version> · <path> · <pane>`; in the narrator it is `delphi v<version> · <view>`. (The current console emits a blank row between the strip and the title, and another after the title twice, once in `frame` and once as the first block's leading blank; the build removes the first and the duplicate of the second.)
 - **The strip shows badges only**, in the fixed role order (orchestrator, architect, builder, red-team, strategist, scout), with no names and no state words, in the console and in the narrator. The state of an agent is carried by its badge's *animation*, drawn from the 005a §4 state machine:
 
   | State | Trigger | Frames (5 cells) | Cadence |
@@ -673,7 +673,7 @@ Information notes start with `·`, errors with `✖` in the alert colour, succes
 ### 10.7 Acceptance criteria
 - `?` on an empty prompt shows the overlay; `?` inside text types `?`.
 - At 80 columns with a 70-column path, the title row ends in `· chat`.
-- A strip frame contains only badges separated by single spaces; no letters other than those inside badges.
+- A strip frame contains only badges separated by single spaces; no letters other than those inside badges. The title row is the row immediately below it.
 - With a thinking agent the strip changes between two frames across 600 ms and does not repaint otherwise (a test drives a fake clock).
 - `Shift+Tab` once changes the mode and posts the note; the footer shows the mode; `auto` is the only mode drawn in the warning-red colour.
 - `COMMANDS` and `chat::HELP` list the same names (a test diffs them).
@@ -690,16 +690,17 @@ Information notes start with `·`, errors with `✖` in the alert colour, succes
 | 28 ≤ w < 40 | blocks are full width minus two; no footer hint |
 | w < 28 or h < 9 | the too-small message (unchanged) |
 | h < 20 | the narrator drops its narrative lines before the rows |
-| h < 16 | the blank row between messages is dropped; the title's trailing blank row is dropped |
+| h < 16 | the blank row between messages is dropped; the blank row under the title is dropped |
 | `NO_COLOR`, `TERM=dumb`, 8/16-colour terminals | §5 and the rail fallback of §7.2; every golden screen also pinned in its stripped form |
 | `DELPHI_REDUCE_MOTION=1` | badges and the pulsing dot are static |
 
-## 12. Amendments this spec needs elsewhere
-- `skills/tui-design/SKILL.md`: add the soft-fill message block (§7.2) as the sanctioned way to bound a message: a tinted, square block with half-block caps and a label above; frames around messages are still not used, so §1.2's ban on frames stands unchanged. §1.1: the anchoring marker's copy becomes `↓ N more lines · pgdn or space · enter jumps to the end`. §2.1: eye colours become "the terminal's default foreground, bold" with the theme's RGB eyes only under true colour. Add the narrator's "no commands, no `/ ?` in its footer" rule.
-- `005b` §3.1 and §4.2 (Observer navigation and footer) are superseded by §9 here; the seven Observer views become six; `005b` §2.1's `Shift+Tab` toggle stays as is (no confirm, §10.3).
-- `005a` §4 gains the rows `thinking` pan cadence and the 3 s `success` hold used by §10.2 (the faces are unchanged).
-- `005d` §3 (header, transcript, footer) and §7 (Observer keys) are superseded by §§5-10 here.
-- `ui/README.md` claims `NO_COLOR` support; it will be true after §5.
+## 12. Amendments this spec needs elsewhere (ratified by the operator, 2026-10-25)
+Applied in the same change as this spec:
+- **`skills/tui-design/SKILL.md`**: messages are tinted square blocks with a label row (§1.2, no frames around messages; the ban on frames around decks, windows and screens stands); header and footer wording (§3.2, §3.3); the Observer is the narrator with six views (§4); two new checklist items (§5). Still to do in that file when the build lands: the anchoring marker's copy becomes `↓ N more lines · pgdn or space · enter jumps to the end`, and §2.1's eye colours become "the terminal's default foreground, bold" with the theme's RGB eyes only under true colour (both are slice 2/4 work, not wording).
+- **`005b` Amendment 005b-A3** (§2.4): the header strip, footer, chat blocks, ticker and narrator of this spec supersede the conflicting parts of §1.3, §3, §4, A1 and A2. `Shift+Tab` stays an immediate cycle.
+- **`005a` Amendment 005a-A1** (§7): badge animation cadence for the header strip.
+- **`005d` Amendment 005d-A1** (§12): §3 and §7 are superseded by §§5-10 here.
+- **`ui/README.md`** claims `NO_COLOR` support; it becomes true with slice 2 and needs no wording change.
 
 ## 13. Implementation plan
 

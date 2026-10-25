@@ -3,7 +3,8 @@ id: spec-005f-console-redesign-build-plan
 title: "005f: Console Redesign Build Plan (ordered slices for an implementing model)"
 author: architect
 timestamp: 2026-10-25T18:00:00Z
-status: draft
+status: approved   # by the operator, 2026-10-25, with 005e; the amendments it lists (005a-A1, 005b-A3, 005d-A1, tui-design) ratified the same day
+approved_by: operator (2026-10-25)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -71,7 +72,7 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 **Goal.** `005e` §10.1-10.3.
 
 **Do.**
-1. `ui/src/screen.ts` `header()`: return exactly `[strip, '', title]` and make `frame()` add exactly one blank row after it; remove the duplicate (the first block's leading `''` in `parts`/`render` must not add a second). The strip is badges only, fixed role order, single spaces, no names, no state words (replace the `st.kind === 'alert' | 'active'` branches with badge frames; the alert banner for pending decisions stays as the 005b banner *below* the strip only if it exists today, else drop it and rely on the `⟦x?x⟧` badge and the footer count).
+1. `ui/src/screen.ts` `header()`: return exactly `[strip, title]` (the title row directly under the strip, **no blank row between them**; the operator asked for a half-row gap, which a cell grid cannot draw, so zero is the nearest) and make `frame()` add exactly one blank row after it; remove the duplicate (the first block's leading `''` in `parts`/`render` must not add a second). The strip is badges only, fixed role order, single spaces, no names, no state words (replace the `st.kind === 'alert' | 'active'` branches with badge frames; the alert banner for pending decisions stays as the 005b banner *below* the strip only if it exists today, else drop it and rely on the `⟦x?x⟧` badge and the footer count).
 2. `ui/src/theme.ts` `badge(role, state, info, pal, frame)`: add the `thinking` state (derived in `fold.ts` as running with a reasoning delta in the last 1.5 s) and the frames of `005e` §10.2 (idle blink, thinking pan, working, waiting, escalated, success held 3 s). Keep `005a` invariants (5 cells; scout no mouth; blink does not move the mouth).
 3. `ui/src/app.tsx`: one timer, 150 ms, computes each badge's frame; request a redraw only when a frame changed; `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin static frames. Clear the timer on every exit path.
 4. Title row clips the path from the left and never the pane name; below 48 columns it is `delphi · <pane>`.
@@ -135,7 +136,7 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 **Goal.** `005e` §9.2 chrome, keys, attention slot; classic Observer retired.
 
 **Do.**
-1. `ui/src/observe-screen.ts` `header()`/`footer()`: header is `[strip, '', 'delphi v<version> · <view>']` plus the one blank row after it; footer is a hairline and one row: `<N> running  ·  <tokens> tokens` at the left, `← →  ·  <dots>` at the right; no money, no `/`, no `?`, no mission id, no path. `VIEWS = ['council','epic','forge','agents','archives','thinking']`; remove `spend` and the digit aliases from `parseView`; titles lowercase (`epic`, not `EPIC DAG`).
+1. `ui/src/observe-screen.ts` `header()`/`footer()`: header is `[strip, 'delphi v<version> · <view>']` (no blank row between them) plus one blank row after it; footer is a hairline and one row: `<N> running  ·  <tokens> tokens` at the left, `← →  ·  <dots>` at the right; no money, no `/`, no `?`, no mission id, no path. `VIEWS = ['council','epic','forge','agents','archives','thinking']`; remove `spend` and the digit aliases from `parseView`; titles lowercase (`epic`, not `EPIC DAG`).
 2. Attention slot: body row 1 of every view; `✔ nothing needs you` or the amber band `▼ needs you   <what>` with `answer in the console` at the right (pending approvals or a council awaiting ratification, from `pending_approvals`, `pending_proposals` and council `escalation`).
 3. `ui/src/observer.tsx`: `←`/`→` change view and stop at the ends; `↑ ↓ PgUp PgDn` scroll where the view scrolls; remove `Shift+arrows`, `Tab`, digits and the archives search; `Ctrl+C` leaves.
 4. Retire the classic Observer: remove `--classic` from `crates/delphi/src/main.rs` and `chat.rs`, delete the interactive loop in `crates/delphi/src/observer.rs`; keep what `--once` needs by routing it through the UI renderer (`delphi-ui --observe --once` prints one `observeFrame` of 80x24, or the terminal size when there is one, and works without a terminal). If the UI executable is missing, `--once` explains how to get it.
@@ -168,7 +169,21 @@ Follow `ui/TERMINALS.md` on Terminal.app, iTerm2, Ghostty and tmux, on a dark an
 
 ## 12. Definition of done (whole plan)
 
+_(The handoff note for the implementing model follows in §13.)_
+
 - Every acceptance list in `005e` §§6.7, 7.4, 8.3, 9.4 and 10.7 passes.
 - Goldens exist for every screen in `005e` §14, each also in stripped form.
 - `npm test`, `npm run typecheck`, `cargo test`, `cargo run -- lint --repo .` and `cargo run -- check tui ui/src` are clean.
 - `ui/README.md`, `ui/TERMINALS.md` and `skills/tui-design/SKILL.md` carry the amendments of `005e` §12.
+
+## 13. Handoff
+
+**State at handoff (2026-10-25).** Design and mockups are approved and the amendments ratified (`005e` §12, recorded as `005a-A1`, `005b-A3`, `005d-A1` and the `skills/tui-design` update). No product code has been changed yet. The design branch is `worktree-agent-a42560a2ca3e1fc4b` (a draft pull request carries it); start implementation from `main` after it merges, or branch from it if it has not.
+
+**Order.** Slices 1, 2 and 3 first (they are independent of each other and remove every P0), then 4, 5, 6; slice 7 (daemon data) must precede 8 and 9; 10 follows 8; 11 is a person's.
+
+**Prompt to give the implementing model.**
+
+> You are implementing slice N of `specs/005f-console-redesign-build-plan.md` in the Delphi repository. Read `specs/005e-console-ux-review-and-redesign.md` §§5-11 and the mockups in `specs/assets/005e/` (open `mockups.html` for every state). Work only on slice N, on a new branch from the current `main`, in a worktree. Make the reference frames in 005e the golden screens. Run the gates in 005f §0 rule 2 and do not commit while any fails. Open a draft pull request with the slice number in the title, the gates' results in the body, and the golden diff called out. Do not merge. If a step in the plan does not match the code you find, stop and say what differs rather than improvising.
+
+**What is deliberately undecided** (for the implementer to raise, not settle): the four open questions in `005e` §16 (archives search, approximate epic edges, tint on unknown backgrounds, animation default over SSH).

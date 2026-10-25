@@ -3,7 +3,7 @@ id: spec-005d-full-screen-console
 title: "005d: The Full-Screen Console (an Ink client of the daemon)"
 author: architect
 timestamp: 2026-10-24T18:00:00Z
-status: approved   # footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25
+status: approved   # footer wording follows Amendment 005b-A2; §3 and §7 amended by 005d-A1 (005e), approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -84,3 +84,6 @@ Unit tests (`ui/test`): input parsing (paste, wheel, split sequences, modifyOthe
 ## 11. Open
 
 Looking at it on real terminals; Windows (not supported); an in-app Markdown/image viewer window (the egui idea of 005c §4 stays later work); the cost of 90 MB per platform and about 45 production packages, accepted in D-28.
+
+## 12. Amendment 005d-A1: Screen and Narrator Per 005e (approved by the operator 2026-10-25)
+§3 (header, transcript, footer) is superseded by [`005e`](005e-console-ux-review-and-redesign.md) §§5, 7, 8 and 10, and §7 (the Observer window and its keys) by 005e §9, with Amendment 005b-A3: the header is the animated badge strip and the title row directly beneath it; the transcript is tinted square blocks with a label row; the left deck is a ticker with finished history; the Observer is the narrator window with six views, plain arrow keys, no money and no classic fallback. Everything else in this spec stands. The ordered build plan is [`005f`](005f-console-redesign-build-plan.md).
