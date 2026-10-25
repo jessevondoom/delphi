@@ -181,7 +181,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
 
   const run = (line: string) => {
     const typed = line.split(/\s/)[0]!;
-    const name = lookup(typed)?.name ?? typed; // `/exit` is `/quit`, `/observe` is `/narrator`
+    const name = lookup(typed)?.name ?? typed; // `/exit` is `/quit`, `/narrator` is `/observe`
     if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
     if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
