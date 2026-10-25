@@ -3,7 +3,7 @@ id: spec-018-operator-hooks
 title: "018: Operator Hooks (observe and deny)"
 author: architect
 timestamp: 2026-10-26T09:00:00Z
-status: draft   # approved when the operator merges the pull request that adds it (it adds GOVERNANCE §5.11 and REV-SEC-10)
+status: approved   # by the operator, 2026-10-25, by merging the pull request that added it (commit 91eb352) with GOVERNANCE §5.11 and REV-SEC-10
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

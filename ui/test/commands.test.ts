@@ -117,3 +117,10 @@ test('/models prints the daemon\'s pool text; /agents lists what is running', as
   await runSlash('/agents', m.c);
   assert.equal(m.out[1], 'Nothing is running.');
 });
+
+test('openWindow opens nothing from a test run, a script or when asked not to', async () => {
+  const { openWindow } = await import('../src/window.ts');
+  assert.match((await openWindow(['true'], { NODE_ENV: 'test' }, true))!, /interactive console/);
+  assert.match((await openWindow(['true'], {}, false))!, /interactive console/);
+  assert.match((await openWindow(['true'], { DELPHI_NO_WINDOWS: '1' }, true))!, /interactive console/);
+});

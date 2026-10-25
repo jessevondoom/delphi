@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · epic
+
+ ✔ nothing needs you
+
+                      earlier                      now                     later
+ ✔ daedalus           ━━━━━━━━━━━━╮                 ┆
+ ✔ odysseus                       ╰━━━━━━━━━╮       ┆
+ ▶ hephaestus                               ╰━━━━━━━●╮
+ ○ ares                                             ┆╰════════════╮
+ ○ athena                                           ┆│            ╰════════════▸
+ ○ hermes                                           ┆╰╌╌╌╌╌╌╌╌╌╌╌╌╌
+
+ now   ⟦•─•⟧ hephaestus is working: Add a retry queue to the claim loop
+ next  ⟦-_-⟧ ares starts when hephaestus ends
+ path  hephaestus → ares → athena  about 7 min
+
+
+
+
+
+                                                             pace  ▁▁▂▃▄▆█▇▅▄▃▂
+────────────────────────────────────────────────────────────────────────────────
+1 running  ·  14.2k tokens                                   ← →  ·  ○ ● ○ ○ ○ ○

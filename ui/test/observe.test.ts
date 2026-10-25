@@ -119,13 +119,12 @@ test('the blind seat is sealed: its live text is never shown', () => {
   assert.match(t, /sealed until all three answer/);
 });
 
-test('epic: the tree with indentation, the selected row, and the narrative', () => {
+test('epic: a row per task with its state glyph, and the now/next/path narrative (the rail itself: epic-rail.test.ts)', () => {
   const t = observeFrame(model('epic'), 110, 34).map(plain).join('\n');
-  assert.match(t, /t_1 build · Implement the deck router/);
-  assert.match(t, /● athena\s+running/);
-  assert.match(t, /\n\s{4}✔ hephaestus\s+done\s+8000 tok/);
-  assert.match(t, /── Narrative/);
-  assert.match(t, /builder finished/);
+  assert.match(t, /\n ▶ athena\s/);
+  assert.match(t, /\n ✔ hephaestus\s/);
+  assert.match(t, /\n now {3}⟦•─•⟧ athena is working: Implement the deck router/);
+  assert.match(t, /\n next {2}nothing queued/);
 });
 
 test('forge: gates, attempts, findings, the flaky note and a coloured live diff', () => {

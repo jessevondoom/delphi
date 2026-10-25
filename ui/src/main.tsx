@@ -6,6 +6,7 @@ import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
 import { initial } from './fold.ts';
+import { Activity, title } from './title.ts';
 import { loadHistory } from './attach.ts';
 import { capabilities, envTheme, useCapabilities, type Info, type Rgb } from './theme.ts';
 
@@ -62,7 +63,7 @@ if (observeAt >= 0) {
       const b = shown === 'forge' ? st.builds[st.builds.length - 1] : undefined;
       const diff = b ? await c.call('observe.diff', { task_id: b.task_id }).catch(() => null) : null;
       c.close();
-      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff, live: {}, connected: true, still: true, now: 0 }, process.stdout.columns || 80, process.stdout.rows || 24);
+      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff, live: {}, connected: true, still: true, now: Date.now() }, process.stdout.columns || 80, process.stdout.rows || 24);
       console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
       process.exit(0);
     } catch (e: any) {
@@ -121,6 +122,13 @@ const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.
 term.once('ev', () => {}); // keep the emitter alive until the app subscribes
 term.start();
 const { dark, forced, bg } = await detectDark(term);
+// The window title says what the workspace is doing, so a minimised or background window shows it too.
+const busy = new Activity();
+for (const a of Object.values(history.approvals)) busy.seedApproval(a.id, mission);
+const retitle = () => term.setTitle(title(info.version, busy));
+ev.on('notification', (n: any) => { if (busy.feed(n)) retitle(); });
+ev.on('reconnected', () => { busy.reset(); retitle(); });
+retitle();
 const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} />, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode

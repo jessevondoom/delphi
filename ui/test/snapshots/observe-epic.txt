@@ -3,9 +3,13 @@ delphi v0.5 · epic
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
- t_1 build · Implement the deck router
-  ● athena       running       1200 tok
-    ✔ hephaestus   done          8000 tok
+                      earlier                                 now                              later
+ ▶ athena             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●═══════════════════════
+ ✔ hephaestus            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┆
+
+ now   ⟦•─•⟧ athena is working: Implement the deck router
+ next  nothing queued
+ path  athena  about 2 min
 
 
 
@@ -17,14 +21,10 @@ delphi v0.5 · epic
 
 
 
-── Narrative ───────────────────────────────────────────────────────────────────────────────────────
- t_1 started
- builder finished
 
 
 
 
-
-
+                                                                                       pace  ▁▃▇▄█▂
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 1 running  ·  3500 tokens                                                        ← →  ·  ○ ● ○ ○ ○ ○

@@ -3,8 +3,12 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
- t_1 build · Implement the deck router
-  ● athena       running       1200 tok
+                      earlier                                 now                              later
+ ▶ athena                                                     ━●════════════════════════════════════
+
+ now   ⟦•─•⟧ athena is working: Implement the deck router
+ next  nothing queued
+ path  athena  about 3 min
 
 
 
@@ -15,10 +19,6 @@ delphi v0.5 · epic
 
 
 
-
-
-── Narrative ───────────────────────────────────────────────────────────────────────────────────────
- t_1 started
 
 
 

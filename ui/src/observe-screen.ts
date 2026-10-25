@@ -6,6 +6,7 @@ import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
+import { epicRail } from './epic-rail.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -101,27 +102,9 @@ export function epicOrder(st: OState): { n: OState['nodes'][string]; depth: numb
   return out;
 }
 
+/** The epic as a rail, with its narrative and the pace row (`epic-rail.ts`). */
 function epic(m: OModel, w: number, h: number): string[] {
-  const order = epicOrder(m.st);
-  const lines: string[] = [];
-  if (!order.length) lines.push(dim('  No agents have run yet in this mission.'));
-  const sel = Math.min(m.selNode, Math.max(0, order.length - 1));
-  let last = '';
-  order.forEach(({ n, depth }, i) => {
-    if (n.task_id !== last) {
-      last = n.task_id;
-      const t = m.st.tasks[n.task_id];
-      lines.push(chalk.bold(text(m)(` ${n.task_id} ${t?.flow ?? ''}${t ? ` · ${clean(t.prompt, 60)}` : ''}`)));
-    }
-    const row = `${name(m, n.role).padEnd(12)} ${n.state.padEnd(10)} ${kilo(n.tokens).padStart(7)} tok`;
-    lines.push('  ' + '  '.repeat(depth) + colored(glyph(n.state) + ' ', stateColor(n.state)) + (i === sel ? chalk.inverse(roleCol(m, n.role)(row)) : roleCol(m, n.role)(name(m, n.role).padEnd(12)) + text(m)(row.slice(12))));
-  });
-  const storyH = 9;
-  const treeH = Math.max(3, h - storyH);
-  const tree = lines.slice(m.scroll, m.scroll + treeH);
-  while (tree.length < treeH) tree.push('');
-  const story = [rule(m, w, 'Narrative'), ...m.st.narrative.slice(-(storyH - 1)).map((l) => text(m)(' ' + clean(l, w - 3)))];
-  return [...tree, ...story];
+  return epicRail(m, w, h);
 }
 
 function forge(m: OModel, w: number, h: number): string[] {
