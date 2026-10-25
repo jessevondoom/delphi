@@ -62,7 +62,7 @@ if (observeAt >= 0) {
       const b = shown === 'forge' ? st.builds[st.builds.length - 1] : undefined;
       const diff = b ? await c.call('observe.diff', { task_id: b.task_id }).catch(() => null) : null;
       c.close();
-      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff, live: {}, connected: true, still: true, now: 0 }, process.stdout.columns || 80, process.stdout.rows || 24);
+      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff, live: {}, connected: true, still: true, now: Date.now() }, process.stdout.columns || 80, process.stdout.rows || 24);
       console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
       process.exit(0);
     } catch (e: any) {

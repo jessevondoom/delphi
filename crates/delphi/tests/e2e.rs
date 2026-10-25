@@ -1363,7 +1363,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
         std::thread::sleep(Duration::from_millis(120));
     }
     o.wait_for("· epic");
-    o.wait_for("Say something");
+    o.wait_for("nothing queued"); // the rail view: one row per task, then now, next and path
     for _ in 0..6 {
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));

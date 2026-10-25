@@ -43,6 +43,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
 
   const load = () => cmd.call('observe.state', {}).then((s: OState) => {
     setSt(s);
+    setNow(Date.now()); // the rail's waterline is this moment
     if (!picked.current) { picked.current = true; setView((s.default_view as View) ?? 'epic'); }
   }).catch(() => setConnected(false));
 
@@ -108,8 +109,8 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
       if (e.t !== 'key' || e.shift || e.alt) return;
       if (e.k === 'right') { step(1); return; }
       if (e.k === 'left') { step(-1); return; }
-      if (e.k === 'down') { v === 'epic' ? setSelNode((x) => Math.min(x + 1, Math.max(0, epicOrder(R.current.st).length - 1))) : setScroll((x) => x + 1); return; }
-      if (e.k === 'up') { v === 'epic' ? setSelNode((x) => Math.max(0, x - 1)) : setScroll((x) => Math.max(0, x - 1)); return; }
+      if (e.k === 'down') { setScroll((x) => x + 1); return; }
+      if (e.k === 'up') { setScroll((x) => Math.max(0, x - 1)); return; }
       if (e.k === 'pgdn') { setScroll((x) => x + 10); return; }
       if (e.k === 'pgup') { setScroll((x) => Math.max(0, x - 10)); return; }
     };
