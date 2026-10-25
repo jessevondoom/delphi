@@ -1,4 +1,4 @@
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle                              navigate: shift+arrows · ○ ● ○
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle                                    navigate: arrows · ○ ● ○
 delphi v0.5 · /proj
 
 ❯ Compare a table and a file for the retry queue.
@@ -27,4 +27,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · shortcuts: ?                                   navigate: shift+arrows · ○ ● ○
+0 tokens · approvals · shortcuts: ?                                         navigate: arrows · ○ ● ○

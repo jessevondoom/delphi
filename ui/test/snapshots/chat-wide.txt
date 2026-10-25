@@ -1,4 +1,4 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                     navigate: shift+arrows · ○ ● ○
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                           navigate: arrows · ○ ● ○
 delphi v0.5 · /proj
 
 
@@ -31,4 +31,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ and then?
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortcuts: ?                       navigate: shift+arrows · ○ ● ○
+0 tokens · approvals · 2 waiting · shortcuts: ?                             navigate: arrows · ○ ● ○
