@@ -59,7 +59,8 @@ Scope (D-06, D-07, D-13, D-14, D-15), budgets (D-10), learning autonomy (D-11), 
 | **4. Council** | 003 §4 | `/council` with in-memory barrier, heterogeneous seats, daemon-filled Minority Report, deterministic escalation | Barrier, fabricated-dissent and heterogeneous-assignment tests pass; one real decision taken through a Council |
 | **5. Observe & recall** | 005 §4, 004 (FTS5), 006 §2 | `delphi narrator` agents pane (models, tokens, spend) + 4 views (Epic, Council, Forge, Archives); `delphi kb search` (two FTS tables + triggers); signed release + Homebrew; simplified `update` (`.upstream` files) | `kb search "[REV-SEC-04]"` ranks #1; FTS sync and rebuild tests pass; tampered-binary and constitution-gate tests pass |
 | **3c. Model pool (D-26)** (built 2026-10-24) | 002 §3.1 r5, §4.1; 003 §3.2, §4; 005 §2.3–2.5 | `[routing.pool]` and `[routing.targets]`; exhaustion distinguished from rate limits; pool state with re-probe; capability-based route resolution; mid-span promotion across families; confirm-or-park for weaker substitutes; Council and retry ladder read the pool; `delphi models` | Spec 002 §4.1 tests 1–7 and 6a pass; an unchanged config routes as before; a real two-family run finishes on the substitute with `model.promoted` in the log. Eight milestones, about 72 h: [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) |
-| **6. Usage-gated** | 004 vectors + coaching, 006 diff3, 007 Plane 3, 008 §2–3 | Each item starts only when a recorded usage need justifies it | The relevant spec's verification plan |
+| **6. Usage-gated** | 004 §3.5 reranker and §4 coaching, 006 diff3, 007 Plane 3, 008 §2–3 | Each item starts only when a recorded usage need justifies it. **Vectors and hybrid search are built** (004-A1, 004-A2; PRs #82, #89), and are no longer in this step | The relevant spec's verification plan |
+| **8. Xenia Phase 1** (D-29) | 011, 012 | Roster-rooted signed git store; kinds `memory`, `endorsement`, `tombstone`; sync with freshness and history walk; publish gate; endorsement to L2. Plan: [`xenia-phase-1-plan.md`](xenia-phase-1-plan.md), milestones X0 to X11 | 011 tests 1–31 and 012 tests 1–23, the 3-admin chain test, parser fuzzing, the live recovery drill, then a 2-week dogfood gate with 3 humans (011 §1.4) |
 | **7. Deferred** | 007 Planes 1–2; direct OpenAI API and local drivers | Not scheduled | Revisit at a future roadmap review |
 
 ## 4. Remaining Work by Estimated Effort
@@ -68,15 +69,20 @@ Hours are focused build time including tests (the unit `specs/005c` uses). The *
 
 | Effort | Item | Gate | Basis |
 | ---: | :--- | :--- | :--- |
-| 60+ h | Federation planes 1–2 (`specs/007`) | Deferred; needs a second operator or machine | rough |
+| ~150 h | Xenia Phase 1 (`specs/011`, `012`), milestones X0 to X11, 110–200 h | D-29 item 4 lifted by the operator 2026-10-25, building has started; the dogfood gate needs 3 humans | plan |
+| 50+ h | Federation planes 1–2 (`specs/007`), less the identity work Xenia builds first | Deferred; needs a second operator or machine | rough |
 | ~30 h | First live connector run and what it shows, formatters, promotion card, harness bridge (`specs/010`) | Needs the operator's Google OAuth client | rough |
-| ~30 h each | Step 6: `sync`, watches, `/rewind` | Each starts only when `delphi needs` says so | rough |
+| ~30 h each | Step 6: watches, `/rewind` | Each starts only when `delphi needs` says so | rough |
+| ~15–30 h | Step 6: `delphi sync` (007 Plane 3); about half if amendment 007-A2 narrows it to rule proposals (ratified 2026-10-25) | `delphi needs sync`: a team repo with a remote | rough |
 | ~15 h | Console half of `specs/005b` (decks, inbox, header states) | After the Narrator trial | stated (`005c`) |
 | ~14 h each | Slack connector, Zoom connector | Need admin steps from the operator | rough |
 | ~14 h | Open red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`) | None | rough |
 | ~14 h | Fixes from the Narrator trial, then the group-chat Council view | Needs the operator to try the Narrator | rough |
-| ~12 h each | Step 6: vectors, coaching automation, diff3 update | Each gated by `delphi needs` | rough |
+| ~12 h each | Step 6: coaching automation (`/retro`), diff3 update | Each gated by `delphi needs` | rough |
+| ~8 h | Step 6: cross-encoder reranker over the top search results (a second packaged model) | At least 3 confirmed search misses (`delphi kb miss`; `RERANK_MISSES`) | rough |
 | ~8 h | Direct OpenAI API driver | Deferred; needs a key to test | stated (review: "roughly a day") |
 | not sized | Harness session resumption (deferred); Gemini Builder (blocked on `gemini --acp`) | Deferred / blocked outside Delphi | n/a |
 
 **Step 3c (the model pool, D-26) is built** (M1 to M8, 2026-10-24, about 72 h of planned work): see [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) for what each milestone did and what is left. What remains of it: `/models` in the full-screen console (`ui/`), the Narrator's target-versus-actual strip, and live samples for the Anthropic API, the Gemini API and Bedrock exhaustion signals.
+
+**Vectors and hybrid search are built** (2026-10-24 and 2026-10-25): local `bge-base` embeddings with `sqlite-vec`, reciprocal-rank fusion, preloaded vectors for shipped documents, `delphi kb eval` (hybrid R@10 0.88, MRR 0.58 on `dev/kb-eval.json`). The reranker is the next retrieval lever and is gated like the rest of Step 6. The librarian (spec 013) therefore no longer waits on retrieval quality; its remaining build trigger is the Xenia corpus (see [`xenia-phase-1-plan.md`](xenia-phase-1-plan.md) §5.1).

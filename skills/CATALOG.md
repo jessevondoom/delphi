@@ -27,6 +27,8 @@ Built-in skills ship no scripts (D-02). A rule worth enforcing is compiled into 
 `delphi lint` verifies that every `templates/…` file a `SKILL.md` names exists and that every `delphi check <kind>` it names is a real kind.
 
 ### 1.1 Checks (`delphi check <kind> <path>`)
+The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, `review-md`, `spec`) are also the engine's read-only `check` tool, so a role with no shell calls them directly; the path guard and trust-tier tracking apply as for `read_file`. `kb`, `tui` and `skill` need a directory and run from the command line.
+
 | Kind | Enforces | Used by |
 | :--- | :--- | :--- |
 | `delphi check dag` | Task or milestone graph: unique ids, known dependencies, no cycle, valid tier, spec links; prints parallel waves and the critical path. | `task-decomposition`, `roadmap-sequencing` |
@@ -54,9 +56,9 @@ Built-in skills ship no scripts (D-02). A rule worth enforcing is compiled into 
 | `handoff-packaging` | Packages minimal pointer-based handoffs per [GOVERNANCE.md](../GOVERNANCE.md) §3.1. | `delphi check handoff`, `templates/handoff-envelope.yaml` |
 | `retrospective-facilitation` | Conducts post-mission retrospectives to coach the agent team. | instructions |
 | `knowledge-compaction` | Compacts verbose mission logs and scratchpads into clean summaries at mission close. | `delphi check provenance` |
-| `review-md-distillation` | Updates `REVIEW.md` and `context/heuristics.md`, and flags 2-strike rules for promotion to checks. | `delphi check review-md` |
+| `review-md-distillation` | Keeps the `REVIEW.md` rubric within its budget, and flags 2-strike rules for promotion to checks. | `delphi check review-md` |
 | `contradiction-pruning` | Detects stale claims, broken file links, or superseded specs. | `delphi check kb` |
-| `lesson-promotion` | Coaches agents by updating `memory/agents/<role>/lessons.md` under the Rule of 25. | `delphi check rules`, `templates/lesson-rule.md` |
+| `lesson-promotion` | Adds, corrects or retires rules in `memory/agents/<role>/lessons.md` and `context/heuristics.md` under the Rule of 25. | `delphi check rules`, `templates/lesson-rule.md` |
 
 ### 2. **Builder** (Lead Engineer, Builder & Script Forger)
 | Skill | Purpose | Backing |
@@ -129,3 +131,5 @@ Built-in skills ship no scripts (D-02). A rule worth enforcing is compiled into 
 ## 3. Growing a Skill
 
 Start with instructions. Promote part of a skill into a check when a rule is violated twice (`[H-005]`), or when a computation (graph walk, schema, count) costs the model more tokens than a command costs the binary. A promoted check is enforcement code: its merge is Red-tier.
+
+Descriptions are the only text an agent sees before it loads a skill, so they are tested: `python3 -I dev/skill_trigger_eval.py audit` checks their shape and flags look-alike pairs offline, and `… trigger <scratch dir>` asks a cheap model which of a role's skills each case in `dev/skill-evals/` should load. When a case misses, fix the overlap in the descriptions (and add a case for it), not the model. Add a case whenever a skill is added or its description changes.

@@ -125,3 +125,17 @@ Unit tests in `crates/delphi/src/avatar.rs` verify:
 1. `badge_width_invariants`: All 63 role/state combinations produce exactly 5 display characters.
 2. `mascot_row_width_invariants`: All 63 role/state combinations produce exactly 7 characters across all 3 rows.
 3. `scout_has_no_mouth`: The `scout` role never renders `_` or `─` in any state.
+
+---
+
+## 7. Amendment 005a-A1: Badge Animation Cadence (approved by the operator 2026-10-25)
+The 1-line badge strip is now the only place an agent's state shows in a window header (see [`005b`](005b-deck-navigation-and-visual-interface.md) A3 and [`005e`](005e-console-ux-review-and-redesign.md) §10.2), so §4's states are animated by one timer:
+
+| State | Rule |
+| :-- | :-- |
+| Idle blink | `⟦-_-⟧` for 150 ms about every 5 s (§2 INV-AVATAR-07 still holds) |
+| Thinking | the two pan frames swap every 600 ms while a reasoning delta arrived in the last 1.5 s |
+| Working, Waiting, Escalated | static frames |
+| Success | `⟦^─^⟧` held for 3 s, then idle |
+
+A badge is redrawn only when its frame changes. `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin every badge to its static frame. The invariants of §2 and the tests of §6 are unchanged.

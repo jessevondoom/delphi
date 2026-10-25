@@ -3,7 +3,7 @@ id: spec-005b-deck-navigation-and-visual-interface
 title: "005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer"
 author: architect
 timestamp: 2026-10-24T00:52:00Z
-status: approved   # Amendment 005b-A2 (header and footer tidy) approved by the operator, 2026-10-25
+status: approved   # Amendments 005b-A2 (header and footer tidy) and 005b-A3 (animated badge strip, soft-fill chat, ticker, narrator) approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -96,6 +96,15 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 2. **Header line 2** is separated from line 1 by one blank row, and reads `delphi v<version> · <working directory> · <pane>` where `<pane>` is `activity` (Left Deck), `chat` (Center Deck) or `decisions` (Right Deck).
 3. **Footer, right.** The only deck indicator reads `← / ? → · ○ ● ○`; it is the single place with navigation hints (`←` `→` move between decks, `?` opens help). Shown at 64 columns and wider; below that only the dots. The `shortcuts: ?` item is gone.
 4. **Footer, left.** `<tokens> tokens`, then the approval mode only when it is not the default (`accept edits`, `auto`), then `N waiting` when decisions are pending. The word `approvals` is no longer shown for the default mode.
+
+### 2.4 Amendment 005b-A3: Badge Strip, Soft-Fill Chat, Activity Ticker, Narrator (approved by the operator 2026-10-25)
+> This amendment is part of the approved spec and is specified in full, with rendered mockups, in [`005e`](005e-console-ux-review-and-redesign.md) §§5-11 (mockups in `assets/005e/`). Where §1.3, §3, §4, A1 and A2 differ from it, this amendment governs; the drawings in §3 and §4 that predate it are illustrative of layout only.
+
+1. **Header.** Line 1 is always the agent strip: badges only, fixed role order, no names, no state words, no status or alert text. A badge's state is carried by its animation (005a-A1); an agent that needs the operator shows `⟦x?x⟧` and the footer counts `N waiting`. Line 2 (`delphi v<version> · <working directory> · <pane>`) sits **directly under the strip, with no blank row between them** (supersedes A2 item 2); one blank row follows it.
+2. **Footer.** Left: `<tokens>  ·  <approval mode>`, the mode always shown (`default` dim, `accept-edits` plain, `auto` in the warning-red colour, never reverse video), then `N waiting` when decisions are pending (supersedes A2 item 4). Right: `← / ? →  ·  ○ ● ○`. Every separator between footer items is `  ·  ` (two spaces, a middle dot, two spaces). `Shift+Tab` cycles the mode at once with no confirmation.
+3. **Chat deck.** Messages are tinted, square blocks with the speaker's badge, name and time on a label row above the block: the operator's right-aligned with dim text, an agent's left-aligned with full-contrast text, each hugging its text up to 80 % of the window. No frames. The `✔ finished` marker is not shown in the chat.
+4. **Activity deck.** A ticker: running spans (thinking, writing, tool call in progress) at the bottom, tail only, wrapped to the window width; finished spans stay above as scrollable history entries led by a `✔ finished` chip.
+5. **The Observer is the narrator window** (supersedes §3's Observer views and §4.2's navigation and footer). Six views (`council`, `epic`, `forge`, `agents`, `archives`, `thinking`; `spend` is removed and no money is shown anywhere in the window); header and footer as the console's with the pane name in lowercase and no working directory; the footer reads `<N> running  ·  <tokens> tokens` and `← →  ·  ○ ● ○ ○ ○ ○` with no `/` and no `?`; plain `←` `→` change view (no `Shift+arrows`, `Tab` or digits); `epic` is the rail with a "now" waterline and a critical path; `council` is a live card layout with blind-round, debate and verdict states; the first body row is a reserved attention slot. The classic Rust Observer (`--classic`) is retired.
 
 ---
 

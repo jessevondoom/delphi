@@ -43,6 +43,8 @@ A spec is the contract Builder implements and Red-Team attacks. It should be sho
 7. Start from `templates/spec-skeleton.md`, with provenance frontmatter and `status: draft`. An agent never marks a spec `approved`.
 8. Run `delphi check spec <file>`.
 
+No shell? Call the `check` tool with `kind: spec` and the draft's path; it returns the same verdict.
+
 ## Done when
 The check passes, every criterion is testable, and the simpler alternative is a real alternative.
 

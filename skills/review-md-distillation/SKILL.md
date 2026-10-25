@@ -1,6 +1,6 @@
 ---
 name: review-md-distillation
-description: "Update REVIEW.md and heuristics from review outcomes within their budgets; flag rules violated twice for a deterministic check. Use after review rounds."
+description: "Keep the REVIEW.md rubric short: merge repeated findings, flag rules violated twice for a deterministic check. Use when the rubric nears its line budget or a review finding recurs."
 authorized_agents:
   - orchestrator
 input_schema:
@@ -39,6 +39,8 @@ The rubric stays short by moving enforceable rules into code. Prose is for judge
 4. Merge or drop rules the evidence no longer supports.
 5. Write the edit as a proposal; the rubric changes only through ratification.
 6. Run `delphi check review-md REVIEW.md` against the proposed text. It enforces the line budget and unique rule IDs.
+
+No shell? Call the `check` tool with `kind: review-md` and the proposed file's path; it returns the same verdict.
 
 ## Done when
 The proposal is shorter or equal in size, each added rule cites evidence, and each promotion names the check that replaces it.

@@ -112,8 +112,8 @@ To prevent a compromised or hallucinating peer instance from poisoning another o
 | **$L_5$** | `user_ratified` | Explicitly ratified by the **local** operator (the **operator**). | **Yes** |
 | **$L_4$** | `internal_empirical` | Verified locally by **Builder** deterministic tests/scripts in this workspace. | **Yes** |
 | **$L_3$** | `internal_generated` | Written locally by an agent with no test evidence (D-08). | **No** (requires local test → $L_4$, or the **operator** ratification → $L_5$). |
-| **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. **Or** (amendment 007-A1, proposed with `specs/011`): a xenia `memory` record validly endorsed by a steward other than its author's person, under a current freshness statement (`specs/011` §4 and §5.1). | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
-| **$L_1$** | `federated_peer` | Unattested A2A response or `delphi://` slice from a federated peer. | **Strictly Forbidden (`[H-004]`)** |
+| **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. **Or** (amendment 007-A1, ratified 2026-10-25 with `specs/011`): a xenia `memory` record validly endorsed by a steward other than its author's person, under a current freshness statement (`specs/011` §4 and §5.1). | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
+| **$L_1$** | `federated_peer` | Unattested A2A response or `delphi://` slice from a federated peer, or a file that `delphi sync` merged from a shared repository without a verified signature (amendment 007-A2). | **Strictly Forbidden (`[H-004]`)** |
 | **$L_0$** | `external_untrusted` | Scraped web pages, third-party repos, or transitive `external_untrusted` data forwarded by a peer. | **Strictly Forbidden (`[H-004]`)** |
 
 ### 3.1 Transitive Taint Preservation (Anti-Laundering Rule)
@@ -140,7 +140,7 @@ For teams sharing a team registry, a separate git repository cloned into the wor
 1. **Pre-Sync Git Snapshot:** Creates `refs/delphi/pre-sync/<timestamp>` so `delphi sync --undo` is instantaneous.
 2. **AST Rule-ID Merge as Proposals (lattice-consistent):** Parses incoming `context/heuristics.md` and `REVIEW.md` by rule ID (`[H-NNN]`, `[REV-*-NN]`). A teammate's rules are at best $L_2$ (`federated_verified`), which §3 makes ineligible for these files. So **every** incoming rule change, new, edited, or deleted, is staged in `.delphi/sync/proposals/` and is never applied directly. The **operator** ratifies them in batch (`delphi sync --review`), which raises them to $L_5$. Changes to `REVIEW.md` §5 suppressions are highlighted as security-sensitive, because a single suppression line can silence **Red-Team**. Raw `<<<<<<<` conflict markers are never written into active prompt files.
 3. **Rule of 25 Overflow:** If ratifying would push `active_rules > 25` or exceed the byte cap, `delphi sync` refuses to apply and records an overflow proposal. It never calls an LLM itself, so sync stays deterministic and offline. **Orchestrator's** ExpeL pruning runs at the next `/retro`.
-4. Non-prompt Zone 2 files (`context/domains/**`, `specs/**`) merge with ordinary Git semantics, stamped `federated_verified` in frontmatter.
+4. Non-prompt Zone 2 files (`context/domains/**`, `specs/**`) merge with ordinary Git semantics, stamped `federated_peer` ($L_1$) in frontmatter. **Amendment 007-A2 (ratified by the operator, 2026-10-25):** nothing in Plane 3 verifies a signature, so a plain merge cannot earn `federated_verified`. Shared knowledge that should reach $L_2$ travels through Xenia (`specs/011`, `specs/012`), where a signed record needs a steward's endorsement under a current freshness statement. `delphi sync` keeps items 1–3 (rule proposals, which all end in operator ratification) and this item at $L_1$.
 
 ---
 
@@ -153,3 +153,4 @@ For teams sharing a team registry, a separate git repository cloned into the wor
 6. **Revocation Test:** A token works, is revoked via `delphi cap revoke <jti>`, and the next resolve fails.
 7. **Inbound Budget Test:** A peer without a standing grant sends an A2A task; it waits in the console queue and spends zero tokens until approved.
 8. **Suppression Injection Test:** A synced `REVIEW.md` adding a `[SUPPRESS-*]` rule is staged as a highlighted proposal and is not active until ratified.
+9. **Plane 3 Tier Test (007-A2):** a file merged by `delphi sync` into `context/domains/` is stamped `federated_peer`, is not returned by an agent's search, and cannot reach `federated_verified` except as a Xenia record.

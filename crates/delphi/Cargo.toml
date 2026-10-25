@@ -1,6 +1,6 @@
 [package]
 name = "delphi"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 rust-version = "1.85"
 description = "Delphi: terminal-first multi-agent working environment (roadmap Step 1: init, doctor, lint)"
@@ -12,6 +12,7 @@ delphi-core = { path = "../delphi-core" }
 delphi-sandbox = { path = "../delphi-sandbox" }
 delphi-engine = { path = "../delphi-engine" }
 delphi-adapter = { path = "../delphi-adapter" }
+delphi-xenia = { path = "../delphi-xenia" }
 toml_edit = "0.25"
 flate2 = "1"
 tar = "0.4"
