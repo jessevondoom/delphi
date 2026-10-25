@@ -21,7 +21,7 @@ Origin and reasoning: [`gap-closure-plan-2026-10-25.md`](../missions/2026-10-23-
 
 ### 1.1 Non-Goals
 - **Starting work from a message.** A reply is a verb and a code, nothing else. Command ingress from a chat channel is prompt injection waiting to happen and is out of scope.
-- **Approving a Red action remotely.** A relay can deny anything and approve only Amber (§3).
+- **Approving a Red action remotely without a second factor.** A relay can deny anything and approve Amber; it approves Red only with the operator's authenticator code, which the daemon checks (§3, §7).
 - Reading the operator's own mailbox. The relay reads a dedicated one.
 
 ### 1.2 Simpler Alternative Considered
@@ -44,9 +44,9 @@ A third client scope beside `console` and `narrator`, on its own socket (`<run>/
 | Card | Console | Relay (email) |
 | :-- | :-- | :-- |
 | Amber | approve, allow similar, deny | approve, deny |
-| Red (merge, pull request, outbound, destructive, constitution) | approve, deny | **deny only** |
+| Red (merge, pull request, outbound, destructive, constitution) | approve, deny | deny; **approve only with step-up** (§7) |
 
-A Red card is still sent to the operator, so they know it is waiting, with the text "approve it at the console, or deny it here" and no approve link. An optional second factor that would let a Red action be approved remotely is §7.
+A Red card is still sent to the operator, so they know it is waiting. Without step-up the text says "approve it at the console, or deny it here" and there is no approve link; with it (§7) the card explains the extra code.
 
 ## 4. The relay process (`delphi relay`)
 Run in a terminal: `delphi relay` (the relay), `delphi relay check` (log in to the mailbox and report, sending and reading nothing).
@@ -94,6 +94,26 @@ The **code is the secret; the address is a filter**. A message that fails any st
 
 **What leaves the machine.** By default only the card's one-line summary, the role, task and tool, and a hash prefix. The provider that carries the mail sees that. `detail = "full"` adds the payload. Everything passes through the daemon's redactor first.
 
+## 5.1 The Telegram channel
+`[relay] channel = "telegram"` carries the same cards to a Telegram bot. It polls the Bot API (`getUpdates`), so no port is opened, and uses the same core: single-use codes, rate limits, notices, step-up.
+
+- **Cards** are plain-text messages (no markup is parsed, so nothing in a summary can format itself) with **Approve** and **Deny** buttons. A tap sends the same `APPROVE <code>` / `DENY <code>` the email links do, so it is answered by the same checks. A Red card with step-up has an Approve button too; tapping it asks for the authenticator code, and the operator types `APPROVE <code> <123456>`.
+- **The sender** is the numeric user id Telegram attaches to every update (`from.id`), not a username, which can change hands. The allowlist is `chat_id` and `also_allow`, both ids.
+- **Only a private chat with that user counts.** A message in a group or a channel, or one whose chat is not the sender's own, is not authenticated and is ignored (and the operator is told once). A bot's message is never acted on.
+- **Replies** are the button's data or the first non-blank line of a typed message. Updates are acknowledged by offset so none is delivered twice.
+- **The bot token** is a credential reference (`keychain:`, `env:`, `command:`), never in the file. It appears in every request URL, so it is removed from every error message; the HTTP client's errors are scrubbed and tested for it. Plain `http` is accepted only for a server on this machine.
+
+```toml
+[relay]
+channel = "telegram"
+
+[relay.telegram]
+chat_id = 123456789                      # your numeric user id (message @userinfobot to find it)
+also_allow = []                          # more numeric ids whose replies count
+credential = "keychain:delphi-relay-telegram"   # the token BotFather gave you
+```
+Set up: make a bot with @BotFather, open a chat with it and press Start (Telegram does not let a bot message someone who has not), store the token, add the table, `/ratify`, then `delphi relay check` (it asks the bot who it is) and `delphi relay`.
+
 ## 6. Parking (away mode)
 `[away] approval_park_max_sec` (default 0, off) is how long a card may stay outstanding across re-raises.
 
@@ -103,9 +123,17 @@ The **code is the secret; the address is a filter**. A message that fails any st
 - `delphi run --on-card relay` answers nothing and waits, which pairs with this: the run's `--timeout` bounds how long. The merge card is still denied by the run so it can end at "ready to merge".
 
 ## 7. Not yet built
-- **TOTP step-up** so a Red action, and later the high-risk reviews of spec 015, can be approved remotely with a second factor the mailbox does not hold.
-- **Chat channels** (Slack Socket Mode, Telegram). The channel interface is two functions (`send`, `poll`); the rules above live once, in the core.
+- **Slack** (Socket Mode). It needs a WebSocket client. The channel interface is two functions (`send`, `poll`) and the rules above live once, in the core, so it is an adapter and nothing more.
 - A `doctor` line for the relay.
+
+## 7.1 Step-up: approving a Red action by reply (TOTP)
+A stolen mailbox or chat account must not be able to approve a merge. With step-up, a Red approval needs something the mailbox does not hold: a six-digit code from the operator's authenticator app.
+
+- **Setup.** `delphi relay totp-enroll` makes a secret and shows it once, as a key and an `otpauth://` link, with the keychain command to store it. In `config.toml`: `[relay] step_up = "totp"` and `totp_credential = "keychain:delphi-relay-totp"` (any `keychain:`, `env:` or `command:` reference; never the secret itself). Both are in the ratified `[relay]` block. `delphi relay totp-check <code>` confirms the phone and the stored key agree.
+- **Use.** A Red card's message explains it. The operator replies `APPROVE <card code> <6 digits>`. A code on a `DENY`, or a malformed one, is not a reply. `APPROVE <card code>` alone leaves the card code unspent and tells the operator what to add.
+- **The daemon checks, not the relay.** `approval.relay_resolve` takes the code with the answer and verifies it against the secret (RFC 6238, HMAC-SHA1, 30-second steps, one step of drift either side). Each code works **once**. Five wrong codes in five minutes lock step-up out for five minutes, even for the right code. A card can still be answered at the console meanwhile. The answer is logged as `relay:<channel>:<sender>+totp`.
+- **What it does not change.** Without `step_up` a relay still cannot approve a Red card. Amber approvals need no code. The card code stays single-use, so a wrong authenticator code spends it: one guess per card.
+- **What it does not protect.** Someone who holds both the mailbox and the phone. The secret is as safe as the credential store it sits in.
 
 ## 8. Setting it up
 1. Make a **dedicated mailbox** for Delphi (a new free Gmail account works; turn on 2-Step Verification and make an app password). Never use your own mailbox.
@@ -125,10 +153,21 @@ There is no remote execution backend, on purpose (a second sandbox is a second t
 
 Nothing here opens a port. Whether a true backend is worth building is a question for `delphi needs`, once this has been used for real work.
 
+### 8.2 Setting up Telegram instead of email
+1. Talk to @BotFather: `/newbot`, and keep the token.
+2. Open a chat with your new bot and press **Start**.
+3. Find your numeric user id (@userinfobot will tell you).
+4. `security add-generic-password -s delphi -a delphi-relay-telegram -w` (it prompts for the token).
+5. Add the `[relay.telegram]` table of §5.1, `/ratify`, `delphi relay check`, then `delphi relay` in a terminal or tmux pane.
+
 ## 9. Verification Plan
 Unit tests (`relay/`): verdict parsing; a card goes out with a token and, by default, only its summary; the token approves once and only once; strangers get no answer and no reply; the right address without authentication is refused and the operator told once, and the forgery does not use up the real code; a wrong token approves nothing and a duplicate message id is not processed twice; replies that are not a verdict or are auto-generated do nothing; a Red card can be denied but never approved (and has no approve link); what the daemon says back (too late, refused, down) reaches the operator; a card resolved elsewhere is closed and its code is dead; a re-raised card has a new code and the old one stays dead; caps hold; header injection through a summary is neutralised.
 
 Email tests: only the first line counts (quoted history, top-posting, reply-below-quote, blank lines); forged and failed authentication; a header the sender wrote does not vouch for them; DKIM/SPF alignment; out-of-office, bounce and bulk mail; HTML-only, quoted-printable and multipart bodies with attachments; no panic on garbage; plain-text composition with pre-filled links and no way to approve Red. Network tests against fake SMTP and IMAP servers on localhost: delivery with headers, login failures, unseen-only reads, oversize skipped, mark-seen; plain text refused for any host but localhost; the password never appears in `Debug` output.
+
+Step-up: the TOTP implementation matches the RFC 6238 and RFC 4226 test vectors and reads base32 as authenticator apps show it; a code is accepted one step either side and no further; a code works once; five wrong codes lock it out for five minutes, even for the right code; at the daemon, a Red approval is refused without step-up configured, without a code, with a wrong one, with a replayed one and with an unusable secret, is accepted with a valid one and logged `+totp`, and a Red denial never needs a code; at the relay, a code is accepted only on an approval, is forwarded only for a Red one, a missing code does not spend the card code, and a wrong one does.
+
+Telegram: a card goes to the operator's private chat with buttons whose data is the reply, in plain text, cut to Telegram's limit; a tap and a typed reply from a private chat are answers and the tap is acknowledged; updates are acknowledged by offset so none repeats; a group message, a chat that is not the sender's, a bot and an unknown update kind are not answers; the token's shape and the `https` rule are checked; failures are reported; and the real HTTP client, against a local server, posts JSON to the bot path, turns a refusal into an error, and never puts the token in an error message (including a refused connection).
 
 Daemon tests (`service.rs`, `tests/daemon.rs`): each socket accepts only its own token and the relay socket issues only relay tokens; the relay method list is fixed and everything else is refused by name; a relay receives only the listed event kinds and never model text; a relay can approve Amber, deny anything, and never approve Red, with a wrong hash, a second answer and the console/relay method split all refused; parking re-raises under a new id, the old id stays dead, nothing runs while parked, no model call is made, and the window ends.
 

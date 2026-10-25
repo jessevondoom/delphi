@@ -21,4 +21,5 @@ pub mod redact;
 pub mod server;
 pub mod spawn;
 pub mod time;
+pub mod totp;
 pub mod usage;
