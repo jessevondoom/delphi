@@ -1424,7 +1424,12 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     assert!(!big.contains("Pending decisions"), "no leftovers from the inbox:\n{}", big);
 
     // Leave, and the terminal comes back: alternate screen off, cursor on, mouse and paste modes off.
+    // A task may still be running here, in which case Ctrl+C asks once before leaving (`005e` §10.5).
     c.type_keys("\x03");
+    std::thread::sleep(Duration::from_millis(400));
+    if c.visible().contains("press Ctrl+C again to quit") {
+        c.type_keys("\x03");
+    }
     assert_eq!(c.wait_exit(), 0);
     std::thread::sleep(Duration::from_millis(200));
     let out = String::from_utf8_lossy(&raw.lock().unwrap()).to_string();

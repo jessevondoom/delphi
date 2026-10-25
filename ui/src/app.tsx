@@ -78,6 +78,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const stateRef = useRef(state);
   stateRef.current = state;
   const queueRef = useRef<string[]>([]);
+  const quitAskedAt = useRef(0); // when Ctrl+C last asked "again to quit"; a second press within 2 s leaves
   const searchRef = useRef(search);
   const inboxRef = useRef(inbox);
   const deckRef = useRef<0 | 1 | 2>(1);
@@ -303,7 +304,16 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           if (e.s === ' ' && comp.current.chars.length === 0 && deckRef.current === 1 && backRef.current > 0) { scroll(-(bodyH - 1)); return; }
           follow(); upd((c) => C.insert(c, e.s)); return;
         case 'ctrl':
-          if (e.c === 'c') { exit(); return; }
+          if (e.c === 'c') {
+            // Leave at once when nothing would be lost; otherwise ask once (`005e` §10.5).
+            const busy = comp.current.chars.length > 0 || queueRef.current.length > 0 || Object.keys(stateRef.current.running).length > 0;
+            const now = Date.now();
+            if (!busy || now - quitAskedAt.current < 2000) { exit(); return; }
+            quitAskedAt.current = now;
+            note('press Ctrl+C again to quit' + (Object.keys(stateRef.current.running).length ? ' (the running task is left to the daemon)' : ''));
+            return;
+          }
+          if (e.c === 'd') { if (comp.current.chars.length === 0) exit(); return; }
           if (e.c === 'j') { upd((c) => C.insert(c, '\n')); return; }
           if (e.c === 'a') { upd(C.home); return; }
           if (e.c === 'e') { upd(C.end); return; }

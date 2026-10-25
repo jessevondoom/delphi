@@ -164,10 +164,26 @@ fn pick_device() -> (Device, DType) {
     if std::env::var("DELPHI_EMBED_DEVICE").is_ok_and(|v| v == "cpu") {
         return (Device::Cpu, DType::F32);
     }
-    match Device::new_metal(0) {
-        Ok(gpu) => (gpu, DType::F32),
-        Err(_) => (Device::Cpu, DType::F32),
+    match metal_device() {
+        Some(gpu) => (gpu, DType::F32),
+        None => (Device::Cpu, DType::F32),
     }
+}
+
+/// The Metal device, made once, or `None` where there is none. Candle's Metal backend does not only return an
+/// error when it cannot start: on a macOS that lacks a system class it asks for (the macOS 14 runner of the release
+/// workflow: "class MTLResidencySetDescriptor could not be found") it panics, which would end the process on any
+/// search. That is caught here, and a machine with no GPU (a virtual machine) or an old macOS uses the CPU.
+pub(crate) fn metal_device() -> Option<Device> {
+    static GPU: std::sync::OnceLock<Option<Device>> = std::sync::OnceLock::new();
+    GPU.get_or_init(|| {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let made = std::panic::catch_unwind(|| Device::new_metal(0).ok());
+        std::panic::set_hook(hook);
+        made.ok().flatten()
+    })
+    .clone()
 }
 
 /// The package's metadata without loading the weights.
@@ -420,6 +436,15 @@ mod tests {
         // Different texts are not the same vector.
         assert!(cos(&vs[0], &vs[1]) < 0.999);
         assert_eq!(packed.embed_query("retry").unwrap().len(), 64);
+    }
+
+    #[test]
+    fn looking_for_the_gpu_never_ends_the_process_and_gives_one_answer() {
+        // Candle's Metal backend panics, rather than failing, on a macOS without a class it needs; that is caught.
+        let first = metal_device().is_some();
+        assert_eq!(first, metal_device().is_some(), "the answer is made once");
+        assert_eq!(pick_device().0.is_cpu(), !first || std::env::var("DELPHI_EMBED_DEVICE").is_ok_and(|v| v == "cpu"));
+        assert!(["the CPU", "the GPU (Metal)"].contains(&device_name()));
     }
 
     #[test]
