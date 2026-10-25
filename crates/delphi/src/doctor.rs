@@ -106,9 +106,19 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         r.push(Level::Ok, "5 links", "", "all links resolve (links to unseeded design records skipped)");
     }
 
-    // 6. Retrieval index (state.db arrives with the Step 2 daemon).
+    // 6. Retrieval index: the FTS5 tables against the chunks, and the vectors against the installed model.
     if ws.dir.join("local/state.db").exists() {
-        r.push(Level::Warn, "6 retrieval-index", "", "state.db present; integrity checks ship with Step 2");
+        match delphi_engine::kb::health(home, &ws.dir) {
+            Err(e) => r.fail("6 retrieval-index", "local/state.db", format!("{}; `delphi kb reindex` rebuilds it from the Markdown", e)),
+            Ok(h) => match (&h.installed_model, &h.indexed_model) {
+                (None, _) => r.push(Level::Ok, "6 retrieval-index", "", format!("{} document(s), {} chunk(s); no embedding model, so search is lexical only", h.documents, h.chunks)),
+                (Some(m), indexed) if indexed.as_deref() != Some(m.as_str()) && h.chunks > 0 => {
+                    r.push(Level::Warn, "6 retrieval-index", "", format!("the index has no vectors from the installed model {}; run `delphi kb index`", m))
+                }
+                (Some(m), _) if h.vectors < h.chunks => r.push(Level::Warn, "6 retrieval-index", "", format!("{} of {} chunk(s) have no vector yet (model {}); run `delphi kb index`", h.chunks - h.vectors, h.chunks, m)),
+                (Some(m), _) => r.push(Level::Ok, "6 retrieval-index", "", format!("{} document(s), {} chunk(s), all with vectors from {}", h.documents, h.chunks, m)),
+            },
+        }
     } else {
         r.push(Level::Skipped, "6 retrieval-index", "", "no state.db yet");
     }

@@ -61,7 +61,11 @@ pub fn run(args: Vec<String>) -> ! {
         let narrator_listener = bind_private(&l.narrator_sock);
 
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let daemon = Daemon::new(DaemonConfig::new(home.clone(), canon.clone())).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
+        let mut cfg = DaemonConfig::new(home.clone(), canon.clone());
+        if let Ok(v) = std::env::var("DELPHI_RELEASE_VERSION") {
+            cfg.binary_version = v;
+        }
+        let daemon = Daemon::new(cfg).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
         // The engine publishes through the daemon's hub, so attached clients see its events.
         let booted = crate::boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
         daemon.set_extension(booted.service.extension());

@@ -91,6 +91,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 **Recommendation:** **A.** Reopen when there are more than 50 missions *and* there's a logged search miss on a terminology-shift query.
 **Blocks:** spec 004 Part B, and the ExpeL deduplicator's similarity signal.
 **Status:** ✅ RATIFIED 2026-10-23: A — FTS5 BM25-only; reopen at >50 missions **and** a logged terminology-shift miss
+**Reopened 2026-10-24 by the operator:** option B, with the size limit raised: up to 150 MB of model in the binary, chosen for retrieval accuracy over size, run with `candle`, with local vectors in `sqlite-vec` fused with the lexical rankings by RRF. The operator did not wait for the reopen trigger. Recorded as Amendment 004-A1 (`specs/004` §3.5); `delphi init` still works offline because the model is inside the binary, not downloaded. Why B is acceptable now: the "~10 MB static binary" was a goal, not a requirement, and the measured gain (`delphi kb eval`, §3.5) is large on questions worded differently from the documents.
 
 ## 🟠 D-02 — Gate 2: Where deterministic helpers live
 **Context:** The barrier, provenance gate, base-branch rubric loader, path guard, and DAG validator are what keep agents in bounds. As Python scripts in `skills/*/scripts/`, they could be edited by the very agents and syncs they constrain, and they'd make Python a runtime dependency.
@@ -286,6 +287,8 @@ Supporting rules:
 - **2026-10-24:** after Step 3c M5, the operator decided two policy points, now in spec 002 §4.1: (1) prompt before downgrading to a weaker model, but if nobody answers within 5 minutes the task retries (looks again, asks again) rather than treating silence as a yes or a no; an explicit decline still waits for the target; (2) confirmations survive daemon restarts within the same session (the same mission), by being rebuilt from the mission log.
 - **2026-10-24:** the operator ratified spec 005 amendment 005-A6 (the model-pool and task-blocking event types: `model.exhausted`, `model.recovered`, `model.promoted`, `model.degraded_confirm`, `model.homogeneous`, `task.blocked`, `task.unblocked`, and the Models section of `status.md`), built in Step 3c M7.
 - **2026-10-25:** at the operator's request the model pool (D-26, Step 3c) was reviewed by reviewers from other model families; findings, verification and fixes are in `councils/step-3c-review/report.md`. One question is left for the operator there: whether a harness serving a tool-using role (it can only answer in text) should need confirmation like a weaker model.
+- **2026-10-25:** the operator asked to see every running agent and the model it is on, and ratified spec 005 amendment 005-A7 (a Running now section in the Narrator's agents view, `/agents` in the inline console, and the per-agent endpoint, model, tier and waiting fields in `observe.state`).
+- **2026-10-25:** the operator decided that a subscription harness serving a role that normally has Delphi's tools (so it answers in text only) does **not** need an extra confirmation: listing the harness in `allowed_endpoints` is the consent, and the `harness.fallback` event shows the role is text-only there. Recorded in spec 002 §4.1.
 
 ---
 

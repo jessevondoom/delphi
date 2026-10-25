@@ -47,7 +47,13 @@ fn main() {
         None => cmd_start(&args),
         Some(a) if a.starts_with("--") && a != "--version" => cmd_start(&args),
         // The daemon and its maintenance commands run from this same executable.
-        Some("__core") => delphi_engine::core_main::run(args[1..].to_vec()),
+        Some("__core") => {
+            // The daemon reports the release of this program, not of the library crate it is built from, so a client
+            // can tell a daemon left over from an older release.
+            // SAFETY: set before any thread exists.
+            unsafe { std::env::set_var("DELPHI_RELEASE_VERSION", env!("CARGO_PKG_VERSION")) };
+            delphi_engine::core_main::run(args[1..].to_vec())
+        }
         Some("lint") => cmd_lint(&args[1..]),
         Some("setup") => cmd_setup(&args[1..]),
         Some("self-update") => cmd_self_update(&args[1..]),
@@ -378,9 +384,14 @@ fn cmd_needs(args: &[String]) -> i32 {
 }
 
 fn cmd_kb(args: &[String]) -> i32 {
-    let (_home, ws) = match resolve_ws("kb", args) {
-        Ok(v) => v,
-        Err(code) => return code,
+    // `eval` and `model` work on documents and model files, not on a workspace.
+    let (home, ws_dir) = if matches!(args.first().map(String::as_str), Some("eval" | "model")) {
+        (home::delphi_home(flag(args, "--home").as_deref()), PathBuf::new())
+    } else {
+        match resolve_ws("kb", args) {
+            Ok((home, ws)) => (home, ws.dir),
+            Err(code) => return code,
+        }
     };
     // The flags that select the workspace are not part of the query.
     let mut rest: Vec<String> = Vec::new();
@@ -392,7 +403,7 @@ fn cmd_kb(args: &[String]) -> i32 {
             rest.push(a.clone());
         }
     }
-    delphi_engine::kb::run(&ws.dir, &rest)
+    delphi_engine::kb::run(&home, &ws_dir, &rest)
 }
 
 /// Bare `delphi`: create what is missing (workspace, model access), then open the console.

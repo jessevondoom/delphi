@@ -1,6 +1,6 @@
 [package]
 name = "delphi"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.85"
 description = "Delphi: terminal-first multi-agent working environment (roadmap Step 1: init, doctor, lint)"
@@ -30,6 +30,10 @@ include_dir = "0.7"
 anyhow = "1.0"
 ratatui = "0.29"
 unicode-width = "0.2"
+
+[features]
+# Compile the embedding model named by DELPHI_EMBED_MODEL_FILE into the executable (the release build; specs/004 §3.5).
+embedded-model = ["delphi-engine/embedded-model"]
 
 [dev-dependencies]
 vt100 = "0.15"

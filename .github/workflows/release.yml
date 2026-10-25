@@ -16,8 +16,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The embedding model (specs/004 §3.5): fetched at a pinned revision with checked sums, packed once, and
+  # compiled into every executable. Its artifact has no hyphen in its name so that `publish` does not collect it.
+  model:
+    name: embedding model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Fetch, check and pack
+        run: dev/fetch-model.sh "$RUNNER_TEMP/embed.dlphmdl"
+      # Preloaded vectors for the shipped documents; the script fails if the cache does not cover them.
+      - name: Preloaded vectors for the shipped documents
+        run: dev/build-seed-vectors.sh "$RUNNER_TEMP/embed.dlphmdl" "$RUNNER_TEMP/seed.dlphvec"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: embedmodel
+          path: |
+            ${{ runner.temp }}/embed.dlphmdl
+            ${{ runner.temp }}/seed.dlphvec
+          compression-level: 0
+
   build:
     name: build (${{ matrix.target }})
+    needs: model
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -41,8 +62,15 @@ jobs:
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match crate version $v"; exit 1; }
       - name: Add the target
         run: rustup target add ${{ matrix.target }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: embedmodel
+          path: ${{ runner.temp }}/model
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p delphi
+        env:
+          DELPHI_EMBED_MODEL_FILE: ${{ runner.temp }}/model/embed.dlphmdl
+          DELPHI_SEED_VECTORS_FILE: ${{ runner.temp }}/model/seed.dlphvec
+        run: cargo build --release --locked --target ${{ matrix.target }} -p delphi --features embedded-model
       # The full-screen console: one standalone executable (the JS runtime is compiled in), built for this target.
       - name: Build the console
         working-directory: ui
@@ -81,6 +109,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
+          pattern: "*-*-*"
           merge-multiple: true
       - name: Attest build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2

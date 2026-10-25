@@ -95,7 +95,7 @@ sandbox = "off"
 # check_command = ["cargo", "clippy"] # merge gate 2
 
 [rag]
-engine = "fts5"                      # D-01: BM25-only in v1; sqlite-hybrid (FTS5 + sqlite-vec + RRF) after the reopen trigger
+engine = "sqlite-hybrid"             # FTS5 + sqlite-vec + RRF (spec 004-A1). Lexical only when the build or install has no embedding model; DELPHI_EMBED_MODEL=off forces that
 max_pointer_results = 10
 exclude_untrusted_by_default = true
 

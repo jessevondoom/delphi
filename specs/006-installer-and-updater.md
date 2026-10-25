@@ -3,7 +3,7 @@ id: spec-006-installer-and-updater
 title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
-status: approved   # by the operator, 2026-10-23, after Council 002
+status: approved   # by the operator, 2026-10-23, after Council 002. The embedded-model note in §2.1 and doctor check 6 in §5 (Amendment 004-A1) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified
@@ -40,7 +40,7 @@ This specification defines how Delphi is packaged, distributed to multiple opera
 
 ### 2.1 Embedded Core Seed (`core-manifest.json`)
 The compiled `delphi` binary embeds the canonical read-only snapshot of all seed files alongside `core-manifest.json`. That manifest is signed with the release key and records each file's `blake3` hash and its provenance tier. Release files are tier $L_5$ by **release ratification**: the operator ratifies the release by installing a signature-verified build.
-- **Benefit 1:** `delphi init` works 100% offline with zero network calls. No embedding model is downloaded (D-01, ratified 2026-10-23).
+- **Benefit 1:** `delphi init` works 100% offline with zero network calls. No embedding model is downloaded: the one that powers semantic search is compiled into the binary (Amendment 004-A1, 2026-10-24, which raised the binary from about 20 MB to about 130 to 160 MB depending on the model, a size the operator chose). The model is part of the binary, so the release's signed checksums and build attestation cover it; the model's own origin (repository, revision, quantization) is recorded in the package header and shown by `delphi kb model info`. The release also compiles in preloaded vectors for the documents it ships (Amendment 004-A2, about 0.6 MB), so a fresh workspace has semantic search on its first query; the release stops if those vectors do not cover the seed.
 - **Benefit 2:** `delphi update` has the pristine ancestor needed for deterministic **Three-Way Merges** if an operator customized a built-in agent manifest. diff3 needs the ancestor's *content*, not just its hash. So `delphi init` and every `delphi update` write the installed release's Zone 1 files to `base/` in the workspace home (§3.1; read-only). `manifest.lock` records their `blake3` hashes so `doctor` can verify them.
 
 ### 2.2 Distribution Channels & Cryptographic Verification
@@ -186,7 +186,7 @@ Running `delphi doctor` executes a fast, read-only, offline verification suite. 
 3. **6-Tier Taint Audit (`[H-004]`):** every protected file (`context/heuristics.md`, `REVIEW.md`, `memory/agents/*/lessons.md`, manifests, skills, the theme) either matches `ratified.lock` ($L_5$ by ratification) or has a provenance-index tier ≥ $L_4$. Anything else is `fail`.
 4. **Rule of 25 & Caps Audit:** in `context/heuristics.md` and each `memory/agents/<role>/lessons.md`, every `### ` heading is one rule. Each rule must have `T`, `D` and `F` lines totaling ≤ 350 characters. Each file must have ≤ 25 rules (matching its `active_rules` frontmatter) and ≤ 6,144 bytes.
 5. **Pointer & Link Validator:** parses Markdown (excluding fenced code blocks, which hold illustrative examples) and verifies that links and `path#Lstart-Lend` pointers resolve. In workspace mode they resolve through the logical overlay (`specs/001` §2.2), and links to design records that are never seeded (`specs/`, `missions/`, `OVERVIEW.md`, `README.md` of the source repo) are `skipped`. It flags absolute home paths matching `/(Users|home)/[A-Za-z0-9._-]+/` (`[REV-SEC-05]`).
-6. **Retrieval Index Health:** verifies `state.db` WAL integrity and the FTS5 tables (`skipped` before the first daemon run). The `sqlite-vec` tables are checked only when `[rag] engine = "sqlite-hybrid"` (D-01).
+6. **Retrieval Index Health:** verifies `state.db` WAL integrity and the FTS5 tables (`skipped` before the first daemon run). When an embedding model is available (compiled in, or named by `DELPHI_EMBED_MODEL`, or at `$DELPHI_HOME/models/embed.dlphmdl`) it also reports the model id, whether the vector table was made by that model, and how many chunks still have no vector (`warn` above zero, with `delphi kb index` as the fix). A build with no model, or `DELPHI_EMBED_MODEL=off`, reports `skipped`: search is lexical only.
 7. **Model Access (`specs/009` §6):** probes each configured endpoint (authentication, features), and checks that each subscription CLI is installed and signed in. Missing or unreachable endpoints are `warn`, never `fail`, so an offline fresh install passes. `--require-providers` makes them `fail`.
 8. **Worktree, Socket & Clean-Repo Hygiene:** orphaned worktree locks and stale `.git/worktrees/` entries; `0600` socket permissions (when a daemon runs); the clean-repo rule for every registered project (§3.1); and live files compared with `ratified.lock`, where drift is reported as a pending proposal, not silently loaded.
 
