@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 30] = [
+pub const KINDS: [&str; 32] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -112,6 +112,12 @@ pub struct Node {
     pub state: String,
     pub tokens: u64,
     pub cost_usd: f64,
+    /// The endpoint and model this agent's latest call went to (empty until its first call), and the tier it asked for.
+    pub endpoint: String,
+    pub model: String,
+    pub tier: String,
+    /// What it is waiting for, if anything: `waiting on you`, or `waiting for a model: <why>`.
+    pub waiting: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -315,6 +321,9 @@ impl ObserverState {
                 if let Some(n) = self.nodes.get_mut(&id) {
                     n.state = st.clone();
                     r = n.role.clone();
+                    if st == "done" || st == "escalated" {
+                        n.waiting.clear();
+                    }
                 }
                 if st == "done" || st == "escalated" {
                     self.live.remove(&id);
@@ -328,7 +337,30 @@ impl ObserverState {
                     self.say(format!("{} is {}", r, st));
                 }
             }
+            "budget.reserve" | "harness.started" => {
+                self.note_model(&s(&e["span_id"]), &s(&e["endpoint_id"]), &s(&e["model_id"]), &s(&e["model_tier"]));
+                if let Some(n) = self.nodes.get_mut(&s(&e["span_id"])) {
+                    if n.waiting.starts_with("waiting for a model") {
+                        n.waiting.clear(); // a call is going out: a model was found
+                    }
+                }
+            }
+            "task.blocked" => {
+                if let Some(n) = self.nodes.get_mut(&s(&e["span_id"])) {
+                    n.waiting = format!("waiting for a model: {}", sanitize(p["why"].as_str().unwrap_or("")).chars().take(100).collect::<String>());
+                }
+                self.say(format!("waiting for a model: {}", s(&p["why"])));
+            }
+            "task.unblocked" => {
+                if let Some(n) = self.nodes.get_mut(&s(&e["span_id"])) {
+                    if n.waiting.starts_with("waiting for a model") {
+                        n.waiting.clear();
+                    }
+                }
+                self.say(if p["resumed"] == true { "a model is back; resuming".to_string() } else { "stopped waiting for a model".to_string() });
+            }
             "agent.usage" => {
+                self.note_model(&s(&e["span_id"]), &s(&e["endpoint_id"]), &s(&e["model_id"]), &s(&e["model_tier"]));
                 let cost = p["cost_usd"].as_f64().unwrap_or(0.0);
                 self.spent_usd += cost;
                 self.tokens.add(p);
@@ -370,6 +402,9 @@ impl ObserverState {
             }
             "approval.requested" => {
                 let id = s(&p["approval_id"]);
+                if let Some(n) = self.nodes.get_mut(&s(&e["span_id"])) {
+                    n.waiting = "waiting on you".into();
+                }
                 self.pending_approvals.insert(id, s(&p["summary"]));
                 if let Some(a) = self.agents.get_mut(&s(&p["role"])) {
                     a.state = "waiting on you".into();
@@ -377,6 +412,11 @@ impl ObserverState {
                 self.say(format!("waiting on you: {}", sanitize(p["summary"].as_str().unwrap_or("")).chars().take(80).collect::<String>()));
             }
             "approval.resolved" => {
+                if let Some(n) = self.nodes.get_mut(&s(&e["span_id"])) {
+                    if n.waiting == "waiting on you" {
+                        n.waiting.clear();
+                    }
+                }
                 self.pending_approvals.remove(&s(&p["approval_id"]));
                 for a in self.agents.values_mut().filter(|a| a.state == "waiting on you") {
                     a.state = "running".into();
@@ -456,8 +496,6 @@ impl ObserverState {
             }
             "endpoint.throttled" => self.say(format!("{} is throttled; trying the next endpoint", s(&p["endpoint_id"]))),
             "model.homogeneous" => self.say(format!("no model outside {} was usable; this pass is homogeneous", s(&p["avoided"]))),
-            "task.blocked" => self.say(format!("waiting for a model: {}", s(&p["why"]))),
-            "task.unblocked" => self.say(if p["resumed"] == true { "a model is back; resuming".to_string() } else { "stopped waiting for a model".to_string() }),
             "model.degraded_confirm" if p["state"] == "asked" => self.say("asking whether a weaker model may run this task".to_string()),
             "model.recovered" => self.say(format!("{} is back ({})", s(&p["endpoint_id"]), s(&p["model_id"]))),
             "model.exhausted" => self.say(format!("{} is out of quota ({}); trying the next endpoint", s(&p["endpoint_id"]), s(&p["reason"]))),
@@ -484,6 +522,49 @@ impl ObserverState {
     /// Top-level nodes (no parent).
     pub fn roots(&self) -> Vec<&Node> {
         self.nodes.values().filter(|n| n.parent.is_none()).collect()
+    }
+
+    /// Remember the endpoint, model and tier an agent's latest call went to. Empty values leave what is known alone.
+    fn note_model(&mut self, span: &str, endpoint: &str, model: &str, tier: &str) {
+        if let Some(n) = self.nodes.get_mut(span) {
+            for (field, value) in [(&mut n.endpoint, endpoint), (&mut n.model, model), (&mut n.tier, tier)] {
+                if !value.is_empty() {
+                    *field = value.to_string();
+                }
+            }
+        }
+    }
+
+    /// Every agent running now (one per live span, so two of the same role, a Council's seats and dispatched
+    /// children are each their own row), in the order they started within their task.
+    pub fn running_agents(&self) -> Vec<&Node> {
+        let mut v: Vec<&Node> = self.nodes.values().filter(|n| n.state == "running" || n.state == "pending").collect();
+        v.sort_by(|a, b| (&a.task_id, a.depth, &a.id).cmp(&(&b.task_id, b.depth, &b.id)));
+        v
+    }
+
+    /// What a running agent is on, in words: `claude-sonnet-5-5 via direct (workhorse)`, or `no call yet`.
+    pub fn model_label(n: &Node) -> String {
+        if n.model.is_empty() {
+            return "no call yet".into();
+        }
+        let via = if n.endpoint.is_empty() { String::new() } else { format!(" via {}", n.endpoint) };
+        let tier = if n.tier.is_empty() { String::new() } else { format!(" ({})", n.tier) };
+        format!("{}{}{}", n.model, via, tier)
+    }
+
+    /// The running agents as plain text, one per line, for the console and logs. `name` maps a role to its display name.
+    pub fn describe_running(&self, name: &dyn Fn(&str) -> String) -> String {
+        let rows = self.running_agents();
+        if rows.is_empty() {
+            return "Nothing is running.\n".into();
+        }
+        let mut out = String::new();
+        for n in rows {
+            let what = if n.waiting.is_empty() { "working" } else { n.waiting.as_str() };
+            out.push_str(&format!("{}{} · {} · {} · {}\n", "  ".repeat(n.depth as usize), name(&n.role), n.task_id, Self::model_label(n), what));
+        }
+        out
     }
 
     /// The view the Narrator should open on when none is asked for: a Council in progress, a build in
@@ -551,6 +632,79 @@ mod tests {
         assert_eq!(st.nodes["sp_builder_1"].tokens, 2400);
         st.apply(&ev(5, "dag.node.state", "t_1", "builder", json!({"node_id": "sp_builder_1", "state": "done"})));
         assert_eq!(st.agents["builder"].state, "idle");
+    }
+
+    /// An envelope for one agent's span, with the fields the daemon stamps on agent events.
+    fn on_span(mut e: Value, span: &str, endpoint: &str, model: &str, tier: &str) -> Value {
+        e["span_id"] = json!(span);
+        e["endpoint_id"] = json!(endpoint);
+        e["model_id"] = json!(model);
+        e["model_tier"] = json!(tier);
+        e
+    }
+
+    fn running(st: &mut ObserverState, seq: u64, span: &str, role: &str, parent: Option<&str>, depth: u64) {
+        let mut added = json!({"node_id": span, "role": role, "depth": depth});
+        if let Some(p) = parent {
+            added["parent"] = json!(p);
+        }
+        st.apply(&ev(seq, "dag.node.added", "t_1", role, added));
+        st.apply(&ev(seq + 1, "dag.node.state", "t_1", role, json!({"node_id": span, "state": "running"})));
+    }
+
+    // The operator's request: every running agent and the model each is on right now.
+    #[test]
+    fn every_running_agent_is_listed_with_the_model_it_is_on_and_what_it_waits_for() {
+        let mut st = ObserverState::new(&roles());
+        assert_eq!(st.describe_running(&|r| r.to_string()), "Nothing is running.\n");
+        running(&mut st, 1, "n1", "orchestrator", None, 0);
+        running(&mut st, 3, "n2", "architect", Some("n1"), 1);
+        running(&mut st, 5, "n3", "red-team", Some("n1"), 1);
+        // The first call of the orchestrator and of the architect is about to go out; the red-team has not called yet.
+        st.apply(&on_span(ev(7, "budget.reserve", "t_1", "orchestrator", json!({"reservation_id": "r_1", "amount": 1})), "n1", "direct", "opus-x", "frontier"));
+        st.apply(&on_span(ev(8, "budget.reserve", "t_1", "architect", json!({"reservation_id": "r_2", "amount": 1})), "n2", "gem", "gem-pro", "frontier"));
+        let rows = st.running_agents();
+        assert_eq!(rows.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), vec!["n1", "n2", "n3"], "parent before children, one row per live span");
+        assert_eq!(ObserverState::model_label(rows[0]), "opus-x via direct (frontier)");
+        assert_eq!(ObserverState::model_label(rows[1]), "gem-pro via gem (frontier)");
+        assert_eq!(ObserverState::model_label(rows[2]), "no call yet");
+        let text = st.describe_running(&|r| r.to_uppercase());
+        assert!(text.contains("ORCHESTRATOR · t_1 · opus-x via direct (frontier) · working\n"), "{}", text);
+        assert!(text.contains("  ARCHITECT · t_1 · gem-pro via gem (frontier) · working\n"), "children are indented: {}", text);
+        assert!(text.contains("  RED-TEAM · t_1 · no call yet · working\n"), "{}", text);
+
+        // The architect's model runs out and it moves to another: the row follows its latest call.
+        st.apply(&on_span(ev(9, "budget.reserve", "t_1", "architect", json!({"reservation_id": "r_3", "amount": 1})), "n2", "backup", "sonnet-x", "workhorse"));
+        assert_eq!(ObserverState::model_label(st.running_agents()[1]), "sonnet-x via backup (workhorse)");
+        st.apply(&on_span(ev(10, "agent.usage", "t_1", "architect", json!({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.01})), "n2", "backup", "sonnet-x", "workhorse"));
+        assert_eq!(st.nodes["n2"].model, "sonnet-x");
+
+        // Waiting on you, and waiting for a model, are per agent, and clear on their own.
+        let mut req = ev(11, "approval.requested", "t_1", "architect", json!({"approval_id": "ap_1", "role": "architect", "summary": "write a spec"}));
+        req["span_id"] = json!("n2");
+        st.apply(&req);
+        let mut blocked = ev(12, "task.blocked", "t_1", "red-team", json!({"reason": "no_model", "back_at": 1_792_864_800, "why": "everything is throttled"}));
+        blocked["span_id"] = json!("n3");
+        st.apply(&blocked);
+        let text = st.describe_running(&|r| r.to_string());
+        assert!(text.contains("architect · t_1 · sonnet-x via backup (workhorse) · waiting on you\n"), "{}", text);
+        assert!(text.contains("red-team · t_1 · no call yet · waiting for a model: everything is throttled\n"), "{}", text);
+        assert!(text.contains("orchestrator · t_1 · opus-x via direct (frontier) · working\n"), "the others are unaffected: {}", text);
+        let mut resolved = ev(13, "approval.resolved", "t_1", "architect", json!({"approval_id": "ap_1"}));
+        resolved["span_id"] = json!("n2");
+        st.apply(&resolved);
+        let mut back = ev(14, "task.unblocked", "t_1", "red-team", json!({"resumed": true}));
+        back["span_id"] = json!("n3");
+        st.apply(&back);
+        assert!(st.running_agents().iter().all(|n| n.waiting.is_empty()), "{:?}", st.running_agents().iter().map(|n| &n.waiting).collect::<Vec<_>>());
+
+        // A finished agent leaves the list.
+        st.apply(&ev(15, "dag.node.state", "t_1", "architect", json!({"node_id": "n2", "state": "done"})));
+        assert_eq!(st.running_agents().iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), vec!["n1", "n3"]);
+        // A harness run names its model when it starts.
+        running(&mut st, 20, "n4", "scout", None, 0);
+        st.apply(&on_span(ev(22, "harness.started", "t_1", "scout", json!({"endpoint_id": "agy-sub", "tools": "none"})), "n4", "agy-sub", "gem-agy", "frontier"));
+        assert_eq!(ObserverState::model_label(st.running_agents().into_iter().find(|n| n.id == "n4").unwrap()), "gem-agy via agy-sub (frontier)");
     }
 
     #[test]

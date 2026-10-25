@@ -654,6 +654,25 @@ impl App {
     fn agents(&self, f: &mut Frame, area: Rect) {
         let pal = self.pal();
         let mut lines: Vec<Line> = Vec::new();
+        // Who is running right now and the model each is on: one row per live span, not per role.
+        lines.push(hairline("Running now", area.width, pal));
+        let running = self.state.running_agents();
+        if running.is_empty() {
+            lines.push(dim_line("  Nothing is running.", pal));
+        }
+        for n in running {
+            let what = if n.waiting.is_empty() { "working".to_string() } else { n.waiting.clone() };
+            let what_colour = if n.waiting.is_empty() { pal.dim() } else { Color::Yellow };
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {}", "  ".repeat(n.depth as usize))),
+                Span::styled(self.name(&n.role), Style::default().fg(role_color(&n.role)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {} · ", n.task_id), Style::default().fg(pal.dim())),
+                Span::styled(delphi_engine::observe::ObserverState::model_label(n), Style::default().fg(pal.text())),
+                Span::styled(format!(" · {}", clip(&what, 70)), Style::default().fg(what_colour)),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(hairline("Roster", area.width, pal));
         for (role, a) in ordered(&self.state) {
             let m = mascot(role, &a.state);
             let model = if a.model.is_empty() { "no call yet".to_string() } else { format!("{} · {}{} · {}", a.tier, clip(&a.model, 28), if a.upscaled { " ⬆" } else { "" }, if a.endpoint.is_empty() { "—" } else { &a.endpoint }) };
@@ -977,6 +996,29 @@ mod tests {
         }
         a.view = View::Agents;
         assert!(render(&a, 140, 34).contains("navigate: shift+arrows · ○ ○ ○ ● ○ ○"));
+    }
+
+    #[test]
+    fn the_agents_view_lists_every_running_agent_and_its_model_above_the_roster() {
+        let mut a = app();
+        a.view = View::Agents;
+        let s = render(&a, 140, 40);
+        assert!(s.contains("Running now") && s.contains("Nothing is running.") && s.contains("Roster"), "{}", s);
+        let env = |seq: u64, kind: &str, role: &str, payload: serde_json::Value| serde_json::json!({"seq": seq, "type": kind, "task_id": "t_1", "agent": role, "payload": payload});
+        for (seq, span, role, depth) in [(1u64, "n1", "orchestrator", 0u64), (3, "n2", "architect", 1)] {
+            a.state.apply(&env(seq, "dag.node.added", role, serde_json::json!({"node_id": span, "role": role, "depth": depth})));
+            a.state.apply(&env(seq + 1, "dag.node.state", role, serde_json::json!({"node_id": span, "state": "running"})));
+        }
+        let mut reserve = env(7, "budget.reserve", "architect", serde_json::json!({"reservation_id": "r_1", "amount": 1}));
+        reserve["span_id"] = serde_json::json!("n2");
+        reserve["endpoint_id"] = serde_json::json!("backup");
+        reserve["model_id"] = serde_json::json!("sonnet-x");
+        reserve["model_tier"] = serde_json::json!("workhorse");
+        a.state.apply(&reserve);
+        let s = render(&a, 140, 40);
+        assert!(!s.contains("Nothing is running."), "{}", s);
+        assert!(s.contains("sonnet-x via backup (workhorse)") && s.contains("no call yet"), "the architect's model, and the orchestrator that has not called yet: {}", s);
+        assert!(s.contains("Running now") && s.find("Running now").unwrap() < s.find("Roster").unwrap(), "{}", s);
     }
 
     #[test]

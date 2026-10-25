@@ -31,6 +31,8 @@ pub enum Input {
     Usage(Option<String>),
     /// `/models`: the model pool and where each model stands.
     Models,
+    /// `/agents`: every agent running now and the model it is on.
+    Agents,
     Budget(Option<f64>),
     Permissions(Option<String>),
     Ratify(Vec<String>),
@@ -64,6 +66,7 @@ pub fn parse_input(line: &str) -> Input {
             "quit" | "exit" | "q" => Input::Quit,
             "usage" => Input::Usage(rest.first().map(|s| s.to_string())),
             "models" => Input::Models,
+            "agents" => Input::Agents,
             "budget" => match rest.first() {
                 None => Input::Budget(None),
                 Some(v) => v.trim_start_matches('$').parse::<f64>().map(|x| Input::Budget(Some(x))).unwrap_or_else(|_| Input::Unknown(format!("/budget takes a dollar amount, not `{}`", v))),
@@ -135,6 +138,7 @@ pub const HELP: &str = "\
 Type a request and press Enter. Reference files with @project/<name>/path or @specs/…; route to a role with `@architect …`.
   /usage [mission|role|task|model]   token and cost totals
   /models                            the model pool: which models are usable, out of quota, or cooling down
+  /agents                            every agent running now and the model it is on
   /budget [dollars]                  show or change this mission's cost ceiling
   /permissions [default|accept-edits|mission-auto]
   /ratify                            pending proposals (config, manifests, specs)
@@ -658,6 +662,10 @@ impl Session {
                 Ok(v) => say(&format!("{}\n", render_usage(&v))),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
+            Input::Agents => {
+                let text = self.shared.obs.lock().unwrap().describe_running(&|r| self.shared.names.get(r).cloned().unwrap_or_else(|| r.to_string()));
+                say(&text);
+            }
             Input::Models => match self.cmd.call("models.get", json!({})) {
                 Ok(v) => say(v["text"].as_str().unwrap_or("")),
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
@@ -972,6 +980,7 @@ mod tests {
         assert_eq!(parse_input("/help"), Input::Help);
         assert_eq!(parse_input("/usage role"), Input::Usage(Some("role".into())));
         assert_eq!(parse_input("/models"), Input::Models);
+        assert_eq!(parse_input("/agents"), Input::Agents);
         assert_eq!(parse_input("/budget"), Input::Budget(None));
         assert_eq!(parse_input("/budget $7.5"), Input::Budget(Some(7.5)));
         assert!(matches!(parse_input("/budget lots"), Input::Unknown(_)));

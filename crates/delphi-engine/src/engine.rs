@@ -2018,6 +2018,31 @@ mod tests {
         assert_eq!((out.status, out.text.as_str()), (Status::Done, "never reached"));
     }
 
+    // The operator's request: the running agent and its model, from the events the daemon really writes.
+    #[tokio::test]
+    async fn the_observer_shows_a_running_agent_and_its_model_from_the_real_event_stream() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New"})), Step::text("Drafted.")], 5.0, |_| {});
+        let fold = |f: &Fx| {
+            let mut st = crate::observe::ObserverState::new(&f.engine.settings.enabled_agents);
+            for e in f.m.replay().unwrap().into_iter().filter(|e| crate::observe::KINDS.contains(&e.kind.as_str())) {
+                st.apply(&serde_json::to_value(e).unwrap());
+            }
+            st
+        };
+        let task = spawn_task(&f, "architect", "Draft a spec");
+        let card = wait_for_card(&f).await;
+        let st = fold(&f);
+        let rows = st.running_agents();
+        assert_eq!(rows.len(), 1, "{:?}", rows);
+        assert_eq!((rows[0].role.as_str(), crate::observe::ObserverState::model_label(rows[0]).as_str(), rows[0].waiting.as_str()), ("architect", "opus-x via direct (frontier)", "waiting on you"));
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        let st = fold(&f);
+        assert!(st.running_agents().is_empty(), "a finished agent is not listed: {:?}", st.running_agents());
+        assert_eq!(st.describe_running(&|r| r.to_string()), "Nothing is running.\n");
+        assert_eq!(st.agents["architect"].model, "opus-x", "the roster still remembers its last model");
+    }
+
     #[tokio::test]
     async fn outcomes_are_recorded_in_the_pool_per_endpoint_and_model() {
         use crate::pool::State;
