@@ -20,6 +20,84 @@ fn sniff_delimiter(text: &str) -> char {
     best.0
 }
 
+/// Every record of a CSV/TSV: quotes, doubled quotes and embedded newlines handled.
+fn records(text: &str, delim: char) -> Vec<Vec<String>> {
+    let (mut rows, mut row, mut field) = (vec![], vec![], String::new());
+    let (mut in_q, mut quoted) = (false, false);
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_q {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    field.push('"');
+                } else {
+                    in_q = false;
+                }
+            } else {
+                field.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '"' if field.is_empty() && !quoted => {
+                in_q = true;
+                quoted = true;
+            }
+            c if c == delim => {
+                row.push(std::mem::take(&mut field));
+                quoted = false;
+            }
+            '\r' | '\n' => {
+                if ch == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                if !(row.is_empty() && field.is_empty()) {
+                    row.push(std::mem::take(&mut field));
+                    rows.push(std::mem::take(&mut row));
+                }
+                quoted = false;
+            }
+            _ => field.push(ch),
+        }
+    }
+    if !(row.is_empty() && field.is_empty()) {
+        row.push(field);
+        rows.push(row);
+    }
+    rows
+}
+
+/// A CSV or TSV as a header and typed rows (numbers become numbers), for charting. At most `max_rows` data rows.
+pub fn read_table(bytes: &[u8], max_rows: usize) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>), DocError> {
+    let body = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    let text = String::from_utf8_lossy(body);
+    let delim = sniff_delimiter(&text);
+    let mut recs = records(&text, delim);
+    if recs.len() < 2 {
+        return Err(DocError("the file needs a header row and at least one row of data".into()));
+    }
+    if recs.len() - 1 > max_rows {
+        return Err(DocError(format!("the file has {} rows; a chart takes at most {}. Summarise it first", recs.len() - 1, max_rows)));
+    }
+    let header: Vec<String> = recs.remove(0).into_iter().map(|h| h.trim().to_string()).collect();
+    let rows = recs
+        .into_iter()
+        .map(|r| {
+            r.into_iter()
+                .map(|c| {
+                    let t = c.trim();
+                    match t.parse::<f64>() {
+                        Ok(n) if n.is_finite() && !t.is_empty() => serde_json::Number::from_f64(n).map(serde_json::Value::Number).unwrap_or_else(|| serde_json::Value::String(c.clone())),
+                        _ => serde_json::Value::String(c),
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    Ok((header, rows))
+}
+
 pub fn extract(bytes: &[u8], format: Format, req: &Request) -> Result<Extract, DocError> {
     let body = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
     let text = String::from_utf8_lossy(body);

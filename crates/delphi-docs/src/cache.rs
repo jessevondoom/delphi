@@ -31,12 +31,23 @@ fn key(bytes: &[u8], name: &str, req: &Request, limits: &Limits) -> String {
 
 /// `extract`, remembering results for inputs of 16 KB and up. Errors are not cached.
 pub fn extract_cached(bytes: &[u8], name: &str, req: &Request, limits: &Limits) -> Result<Extract, DocError> {
+    extract_with(cache(), bytes, name, req, limits)
+}
+
+/// (hits, misses, entries) since the process started.
+pub fn stats() -> (u64, u64, usize) {
+    stats_of(cache())
+}
+
+/// The work of [`extract_cached`] against a given cache, so tests can use one of their own: the process-wide cache
+/// is shared by every test running in parallel, and its counters cannot be compared across a window.
+fn extract_with(cache: &Mutex<Cache>, bytes: &[u8], name: &str, req: &Request, limits: &Limits) -> Result<Extract, DocError> {
     if bytes.len() < MIN_INPUT {
         return extract(bytes, name, req, limits);
     }
     let k = key(bytes, name, req, limits);
     {
-        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = c.map.get(&k) {
             let e = e.clone();
             c.hits += 1;
@@ -45,7 +56,7 @@ pub fn extract_cached(bytes: &[u8], name: &str, req: &Request, limits: &Limits) 
         c.misses += 1;
     }
     let e = extract(bytes, name, req, limits)?;
-    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
     let size = e.text.len();
     if size <= MAX_BYTES / 4 && !c.map.contains_key(&k) {
         while !c.order.is_empty() && (c.map.len() >= MAX_ENTRIES || c.bytes + size > MAX_BYTES) {
@@ -62,9 +73,8 @@ pub fn extract_cached(bytes: &[u8], name: &str, req: &Request, limits: &Limits) 
     Ok(e)
 }
 
-/// (hits, misses, entries) since the process started.
-pub fn stats() -> (u64, u64, usize) {
-    let c = cache().lock().unwrap_or_else(|e| e.into_inner());
+fn stats_of(cache: &Mutex<Cache>) -> (u64, u64, usize) {
+    let c = cache.lock().unwrap_or_else(|e| e.into_inner());
     (c.hits, c.misses, c.map.len())
 }
 
@@ -72,36 +82,61 @@ pub fn stats() -> (u64, u64, usize) {
 mod tests {
     use super::*;
 
-    // Both tests assert on the process-wide hit and miss counters, so they must not interleave.
-    static COUNTERS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn fresh() -> Mutex<Cache> {
+        Mutex::new(Cache::default())
+    }
+
+    fn big() -> String {
+        format!("{}\n", "a line of text that makes the file big enough to cache. ".repeat(400))
+    }
 
     #[test]
     fn a_repeat_read_is_a_hit_and_a_different_request_or_content_is_not() {
-        let _g = COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
-        let big = format!("{}\n", "a line of text that makes the file big enough to cache. ".repeat(400));
-        let (h0, m0, _) = stats();
-        let a = extract_cached(big.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
-        let b = extract_cached(big.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
+        let c = fresh();
+        let text = big();
+        let (req, lim) = (Request::default(), Limits::default());
+        let a = extract_with(&c, text.as_bytes(), "a.txt", &req, &lim).unwrap();
+        assert_eq!(stats_of(&c), (0, 1, 1), "the first read is a miss and is kept");
+        let b = extract_with(&c, text.as_bytes(), "a.txt", &req, &lim).unwrap();
         assert_eq!(a, b);
-        let (h1, m1, n1) = stats();
-        assert!(h1 > h0 && m1 > m0 && n1 >= 1,"{:?} -> {:?}", (h0, m0), (h1, m1, n1));
-        let hits_before = stats().0;
-        let other = format!("{}x", big);
-        let _ = extract_cached(other.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
-        let _ = extract_cached(big.as_bytes(), "unique-one.txt", &Request { start: Some(2), ..Request::default() }, &Limits::default());
-        assert_eq!(stats().0, hits_before, "changed bytes and a changed request are separate entries");
+        assert_eq!(stats_of(&c), (1, 1, 1), "the second is a hit");
+        let other = format!("{}x", text);
+        extract_with(&c, other.as_bytes(), "a.txt", &req, &lim).unwrap();
+        extract_with(&c, text.as_bytes(), "a.txt", &Request { start: Some(2), ..Request::default() }, &lim).unwrap();
+        extract_with(&c, text.as_bytes(), "b.txt", &req, &lim).unwrap();
+        assert_eq!(stats_of(&c), (1, 4, 4), "changed bytes, a changed request and a changed name are separate entries");
     }
 
     #[test]
     fn small_inputs_and_errors_bypass_the_cache() {
-        let _g = COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
-        let (_, m0, _) = stats();
-        let _ = extract_cached(b"tiny", "t.txt", &Request::default(), &Limits::default()).unwrap();
-        assert_eq!(stats().1, m0, "small files are not looked up");
+        let c = fresh();
+        let (req, lim) = (Request::default(), Limits::default());
+        extract_with(&c, b"tiny", "t.txt", &req, &lim).unwrap();
+        assert_eq!(stats_of(&c), (0, 0, 0), "small files are not looked up or kept");
         let mut bad = b"PK\x03\x04".to_vec();
         bad.resize(20_000, b'x');
-        let r1 = extract_cached(&bad, "unique-two.zip", &Request::default(), &Limits::default());
-        let r2 = extract_cached(&bad, "unique-two.zip", &Request::default(), &Limits::default());
-        assert!(r1.is_err() && r2.is_err());
+        assert!(extract_with(&c, &bad, "z.zip", &req, &lim).is_err());
+        assert!(extract_with(&c, &bad, "z.zip", &req, &lim).is_err());
+        assert_eq!(stats_of(&c), (0, 2, 0), "an error is a miss each time and is never kept");
+    }
+
+    #[test]
+    fn the_cache_is_bounded() {
+        let c = fresh();
+        let (req, lim) = (Request::default(), Limits::default());
+        let base = big();
+        for i in 0..(MAX_ENTRIES + 20) {
+            let text = format!("{}{}", base, i);
+            extract_with(&c, text.as_bytes(), "n.txt", &req, &lim).unwrap();
+        }
+        assert_eq!(stats_of(&c).2, MAX_ENTRIES, "the oldest entries are dropped");
+    }
+
+    #[test]
+    fn the_process_wide_cache_is_what_extract_cached_uses() {
+        let text = format!("{}process-wide", big());
+        let before = stats().1;
+        extract_cached(text.as_bytes(), "pw.txt", &Request::default(), &Limits::default()).unwrap();
+        assert!(stats().1 > before, "counters only ever grow, so this holds however tests interleave");
     }
 }

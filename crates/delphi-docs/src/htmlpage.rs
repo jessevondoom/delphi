@@ -301,7 +301,7 @@ fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
 }
 
 /// Text safe to put inside an HTML comment: no `--`, no `>`, no control characters, bounded.
-fn comment_text(s: &str) -> String {
+pub fn comment_text(s: &str) -> String {
     let flat: String = s.chars().filter(|c| !c.is_control() || *c == ' ').take(400).collect();
     flat.replace("--", "- -").replace(['>', '<'], " ")
 }

@@ -12,7 +12,7 @@
 
 use crate::tools::{denied, observe, str_arg, with_provenance_header, zone_of, ActionKind, Classified, Stamp, ToolCtx, ToolError, ToolExec, ToolResult, ToolSpec, ToolTier};
 use delphi_adapter::claude::ToolDef;
-use delphi_docs::htmlpage;
+use delphi_docs::{chart, htmlpage};
 use delphi_core::pathguard::{Access, Guard};
 use delphi_core::provenance::{gate_write, OutputCheck, Tier};
 use serde_json::{json, Value};
@@ -25,7 +25,7 @@ const OTHER_ROOTS: [&str; 6] = ["specs", "context", "memory", "skills", "agents"
 /// Mission folders tried, in order, for a plain path; the first one the role may write wins.
 const MISSION_FOLDERS: [&str; 7] = ["artifacts", "reports", "research", "specs", "comms", "councils", "threat-models"];
 
-const TOOLS: &[&str] = &["write_archive", "write_html"];
+const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart"];
 
 pub fn is_artifact_tool(name: &str) -> bool {
     TOOLS.contains(&name)
@@ -35,6 +35,7 @@ fn extensions(tool: &str) -> &'static [&'static str] {
     match tool {
         "write_archive" => &["zip"],
         "write_html" => &["html", "htm"],
+        "write_chart" => &["svg"],
         _ => &[],
     }
 }
@@ -107,6 +108,9 @@ fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     if tool == "write_html" {
         return classify_html(args);
     }
+    if tool == "write_chart" {
+        return classify_chart(args);
+    }
     let path = str_arg(args, "path")?;
     let members = if tool == "write_archive" { Some(members_of(args)?) } else { None };
     let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, tool).map_err(ToolError)?;
@@ -142,6 +146,58 @@ fn classify_html(args: &Value) -> Result<Classified, ToolError> {
     Ok(Classified { tool: "write_html".into(), tier, kind, summary, payload, pattern })
 }
 
+/// A chart. Charts hold no script, so one is Green in the mission and Amber in a worktree like any worktree edit.
+/// Data read from a file is not opened at classification (it needs the role's read access); the rest is checked now.
+fn classify_chart(args: &Value) -> Result<Classified, ToolError> {
+    let path = str_arg(args, "path")?;
+    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_chart").map_err(|e| if path.to_lowercase().ends_with(".png") { ToolError("write_chart writes .svg files; PNG output is not available yet (an SVG opens in any browser)".into()) } else { ToolError(e) })?;
+    if args.get("format").and_then(|f| f.as_str()).is_some_and(|f| f != "svg") {
+        return Err(ToolError("`format` is svg for now; PNG output is not available yet".into()));
+    }
+    let from = args.pointer("/data/from").and_then(|f| f.as_str());
+    let (series, rows) = match from {
+        Some(_) => (None, None),
+        None => {
+            let spec = chart::from_json(args).map_err(|e| ToolError(e.0))?;
+            (Some(spec.series.len()), Some(spec.x.len()))
+        }
+    };
+    let kind = str_arg(args, "type").unwrap_or("chart").to_string();
+    let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let (tier, action) = if resolved.starts_with("@worktree/") { (ToolTier::Amber, ActionKind::WorktreeEdit) } else { (ToolTier::Green, ActionKind::MissionArtifact) };
+    let dir = resolved.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let args_hash = blake3::hash(serde_json::to_string(args).unwrap_or_default().as_bytes()).to_hex().to_string();
+    Ok(Classified {
+        tool: "write_chart".into(),
+        tier,
+        kind: action,
+        summary: format!("write {} (a {} chart{})", path, kind, from.map(|f| format!(" of {}", f)).unwrap_or_default()),
+        payload: json!({"tool": "write_chart", "path": path, "type": kind, "title": title, "series": series, "rows": rows, "from": from, "args_blake3": args_hash}),
+        pattern: format!("write_chart {}/*", dir),
+    })
+}
+
+/// A file a tool read for its data: its logical path and its bytes.
+type FileRead = (String, Vec<u8>);
+
+/// The arguments with `data: {from}` replaced by the file's contents, plus the file read (path, bytes) if there was one.
+/// Reading goes through the role's read access; the caller records what was read (it lowers the span's trust).
+fn chart_args(guard: &Guard, args: &Value) -> Result<(Value, Option<FileRead>), ToolResult> {
+    let Some(from) = args.pointer("/data/from").and_then(|f| f.as_str()) else { return Ok((args.clone(), None)) };
+    let lower = from.to_lowercase();
+    if !(lower.ends_with(".csv") || lower.ends_with(".tsv")) {
+        return Err(ToolResult::err(format!("`data.from` reads .csv and .tsv files for now; `{}` is neither. Read it with read_doc and pass the numbers as `columns` and `rows`", from)));
+    }
+    let (bytes, truncated) = guard.read_file(from, MAX_ARTIFACT_BYTES).map_err(denied)?;
+    if truncated {
+        return Err(ToolResult::err(format!("`{}` is larger than 4 MB; summarise it first", from)));
+    }
+    let (columns, rows) = delphi_docs::read_table(&bytes, 20_000).map_err(|e| ToolResult::err(e.0))?;
+    let mut a = args.clone();
+    a["data"] = json!({"columns": columns, "rows": rows});
+    Ok((a, Some((from.to_string(), bytes))))
+}
+
 /// Where a call will write: the artifact and, if there is one, its provenance record.
 pub struct Target {
     pub path: String,
@@ -167,6 +223,10 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
     }
     if tool == "write_html" {
         htmlpage::from_json(args).and_then(|s| htmlpage::render(&s)).map_err(|e| ToolResult::err(e.0))?;
+    }
+    if tool == "write_chart" {
+        let (a, _) = chart_args(guard, args)?;
+        chart::from_json(&a).map_err(|e| ToolResult::err(e.0))?;
     }
     Ok(Target { path: resolved, sidecar })
 }
@@ -288,6 +348,47 @@ fn write_html(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, html.as_bytes(), "write_html", &inputs)
 }
 
+fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_chart", args) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    let (a, read) = match chart_args(ctx.guard, args) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    // The data this chart draws was read by this span: its trust counts against the chart, and is printed on it.
+    let mut inputs = vec![];
+    let mut spec_args = a;
+    if let Some((from, bytes)) = &read {
+        let tier = observe(ctx, from, bytes);
+        let trust = format!("data: {} (trust {} {})", from, tier, tier.name());
+        let given = spec_args.get("source").and_then(|s| s.as_str()).map(|s| s.to_string());
+        spec_args["source"] = json!(match given {
+            Some(s) => format!("{} · {}", s, trust),
+            None => trust,
+        });
+        inputs.push(format!("{} ({} bytes, blake3 {})", from, bytes.len(), blake3::hash(bytes).to_hex()));
+    }
+    let spec = match chart::from_json(&spec_args) {
+        Ok(s) => s,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let tier = ctx.span.output_tier(OutputCheck::Unverified);
+    let comment = htmlpage::comment_text(&format!(
+        "delphi artifact: written by role {} in mission {} with write_chart at {}; trust {} {}{}",
+        ctx.role,
+        ctx.mission_id,
+        ctx.now_rfc3339,
+        tier,
+        tier.name(),
+        target.sidecar.as_ref().map(|s| format!("; provenance record: {}", s.rsplit('/').next().unwrap_or(s))).unwrap_or_default()
+    ));
+    let svg = chart::render_svg(&spec, Some(&comment));
+    inputs.push(format!("{} chart: {} series, {} points, title: {}", spec_args.get("type").and_then(|t| t.as_str()).unwrap_or("?"), spec.series.len(), spec.x.len(), spec.title.chars().take(100).collect::<String>()));
+    write_artifact(ctx, &target, svg.as_bytes(), "write_chart", &inputs)
+}
+
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
         def: ToolDef {
@@ -315,6 +416,33 @@ pub fn specs() -> Vec<ToolSpec> {
         requires_write_scope: true,
         classify: |tool, args| classify(tool, args),
         exec: ToolExec::Local(write_html),
+    },
+    ToolSpec {
+        def: ToolDef {
+            name: "write_chart".into(),
+            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), line, area (one series), scatter (at most 2 series) or hist (a distribution of one column); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
+            input_schema: json!({"type": "object", "required": ["path", "type", "title", "data"], "properties": {
+                "path": {"type": "string"},
+                "type": {"type": "string", "enum": ["bar", "hbar", "line", "area", "scatter", "hist"]},
+                "title": {"type": "string"},
+                "subtitle": {"type": "string"},
+                "data": {"type": "object", "description": "{columns: [names], rows: [[...]]} or {from: path to a .csv/.tsv}"},
+                "x": {"type": "string"},
+                "y": {"description": "a column name or an array of column names"},
+                "series_by": {"type": "string"},
+                "x_order": {"type": "string", "enum": ["ordered"]},
+                "scale": {"type": "object"},
+                "format": {"type": "object", "description": "number formats, for example {y: \"0,0 ms\"}"},
+                "annotations": {"type": "array", "maxItems": 5, "items": {"type": "object"}},
+                "bins": {"type": "integer", "minimum": 2, "maximum": 60},
+                "source": {"type": "string"},
+                "size": {"type": "string", "enum": ["wide", "square", "tall"]},
+                "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
+            }}),
+        },
+        requires_write_scope: true,
+        classify: |tool, args| classify(tool, args),
+        exec: ToolExec::Local(write_chart),
     }]
 }
 
@@ -667,6 +795,111 @@ mod tests {
         task.await.unwrap().unwrap();
         assert!(!f.root.join(format!("workspaces/w/local/missions/{}/research/page.html", f.m.id)).exists());
         assert!(f.model.requests()[1].body["messages"].to_string().contains("not today") || f.model.requests()[1].body["messages"].to_string().contains("denied"));
+    }
+
+    fn chart_args() -> Value {
+        json!({"path": "latency", "type": "line", "title": "Median latency fell 12% in 0.2.3", "x": "release", "y": ["p50", "p95"], "x_order": "ordered",
+               "data": {"columns": ["release", "p50", "p95"], "rows": [["0.2.1", 120, 340], ["0.2.2", 118, 310], ["0.2.3", 104, 255]]}})
+    }
+
+    #[test]
+    fn a_chart_is_drawn_marked_with_its_trust_and_recorded() {
+        let mut f = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f, "write_chart", chart_args());
+        assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/latency.svg (") && r.content.contains("tier L3"), "{}", r.content);
+        let svg = fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.svg")).unwrap();
+        assert!(svg.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- delphi artifact: written by role architect in mission m1 with write_chart at 2026-10-25T12:00:00.000Z; trust L3 internal_generated; provenance record: latency.svg.provenance.md -->\n<svg "), "{}", &svg[..300]);
+        assert!(svg.contains("<title id=\"chart-title\">Median latency fell 12% in 0.2.3</title>") && !svg.contains("<script"), "no script in a chart");
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.svg.provenance.md")).unwrap();
+        assert!(side.contains("- line chart: 2 series, 3 points") && side.contains("produced_by: write_chart"), "{}", side);
+        assert_eq!(stamps.len(), 2);
+    }
+
+    #[test]
+    fn a_chart_that_does_not_fit_its_data_is_refused_before_anyone_is_asked_with_a_better_form() {
+        let reg = Registry::builtin();
+        let mut pie = chart_args();
+        pie["type"] = json!("pie");
+        assert!(reg.classify("write_chart", &pie).unwrap_err().0.contains("use `hbar`"));
+        let mut one = chart_args();
+        one["type"] = json!("bar");
+        one["data"] = json!({"columns": ["k", "v"], "rows": [["only", 5]]});
+        one["x"] = json!("k");
+        one["y"] = json!("v");
+        assert!(reg.classify("write_chart", &one).unwrap_err().0.contains("just a number"));
+        let mut png = chart_args();
+        png["path"] = json!("latency.png");
+        assert!(reg.classify("write_chart", &png).unwrap_err().0.contains("PNG output is not available yet"));
+        let mut fmt = chart_args();
+        fmt["format"] = json!("png");
+        assert!(reg.classify("write_chart", &fmt).unwrap_err().0.contains("PNG"));
+        // classification: Green in the mission, Amber in a worktree, with the arguments bound
+        let c = reg.classify("write_chart", &chart_args()).unwrap();
+        assert_eq!((c.tier, c.kind), (ToolTier::Green, ActionKind::MissionArtifact));
+        assert!(c.summary.contains("a line chart") && c.payload["series"] == 2 && c.payload["rows"] == 3 && c.payload["args_blake3"].as_str().unwrap().len() == 64, "{:?}", c);
+        let mut wt = chart_args();
+        wt["path"] = json!("@worktree/docs/latency.svg");
+        assert_eq!(reg.classify("write_chart", &wt).unwrap().kind, ActionKind::WorktreeEdit);
+        let mut f = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f, "write_chart", pie);
+        assert!(r.is_error && stamps.is_empty() && !f.root.join("local/missions/m1/artifacts").exists(), "{}", r.content);
+    }
+
+    #[test]
+    fn data_read_from_a_file_has_its_trust_printed_under_the_chart_and_taints_the_span() {
+        let mut f = fx(&["missions/**"]);
+        fs::write(f.root.join("proj/src/latency.csv"), "release,p50,p95\n0.2.1,120,340\n0.2.2,118,310\n0.2.3,104,255\n").unwrap();
+        fs::write(f.root.join("proj/vendor/lib/latency.csv"), "release,p50,p95\n0.2.1,1,2\n0.2.2,3,4\n").unwrap();
+        let from = |path: &str| json!({"path": "chart", "type": "line", "title": "T", "x_order": "ordered", "data": {"from": path}});
+        let (r, _) = run_tool(&mut f, "write_chart", from("@project/app/src/latency.csv"));
+        assert!(!r.is_error && r.content.contains("tier L3"), "{}", r.content);
+        let svg = fs::read_to_string(f.root.join("local/missions/m1/artifacts/chart.svg")).unwrap();
+        assert!(svg.contains("Source: data: @project/app/src/latency.csv (trust L4 internal_empirical)") && svg.contains(">p95  255</text>"), "{}", &svg[svg.len().saturating_sub(700)..]);
+        assert_eq!(f.span.ceiling(), Tier::L5, "a project file at its base commit is local input");
+        // an untrusted file: the chart says so, and so does its stamp
+        let (r, stamps) = run_tool(&mut f, "write_chart", from("@project/app/vendor/lib/latency.csv"));
+        assert!(!r.is_error && r.content.contains("tier L0 external_untrusted"), "{}", r.content);
+        let svg = fs::read_to_string(f.root.join("local/missions/m1/artifacts/chart.svg")).unwrap();
+        assert!(svg.contains("(trust L0 external_untrusted)") && svg.contains("trust L0 external_untrusted"), "{}", &svg[svg.len().saturating_sub(300)..]);
+        assert_eq!(f.span.ceiling(), Tier::L0);
+        assert!(stamps.iter().all(|s| s.tier == Tier::L0));
+        // a given source is kept beside it
+        let mut with_source = from("@project/app/src/latency.csv");
+        with_source["source"] = json!("weekly dashboard export");
+        let (r, _) = run_tool(&mut f, "write_chart", with_source);
+        assert!(!r.is_error);
+        assert!(fs::read_to_string(f.root.join("local/missions/m1/artifacts/chart.svg")).unwrap().contains("Source: weekly dashboard export · data: @project/app/src/latency.csv"));
+    }
+
+    #[test]
+    fn data_files_that_cannot_be_charted_say_why() {
+        let mut f = fx(&["missions/**"]);
+        fs::write(f.root.join("proj/src/notes.md"), "# not data\n").unwrap();
+        fs::write(f.root.join("proj/src/one.csv"), "a,b\n").unwrap();
+        let from = |p: &str| json!({"path": "c", "type": "bar", "title": "T", "data": {"from": p}});
+        for (path, expect) in [("@project/app/src/notes.md", "reads .csv and .tsv"), ("@project/app/src/one.csv", "header row and at least one row"), ("@project/app/src/missing.csv", "not found")] {
+            let (r, stamps) = run_tool(&mut f, "write_chart", from(path));
+            assert!(r.is_error && r.content.contains(expect) && stamps.is_empty(), "{}: {}", path, r.content);
+        }
+        // outside the role's read scope
+        f.guard.read_globs = vec!["missions/**".into()];
+        let (r, _) = run_tool(&mut f, "write_chart", from("@project/app/src/one.csv"));
+        assert!(r.is_error && r.content.contains("outside your role's access scope"), "{}", r.content);
+        assert!(!f.root.join("local/missions/m1/artifacts/c.svg").exists());
+    }
+
+    #[tokio::test]
+    async fn through_the_engine_a_chart_needs_no_card_and_reaches_the_model() {
+        use crate::engine::Status;
+        use crate::model::Step;
+        use crate::testkit::{events_of, setup};
+        let f = setup(vec![Step::tool("a1", "write_chart", chart_args()), Step::text("Charted.")], 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Chart the latency").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(events_of(&f, "approval.requested").is_empty());
+        let svg = f.root.join(format!("workspaces/w/local/missions/{}/research/latency.svg", f.m.id));
+        assert!(svg.exists() && fs::read_to_string(svg).unwrap().contains("Median latency fell 12% in 0.2.3"));
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("created missions/"));
     }
 
     #[test]
