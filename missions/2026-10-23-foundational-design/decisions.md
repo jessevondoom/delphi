@@ -286,6 +286,7 @@ Supporting rules:
 - **2026-10-24:** after Step 3c M5, the operator decided two policy points, now in spec 002 §4.1: (1) prompt before downgrading to a weaker model, but if nobody answers within 5 minutes the task retries (looks again, asks again) rather than treating silence as a yes or a no; an explicit decline still waits for the target; (2) confirmations survive daemon restarts within the same session (the same mission), by being rebuilt from the mission log.
 - **2026-10-24:** the operator ratified spec 005 amendment 005-A6 (the model-pool and task-blocking event types: `model.exhausted`, `model.recovered`, `model.promoted`, `model.degraded_confirm`, `model.homogeneous`, `task.blocked`, `task.unblocked`, and the Models section of `status.md`), built in Step 3c M7.
 - **2026-10-25:** at the operator's request the model pool (D-26, Step 3c) was reviewed by reviewers from other model families; findings, verification and fixes are in `councils/step-3c-review/report.md`. One question is left for the operator there: whether a harness serving a tool-using role (it can only answer in text) should need confirmation like a weaker model.
+- **2026-10-25:** the operator asked to see every running agent and the model it is on, and ratified spec 005 amendment 005-A7 (a Running now section in the Narrator's agents view, `/agents` in the inline console, and the per-agent endpoint, model, tier and waiting fields in `observe.state`).
 
 ---
 

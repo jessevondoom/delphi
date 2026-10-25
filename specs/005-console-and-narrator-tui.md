@@ -254,7 +254,9 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
 The **Narrator** attaches to the workspace UDS socket from any second terminal window or monitor and shows what the agent team is doing in real time. Its screen has two parts: a persistent **agents pane** (§4.1) and one of four switchable **views** (§4.2, hotkeys `1`–`4`). The pane is always visible, and `a` toggles it to give a view the full width.
 
 ### 4.1 Agents Pane (always visible; D-18)
-One row per enabled role, rendered with the viewer's theme display name for that role:
+**Running now (amendment 005-A7, ratified by the operator 2026-10-25).** In the agents view, above the per-role rows, the Narrator lists **every agent that is running, one row per live span** (two agents of one role, a Council's seats and dispatched children each get their own row, children indented under their parent): its display name, task, the model its latest call went to as `<model> via <endpoint> (<tier>)` (or `no call yet`), and what it is waiting for if anything (`waiting on you`, or `waiting for a model: <why>`). The model follows the agent's latest call (`budget.reserve`, `harness.started`, `agent.usage`), so a substitution shows at once; a finished agent leaves the list. The inline console shows the same list with `/agents`. `observe.state` carries `endpoint`, `model`, `tier` and `waiting` on each node.
+
+Below it, one row per enabled role, rendered with the viewer's theme display name for that role:
 
 | Column | Content |
 | :--- | :--- |
