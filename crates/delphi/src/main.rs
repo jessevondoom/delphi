@@ -378,9 +378,14 @@ fn cmd_needs(args: &[String]) -> i32 {
 }
 
 fn cmd_kb(args: &[String]) -> i32 {
-    let (_home, ws) = match resolve_ws("kb", args) {
-        Ok(v) => v,
-        Err(code) => return code,
+    // `eval` and `model` work on documents and model files, not on a workspace.
+    let (home, ws_dir) = if matches!(args.first().map(String::as_str), Some("eval" | "model")) {
+        (home::delphi_home(flag(args, "--home").as_deref()), PathBuf::new())
+    } else {
+        match resolve_ws("kb", args) {
+            Ok((home, ws)) => (home, ws.dir),
+            Err(code) => return code,
+        }
     };
     // The flags that select the workspace are not part of the query.
     let mut rest: Vec<String> = Vec::new();
@@ -392,7 +397,7 @@ fn cmd_kb(args: &[String]) -> i32 {
             rest.push(a.clone());
         }
     }
-    delphi_engine::kb::run(&ws.dir, &rest)
+    delphi_engine::kb::run(&home, &ws_dir, &rest)
 }
 
 /// Bare `delphi`: create what is missing (workspace, model access), then open the console.
