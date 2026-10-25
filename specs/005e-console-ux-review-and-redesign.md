@@ -96,15 +96,15 @@ The badge system and role colours; the two-line header's state machine; hairline
 | success `✔` | ANSI 2 (green) | same | glyph only |
 | warning, Amber tier, countdowns under 60 s | ANSI 3 (yellow) | same | `bold` |
 | alert, Red tier, errors `✖`, escalations | ANSI 1 (red) + `bold` | same | `bold` + `reverse` on the one word that matters (`RED`, `needs you`) |
-| role chassis (badges, names) | the theme's RGB when `COLORTERM` is `truecolor`/`24bit` | nearest of ANSI 1-6/9-14 per role, written in the theme pack (`orchestrator` 13, `architect` 14, `builder` 11, `red-team` 9, `strategist` 10, `scout` 3) | badges keep their glyphs; names `bold` |
-| badge eyes | default fg `bold` (dark or light, whatever the terminal is) | same | same |
+| role chassis (badges, names) | the theme's RGB when `COLORTERM` is `truecolor`/`24bit` | an ANSI colour per role, written in the avatar library (`avatar::ROLES`, `chassis_ansi`, carried by `ui_spec`; theme packs carry names only) (`orchestrator` 13, `architect` 14, `builder` 11, `red-team` 9, `strategist` 10, `scout` 3) | badges keep their glyphs; names `bold` |
+| badge eyes | default foreground, `bold`; under true colour the library's eyes instead (white on a dark terminal, deep slate on a light one, `005a` §2.1; the red-team's alert eyes gold), see §12 | same (the red-team's alert eyes ANSI 3 `bold`) | `bold` |
 | message tint (§7.2) | background moved 8 % toward white (dark) or 6 % toward black (light) under true colour; grey-ramp entry in 256 colours; ANSI 8 (dark) or 7 (light) in 16 | same, else the rail fallback | none: rail fallback (`│` at the left of each row) |
 | approval mode `auto` in the footer | the warning-red colour: ANSI 9 `bold` (theme RGB orange under true colour); never reverse video | same | `bold` |
 
 Rules:
 - `NO_COLOR` set (any value) or `TERM=dumb`: no SGR colour codes at all; attributes stay unless `TERM=dumb`. Checked once at start (`ui/src/theme.ts` gains `capabilities(env, term)`), and the same decision is made by the Rust consoles (`observer::Pal`).
 - Dark or light is still asked of the terminal (OSC 11) but only decides the *tint* and the eye colour; nothing else depends on it.
-- The theme pack's `theme.md` gains an optional `ansi:` column per role; absent, the nearest ANSI index is computed once from the RGB (`avatar::ui_spec` carries it to the UI).
+- Each role's ANSI fallback lives with its chassis colour in the avatar library (`chassis_ansi` in `avatar::ROLES`; `ui_spec` carries it to the UI as `ansi`). Theme packs carry names, epithets and personas only and never colours (decided 2026-10-25: a pack could otherwise recolour roles and break the badge invariants of `005a`).
 - `theme.ts` exports semantic functions only (`body`, `operator`, `muted`, `accent`, `ok`, `warn`, `alert`, `role(role)`); no hex literal outside `theme.ts`, enforced by a unit test that greps `ui/src`.
 
 ## 6. First run and the no-model state
