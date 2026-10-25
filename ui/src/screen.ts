@@ -26,7 +26,7 @@ export type Model = {
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'];
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
 const dots = (deck: number) => [0, 1, 2].map((i) => (i === deck ? T.accent('●') : T.dim('○'))).join(' ');
-const nav = (deck: number, w = 100) => (w >= 64 ? T.dim('navigate: arrows · ') : '') + dots(deck);
+const nav = (deck: number, w = 100) => (w >= 64 ? T.dim('← / ? → · ') : '') + dots(deck);
 
 export function header(m: Model, w: number): string[] {
   const st = status(m.state, m.now);
@@ -39,18 +39,19 @@ export function header(m: Model, w: number): string[] {
     left = T.badge(st.role, 'running', m.info, m.pal) + ' ' + T.roleColor(st.role, m.info).bold(T.roleName(st.role, m.info) + ':') + ' ' + T.text(m.pal)(st.doing || 'working');
   } else {
     const roles = ORDER.filter((r) => m.info.roles[r]);
-    left = roles.map((r) => T.badge(r, m.state.agents[r]?.state ?? 'idle', m.info, m.pal)).join(' ') + T.dim('  all agents idle');
+    left = roles.map((r) => T.badge(r, m.state.agents[r]?.state ?? 'idle', m.info, m.pal)).join(' ');
   }
-  const l2 = chalk.bold(T.text(m.pal)('delphi')) + T.dim(` v${m.info.version} · ${T.tilde(m.info.cwd)}`);
-  return [T.spread(left, nav(m.deck, w), w), T.clip(l2, w)];
+  const l2 = chalk.bold(T.text(m.pal)('delphi')) + T.dim(` v${m.info.version} · ${T.tilde(m.info.cwd)} · ${PANE[m.deck]}`);
+  return [T.clip(left, w), '', T.clip(l2, w)];
 }
 
-const MODE: Record<string, string> = { default: 'approvals', 'accept-edits': 'accept edits', 'mission-auto': 'auto' };
+const PANE = ['activity', 'chat', 'decisions'] as const;
+const MODE: Record<string, string> = { 'accept-edits': 'accept edits', 'mission-auto': 'auto' };
 
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
   const pending = Object.keys(m.state.approvals).length;
-  const left = T.dim(`${k} tokens · ${MODE[m.mode] ?? m.mode}${pending ? ` · ${pending} waiting` : ''} · shortcuts: ?`);
+  const left = T.dim([`${k} tokens`, MODE[m.mode] ?? (m.mode === 'default' ? '' : m.mode), pending ? `${pending} waiting` : ''].filter(Boolean).join(' · '));
   return T.spread(left, nav(m.deck, w), w);
 }
 

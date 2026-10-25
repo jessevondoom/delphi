@@ -1,7 +1,7 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 r… ○ ● ○
-delphi v0.5 · /proj
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaini…
 
-    + fn enqueue()
+delphi v0.5 · /proj · chat
+
     + fn dequeue()
   /y approve once · /a allow similar this task …
 
@@ -15,4 +15,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────
 ❯ and then?
 ────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortc… ○ ● ○
+0 tokens · 2 waiting                       ○ ● ○

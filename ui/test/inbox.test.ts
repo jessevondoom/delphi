@@ -93,9 +93,9 @@ test('the views follow the design: list rows with tier, role badge and time; foc
 test('the header alert uses the red-team badge and counts decisions; the footer shows the approval mode', () => {
   const s = three();
   const m = (over: Partial<Model> = {}): Model => ({ info, pal, state: s, now: 5000, deck: 2, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, ...over });
-  assert.match(plain(header(m(), 100)[0]!), /^⟦x\?x⟧ ares: 3 decisions pending · \d\d:\d\d remaining\s+navigate: arrows · ○ ○ ●$/);
-  assert.match(plain(footer(m(), 100)), /^0 tokens · approvals · 3 waiting · shortcuts: \?/);
-  assert.match(plain(footer(m({ mode: 'mission-auto' }), 100)), /· auto ·/);
+  assert.match(plain(header(m(), 100)[0]!), /^⟦x\?x⟧ ares: 3 decisions pending · \d\d:\d\d remaining$/);
+  assert.match(plain(footer(m(), 100)), /^0 tokens · 3 waiting\s+← \/ \? → · ○ ○ ●$/);
+  assert.match(plain(footer(m({ mode: 'mission-auto' }), 100)), /^0 tokens · auto · 3 waiting/);
   const lines = frame(m(), 100, 30).map(plain);
   assert.ok(lines.some((l) => l.startsWith('enter open card')), 'the prompt row is replaced by the key hint on this deck');
   assert.ok(!lines.some((l) => l.startsWith('❯ ') && l.includes('draft')));

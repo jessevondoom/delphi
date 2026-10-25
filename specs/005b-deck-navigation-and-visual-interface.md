@@ -89,6 +89,14 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 
 **Verification** (extends §6, test 1). With an empty prompt `←` and `→` switch decks and stop at the ends. With text typed, `←` moves the cursor and the deck does not change. `Shift+Left` and `Shift+Right` switch decks with text typed, and the draft is intact on return. `Alt+←` does not switch decks. In the Right Deck, List Mode `←` returns to the chat and Focus Mode `←` `→` change card. These are covered by `ui/test/decknav.test.ts` and the scripted session in `crates/delphi/tests/e2e.rs`.
 
+### 2.3 Amendment 005b-A2: Header and Footer Tidy (requested by the operator 2026-10-25)
+> Where §1.3, §3 and A1 item 4 differ from this amendment, this amendment governs. It applies to the full-screen console only.
+
+1. **Header line 1** carries the agent strip or the status/alert text only. The deck dots are no longer shown in the header, and the idle strip has no `all agents idle` label.
+2. **Header line 2** is separated from line 1 by one blank row, and reads `delphi v<version> · <working directory> · <pane>` where `<pane>` is `activity` (Left Deck), `chat` (Center Deck) or `decisions` (Right Deck).
+3. **Footer, right.** The only deck indicator reads `← / ? → · ○ ● ○`; it is the single place with navigation hints (`←` `→` move between decks, `?` opens help). Shown at 64 columns and wider; below that only the dots. The `shortcuts: ?` item is gone.
+4. **Footer, left.** `<tokens> tokens`, then the approval mode only when it is not the default (`accept edits`, `auto`), then `N waiting` when decisions are pending. The word `approvals` is no longer shown for the default mode.
+
 ---
 
 ## 3. High-Fidelity Text Wireframes

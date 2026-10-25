@@ -1,7 +1,7 @@
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧  all agents idle                                    navigate: arrows · ○ ● ○
-delphi v0.5 · /proj
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧
 
-❯ Compare a table and a file for the retry queue.
+delphi v0.5 · /proj · chat
+
 
 ⟦•_•⟧ daedalus · architect · 09:00:05
 
@@ -27,4 +27,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · shortcuts: ?                                         navigate: arrows · ○ ● ○
+0 tokens                                                                             ← / ? → · ○ ● ○
