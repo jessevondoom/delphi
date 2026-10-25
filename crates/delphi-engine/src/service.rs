@@ -949,7 +949,7 @@ mod tests {
 
     async fn seed_decision(f: &Fx, id: &str, allow: bool) -> String {
         let c = crate::tools::Classified { tool: "write_file".into(), tier: crate::tools::ToolTier::Amber, kind: crate::tools::ActionKind::WorktreeEdit, summary: format!("write src/{}.rs", id), payload: json!({"tool": "write_file", "path": format!("@worktree/src/{}.rs", id), "bytes": 3, "blake3": "ab"}), pattern: "write_file @worktree/src/*".into() };
-        let v = crate::provisional::Verdict { allow, rationale: "ok".into(), risk: crate::provisional::Risk::Routine };
+        let v = crate::provisional::Verdict::by_rule(allow, "ok".into(), crate::provisional::Risk::Routine);
         let ev = crate::provisional::decision_event(id, &c, crate::approval::Tier::Amber, &v, "builder");
         let hash = ev["payload_blake3"].as_str().unwrap().to_string();
         let mut e = EventEnvelope::new(&f.m.id, "decision.provisional", ev);

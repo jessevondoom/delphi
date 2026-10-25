@@ -67,7 +67,7 @@ struct AuditTarget<'a> {
 impl Engine {
     /// Another family with an allowed endpoint that can serve a Builder or auditor (an API endpoint, or the
     /// Claude harness), if any.
-    fn other_family(&self, current: &str, builder: bool) -> Option<String> {
+    pub(crate) fn other_family(&self, current: &str, builder: bool) -> Option<String> {
         let cfg = self.cfg.get();
         let mut families: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id) && e.family != current).map(|e| e.family.clone()).collect();
         families.sort();
@@ -263,7 +263,7 @@ mod tests {
 
     fn fixture(steps: Vec<Step>, test_script: &str) -> Fx {
         let script = test_script.to_string();
-        let f = setup_with_exec(steps, 5.0, |_| {}, move |c| {
+        let f = setup_with_exec(steps, 5.0, |s| s.approver = crate::provisional::ApproverKind::Rules, move |c| {
             c.test_command = Some(vec!["/bin/sh".into(), "-c".into(), script]);
             c.check_command = Some(vec!["/bin/sh".into(), "-c".into(), "true".into()]);
         });
