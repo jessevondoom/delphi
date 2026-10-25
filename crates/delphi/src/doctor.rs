@@ -116,7 +116,12 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
                     r.push(Level::Warn, "6 retrieval-index", "", format!("the index has no vectors from the installed model {}; run `delphi kb index`", m))
                 }
                 (Some(m), _) if h.vectors < h.chunks => r.push(Level::Warn, "6 retrieval-index", "", format!("{} of {} chunk(s) have no vector yet (model {}); run `delphi kb index`", h.chunks - h.vectors, h.chunks, m)),
-                (Some(m), _) => r.push(Level::Ok, "6 retrieval-index", "", format!("{} document(s), {} chunk(s), all with vectors from {}", h.documents, h.chunks, m)),
+                (Some(m), _) => r.push(
+                    Level::Ok,
+                    "6 retrieval-index",
+                    "",
+                    format!("{} document(s), {} chunk(s), all with vectors from {}; {}", h.documents, h.chunks, m, h.reranker.as_ref().map(|r| format!("results reranked by {}", r)).unwrap_or_else(|| "results are not reranked".into())),
+                ),
             },
         }
     } else {

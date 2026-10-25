@@ -354,22 +354,26 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`query` must be 1 to 500 characters"));
         }
         let (ws, home, role) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone(), p["role"].as_str().map(String::from));
+        // Reranking reads the best results with a second model and adds about half a second; `"rerank": false` skips it.
+        let rerank = p["rerank"].as_bool().unwrap_or(true);
         let hits = tokio::task::spawn_blocking(move || -> Result<Vec<crate::kb::Hit>, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
-            // A search never waits for the model to read the corpus: an empty index is filled with words now, and
-            // the vectors are made in the background and used from the next search on.
-            if kb.counts()?.0 == 0 {
-                kb.sync_lexical(&crate::kb::sources(&ws), "")?;
-            }
-            if crate::kb::attach_default(&home, &mut kb)? {
-                // Vectors shipped with the release for the built-in documents are applied before this search.
-                kb.apply_seed_vectors()?;
+            // A search never waits for the model to read the corpus, and never answers from a stale index: the words
+            // and the release's preloaded vectors are brought up to date first (unchanged files cost a stat), and
+            // vectors for anything new are made in the background and used from the next search on.
+            let model = crate::kb::attach_default(&home, &mut kb)?;
+            kb.refresh(&ws, "")?;
+            if model {
                 let (vectors, chunks) = kb.vector_counts()?;
                 if vectors < chunks {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            let hits = kb.search(&query, &crate::kb::SearchOpts { role: role.clone(), ..Default::default() })?;
+            let mut opts = crate::kb::SearchOpts { role: role.clone(), ..Default::default() };
+            if !rerank {
+                opts.rerank_weight = 0.0;
+            }
+            let hits = kb.search(&query, &opts)?;
             crate::kb::log_search(&ws, &query, role.as_deref(), hits.len());
             Ok(hits)
         })
@@ -384,11 +388,11 @@ impl EngineService {
         let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
         let rep = tokio::task::spawn_blocking(move || -> Result<crate::kb::IndexReport, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
-            let rep = kb.sync_lexical(&crate::kb::sources(&ws), "")?;
+            let model = crate::kb::attach_default(&home, &mut kb)?;
             // The words are searchable now, and so are the built-in documents' preloaded vectors; the rest follow
             // in the background.
-            if crate::kb::attach_default(&home, &mut kb)? {
-                kb.apply_seed_vectors()?;
+            let rep = kb.refresh(&ws, "")?;
+            if model {
                 crate::kb::embed_in_background(&home, &ws);
             }
             Ok(rep)

@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
+mod rerank;
+pub use rerank::{open as open_reranker, open_bytes as open_reranker_bytes, CandleReranker};
+
 const MAGIC: &[u8; 8] = b"DLPHMDL1";
 /// Tensors with fewer elements than this stay f32 (biases, norms, small tables).
 const QUANTIZE_FROM: usize = 4096;
@@ -146,6 +149,15 @@ pub struct CandleEmbedder {
     dtype: DType,
 }
 
+/// Where the models run, for `delphi kb model info`.
+pub fn device_name() -> &'static str {
+    if pick_device().0.is_cpu() {
+        "the CPU"
+    } else {
+        "the GPU (Metal)"
+    }
+}
+
 /// The GPU on a Mac that has one, otherwise the CPU; `DELPHI_EMBED_DEVICE=cpu` forces the CPU. Always f32: on
 /// Metal, f16 was measured to give wrong vectors (recall 0) and to be slower, so it is not offered.
 fn pick_device() -> (Device, DType) {
@@ -188,6 +200,28 @@ fn split(bytes: &[u8]) -> Result<(Header, &[u8]), String> {
     Ok((header, &bytes[16 + n..]))
 }
 
+/// The package's weights as f32 tensors on `dev` (int8 matrices are widened with their row scales).
+fn tensors(header: &Header, blob: &[u8], dev: &Device) -> Result<HashMap<String, Tensor>, String> {
+    let slice = |off: u64, len: u64| blob.get(off as usize..(off + len) as usize).ok_or_else(|| "truncated model package".to_string());
+    let mut out: HashMap<String, Tensor> = HashMap::new();
+    for e in &header.tensors {
+        let raw = slice(e.off, e.len)?;
+        let n: usize = e.shape.iter().product();
+        let data: Vec<f32> = match e.enc.as_str() {
+            "f32" => raw.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect(),
+            "q8" => {
+                let (vals, scales) = raw.split_at(n);
+                let cols = e.shape[1];
+                let scales: Vec<f32> = scales.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+                vals.iter().enumerate().map(|(i, q)| (*q as i8) as f32 * scales[i / cols]).collect()
+            }
+            other => return Err(format!("unknown tensor encoding {}", other)),
+        };
+        out.insert(e.name.clone(), Tensor::from_vec(data, e.shape.clone(), dev).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 impl CandleEmbedder {
     pub fn load(bytes: &[u8]) -> Result<CandleEmbedder, String> {
         let (header, blob) = split(bytes)?;
@@ -197,23 +231,7 @@ impl CandleEmbedder {
             slice(*o, *l)
         };
         let (dev, dtype) = pick_device();
-        let mut tensors: HashMap<String, Tensor> = HashMap::new();
-        for e in &header.tensors {
-            let raw = slice(e.off, e.len)?;
-            let n: usize = e.shape.iter().product();
-            let data: Vec<f32> = match e.enc.as_str() {
-                "f32" => raw.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect(),
-                "q8" => {
-                    let (vals, scales) = raw.split_at(n);
-                    let cols = e.shape[1];
-                    let scales: Vec<f32> = scales.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
-                    vals.iter().enumerate().map(|(i, q)| (*q as i8) as f32 * scales[i / cols]).collect()
-                }
-                other => return Err(format!("unknown tensor encoding {}", other)),
-            };
-            tensors.insert(e.name.clone(), Tensor::from_vec(data, e.shape.clone(), &dev).map_err(|e| e.to_string())?);
-        }
-        let vb = VarBuilder::from_tensors(tensors, dtype, &dev);
+        let vb = VarBuilder::from_tensors(tensors(&header, blob, &dev)?, dtype, &dev);
         let cfg = std::str::from_utf8(file("config.json")?).map_err(|e| e.to_string())?;
         let net = match header.meta.kind.as_str() {
             "bert" => {

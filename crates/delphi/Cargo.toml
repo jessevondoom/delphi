@@ -32,7 +32,8 @@ ratatui = "0.29"
 unicode-width = "0.2"
 
 [features]
-# Compile the embedding model named by DELPHI_EMBED_MODEL_FILE into the executable (the release build; specs/004 §3.5).
+# Compile the models and preloaded vectors named by DELPHI_EMBED_MODEL_FILE, DELPHI_RERANK_MODEL_FILE and
+# DELPHI_SEED_VECTORS_FILE into the executable (the release build; specs/004 §3.5 to §3.7).
 embedded-model = ["delphi-engine/embedded-model"]
 
 [dev-dependencies]
