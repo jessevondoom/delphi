@@ -1162,6 +1162,10 @@ impl Engine {
             if let Err(refused) = tools::precheck_write(&sc.guard, sc.span.ceiling(), &sc.role, &sc.m.id, &now, args) {
                 return Ok(refused);
             }
+        } else if crate::artifacts::is_artifact_tool(name) {
+            if let Err(refused) = crate::artifacts::precheck(&sc.guard, sc.span.ceiling(), &sc.m.id, name, args) {
+                return Ok(refused);
+            }
         }
         if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
             if let Some(denied) = self.ask_classified(sc, tier, &c).await? {
