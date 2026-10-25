@@ -44,6 +44,8 @@ Sequence by dependency and risk, not by enthusiasm.
 5. Write the plan from `templates/milestones.yaml` and run `delphi check dag <file> --repo .`. It rejects cycles and unknown ids, then prints the parallel waves and the critical path.
 6. Read the critical path. If it is longer than the constraints allow, cut scope or break a dependency; do not just reorder.
 
+No shell? Call the `check` tool with `kind: dag` and the plan's path; it returns the same verdict.
+
 ## Done when
 The check passes, the critical path is named, and each milestone states what is true when it ships.
 

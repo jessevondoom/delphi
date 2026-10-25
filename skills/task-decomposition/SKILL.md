@@ -44,6 +44,8 @@ Break a goal into the smallest set of tasks that can each be handed to one agent
 6. Write the plan from `templates/task-dag.yaml` to `missions/<mission>/plan.yaml`.
 7. Run `delphi check dag missions/<mission>/plan.yaml --repo .` and fix every failure. A cycle means two tasks are really one, or a dependency points the wrong way.
 
+No shell? Call the `check` tool with `kind: dag` and the plan's path; it returns the same verdict.
+
 ## Done when
 The check passes, every task has a verifiable deliverable, and the critical path it prints matches your expectation of the longest chain.
 

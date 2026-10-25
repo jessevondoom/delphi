@@ -155,6 +155,12 @@ impl Registry {
             exec: ToolExec::Local(search),
         });
         r.register(ToolSpec {
+            def: read_def("check", "Run a deterministic check on a document you can read and get a short verdict, instead of working the rule out yourself. Kinds: `dag` (task or milestone plan: cycles, unknown dependencies, tiers; reports parallel waves and the critical path), `handoff` (handoff envelope), `provenance` (provenance frontmatter), `rules` (Rule of 25 file), `review-md` (REVIEW.md budget), `spec` (spec sections and frontmatter).", json!({"type": "object", "required": ["kind", "path"], "properties": {"kind": {"type": "string", "enum": crate::checks::TEXT_KINDS}, "path": {"type": "string"}}})),
+            requires_write_scope: false,
+            classify: classify_read,
+            exec: ToolExec::Local(check),
+        });
+        r.register(ToolSpec {
             def: read_def("write_file", "Create or replace a text file under `missions/<mission>/…` (notes, plans, reports) or `specs/…` (draft specs). A provenance header is added for you; a spec can never be marked approved by an agent.", json!({"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string"}, "content": {"type": "string"}}})),
             requires_write_scope: true,
             classify: classify_write,
@@ -399,6 +405,35 @@ fn list_dir(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
 }
 
+/// `check`: the file is read through the same guard as `read_file`, so scope, `.git` and never-readable rules hold, and its
+/// tier lowers the span's ceiling exactly as a read would. The verdict is derived text, not file content.
+fn check(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let (kind, path) = match (str_arg(args, "kind"), str_arg(args, "path")) {
+        (Ok(k), Ok(p)) => (k, p),
+        (Err(e), _) | (_, Err(e)) => return ToolResult::err(e.0),
+    };
+    if !crate::checks::TEXT_KINDS.contains(&kind) {
+        return ToolResult::err(format!("unknown check `{}` (one of: {})", kind, crate::checks::TEXT_KINDS.join(", ")));
+    }
+    let (bytes, truncated) = match ctx.guard.read_file(path, MAX_READ_BYTES) {
+        Ok(r) => r,
+        Err(d) => return denied(d),
+    };
+    if bytes.contains(&0) {
+        return ToolResult::err("binary file; not checked");
+    }
+    if truncated {
+        return ToolResult::err(format!("file is larger than {} KB; a check judges the whole file", MAX_READ_BYTES / 1024));
+    }
+    observe(ctx, path, &bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    // A linked spec counts as existing when this role can read it.
+    match crate::checks::check_text(kind, &text, &|p| ctx.guard.read_file(p, 1).is_ok()) {
+        Ok(o) => ToolResult::ok(o.render(kind, path)),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 fn search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let (pattern, root) = match (str_arg(args, "pattern"), str_arg(args, "path")) {
         (Ok(p), Ok(r)) => (p, r),
@@ -561,8 +596,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "list_dir", "search"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "list_dir", "search", "write_file"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "list_dir", "search", "check"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "list_dir", "search", "check", "write_file"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -674,6 +709,34 @@ mod tests {
     }
 
     #[test]
+    fn check_judges_a_readable_document_and_taints_like_a_read() {
+        let mut f = fx(&[]);
+        fs::write(f.root.join("local/missions/m1/plan.yaml"), "tasks:\n  - {id: a, tier: code-craft}\n  - {id: b, tier: fast-triage, depends_on: [a], spec: specs/001-x.md}\n").unwrap();
+        let r = run_tool(&mut f, "check", json!({"kind": "dag", "path": "missions/m1/plan.yaml"}));
+        assert!(!r.is_error && r.content.starts_with("dag missions/m1/plan.yaml: FAIL") && r.content.contains("spec `specs/001-x.md` does not exist"), "{}", r.content);
+        fs::write(f.root.join("team/specs/001-x.md"), "x").unwrap();
+        let r = run_tool(&mut f, "check", json!({"kind": "dag", "path": "missions/m1/plan.yaml"}));
+        assert!(r.content.starts_with("dag missions/m1/plan.yaml: pass") && r.content.contains("critical path (weight 2): a -> b"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L5);
+        // Checking an untrusted file lowers the ceiling just as reading it would.
+        let r = run_tool(&mut f, "check", json!({"kind": "provenance", "path": "@project/app/vendor/lib/x.js"}));
+        assert!(!r.is_error && r.content.contains("FAIL"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L0);
+    }
+
+    #[test]
+    fn check_validates_its_input_and_respects_the_path_guard() {
+        let mut f = fx(&[]);
+        assert!(run_tool(&mut f, "check", json!({"kind": "tui", "path": "missions/m1/a"})).content.contains("unknown check"));
+        assert!(run_tool(&mut f, "check", json!({"path": "missions/m1/a"})).is_error);
+        for path in ["missions/m1/events.jsonl", "operator/profile.md", "@project/app/.git/config"] {
+            let r = run_tool(&mut f, "check", json!({"kind": "dag", "path": path}));
+            assert!(r.is_error && r.content.contains("denied"), "{} → {}", path, r.content);
+        }
+        assert!(run_tool(&mut f, "check", json!({"kind": "dag", "path": "@project/app/bin.dat"})).content.contains("binary"));
+    }
+
+    #[test]
     fn list_dir_marks_directories_and_hides_forbidden_entries() {
         let mut f = fx(&[]);
         let r = run_tool(&mut f, "list_dir", json!({"path": "@project/app"}));
@@ -765,7 +828,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "list_dir", "search"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "list_dir", "search", "write_file"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "list_dir", "search", "check"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "list_dir", "search", "check", "write_file"]);
     }
 }
