@@ -671,13 +671,13 @@ pub fn specs() -> Vec<ToolSpec> {
                 "sheets": {"type": "array", "minItems": 1, "maxItems": sheetwriter::MAX_SHEETS, "items": {"type": "object", "required": ["columns", "rows"], "properties": {
                     "name": {"type": "string", "description": "up to 31 characters, without [ ] : * ? / or backslash"},
                     "columns": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array"}},
+                    "rows": {"type": "array", "items": {"type": "array", "items": {}}},
                     "formulas": {"type": "array", "items": {"type": "object", "required": ["cell", "f"], "properties": {"cell": {"type": "string"}, "f": {"type": "string"}}}},
                     "widths": {"type": "array", "items": {"type": "number"}},
                     "formats": {"type": "array", "items": {"type": "string"}}
                 }}},
                 "columns": {"type": "array", "items": {"type": "string"}, "description": "a single sheet's header, instead of `sheets`"},
-                "rows": {"type": "array", "items": {"type": "array"}, "description": "a single sheet's rows, instead of `sheets`"}
+                "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "a single sheet's rows, instead of `sheets`"}
             }}),
         },
         requires_write_scope: true,
