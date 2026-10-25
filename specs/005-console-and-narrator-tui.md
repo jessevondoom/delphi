@@ -53,7 +53,7 @@ flowchart LR
         Coalescer["16ms (60fps) Delta Frame Coalescer"]
         Engine["agent State Machine & Adapter"]
         Log["missions/<id>/events.jsonl (Append-Only Truth)"]
-        DB[".delphi/state.db (SQLite WAL + FTS5)"]
+        DB[".delphi/state.db (SQLite WAL + FTS5 + vectors)"]
     end
 
     Console <==> UDS
@@ -284,7 +284,7 @@ A footer row shows mission totals: tokens by type, total cost against budget, th
 3. **`[3: Forge (Worktrees & Diffs)]`:**
    - Live `git diff` viewer and test-runner output stream for **Builder's** isolated worktrees (`.delphi/worktrees/<task-id>/`), plus line-anchored `REVIEW.md` audit comments from **Red-Team** and **Strategist**.
 4. **`[4: Archives (Knowledge Base & Coaching Ledger)]`:**
-   - Instant fuzzy/FTS5 browser over `context/`, `specs/`, `REVIEW.md`, and each role's private `memory/agents/<role>/lessons.md`.
+   - Search over the knowledge base: the same hybrid search as `delphi kb search` and `/search` (keywords, meaning, and a reranking pass; `specs/004` §3), across `context/`, `specs/`, `missions/`, the agents and skills, `REVIEW.md`, and each role's private `memory/agents/<role>/lessons.md`. It calls `kb.search`, which brings the index up to date first; `"rerank": false` gives the quick answer.
 
 **Build order:** the usage ledger and `/usage` ship in roadmap Step 2, because budget enforcement already needs them. The agents pane and the Epic view ship with the narrator views in Step 5. Control actions (pause or inspect a node) come later.
 ---

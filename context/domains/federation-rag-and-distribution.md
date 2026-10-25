@@ -37,11 +37,12 @@ Pure dense embeddings compress exact identifiers (`[H-004]`, `REV-SEC-04`, `Part
 
 ### 2.2 The Two-Gear Retrieval Protocol (`.delphi/state.db`)
 - **Gear 1 (Hot Code & Curated Docs):** Live source code (`src/**`, `.delphi/worktrees/**`) is **never** vector-indexed (avoiding index staleness during TDD). Agents navigate via `context/index.md` + `ripgrep` / `ast-grep`.
-- **Gear 2 (Archival Missions & Domain Docs):** `.delphi/state.db` indexes Markdown files (`context/`, `specs/`, `missions/`, `memory/`) using:
+- **Gear 2 (Archival Missions & Domain Docs):** `.delphi/state.db` indexes Markdown files (`context/`, `specs/`, `missions/`, `memory/`, and the agents and skills) using:
   1. **Deterministic AST Breadcrumb Chunking:** Splits on `# H1`/`## H2`/`### H3` while keeping code blocks and tables intact, recording exact `start_line`..`end_line` numbers and prepending `[File | Lines | Heading Path | Source | Status]`.
   2. **SQLite FTS5 (BM25):** Configured with `tokenize="unicode61 tokenchars '_-.:/@#'"` so technical IDs (`H-004`, `REV-SEC-04`) are tokenized intact.
-  3. **`sqlite-vec` Vector Search:** local nearest-neighbour search inside the same SQLite ACID file, over vectors from a BERT-family model that runs in the binary on `candle` (the dimension follows the model; `specs/004` §3.5 names it). Built in Amendment 004-A1; before that this document described it as planned.
+  3. **`sqlite-vec` Vector Search:** local nearest-neighbour search inside the same SQLite ACID file, over vectors from a BERT-family model that runs in the binary on `candle` (the dimension follows the model; `specs/004` §3.5 names it), with preloaded vectors for the shipped documents (§3.6). Built in Amendments 004-A1 and 004-A2; before that this document described it as planned.
   4. **Reciprocal Rank Fusion (RRF, $k=60$):** Pre-filtered by `status = 'active'` and taint tier, returning at most 10 `file:///path#Lstart-Lend` pointers (`<150` lines total).
+  5. **Cross-encoder reranking:** a small model reads the question together with each of the best few results and puts the best answer first; a best score below a calibrated floor returns nothing (`specs/004` §3.7, Amendment 004-A3). This is the answer to §2.1's concern: exact identifiers are matched by the keyword rankings, meaning by the vectors, and the final order by a model that reads both texts.
 
 ---
 

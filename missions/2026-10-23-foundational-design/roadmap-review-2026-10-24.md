@@ -74,3 +74,11 @@ Each is cheap to reverse; tell me if one is wrong.
 - Connector tool wire names are `<connector>__<tool>`, because some model APIs reject a dot.
 - `delphi update` surfaces refreshed release files as ordinary ratification proposals, which required `base/` to count as a source of proposals.
 - Thresholds in `delphi needs` (10 finished tasks, 3 set-aside files) are my defaults; the vector rule (50 missions and a confirmed miss) is D-01's.
+
+## 6. Update, 2026-10-25: what changed after this review
+
+This review is a snapshot and its body is left as written. Two of its statements no longer hold:
+- **"Vectors" is no longer Step 6 or gated.** The operator reopened D-01 on 2026-10-24 and directed the work that followed. Knowledge search now has local embeddings, a reranker, preloaded vectors for the shipped documents, the agents and skills in the index, and a refresh on every search (`specs/004` Amendments 004-A1 to 004-A3). The "50 missions and a confirmed miss" rule in the last decisions line above is spent; `delphi needs` no longer lists vectors.
+- **`delphi kb` is no longer FTS5 only** (the Step 5 row in §1). `delphi kb eval` measures it, and `dev/kb-eval.json` with `dev/kb-eval-holdout.json` are the question sets; the second is never tuned on.
+
+Still true: Step 6's other items (coaching automation, diff3, sync, watches, rewind) are gated by `delphi needs`.

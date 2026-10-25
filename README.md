@@ -14,7 +14,7 @@ Delphi is a spec-driven, multi-agent working environment for **software engineer
 - **Builds you can trust:** the Builder works in a throwaway worktree; Delphi runs your tests, has a different agent audit the exact commit, and asks before merging (or opens a pull request).
 - **Councils:** for a hard call, several seats on different model families answer blind, attack each other's answers, and the verdict carries a Minority Report that the runtime copies verbatim.
 - **A second window** (`delphi narrator`): a read-only live view of the task graph, Council, worktree diffs, agents and spend.
-- **Knowledge search** (`delphi kb search`), **connectors** to Slack, Google and Zoom (in progress), and a budget that is enforced before each model call, not after.
+- **Knowledge search** (`delphi kb search`: keywords, meaning and a reranking pass, all local), **connectors** to Slack, Google and Zoom (in progress), and a budget that is enforced before each model call, not after.
 - **Safety by construction:** anything an agent reads from outside is untrusted and limits what it may do next; the model-access settings and agent definitions only change when you ratify them.
 
 ## Install
@@ -45,6 +45,19 @@ The first time, `delphi` creates a workspace for the project (with a one-line no
 Everything after install is the one command `delphi`; run it again any time (in any project) and it opens the console. In the console, useful commands: `/usage`, `/budget [dollars]`, `/permissions`, `/ratify`, `/narrator`, `/y /a /n /d` to answer a card, and `/help`. `delphi doctor` checks the install; `delphi needs` shows which later features have earned their turn. Using Delphi never writes into your project repository (D-03); its state lives in `~/.delphi` (or `$DELPHI_HOME`).
 
 **From source:** `cargo build --release` produces one executable, `target/release/delphi` (the daemon is `delphi __core`). For the full-screen console also run `cd ui && npm ci && npm run build` and put `ui/dist/delphi-ui` next to `delphi` (or set `$DELPHI_UI`); without it `delphi` uses the inline console. `cargo test` runs everything; `cargo run -- lint --repo .` lints this repository (CI does too). Rust 1.85 or newer.
+
+## Knowledge search
+
+```sh
+delphi kb search how do we keep untrusted text out of the lessons
+```
+
+Search finds the passage that answers the question, not only the one that shares its words. It combines keyword matching (so `[REV-SEC-04]` and `Part.thoughtSignature` still hit exactly), a search by meaning, and a second model that reads the best few results with your question and puts the best answer first. It covers `context/`, `specs/`, `missions/`, agent memory, and the agents and skills themselves, and it returns pointers (`path#L10-L40`) with a three-line preview. Anything untrusted or inactive is left out unless you ask, and an agent only ever sees its own private memory.
+
+- **Local.** The two models (about 146 MB together) are inside the executable and run on your machine; nothing is sent anywhere. A build without them, or `DELPHI_EMBED_MODEL=off`, still searches by keyword.
+- **Always current.** Every search checks the files first (unchanged ones cost a stat, not a read), so a note written a minute ago is found. The built-in documents come with their vectors already made; anything new is embedded in the background and joins the results as it is ready. `delphi kb index` embeds everything now; `delphi kb reindex` rebuilds from the files.
+- **A quick answer.** `--no-rerank` (or `"rerank": false` over the daemon) skips the reading pass and answers in about a fiftieth of a second instead of half a second. `--lexical` is keywords only.
+- **Check it.** `delphi kb stats`, `delphi kb model info --check` and `delphi doctor` show what is installed and whether the index is complete. `delphi kb miss "<question>"` records a search that should have found something; `delphi kb eval` re-measures recall on `dev/kb-eval.json` (and the held-out `dev/kb-eval-holdout.json`) after any change.
 
 ---
 
@@ -107,7 +120,7 @@ delphi/
 1. **[001 — Governance & Manifests](specs/001-governance-and-manifests.md):** schemas for `AGENT.md`, progressive-disclosure `SKILL.md`, `HandoffEnvelope`, the 6-tier taint lattice and taint-gated tools, and theme packs.
 2. **[002 — Adapter & Model Scaling](specs/002-adapter-and-routing.md):** the Intermediate Prompt Representation (IPR), provider dialect passes, `ContentBlock[]` signature preservation, the model scaler, and (deferred) CLI harness drivers.
 3. **[003 — Collaboration & Council](specs/003-collaboration-and-council.md):** escalation ladder, task DAG execution, unified retry ladder and budget, and the 3-round Council with blind Round 1 and Minority Report.
-4. **[004 — Memory, Retrieval & Coaching](specs/004-memory-and-coaching.md):** dual-tier memory, frozen boot snapshots, FTS5 retrieval (vectors later), the context circuit breaker, and the ratified learning loop.
+4. **[004 — Memory, Retrieval & Coaching](specs/004-memory-and-coaching.md):** dual-tier memory, frozen boot snapshots, hybrid retrieval (keywords, local embeddings and a reranker), the context circuit breaker, and the ratified learning loop.
 5. **[005 — Console & Narrator TUI](specs/005-console-and-narrator-tui.md):** the `delphi-core` daemon, 60Hz coalesced event stream, the console window and the narrator window.
 6. **[006 — Installer, Layout & Updater](specs/006-installer-and-updater.md):** single-binary seed packaging, the Delphi home layout, the three-zone model, `update`, and `doctor`.
 7. **[007 — Federation & Sync](specs/007-federated-mesh-and-sync.md):** team sync via ratified proposals (A2A delegation and `delphi://` pointers deferred).
