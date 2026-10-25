@@ -35,7 +35,7 @@ const USAGE: &str = "usage:
   delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]   (set up whatever is missing, then open the console)
   delphi update [--check] [--allow-downgrade] [--workspace <name>] [--home <dir>]
   delphi rollback [--workspace <name>] [--home <dir>]
-  delphi self-update [--check] [--version vX.Y.Z | --dev] [--rollback]   (--dev: the latest build of main)
+  delphi self-update [--check] [--version vX.Y.Z | --dev] [--rollback] [--no-restart]   (--dev: the latest build of main; running daemons are restarted on the new version unless --no-restart)
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
@@ -178,7 +178,32 @@ fn cmd_self_update(args: &[String]) -> i32 {
         return 1;
     };
     let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
-    selfupdate::run(args, &selfupdate::RealNet, &dest, &api)
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    let no_restart = args.iter().any(|a| a == "--no-restart");
+    selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |exe| !no_restart && restart_daemons(exe, &home))
+}
+
+/// Restart every workspace's running daemon with the freshly installed `exe`, so none keeps running the old release.
+/// Each is restarted by the new program itself (`daemon restart`). True if any daemon was running.
+fn restart_daemons(exe: &std::path::Path, home: &std::path::Path) -> bool {
+    let Ok(rd) = std::fs::read_dir(home.join("workspaces")) else { return false };
+    let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|d| d.join("config.toml").exists()).collect();
+    dirs.sort();
+    let mut any = false;
+    for dir in dirs {
+        let running = delphi_core::spawn::layout(home, &dir).is_ok_and(|l| delphi_core::client::Client::connect(&l.sock).is_ok());
+        if !running {
+            continue;
+        }
+        any = true;
+        let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        println!("Restarting the daemon of workspace `{}`…", name);
+        let ok = std::process::Command::new(exe).args(["daemon", "restart", "--workspace", &name, "--home"]).arg(home).stdin(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("delphi self-update: could not restart it; run `delphi daemon restart --workspace {}`", name);
+        }
+    }
+    any
 }
 
 /// `delphi update` / `delphi rollback`: refresh (or restore) the built-in Zone 1 files of the workspaces.

@@ -6,6 +6,8 @@
 //!   anything.
 //! * Replacement is a rename in the same directory, so a running `delphi` or daemon keeps working; the old
 //!   executable is kept as `delphi.prev` and `--rollback` puts it back.
+//! * Daemons that are running are restarted on the new executable (`--no-restart` leaves them), so an update never
+//!   leaves one on the old version.
 //! * Only releases newer than this one are installed, and never a prerelease unless asked for by version.
 //! * `--dev` follows `main` instead: every push to main publishes a build as the rolling `dev` release (see
 //!   `.github/workflows/dev.yml`). Its version is `<crate version>-dev.g<commit>`, so any other build is "different"
@@ -287,13 +289,23 @@ impl Net for RealNet {
     }
 }
 
-/// The command. Returns the process exit code.
+/// The command, restarting nothing. Returns the process exit code.
+#[cfg(test)]
 pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
+    run_with(args, net, dest, api, &mut |_| false)
+}
+
+/// `run`, calling `restart` with the new executable once an install or rollback has replaced it. It returns whether
+/// it found a running daemon (and said so); if not, the command tells the user how to restart one.
+pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, restart: &mut dyn FnMut(&Path) -> bool) -> i32 {
     let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
     if args.iter().any(|a| a == "--rollback") {
         return match rollback(dest) {
             Ok(()) => {
-                println!("Restored the previous version. Run `delphi daemon restart` so a running daemon matches.");
+                println!("Restored the previous version.");
+                if !restart(dest) {
+                    println!("A running daemon keeps the version it started with until it restarts: `delphi daemon restart`.");
+                }
                 0
             }
             Err(e) => {
@@ -336,7 +348,9 @@ pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
                 println!("This is a development build of main, not a release; `delphi self-update` returns to the latest release.");
             }
             println!("Installed {} at {} (the old version is kept as {}; `delphi self-update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
-            println!("A running daemon keeps the old version until it restarts: `delphi daemon restart`.");
+            if !restart(dest) {
+                println!("A running daemon keeps the old version until it restarts: `delphi daemon restart`.");
+            }
             println!("Then run `delphi update` to refresh the built-in agents, skills and themes in your workspaces.");
             0
         }
@@ -582,5 +596,24 @@ mod tests {
         assert_eq!(run(&["--check".into()], &net, &dest, &api), 0);
         assert!(!dest.exists(), "--check never installs");
         assert_eq!(run(&["--version".into(), "v7.7.7".into()], &net, &dest, &api), 1, "an unknown version is an error, not a silent success");
+    }
+
+    #[test]
+    fn daemons_are_restarted_on_the_new_executable_after_an_install_or_rollback_and_only_then() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("delphi");
+        std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.1.0'\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (net, api) = server("v99.0.0", "99.0.0", None);
+        let mut seen: Vec<PathBuf> = Vec::new();
+        assert_eq!(run_with(&["--check".into()], &net, &dest, &api, &mut |p| { seen.push(p.to_path_buf()); true }), 0);
+        assert!(seen.is_empty(), "--check changes nothing, so restarts nothing");
+        assert_eq!(run_with(&[], &net, &dest, &api, &mut |p| { seen.push(p.to_path_buf()); true }), 0);
+        assert_eq!(seen, vec![dest.clone()], "an install restarts the daemons, on the executable it just installed");
+        assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, &mut |p| { seen.push(p.to_path_buf()); true }), 0);
+        assert_eq!(seen.len(), 2, "a rollback restarts them too");
     }
 }
