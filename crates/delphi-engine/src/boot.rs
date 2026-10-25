@@ -295,6 +295,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         optimistic: Default::default(),
         decisions_changed: Default::default(),
         timers: Arc::new(timers),
+        inventory: Arc::new(crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json"))),
         toolless: Default::default(),
         approver_calls: Default::default(),
     });

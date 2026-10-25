@@ -209,6 +209,8 @@ pub struct Engine {
     pub(crate) decisions_changed: tokio::sync::Notify,
     /// Durable timers (`specs/017`): wakes the daemon keeps on behalf of roles and the operator.
     pub timers: Arc<crate::timers::TimerStore>,
+    /// What each subscription CLI last reported it could do (`specs/018` §4), shown to roles that dispatch work.
+    pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
@@ -528,6 +530,10 @@ impl Engine {
             if let Some(extra) = self.injected.lock().unwrap().get(&handoff.handoff_id) {
                 slices.extend(extra.iter().cloned());
             }
+            // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
+            if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
+                slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });
+            }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
             }
@@ -542,20 +548,7 @@ impl Engine {
                 reminder: Some(handoff.reminder_text()),
                 nonce,
             };
-            let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
-            if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
-                defs.push(dispatch_def());
-            }
-            if sc.manifest.execute.iter().any(|e| e == "timers") {
-                defs.push(timer_def());
-            }
-            if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
-                defs.push(run_command_def());
-            }
-            defs.extend(self.connector_defs(&sc).await?);
-            if sc.toolless {
-                defs.clear();
-            }
+            let defs = self.span_tool_defs(&sc).await?;
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             // A family whose first allowed endpoint is a harness runs the whole span in the subscription CLI
@@ -1094,8 +1087,29 @@ impl Engine {
         matches!(resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &self.route_request(sc, true)), Route::Target { .. } | Route::Similar { .. } | Route::Weaker { .. })
     }
 
+    /// The tools this span is offered: the built-ins its scope allows, then the ones its manifest's `execute` list
+    /// adds, then connector tools. An API span sends them with every turn; a harness span gets them over the bridge
+    /// (`bridge.rs`), so both seats have the same Delphi tools for the same role.
+    pub(crate) async fn span_tool_defs(&self, sc: &SpanCtx) -> Result<Vec<ToolDef>, EngineError> {
+        let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
+        if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
+            defs.push(dispatch_def());
+        }
+        if sc.manifest.execute.iter().any(|e| e == "timers") {
+            defs.push(timer_def());
+        }
+        if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+            defs.push(run_command_def());
+        }
+        defs.extend(self.connector_defs(sc).await?);
+        if sc.toolless {
+            defs.clear();
+        }
+        Ok(defs)
+    }
+
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
-    async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+    pub(crate) async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
         if sc.toolless {
             return Ok(tool_result_error("this span answers in text only; it has no tools"));
         }

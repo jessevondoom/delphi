@@ -70,6 +70,8 @@ fn main() {
             unsafe { std::env::set_var("DELPHI_RELEASE_VERSION", env!("CARGO_PKG_VERSION")) };
             delphi_engine::core_main::run(args[1..].to_vec())
         }
+        // The tool bridge's relay, started by a subscription CLI as its MCP server (`delphi_engine::bridge`).
+        Some("__mcp-bridge") => delphi_engine::bridge::run_relay(&args[1..]),
         Some("lint") => cmd_lint(&args[1..]),
         Some("check") => cmd_check(&args[1..]),
         Some("setup") => cmd_setup(&args[1..]),

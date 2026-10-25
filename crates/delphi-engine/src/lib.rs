@@ -3,6 +3,7 @@
 pub mod approval;
 pub mod auth_cli;
 pub mod boot;
+pub mod bridge;
 pub mod core_main;
 pub mod council;
 pub mod build;
@@ -20,6 +21,7 @@ pub mod gates;
 pub mod handoff;
 pub mod harness;
 pub mod harness_run;
+pub mod inventory;
 pub mod embed;
 pub mod kb;
 pub mod vecext;
