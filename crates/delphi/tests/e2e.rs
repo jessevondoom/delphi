@@ -4,6 +4,8 @@
 //! the console, run a tool-using task, answer an approval card, read usage, and check that an unratified
 //! edit to the endpoint config never redirects traffic.
 
+mod common;
+
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -187,6 +189,8 @@ impl Session {
 // ── the workspace ───────────────────────────────────────────────────────────
 
 struct Env {
+    /// First, so it drops first: it stops the daemons while the directory is still there.
+    _reap: common::DaemonReaper,
     _t: tempfile::TempDir,
     home: PathBuf,
     ws: PathBuf,
@@ -261,7 +265,7 @@ fn setup(port: u16) -> Env {
     run(&["init", "--non-interactive", "--home", home.to_str().unwrap(), "--workspace", "e2e", "--project", proj.to_str().unwrap()]);
     let ws = home.join("workspaces/e2e");
     std::fs::write(ws.join("config.toml"), config_for(&proj, port)).unwrap();
-    Env { _t: t, home, ws }
+    Env { _reap: common::DaemonReaper::new(&home), _t: t, home, ws }
 }
 
 /// The daemon's pid, from the console banner (`daemon pid 1234`).
@@ -865,6 +869,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
 fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     let t = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
     let (home, proj) = (t.path().join("h"), t.path().join("app"));
+    let _reap = common::DaemonReaper::new(&home);
     std::fs::create_dir_all(proj.join(".git")).unwrap();
     let Some(wrapper) = ui_launcher(t.path()) else { return };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
