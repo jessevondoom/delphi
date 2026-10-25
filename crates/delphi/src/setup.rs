@@ -660,7 +660,7 @@ impl Env for RealEnv {
     }
 
     fn http_get(&self, url: &str, headers: &[(&str, &str)]) -> Result<(u16, String), String> {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().map_err(|e| e.to_string())?;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         let client = delphi_adapter::http::build_client();
         rt.block_on(async {
             let mut req = client.get(url).timeout(std::time::Duration::from_secs(20));
