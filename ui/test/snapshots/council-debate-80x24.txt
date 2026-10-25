@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦…  ⟧
+delphi v0.5 · council
+
+ ✔ nothing needs you
+
+ question  Should the retry queue be a table or a file?
+ round   ✔ blind ━━━━━━━━━ ● debate ╌╌╌╌╌╌╌╌╌ ○ verdict                   00:34
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ⟦•_•⟧ daedalus            ⟦•_•⟧ odysseus            ⟦…  ⟧ hermes
+   table                     table                     file
+   ✔ replied                 ✔ replied                 ● answering daedalus
+   atomic claims and a       a table is already        fsync ordering and a
+   one-query audit           the house pattern         recovery story▊
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   verdict    none yet · round 2 of 3
+   positions  table 2 · file 1   hermes is replying
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+────────────────────────────────────────────────────────────────────────────────
+3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○

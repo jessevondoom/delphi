@@ -133,16 +133,17 @@ export function band(row: string, bg: Rgb | null | undefined): string {
   return chalk.bgRgb(...mixed).rgb(...warnRgb)(row);
 }
 
-export function tint(bg: Rgb | null, isDark: boolean, color: Capabilities['color'] = caps.color): Tint | null {
+/** `boost` > 1 is a brighter tint of the same kind: the council view lifts the seat that is speaking (`005e` §9.2). */
+export function tint(bg: Rgb | null, isDark: boolean, color: Capabilities['color'] = caps.color, boost = 1): Tint | null {
   if (!bg || color === 'none') return null;
   if (color === 'truecolor') {
-    const k = isDark ? 0.08 : -0.06;
+    const k = (isDark ? 0.08 : -0.06) * boost;
     const c = bg.map((v) => Math.round(k > 0 ? v + (255 - v) * k : v * (1 + k))) as Rgb;
     return { fill: (s) => chalk.bgRgb(...c)(s), ink: (s) => chalk.rgb(...c)(s) };
   }
   if (color === '256') {
     const step = Math.max(0, Math.min(23, Math.round((luma(bg) - 8) / 10)));
-    const idx = 232 + Math.max(0, Math.min(23, step + (isDark ? 2 : -2)));
+    const idx = 232 + Math.max(0, Math.min(23, step + Math.round((isDark ? 2 : -2) * boost)));
     return { fill: (s) => chalk.bgAnsi256(idx)(s), ink: (s) => chalk.ansi256(idx)(s) };
   }
   const near = ANSI16.reduce((best, c, i) => (dist(c, bg) < dist(ANSI16[best]!, bg) ? i : best), 0);
