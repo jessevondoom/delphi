@@ -32,6 +32,7 @@ fn short(s: &str, n: usize) -> String {
 fn state(d: &Value) -> String {
     match (d["outcome"].as_str(), d["review"]["resolution"].as_str()) {
         (Some("deny"), _) => "refused".into(),
+        _ if d["reverted"] == true => "reverted".into(),
         (_, Some(r)) => r.to_string(),
         _ => "PENDING".into(),
     }
