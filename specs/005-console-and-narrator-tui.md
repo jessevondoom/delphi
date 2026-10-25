@@ -236,6 +236,7 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
     - `default`: every Amber action asks.
     - `accept-edits`: auto-approves Amber *worktree file and branch edits* only.
     - `mission-auto`: additionally auto-approves dependency installs pinned in a committed lockfile.
+    - `optimistic`: `mission-auto`, and a build started in it decides its eligible cards provisionally for later review (`specs/015`), as `/build --optimistic` does. Refused when no OS sandbox is available.
   - `/ratify` [2]: reviews pending proposals from `ratified.lock` drift (config endpoint and access changes, manifests, constitution, specs, theme). Each one shows its diff and is ratified or rejected individually (Red-tier, `specs/006` §3.1, `specs/009` §5). The console announces new pending proposals on attach.
   - `/scale <role> <tier>` [2]: overrides the scaler's choice for a role. It can't leave `allowed_endpoints`.
   - `/council "<topic>"` [4]: convenes a Council.

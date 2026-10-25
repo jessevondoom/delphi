@@ -258,6 +258,7 @@ fn mode_label(mode: &str) -> &str {
     match mode {
         "accept-edits" => "edits auto",
         "mission-auto" => "auto",
+        "optimistic" => "optimistic",
         _ => "approvals",
     }
 }

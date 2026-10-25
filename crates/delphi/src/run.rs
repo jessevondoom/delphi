@@ -107,8 +107,8 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     };
     let permissions = value_of(args, "--permissions");
     if let Some(p) = &permissions {
-        if !["default", "accept-edits", "mission-auto"].contains(&p.as_str()) {
-            return Err(format!("--permissions takes default, accept-edits or mission-auto, not `{}`", p));
+        if !["default", "accept-edits", "mission-auto", "optimistic"].contains(&p.as_str()) {
+            return Err(format!("--permissions takes default, accept-edits, mission-auto or optimistic, not `{}`", p));
         }
     }
     let budget = match value_of(args, "--budget") {
