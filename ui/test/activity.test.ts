@@ -205,6 +205,30 @@ test('the deck and the chat keep separate offsets; history survives a resize', (
   }
 });
 
+test('a streaming frame in flight while a resync reloads the history does not bring a finished reply back as a live one', () => {
+  const past = [
+    { type: 'task.created', task_id: 't_1', payload: { prompt: 'hi' } },
+    { type: 'dag.node.added', task_id: 't_1', payload: { node_id: 'sp_architect_1', role: 'architect', depth: 0 } },
+    { type: 'task.output', task_id: 't_1', payload: { status: 'done', text: 'Understood.' } },
+  ];
+  const reloaded = replay(initial(0), past);
+  const late = step(reloaded, delta('sp_architect_1', { text: 'Understood.' }), 5);
+  assert.equal(late.live, '', 'no live block');
+  assert.equal(late.tokens, reloaded.tokens, 'and no tokens counted twice');
+  assert.ok(!lines(model(late, { deck: 1 }), 100, 24).join('\n').includes('writing'));
+  // A failed or stopped task is over too.
+  for (const end of ['task.failed', 'task.cancelled']) {
+    const s = replay(initial(0), [past[0]!, past[1]!, { type: end, task_id: 't_1', payload: { error: 'x' } }]);
+    assert.equal(step(s, delta('sp_architect_1', { text: 'x' }), 5).live, '', end);
+  }
+  // A task that had not finished when the history was reloaded is still streaming, and keeps doing so.
+  const open = replay(initial(0), [past[0]!, past[1]!]);
+  assert.equal(step(open, delta('sp_architect_1', { text: 'more' }), 5).live, 'more');
+  // Another task's spans are unaffected by the first one ending.
+  const two = replay(initial(0), [...past, { type: 'dag.node.added', task_id: 't_2', payload: { node_id: 'sp_b_2', role: 'builder', depth: 0 } }]);
+  assert.equal(step(two, delta('sp_b_2', { text: 'still going' }), 5).live, 'still going');
+});
+
 test('replay does not bring the deck back, and the empty deck says what it is for', () => {
   assert.deepEqual(replay(world(), []).activity, { running: [], history: [] });
   assert.match(lines(model(initial(0)), 100, 24).join('\n'), /nothing running/);

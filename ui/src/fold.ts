@@ -133,7 +133,16 @@ const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? '')
 export function replay(s: State, events: any[]): State {
   const KEEP = new Set(['task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
   const done = events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
-  return { ...done, running: {}, agents: {}, ended: {}, activity: emptyActivity() }; // what is running now comes from the daemon's snapshot, not from old events
+  // Every span of a task that has finished is over. A streaming frame can still be in flight when a resync reloads the
+  // history (the daemon sends one to a client that fell behind), and without this it would bring the finished reply back as a
+  // "writing" block that never ends. Spans of a task that has not finished stay open: they are still streaming.
+  const taskOf: Record<string, string> = {}, over = new Set<string>();
+  for (const e of events) {
+    if (e.type === 'dag.node.added' && e.payload?.node_id != null) taskOf[String(e.payload.node_id)] = String(e.task_id ?? '');
+    if ((e.type === 'task.output' || e.type === 'task.failed' || e.type === 'task.cancelled') && e.task_id) over.add(String(e.task_id));
+  }
+  const ended = endedWith(s.ended, Object.keys(taskOf).filter((k) => over.has(taskOf[k]!)));
+  return { ...done, running: {}, agents: {}, ended, activity: emptyActivity() }; // what is running now comes from the daemon's snapshot, not from old events
 }
 
 /** The block for a task that stopped: the reason without the engine's wrapper, and the console's own words for it. */

@@ -697,6 +697,27 @@ impl PtyConsole {
         }
     }
 
+    /// The text is on the screen as drawn now. A frame arrives in pieces, so one snapshot taken the instant a string was
+    /// seen in the byte stream can be a half-drawn screen (the note already there, the prompt row not yet): look until it settles.
+    fn expect_visible(&self, needle: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.visible().contains(needle) {
+            assert!(Instant::now() < deadline, "`{}` is not on the screen:\n{}", needle, self.visible());
+            std::thread::sleep(Duration::from_millis(60));
+        }
+    }
+
+    /// Wait until no reply is streaming. The reply's own words and its "Athena · " label also appear in the streaming copy, so
+    /// seeing them does not mean the task is over; a daemon stopped now takes the unwritten reply with it (an agent's words
+    /// stay in daemon memory until its task ends) and the reply is missing when the console reloads the log.
+    fn wait_until_not_writing(&self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.visible().contains("· writing") {
+            assert!(Instant::now() < deadline, "the reply never finished:\n{}", self.visible());
+            std::thread::sleep(Duration::from_millis(60));
+        }
+    }
+
     /// Leave with Ctrl+C the way a person does: when the console says "press Ctrl+C again to quit" (text typed, or a
     /// task still finishing: the text a test waited for can be the streaming copy), press it again. The exit code.
     fn ctrl_c_out(mut self) -> i32 {
@@ -929,7 +950,8 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     // Reopen: the conversation is replayed from the mission's events.
     let c2 = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     c2.wait_for("Hello from the daemon.");
-    assert!(c2.visible().contains("Tell me something") && c2.visible().contains("you · "), "{}", c2.visible());
+    c2.expect_visible("Tell me something");
+    c2.expect_visible("you · ");
     drop(c2);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
@@ -1040,7 +1062,7 @@ fn a_long_reply_is_pinned_at_its_label_row_and_space_pages_and_enter_jumps_to_th
         assert!(Instant::now() < deadline, "Space did not page down:\n{}", c.visible());
         std::thread::sleep(Duration::from_millis(60));
     }
-    assert!(c.visible().contains("more lines"), "still lines below after one page:\n{}", c.visible());
+    c.expect_visible("more lines");
     c.type_keys("\r");
     c.wait_for("Paragraph 40 of the long answer.");
     assert!(!c.visible().contains("more lines"), "at the end there is no marker:\n{}", c.visible());
@@ -1114,7 +1136,7 @@ fn the_inline_console_stops_a_task_with_esc_and_asks_before_ctrl_c_throws_anythi
     std::thread::sleep(Duration::from_millis(200));
     c.type_keys("\x03");
     c.wait_for("press Ctrl+C again to quit");
-    assert!(c.visible().contains("abc"), "the text was not thrown away:\n{}", c.visible());
+    c.expect_visible("abc");
     // Esc clears it; with nothing typed and nothing running, one Ctrl+C leaves at once.
     c.type_keys("\x1b");
     std::thread::sleep(Duration::from_millis(300));
@@ -1135,7 +1157,7 @@ fn the_full_screen_console_asks_before_ctrl_c_throws_a_draft_away() {
     std::thread::sleep(Duration::from_millis(200));
     c.type_keys("\x03");
     c.wait_for("press Ctrl+C again to quit");
-    assert!(c.visible().contains("a draft"), "the draft is still there:\n{}", c.visible());
+    c.expect_visible("a draft");
     assert_eq!(c.ctrl_c_out(), 0);
     // Empty prompt, nothing running: Ctrl+D leaves too.
     let mut d = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
@@ -1358,7 +1380,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.type_keys("\t");
     o.type_keys("q");
     std::thread::sleep(Duration::from_millis(300));
-    assert!(o.visible().contains("· archives"), "digits, Tab and q are not bound:\n{}", o.visible());
+    o.expect_visible("· archives"); // digits, Tab and q are not bound
     for _ in 0..3 {
         o.type_keys("\x1b[D");
         std::thread::sleep(Duration::from_millis(120));
@@ -1537,7 +1559,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[C"); // and back to the chat
     std::thread::sleep(Duration::from_millis(300));
-    assert!(c.visible().contains("← / ? →  ·  ○ ● ○"), "{}", c.visible());
+    c.expect_visible("← / ? →  ·  ○ ● ○");
 
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
@@ -1637,6 +1659,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     c.type_keys("\r");
     c.wait_for("First answer.");
     c.wait_for("Athena · ");
+    c.wait_until_not_writing(); // the finished reply is in the log; the streaming copy is not
     // The daemon is stopped and started again behind the console's back.
     // (the CLI asks for a terminal, as the console does, so it runs in one)
     let restart = PtyConsole::start_env(&e.home, &["daemon", "restart", "--workspace", "e2e"], 10, 80, &[]);
@@ -1644,7 +1667,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     c.wait_for("the daemon connection closed");
     c.wait_for("reconnected to the daemon");
     // The conversation is still there, and the next message works.
-    assert!(c.visible().contains("First answer."), "{}", c.visible());
+    c.expect_visible("First answer.");
     c.type_keys("Two");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");

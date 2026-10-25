@@ -89,20 +89,43 @@ Delphi's native connectors (`specs/010`) are unaffected and reach the CLI throug
 - **Environment-configured CLIs** (a Bedrock- or Vertex-backed Claude Code) keep their variables through `env_allow`.
 - **Quota.** An Enterprise seat has its own rate windows; the existing exhaustion handling (`harness.fallback`, the pool) and reported-usage metering apply unchanged.
 
-## 8. agy (Gemini subscription): the spike, 2026-10-25
-Question: can the same bridge reach `agy`? **No.**
-- `agy mcp add` writes the **user-global** `~/.gemini/config/mcp_config.json`; `agy mcp list` shows the same servers from any directory. There is no `--mcp-config` flag, no scope flag, and none of nine candidate workspace-local files (`.gemini/…`, `.agents/…`, `.antigravity/…`, `mcp_config.json`, `.mcp.json`, …) is read.
-- Isolating `HOME` to give a span its own config fails authentication on macOS (the login lives in the per-HOME keychain); working around it would mean exposing the login keychain to the process, which this spec does not do.
+## 8. agy (Gemini subscription)
+### 8.1 First look, 2026-10-25: the global route is closed
+- `agy mcp add` writes the **user-global** `~/.gemini/config/mcp_config.json`; `agy mcp list` shows the same servers from any directory. There is no `--mcp-config` flag and no scope flag.
+- Isolating `HOME` to give a span its own config fails authentication on macOS (the login lives in the per-HOME keychain); working around it would mean exposing the login keychain to the process.
 - Writing Delphi's relay into the operator's global config is a per-machine setting that cannot carry a per-span token, and editing it is outside §1.1.
-- Its `init` lists 60 tools (browser, web search, URL reading, shell, file edit, image generation, scheduling, `call_mcp_tool`) that cannot be turned off, and it has no approval bridge.
+- `agy` lists 60 tools at start (browser, web search, URL reading, shell, file edit, image generation, scheduling, subagents, `call_mcp_tool`) and cannot turn them off.
 
-So `agy` stays an **advice-only** seat: empty working directory, span tainted L0 from the start, projects checked afterwards. Its own web and URL tools are available to it, and everything it returns is untrusted. The inventory says so. Reopen if `agy` gains a per-run MCP config.
+### 8.2 Second look, same day: the workspace route is open
+`agy` documents a per-workspace customization system in its own bundled guide (`~/.gemini/antigravity-cli/builtin/skills/agy-customizations`): a `.agents/` directory in the working directory (or any parent up to the repository root) can hold `hooks.json`, `plugins.json` and `plugins/<name>/` plugins that bundle an MCP server. Delphi chooses each span's working directory, so everything below lives in the span's own scratch directory and nothing in `~/.gemini` is touched. Verified with the real `agy` 1.4.7 in a plain directory, headless, with no trust prompt:
+- **A `PreToolUse` hook is a gate.** `.agents/hooks.json` with `matcher: ".*"` runs a command before every tool step. It gets `{toolCall: {name, args}}` on stdin and answers `allow`, `deny`, `ask` or `force_ask`; a `deny` stops the tool, and its `reason` goes back to the model (so it can say "use the Delphi tool"). It may also rewrite arguments (`overwrite`). A denied `run_command` never ran (`proof.txt` was not created).
+- **The gate fails closed.** A hook that exits non-zero, prints garbage, prints nothing, is missing, or times out: in all five cases the shell command did not run.
+- **Coverage.** The gate saw `read_file`, `run_command` (also used for "list a directory" and `grep`), `search_web`, `write_file` and `invoke_subagent`, and every denial held. All 60 tools were not exercised one by one.
+- **A workspace plugin carries the bridge.** `.agents/plugins/<name>/plugin.json` plus `mcp_config.json` (the same `command`/`env` form the Claude CLI gets) loaded the MCP server in a headless run. The tool is offered as `mcp_<plugin>_<server>_<tool>`. The server needs `_meta: {"antigravity/alwaysLoad": true}` on its tools, or `agy` reaches them only through its generic `call_mcp_tool`; the bridge now sets it (§2), which other clients ignore. The relay answers `agy` unchanged (`server/discover` gets `-32601`).
+- **End to end with Delphi's own pieces:** `live_agy_calls_a_delphi_tool_through_a_workspace_plugin_while_a_hook_denies_its_other_tools` (`tests/bridge_relay.rs`, ignored, uses the operator's login) starts the real `agy` in a temp directory holding a plugin made from the real `Bridge` config and a gate hook. The call reached the span through the real relay and its answer returned to the model; the gate saw `mcp_delphi_delphi_timer` (allowed) and `run_command` (denied).
+
+### 8.3 Design, not built
+Per span, Delphi writes into the scratch directory: the plugin (`delphi __mcp-bridge`, socket and token in its `env`, as for the Claude CLI) and `.agents/hooks.json` with one `PreToolUse` command, `delphi __agy-hook`. That command reads the payload from stdin, asks the span over the same socket and prints the decision. Policy: allow the bridge tools; allow the web tools a profile lists (`search_web`, `read_url_content`); deny everything else, naming the Delphi tool to use in the `reason`; deny subagents; a hook failure is a denial (verified). The decisions are recorded as `harness.tool` events, so `agy` spans get the audit the Claude seat has. The hook's `overwrite` can pin paths into a worktree.
+
+### 8.4 What it would unlock
+- **A second family that can do the work, not only comment on it.** An `agy` span gets the same Delphi tools as a Claude span: `timer`, `dispatch_agent`, scoped and provenance-stamped file reads, `write_file` into `missions/**` and `specs/**`, native connectors. The orchestrator can run on Gemini when Claude's quota is out, and the other way round.
+- **Better Council and red-team seats.** A Gemini seat reads the project through Delphi's tools (with trust tiers) instead of reasoning over pasted excerpts.
+- **A safer `agy`.** Today it is advice-only because it can read any file the operator can and cannot be restricted. With the gate it is deny-by-default, which makes the L0-from-the-start taint and the "projects unchanged afterwards" check defence in depth rather than the only control.
+- **A cross-family Builder on a subscription-only setup** (build on Gemini, review on Claude, `[H-007]`): the gate is the approval bridge `agy` lacked, once the Claude-side path and command rules are ported to `agy`'s tool names (`Path`, `CommandLine`).
+- Gemini's own web and URL tools under policy, and an exact tool-by-tool audit.
+
+### 8.5 Risks
+- It relies on `agy`'s customization system, which is documented in the CLI but young: workspace trust, hook semantics and tool names can change. The probe (`endpoints test --probe`) must run a denied call and an allowed call and report the result, as it does for the Claude bridge.
+- The user's own global hooks and plugins load in addition and run first or after; they are the operator's.
+- Tool coverage by `PreToolUse` was sampled, not exhaustive: keep the L0 taint and the project check until a conformance probe covers the tool list.
+- The model sometimes prefers a built-in (`schedule` over the Delphi `timer`): the denial `reason` steers it, and the harness note names the Delphi tools.
 
 ## 9. Verification
 Built and passing (workspace tests, clippy `-D warnings`, spec lint):
 - `bridge`: handshake and `server/discover` answer; a call reaches the span and its result returns; an unoffered tool is refused without reaching the span; a wrong token gets silence; the directory is private; the command line is constant and the token is not on it; a call after the span ended is an error, not a hang. The relay as a real process (`tests/bridge_relay.rs`).
 - `harness_run`: the orchestrator sets a timer through the bridge (the `timer.set` event, the pending timer and `harness.bridge_call` are all there) and dispatches a child through it; a role without `timers` is not offered the tool and a forged call is refused; a CLI that did not load the bridge fails loudly; `bridge = false` tells the model it is text-only; the default profile launches in `auto` with the web tools and account connectors and a narrowed profile restores `manual`, no built-ins and `--strict-mcp-config`; an outbound request is an Amber card when delegated and Red otherwise; connectors are denied when closed, a listed read skips the card and taints, any other is a Red card; a Builder keeps the CLI's own tools and `manual` mode; the orchestrator is shown the inventory and other roles are not.
 - `harness`: the first turn waits for connectors to stop loading and does not wait without them. `config`: defaults, partial blocks, every rejection, and the mixed `[harness]` namespace. `policy`: allowlist, denial, drop-ins. `inventory`, `capabilities` (the probe's bridge verdict), `doctor` (profile and policy lines).
+- **Live, agy** (`... -- --ignored --nocapture live_agy`): the real `agy` calls a Delphi tool through a workspace plugin and the real relay while a hook denies its shell (§8.2).
 - **Live** (`cargo test -p delphi-engine --test bridge_relay -- --ignored --nocapture`, about a tenth of a cent a pass): the real `claude` calls a Delphi tool through the real relay in `manual` (it asks first), `auto` (it asks nothing) and the shipped default (auto, web tools, the account's connector connected before the first turn).
 
 Not verified, because it needs an organization-managed account: the behavior of managed settings in §7 (the schema is read from the CLI's own binary, not exercised), and a connector call end to end.
@@ -117,5 +140,6 @@ Not verified, because it needs an organization-managed account: the behavior of 
 | 4 | Profiles (optional), `env_allow`, doctor rows (profile, policy), probe verdict, example config | built |
 | 5 | Native tools and delegated approvals, on by default | built |
 | 6 | The CLI's own MCP servers and the account's connectors, on by default, with the connector settle | built |
-| 7 | agy spike | done: not possible today (§8) |
+| 7 | agy spike, global route | done: closed (§8.1) |
 | 8 | An organization-managed account check | open: needs an SSO machine (§7 first-run steps) |
+| 9 | agy bridge and gate through the workspace `.agents/` (§8.2-8.3) | proven by a live test with Delphi's real bridge; not built into the engine; the bridge already sets the one hint it needs |
