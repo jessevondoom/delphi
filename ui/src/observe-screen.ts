@@ -6,7 +6,7 @@ import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
-import { epicRail } from './epic-rail.ts';
+import { epicThreads } from './epic-threads.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -17,6 +17,8 @@ export type OState = {
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
+  /** The orchestrator's own grouping of tasks into threads, when it sends one; otherwise the window groups by what the tasks say. */
+  threads?: { id: string; label: string; tasks: string[] }[];
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
@@ -102,9 +104,9 @@ export function epicOrder(st: OState): { n: OState['nodes'][string]; depth: numb
   return out;
 }
 
-/** The epic as a rail, with its narrative and the pace row (`epic-rail.ts`). */
+/** The epic as threads of work grouped by what they are about, each with done, now and next (`epic-threads.ts`). */
 function epic(m: OModel, w: number, h: number): string[] {
-  return epicRail(m, w, h);
+  return epicThreads(m, w, h);
 }
 
 /** A full-width tinted band for the row that is running or selected; bold where there is no tint (`005f` slice 10). */

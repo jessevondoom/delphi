@@ -1,0 +1,34 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · epic
+
+ ✔ nothing needs you
+
+ ◐ Add a retry queue to the claim loop                                             ▰▰▰▱▱▱ 3/7 · ~7m
+   ✔ done chose table 2 of 3 · design · plan
+   ▶ now  hephaestus building 5:00 · tests 12 of 14 passed
+   ○ next audit → research → wrap up
+
+ ◐ Compare managed vector databases for the kn…          ⇢ feeds Draft the knowl…  ▰▰▱▱▱▱ 1/3 · ~4m
+   ✔ done research
+   ▶ now  daedalus designing 11:00
+   ○ next audit
+
+ ○ Draft the knowledge base pricing tiers            ⇠ waits on Compare managed…  ▱▱▱▱▱▱ 0/2 · ~11m
+   ○ next plan → wrap up
+
+ ✔ Survey competitor onboarding flows                                                    ▰▰▰▰▰▰ 2/2
+
+
+
+
+
+
+
+
+
+
+
+
+ ↑ ↓  open a thread                                                              pace  ▁▁▂▃▄▆█▇▅▄▃▂
+────────────────────────────────────────────────────────────────────────────────────────────────────
+1 running  ·  14.2k tokens                                                       ← →  ·  ○ ● ○ ○ ○ ○

@@ -119,12 +119,11 @@ test('the blind seat is sealed: its live text is never shown', () => {
   assert.match(t, /sealed until all three answer/);
 });
 
-test('epic: a row per task with its state glyph, and the now/next/path narrative (the rail itself: epic-rail.test.ts)', () => {
+test('epic: threads of work with a done, now and next line each (the pane itself: epic-threads.test.ts)', () => {
   const t = observeFrame(model('epic'), 110, 34).map(plain).join('\n');
-  assert.match(t, /\n ▶ athena\s/);
-  assert.match(t, /\n ✔ hephaestus\s/);
-  assert.match(t, /\n now {3}⟦•─•⟧ athena is working: Implement the deck router/);
-  assert.match(t, /\n next {2}nothing queued/);
+  assert.match(t, /\n ◐ Implement the deck router/);
+  assert.match(t, /\n {3}▶ now /);
+  assert.match(t, /↑ ↓ {2}open a thread/);
 });
 
 test('forge: gates, attempts, findings, the flaky note and a coloured live diff', () => {

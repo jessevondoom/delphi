@@ -4,8 +4,8 @@ delphi v0.5 · epic
  ✔ nothing needs you
 
 
-  No agents have run yet in this mission.
-
+  Nothing is in progress yet. Ask for something in the console and it will appe…
+  grouped by what it is about.
 
 
 

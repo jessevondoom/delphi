@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · epic
+
+ ✔ nothing needs you
+
+ ◐ Add a retry queue to the claim loop                         ▰▰▰▱▱▱ 3/7 · ~7m
+   ✔ design
+   ✔ council: Should the retry queue be a table or a …  chose table 2 of 3
+   ✔ plan
+   ▶ build  hephaestus building 5:00
+      ▶ tests 12 of 14 passed
+      ○ audit
+      ○ merge waits for you
+   ○ audit
+   ○ research · Document the retry queue fo…
+   ○ wrap up
+
+ ◐ Compare managed vector databases… ⇢ feeds Draft the knowl…  ▰▰▱▱▱▱ 1/3 · ~4m
+   ✔ done research
+   ▶ now  daedalus designing 11:00
+   ○ next audit
+ ↑ ↓  another thread                                         pace  ▁▁▂▃▄▆█▇▅▄▃▂
+────────────────────────────────────────────────────────────────────────────────
+1 running  ·  14.2k tokens                                   ← →  ·  ○ ● ○ ○ ○ ○
