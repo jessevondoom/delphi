@@ -24,7 +24,7 @@ The model pool (D-26) was written by a Claude model. For an independent look it 
 
 | # | Seat · severity claimed | Finding | Verdict | What was done |
 | :-- | :-- | :-- | :-- | :-- |
-| A1 | A · P0 | A write-capable role can be routed to the `agy` harness | **Overstated; the real point is capability loss.** A harness span for a non-Builder runs in an empty directory with `Tools::None`; `agy` output is untrusted L0. Nothing executes Delphi's write tools. What is true: since M4 a tool-using role (the Orchestrator needs dispatch, the Architect writes specs) can fall back to a harness and silently becomes text-only. | `harness.fallback` now says so ("a harness answers in text only: this role's Delphi tools are not available there"). The fallback is also now only allowed before a span's first turn (see B2). **Left for the operator:** should a harness for a tool-using role need confirmation like a weaker model? |
+| A1 | A · P0 | A write-capable role can be routed to the `agy` harness | **Overstated; the real point is capability loss.** A harness span for a non-Builder runs in an empty directory with `Tools::None`; `agy` output is untrusted L0. Nothing executes Delphi's write tools. What is true: since M4 a tool-using role (the Orchestrator needs dispatch, the Architect writes specs) can fall back to a harness and silently becomes text-only. | `harness.fallback` now says so ("a harness answers in text only: this role's Delphi tools are not available there"). The fallback is also now only allowed before a span's first turn (see B2). **Decided by the operator (2026-10-25): no extra confirmation.** Listing the harness as allowed is the consent; the fallback event says the role is text-only there. |
 | A2 | A · P0 | Unredacted text in the approval card summary | **Quote accurate, premise not.** Line 741 did not redact `why`; but `why` is built from our own fixed phrases (`exhaust.rs` reasons), not provider free text, so no secret reaches it today. Severity P2 hardening. | Fixed: the summary is redacted. Test registers a secret in a pool reason and checks the card and the log. |
 | A3 | A · P1 | Confirmation keyed on the substitute only: consent to sonnet-for-opus covers sonnet-for-a-1M-window-model | **Valid.** | Fixed: decisions are keyed by (target, substitute); events now carry the target; an answer logged without a target is never trusted. |
 | A4 | A · P2 | Timestamp arithmetic on `pool-state.json` can overflow | **Valid (debug builds panic; release wraps).** | Fixed with saturating arithmetic; test with `i64::MIN` timestamps. |
@@ -54,6 +54,6 @@ The seats also reported four checks that hold (A: the endpoint pin, approval int
 
 ## Left open
 
-1. Whether a harness for a tool-using role should need confirmation (A1).
+1. ~~Whether a harness for a tool-using role should need confirmation (A1).~~ Decided 2026-10-25: it should not.
 2. B5 and B13, minor, deferred.
 3. A third family for the next review (GPT-OSS, when its quota returns).
