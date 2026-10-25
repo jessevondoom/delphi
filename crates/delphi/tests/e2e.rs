@@ -635,6 +635,27 @@ impl PtyConsole {
         p.screen().contents()
     }
 
+    /// From `auto`, one Shift+Tab: optimistic needs the OS sandbox, so it is either `auto · optimistic` (then one more
+    /// press wraps to default) or refused and default at once. Either way the note for default must follow.
+    fn cycle_back_to_default(&mut self) {
+        self.type_keys("\x1b[Z");
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            let seen = self.everything();
+            if seen.contains("· approval mode: auto · optimistic") {
+                self.wait_for("tokens  ·  auto · optimistic");
+                self.type_keys("\x1b[Z");
+                break;
+            }
+            if seen.contains("· approval mode: default") {
+                return;
+            }
+            assert!(Instant::now() < deadline, "no mode note after Shift+Tab from auto:\n{}", seen);
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        self.wait_for("· approval mode: default");
+    }
+
     fn wait_for(&self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(40);
         while !self.everything().contains(needle) {
@@ -1085,8 +1106,7 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.type_keys("\x1b[Z");
     c.wait_for("· approval mode: auto — Amber actions run without asking this mission");
     c.wait_for("tokens  ·  auto");
-    c.type_keys("\x1b[Z");
-    c.wait_for("· approval mode: default");
+    c.cycle_back_to_default(); // through `auto · optimistic` where the OS sandbox exists, straight to default where it does not
     c.wait_for("tokens  ·  default"); // default mode is named too
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
@@ -1294,10 +1314,12 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("exported to local/missions/");
 
     // Shift+Tab goes round the approval modes and ends where it started.
-    for footer in ["tokens  ·  accept edits", "tokens  ·  auto", "tokens  ·  default"] {
+    for footer in ["tokens  ·  accept edits", "tokens  ·  auto"] {
         c.type_keys("\x1b[Z");
         c.wait_for(footer);
     }
+    c.cycle_back_to_default();
+    c.wait_for("tokens  ·  default");
 
     // The window shrinks and grows: the screen is always exactly the window, never wider, footer on the last row.
     c.resize(24, 70);
