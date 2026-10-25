@@ -22,7 +22,9 @@ export function windowCommand(argv: string[], platform: string = process.platfor
 }
 
 /** Resolves to an error message, or null once the launcher has started and exited cleanly. */
-export function openWindow(argv: string[]): Promise<string | null> {
+export function openWindow(argv: string[], env: NodeJS.ProcessEnv = process.env, interactive: boolean = Boolean(process.stdin.isTTY)): Promise<string | null> {
+  // A window is only ever opened for a person at a console who asked for one: never from a test run or a script.
+  if (env.NODE_ENV === 'test' || env.NODE_TEST_CONTEXT || env.DELPHI_NO_WINDOWS || !interactive) return Promise.resolve('windows are only opened from an interactive console');
   const c = windowCommand(argv);
   if (!c) return Promise.resolve(`no way to open a window on ${process.platform}`);
   return new Promise((done) => {

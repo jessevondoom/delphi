@@ -27,8 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Fetch, check and pack
-        run: dev/fetch-model.sh "$RUNNER_TEMP/embed.dlphmdl"
+      - name: Fetch, check and pack the embedding model
+        run: dev/fetch-model.sh embed "$RUNNER_TEMP/embed.dlphmdl"
+      - name: Fetch, check and pack the reranking model
+        run: dev/fetch-model.sh rerank "$RUNNER_TEMP/rerank.dlphmdl"
       - name: Preloaded vectors for the shipped documents
         run: dev/build-seed-vectors.sh "$RUNNER_TEMP/embed.dlphmdl" "$RUNNER_TEMP/seed.dlphvec"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -36,6 +38,7 @@ jobs:
           name: embedmodel
           path: |
             ${{ runner.temp }}/embed.dlphmdl
+            ${{ runner.temp }}/rerank.dlphmdl
             ${{ runner.temp }}/seed.dlphvec
           compression-level: 0
 
@@ -66,6 +69,7 @@ jobs:
       - name: Build
         env:
           DELPHI_EMBED_MODEL_FILE: ${{ runner.temp }}/model/embed.dlphmdl
+          DELPHI_RERANK_MODEL_FILE: ${{ runner.temp }}/model/rerank.dlphmdl
           DELPHI_SEED_VECTORS_FILE: ${{ runner.temp }}/model/seed.dlphvec
         run: cargo build --release --locked --target ${{ matrix.target }} -p delphi --features embedded-model
       - name: Build the console
