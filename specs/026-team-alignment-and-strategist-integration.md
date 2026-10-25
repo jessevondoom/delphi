@@ -2,150 +2,148 @@
 id: spec-026-team-alignment-and-strategist-integration
 title: "026: Team Alignment: How Shared Knowledge, Goals & Perspective Reach the Strategist, the Council and the Console"
 author: architect
-timestamp: 2026-10-25T21:00:00Z
-status: draft
+timestamp: 2026-10-25T23:00:00Z
+status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
-confidence: medium   # the prompt-assembly seams exist (specs/002 §2, specs/004 §5.2, specs/020 §4); the org-context slice and /org view are unbuilt
+confidence: medium   # the prompt-assembly seams exist (engine.rs ContextSlice, boot.rs snapshot, council.rs); the slice and /org are unbuilt
 source_mission: xenia-org-memory
 tags: [spec, xenia, bundles, strategist, council, console, knowledge, post-v1]
 ---
 
 # Spec 026: Team Alignment and Strategist Integration
 
-> **Status: draft, proposed.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md). Depends on adopted bundles (`specs/023`, `specs/024`) and on xenia `memory` records (`specs/011`, `specs/012`, Phase 1 in build). Nothing here is built.
+> **Status: approved by the operator 2026-10-25 (decisions), text approved on merge.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md). Depends on added bundles (`specs/023`, `specs/024`) and on xenia `memory` records (`specs/011`, `specs/012`, Phase 1 in build). Nothing here is built; §11 is the build plan.
 
 ## 1. Scope & Objectives
-The operator's stated value of the sharing layer: *with extra knowledge and understanding shared across a team, results get better, and Delphi's strategist can help the team cut through with new ideas driven by consistent knowledge and goals.* This spec says how shared knowledge, goals and perspective actually reach the agents and the operator:
-1. **The org-context slice** (§3): a deterministic, bounded text the daemon assembles from adopted bundles and gives to the roles that plan and design.
+The operator's stated value of the sharing layer: *with extra knowledge and understanding shared across a team, results get better, and Delphi's strategist can help the team cut through with new ideas driven by consistent knowledge and goals.* This spec says how shared knowledge, goals and perspective reach the agents and the operator:
+1. **The org-context slice** (§3): deterministic, bounded text the daemon assembles from added bundles for the roles that plan and design.
 2. **Council lenses** (§4): perspectives as Round 1 framing for seats.
 3. **The alignment check** (§5): the strategist's scope audit extended to goals and decisions.
-4. **Retrieval surfaces** (§6): what search shows, and how an agent is told where a fact came from.
-5. **The console** (§7): `/org`, the alignment card, and what the Narrator shows.
-6. **The loop back** (§8): how a mission's findings become org knowledge through the existing publish gate.
+4. **Retrieval surfaces** (§6), **the console** (§7) and **the loop back** (§8).
 
 ### 1.1 Non-Goals
-- New roles. The strategist, orchestrator, architect and red-team already exist with the right charters (GOVERNANCE §2); the librarian (`specs/013`) is unchanged and its build trigger is still xenia's dogfood gate.
-- Letting goals or perspectives *decide* anything. They inform; the gates, tiers and the operator decide (`specs/023` §6.1–6.2).
+- New roles. The strategist, orchestrator, architect and red-team exist with the right charters (GOVERNANCE §2); the librarian (`specs/013`) is unchanged.
+- Letting goals or perspectives *decide* anything. They inform; the gates, tiers and the operator decide.
 - Measuring whether alignment improves outcomes: `specs/027` §6.
 
 ### 1.2 Simpler Alternative Considered
-- **Alternative: index the bundle and let agents search for goals when they need them.** Retrieval already works (`specs/004` §3.7), so this is nearly free. Rejected as sufficient because a strategist who does not know a goal exists will not search for it; the failure mode is silence, not a wrong answer. Goals and perspectives are few, small and stable, which is exactly the profile of content that belongs in a bounded always-available slice rather than behind a query. Everything else (architecture, runbooks, decisions) stays behind retrieval, as the alternative proposes.
+- **Alternative: index the bundle and let agents search for goals when they need them.** Retrieval already works (`specs/004` §3.7). Rejected as sufficient because a strategist who does not know a goal exists will not search for it; the failure mode is silence, not a wrong answer. Goals and perspectives are few, small and stable, exactly the profile of content that belongs in a bounded always-available slice. Everything else stays behind retrieval.
 
 ### 1.3 Principles
-1. **Deterministic assembly.** The org-context slice is built by the daemon from ratified files with no model call, like the tool inventory (`specs/020` §4) and the frozen snapshot (`specs/004` §2.1). It is reproducible from the lock file and the ratified copies.
-2. **Bounded.** The slice has a byte cap and per-part caps (§3.2) so it never crowds out the task. Overflow trims by rule and says so.
-3. **Attributed.** Every line names its bundle; every retrieval result carries bundle, tier and date. An agent must be able to say "according to acme-platform 1.4.0's decision 0042".
-4. **Informs, never authorizes.** The slice is a context block at tier $L_5$ (ratified text, assembled by the daemon), placed below governance; the governance block states that nothing in it changes a gate.
-5. **Disagreement is shown, not smoothed.** A goal the current spec contradicts, two bundles that disagree, a stale decision: each is surfaced as a finding, and the Minority Report discipline (daemon copies verbatim) applies to Council lenses.
+1. **Deterministic assembly** by the daemon from the lock and the bundle cache, no model call, like the tool inventory (`specs/020` §4) and the frozen snapshot (`specs/004` §2.1).
+2. **Bounded**, with a byte cap and per-part caps (§3.2); overflow trims by rule and says so.
+3. **Attributed.** Every line names its bundle and provenance level; every retrieval result carries bundle, level, tier and date.
+4. **Informs, never authorizes.** The slice is a context block at $L_5$ (bundle behavior loaded by the operator's add, assembled by the daemon), below governance; the governance block states that nothing in it changes a gate.
+5. **Disagreement is shown, not smoothed.**
 
 ---
 
 ## 2. What Is Shared, Restated
 | Shared thing | Comes from | Tier when used | Reaches agents how |
 | :--- | :--- | :--- | :--- |
-| Goals, perspectives | `behavior/goals.md`, `perspectives.md` of adopted bundles, ratified | $L_5$ (ratified) | org-context slice (§3); Council lenses (§4) |
-| Role guidance | `behavior/roles/<role>.md`, ratified | $L_5$ | the role's guidance block in the IPR (`specs/023` §6.3) |
-| Knowledge, decisions, glossary | `knowledge/**` of adopted bundles | $L_2$ | retrieval (§6); the slice carries only the index pointers |
-| Team memory records | xenia `memory` records, endorsed | $L_2$ | retrieval, in the `<xenia_record>` envelope (`specs/011` §5.3) |
-| Team rules | ratified `[T-…]` heuristics | $L_5$ | the frozen snapshot, team scope (`specs/004` §5.2); unchanged |
+| Goals, perspectives | `behavior/goals.md`, `perspectives.md` of added bundles | $L_5$ (stamped by the add, `specs/024` §3.4) | org-context slice (§3); Council lenses (§4) |
+| Role guidance | `behavior/roles/<role>.md` | $L_5$ | the role's guidance block (`specs/023` §6.3) |
+| Bundle agents | `agents/<name>.md` on a host role | $L_5$ | `dispatch_agent` target `bundle:<name>/<agent>` (`specs/023` §5B) |
+| Knowledge, decisions, glossary | `knowledge/**` | $L_2$ | retrieval (§6); the slice carries index pointers only |
+| Team memory records | xenia `memory` records, endorsed | $L_2$ | retrieval in the `<xenia_record>` envelope (`specs/011` §5.3) |
+| Bundle rules | `behavior/heuristics.md` | $L_5$ | the bundle rules block in the team scope budget (`specs/023` §6.4) |
 | Project conventions | `AGENTS.md`, `README`, tracked docs | $L_4$ | pointers (`specs/025` §5) |
 
 ---
 
 ## 3. The Org-Context Slice (`@runtime/org-context`)
 ### 3.1 Who gets it
-Roles whose manifest has `agent-dispatch` in `execute` or that write `specs/**` or `missions/**/roadmap.md`: today `orchestrator`, `strategist`, `architect`, and `red-team` when it reviews a spec. The builder does **not** get the slice (it gets knowledge through search and the handoff envelope's pointers), because a builder's task context is the spec, and goals in its prompt would invite scope creep, the strategist's own blind spot (GOVERNANCE §2). Council seats get §4's lens, not the whole slice, so Round 1 stays blind. The set is a manifest attribute (`execute: ["org-context"]`), ratified like any manifest change, so a team can give it to the writer or take it from red-team.
+Roles whose manifest has `agent-dispatch` in `execute` or that write `specs/**` or `missions/**/roadmap.md`: `orchestrator`, `strategist`, `architect`, and `red-team` when it reviews a spec. The builder does **not** get the slice (it gets knowledge through search and the handoff envelope's pointers), because goals in a builder's prompt invite scope creep, the strategist's own blind spot (GOVERNANCE §2). Council seats get §4's lens, not the slice, so Round 1 stays blind. The set is a manifest attribute (`execute: ["org-context"]`), changed like any Delphi manifest change (that is Delphi's own ratification path, untouched by OD-1, which concerns bundles).
 
 ### 3.2 Assembly (daemon, deterministic)
-For each adopted bundle in `order` (`specs/024` §4.1), skipping `removed` and marking `stale`:
-1. **Header:** `acme-platform 1.4.0 (acme) · matched: yes · stale: no · publisher: acme-platform-eng (store acme-main, endorsed)` or `· UNSIGNED` or `· not matched to this project`.
-2. **Goals:** every goal with `Status: active`, as `[G-acme-01] <title> · horizon <h> · measure <m>`; at most 8 per bundle, then `(+N more, see @bundle/acme/acme-platform/behavior/goals.md)`. The `Why` line is omitted (it is one `read_file` away).
-3. **Perspectives:** `[P-acme-03] <statement>` only (no apply-when or counter-case, which the Council lens carries); at most 12 across all bundles, earlier bundles first.
-4. **Knowledge index:** the first 20 lines of `knowledge/index.md` that match `applies_to.paths` against the current project's changed paths when a task is running, else the first 20 lines; each as `- <title> — <summary> (@bundle/acme/acme-platform/knowledge/<path>)`.
-5. **Open items:** decisions past `review_by`, goals past horizon with `Status: active`, structured collisions pending, disputes open (§7), as one line each, at most 6.
+For each added bundle in `order` (`specs/024` §4.1), skipping `removed` and marking `stale`:
+1. **Header:** `acme-platform 1.4.0 (acme) · known-publisher · matched: yes · stale: no` (the provenance level of `specs/024` §2.2).
+2. **Goals:** every goal with `Status: active` as `[G-acme-01] <title> · horizon <h> · measure <m>`; at most 8 per bundle, then `(+N more, see @bundle/acme/acme-platform/knowledge/… goals)`.
+3. **Perspectives:** `[P-acme-03] <statement>` only; at most 12 across all bundles, earlier bundles first.
+4. **Knowledge index:** the first 20 lines of `knowledge/index.md` that match `applies_to.paths` against the current task's changed paths, else the first 20; each as `- <title> — <summary> (@bundle/acme/acme-platform/knowledge/<path>)`.
+5. **Open items:** decisions past `review_by`, goals past horizon still `active`, collisions pending, disputes open, unmapped MCP servers, at most 6 lines.
 
-Then one block for the project: a pointer to the nearest `AGENTS.md` and `README` if present (`specs/025` §5.1).
+Then one block for the project: pointers to the nearest `AGENTS.md` and `README` if present.
 
-**Caps:** the whole slice at most **4 KiB**; per bundle at most 1.5 KiB; when several bundles exceed the total, each is trimmed from the bottom of its knowledge index first, then perspectives, never goals; a trimmed part ends with `(trimmed; /org shows all)`. These numbers are proposals (B-10); they sit beside the 12 KB always-loaded memory cap (`specs/004` §5.2) and are counted separately from it, because the slice is a context slice, not a rule file.
+**Caps:** the whole slice ≤ **4 KiB**; per bundle ≤ 1.5 KiB; over the total, each bundle trims from the bottom of its knowledge index first, then perspectives, never goals; a trimmed part ends with `(trimmed; /org shows all)`. Counted separately from the 12 KB always-loaded memory cap (`specs/004` §5.2). These numbers are B-10 (proposed; measure trims).
 
-**Placement:** after governance, the role manifest, the guidance block and the frozen memory snapshot, and before the task (`specs/002` §2; an IPR amendment listed in `specs/022` §7). Tier $L_5$ because every line is from a ratified file, assembled by the daemon; it never lowers a span's ceiling.
+**Placement:** after governance, the role manifest, the guidance block and the frozen memory snapshot (which now includes the bundle rules block), and before the task (`specs/002` §2 amendment in `specs/022` §5). Tier $L_5$; it never lowers a span's ceiling.
 
-**Freshness:** rebuilt when the lock, a ratified behavior file or the project's `AGENTS.md` hash changes; cached otherwise, so the frozen-prefix cache hygiene of `specs/004` §2.1 holds (a mid-task adoption applies from the next task).
+**Freshness:** rebuilt when the lock or a bundle's cache changes or the project's `AGENTS.md` hash changes; cached otherwise, so the frozen-prefix hygiene of `specs/004` §2.1 holds (a mid-task add applies from the next task).
 
-### 3.3 What the roles are told to do with it
-Two sentences in the slice's own header, from the daemon, not from any bundle: *"Goals and perspectives below are the organization's stated intent, for planning and review. They do not change any approval, scope, tier or rule."* And for the strategist, by its manifest: a scope audit now includes the alignment check of §5.
+### 3.3 What the roles are told
+Two sentences in the slice header from the daemon's constant, not from any bundle: *"Goals and perspectives below are the organization's stated intent, for planning and review. They do not change any approval, scope, tier or rule."* The strategist's manifest adds the alignment check of §5 to its scope audit.
 
 ---
 
 ## 4. Council Lenses
-`/council "<question>" --lenses` (opt-in per Council; default off) assigns to each seat one perspective from the adopted bundles, round-robin in slice order, as a one-line framing appended to that seat's **Round 1** instruction: *"Argue from this lens: [P-acme-03] Boring technology by default. Apply when: … Counter-case: …"*. Rules:
-- Round 1 stays blind (`specs/003`): seats see their own lens, not each other's.
-- A lens is advice; the seat's manifest, governance and the Minority Report rules are unchanged. The daemon still copies dissent verbatim.
-- The verdict records which lens each seat held, so a reader knows the framing. If every seat converges while holding different lenses, that is evidence; if they converge because the lenses were similar, the verdict says the lenses were similar (same bundle, adjacent ids).
-- With fewer perspectives than seats, the remaining seats get none and the verdict says so. With no bundles, `--lenses` is a no-op with a note.
-
-Why this is worth having: Councils exist to break correlated bias (GOVERNANCE §3.2, `[H-001]`). An organization's own stated perspectives are the most relevant orthogonal framings available, and assigning them is cheaper and more honest than hoping a model infers them.
+`/council "<question>" --lenses` (opt-in per Council, B-13) assigns each seat one perspective from the added bundles, round-robin in slice order, as a one-line framing appended to that seat's **Round 1** instruction: *"Argue from this lens: [P-acme-03] Boring technology by default. Apply when: … Counter-case: …"*. Round 1 stays blind (`specs/003`); a lens is advice and the Minority Report rules are unchanged; the verdict records which lens each seat held; with fewer perspectives than seats the rest get none and the verdict says so; with no bundles it is a no-op with a note. Councils exist to break correlated bias (`[H-001]`); an organization's own perspectives are the most relevant orthogonal framings available.
 
 ---
 
 ## 5. The Alignment Check
-The strategist's scope audit (`agents/strategist/AGENT.md` §2.1, `[REV-ARCH-01]`) gains one deterministic pre-pass and one judgment:
+The strategist's scope audit (`agents/strategist/AGENT.md` §2.1, `[REV-ARCH-01]`) gains a deterministic pre-pass and a judgment:
 
-**Pre-pass (daemon, no model):** for a spec or PR under review, extract the ids it cites (`[G-…]`, `[P-…]`, `knowledge/decisions/NNNN-…`) and check each exists in an adopted bundle and is not `superseded` or past `review_by`. Report `ALIGN-REF-01: cites decision 0042, superseded by 0057` style findings. Cheap, exact, and catches the most common drift: building on a decision the organization already reversed.
+**Pre-pass (daemon, no model):** for a spec or PR under review, extract cited ids (`[G-…]`, `[P-…]`, `knowledge/decisions/NNNN-…`) and check each exists in an added bundle and is not `superseded` or past `review_by`. Report `ALIGN-REF-01: cites decision 0042, superseded by 0057` style findings.
 
-**Judgment (strategist):** for each active goal in the slice, one of `serves`, `neutral`, `conflicts`, `unclear`, with a one-line reason, written as a table in the review; and for each perspective, whether the spec honors it or argues for an exception. Findings are **`P2` by default** and never block a merge on their own: a spec may legitimately serve no stated goal (maintenance, a bug), and a wrong `conflicts` must not stall the team. A `conflicts` on a goal whose `Measure` names a production metric is raised to `P1` so it is seen. Nothing here is a `P0`; the strategist cannot waive `P0`s and cannot create them from alignment either.
-
-The output goes where scope-audit findings go today (the review record under `missions/**`), with the goal and decision ids, so `rule_stats`-style counting (`specs/027` §6.3) can later ask "how often did specs conflict with G-acme-01".
+**Judgment (strategist):** per active goal in the slice, one of `serves`, `neutral`, `conflicts`, `unclear` with a one-line reason, as a table in the review; per perspective, honored or argued exception. Findings are **`P2` by default** and never block a merge on their own; a `conflicts` on a goal whose `Measure` names a production metric is `P1`. Nothing here is a `P0`. Output goes where scope-audit findings go (the review record under `missions/**`) with the ids, so `specs/027` §6.3 can count them.
 
 ---
 
 ## 6. Retrieval Surfaces
-- **Search results** from zone `bundles` carry the breadcrumb `[File: bundles/acme/acme-platform/knowledge/runbooks/rolling-deploy.md | Lines: … | Section: … | Source: federated_verified | Bundle: acme/acme-platform@1.4.0 | Review by: 2027-03-01]`. A stale or unmatched bundle says so in the breadcrumb.
-- **`delphi kb search --bundle <name>`** and **`--no-bundles`** filter; **`--org <org>`** too. The Narrator's Archives view (`specs/005` §4.2) gains the same filter.
-- **Spotlighting.** Bundle knowledge enters a prompt in the same bounded, nonce-tagged envelope as a xenia record (`<xenia_record>` of `specs/011` §5.3, with `bundle=`), so an agent sees it as quoted data. The sanitizer of `specs/007` §3.2 runs at adoption, as it does at xenia ingest, as defense in depth; the taint table is the control.
-- **Agents are told the tier.** The envelope's attributes name the tier and the bundle; the role guidance of a careful organization will say "cite the bundle and version when you rely on it" and Delphi's own writer role already keeps caveats (GOVERNANCE §2).
-- **Memory records beside bundles.** An endorsed xenia `memory` record and a bundle knowledge file about the same subject both appear; the record is the team's lived finding, the bundle the organization's statement. The result list does not merge them. When they disagree, §7's `/org` lists it once a human or the strategist files a `dispute`.
+- **Breadcrumbs** from zone `bundles`: `[File: bundles/acme/acme-platform/knowledge/runbooks/rolling-deploy.md | Lines: … | Section: … | Source: federated_verified | Bundle: acme/acme-platform@1.4.0 · known-publisher | Review by: 2027-03-01]`; stale or unmatched bundles say so.
+- **Filters:** `delphi kb search --bundle <name>`, `--org <org>`, `--no-bundles`; the Narrator's Archives view gains the same.
+- **Spotlighting:** bundle knowledge enters a prompt in the bounded, nonce-tagged envelope of `specs/011` §5.3 with `bundle=` and `provenance=` attributes; the sanitizer of `specs/007` §3.2 runs at add as defense in depth; the taint table is the control.
+- **Semantic ranking comes online as vectors arrive** (`specs/027` §5): until then results are lexical and the breadcrumb says `(lexical only: vectors N% ready)`.
+- **Memory records beside bundles.** An endorsed record and a bundle file about the same subject both appear; the list does not merge them.
 
 ---
 
 ## 7. The Console
 ### 7.1 `/org`
-A deck (`specs/005b`) showing: adopted bundles with version, publisher state, matched/stale, update available; goals as a table with status and horizon; perspectives; open items (superseded decisions still cited, collisions, disputes, stale files, lapsed ratifications after an update); and the actions `adopt`, `update`, `rollback`, `remove`, `ratify <item>`, each of which opens the ordinary card. It is the one place a teammate looks to answer "what does this organization want and what has changed".
+A deck (`specs/005b`) showing: added bundles with version, provenance level, matched/stale, update available, vector readiness; goals as a table; perspectives; open items (superseded decisions still cited, collisions, disputes, stale files, unmapped MCP servers, trimmed rules); and the actions `add` (from `team/bundles.toml` suggestions or a path), `update`, `rollback`, `remove`, `map connector`, each running the corresponding command with its printed summary or notice. **No action raises a card** (OD-1); each is the operator's explicit act in the console.
 
-### 7.2 Cards
-- **Adoption / update card:** `specs/024` §4.2–4.3.
-- **Alignment finding card:** when a spec approval card is raised (`specs/003` §3.1), its body shows the strategist's alignment table beneath the scope-audit summary, so the operator approves a spec seeing which goals it serves and conflicts with. No new card; one more section on an existing one.
-- **Lens notice:** a Council started with `--lenses` lists the seat-to-lens assignment in the Council chamber view before Round 1 output streams.
+### 7.2 Where alignment appears
+- **Spec approval card** (`specs/003` §3.1): its body shows the strategist's alignment table beneath the scope-audit summary. One more section on an existing card; approving a spec is still the operator's existing act.
+- **Lens notice:** a Council started with `--lenses` lists the seat-to-lens assignment in the chamber view before Round 1 streams.
 
 ### 7.3 Narrator
-Events `bundle.adopted|updated|rolled_back|removed`, `org_context.built` (size, bundles, trimmed parts), `align.finding` (ids, level) and `council.lens_assigned` feed the Narrator's task and Council views (`specs/005-A6` event conventions). The Narrator is read-only; nothing here gives it an action.
+Events `bundle.added|updated|rolled_back|removed`, `bundle.vectors_progress`, `org_context.built` (size, bundles, trimmed parts), `align.finding` (ids, level), `council.lens_assigned` feed the Narrator's task and Council views. Read-only, as always.
 
 ---
 
 ## 8. The Loop Back
-Alignment is two-way or it decays. Three existing paths carry findings from a mission back to the organization, and this spec adds no fourth:
-1. **`/retro` proposals** that cite bundle knowledge keep the citation (`source: acme-platform@1.4.0 knowledge/...`). A ratified team heuristic that came from a bundle keeps its `[T-<org>-NN]` id (`specs/023` §6.4).
-2. **A xenia `memory` record** is how a team publishes "we found this to be wrong / incomplete" (`specs/011` §7.1 publish gate: promoted scope only, scan, exact-bytes preview, Red approval, no model turn after preview). `/org` offers `publish finding` on an open item, which pre-fills a `memory` record with `related` pointing at the bundle record and `memory_type: gotcha|decision`.
-3. **A `dispute` endorsement** against the bundle's record (`specs/012` §5.2) is how a member flags a bundle file as wrong to the stewards without editing anything. `/org` offers `dispute` on a knowledge file; the note is the operator's own words.
+Three existing paths carry findings back to the organization; this spec adds no fourth:
+1. **`/retro` proposals** that cite bundle knowledge keep the citation (`source: acme-platform@1.4.0 knowledge/...`).
+2. **A xenia `memory` record** publishes "we found this wrong or incomplete" through the unchanged publish gate (`specs/011` §7.1: promoted scope only, scan, exact-bytes preview, Red approval, no model turn after preview; publishing is outbound, so the gate stays). `/org publish finding` pre-fills a `memory` record with `related` pointing at the bundle record.
+3. **A `dispute` endorsement** against the bundle's record (`specs/012` §5.2). `/org dispute` pre-fills it; the note is the operator's words.
 
-A new bundle version is the only way knowledge changes; the loop ends with the publisher reading the records and disputes and shipping it. `delphi bundle distill` (`specs/027` §2) helps the publisher turn those records into the next version.
+A new bundle version is the only way knowledge changes. `delphi bundle distill` (`specs/027` §2) helps the publisher turn records and disputes into the next version.
 
 ---
 
 ## 9. Acceptance Criteria
-1. **AC-1 (assembly):** with two adopted bundles the slice is built with no model call, is byte-identical on two builds from the same lock and ratified copies, is at most 4 KiB, names each bundle and its state in the header, lists active goals and perspectives with ids, trims knowledge index before perspectives before goals and marks the trim, and omits a `removed` bundle.
-2. **AC-2 (who):** the slice is in the orchestrator's, strategist's and architect's prompt and not in the builder's or a Council seat's; adding `org-context` to a role's `execute` by a ratified manifest change gives it the slice; an unratified change does not.
-3. **AC-3 (placement and tier):** the slice sits after the guidance block and memory snapshot and before the task in the IPR; a span with the slice keeps ceiling $L_5$; the header sentence of §3.3 is present and comes from the daemon's constant, not from any bundle file.
-4. **AC-4 (lenses):** `--lenses` assigns distinct perspectives round-robin, seats see only their own in Round 1, the verdict records the assignment, and with no bundles it is a no-op with a note; the Minority Report path is unchanged (existing tests still pass).
-5. **AC-5 (alignment):** a spec citing a superseded decision gets `ALIGN-REF-01` from the pre-pass with no model call; the strategist's table has one row per active goal with a value from the fixed set; a `conflicts` on a goal with a metric measure is `P1`, otherwise `P2`; no alignment finding is ever `P0` or blocks a merge gate.
-6. **AC-6 (retrieval):** a bundle result's breadcrumb carries bundle, version, tier and review date; `--bundle`, `--org` and `--no-bundles` filter; the content reaches the model inside the spotlighted envelope with `bundle=` set.
-7. **AC-7 (console):** `/org` lists bundles, goals, perspectives and open items and every action opens the corresponding card; the spec approval card shows the alignment table; `/org publish finding` and `dispute` pre-fill the correct record kinds and go through the unchanged publish gate (exact bytes, Red, no model turn).
-8. **AC-8 (freshness):** adopting a bundle mid-task does not change the running task's prefix; the next task sees the new slice.
+1. **AC-1 (assembly):** with two added bundles the slice is built with no model call, is byte-identical on two builds from the same lock and cache, is ≤ 4 KiB, names each bundle and its provenance level, lists active goals and perspectives with ids, trims index before perspectives before goals and marks the trim, omits a `removed` bundle and marks a `stale` one.
+2. **AC-2 (who):** the slice is in the orchestrator's, strategist's and architect's prompt and not in the builder's or a Council seat's; adding `org-context` to a role's `execute` by a manifest change gives it the slice.
+3. **AC-3 (placement and tier):** the slice sits after the guidance block and memory snapshot (with the bundle rules block) and before the task; the span keeps ceiling $L_5$; the header sentence comes from the daemon's constant.
+4. **AC-4 (lenses):** `--lenses` assigns distinct perspectives round-robin, seats see only their own in Round 1, the verdict records the assignment, no bundles is a no-op with a note; existing Council tests still pass.
+5. **AC-5 (alignment):** a spec citing a superseded decision gets `ALIGN-REF-01` from the pre-pass with no model call; the strategist's table has one row per active goal from the fixed set; `conflicts` on a metric goal is `P1`, otherwise `P2`; no alignment finding is `P0` or blocks a merge gate.
+6. **AC-6 (retrieval):** a bundle result's breadcrumb carries bundle, version, provenance level, tier and review date; `--bundle`, `--org`, `--no-bundles` filter; the content reaches the model inside the envelope with `bundle=` and `provenance=`; before vectors are ready the breadcrumb says so.
+7. **AC-7 (console):** `/org` lists bundles, goals, perspectives, open items and vector readiness; every action runs its command and raises no card; the spec approval card shows the alignment table; `/org publish finding` and `dispute` pre-fill the right record kinds and go through the unchanged publish gate.
+8. **AC-8 (freshness):** adding a bundle mid-task does not change the running task's prefix; the next task sees the new slice.
 
 ## 10. Verification Plan
-Daemon tests in `delphi-engine`: slice assembly against fixture lock files and ratified copies (golden output; two bundles; caps at the boundary; removed and stale states; `applies_to.paths` matching with and without a running task); IPR assembly order (`specs/002` §2 tests extended); role gating by manifest; Council lens assignment (3 seats and 2 perspectives; 5 seats and 12 perspectives; none) with the existing Council tests still green; the alignment pre-pass on specs citing live, superseded and stale ids; breadcrumb and envelope attributes; the search filters. Console tests in `ui/` for `/org` rendering and the card section (pty tests, with the flakiness note of `flaky-e2e` in mind: rerun first). A recorded end-to-end run: adopt the fixture bundle, ask the strategist for a roadmap, and check that the roadmap cites a goal id and the slice appears exactly once in the logged prompt.
+Daemon tests in `delphi-engine`: slice assembly against fixture lock files and caches (golden output; two bundles; caps at the boundary; removed and stale states; provenance levels in the header; `applies_to.paths` matching with and without a running task); IPR assembly order (`specs/002` §2 tests extended for the guidance block, the rules block and the slice); role gating by manifest `execute`; Council lens assignment (3 seats and 2 perspectives; 5 and 12; none) with the existing Council tests still green; the alignment pre-pass on specs citing live, superseded and stale ids with the model client instrumented to refuse calls; breadcrumb and envelope attributes including the `(lexical only…)` note; the search filters. Console tests in `ui/` for `/org` rendering and one action per kind, asserting no approval card is raised (pty tests; rerun first on a flake, per the e2e note). A recorded end-to-end run: add the fixture bundle, ask the strategist for a roadmap, and check that the roadmap cites a goal id and the slice appears exactly once in the logged prompt.
 
-## 11. Open Questions
-B-10 (slice caps and the role set), B-13 (whether Council lenses should default on when bundles are adopted) in `specs/022` §7.
+## 11. Build Plan (slices B5 and B9 of `specs/022` §6)
+| Slice | Touches | Tests and fixtures | Needs | Effort |
+| :-- | :--- | :--- | :--- | ---: |
+| **B5 Org-context slice and `/org`** (AC-1..3, AC-6 breadcrumb part, AC-7 view and actions, AC-8) | `crates/delphi-engine/src/org_context.rs` (new: deterministic assembly from the lock and cache, caps, trimming, cache keyed by lock+cache+`AGENTS.md` hashes); `crates/delphi-engine/src/engine.rs` (push `ContextSlice { label: "@runtime/org-context", tier: "L5" }` beside the `@runtime/tool-inventory` push, gated by `execute: ["org-context"]`); `crates/delphi-adapter/src/ipr.rs` (slot after memory, before task; governance sentence); `crates/delphi/src/lint.rs` (`org-context` as a known `execute` capability); `agents/{orchestrator,strategist,architect,red-team}/AGENT.md` (`execute` gains `org-context`; a ratified manifest change); `crates/delphi-engine/src/service.rs` (RPC `org.view`, `org.action`); `ui/src/org.ts` (new deck), `ui/src/commands.json` + `commands.ts` (`/org`), `ui/src/decknav.ts`; `crates/delphi-engine/src/observe.rs` (Narrator rows for the new events); `crates/delphi-engine/src/kb.rs` (breadcrumb fields, `(lexical only…)` note) | golden slice output for two fixture bundles (matched/unmatched, stale, removed, over-cap); prompt order test in the `harness_run.rs`/`engine.rs` style that asserts the orchestrator sees it and the builder does not; `ui/` pty test for `/org` rendering and one action (rerun on flake, per the e2e note) | B4 | 14 h |
+| **B9 Alignment check and Council lenses** (AC-4, AC-5, AC-7 card part) | `crates/delphi-engine/src/align.rs` (new: id extraction, pre-pass against the cache, `ALIGN-REF-*` findings); `crates/delphi-engine/src/council.rs` (`--lenses` assignment, Round 1 framing per seat, verdict record); `crates/delphi-engine/src/approval.rs` (alignment table section on the spec card payload); `crates/delphi-engine/src/gates.rs` / `finalize.rs` (findings recorded as `P1`/`P2`, never gating); `agents/strategist/AGENT.md` §2.1 text; `skills/scope-creep-detection/SKILL.md` (the table format); `ui/src/weave.ts` (lens notice in the chamber view) | pre-pass fixtures (live, superseded, stale ids); Council tests with 3 seats/2 perspectives, 5/12, none; card payload golden; a recorded run where the strategist's roadmap cites a goal id | B5 | 12 h |
+
+Merge sequencing: B5 after B4 (it needs the rules block and guidance slots to exist so the IPR order test is complete); B9 after B5. The manifest `execute` change in B5 is a ratified Delphi manifest change and ships as its own commit inside the slice so it can be reviewed alone.
+
+## 12. Open Questions
+B-10 (caps and role set), B-13 (lenses default) in `specs/022` §7.
