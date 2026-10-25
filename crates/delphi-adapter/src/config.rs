@@ -649,8 +649,10 @@ impl Config {
                     errs.push(format!("[harness.{}] env_allow entry `{}` must be an environment variable name (A-Z, 0-9, `_`); give names, never values", name, v));
                 }
             }
-            // agy has no per-span MCP injection, no way to choose its tools and no approval bridge (`specs/009` §7B,
-            // `specs/020` §8), so only `env_allow` means anything for it; the engine reads nothing else from its block.
+            // agy has no flag for an MCP config, a tool list or an approval bridge. Delphi gives it a plugin and a gate hook in the
+            // span's own `.agents/` instead (`specs/020` §8), so from its block the engine reads `bridge`, `native_tools` (the
+            // web tools the gate lets through; Claude names are translated) and `env_allow`. `approvals`, `claudeai_connectors`
+            // and `connector_reads` mean nothing to it.
         }
         for (name, c) in &self.connectors {
             let ok_name = !name.is_empty() && name.len() <= 32 && name.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') && !name.starts_with('-');

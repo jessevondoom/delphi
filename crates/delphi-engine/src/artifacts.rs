@@ -637,7 +637,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "subtitle": {"type": "string"},
                 "summary": {"type": "string"},
                 "toc": {"type": "boolean"},
-                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}}}},
+                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array", "items": {"type": "object"}}, "chart": {"type": "object"}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },
@@ -654,7 +654,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "author": {"type": "string"},
-                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
+                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array", "items": {"type": "object"}}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },
@@ -671,13 +671,13 @@ pub fn specs() -> Vec<ToolSpec> {
                 "sheets": {"type": "array", "minItems": 1, "maxItems": sheetwriter::MAX_SHEETS, "items": {"type": "object", "required": ["columns", "rows"], "properties": {
                     "name": {"type": "string", "description": "up to 31 characters, without [ ] : * ? / or backslash"},
                     "columns": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array"}},
+                    "rows": {"type": "array", "items": {"type": "array", "items": {}}},
                     "formulas": {"type": "array", "items": {"type": "object", "required": ["cell", "f"], "properties": {"cell": {"type": "string"}, "f": {"type": "string"}}}},
                     "widths": {"type": "array", "items": {"type": "number"}},
                     "formats": {"type": "array", "items": {"type": "string"}}
                 }}},
                 "columns": {"type": "array", "items": {"type": "string"}, "description": "a single sheet's header, instead of `sheets`"},
-                "rows": {"type": "array", "items": {"type": "array"}, "description": "a single sheet's rows, instead of `sheets`"}
+                "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "a single sheet's rows, instead of `sheets`"}
             }}),
         },
         requires_write_scope: true,

@@ -123,11 +123,24 @@ fn claude_seat(e: &Endpoint, p: &HarnessProfile, seen: Option<&SeatRecord>) -> S
     s
 }
 
-fn agy_seat(e: &Endpoint, seen: Option<&SeatRecord>) -> String {
-    let mut s = format!("- `{}` (family gemini; the Antigravity CLI `agy`{}): ADVICE-ONLY.\n", e.id, if models(e).is_empty() { String::new() } else { format!("; models {}", models(e)) });
-    s.push_str("  - No Delphi tool reaches it: it has no way to load Delphi's bridge or ask Delphi for approval. Do not give it work that needs `timer`, `dispatch_agent`, scoped file access or connectors, and never a Builder task.\n");
-    s.push_str("  - It brings its own tools (browser, web search, URL reading, shell, file edit, image generation, scheduling, MCP calls) and they cannot be turned off. Delphi therefore runs it in an empty directory, treats everything it returns as untrusted (L0) and discards the run if a project checkout changed.\n");
-    s.push_str("  - Good for: a second opinion from another model family, Council seats, red-team review of text you quote to it.\n");
+fn agy_seat(e: &Endpoint, p: &HarnessProfile, seen: Option<&SeatRecord>) -> String {
+    let m = if models(e).is_empty() { String::new() } else { format!("; models {}", models(e)) };
+    let mut s = if p.bridge {
+        format!("- `{}` (family gemini; the Antigravity CLI `agy`{}): GATED, WITH DELPHI'S TOOLS.\n", e.id, m)
+    } else {
+        format!("- `{}` (family gemini; the Antigravity CLI `agy`{}): ADVICE-ONLY.\n", e.id, m)
+    };
+    if p.bridge {
+        let web = crate::bridge::agy_native_tools(&p.native_tools);
+        s.push_str("  - Delphi tools: YES, over a plugin the span carries in its own working directory (they appear to the model as `mcp_delphi_delphi_<tool>`). A role gets the same Delphi tools it would get on an API seat, each call run under Delphi's classification, taint gates and approvals.\n");
+        s.push_str(&format!("  - Its own tools: a hook asks Delphi before every one and denies all but {}. Its shell, file, browser, scheduling and subagent tools are switched off, and a hook that fails counts as a denial.\n", if web.is_empty() { "none of them".to_string() } else { web.join(", ") }));
+        s.push_str("  - Trust: its span is still untrusted (L0) from the start, because Delphi cannot check the hook from outside, and the projects are checked afterwards. Actions that need a trusted span (dispatching, writing specs) therefore ask the operator on a Red card. Never a Builder task: file edits and commands have no approval path on this seat yet.\n");
+        s.push_str("  - Good for: a second family that can orchestrate, dispatch, read through Delphi's scoped tools, and sit on a Council or red-team seat; a fallback when Claude's quota is out.\n");
+    } else {
+        s.push_str("  - No Delphi tool reaches it (the bridge is off in `[harness.agy]`). Do not give it work that needs `timer`, `dispatch_agent`, scoped file access or connectors, and never a Builder task.\n");
+        s.push_str("  - It brings its own tools (browser, web search, URL reading, shell, file edit, image generation, scheduling, MCP calls) and nothing here gates them. Delphi therefore runs it in an empty directory, treats everything it returns as untrusted (L0) and discards the run if a project checkout changed.\n");
+        s.push_str("  - Good for: a second opinion from another model family, Council seats, red-team review of text you quote to it.\n");
+    }
     match seen {
         Some(r) => s.push_str(&format!("  - Last session reported {} tool(s): {}.\n", r.tools.len(), brief(&r.tools, 20))),
         None => s.push_str("  - No session has reported its tools yet.\n"),
@@ -155,7 +168,7 @@ pub fn render(cfg: &Config, seen: &[SeatRecord]) -> String {
         let rec = seen.iter().find(|r| r.endpoint_id == e.id);
         out.push_str(&match (e.path, e.harness.as_deref().unwrap_or("claude")) {
             (AccessPath::Harness, "claude") => claude_seat(e, &cfg.harness.get("claude").cloned().unwrap_or_default(), rec),
-            (AccessPath::Harness, "agy") => agy_seat(e, rec),
+            (AccessPath::Harness, "agy") => agy_seat(e, &cfg.harness.get("agy").cloned().unwrap_or_default(), rec),
             (AccessPath::Harness, other) => format!("- `{}` (harness `{}`): not supported; Delphi cannot run it.\n", e.id, other),
             _ => api_seat(e),
         });
@@ -209,7 +222,8 @@ gemini = ["agy-sub"]
         assert!(text.contains("CLI built-in tools for roles without a worktree: WebSearch, WebFetch. Content they fetch is untrusted"));
         assert!(text.contains("the CLI's own MCP servers load"));
         assert!(text.contains("Approvals: delegated") && text.contains("Builders stay on Delphi's rules"));
-        assert!(text.contains("`agy-sub`") && text.contains("ADVICE-ONLY") && text.contains("never a Builder task"));
+        assert!(text.contains("`agy-sub`") && text.contains("GATED, WITH DELPHI'S TOOLS") && text.contains("mcp_delphi_delphi_") && text.contains("denies all but search_web, read_url_content") && text.contains("Never a Builder task") && text.contains("Red card"), "{}", text);
+        assert!(!text.contains("ADVICE-ONLY"), "the seat is not advice-only any more");
         assert!(text.contains("No session has reported its tools yet"));
     }
 
@@ -223,6 +237,18 @@ gemini = ["agy-sub"]
         assert!(text.contains("Last session reported 2 tool(s): mcp__delphi__timer, WebSearch. MCP servers: delphi (connected)"), "{}", text);
         let off = Config::parse(&format!("{}\n[harness.claude]\nbridge = false\n", BASE)).unwrap();
         assert!(render(&off, &[]).contains("Delphi tools: NO (the bridge is off"));
+    }
+
+    #[test]
+    fn an_agy_seat_with_its_bridge_off_is_advice_only_again_and_the_web_tools_follow_the_profile() {
+        let off = Config::parse(&format!("{}\n[harness.agy]\nbridge = false\n", BASE)).unwrap();
+        let text = render(&off, &[]);
+        assert!(text.contains("ADVICE-ONLY") && text.contains("No Delphi tool reaches it") && !text.contains("GATED"), "{}", text);
+        let narrow = Config::parse(&format!("{}\n[harness.agy]\nnative_tools = []\n", BASE)).unwrap();
+        assert!(render(&narrow, &[]).contains("denies all but none of them"));
+        let own = Config::parse(&format!("{}\n[harness.agy]\nnative_tools = [\"WebSearch\", \"Read\", \"search_web\"]\n", BASE)).unwrap();
+        let t = render(&own, &[]);
+        assert!(t.contains("denies all but search_web. "), "a Claude-only name means nothing to agy, and a repeat is not listed twice: {}", t);
     }
 
     #[test]
