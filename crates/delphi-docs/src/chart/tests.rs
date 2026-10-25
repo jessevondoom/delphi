@@ -25,8 +25,19 @@ fn form_follows_the_question_each_rule_refuses_with_a_reason_and_a_better_form()
         (json!({"type": "bar", "data": {"columns": ["a"], "rows": [[1]]}}), "`title`"),
         (json!({"type": "bar", "title": "T"}), "`data`"),
         (json!({"type": "radar", "title": "T", "data": {"columns": ["a"], "rows": [[1]]}}), "unknown chart type"),
-        (json!({"type": "pie", "title": "T", "data": {"columns": ["a"], "rows": [[1]]}}), "use `hbar`"),
-        (json!({"type": "heatmap", "title": "T", "data": {"columns": ["a"], "rows": [[1]]}}), "not available yet"),
+        (json!({"type": "table", "title": "T", "data": {"columns": ["a"], "rows": [[1]]}}), "not a chart"),
+        (two_col("donut", json!([["only", 5]])), "2 to 4 parts"),
+        (two_col("donut", json!([["a", 1], ["b", 2], ["c", 3], ["d", 4], ["e", 5]])), "fold the smallest"),
+        (two_col("donut", json!([["a", 1], ["b", -2]])), "zero or more"),
+        (json!({"type": "donut", "title": "T", "data": {"columns": ["k", "v", "w"], "rows": [["a", 1, 2], ["b", 2, 3]]}}), "one value column"),
+        (two_col("stacked-bar", json!([["a", 1], ["b", 2]])), "2 or more series"),
+        (json!({"type": "stacked-bar", "title": "T", "data": {"columns": ["k", "a", "b"], "rows": [["x", 1, -2], ["y", 2, 3]]}}), "zero or more"),
+        (json!({"type": "stacked-bar", "title": "T", "data": {"columns": ["k", "a", "b"], "rows": [["x", 1, 2]]}}), "just its parts"),
+        (json!({"type": "heatmap", "title": "T", "data": {"columns": ["k", "a"], "rows": [["x", 1], ["y", 2]]}}), "2 or more rows"),
+        (json!({"type": "box", "title": "T", "data": {"columns": ["g", "v"], "rows": [["a", 1], ["a", 2], ["a", 3], ["a", 4], ["a", 5]]}}), "between 2 and 12 groups"),
+        (json!({"type": "box", "title": "T", "data": {"columns": ["g", "v"], "rows": [["a", 1], ["a", 2], ["a", 3], ["a", 4], ["a", 5], ["b", 1], ["b", 2]]}}), "at least 5 values; group `b` has 2"),
+        (json!({"type": "sparkline", "title": "T", "data": {"columns": ["x", "v"], "rows": [[1, 5], [2, 6]]}}), "at least 3 points"),
+        (json!({"type": "sparkline", "title": "T", "data": {"columns": ["x", "a", "b"], "rows": [[1, 5, 1], [2, 6, 2], [3, 7, 3]]}}), "one line"),
         (two_col("bar", json!([["only", 5]])), "just a number"),
         (two_col("bar", cats(41)), "Other"),
         (two_col("hbar", cats(201)), "Other"),
@@ -100,7 +111,8 @@ fn the_marks_follow_the_fixed_specs() {
         // text wears ink tokens, never a series colour
         for t in s.split("<text ").skip(1) {
             let class = attr(t, "class").unwrap();
-            assert!(["t1", "t1 b", "t2", "t3"].contains(&class), "{}: text with class {:?}", name, class);
+            // (heatmap cell values use ht0..ht4: the primary ink or the surface colour, chosen by contrast)
+            assert!(["t1", "t1 b", "t2", "t3", "ht0", "ht1", "ht2", "ht3", "ht4"].contains(&class), "{}: text with class {:?}", name, class);
         }
         // lines are 2px with round joins; dots carry a 2px surface ring; areas are a 10% wash
         assert!(s.contains(".k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}"), "{}", name);
@@ -271,4 +283,123 @@ fn write_samples() {
             std::fs::write(format!("{}/{}-{}.svg", dir, name, theme), render_svg(&c, Some("delphi chart sample"))).unwrap();
         }
     }
+}
+
+fn sample(name: &str) -> Value {
+    samples::all().into_iter().find(|(n, _)| *n == name).unwrap().1
+}
+
+#[test]
+fn a_stacked_bar_stacks_with_a_gap_a_rounded_top_and_totals_and_prints_its_values_for_three_parts() {
+    let s = svg(sample("stacked-three-parts"));
+    // 4 columns x 3 parts: the bottom and middle parts are rects, the top part has the rounded end
+    assert_eq!(s.matches("<rect class=\"f1\" x=").count() + s.matches("<rect class=\"f2\" x=").count() - s.matches("width=\"10\" height=\"10\"").count().min(2) - s.matches("width=\"8\" height=\"8\"").count().min(2), 8, "bottom and middle parts of 4 stacks");
+    assert!(s.matches("width=\"24\"").count() >= 8, "columns are 24px thick");
+    assert_eq!(s.matches("<path class=\"f3\"").count(), 4);
+    assert!(s.contains(">16.7</text>") && s.contains(">15.8</text>"), "totals sit above each stack");
+    // three parts use the low-contrast slots, so the values table is added
+    assert!(s.contains(">compile</text>") && s.contains(">9.4</text>"), "{}", s);
+    let d = describe_of(&sample("stacked-three-parts"));
+    assert!(d.starts_with("Stacked bar chart.") && d.contains("Q1 6.1 / 9.4 / 1.2"), "{}", d);
+}
+
+fn describe_of(v: &Value) -> String {
+    let s = svg(v.clone());
+    let a = s.find("<desc id=\"chart-desc\">").unwrap() + "<desc id=\"chart-desc\">".len();
+    s[a..s.find("</desc>").unwrap()].to_string()
+}
+
+#[test]
+fn a_donut_draws_each_part_as_a_ring_segment_and_lists_values_and_shares() {
+    let s = svg(sample("donut-three"));
+    assert_eq!(s.matches("class=\"f1 sl\"").count() + s.matches("class=\"f2 sl\"").count() + s.matches("class=\"f3 sl\"").count(), 3, "{}", s);
+    assert!(s.contains(">$12,600</text>") && s.contains(">Total</text>"), "the middle says the total: {}", s);
+    assert!(s.contains(">67%</text>") && s.contains(">23%</text>") && s.contains(">10%</text>") && s.contains(">$8,400</text>"), "{}", s);
+    // one part that is the whole is a full ring, not a degenerate arc
+    let one = svg(json!({"type": "donut", "title": "T", "data": {"columns": ["k", "v"], "rows": [["a", 5], ["b", 0]]}}));
+    assert_eq!(one.matches(" sl\"").count(), 1);
+    assert!(one.contains("A") && !one.contains("NaN") && !one.contains("inf"), "{}", one);
+    assert!(describe_of(&sample("donut-three")).starts_with("Donut chart."));
+}
+
+#[test]
+fn a_heatmap_shades_every_cell_in_five_steps_labels_what_fits_and_shows_its_scale() {
+    let s = svg(sample("heatmap-weeks"));
+    let cells: usize = (0..5).map(|i| s.matches(&format!("<rect class=\"h{}\" x=", i)).count()).sum();
+    assert_eq!(cells, 5 * 10 + 5, "5 rows x 10 columns, plus the five scale swatches");
+    assert!((0..5).all(|i| s.contains(&format!("--h{}:#", i)) && s.contains(&format!("--ht{}:#", i))), "fills and label colours are in both modes' variables");
+    assert!(s.contains("class=\"ht") && s.contains(">W7</text>") && s.contains(">worker</text>"), "{}", s);
+    // a missing value is an outlined empty cell, not a fake zero
+    let gap = svg(json!({"type": "heatmap", "title": "T", "data": {"columns": ["k", "a", "b"], "rows": [["x", 1, 2], ["y", null, 4]]}}));
+    assert_eq!(gap.matches("<rect class=\"g\"").count(), 1, "{}", gap);
+}
+
+#[test]
+fn a_box_plot_marks_quartiles_median_whiskers_and_outliers() {
+    let s = svg(sample("box-regions"));
+    assert_eq!(s.matches("<rect class=\"bx\"").count(), 3);
+    assert_eq!(s.matches("<path class=\"wh\"").count(), 3);
+    assert!(s.matches("class=\"d1\" cx=").count() >= 3, "the unusually slow requests are drawn as dots: {}", s.matches("class=\"d1\" cx=").count());
+    let d = describe_of(&sample("box-regions"));
+    assert!(d.starts_with("Box plot chart.") && d.contains("us-east: median") && d.contains("(30 values)"), "{}", d);
+    // quartiles by linear interpolation: 1..=9 has median 5 and quartiles 3 and 7
+    let g: Vec<f64> = (1..=9).map(f64::from).collect();
+    assert_eq!((more::quantile(&g, 0.25), more::quantile(&g, 0.5), more::quantile(&g, 0.75)), (3.0, 5.0, 7.0));
+    assert_eq!(more::quantile(&[1.0, 2.0], 0.5), 1.5);
+}
+
+#[test]
+fn a_sparkline_is_small_has_no_axes_and_ends_in_a_dot_and_a_value() {
+    let c = chart(sample("sparkline-trend")).unwrap();
+    let s = render_svg(&c, None);
+    assert!(s.contains("viewBox=\"0 0 360 88\"") && !s.contains("class=\"g\"") && !s.contains("class=\"ax\""), "{}", s);
+    assert_eq!(s.matches("<path class=\"k1\"").count(), 1);
+    assert_eq!(s.matches("<circle class=\"d1\"").count(), 1);
+    assert!(s.contains(">Weekly active users</text>") && s.contains("last 40 weeks"));
+    assert!(describe_of(&sample("sparkline-trend")).starts_with("Sparkline chart."));
+}
+
+#[test]
+fn every_form_embeds_in_a_page_that_passes_the_safety_check_and_renders_deterministically() {
+    for (name, spec) in samples::all() {
+        let c = chart(spec.clone()).unwrap_or_else(|e| panic!("{}: {}", name, e));
+        assert_eq!(render_svg(&c, None), render_svg(&c, None), "{}", name);
+        let page = json!({"title": "P", "blocks": [{"type": "chart", "chart": spec}]});
+        let html = crate::htmlpage::render(&crate::htmlpage::from_json(&page).unwrap()).unwrap_or_else(|e| panic!("{}: {}", name, e));
+        assert!(crate::htmllint::lint(&html).is_empty(), "{}", name);
+        let s = render_svg(&c, None);
+        assert!(!s.contains("NaN") && !s.contains("inf") && !s.contains("undefined"), "{}", name);
+    }
+}
+
+#[test]
+fn only_charts_inside_a_page_answer_the_pointer_and_their_targets_are_bounded() {
+    for (name, spec) in samples::all() {
+        let c = chart(spec).unwrap();
+        let alone = render_svg(&c, None);
+        for attr in ["data-v=", "data-s=", "data-t=", "data-zoom", "class=\"hit\"", "class=\"brush\""] {
+            assert!(!alone.contains(attr), "{}: a standalone file carries {}", name, attr);
+        }
+        assert!(!alone.contains("<script"));
+        let page = inline_svg(&c, "c1");
+        if name != "sparkline-trend" {
+            assert!(page.contains("data-v=\""), "{}: nothing to point at", name);
+        }
+        // one legend item per series, each a focusable button that says whether it is shown
+        if c.series.len() > 1 && !matches!(c.kind, Kind::Heatmap | Kind::Donut) {
+            assert_eq!(page.matches("data-t=\"").count(), c.series.len(), "{}", name);
+            assert_eq!(page.matches("role=\"button\" aria-pressed=\"true\"").count(), c.series.len(), "{}", name);
+        }
+        assert_eq!(page.contains("data-zoom"), page.contains("class=\"brush\""), "{}: a zoomable chart has its selection rectangle", name);
+        assert!(page.matches("class=\"hit\"").count() <= 301, "{}: too many pointer targets", name);
+    }
+    // a long line is thinned to at most 300 bands rather than one per point
+    let rows: Vec<Value> = (0..1800).map(|i| json!([i, (i as f64 * 0.05).sin() * 10.0 + 50.0])).collect();
+    let long = chart(json!({"type": "line", "title": "T", "data": {"columns": ["x", "v"], "rows": rows}})).unwrap();
+    let n = inline_svg(&long, "c1").matches("class=\"hit\"").count();
+    assert!((100..=301).contains(&n), "{}", n);
+    // text from the data cannot break out of the attribute that says it
+    let evil = chart(json!({"type": "bar", "title": "T", "data": {"columns": ["k", "v"], "rows": [["\"><script>alert(1)</script>", 1], ["b", 2]]}})).unwrap();
+    let s = inline_svg(&evil, "c1");
+    assert!(!s.contains("<script") && s.contains("&quot;&gt;&lt;script&gt;"), "{}", s);
 }

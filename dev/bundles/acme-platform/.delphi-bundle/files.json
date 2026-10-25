@@ -1,0 +1,31 @@
+{
+  "bundle": 1,
+  "name": "acme-platform", "org": "acme", "version": "1.4.0",
+  "files": {
+    ".claude-plugin/plugin.json": { "blake3": "blake3:a3ab4eff3b99b2277f4fa27efdd340e6d9ffe67f744fafb0e713bbaebc15c8e8", "bytes": 459 },
+    "CHANGELOG.md": { "blake3": "blake3:28669e67ee34c6181a92b9529cf5c6e05b46dd401ee5f950fae42afe6710e442", "bytes": 108 },
+    "LICENSE": { "blake3": "blake3:15803c026cc575508b6f6c2c1804f6c73db017047f22a63565b2bb219292b26a", "bytes": 75 },
+    "README.md": { "blake3": "blake3:08f461f76cba24e75b00818dda6c7db295ea9f53b225fb521c4e56d57c9a5121", "bytes": 650 },
+    "agents/reviewer.md": { "blake3": "blake3:226109e8e025fc2945eac75612f90c47a56ed04cf443b462b0ce12965259c40e", "bytes": 406 },
+    "behavior/goals.md": { "blake3": "blake3:0e06884549a35e4b720d7190876dbb829d6394611fc151dd00f8360daf9aa940", "bytes": 571 },
+    "behavior/heuristics.md": { "blake3": "blake3:42198427ca14d02ad50a5ef79b0ab04c4283545783a52ea023aa5cd3cabef423", "bytes": 575 },
+    "behavior/perspectives.md": { "blake3": "blake3:97af52af6d3e7d26df59504ac6ce2ce09780b32596ca60f481a3d482e363715b", "bytes": 901 },
+    "behavior/policies.toml": { "blake3": "blake3:ea3ff2f132f363a5da96b91da146bbe7fd2511754d8a8297032f1f85ffb93f60", "bytes": 328 },
+    "behavior/roles/architect.md": { "blake3": "blake3:83f1800735ebaa230d832bb7e4d8cf215b282c488d9e4b44ab94d6e3c5c6cb8e", "bytes": 677 },
+    "behavior/roles/builder.md": { "blake3": "blake3:8f8cccf69c0ddfd2c25da7cadef6c76a70a855f08171f13797a4b3cedb3224a6", "bytes": 527 },
+    "bundle.toml": { "blake3": "blake3:ef01b7451c3cab26da4b9a4ac0298e94bc7a49d5de45d2938b5db4c7c1bcbc3b", "bytes": 865 },
+    "evals/delphi/kb-eval.json": { "blake3": "blake3:7236cdac99cf392da9897a07038c062becd0c701dae3b5544735d2c883ff3603", "bytes": 1110 },
+    "evals/delphi/tasks/add-retry-to-billing-client.md": { "blake3": "blake3:b13109e9d6f7bf784eb7b245bae633729b2007a6e774340af373f1ca9d6e33d6", "bytes": 284 },
+    "knowledge/architecture/overview.md": { "blake3": "blake3:4cab07e12538523b457bf5bac9e6f6b777f9345a87e7b58d8a047602a6068b8f", "bytes": 737 },
+    "knowledge/architecture/service-mesh.md": { "blake3": "blake3:3358d47649a860837a51f33407527d9f2644ed16ed6c65da93322110d2e1223e", "bytes": 514 },
+    "knowledge/decisions/0031-latency-budget.md": { "blake3": "blake3:e5b7d850f89f8df0461bf83eb65a54ef2e64c36cc79e59c1a12cf275e90055ba", "bytes": 481 },
+    "knowledge/decisions/0042-postgres-over-dynamo.md": { "blake3": "blake3:ffdab17f933322a7b75824696844d97ad734fcd75c18d4c936532e19eb9ea172", "bytes": 545 },
+    "knowledge/glossary.md": { "blake3": "blake3:959daed7a0286c75e4beed738fe5c4104dfb761b81b842e2a06219bb53a3da8a", "bytes": 490 },
+    "knowledge/index.md": { "blake3": "blake3:3862fac5a98450d40a05d0e7258228cac66aa8bc749c7d131f1a05cb5b0a9011", "bytes": 1021 },
+    "knowledge/runbooks/incident-first-30-minutes.md": { "blake3": "blake3:9cfdd54299336d1f4c62dccb19c680d4ba355cb04f027e9485f09379d7620a8d", "bytes": 510 },
+    "knowledge/runbooks/rolling-deploy.md": { "blake3": "blake3:88099a99a8eeb8581c83e9dccf53272af34514e7ee463fd0875103ce9c154706", "bytes": 436 },
+    "skills/incident-review/SKILL.md": { "blake3": "blake3:99ed084bbc14bcd840a37123259cbda61529d8407d85a848a338c011f28c76a8", "bytes": 819 },
+    "skills/incident-review/templates/postmortem.md": { "blake3": "blake3:dcd24acc8b9b6deefe7b5f0064ed10dd47e316969450fccabdb530665de6da90", "bytes": 120 },
+    "skills/migration-plan/SKILL.md": { "blake3": "blake3:5aeab1738c50882c9d68229df6f92fca123830e02e4f28cda143d1ece53295b0", "bytes": 709 }
+  }
+}

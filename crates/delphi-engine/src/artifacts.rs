@@ -12,7 +12,7 @@
 
 use crate::tools::{denied, observe, str_arg, with_provenance_header, zone_of, ActionKind, Classified, Stamp, ToolCtx, ToolError, ToolExec, ToolResult, ToolSpec, ToolTier};
 use delphi_adapter::claude::ToolDef;
-use delphi_docs::{chart, htmlkinds, htmlpage};
+use delphi_docs::{chart, htmlkinds, htmlpage, sheetwriter};
 use delphi_core::pathguard::{Access, Guard};
 use delphi_core::provenance::{gate_write, OutputCheck, Tier};
 use serde_json::{json, Value};
@@ -25,7 +25,7 @@ const OTHER_ROOTS: [&str; 6] = ["specs", "context", "memory", "skills", "agents"
 /// Mission folders tried, in order, for a plain path; the first one the role may write wins.
 const MISSION_FOLDERS: [&str; 7] = ["artifacts", "reports", "research", "specs", "comms", "councils", "threat-models"];
 
-const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart", "write_report", "write_deck"];
+const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet"];
 
 pub fn is_artifact_tool(name: &str) -> bool {
     TOOLS.contains(&name)
@@ -36,6 +36,7 @@ fn extensions(tool: &str) -> &'static [&'static str] {
         "write_archive" => &["zip"],
         "write_html" | "write_report" | "write_deck" => &["html", "htm"],
         "write_chart" => &["svg"],
+        "write_sheet" => &["xlsx", "csv"],
         _ => &[],
     }
 }
@@ -112,6 +113,9 @@ fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
         return classify_chart(args);
     }
     let path = str_arg(args, "path")?;
+    if tool == "write_sheet" {
+        return classify_sheet(path, args);
+    }
     let members = if tool == "write_archive" { Some(members_of(args)?) } else { None };
     let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, tool).map_err(ToolError)?;
     let (tier, kind) = if resolved.starts_with("@worktree/") { (ToolTier::Amber, ActionKind::WorktreeEdit) } else { (ToolTier::Green, ActionKind::MissionArtifact) };
@@ -253,6 +257,35 @@ fn classify_page(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     Ok(Classified { tool: tool.into(), tier, kind, summary, payload, pattern })
 }
 
+/// The workbook a call describes, as bytes for the path's extension (`.csv` or `.xlsx`).
+fn build_sheet(resolved: &str, args: &Value) -> Result<(Vec<u8>, sheetwriter::Workbook), String> {
+    let wb = sheetwriter::from_json(args).map_err(|e| e.0)?;
+    let bytes = if resolved.to_lowercase().ends_with(".csv") { sheetwriter::to_csv(&wb).map_err(|e| e.0)?.into_bytes() } else { sheetwriter::to_xlsx(&wb).map_err(|e| e.0)? };
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(format!("the spreadsheet would be {} bytes; the limit is {} (4 MB). Write fewer rows, or split it", bytes.len(), MAX_ARTIFACT_BYTES));
+    }
+    Ok((bytes, wb))
+}
+
+/// A spreadsheet reads no files, so it is built and checked now. It is Green in the mission and Amber in a worktree.
+fn classify_sheet(path: &str, args: &Value) -> Result<Classified, ToolError> {
+    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_sheet").map_err(ToolError)?;
+    let (bytes, wb) = build_sheet(&resolved, args).map_err(ToolError)?;
+    let (tier, kind) = if resolved.starts_with("@worktree/") { (ToolTier::Amber, ActionKind::WorktreeEdit) } else { (ToolTier::Green, ActionKind::MissionArtifact) };
+    let dir = resolved.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let rows: usize = wb.sheets.iter().map(|s| s.rows.len()).sum();
+    let formulas: usize = wb.sheets.iter().map(|s| s.formulas.len()).sum();
+    let args_hash = blake3::hash(serde_json::to_string(args).unwrap_or_default().as_bytes()).to_hex().to_string();
+    Ok(Classified {
+        tool: "write_sheet".into(),
+        tier,
+        kind,
+        summary: format!("write {} ({}, {}, {})", path, plural(wb.sheets.len(), "sheet"), plural(rows, "row"), plural(formulas, "formula")),
+        payload: json!({"tool": "write_sheet", "path": path, "sheets": wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "rows": rows, "formulas": formulas, "bytes": bytes.len(), "args_blake3": args_hash}),
+        pattern: format!("write_sheet {}/*", dir),
+    })
+}
+
 /// A chart. Charts hold no script, so one is Green in the mission and Amber in a worktree like any worktree edit.
 /// Data read from a file is not opened at classification (it needs the role's read access); the rest is checked now.
 fn classify_chart(args: &Value) -> Result<Classified, ToolError> {
@@ -331,6 +364,9 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
     if is_page_tool(tool) {
         let a = embed_data(guard, args, &mut |_, _| None)?;
         build_page(tool, &a, None).map_err(ToolResult::err)?;
+    }
+    if tool == "write_sheet" {
+        build_sheet(&resolved, args).map_err(ToolResult::err)?;
     }
     if tool == "write_chart" {
         let (a, _) = chart_args(guard, args)?;
@@ -480,6 +516,19 @@ fn write_page(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, built.html.as_bytes(), tool, &inputs)
 }
 
+fn write_sheet(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_sheet", args) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    let (bytes, wb) = match build_sheet(&target.path, args) {
+        Ok(b) => b,
+        Err(e) => return ToolResult::err(e),
+    };
+    let inputs: Vec<String> = wb.sheets.iter().map(|s| format!("sheet {}: {} columns, {} rows, {}", s.name, s.columns.len(), s.rows.len(), plural(s.formulas.len(), "formula"))).collect();
+    write_artifact(ctx, &target, &bytes, "write_sheet", &inputs)
+}
+
 fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_chart", args) {
         Ok(t) => t,
@@ -521,7 +570,7 @@ fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, svg.as_bytes(), "write_chart", &inputs)
 }
 
-const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read), {type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
+const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read; the reader can point at marks for their values, click legend items to hide a series and drag to zoom),{type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
@@ -554,10 +603,10 @@ pub fn specs() -> Vec<ToolSpec> {
     ToolSpec {
         def: ToolDef {
             name: "write_chart".into(),
-            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), line, area (one series), scatter (at most 2 series) or hist (a distribution of one column); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
+            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), stacked-bar (parts of a total per category: one column per part in `y`, parts are zero or more), line, area (one series), scatter (at most 2 series), hist (a distribution of one column), box (spread within groups: `x` names the group column and `y` the value column, one row per measurement, at least 5 per group, 2 to 12 groups), heatmap (a grid: `x` names the column categories and each `y` column is a row, up to 24 rows and 40 columns, values shaded and printed), donut (2 to 4 parts of a whole: one value column in `y`, one row per part, with the total in the middle and each part's value and share listed) or sparkline (a small line with no axes for a trend, at least 3 points); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
             input_schema: json!({"type": "object", "required": ["path", "type", "title", "data"], "properties": {
                 "path": {"type": "string"},
-                "type": {"type": "string", "enum": ["bar", "hbar", "line", "area", "scatter", "hist"]},
+                "type": {"type": "string", "enum": ["bar", "hbar", "stacked-bar", "line", "area", "scatter", "hist", "box", "heatmap", "donut", "sparkline"]},
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "data": {"type": "object", "description": "{columns: [names], rows: [[...]]} or {from: path to a .csv/.tsv}"},
@@ -612,6 +661,28 @@ pub fn specs() -> Vec<ToolSpec> {
         requires_write_scope: true,
         classify: |tool, args| classify(tool, args),
         exec: ToolExec::Local(write_deck),
+    },
+    ToolSpec {
+        def: ToolDef {
+            name: "write_sheet".into(),
+            description: "Write a spreadsheet as an .xlsx (Excel, LibreOffice, Numbers) or a .csv. `path` is a plain name like `latency.xlsx` (goes in the mission's folder) or `@worktree/…`; the extension picks the format (none means .xlsx). `sheets`: [{name, columns:[header names], rows:[[…]], formulas?, widths?, formats?}] (for one sheet, `columns` and `rows` may be given at the top level). A cell is text, a number, true/false or null (empty); numbers stay numbers so the program can sum and chart them, and text is always kept as text. The header row is bold and frozen. `formulas`: [{cell:\"D2\", f:\"=B2*C2\"}] puts a formula in any cell below the header, including a totals row under the data; formulas are computed when the file is opened, may refer to other sheets (`Latency!B2:B9`), and are refused if they fetch from the web, run programs or read other files. `widths` are character widths per column and `formats` are number formats per column like `#,##0`, `0.0%` or `0.00` (\"\" for none). Limits: 20 sheets, 50000 rows, 200 columns, 4 MB. A .csv holds one sheet and no formulas (a cell starting with = + - or @ is prefixed with an apostrophe so a spreadsheet program shows it rather than running it). A provenance record is written beside the file.".into(),
+            input_schema: json!({"type": "object", "required": ["path"], "properties": {
+                "path": {"type": "string"},
+                "sheets": {"type": "array", "minItems": 1, "maxItems": sheetwriter::MAX_SHEETS, "items": {"type": "object", "required": ["columns", "rows"], "properties": {
+                    "name": {"type": "string", "description": "up to 31 characters, without [ ] : * ? / or backslash"},
+                    "columns": {"type": "array", "items": {"type": "string"}},
+                    "rows": {"type": "array", "items": {"type": "array"}},
+                    "formulas": {"type": "array", "items": {"type": "object", "required": ["cell", "f"], "properties": {"cell": {"type": "string"}, "f": {"type": "string"}}}},
+                    "widths": {"type": "array", "items": {"type": "number"}},
+                    "formats": {"type": "array", "items": {"type": "string"}}
+                }}},
+                "columns": {"type": "array", "items": {"type": "string"}, "description": "a single sheet's header, instead of `sheets`"},
+                "rows": {"type": "array", "items": {"type": "array"}, "description": "a single sheet's rows, instead of `sheets`"}
+            }}),
+        },
+        requires_write_scope: true,
+        classify: |tool, args| classify(tool, args),
+        exec: ToolExec::Local(write_sheet),
     },
 ]
 }
@@ -989,8 +1060,8 @@ mod tests {
     fn a_chart_that_does_not_fit_its_data_is_refused_before_anyone_is_asked_with_a_better_form() {
         let reg = Registry::builtin();
         let mut pie = chart_args();
-        pie["type"] = json!("pie");
-        assert!(reg.classify("write_chart", &pie).unwrap_err().0.contains("use `hbar`"));
+        pie["type"] = json!("radar");
+        assert!(reg.classify("write_chart", &pie).unwrap_err().0.contains("unknown chart type `radar`; use bar, hbar, stacked-bar"));
         let mut one = chart_args();
         one["type"] = json!("bar");
         one["data"] = json!({"columns": ["k", "v"], "rows": [["only", 5]]});
@@ -1134,7 +1205,7 @@ mod tests {
         }
         // a bad chart inside a slide is refused with the chart's reason before anyone is asked
         let mut bad = deck_args(None);
-        bad["slides"][1]["chart"]["type"] = json!("pie");
+        bad["slides"][1]["chart"]["type"] = json!("radar");
         assert!(reg.classify("write_deck", &bad).unwrap_err().0.contains("chart block"));
         // a page may hold a chart too
         let page = json!({"path": "p", "title": "P", "blocks": [{"type": "grid", "columns": 2, "blocks": [{"type": "chart", "chart": chart_block(None)}, {"type": "markdown", "text": "x"}]}]});
@@ -1161,5 +1232,51 @@ mod tests {
         assert!(!r.is_error && r.content.contains("tier L0") && stamps.iter().all(|s| s.tier == Tier::L0), "{}", r.content);
         let html = fs::read_to_string(f.root.join("local/missions/m1/artifacts/q3.html")).unwrap();
         assert!(html.contains("trust L0 external_untrusted") && html.contains("Source: data: @project/app/vendor/lib/latency.csv (trust L0"), "the document and the chart both say so");
+    }
+    fn sheet_args() -> Value {
+        json!({"path": "latency", "sheets": [{"name": "Latency", "columns": ["release", "p50", "p95"], "rows": [["0.2.1", 120, 340], ["0.2.2", 104, 255]], "formulas": [{"cell": "B4", "f": "=SUM(B2:B3)"}], "formats": ["", "#,##0", ""]}]})
+    }
+
+    #[test]
+    fn a_sheet_is_written_stamped_and_read_back_and_csv_is_chosen_by_the_extension() {
+        let mut f = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f, "write_sheet", sheet_args());
+        assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/latency.xlsx (") && stamps.len() == 2, "{}", r.content);
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/latency.xlsx"}));
+        assert!(back.content.contains("0.2.2") && back.content.contains("(=SUM(B2:B3))"), "{}", back.content);
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.xlsx.provenance.md")).unwrap();
+        assert!(side.contains("produced_by: write_sheet") && side.contains("sheet Latency: 3 columns, 2 rows, 1 formula"), "{}", side);
+        // one sheet, no formulas: a .csv
+        let csv = json!({"path": "latency.csv", "columns": ["a", "b"], "rows": [["=1+1", 2]]});
+        let (r, _) = run_tool(&mut f, "write_sheet", csv);
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.csv")).unwrap(), "a,b\r\n\"'=1+1\",2\r\n");
+    }
+
+    #[test]
+    fn a_sheet_that_cannot_be_written_is_refused_before_anyone_is_asked_and_leaves_nothing() {
+        let reg = Registry::builtin();
+        let c = reg.classify("write_sheet", &sheet_args()).unwrap();
+        assert_eq!((c.tier, c.kind), (ToolTier::Green, ActionKind::MissionArtifact));
+        assert!(c.summary.contains("1 sheet, 2 rows, 1 formula"), "{}", c.summary);
+        let mut wt = sheet_args();
+        wt["path"] = json!("@worktree/data/latency.xlsx");
+        assert_eq!(reg.classify("write_sheet", &wt).unwrap().kind, ActionKind::WorktreeEdit);
+        for (mutate, expect) in [
+            (json!({"sheets": [{"name": "A", "columns": ["x"], "rows": [[1]], "formulas": [{"cell": "B2", "f": "WEBSERVICE(\"http://e.com\")"}]}]}), "outside the workbook"),
+            (json!({"path": "t.csv", "sheets": [{"name": "A", "columns": ["x"], "rows": [[1]]}, {"name": "B", "columns": ["x"], "rows": [[1]]}]}), "one sheet"),
+            (json!({"path": "t.pdf"}), "writes .xlsx files"),
+        ] {
+            let mut a = sheet_args();
+            for (k, v) in mutate.as_object().unwrap() {
+                a[k] = v.clone();
+            }
+            let e = reg.classify("write_sheet", &a).unwrap_err();
+            assert!(e.0.contains(expect), "{}: {}", expect, e);
+            let mut f = fx(&["missions/**"]);
+            let (r, stamps) = run_tool(&mut f, "write_sheet", a);
+            assert!(r.is_error && stamps.is_empty() && !f.root.join("local/missions/m1/artifacts").exists(), "{}", r.content);
+        }
     }
 }

@@ -6,6 +6,7 @@
 //! y axis (never two scales), bars start at zero, a pie is for parts of a whole, a line needs an ordered x,
 //! one number is a stat tile rather than a one-bar chart, and past a handful of series you facet or tabulate.
 
+mod more;
 pub mod palette;
 mod render;
 #[cfg(test)]
@@ -30,6 +31,16 @@ pub enum Kind {
     Area,
     Scatter,
     Hist,
+    /// Parts of a total across categories, stacked in one column.
+    Stacked,
+    /// Parts of a whole (2 to 4 slices) as a ring.
+    Donut,
+    /// A grid of values by two categories, shaded in one hue.
+    Heatmap,
+    /// The spread of a value within each group.
+    Box,
+    /// A small line with no axes, for the shape of a trend.
+    Sparkline,
 }
 
 impl Kind {
@@ -41,6 +52,11 @@ impl Kind {
             Kind::Area => "area",
             Kind::Scatter => "scatter",
             Kind::Hist => "hist",
+            Kind::Stacked => "stacked-bar",
+            Kind::Donut => "donut",
+            Kind::Heatmap => "heatmap",
+            Kind::Box => "box",
+            Kind::Sparkline => "sparkline",
         }
     }
 }
@@ -106,9 +122,15 @@ pub struct ChartSpec {
     pub bins: Option<usize>,
     /// Plain-language notes shown under the chart (for example "downsampled from 20,000 points").
     pub notes: Vec<String>,
+    /// A box plot's raw values per category, sorted (the series holds each group's median).
+    pub groups: Vec<Vec<f64>>,
 }
 
+const TYPES: &str = "bar, hbar, stacked-bar, line, area, scatter, hist, box, heatmap, donut or sparkline";
 const MAX_ROWS: usize = 20_000;
+const MAX_HEAT_ROWS: usize = 24;
+const MAX_HEAT_COLS: usize = 40;
+const MAX_BOX_GROUPS: usize = 12;
 const MAX_SCATTER_POINTS: usize = 5_000;
 const MAX_BARS: usize = 400;
 const LINE_DOWNSAMPLE_OVER: usize = 2_000;
@@ -148,16 +170,20 @@ fn str_field<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
 /// Read and check a chart. The error says what is wrong with the request and, where the form is the problem,
 /// which form to use instead.
 pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
-    let kind = match str_field(v, "type").ok_or_else(|| bad("a chart needs a `type`: bar, hbar, line, area, scatter or hist"))? {
+    let kind = match str_field(v, "type").ok_or_else(|| bad(format!("a chart needs a `type`: {}", TYPES)))? {
         "bar" | "column" => Kind::Bar,
         "hbar" => Kind::HBar,
         "line" => Kind::Line,
         "area" => Kind::Area,
         "scatter" => Kind::Scatter,
         "hist" | "histogram" => Kind::Hist,
-        "pie" | "donut" => return Err(bad("pie and donut charts are not available yet. If the parts add up to a whole and there are at most 6 of them, use `hbar` with the shares; for close values a bar is easier to compare anyway")),
-        "box" | "heatmap" | "stacked-bar" | "sparkline" | "table" => return Err(bad(format!("`{}` charts are not available yet; use bar, hbar, line, area, scatter or hist (or a table block in write_html)", str_field(v, "type").unwrap_or("")))),
-        other => return Err(bad(format!("unknown chart type `{}`; use bar, hbar, line, area, scatter or hist", other))),
+        "stacked-bar" | "stacked" => Kind::Stacked,
+        "donut" | "pie" => Kind::Donut,
+        "heatmap" => Kind::Heatmap,
+        "box" | "boxplot" => Kind::Box,
+        "sparkline" => Kind::Sparkline,
+        "table" => return Err(bad("a table is not a chart: use a `table` block in write_html, write_report or write_deck, or write_sheet")),
+        other => return Err(bad(format!("unknown chart type `{}`; use {}", other, TYPES))),
     };
     let title = str_field(v, "title").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("a chart needs a `title`; say what it shows, ideally the point it makes (\"Median latency fell 12% in 0.2.3\")"))?;
     if title.chars().count() > 140 {
@@ -204,6 +230,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
     let y_zero_off = scale.and_then(|s| s.get("y_zero")).and_then(|z| z.as_bool()) == Some(false);
 
     let mut x: XAxis;
+    let mut boxes: Vec<Vec<f64>> = vec![];
     let mut series: Vec<Series> = vec![];
     let mut notes: Vec<String> = vec![];
 
@@ -220,6 +247,38 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
         }
         x = XAxis::Numbers(vec![]);
         series.push(Series { name, values: vals });
+    } else if kind == Kind::Box {
+        if y_names.len() > 1 {
+            return Err(bad("a box plot shows one value column's spread in each group; name one column in `y`"));
+        }
+        let xi = col(&x_name)?;
+        let name = y_names.first().cloned().or_else(|| columns.iter().find(|c| **c != x_name).cloned()).ok_or_else(|| bad("a box plot needs a group column (`x`) and a value column (`y`)"))?;
+        let vals = column_numbers(col(&name)?)?;
+        let mut names: Vec<String> = vec![];
+        for (i, r) in rows.iter().enumerate() {
+            let Some(val) = vals[i] else { continue };
+            let g = cell_text(r.get(xi).unwrap_or(&Value::Null));
+            let gi = match names.iter().position(|n| *n == g) {
+                Some(p) => p,
+                None => {
+                    names.push(g);
+                    boxes.push(vec![]);
+                    names.len() - 1
+                }
+            };
+            boxes[gi].push(val);
+        }
+        if names.len() < 2 || names.len() > MAX_BOX_GROUPS {
+            return Err(bad(format!("a box plot compares between 2 and {} groups; `{}` has {}. With one group use `hist`; with more, keep the main groups and fold the rest into \"Other\"", MAX_BOX_GROUPS, x_name, names.len())));
+        }
+        if let Some((g, b)) = names.iter().zip(&boxes).find(|(_, b)| b.len() < 5) {
+            return Err(bad(format!("a box needs at least 5 values; group `{}` has {}. Show small groups as bars or a table", g, b.len())));
+        }
+        for b in &mut boxes {
+            b.sort_by(|a, c| a.partial_cmp(c).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        series.push(Series { name, values: boxes.iter().map(|b| Some(more::quantile(b, 0.5))).collect() });
+        x = XAxis::Categories(names);
     } else {
         // --- x
         let xi = col(&x_name)?;
@@ -228,7 +287,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
         let dates: Option<Vec<f64>> = xcells.iter().map(|c| c.as_str().and_then(parse_date)).collect();
         let ordered_cats = str_field(v, "x_order") == Some("ordered");
         x = match kind {
-            Kind::Bar | Kind::HBar => XAxis::Categories(xcells.iter().map(|c| cell_text(c)).collect()),
+            Kind::Bar | Kind::HBar | Kind::Stacked | Kind::Donut | Kind::Heatmap => XAxis::Categories(xcells.iter().map(|c| cell_text(c)).collect()),
             Kind::Scatter => match (nums, dates) {
                 (Some(n), _) if xcells.iter().all(|c| c.is_number() || c.as_str().is_some_and(|s| s.trim().parse::<f64>().is_ok())) => XAxis::Numbers(n),
                 (_, Some(d)) => XAxis::Dates(d),
@@ -256,7 +315,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
                     names.push(k.clone());
                 }
             }
-            if names.len() > MAX_SERIES {
+            if names.len() > series_cap(kind) {
                 return Err(too_many_series(names.len(), kind, Some(sb)));
             }
             // one distinct x position per x value, in first-seen order
@@ -282,15 +341,21 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
             if ys.is_empty() {
                 return Err(bad("there is no value column to plot; the data has only the x column"));
             }
-            if ys.len() > MAX_SERIES {
+            if ys.len() > series_cap(kind) {
                 return Err(too_many_series(ys.len(), kind, None));
+            }
+            if kind == Kind::Donut && ys.len() != 1 {
+                return Err(bad("a donut shows one value column (the share of each row); name it in `y`. To compare several measures use `stacked-bar` or `bar`"));
+            }
+            if kind == Kind::Sparkline && ys.len() != 1 {
+                return Err(bad("a sparkline is one line; name its column in `y`. To compare lines use `line`"));
             }
             for name in &ys {
                 series.push(Series { values: column_numbers(col(name)?)?, name: name.clone() });
             }
         }
         // sort by x for the forms that connect points, so the line goes left to right
-        if matches!(kind, Kind::Line | Kind::Area) {
+        if matches!(kind, Kind::Line | Kind::Area | Kind::Sparkline) {
             if let XAxis::Numbers(xs) | XAxis::Dates(xs) = &x {
                 let mut idx: Vec<usize> = (0..xs.len()).collect();
                 idx.sort_by(|a, b| xs[*a].partial_cmp(&xs[*b]).unwrap_or(std::cmp::Ordering::Equal));
@@ -315,7 +380,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
     if all_values.is_empty() {
         return Err(bad("none of the values could be read as numbers"));
     }
-    let max_series = if kind == Kind::Scatter { MAX_SERIES_SCATTER } else { MAX_SERIES };
+    let max_series = series_cap(kind);
     if series.len() > max_series {
         return Err(too_many_series(series.len(), kind, None));
     }
@@ -334,14 +399,54 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
                 return Err(bad("bars on a log axis mislead: bar length stops meaning amount. Use a `line` or `scatter` chart for log scales, or keep a linear axis"));
             }
             if kind == Kind::Bar {
-                if let XAxis::Categories(c) = &x {
-                    let longest = c.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-                    // a column needs its label to fit under it: about 6.4px per character at 11px type
-                    let needed = n as f64 * (longest.min(24) as f64 * 6.4 + 10.0);
-                    if needed > 640.0 * 0.9 {
-                        return Err(bad(format!("{} categories with labels up to {} characters will not fit under columns without rotating the text. Use `hbar`, which gives each label its own row", n, longest)));
-                    }
+                if let Some(e) = columns_fit(&x, n) {
+                    return Err(e);
                 }
+            }
+        }
+        Kind::Stacked => {
+            if n == 1 {
+                return Err(bad("a stacked bar with one column is just its parts: show them as a `donut` (2 to 4 parts), or an `hbar`"));
+            }
+            if n > 24 {
+                return Err(bad(format!("{} stacks is too many to read. Keep the main {} and fold the rest into \"Other\", or use `hbar` for one value per row", n, 12)));
+            }
+            if series.len() < 2 {
+                return Err(bad("a stacked bar shows the parts of a total, so it needs 2 or more series (value columns). With one series use `bar`"));
+            }
+            if all_values.iter().any(|v| *v < 0.0) {
+                return Err(bad("a stacked bar adds its parts up, so every part is zero or more. With negative values use a grouped `bar`"));
+            }
+            if log_y {
+                return Err(bad("stacked bars on a log axis mislead: lengths stop meaning amounts. Keep a linear axis"));
+            }
+            if let Some(e) = columns_fit(&x, n) {
+                return Err(e);
+            }
+        }
+        Kind::Donut => {
+            if !(2..=4).contains(&n) {
+                return Err(bad(format!("a donut shows 2 to 4 parts of a whole and this has {}. With more, fold the smallest into \"Other\", or use `hbar` with the shares", n)));
+            }
+            if all_values.iter().any(|v| *v < 0.0) || all_values.iter().sum::<f64>() <= 0.0 {
+                return Err(bad("a donut shows shares of a whole, so every part is zero or more and they add up to more than zero. For values that can fall below zero use `bar`"));
+            }
+        }
+        Kind::Heatmap => {
+            if series.len() < 2 || n < 2 {
+                return Err(bad("a heatmap is a grid: it needs 2 or more rows (value columns in `y`) and 2 or more x categories. For one row use `bar`"));
+            }
+            if n > MAX_HEAT_COLS {
+                return Err(bad(format!("{} columns is too wide for a heatmap ({} at most); aggregate the x values, for example days into weeks", n, MAX_HEAT_COLS)));
+            }
+            if log_y {
+                return Err(bad("a heatmap shades its values on a linear scale; remove the log setting"));
+            }
+        }
+        Kind::Box => {}
+        Kind::Sparkline => {
+            if n < 3 || series.len() != 1 {
+                return Err(bad("a sparkline is one line of at least 3 points. With fewer, show the numbers (a `stats` block); with several series use `line`"));
             }
         }
         Kind::Line | Kind::Area | Kind::Scatter => {
@@ -352,7 +457,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
         Kind::Hist => {}
     }
     if kind == Kind::Area && series.len() > 1 {
-        return Err(bad("an area chart shows one series (filled areas of several series hide each other). Use `line` for several series; for parts of a total over time, wait for `stacked-bar` or use `line`"));
+        return Err(bad("an area chart shows one series (filled areas of several series hide each other). Use `line` for several series, or `stacked-bar` for the parts of a total"));
     }
     if kind == Kind::Scatter && n * series.len() > MAX_SCATTER_POINTS {
         return Err(bad(format!("{} points is more than a scatter plot can show clearly ({} at most). Use `hist` for one variable, or aggregate", n * series.len(), MAX_SCATTER_POINTS)));
@@ -360,7 +465,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
     if log_y && all_values.iter().any(|v| *v <= 0.0) {
         return Err(bad("a log axis needs every value above zero; this data has zeros or negatives. Use a linear axis"));
     }
-    if series.len() >= 2 {
+    if series.len() >= 2 && !matches!(kind, Kind::Heatmap | Kind::Box) {
         // two measures on very different scales would need two axes, which invent correlations
         let mags: Vec<f64> = series.iter().map(|s| s.values.iter().flatten().map(|v| v.abs()).fold(0.0, f64::max)).filter(|m| *m > 0.0).collect();
         if let (Some(hi), Some(lo)) = (mags.iter().cloned().reduce(f64::max), mags.iter().cloned().reduce(f64::min)) {
@@ -371,7 +476,7 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
     }
 
     // --- bounded marks
-    if matches!(kind, Kind::Line | Kind::Area) && n > LINE_DOWNSAMPLE_OVER {
+    if matches!(kind, Kind::Line | Kind::Area | Kind::Sparkline) && n > LINE_DOWNSAMPLE_OVER {
         let original = n;
         let (nx, ns) = downsample(&x, &series, 1000);
         x = nx;
@@ -423,7 +528,25 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
         Some(b) => Some(b.as_u64().filter(|b| (2..=60).contains(b)).ok_or_else(|| bad("`bins` is a whole number from 2 to 60"))? as usize),
         None => None,
     };
-    Ok(ChartSpec { kind, title: title.to_string(), subtitle, x, x_name, series, log_y, truncated: y_zero_off && matches!(kind, Kind::Bar | Kind::HBar | Kind::Area | Kind::Hist), annotations, y_fmt, size, theme, source, bins, notes })
+    Ok(ChartSpec { kind, title: title.to_string(), subtitle, x, x_name, series, log_y, truncated: y_zero_off && matches!(kind, Kind::Bar | Kind::HBar | Kind::Area | Kind::Hist), annotations, y_fmt, size, theme, source, bins, notes, groups: boxes })
+}
+
+/// Most series (or heatmap rows) a chart of this kind carries.
+fn series_cap(kind: Kind) -> usize {
+    match kind {
+        Kind::Scatter => MAX_SERIES_SCATTER,
+        Kind::Heatmap => MAX_HEAT_ROWS,
+        _ => MAX_SERIES,
+    }
+}
+
+/// Why columns of these categories cannot carry their labels, if they cannot.
+fn columns_fit(x: &XAxis, n: usize) -> Option<DocError> {
+    let XAxis::Categories(c) = x else { return None };
+    let longest = c.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    // a column needs its label to fit under it: about 6.4px per character at 11px type
+    let needed = n as f64 * (longest.min(24) as f64 * 6.4 + 10.0);
+    (needed > 640.0 * 0.9).then(|| bad(format!("{} categories with labels up to {} characters will not fit under columns without rotating the text. Use `hbar`, which gives each label its own row", n, longest)))
 }
 
 fn too_many_series(n: usize, kind: Kind, by: Option<&str>) -> DocError {

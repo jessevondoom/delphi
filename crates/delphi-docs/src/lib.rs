@@ -15,6 +15,7 @@ mod html;
 pub mod htmlkinds;
 pub mod htmllint;
 pub mod htmlpage;
+pub mod sheetwriter;
 mod image;
 pub mod limits;
 mod mail;

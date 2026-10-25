@@ -3,7 +3,7 @@ id: spec-005e-console-ux-review-and-redesign
 title: "005e: Console UX Review and Redesign (chat, activity ticker, narrator, first run)"
 author: architect
 timestamp: 2026-10-25T12:00:00Z
-status: approved   # by the operator, 2026-10-25, after reviewing the rendered mockups; amendments in §12 ratified the same day
+status: approved   # by the operator, 2026-10-25, after reviewing the rendered mockups; amendments in §12 ratified the same day; the §16.1 change that `/observe` opens one narrator window (no tmux splits, no `tile`) ratified 2026-10-25
 approved_by: operator (2026-10-25)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -663,7 +663,7 @@ delphi v0.5 · ~/projects/app · chat
 **No confirmation step.** `Shift+Tab` cycles `default → accept-edits → auto` at once. The safeguards are visibility and a note: the mode is shown next to the token count in the footer at all times, `auto` in the warning-red colour (§7.2), and each change posts one `dim` note: `· approval mode: auto — Amber actions run without asking this mission; Red actions always ask`, `· approval mode: accept edits — file edits run without asking; commands and Red actions still ask`, `· approval mode: default`. The residual risk, recorded honestly: one stray `Shift+Tab` pair reaches `auto` with no pause. Red actions are never auto-approved in any mode (005b), which bounds the damage.
 
 ### 10.4 One command set (finding 7)
-`COMMANDS` in `ui/src/commands.ts` becomes the single list, generated into the Rust `HELP` at build time (or the Rust list is exported as JSON and read by the UI; either way one source). `/models` and `/agents` are added to the Ink console (`run.ts`: `models.get` → text; `/agents` from the fold's `agents` map). `/narrator` in the Ink console opens tmux splits when `$TMUX` is set, like the Rust console, else prints the command. The slash menu shows up to 8 items and a `· N more` line when truncated; descriptions wrap to a second dim line at < 100 columns rather than clipping mid-word (finding 14).
+`COMMANDS` in `ui/src/commands.ts` becomes the single list, generated into the Rust `HELP` at build time (or the Rust list is exported as JSON and read by the UI; either way one source). `/models` and `/agents` are added to the Ink console (`run.ts`: `models.get` → text; `/agents` from the fold's `agents` map). `/observe` (alias `/narrator`) in the Ink console opens one narrator window: a tmux window when `$TMUX` is set, else a new terminal window (amended 2026-10-25, §16.1; this said tmux splits). The slash menu shows up to 8 items and a `· N more` line when truncated; descriptions wrap to a second dim line at < 100 columns rather than clipping mid-word (finding 14).
 
 ### 10.5 Consistent leave and stop (findings 7, 18)
 `Ctrl+C`: both consoles ask once when there is text, a queue or a running task, and leave at once otherwise. `Esc`: both clear the prompt first; with it empty, both stop the running task (the inline console gains `task.cancel`). `Ctrl+D` on an empty prompt leaves in both. The narrator leaves on `Ctrl+C` only.

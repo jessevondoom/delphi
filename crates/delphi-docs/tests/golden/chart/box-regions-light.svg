@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">ap-south is slower and more variable</title>
+<desc id="chart-desc">Box plot chart. ms by region. us-east: median 100 ms, middle half 89.8 ms to 109.2 ms, range 81.5 ms to 195 ms (30 values). eu-west: median 130.3 ms, middle half 122.6 ms to 140.7 ms, range 107.8 ms to 225 ms (30 values). ap-south: median 171.6 ms, middle half 163.1 ms to 180.2 ms, range 149.2 ms to 265 ms (30 values).</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+.bx{fill:var(--s1);fill-opacity:.18;stroke:var(--s1);stroke-width:2}.wh{stroke:var(--s1);stroke-width:1.5;fill:none}
+@media (forced-colors: active){.wh{stroke:GrayText}.bx{fill:Canvas;stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">ap-south is slower and more variable</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">request latency, ms</text>
+<line class="g" x1="62.3" y1="360" x2="704" y2="360"/>
+<text x="54.3" y="364" class="t3" font-size="11" text-anchor="end">50 ms</text>
+<line class="g" x1="62.3" y1="302" x2="704" y2="302"/>
+<text x="54.3" y="306" class="t3" font-size="11" text-anchor="end">100 ms</text>
+<line class="g" x1="62.3" y1="244" x2="704" y2="244"/>
+<text x="54.3" y="248" class="t3" font-size="11" text-anchor="end">150 ms</text>
+<line class="g" x1="62.3" y1="186" x2="704" y2="186"/>
+<text x="54.3" y="190" class="t3" font-size="11" text-anchor="end">200 ms</text>
+<line class="g" x1="62.3" y1="128" x2="704" y2="128"/>
+<text x="54.3" y="132" class="t3" font-size="11" text-anchor="end">250 ms</text>
+<line class="g" x1="62.3" y1="70" x2="704" y2="70"/>
+<text x="54.3" y="74" class="t3" font-size="11" text-anchor="end">300 ms</text>
+<line class="ax" x1="62.3" y1="360" x2="704" y2="360"/>
+<path class="wh" d="M169.25,291.29 L169.25,277.35 M169.25,313.84 L169.25,323.5 M159.25,277.35 L179.25,277.35 M159.25,323.5 L179.25,323.5"/>
+<rect class="bx" x="149.25" y="291.29" width="40" height="22.55" rx="2"/>
+<path class="k1" d="M149.25,302 L189.25,302"/>
+<circle class="d1" cx="169.25" cy="191.8" r="4"/>
+<circle class="d1" cx="169.25" cy="191.8" r="4"/>
+<text x="195.25" y="306" class="t2" font-size="11" text-anchor="start">100 ms</text>
+<text x="169.25" y="376" class="t3" font-size="11" text-anchor="middle">us-east</text>
+<path class="wh" d="M383.15,254.84 L383.15,243.85 M383.15,275.83 L383.15,293 M373.15,243.85 L393.15,243.85 M373.15,293 L393.15,293"/>
+<rect class="bx" x="363.15" y="254.84" width="40" height="20.99" rx="2"/>
+<path class="k1" d="M363.15,266.86 L403.15,266.86"/>
+<circle class="d1" cx="383.15" cy="157" r="4"/>
+<text x="409.15" y="270.86" class="t2" font-size="11" text-anchor="start">130.3 ms</text>
+<text x="383.15" y="376" class="t3" font-size="11" text-anchor="middle">eu-west</text>
+<path class="wh" d="M597.05,208.98 L597.05,196.74 M597.05,228.8 L597.05,244.92 M587.05,196.74 L607.05,196.74 M587.05,244.92 L607.05,244.92"/>
+<rect class="bx" x="577.05" y="208.98" width="40" height="19.82" rx="2"/>
+<path class="k1" d="M577.05,218.97 L617.05,218.97"/>
+<circle class="d1" cx="597.05" cy="110.6" r="4"/>
+<text x="623.05" y="222.97" class="t2" font-size="11" text-anchor="start">171.6 ms</text>
+<text x="597.05" y="376" class="t3" font-size="11" text-anchor="middle">ap-south</text>
+</svg>
