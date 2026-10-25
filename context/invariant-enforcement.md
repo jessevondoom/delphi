@@ -38,7 +38,7 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Hard links can't bypass the path guard | spec 001 §2.2 | `st_nlink`/protected-inode check + sandbox visibility | Daemon | ◐ path-guard library + tests (Step 1) |
 | Taint tier read from the provenance index, never from frontmatter | spec 001 §5.1 | Provenance index + origin defaults | Daemon | ❌ |
 | Manifests, skills, custom scripts and theme load only from ratified copies; overrides only narrow | spec 001 §2.3, 006 §3.1 | `ratified.lock` loader + `delphi lint` | Daemon + CI | ✅ loader verifies each ratified copy against its lock (Step 2) + narrow-only lint (Step 1) |
-| Update can't change active rules before ratification | spec 006 §4 | Ratify-before-swap; daemon loads `local/ratified/` only | Daemon | ◐ daemon loads `local/ratified/` only (Step 2); update flow Step 5 |
+| Only the operator's manual `delphi update` ratifies release files, and only byte-exact ones | spec 006 §3.7, GOV §5.7 | `update::ratify_release` (hash must equal the release's); daemon loads `local/ratified/` only | CLI + Daemon | ✅ tests in `update.rs` |
 | No memory rule in any scope relaxes governance controls | spec 004 §5.2 | Rule linter at proposal time + Red-Team review | Daemon | ❌ |
 | Operator memory never leaves the machine implicitly; contributions are scrubbed and previewed | spec 004 §5.5, §5.7 | Sync/contribute path filters + canary scan test | Daemon + CI | ❌ |
 | Privileged RPCs need the console capability token; sandboxes can't reach `run/` | spec 005 §2.1, 008 §4 | Socket auth + sandbox profile | Daemon | ◐ token on every connection, scope checks, same-UID defence (Step 2); sandbox profile Step 3 |

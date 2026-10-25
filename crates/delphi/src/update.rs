@@ -3,8 +3,9 @@
 //!
 //! Only Zone 1 (`base/`) is touched. A file the operator customized is never overwritten and never gets
 //! conflict markers: the new version is written beside it as `<file>.upstream-v<release>` for the operator to
-//! accept, keep or merge. Nothing here changes what agents run under: the daemon loads only ratified copies,
-//! so every changed constitutional file or manifest shows up as a pending proposal (`/ratify`).
+//! accept, keep or merge. Running the update is the operator's approval of what the release ships (006-A6): the
+//! files the workspace now holds byte-for-byte as the release has them are ratified at the end. Anything else
+//! (a customized file, config, a spec) stays a pending proposal (`/ratify`), and `--review` ratifies nothing.
 
 use crate::home::{hash, read_lock, write_lock};
 use crate::seed;
@@ -223,7 +224,22 @@ fn workspaces(home: &Path, only: Option<&str>) -> Vec<(String, PathBuf)> {
 }
 
 /// `delphi update --workspaces-only [--check] [--allow-downgrade] [--rollback] [--workspace <name>]`.
-pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, rollback_instead: bool) -> i32 {
+/// Ratify, in one workspace, every pending proposal that is a release file held exactly as the release (or, on
+/// rollback, the restored release) has it: `release` maps each logical name to the blake3 of its bytes. Returns the
+/// names ratified. A proposal for a customized file, a new file of the operator's, config or a spec never matches.
+fn ratify_release(home: &Path, dir: &Path, release: &BTreeMap<String, String>) -> Vec<String> {
+    use delphi_engine::ratify::{self, Kind, Scope};
+    let mut done = Vec::new();
+    for p in ratify::list(home, dir) {
+        let (Some(live), true) = (p.live_blake3.as_deref(), p.scope == Scope::Workspace && matches!(p.kind, Kind::New | Kind::Changed)) else { continue };
+        if release.get(&p.logical).map(String::as_str) == Some(live) && ratify::apply(home, dir, &p.id, live).is_ok() {
+            done.push(p.logical);
+        }
+    }
+    done
+}
+
+pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, rollback_instead: bool, review: bool) -> i32 {
     let list = workspaces(home, only);
     if list.is_empty() {
         eprintln!("delphi update: no workspace found in {}{}", home.display(), only.map(|o| format!(" named `{}`", o)).unwrap_or_default());
@@ -237,7 +253,8 @@ pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, 
     for (n, dir) in &list {
         targets.push((n.clone(), dir.join("base"), dir.join("core"), dir.clone()));
     }
-    for (name, base, core, _dir) in &targets {
+    let release_hashes: BTreeMap<String, String> = seed.iter().map(|(l, b)| (l.clone(), hash(b))).collect();
+    for (name, base, core, dir) in &targets {
         if !base.join("manifest.lock").exists() {
             continue;
         }
@@ -246,17 +263,32 @@ pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, 
                 Ok(n) => {
                     rolled_back += 1;
                     println!("{}: rolled back ({} file(s))", name, n);
+                    // The restored release is the one that was ratified before the update, so ratify it again.
+                    if !review && name != "operator" {
+                        let restored: BTreeMap<String, String> = read_lock(&base.join("manifest.lock")).unwrap_or_default();
+                        ratify_release(home, dir, &restored);
+                    }
                 }
                 Err(e) => eprintln!("{}: {}", name, e),
             }
             continue;
         }
         match merge(base, core, release, &seed, !check, allow_downgrade) {
-            Ok(changes) if changes.is_empty() => println!("{}: already at release {}", name, release),
             Ok(changes) => {
-                println!("{}: {} {} change(s) for release {}", name, if check { "would make" } else { "made" }, changes.len(), release);
-                for c in &changes {
-                    println!("{}", describe(c));
+                if changes.is_empty() {
+                    println!("{}: already at release {}", name, release);
+                } else {
+                    println!("{}: {} {} change(s) for release {}", name, if check { "would make" } else { "made" }, changes.len(), release);
+                    for c in &changes {
+                        println!("{}", describe(c));
+                    }
+                }
+                // Running the update is the operator's approval of what this release ships (006-A6).
+                if !check && !review && name != "operator" {
+                    let done = ratify_release(home, dir, &release_hashes);
+                    if !done.is_empty() {
+                        println!("{}: ratified {} file(s) from release {}: {}", name, done.len(), release, done.join(", "));
+                    }
                 }
             }
             Err(e) => {
@@ -397,14 +429,67 @@ mod tests {
         write_lock(&rl_path, &rl, &[("release", "0.0.1".into()), ("ratified_by", "release".into())]).unwrap();
         let pending_before: Vec<String> = delphi_engine::ratify::list(&home, &ws.dir).into_iter().map(|p| p.id).collect();
         assert!(!pending_before.iter().any(|p| p.contains("GOVERNANCE")), "{:?}", pending_before);
-        assert_eq!(run(&home, Some("w"), false, false, false), 0);
+        assert_eq!(run(&home, Some("w"), false, false, false, false), 0);
         assert_eq!(zone3(&ws.dir), before, "Zone 2 and 3 are byte-identical after an update");
         assert_ne!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older", "Zone 1 was refreshed");
-        // The refreshed constitution is a pending proposal; the ratified copy still governs.
+        // Running the update ratified the constitution as shipped: no proposal, and the ratified copy is the release's.
         let pending = delphi_engine::ratify::list(&home, &ws.dir);
-        assert!(pending.iter().any(|p| p.logical == "GOVERNANCE.md"), "{:?}", pending.iter().map(|p| &p.id).collect::<Vec<_>>());
-        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older", "the ratified copy is untouched");
-        assert_eq!(run(&home, Some("w"), false, false, true), 0, "rollback");
+        assert!(!pending.iter().any(|p| p.logical == "GOVERNANCE.md"), "{:?}", pending.iter().map(|p| &p.id).collect::<Vec<_>>());
+        let shipped = fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap();
+        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), shipped);
+        assert_eq!(run(&home, Some("w"), false, false, true, false), 0, "rollback");
         assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older");
+    }
+
+    /// A workspace installed from an older release, with the older constitution ratified.
+    fn older_workspace(t: &tempfile::TempDir) -> (PathBuf, crate::home::Workspace) {
+        let (home, proj) = (t.path().join("home"), t.path().join("proj"));
+        fs::create_dir_all(&proj).unwrap();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(&proj).status().unwrap().success());
+        let ws = crate::home::init(&crate::home::InitOptions { home: home.clone(), workspace: "w".into(), projects: vec![proj], theme: "greek".into() }).unwrap();
+        let lock_path = ws.dir.join("base/manifest.lock");
+        let mut lock = read_lock(&lock_path).unwrap();
+        lock.insert("GOVERNANCE.md".into(), hash(b"older"));
+        fs::write(ws.dir.join("base/GOVERNANCE.md"), "older").unwrap();
+        write_lock(&lock_path, &lock, &[("release", "0.0.1".into()), ("signature", "unsigned-dev-build".into())]).unwrap();
+        fs::write(ws.dir.join("local/ratified/GOVERNANCE.md"), "older").unwrap();
+        let rl_path = ws.dir.join("local/ratified.lock");
+        let mut rl = read_lock(&rl_path).unwrap();
+        rl.insert("GOVERNANCE.md".into(), hash(b"older"));
+        write_lock(&rl_path, &rl, &[("release", "0.0.1".into()), ("ratified_by", "release".into())]).unwrap();
+        (home, ws)
+    }
+
+    #[test]
+    fn review_ratifies_nothing_and_leaves_the_release_pending() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        assert_eq!(run(&home, Some("w"), false, false, false, true), 0);
+        let pending = delphi_engine::ratify::list(&home, &ws.dir);
+        assert!(pending.iter().any(|p| p.logical == "GOVERNANCE.md"));
+        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older", "the ratified copy still governs");
+    }
+
+    #[test]
+    fn a_customized_file_and_the_operators_own_edits_are_not_ratified_by_an_update() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        // The operator customized the constitution in core/ and wrote a new file of their own in team/.
+        fs::write(ws.dir.join("core/GOVERNANCE.md"), "my edit").unwrap();
+        fs::create_dir_all(ws.dir.join("team")).unwrap();
+        fs::write(ws.dir.join("team/REVIEW.md"), "team rubric").unwrap();
+        assert_eq!(run(&home, Some("w"), false, false, false, false), 0);
+        let pending: Vec<String> = delphi_engine::ratify::list(&home, &ws.dir).into_iter().map(|p| p.logical).collect();
+        assert!(pending.contains(&"GOVERNANCE.md".to_string()), "{:?}", pending);
+        assert!(pending.contains(&"REVIEW.md".to_string()), "{:?}", pending);
+        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older");
+    }
+
+    #[test]
+    fn check_mode_ratifies_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        assert_eq!(run(&home, Some("w"), true, false, false, false), 0);
+        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older");
     }
 }
