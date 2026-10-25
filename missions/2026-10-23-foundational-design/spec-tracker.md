@@ -33,6 +33,32 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | no | n/a | post-v1; build waits for the core (D-29) |
 | 012 Xenia record schema | yes (text, by "ratify all") | no | n/a | same; Phase 1 is kinds `memory`, `endorsement`, `tombstone` |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
+| 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155) | no | n/a | B0: apply the 022 §5 amendments; then the slices below |
+| 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25) | no | n/a | B1 |
+| 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25) | no | n/a | B2, B4, B6 |
+| 025 Plugin, skill, agent and tool compatibility (incl. `delphi bundle serve`) | yes (2026-10-25) | no | n/a | B7, B12 |
+| 026 Team alignment and strategist integration | yes (2026-10-25) | no | n/a | B5, B9 |
+| 027 Authoring, transports, vector pipeline, evaluation | yes (2026-10-25) | no | n/a | B3, B8 (needs xenia X7/X8), B10, B11 |
+
+### Sharing-layer slices (specs 022–027; estimates ±30%, nothing started)
+
+| Slice | Delivers | Spec / build plan | Depends on | Effort | State |
+| :-- | :-- | :-- | :-- | --: | :-- |
+| B0 | amendments of 022 §5 applied (001, 002, 004, 006, 010, 011, 012, 013, 019, GOVERNANCE §5.7, four role manifests, CATALOG) | 022 §5–6 | PR #155 merged | 4 h | not started |
+| B1 | `delphi-bundle` crate, `delphi bundle validate` (15 steps, `--against`, `--claude`), golden fixture `dev/bundles/acme-platform` in CI | 023 §14 | B0 | 20 h | not started |
+| B2 | `bundle add` from a directory: `local/bundles.lock` with history, cache under `$DELPHI_HOME/bundles/`, `@bundle/` path, kb zone `bundles` at L2 with lexical search at once, provenance level in breadcrumbs, printed summary, `remove`, staleness | 024 §10 | B1 | 16 h | not started |
+| B3 | vector pipeline: key match, re-keying, seeded spot check, fallback to local embedding, progress, incremental re-embed, resumability, `package --vectors` | 027 §10 | B2 | 14 h | not started |
+| B4 | behavior and agents on add: skills for named roles, bundle subagents on host roles with intersected tools, guidance block, bundle rules block in the team budget, tighten-only deny rules | 024 §10 | B2 | 18 h | not started |
+| B5 | org-context slice (IPR slot, caps, trimming), `/org` deck with add/update/rollback/remove/map actions, Narrator events, role manifests gain `org-context` | 026 §11 | B4 | 14 h | not started |
+| B6 | `sign`, `package`, `.xbundle` import hardening, publisher continuity with explicit `--replace-publisher`, `update` with changelog notice, `rollback` from lock history, `gc` | 024 §10 | B2 (B4 for behavior reload) | 14 h | not started |
+| B7 | compatibility: `plugin.json` generation, plugin `import` with the component table, agent host-role mapping, `.mcp.json` inert entries + `connectors map`, `assets/` synonym, `references/` indexing, `AGENTS.md` pointers, exports (`--claude-plugin`, `--strip-delphi`, `--agents-md`, `--marketplace`), `add --from-marketplace` | 025 §10 | B1, B2, B4, B6 | 18 h | not started |
+| B8 | xenia kind `bundle` (supersedes provisional `skill`): publish and add through the store, endorsement as provenance, hardened tree fetch, update as new `rev` | 027 §10 | B6; xenia X7, X8; 011 §11 Phase 2 re-review | 16 h | not started |
+| B9 | alignment check (`ALIGN-REF-*` pre-pass, strategist table on the spec card, P2/P1 never P0) and opt-in Council lenses | 026 §11 | B5 | 12 h | not started |
+| B10 | authoring: `init`, `distill` (writer role, staging only, allow-listed inputs), `validate --report` redaction report, the `org-bundle-authoring` skill wired to the writer role, scan extensions | 027 §10 | B1, B3, B6 | 16 h | not started |
+| B11 | evaluation: `kb eval --bundle` advisory gate (frozen R@10 ≥ 0.80, MRR ≥ 0.50, 0 controls), bench arm A3b / task set T8 with `--pilot`, pre-registration file format and hash pin, `bundle.cited` and `align.finding` telemetry, `bundle report` | 027 §10 | B2, B9, bench runner open items | 16 h | not started |
+| B12 | `delphi bundle serve`: read-only stdio MCP server (resources = knowledge docs; tools = `search`, `get_doc`) over added bundles | 025 §10 | B3, B4 | 10 h | not started |
+
+Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, B7 branch from B2; B8 waits on the xenia plan; B12 last. Resolved questions (2026-10-25): B-1 yes; B-2 L2 for unsigned local bundles; B-3 guidance block loads on add, no ratification; B-7 scripts never executed; B-8 serve as MCP yes (B12); B-12 rollback from lock history, no cards; B-14 agent `distill` yes with staging and scan; B-15 retrieval gate frozen now, bench thresholds frozen after a pilot in a hash-pinned pre-registration, telemetry descriptive; B-16 ship vectors when the embedder is Delphi's default. Still proposed (recommendations stand, operator may revisit): B-4 (`bundle` kind supersedes `skill`), B-5 (transport order), B-6 (person scope later), B-9 (`--agents-md` path), B-10 (slice caps), B-11 (`summary`/`domain` in 001 §5), B-13 (lenses opt-in), B-17 (no default host role).
 
 ## Roadmap steps, for cross-reference
 
