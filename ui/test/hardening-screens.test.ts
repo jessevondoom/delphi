@@ -43,7 +43,7 @@ function convo(): State {
   s = addBlock(s, { kind: 'note', text: '■ stopped', at: T0 + 7000 });
   return s;
 }
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: convo(), now: T0 + 9000, deck: 1, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, still: true, ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true, bg: [15, 23, 42] }, state: convo(), now: T0 + 9000, deck: 1, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, still: true, ...over });
 const req = (id: string, tier: string, summary: string, at: number) => ({ method: 'event', params: { type: 'approval.requested', task_id: 't_1', payload: { approval_id: id, role: tier === 'red' ? 'architect' : 'builder', tier, tool: 'write_file', summary, payload_blake3: 'h' + id, payload: { preview: '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new' }, timeout_secs: 600 } } }) as const;
 
 test('golden screens: the chat, the menu, the inbox in both modes, the stream and a panel', () => {

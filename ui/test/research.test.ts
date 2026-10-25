@@ -16,7 +16,7 @@ mkdirSync(join(ws, 'team/specs'), { recursive: true });
 writeFileSync(join(ws, 'team/specs/003-collab.md'), '# Collaboration\n\nA council has three rounds.\n');
 const info: Info = { console_socket: '', narrator_socket: '', workspace: ws, mission: null, version: '0.5', cwd: '/p', roles: { orchestrator: { name: 'athena', chassis: '#a855f7', face: '•─•' }, architect: { name: 'daedalus', chassis: '#38bdf8', face: '•_•' } } };
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true, bg: [15, 23, 42] }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, help: false, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, ...over });
 const text = (s: string): any => ({ t: 'text', s });
 const key = (k: string): any => ({ t: 'key', k, alt: false, shift: false, ctrl: false });
 

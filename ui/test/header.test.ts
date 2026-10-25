@@ -16,7 +16,7 @@ import * as T from '../src/theme.ts';
 import { info, plain, snapshot, stateWorld } from './helpers.ts';
 
 const model = (over: Partial<Model> = {}): Model => ({
-  info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
+  info, pal: { dark: true, bg: [15, 23, 42] }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, still: true, ...over,
 });
 const running = (extra: Partial<Agent> = {}): Agent => ({ state: 'running', doing: 'working', ...extra });
@@ -155,7 +155,7 @@ test('help keys: ? opens on an empty prompt only; ? and Esc close; paging is ign
   assert.equal(helpKey(true, { t: 'text', s: 'a' }, true, true), 'close-and-pass');
   assert.equal(helpKey(true, key('enter'), true, true), 'close-and-pass');
   assert.equal(helpKey(true, { t: 'ctrl', c: 'o' }, true, true), 'close-and-pass');
-  assert.equal(helpKey(true, { t: 'bg', dark: true }, true, true), 'pass');
+  assert.equal(helpKey(true, { t: 'bg', dark: true, rgb: [0, 0, 0] }, true, true), 'pass');
 });
 
 test('the help overlay is a card of up to 76 columns, centred, over the transcript; it never scrolls it', () => {

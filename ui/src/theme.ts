@@ -32,7 +32,8 @@ export type Info = {
   avatar?: AvatarSpec;
 };
 
-export type Pal = { dark: boolean };
+/** Dark or light, and the terminal's background colour when it answered the query (`null`/absent: unknown, so no tint). */
+export type Pal = { dark: boolean; bg?: Rgb | null };
 
 /**
  * What the terminal can show (`005e` §5). `NO_COLOR` (set to anything) and `TERM=dumb` mean no colour at all;
