@@ -261,8 +261,11 @@ fn cmd_chat(args: &[String]) -> i32 {
             }
         }
     }
+    // An older `delphi self-update` replaced only this program: say what is missing and how to get it.
+    let notice = (!args.iter().any(|a| a == "--inline") && ui_executable().is_none())
+        .then_some("(the full-screen console, delphi-ui, is not installed next to this program, so this is the inline console. Install both: curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh)");
     if on_terminal && !args.iter().any(|a| a == "--plain") {
-        console::run(&home, &ws.dir, flag(args, "--mission"), names)
+        console::run(&home, &ws.dir, flag(args, "--mission"), names, notice)
     } else {
         chat::run(&home, &ws.dir, flag(args, "--mission"), names)
     }

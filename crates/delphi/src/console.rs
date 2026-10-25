@@ -428,7 +428,7 @@ fn print_reply(term: &mut ratatui::DefaultTerminal, session: &mut Session, r: &R
     }
 }
 
-pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>) -> i32 {
+pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<String, String>, notice: Option<&str>) -> i32 {
     let pal = Pal { dark: crate::observer::detect_dark() };
     // One clear at the start, then never again: from here on the screen only grows.
     {
@@ -457,6 +457,9 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
             return code;
         }
     };
+    if let Some(n) = notice {
+        chat::say(&format!("{}\n", n));
+    }
     {
         use ratatui::crossterm::{event::EnableBracketedPaste, execute};
         let _ = execute!(std::io::stdout(), EnableBracketedPaste);
