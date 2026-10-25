@@ -7,6 +7,9 @@
 //! * Replacement is a rename in the same directory, so a running `delphi` or daemon keeps working; the old
 //!   executable is kept as `delphi.prev` and `--rollback` puts it back.
 //! * Only releases newer than this one are installed, and never a prerelease unless asked for by version.
+//! * `--dev` follows `main` instead: every push to main publishes a build as the rolling `dev` release (see
+//!   `.github/workflows/dev.yml`). Its version is `<crate version>-dev.g<commit>`, so any other build is "different"
+//!   and is replaced, which the stable channel never does for a prerelease.
 //!
 //! The checksum protects against a damaged or truncated download, not against a compromised release: the
 //! release workflow also publishes build-provenance attestations, which `gh attestation verify` checks.
@@ -99,6 +102,27 @@ pub fn find(net: &dyn Net, api: &str, current: &str, wanted: Option<&str>) -> Re
     rels.retain(|r| !r.prerelease && parse_version(&r.tag).is_some());
     rels.sort_by_key(|r| parse_version(&r.tag).map(|(a, b, c, _)| (a, b, c)));
     Ok(rels.pop().filter(|r| newer(&r.tag, current)))
+}
+
+/// The rolling build of `main`, published as the `dev` release. Its tarballs are named for the exact version they
+/// report (`delphi-v0.2.4-dev.gabc1234-<target>.tar.gz`), so the release handed to `install` carries that version
+/// as its tag, not the word "dev". `None` when this already is that build.
+pub fn find_dev(net: &dyn Net, api: &str, current: &str, target: &str) -> Result<Option<Release>> {
+    let url = format!("{}/tags/dev", api.trim_end_matches('/'));
+    let body = net.get(&url, 4 << 20).map_err(|e| anyhow!("could not read the dev release: {}", e))?;
+    let rel = releases_from(&body)?.pop().ok_or_else(|| anyhow!("no dev build is published yet"))?;
+    let suffix = format!("-{}.tar.gz", target);
+    let tag = rel
+        .assets
+        .iter()
+        .find_map(|(n, _)| n.strip_prefix("delphi-")?.strip_suffix(suffix.as_str()))
+        .filter(|v| v.contains("-dev.") && parse_version(v).is_some_and(|(_, _, _, pre)| pre))
+        .ok_or_else(|| anyhow!("the dev release has no build for {}", target))?
+        .to_string();
+    if tag.trim_start_matches('v') == current {
+        return Ok(None);
+    }
+    Ok(Some(Release { tag, prerelease: true, assets: rel.assets }))
 }
 
 #[derive(Debug, PartialEq)]
@@ -280,10 +304,20 @@ pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
     }
     let current = env!("CARGO_PKG_VERSION");
     let wanted = flag("--version");
-    let rel = match find(net, api, current, wanted.as_deref()) {
+    let dev = args.iter().any(|a| a == "--dev");
+    if dev && wanted.is_some() {
+        eprintln!("delphi self-update: --dev and --version cannot be combined");
+        return 2;
+    }
+    let Some(target) = target() else {
+        eprintln!("delphi self-update: there is no build for this platform ({} {})", std::env::consts::OS, std::env::consts::ARCH);
+        return 1;
+    };
+    let found = if dev { find_dev(net, api, current, target) } else { find(net, api, current, wanted.as_deref()) };
+    let rel = match found {
         Ok(Some(r)) => r,
         Ok(None) => {
-            println!("delphi {} is the latest release.", current);
+            println!("delphi {} is the latest {}.", current, if dev { "dev build" } else { "release" });
             return 0;
         }
         Err(e) => {
@@ -293,15 +327,14 @@ pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
     };
     println!("{} -> {}", current, rel.tag);
     if args.iter().any(|a| a == "--check") {
-        println!("An update is available. Run `delphi self-update` to install it.");
+        println!("An update is available. Run `delphi self-update{}` to install it.", if dev { " --dev" } else { "" });
         return 0;
     }
-    let Some(target) = target() else {
-        eprintln!("delphi self-update: there is no build for this platform ({} {})", std::env::consts::OS, std::env::consts::ARCH);
-        return 1;
-    };
     match install(net, &rel, target, dest) {
         Ok(i) => {
+            if dev {
+                println!("This is a development build of main, not a release; `delphi self-update` returns to the latest release.");
+            }
             println!("Installed {} at {} (the old version is kept as {}; `delphi self-update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
             println!("A running daemon keeps the old version until it restarts: `delphi daemon restart`.");
             println!("Then run `delphi update` to refresh the built-in agents, skills and themes in your workspaces.");
@@ -486,6 +519,57 @@ mod tests {
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
         assert!(binary_from_tarball(&gz.finish().unwrap()).unwrap_err().to_string().contains("no `delphi` file"));
+    }
+
+    /// The rolling `dev` release: one release whose tarballs are named for the version they report.
+    fn dev_server(version: &str) -> (Fake, String) {
+        let tag = format!("v{}", version);
+        let (mut net, _) = server(&tag, version, None);
+        let name = format!("delphi-{}-{}.tar.gz", tag, T);
+        let one = serde_json::json!({"tag_name": "dev", "prerelease": true, "draft": false, "assets": [
+            {"name": name, "browser_download_url": format!("https://dl/{}", name)},
+            {"name": format!("{}.sha256", name), "browser_download_url": format!("https://dl/{}.sha256", name)}]});
+        net.0.insert("https://api/releases/tags/dev".into(), one.to_string().into_bytes());
+        (net, "https://api/releases".into())
+    }
+
+    #[test]
+    fn the_dev_channel_installs_the_rolling_build_of_main_and_skips_one_it_already_has() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("delphi");
+        std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.2.4'\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (net, api) = dev_server("0.2.4-dev.gabc1234");
+        let rel = find_dev(&net, &api, "0.2.4", T).unwrap().unwrap();
+        assert_eq!(rel.tag, "v0.2.4-dev.gabc1234", "the tag is the version the binary reports, not `dev`");
+        install(&net, &rel, T, &dest).unwrap();
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.4-dev.gabc1234"));
+        assert!(std::fs::read_to_string(d.path().join("delphi.prev")).unwrap().contains("'delphi 0.2.4'"));
+        assert!(find_dev(&net, &api, "0.2.4-dev.gabc1234", T).unwrap().is_none(), "already that build");
+        assert!(find_dev(&net, &api, "0.2.4-dev.golder00", T).unwrap().is_some(), "any other build is replaced, even from the same crate version");
+        // The stable channel still never offers a prerelease, and a dev build moves to the release of its version.
+        assert!(find(&net, &api, "0.2.4-dev.gabc1234", None).unwrap().is_none());
+        assert!(newer("v0.2.4", "0.2.4-dev.gabc1234"));
+    }
+
+    #[test]
+    fn the_dev_channel_refuses_a_release_that_is_not_a_dev_build_or_has_no_build_for_this_machine() {
+        let (mut net, api) = dev_server("0.2.4-dev.gabc1234");
+        assert!(find_dev(&net, &api, "0.2.4", "x86_64-unknown-linux-gnu").unwrap_err().to_string().contains("no build for x86_64-unknown-linux-gnu"));
+        let (stable, api) = dev_server("0.3.0");
+        assert!(find_dev(&stable, &api, "0.2.4", T).unwrap_err().to_string().contains("no build"), "a plain release under the dev tag is not a dev build");
+        net.0.remove("https://api/releases/tags/dev");
+        assert!(find_dev(&net, &api, "0.2.4", T).unwrap_err().to_string().contains("could not read the dev release"));
+    }
+
+    #[test]
+    fn dev_and_version_cannot_be_combined() {
+        let (net, api) = dev_server("0.2.4-dev.gabc1234");
+        let dest = tempfile::tempdir().unwrap().path().join("delphi");
+        assert_eq!(run(&["--dev".into(), "--version".into(), "v0.2.4".into()], &net, &dest, &api), 2);
     }
 
     #[test]

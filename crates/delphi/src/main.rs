@@ -25,7 +25,7 @@ const USAGE: &str = "usage:
   delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]   (set up whatever is missing, then open the console)
   delphi update [--check] [--allow-downgrade] [--workspace <name>] [--home <dir>]
   delphi rollback [--workspace <name>] [--home <dir>]
-  delphi self-update [--check] [--version vX.Y.Z] [--rollback]
+  delphi self-update [--check] [--version vX.Y.Z | --dev] [--rollback]   (--dev: the latest build of main)
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
