@@ -263,7 +263,9 @@ impl Engine {
 
     /// One call from the Delphi bridge: run it exactly as an API span would run it (`exec_tool`: classification, taint
     /// gate, approval, stamps), record it, and answer the CLI. The log holds the call and its result, as for any span.
-    async fn bridge_call(self: &Arc<Self>, sc: &mut SpanCtx, call: BridgeCall, ep: &Endpoint, model: &str) -> Result<(), EngineError> {
+    /// Returns the reason the span must stop if the call was a dispatch whose child halted (as on the API path, a halted
+    /// child ends its parent after the parent has been told).
+    async fn bridge_call(self: &Arc<Self>, sc: &mut SpanCtx, call: BridgeCall, ep: &Endpoint, model: &str) -> Result<Option<String>, EngineError> {
         let id = if call.call_id.is_empty() { format!("bridge-{}", call.name) } else { call.call_id.clone() };
         let r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
         let arguments = {
@@ -278,7 +280,7 @@ impl Engine {
         sc.m.append(sc.agent_ev("harness.bridge_call", payload, ep, model)).await?;
         // The CLI may have gone while the call waited for the operator; nobody is left to answer, which is fine.
         let _ = call.reply.send(r);
-        Ok(())
+        Ok(sc.child_escalation.take())
     }
 
     /// Run the whole span in the subscription CLI.
@@ -373,7 +375,11 @@ impl Engine {
                     if !READ_ONLY_TOOLS.contains(&call.name.as_str()) {
                         used_tools = true;
                     }
-                    self.bridge_call(sc, call, ep, &launch.model).await?;
+                    if let Some(why) = self.bridge_call(sc, call, ep, &launch.model).await? {
+                        session.kill().await;
+                        failure = Some((why, false));
+                        break;
+                    }
                     continue;
                 }
                 ev = session.next(self.settings.harness_idle) => match ev {
@@ -1064,6 +1070,28 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
         // What the CLI reported at start-up is kept for the orchestrator's picture of its seats.
         let seats = f.engine.inventory.seats();
         assert_eq!((seats.len(), seats[0].endpoint_id.as_str(), seats[0].bridge, seats[0].tools.as_slice()), (1, "claude-sub", true, &["mcp__delphi__timer".to_string()][..]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_runs_a_child_through_the_bridge_and_its_report_comes_back_to_the_calling_cli() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        // The same stand-in CLI serves both roles: the orchestrator's call dispatches; the architect's own call is refused (it was not offered dispatch_agent).
+        let (body, out_file, _argv) = bridge_cli(scripts.path(), "dispatch_agent", r#"{"role":"architect","objective":"Draft the plan"}"#, "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "Get a plan drafted").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        let text = answer["response"]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text == "All done." && answer["response"]["result"]["isError"] == false, "the child's report is the tool result: {}", text);
+        let started = events_of(&f, "harness.started");
+        assert_eq!(started.len(), 2, "the orchestrator's span and its child's");
+        let added = events_of(&f, "dag.node.added");
+        assert!(added.iter().any(|e| e.payload["role"] == "architect" && e.payload["depth"] == 1), "{:?}", added.iter().map(|e| e.payload.clone()).collect::<Vec<_>>());
+        let call = events_of(&f, "harness.bridge_call");
+        assert!(call.iter().any(|e| e.payload["name"] == "dispatch_agent" && e.payload["content"].as_str().unwrap_or("").contains("All done.")));
     }
 
     #[tokio::test]

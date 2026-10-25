@@ -127,6 +127,7 @@ async fn a_relay_with_the_wrong_token_gets_nothing_and_a_relay_without_one_refus
     .await
     .unwrap();
     assert!(silent.is_empty(), "no tool list for a stranger: {:?}", silent);
+    assert!(tokio::task::spawn_blocking(move || child.wait().unwrap()).await.unwrap().success(), "the relay ends when the server closes on it");
     let no_token = Command::new(env!("CARGO_BIN_EXE_delphi-core")).args(["__mcp-bridge", "--socket", "/nonexistent"]).env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
     assert_eq!(no_token.code(), Some(2));
 }

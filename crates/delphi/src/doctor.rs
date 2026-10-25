@@ -196,7 +196,13 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             Some("claude") => match run("claude", &["--version"]) {
                 None => missing(r, id, "the `claude` program was not found on PATH; install Claude Code, or this endpoint is skipped (API endpoints take over if any)".into()),
                 Some((_, ver)) => match run("claude", &["auth", "status", "--json"]).and_then(|(_, out)| serde_json::from_str::<serde_json::Value>(&out).ok()) {
-                    Some(s) if s["loggedIn"] == true => r.push(Level::Ok, "10 harness", id.to_string(), format!("claude {} is signed in ({}, {} plan); the approval bridge needs no sandbox", ver.trim(), s["authMethod"].as_str().unwrap_or("?"), s["subscriptionType"].as_str().unwrap_or("?"))),
+                    Some(s) if s["loggedIn"] == true => {
+                        // The ratified profile (`specs/018`): what Delphi will ask this CLI to do. Whether an organization's own
+                        // MCP policy lets the bridge load can only be seen by starting the CLI: `endpoints test --probe`.
+                        let p = v.get("harness").and_then(|h| h.get("claude"));
+                        let (bridge, approvals, connectors) = (p.and_then(|p| p.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true), p.and_then(|p| p.get("approvals")).and_then(|a| a.as_str()).unwrap_or("delphi"), p.and_then(|p| p.get("claudeai_connectors")).and_then(|b| b.as_bool()).unwrap_or(false));
+                        r.push(Level::Ok, "10 harness", id.to_string(), format!("claude {} is signed in ({}, {} plan); the approval bridge needs no sandbox. Profile: Delphi tool bridge {}, approvals by {}, account connectors {}. `delphi endpoints test --probe` confirms the bridge loads under your organization's MCP policy", ver.trim(), s["authMethod"].as_str().unwrap_or("?"), s["subscriptionType"].as_str().unwrap_or("?"), if bridge { "on" } else { "off (roles run text-only)" }, approvals, if connectors { "on" } else { "off" }))
+                    }
                     Some(_) => missing(r, id, "`claude` is installed but not signed in: run `claude auth login`".into()),
                     None => r.warn("10 harness", id.to_string(), "`claude auth status` gave no usable answer; run `delphi endpoints test --probe`"),
                 },
@@ -777,7 +783,10 @@ mod tests {
         let mut r = Report::default();
         check_harnesses(cfg, &run_ok, false, &mut r);
         let text: Vec<String> = r.findings.iter().map(|f| format!("{:?} {} {}", f.level, f.location, f.message)).collect();
-        assert!(text.iter().any(|t| t.starts_with("Ok c") && t.contains("signed in") && t.contains("pro plan")), "{:?}", text);
+        assert!(text.iter().any(|t| t.starts_with("Ok c") && t.contains("signed in") && t.contains("pro plan") && t.contains("Delphi tool bridge on, approvals by delphi, account connectors off")), "{:?}", text);
+        let mut r2 = Report::default();
+        check_harnesses(&format!("{}\n[harness.claude]\nbridge = false\napprovals = \"delegate\"\nclaudeai_connectors = true\n", cfg), &run_ok, false, &mut r2);
+        assert!(r2.findings.iter().any(|f| f.location == "c" && f.message.contains("bridge off (roles run text-only), approvals by delegate, account connectors on")), "{:?}", r2.findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>());
         assert!(text.iter().any(|t| t.starts_with("Ok a") && t.contains("endpoints test --probe")), "{:?}", text);
         assert!(text.iter().any(|t| t.starts_with("Warn g") && t.contains("Antigravity")), "{:?}", text);
         assert!(!text.iter().any(|t| t.contains("secret@example.com")), "the account email is never printed");

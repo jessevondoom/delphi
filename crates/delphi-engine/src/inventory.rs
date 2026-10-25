@@ -47,9 +47,17 @@ impl Inventory {
         Inventory { path: Some(path), seats: Mutex::new(seats.into_iter().map(|s| (s.endpoint_id.clone(), s)).collect()) }
     }
 
+    /// Take the file's content, if there is a file that parses: `delphi endpoints test --probe` writes it from another process.
+    fn refresh(&self, seats: &mut BTreeMap<String, SeatRecord>) {
+        if let Some(list) = self.path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str::<Vec<SeatRecord>>(&t).ok()) {
+            *seats = list.into_iter().map(|s| (s.endpoint_id.clone(), s)).collect();
+        }
+    }
+
     /// Remember a session's start-up report. Written only when it changed, so a busy daemon does not rewrite the file per span.
     pub fn record(&self, rec: SeatRecord) {
         let mut seats = self.seats.lock().unwrap();
+        self.refresh(&mut seats);
         let same = seats.get(&rec.endpoint_id).is_some_and(|old| SeatRecord { seen_unix: 0, ..old.clone() } == SeatRecord { seen_unix: 0, ..rec.clone() });
         if same {
             return;
@@ -64,7 +72,9 @@ impl Inventory {
     }
 
     pub fn seats(&self) -> Vec<SeatRecord> {
-        self.seats.lock().unwrap().values().cloned().collect()
+        let mut seats = self.seats.lock().unwrap();
+        self.refresh(&mut seats);
+        seats.values().cloned().collect()
     }
 }
 

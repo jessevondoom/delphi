@@ -123,6 +123,19 @@ default_peer_trust_ceiling = "federated_peer"
 # client_id = "<from your IdP admin>"
 # scopes = ["llm.invoke"]
 
+# ── Subscription CLIs (specs/018). [harness.*] is ratified like [access]. Without a block the defaults below apply:
+# Delphi's tools reach the Claude CLI over a per-span MCP bridge, Delphi answers every permission request, and the
+# CLI loads nothing but that bridge. `delphi endpoints test --probe` shows whether your organization's MCP policy lets the bridge load.
+# [harness.claude]
+# bridge = true                        # false: roles without a worktree run text-only (no timer, dispatch or file tools)
+# approvals = "delphi"                 # "delegate": non-Builder roles run in the CLI's auto mode, so your organization's policy
+#                                      # and the CLI's own classifier answer first; Delphi asks you only about what they cannot
+#                                      # settle. Builders and Delphi's own tools always stay on Delphi's rules.
+# native_tools = ["WebSearch", "WebFetch"]   # the CLI's own tools for roles without a worktree (what they fetch is untrusted)
+# claudeai_connectors = false          # true: the signed-in account's own (organization-managed) connectors load too
+# connector_reads = ["mcp__claude_ai_Slack__slack_search"]   # exact names of those connector tools that only read; any other is a Red card
+# env_allow = ["AWS_PROFILE"]          # extra environment variable NAMES passed to the CLI (never values)
+
 # ── Connectors (specs/010). [connectors.*] is ratified like [access]. Delphi ships no client IDs: create an OAuth
 # client in your own Google Cloud project, then `delphi auth login google`, `delphi connectors test drive`,
 # `delphi connectors pin drive`, and /ratify the pins. The server URLs below are reported, not confirmed: check them
