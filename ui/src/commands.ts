@@ -11,7 +11,7 @@ export const COMMANDS: Command[] = [
   { name: '/notes', desc: 'Read the mission notebook', local: true },
   { name: '/connectors', desc: 'Which connectors are configured, logged in and pinned', local: true },
   { name: '/mouse', desc: 'Turn mouse reporting on or off (off hands text selection back to the terminal; on, drag to select and copy)', local: true },
-  { name: '/quit', desc: 'Leave the console; the daemon keeps running', local: true },
+  { name: '/quit', desc: 'Leave the console, also /exit; the daemon keeps running', local: true },
   { name: '/build', desc: 'A Builder task: worktree, tests, audit, then your approval to merge', local: false },
   { name: '/council', desc: 'Convene a blind three-round council on a proposition', local: false },
   { name: '/timer', desc: 'Wake a role later: /timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>', local: false },
