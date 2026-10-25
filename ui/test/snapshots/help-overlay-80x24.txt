@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · /proj · chat
+
+  keys · esc closes
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+   enter  send                alt+enter / ctrl+j  new line
+   esc    clear the prompt; with it empty, stop what is running
+   ↑ ↓    history             ctrl+r  search history      tab  complete
+   ← →    decks (empty prompt) · shift+← →  decks any time
+   pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end
+   /  commands   @role …  one role   @specs/…  a file   ?  this help
+   shift+tab  approval mode (default → accept edits → auto)
+   inbox:  y approve · n reject · a all amber · d payload · tab list/focus
+   ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)
+
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+12.4k tokens  ·  default                                       ← / ? →  ·  ○ ● ○

@@ -1,40 +1,40 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining
-
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
+            keys · esc closes
+            ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-  • transactions
-  • one place to query
+             enter  send                alt+enter / ctrl+j  new line
+             esc    clear the prompt; with it empty, stop what is running
+             ↑ ↓    history             ctrl+r  search history      tab  complete
+             ← →    decks (empty prompt) · shift+← →  decks any time
+             pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end
+             /  commands   @role …  one role   @specs/…  a file   ?  this help
+             shift+tab  approval mode (default → accept edits → auto)
+             inbox:  y approve · n reject · a all amber · d payload · tab list/focus
+             ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)
 
-    rust
-    fn enqueue(job: Job) -> Result<()> { Ok(()) }
-
-  See specs/002-adapter-and-routing.md#4 for the ladder.
+            ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
-❯ Now write it
 
-── approval needed [amber] · hephaestus
-  Write crates/queue.rs (+84)
-    + fn enqueue()
-    + fn dequeue()
-  /y approve once · /a allow similar this task · /n reject · /d view all
 
-── approval needed [RED — never auto-approved] · daedalus
-  Ratify spec 011 into the canonical repository
-    ratify specs/011
-  /y approve once · /n reject · /d view all
 
-keys
-  enter send · alt+enter or ctrl+j newline · esc clear · ↑↓ history
-  pgup pgdn or the mouse wheel scroll · ← → with an empty prompt (or shift+← shift+→ any time) move…
-  ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave
-  / opens the command menu · tab or enter completes
-  answer a waiting approval with /y /a /n /d · @architect … sends to one role · @specs/… points at …
-  esc stops what is running (when the prompt is empty) · ctrl+o shows tool details · ctrl+r searche…
-  a message sent while something runs is queued and goes when it finishes
+
+
+
+
+
+
+
+
+
+
+
+
+
 ◐ working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · 2 waiting                                                                 ← / ? → · ○ ● ○
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ● ○

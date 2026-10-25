@@ -1,6 +1,5 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
-
-delphi v0.5 · /proj · chat
+delphi · chat
 
   delphi · no model configured
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -13,8 +12,9 @@ delphi v0.5 · /proj · chat
        connect Claude Code, agy or
        an API key (guided)
      delphi models
+       what is configured, and what
 
 ────────────────────────────────────────
 ❯
 ────────────────────────────────────────
-0 tokens · no model                ○ ● ○
+0 tokens  ·  default  ·  no model  ○ ● ○

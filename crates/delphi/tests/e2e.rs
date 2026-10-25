@@ -845,7 +845,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c.wait_for("• one");
     let screen = c.visible();
     assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
-    assert!(screen.lines().nth(2).unwrap().contains("· chat"), "header: {}", screen);
+    assert!(screen.lines().nth(1).unwrap().contains("· chat"), "the title row is directly under the strip: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
@@ -885,7 +885,7 @@ fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     }
     assert_eq!(c.written("Run the guided setup now?"), 1, "the setup is offered once:\n{}", c.everything());
     c.wait_for("delphi · no model configured");
-    c.wait_for("0 tokens · no model");
+    c.wait_for("0 tokens  ·  default  ·  no model");
     c.type_keys("hello");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
@@ -897,6 +897,36 @@ fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "app", "--home"]).arg(&home).output();
+}
+
+/// `specs/005e` §10.1: the footer promises `?`, so `?` must do something. On an empty prompt it opens the key list;
+/// inside text it is a character; Esc closes the list.
+#[test]
+fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    c.type_keys("?");
+    c.wait_for("keys · esc closes");
+    let open = c.visible();
+    assert!(open.contains("shift+tab  approval mode") && !open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
+    c.type_keys("\x1b");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("keys · esc closes") {
+        assert!(Instant::now() < deadline, "Esc did not close the key list:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    c.type_keys("why");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("?");
+    c.wait_for("❯ why?");
+    assert!(!c.visible().contains("keys · esc closes"), "a ? inside text is a character:\n{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
 #[test]
@@ -916,7 +946,7 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("decision needed");
+    c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     c.wait_for("approval needed [amber]");
     c.wait_for("esc to stop");
     // A message sent while the task waits is queued, not sent.
@@ -1045,15 +1075,18 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     }
     // Shift+Tab cycles the approval mode, shown in the footer, and the daemon agrees.
     c.type_keys("\x1b[Z");
-    c.wait_for("accept edits");
+    c.wait_for("· approval mode: accept edits — file edits run without asking");
+    c.wait_for("tokens  ·  accept edits");
     c.type_keys("\x1b[Z");
-    c.wait_for("· auto");
+    c.wait_for("· approval mode: auto — Amber actions run without asking this mission");
+    c.wait_for("tokens  ·  auto");
     c.type_keys("\x1b[Z");
-    c.wait_for("tokens  "); // default mode: the footer names no mode
+    c.wait_for("· approval mode: default");
+    c.wait_for("tokens  ·  default"); // default mode is named too
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("decision needed");
+    c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
     c.type_keys("\x1b[1;2C");
     c.wait_for("Pending decisions (1)");
@@ -1233,19 +1266,19 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.type_keys("\x1b[D"); // Left, with text: the cursor moves, the deck stays
     std::thread::sleep(Duration::from_millis(300));
     let kept = c.visible();
-    assert!(kept.contains("❯ abc") && kept.contains("← / ? → · ○ ● ○"), "{}", kept);
+    assert!(kept.contains("❯ abc") && kept.contains("← / ? →  ·  ○ ● ○"), "{}", kept);
     c.type_keys("\x1b[1;2D"); // Shift+Left: the left deck, the draft waits
-    c.wait_for("← / ? → · ● ○ ○");
+    c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[1;2C");
     c.wait_for("❯ abc");
     c.type_keys("\x05\x15"); // End, then delete to the start: an empty prompt
     std::thread::sleep(Duration::from_millis(300));
     assert!(!c.visible().contains("❯ abc"), "{}", c.visible());
     c.type_keys("\x1b[D"); // Left, now empty: the left deck
-    c.wait_for("← / ? → · ● ○ ○");
+    c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[C"); // and back to the chat
     std::thread::sleep(Duration::from_millis(300));
-    assert!(c.visible().contains("← / ? → · ○ ● ○"), "{}", c.visible());
+    assert!(c.visible().contains("← / ? →  ·  ○ ● ○"), "{}", c.visible());
 
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
@@ -1256,7 +1289,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("exported to local/missions/");
 
     // Shift+Tab goes round the approval modes and ends where it started.
-    for footer in ["tokens · accept edits", "tokens · auto", "tokens  "] {
+    for footer in ["tokens  ·  accept edits", "tokens  ·  auto", "tokens  ·  default"] {
         c.type_keys("\x1b[Z");
         c.wait_for(footer);
     }

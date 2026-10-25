@@ -8,7 +8,15 @@ import { sanitize, type AgentState } from './theme.ts';
  * headline, `reason` the engine's reason without its wrapper, `cause` which stop it is (`attention.ts`).
  */
 export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause };
-export type Agent = { state: AgentState; doing: string; /** When it entered `escalated`, so the strip can let go of the face (`005e` §6.2). */ since?: number };
+export type Agent = {
+  state: AgentState; doing: string;
+  /** When it entered `escalated`, so the strip can let go of the face (`005e` §6.2). */
+  since?: number;
+  /** When its last reasoning delta arrived: a running agent with one in the last 1.5 s is thinking (`005e` §10.2). */
+  thinkingAt?: number;
+  /** When its task last finished: the badge shows success for 3 s. */
+  successAt?: number;
+};
 export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 export type Act = { id: number; span: string; role: string; kind: 'thinking' | 'text' | 'tool' | 'result'; text: string };
 export type State = {
@@ -86,7 +94,11 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string }>;
     let add = '';
     let activity = s.activity;
+    let agents = s.agents;
     for (const k of Object.keys(spans).sort()) {
+      const who = s.spans[k]?.role;
+      // Reasoning is only noted as "thinking", never shown, so even a blind council round pans its badges.
+      if (who && spans[k]?.thinking && agents[who]) agents = { ...agents, [who]: { ...agents[who]!, thinkingAt: now } };
       if (s.council && s.spans[k]) continue; // a council's round one stays blind
       const role = s.spans[k]?.role ?? '?';
       for (const [kind, t] of [['thinking', spans[k]?.thinking], ['text', spans[k]?.text]] as const) {
@@ -95,8 +107,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       }
       add += spans[k]?.text ?? '';
     }
-    if (!add && activity === s.activity) return s;
-    return { ...s, activity, live: (s.live + sanitize(add)).slice(-8000), tokens: s.tokens + Math.ceil(add.length / 4), lastActivity: now };
+    if (!add && activity === s.activity && agents === s.agents) return s;
+    return { ...s, agents, activity, live: (s.live + sanitize(add)).slice(-8000), tokens: s.tokens + Math.ceil(add.length / 4), lastActivity: now };
   }
   if (n.method !== 'event') return s;
   const e = p, pl = e.payload ?? {};
@@ -124,7 +136,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const said = sanitize(String(pl.text ?? ''));
       const base = { ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), lastActivity: now };
       if (escalated) return setAgent(addBlock(base, attention(role, said, stamp(e, now))), role, { state: 'escalated', doing: '', since: now });
-      return addBlock({ ...base, sources: noteSources(s.sources, citations(said), 'cited', role, stamp(e, now)) }, { kind: 'reply', role, text: said, at: stamp(e, now), status: 'done' });
+      const done = addBlock({ ...base, sources: noteSources(s.sources, citations(said), 'cited', role, stamp(e, now)) }, { kind: 'reply', role, text: said, at: stamp(e, now), status: 'done' });
+      return setAgent(done, role, { state: 'idle', doing: '', successAt: now });
     }
     case 'task.cancelled': {
       const idle: Record<string, Agent> = {};
@@ -168,20 +181,4 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     }
     default: return s;
   }
-}
-
-/** What line one of the header shows. */
-export type Status =
-  | { kind: 'alert'; role: string; secs: number }
-  | { kind: 'active'; role: string; doing: string }
-  | { kind: 'strip' };
-
-export function status(s: State, now: number): Status {
-  if (s.alert) return { kind: 'alert', role: s.alert.role, secs: Math.max(0, Math.round((s.alert.until - now) / 1000)) };
-  const running = Object.entries(s.agents).filter(([, a]) => a.state === 'running');
-  if (running.length && now - s.lastActivity < 30_000) {
-    const [role, a] = running.sort((x, y) => ROLES.indexOf(x[0]) - ROLES.indexOf(y[0]))[running.length > 1 ? running.length - 1 : 0]!;
-    return { kind: 'active', role, doing: a.doing };
-  }
-  return { kind: 'strip' };
 }

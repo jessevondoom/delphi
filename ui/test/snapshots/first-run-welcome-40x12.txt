@@ -1,12 +1,12 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
-
-delphi v0.5 · /proj · chat
-
+delphi · chat
 
   Ask anything about /proj, or hand out…
 
+    @architect draft a spec for …
+      one role answers
 
 ────────────────────────────────────────
 ❯
 ────────────────────────────────────────
-0 tokens                           ○ ● ○
+0 tokens  ·  default               ○ ● ○

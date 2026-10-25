@@ -15,6 +15,9 @@ import * as P from './panel.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
 import { frame, transcriptCount, type Model } from './screen.ts';
+import { helpKey } from './help.ts';
+import { modeNote, nextMode } from './mode.ts';
+import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
 import type { Ev } from './input.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
@@ -84,10 +87,18 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   }, [stdout]);
 
   const running = Object.keys(state.running).length;
-  useEffect(() => { // a slow tick when idle (clock, countdown), a quick one while the spinner turns
-    const t = setInterval(() => setNow(Date.now()), running ? 250 : 1000);
+  const still = useMemo(() => stillMotion(), []);
+  // One timer for everything that moves with time (badge frames, the clock, the spinner). It looks every 150 ms and
+  // asks for a repaint only when something on screen would differ, so an idle window does not redraw.
+  useEffect(() => {
+    let last = '';
+    const t = setInterval(() => {
+      const n = Date.now(), s = stateRef.current;
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0);
+      if (key !== last) { last = key; setNow(n); }
+    }, TICK_MS);
     return () => clearInterval(t);
-  }, [running]);
+  }, [info, still]);
 
   useEffect(() => {
     // Frames arrive many times a second; fold them in batches so a stream costs one repaint per 33 ms, not one per frame.
@@ -220,11 +231,17 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         return;
       }
 
+      // The help overlay (chat deck): `?`, Esc close it; paging does nothing; any other key closes it and is then handled.
+      const hk = helpKey(help, e, comp.current.chars.length === 0, deckRef.current === 1);
+      if (hk === 'open') { setHelp(true); return; }
+      if (hk === 'close') { setHelp(false); return; }
+      if (hk === 'ignore') return;
+      if (hk === 'close-and-pass') setHelp(false);
+
       // Shift+Tab cycles the approval mode from anywhere.
       if (e.t === 'key' && e.k === 'shift-tab') {
-        const order = ['default', 'accept-edits', 'mission-auto'];
-        const next = order[(order.indexOf(modeRef.current) + 1) % order.length]!;
-        cmd.call('permissions.set', { mode: next }).then((v: any) => { setMode(String(v?.mode ?? next)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        const next = nextMode(modeRef.current);
+        cmd.call('permissions.set', { mode: next }).then((v: any) => { const got = String(v?.mode ?? next); setMode(got); note(modeNote(got)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
         return;
       }
 
@@ -260,7 +277,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         case 'bg': if (!themeForced) setPal({ dark: e.dark }); return;
         case 'wheel': setBack((b) => Math.max(0, b + (e.dir === 'up' ? 3 : -3))); return;
         case 'paste': upd((c) => C.insert(c, e.s)); return;
-        case 'text': setHelp(false); upd((c) => C.insert(c, e.s)); return;
+        case 'text': upd((c) => C.insert(c, e.s)); return;
         case 'ctrl':
           if (e.c === 'c') { exit(); return; }
           if (e.c === 'j') { upd((c) => C.insert(c, '\n')); return; }
@@ -340,8 +357,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel]);
+  const model: Model = { ...base, still, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>
