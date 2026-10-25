@@ -764,12 +764,23 @@ Decided by the operator on 2026-10-25 (from the questions of the earlier draft a
 6. **Classic Rust Observer.** Retired; the Ink window is the narrator (§9.2).
 7. Chat: tinted square blocks up to 80 % width, name and time above the block. Header: faces only, animated, one blank row. Narrator: plain arrows only, no `/ ?` in the footer, epic is the rail and is named `epic`, pace anchored bottom right, council is the weave with live states.
 
-Still open:
+Still open (and how each was built meanwhile, 2026-10-25; the operator can reopen any):
 
-- **Archives search.** The narrator has no keyboard commands, so the archives view loses its in-window search. Is browsing plus the console's `Ctrl+K` enough?
-- **Epic edges.** If the plan's dependency edges are not recorded in the event log, the rail will draw edges derived from parent and order (§9.3). Is approximate acceptable until the plan records them?
-- **Tint on unknown backgrounds.** A terminal that answers neither OSC 11 nor `COLORFGBG` is assumed dark; on a light terminal the tint would be nearly invisible. Is `DELPHI_THEME` guidance enough (it is for badge eyes, 005a)?
-- **Reduced motion default.** Animation is on by default. Should it start off over SSH or in tmux, where redraw cost matters more?
+- **Archives search.** The narrator has no keyboard commands, so the archives view loses its in-window search. Is browsing plus the console's `Ctrl+K` enough? *Built as specified: no in-window search.*
+- **Epic edges.** If the plan's dependency edges are not recorded in the event log, the rail will draw edges derived from parent and order (§9.3). Is approximate acceptable until the plan records them? *Built that way: the daemon sends `after` per node, taken from the event when the plan records it and otherwise derived from parent and creation order (slice 7).*
+- **Tint on unknown backgrounds.** A terminal that answers neither OSC 11 nor `COLORFGBG` is assumed dark; on a light terminal the tint would be nearly invisible. Is `DELPHI_THEME` guidance enough (it is for badge eyes, 005a)? *Built more strictly: the tint needs the terminal's own `OSC 11` colour; without it (or under `NO_COLOR`) messages get a dim `│` rail instead of a fill, so nothing is ever invisible. `DELPHI_THEME` fixes dark or light but cannot supply the colour (`ui/TERMINALS.md`).*
+- **Reduced motion default.** Animation is on by default. Should it start off over SSH or in tmux, where redraw cost matters more? *Built as on by default everywhere; one 150 ms timer repaints only when a frame changed, and `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin the static frames.*
+
+### 16.1 As built (slices 1-9 merged 2026-10-25; slice 10 in progress, slice 11 a person's)
+
+Differences between this spec's mockups and the product, each decided while building (details in the pull requests):
+- **No alert line in the header** (the earlier build replaced the whole first row with one): a waiting decision is the `⟦x?x⟧` badge, the footer's `N waiting` and the approval card in the chat; the countdown lives in the inbox.
+- **The footer always names the mode** (`0 tokens  ·  default`), and `no model` follows it. The frames of §6.3 and §6.5 were corrected; the PNGs were not redrawn (a later decision overrides an older mockup).
+- **Tool lines** sit at the end of the agent block that follows them, not between its paragraphs (the event log cannot recover the interleaving of a finished reply).
+- **The activity deck's entries end on the node's `done`/`escalated` event**, not on every tool result, so the history is a list of work, not of calls; a stopped span shows a red `✖ stopped` chip.
+- **Council:** the agreement meter is proportional (a 2-1 split fills seven of ten cells); seats that have not yet spoken in the debate read `waiting`; the old open-column view with findings, minority report and saved path is gone (the record file keeps them).
+- **Command list:** `ui/src/commands.json` is the single list; the Rust consoles generate their help from it, and `/exit`, `/observe` and `/perm` are aliases of `/quit`, `/narrator` and `/permissions`.
+- **Inline console:** `Esc` clears the prompt, then stops the running task; `Ctrl+C` asks once when text is typed or a task runs.
 
 ## 17. Notes from the external seat (Gemini 3.8 Flash through `agy`, plan mode, 2026-10-25)
 
