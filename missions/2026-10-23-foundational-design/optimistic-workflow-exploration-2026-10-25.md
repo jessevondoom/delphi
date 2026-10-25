@@ -57,12 +57,20 @@ I have seen only part of the `ActionKind` list. Implementation must start by mak
 ### 2.2 Who decides, in order
 
 1. **Ratified rules first.** Allow rules the operator already ratified answer the card as they do now. That isn't a decision and is not recorded as one.
-2. **A policy-bound approver.** Otherwise the Orchestrator answers, subject to:
+2. **The Strategist as approver, under a narrow skill.** Otherwise the Strategist answers through a new `provisional-decision` skill, subject to:
    - the approver's span must be untainted; a span that has read content at `federated_peer` or below is ineligible, and the card parks instead;
-   - the approver is never the requester, and never a span the requester dispatched;
-   - the approver's input is the **daemon-built card** (the classified action and payload), not free-text from the Builder, so a poisoned rationale can't steer it;
-   - it returns `allow` or `deny` plus a short rationale, recorded verbatim.
-3. **A second seat for risk.** Decisions above a "routine" risk class need concurrence from a second seat (Red-Team, ideally another model family). Disagreement does not get resolved by the Orchestrator: the card parks for the operator.
+   - the approver is never the requester (the Builder, or whichever role raised the card), and never a span the requester dispatched;
+   - the approver's input is the **daemon-built card** (the classified action and payload) plus the approved spec, not free-text from the requester, so a poisoned rationale can't steer it;
+   - it returns `allow` or `deny` plus a short rationale, recorded verbatim;
+   - while deciding, it has no write tools at all. Its normal write scope (roadmaps, council notes) is not available in that span.
+
+   *Why the Strategist:* the question a provisional decision asks is "does this action serve the approved spec and stay inside its scope?", which is the scope audit the Strategist already does, and it already can't waive Red-Team `P0`s. The manifest change is one added line: it also cannot waive any eligibility rule in §2.1. *Why not the Builder* (the `builder` role, whatever the active theme calls it): it is the requester, so it would be approving its own actions, which §2.2 forbids. *Why not the Orchestrator:* it dispatches the requester and holds the whole task's context, and its listed blind spot is smoothing over dissent. A dedicated tenth role remains possible later if the Strategist's other duties get in the way; it is not needed now. Routine-class cards may use the cheaper `fast-triage` tier instead of `deep-reasoning`, since eligibility is already checked deterministically.
+3. **A second seat is optional, and its absence is recorded, not blocked.** Operators often have only one provider, so the second seat can't be required. `[optimistic] second_seat` takes:
+   - `cross-family`: Red-Team on another model family, for decisions above the routine class. Preferred where two families exist.
+   - `any`: Red-Team in a fresh context on the same family. Weaker, and marked `single-family` in the ledger.
+   - `off`: no second seat.
+
+   When no second seat ran for a decision above the routine class, `[optimistic] unseconded = "park" | "allow"` decides what happens. The default is `park` (the card waits for the operator); an operator who wants flexibility sets `allow`. This costs safety little, because eligibility (§2.1) and gate 6 still hold; what it risks is wasted work if you later reject the decision. Unseconded decisions are flagged and listed first at review. A disagreement between two seats that did run always parks the card; the Strategist doesn't break ties.
 
 ### 2.3 The decision ledger
 
@@ -151,7 +159,8 @@ All Red-tier (constitutional), ratified by the operator:
 4. The ledger contains an entry for every approval the approver answered, even if the agent claims otherwise.
 5. Gate 6 is red with an unreviewed decision, green after review, and red again after a new commit adds a decision. It is re-evaluated when the merge card is answered.
 6. Rejecting a decision resets the branch, invalidates later decisions and re-queues the task with the denial recorded.
-7. Disagreement between the seats parks the card; it is not decided by the Orchestrator.
+7. Disagreement between two seats that ran parks the card; the approver doesn't break ties. With one provider, `second_seat = "off"` and `unseconded = "park"` parks above-routine cards, and with `unseconded = "allow"` the decision is recorded as unseconded and sorted first at review.
+7b. The Strategist's span during a provisional decision has no write tools; a request for one is refused.
 8. The mode refuses to start without a sandbox.
 9. Bulk ratify is refused for non-routine decisions.
 10. A review answer bound to an old `payload_blake3` or `at_sha` is rejected.
@@ -168,13 +177,13 @@ Recorded per optimistic mission and added to the benchmark's secondary metrics:
 
 - **O0:** a draft charter amendment and spec text; the explicit eligibility allow-list; operator decision on §8. No code.
 - **O1:** the ledger events, gate 6, `delphi decisions`, branch reset on rejection, the sandbox-required check. The approver is a stub that answers from a fixed rule, so the machinery can be tested without a model.
-- **O2:** the Orchestrator as approver, the second seat, risk classes, the relay digest. Optionally, building against a draft spec (§2.8).
+- **O2:** the Strategist as approver, the optional second seat, risk classes, the relay digest. Optionally, building against a draft spec (§2.8).
 - **O3:** trial on real builds alongside the benchmark arm; tune from §6.
 
 ## 8. Open decisions for the operator
-1. Is the "provisional decision is not an approval" framing acceptable, with the charter edits in §3?
-2. Should the approver be the Orchestrator, or a dedicated, narrower role with its own manifest and no other powers? I lean toward the second; it makes the permission surface explicit.
-3. Second-seat concurrence: always, only above routine, or off?
+1. ~~Is the "provisional decision is not an approval" framing acceptable?~~ **Accepted by the operator, 2026-10-25.** The charter edits in §3 still need Red-tier ratification.
+2. ~~Which role approves?~~ **Proposed: the Strategist** (§2.2). Awaiting the operator's confirmation. The Builder is ruled out because it is the requester.
+3. ~~Second-seat concurrence~~ **Optional, per operator.** Not required, because some operators have one provider (§2.2 item 3). Awaiting a decision on the default for `unseconded` (proposed: `park`).
 4. Draft-spec building (§2.8): in scope for O2 or later?
 5. Spend and decision-count caps: starting values.
 

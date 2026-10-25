@@ -82,6 +82,23 @@ Email is the platform-agnostic option: no app to install, no vendor API, and it 
 4. The first line of the reply, before any quoted text, is exactly the verb and token. Quoted earlier messages, forwarded copies and signatures are ignored.
 5. Messages with `Auto-Submitted` or `Precedence: bulk` headers (out-of-office, mail loops) are dropped.
 
+**Mailbox providers.** The adapter speaks plain IMAP and SMTP with a `password` (app password) or `oauth2` credential, so it is not tied to any provider. These notes come from secondary sources and some were not confirmed; check each provider's current terms before relying on them. Volume is tiny (dozens of messages a day), so free-tier limits don't matter. What matters is whether the provider still offers IMAP and SMTP on a free plan, and how it authenticates.
+| Option | Free? | Notes |
+| :-- | :-- | :-- |
+| **A dedicated free Gmail account, with an app password** | Yes | **Recommended starting point.** Personal accounts with 2-Step Verification reportedly still accept app passwords for IMAP and SMTP. Use a new account for Delphi alone, never your own mailbox. App passwords don't expire, which sidesteps the OAuth issue below. Google could tighten this, so keep the adapter generic. |
+| **Google Workspace, OAuth with an Internal app** | Paid account | Workspace is reported to have ended password logins in 2025, so OAuth is required there. An *Internal* app avoids the 7-day refresh-token expiry and Google's verification review. Needs an org admin. |
+| Outlook.com, iCloud Mail | Yes | Both have free accounts with IMAP and SMTP. Outlook.com is understood to require OAuth rather than passwords, and iCloud uses app-specific passwords. I did not verify either. |
+| Fastmail, Proton | Not free | Fastmail is understood to be trial-only; Proton's IMAP goes through its Bridge app, and I could not confirm whether the free tier includes it. Treat as paid options. |
+| Zoho Mail | Free plan lacks IMAP and SMTP | Reported in a 2026 article and a vendor community thread. Skip. |
+| Transactional senders (Resend, Brevo, SMTP2GO, Mailgun) | Yes, small caps | They can send, but none gives the IMAP inbox the relay needs, and their inbound features use webhooks, which would need an open inbound port. Useful only if you want sending separated from receiving. SendGrid's free plan was retired in 2025. |
+| Your own domain or a cheap host | Cheap | Any host offering a mailbox with IMAP works, and gives full control. |
+
+**Why not reuse the Google connector?** Reusing its sign-in plumbing is fine, but reusing the Gmail connector itself is not.
+- The Gmail connector's tools feed message bodies into agent context as untrusted content. The relay must parse mail *outside* any agent, which is the separation §1.1 requires.
+- The connector has never run against Google. Its server URLs are marked "reported" and unconfirmed (spec 010 §7.4).
+- Reading IMAP over OAuth needs a broader Gmail scope. In an OAuth client left in Testing mode, refresh tokens are reported to expire after 7 days, and Gmail's scopes are restricted, so Google verification would be needed to lift that. An app password has neither problem.
+- What can be shared: `oauth2.rs` and the Google credential source, if a Workspace operator wants OAuth. That would be a separate client from the connector's, so revoking one doesn't break the other.
+
 **Tier policy for email:**
 - **Amber:** answerable by email.
 - **Red:** not by email by default. With `step-up = "totp"`, a Red answer also needs a six-digit TOTP code from an authenticator the operator enrolled at setup. The code is independent of the mailbox, so a stolen mailbox alone can't approve a Red action. Merge approval and the high-risk decisions in the optimistic workflow use the same rule.
@@ -203,11 +220,11 @@ I'd start with P0 and P1, because P3 and P4 both depend on `delphi run`.
 ## 6. Decisions needed from the operator
 1. **Parking amendment:** timeout denies the request but parks the task, with a new card on resume (§1.1). Yes or no.
 2. **Remote Red policy:** `console-only` (recommended) or `step-up`.
-3. **First relay channel:** I now recommend **email**, because it is platform-agnostic and every operator has it. It also forces the trust design to be right: if the model is safe for the weakest channel, it is safe for chat. Cost: Amber-only until TOTP step-up exists, and slower delivery. Which mailbox provider you would use affects the adapter (password versus OAuth).
+3. **First relay channel:** I now recommend **email**, because it is platform-agnostic and every operator has it. It also forces the trust design to be right: if the model is safe for the weakest channel, it is safe for chat. Cost: Amber-only until TOTP step-up exists, and slower delivery. The starting recommendation is a dedicated free Gmail account with an app password; see "Mailbox providers" in §1.2.
 4. **API keys and a spend cap** for the nightly live job and the pilot, and whether CI may hold the secrets.
 5. **Pre-registered thresholds** in the evaluation plan (§6 there).
 6. **Headless PR authorisation:** my recommendation is no standing authorisation for now.
-7. **Optimistic workflow:** accept the "provisional decision is not an approval" framing and its charter edits? The open questions are listed in the exploration's §8.
+7. **Optimistic workflow:** the "provisional decision is not an approval" framing is **accepted (2026-10-25)**. Its charter edits still need ratifying. The Strategist is proposed as approver and the second seat is optional; remaining questions are in the exploration's §8.
 
 ## 7. What this plan does not do
 - It does not add computer or browser control, auto-curated user memory, or IDE integration. The comparison found them in other harnesses; the reasons for leaving them out (taint model, D-09 and D-11, terminal-first) still hold.
