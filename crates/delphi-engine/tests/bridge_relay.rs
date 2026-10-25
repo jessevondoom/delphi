@@ -120,6 +120,72 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
     }
 }
 
+/// The real `agy` against the real bridge and relay, with nothing in the operator's own configuration touched: the
+/// plugin that carries the MCP server and the hook that gates every tool both live in the span's own working
+/// directory (`.agents/`), which agy loads from there. The hook allows Delphi's tool and denies everything else.
+/// `cargo test -p delphi-engine --test bridge_relay -- --ignored --nocapture live_agy`. Flash, a few tenths of a cent.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "uses the operator's Antigravity login"]
+async fn live_agy_calls_a_delphi_tool_through_a_workspace_plugin_while_a_hook_denies_its_other_tools() {
+    use delphi_engine::harness::{cli_env, Cli, Event, Launch, LaunchProfile, Session, Tools};
+    use std::os::unix::fs::PermissionsExt;
+    let (bridge, mut calls) = Bridge::start(defs(), "Delphi's timer tool wakes you later.".into(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core"))).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    // The plugin: the bridge's own config, as the engine already writes it for the Claude CLI.
+    let plugin = root.join(".agents/plugins/delphi");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("plugin.json"), r#"{"name":"delphi"}"#).unwrap();
+    std::fs::copy(bridge.config_path(), plugin.join("mcp_config.json")).unwrap();
+    // The gate: allow the Delphi tool, deny every other tool, and note what it saw.
+    let seen = root.join("hook-saw.txt");
+    let gate = root.join("gate.sh");
+    std::fs::write(&gate, format!("#!/bin/sh\npayload=$(cat)\nname=$(printf '%s' \"$payload\" | python3 -I -c 'import sys,json; print(json.load(sys.stdin)[\"toolCall\"][\"name\"])')\necho \"$name\" >> '{seen}'\ncase \"$name\" in\n  mcp_delphi_*) echo '{{\"decision\":\"allow\"}}';;\n  *) echo '{{\"decision\":\"deny\",\"reason\":\"denied by the Delphi gate: only the delphi MCP tools are available in this task\"}}';;\nesac\n", seen = seen.display())).unwrap();
+    std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join(".agents/hooks.json"), json!({"delphi-gate": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": gate.display().to_string(), "timeout": 20}]}]}}).to_string()).unwrap();
+    let l = Launch {
+        cli: Cli::Agy,
+        program: "agy".into(),
+        model: "gemini-3.8-flash-low".into(),
+        system_prompt: "You are a test fixture. Be brief.".into(),
+        user_prompt: "Use the MCP tool named timer from the delphi server (not your built-in scheduler) once, with note 'check CI' and in_secs 90. Then run the shell command: echo leaked > proof.txt . Then say what each one returned.".into(),
+        cwd: root.clone(),
+        tools: Tools::Standard,
+        env: cli_env(),
+        profile: LaunchProfile::default(),
+        opts: Default::default(),
+    };
+    let mut s = Session::start(&l).await.expect("agy starts");
+    let (mut served, mut text) = (false, String::new());
+    loop {
+        let ev = tokio::select! {
+            Some(call) = calls.recv() => {
+                assert_eq!(call.name, "timer");
+                served = true;
+                call.reply.send(ToolResult { content: "timer tm_0001 set. It is now 12:00.".into(), is_error: false }).unwrap();
+                continue;
+            }
+            ev = s.next(std::time::Duration::from_secs(120)) => match ev { Some(ev) => ev, None => break },
+        };
+        match ev {
+            Event::Text(t) => text.push_str(&t),
+            Event::Result { text: t, .. } => {
+                if text.is_empty() {
+                    text = t;
+                }
+                s.close_input();
+            }
+            Event::Exit { .. } => break,
+            _ => {}
+        }
+    }
+    let saw = std::fs::read_to_string(&seen).unwrap_or_default();
+    println!("hook saw: {:?}\nagy said: {}", saw.lines().collect::<Vec<_>>(), text.replace('\n', " "));
+    assert!(served, "the Delphi tool reached the span through the plugin");
+    assert!(saw.lines().any(|n| n.starts_with("mcp_delphi_")) && saw.lines().any(|n| n == "run_command"), "the hook saw both the Delphi tool and the shell: {:?}", saw);
+    assert!(!root.join("proof.txt").exists(), "the shell command was denied and never ran");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_relay_with_the_wrong_token_gets_nothing_and_a_relay_without_one_refuses_to_start() {
     let (bridge, _calls) = Bridge::start(defs(), String::new(), std::path::Path::new("/x")).await.unwrap();

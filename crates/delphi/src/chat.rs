@@ -920,6 +920,32 @@ fn daemon_note(a: &delphi_core::spawn::Attached) -> Option<String> {
     a.stale.then(|| format!("(the daemon is running {} but this is {}, and it is busy with a task or an approval; run `delphi daemon restart` when it is idle)", a.daemon_version, env!("CARGO_PKG_VERSION")))
 }
 
+/// Run the UI program to its end and give its exit code. While it runs this process ignores SIGINT and SIGQUIT, as
+/// `system(3)` does: the UI is the one that owns Ctrl+C. Without that, a Ctrl+C that reaches the terminal in the
+/// instant after the UI has handed it back (it restores cooked mode, then exits) goes to the terminal's foreground
+/// group, which is this process too, and kills the launcher with the signal. The caller then sees a death by signal
+/// instead of the UI's own exit code. The child starts with the default dispositions again (an ignored signal would
+/// otherwise be inherited through `exec`). A UI killed by a signal gives the shell's `128 + n`.
+fn run_ui(cmd: &mut std::process::Command) -> std::io::Result<i32> {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    // SAFETY: only `signal(2)` is called in the forked child, which is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    // SAFETY: plain signal-disposition calls; the previous dispositions are put back below.
+    let (old_int, old_quit) = unsafe { (libc::signal(libc::SIGINT, libc::SIG_IGN), libc::signal(libc::SIGQUIT, libc::SIG_IGN)) };
+    let status = cmd.status();
+    unsafe {
+        libc::signal(libc::SIGINT, old_int);
+        libc::signal(libc::SIGQUIT, old_quit);
+    }
+    status.map(|s| s.code().or_else(|| s.signal().map(|n| 128 + n)).unwrap_or(1))
+}
+
 /// Start (or join) the daemon, then run the full-screen UI as a child of this process. The UI gets what it needs to
 /// connect (socket paths, mission, role names and colours) as one JSON argument: no token, no secret. It asks the
 /// daemon for its own token through the socket, which checks that it was started from a terminal.
@@ -947,8 +973,8 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
         }
     };
     let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, mission, names);
-    match std::process::Command::new(ui).arg("--info").arg(info.to_string()).status() {
-        Ok(s) => s.code().unwrap_or(1),
+    match run_ui(std::process::Command::new(ui).arg("--info").arg(info.to_string())) {
+        Ok(code) => code,
         Err(e) => {
             eprintln!("delphi chat: cannot start the full-screen console ({}); try `delphi chat --inline`", e);
             1
@@ -979,8 +1005,8 @@ pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&s
     if once {
         cmd.arg("--once");
     }
-    match cmd.status() {
-        Ok(s) => s.code().unwrap_or(1),
+    match run_ui(&mut cmd) {
+        Ok(code) => code,
         Err(e) => {
             eprintln!("delphi observe: cannot start the narrator window ({})", e);
             1
@@ -1231,6 +1257,24 @@ mod tests {
         assert!(none.contains("Stopped: no model is configured for this workspace.") && !none.contains("throttled") && !none.contains("[escalated"), "{}", none);
         let failed = fresh.event(&json!({"type": "task.failed", "task_id": "t_0005", "payload": {"error": "disk full"}})).unwrap();
         assert!(failed.contains("t_0005 needs you") && failed.contains("Stopped: disk full"), "{}", failed);
+    }
+
+    #[test]
+    fn the_launcher_outlives_a_ctrl_c_meant_for_the_ui_and_reports_the_uis_own_code() {
+        // A child that signals the whole foreground group the way the terminal does, then leaves with its own code.
+        // If this process did not ignore SIGINT while the child runs, the test runner itself would be killed here.
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "kill -INT $PPID; sleep 0.1; exit 7"]);
+        assert_eq!(run_ui(&mut cmd).unwrap(), 7);
+        // The child does not inherit the ignore: its own default (die on SIGINT) is back, and that is reported as 128 + 2.
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "kill -INT $$; sleep 5"]);
+        assert_eq!(run_ui(&mut cmd).unwrap(), 130);
+        // And this process's own disposition is restored: SIGINT is not left ignored.
+        let now = unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
+        assert_ne!(now, libc::SIG_IGN, "the launcher put the previous disposition back");
+        unsafe { libc::signal(libc::SIGINT, now) };
+        assert!(run_ui(&mut std::process::Command::new("/nonexistent/delphi-ui")).is_err());
     }
 
     #[test]

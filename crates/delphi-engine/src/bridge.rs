@@ -61,7 +61,10 @@ pub fn random_hex(bytes: usize) -> std::io::Result<String> {
 
 /// Map a Delphi tool to MCP's shape.
 fn mcp_tool(d: &ToolDef) -> Value {
-    json!({"name": d.name, "description": d.description, "inputSchema": d.input_schema})
+    // `antigravity/alwaysLoad`: the Antigravity CLI loads a server's tools on demand, behind its generic `call_mcp_tool`,
+    // unless the server marks them. Delphi's tools are the point of the seat, so they are offered directly by their own
+    // names (which also lets a gate see which tool is being called). Other clients ignore the key.
+    json!({"name": d.name, "description": d.description, "inputSchema": d.input_schema, "_meta": {"antigravity/alwaysLoad": true}})
 }
 
 impl Bridge {
@@ -286,6 +289,7 @@ mod tests {
         let list = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await;
         assert_eq!(list["result"]["tools"][0]["name"], "timer");
         assert_eq!(list["result"]["tools"][0]["inputSchema"]["type"], "object");
+        assert_eq!(list["result"]["tools"][0]["_meta"]["antigravity/alwaysLoad"], true, "agy offers the tool directly, by its own name, instead of behind call_mcp_tool");
         assert!(ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 3, "method": "ping"})).await["result"].is_object());
     }
 
