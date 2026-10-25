@@ -226,6 +226,7 @@ function windowOf(ps: string[][], start: number, end: number): string[] {
 const HELP = [
   'keys',
   '  enter send · alt+enter or ctrl+j newline · esc clear · ↑↓ history',
+  '  drag to select text and copy it (double-click a word, triple-click a line; /mouse off hands selection back to the terminal)',
   '  pgup pgdn or the mouse wheel scroll · ← → with an empty prompt (or shift+← shift+→ any time) move between decks',
   '  ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave',
   '  / opens the command menu · tab or enter completes',

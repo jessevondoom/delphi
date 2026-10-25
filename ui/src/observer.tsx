@@ -5,6 +5,7 @@ import { Box, Text, useApp, useStdout } from 'ink';
 import type { Ev } from './input.ts';
 import { emptyState, epicOrder, observeFrame, parseView, VIEWS, type Hit, type OModel, type OState, type View } from './observe-screen.ts';
 import type { Rpc } from './rpc.ts';
+import { useSelection } from './select.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 
@@ -132,9 +133,10 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
 
   const model: OModel = { info, pal, st, view, pick, scroll, selNode, search, diff, live, connected, think };
   const lines = observeFrame(model, size.w, size.h);
+  const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
-      <Text>{lines.join('\n')}</Text>
+      <Text>{shown.join('\n')}</Text>
     </Box>
   );
 }

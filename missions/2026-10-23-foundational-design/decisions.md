@@ -418,3 +418,5 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 4. **The zero-token watch engine (`specs/008` §2) stays unbuilt.** When it is built it keeps its schedule in the timer store.
 
 **Status:** ✅ APPROVED 2026-10-25 by the operator.
+
+- **2026-10-25:** the operator asked to set timers directly in chat, since only the orchestrator could. Approved as **017-A1** (`specs/017` §5): `/timer` in the full-screen console and in `delphi chat --inline`, over the existing console-only `timer.*` calls. Also at the operator's request, the full-screen console and the Observer select text themselves (drag to select and copy, double-click a word, triple-click a line), because mouse reporting, which the wheel needs, stops the terminal selecting; `/mouse` still hands selection back to the terminal. No new dependency.
