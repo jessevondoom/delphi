@@ -13,7 +13,7 @@ Delphi is a spec-driven, multi-agent working environment for **software engineer
 - **A console** (just `delphi`): ask questions, hand out work with `@architect …`, `/build …` or `/council …`, and answer approval cards. Nothing consequential happens without a card.
 - **Builds you can trust:** the Builder works in a throwaway worktree; Delphi runs your tests, has a different agent audit the exact commit, and asks before merging (or opens a pull request).
 - **Councils:** for a hard call, several seats on different model families answer blind, attack each other's answers, and the verdict carries a Minority Report that the runtime copies verbatim.
-- **A second window** (`delphi narrator`): a read-only live view of the task graph, Council, worktree diffs, agents and spend.
+- **A second window** (`delphi narrator`): a read-only live view of the task graph, Council, worktree diffs, agents, archives and reasoning (no money).
 - **Knowledge search** (`delphi kb search`: keywords, meaning and a reranking pass, all local), **connectors** to Slack, Google and Zoom (in progress), and a budget that is enforced before each model call, not after.
 - **Safety by construction:** anything an agent reads from outside is untrusted and limits what it may do next; the model-access settings and agent definitions only change when you ratify them.
 
