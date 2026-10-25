@@ -124,3 +124,32 @@ test('openWindow opens nothing from a test run, a script or when asked not to', 
   assert.match((await openWindow(['true'], {}, false))!, /interactive console/);
   assert.match((await openWindow(['true'], { DELPHI_NO_WINDOWS: '1' }, true))!, /interactive console/);
 });
+
+test('/missions lists the workspace\'s missions newest first and says how to reopen one', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, utimesSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const ws = mkdtempSync(join(tmpdir(), 'delphi-missions-'));
+  const mission = (id: string, secsAgo: number) => {
+    const ev = join(ws, 'local/missions', id, 'events');
+    mkdirSync(ev, { recursive: true });
+    const f = join(ev, '000001.jsonl');
+    writeFileSync(f, '{}\n');
+    const t = (Date.now() - secsAgo * 1000) / 1000;
+    utimesSync(f, t, t);
+  };
+  mission('2026-10-23-session', 2 * 86400 + 10); mission('2026-10-25-session', 90); mission('2026-10-24-session', 5 * 3600);
+  writeFileSync(join(ws, 'local/missions/stray.txt'), 'x');
+  const r = ctx(() => ({}));
+  (r.c.info as any).workspace = ws;
+  await runSlash('/missions', r.c);
+  const lines = r.out[0]!.split('\n');
+  assert.match(lines[0]!, /^ {2}2026-10-25-session {2}1 min ago {2}\(latest\)$/);
+  assert.match(lines[1]!, /2026-10-24-session {2}5 h ago$/);
+  assert.match(lines[2]!, /2026-10-23-session {2}2 d ago$/);
+  assert.equal(lines[3], 'reopen one with: delphi chat --mission <id>');
+  const empty = ctx(() => ({}));
+  (empty.c.info as any).workspace = join(ws, 'nowhere');
+  await runSlash('/missions', empty.c);
+  assert.match(empty.out[0]!, /^no missions yet/);
+});

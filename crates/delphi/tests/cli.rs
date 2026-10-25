@@ -38,17 +38,85 @@ fn help_is_stdout_exit_zero_and_touches_nothing() {
 
 #[test]
 fn every_command_answers_help_with_only_its_own_usage() {
-    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "observe", "narrator", "daemon", "xenia", "endpoints"] {
+    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "observe", "narrator", "daemon", "xenia", "endpoints", "status", "missions", "skills", "hooks"] {
         for flag in ["--help", "-h"] {
             let (o, touched) = run(&[cmd, flag]);
             assert_eq!(o.status.code(), Some(0), "{} {}", cmd, flag);
             let out = text(&o.stdout);
-            assert!(out.starts_with("usage:"), "{} {}: {}", cmd, flag, out);
-            assert!(out.lines().skip(1).all(|l| l.starts_with("  delphi ")), "{} {}: {}", cmd, flag, out);
-            assert!(out.lines().count() < 6, "{} {} printed the whole table", cmd, flag);
+            let lines: Vec<&str> = out.lines().collect();
+            assert_eq!(lines[0], "usage:", "{} {}: {}", cmd, flag, out);
+            let name = if cmd == "narrator" { "observe" } else { cmd };
+            assert!(lines[1].starts_with(&format!("  delphi {}", name)), "{} {}: {}", cmd, flag, out);
+            assert!(lines.iter().take_while(|l| !l.is_empty()).skip(1).all(|l| l.starts_with("  delphi ") || l.starts_with("    ")), "{} {}: option lines only before the sentence: {}", cmd, flag, out);
+            assert!(lines.len() < 12, "{} {} printed more than its own page", cmd, flag);
+            assert!(lines.iter().all(|l| l.chars().count() < 120), "{} {}: a line is too long:\n{}", cmd, flag, out);
             assert!(!touched, "{} {} wrote to the home", cmd, flag);
         }
     }
+}
+
+#[test]
+fn the_command_list_is_grouped_one_sentence_each_and_names_the_environment() {
+    let (o, touched) = run(&["--help"]);
+    let out = text(&o.stdout);
+    assert!(!touched);
+    for section in ["\nStart\n", "\nSet up\n", "\nWork\n", "\nInspect\n", "\nMaintain\n", "\nEnvironment\n"] {
+        assert!(out.contains(section), "section {:?} in\n{}", section, out);
+    }
+    for cmd in ["chat", "run", "status", "missions", "doctor", "update", "observe"] {
+        let line = out.lines().find(|l| l.starts_with(&format!("  delphi {} ", cmd))).unwrap_or_else(|| panic!("{} is listed:\n{}", cmd, out));
+        assert!(line.len() > 26, "{} has a sentence: {}", cmd, line);
+    }
+    for var in ["DELPHI_HOME", "DELPHI_WORKSPACE", "DELPHI_UI", "DELPHI_THEME", "NO_COLOR", "DELPHI_REDUCE_MOTION", "DELPHI_NO_ONBOARD"] {
+        assert!(out.contains(var), "{} is described", var);
+    }
+    assert!(out.lines().all(|l| l.chars().count() < 100), "no line wider than 100 columns:\n{}", out);
+    assert!(!out.contains("self-update") && !out.contains("rollback]"), "retired commands are not listed");
+}
+
+/// A workspace in a scratch home, so `status` and `missions` have something to read.
+fn workspace() -> (tempfile::TempDir, std::path::PathBuf) {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    let proj = t.path().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    Command::new("git").args(["init", "-q"]).current_dir(&proj).status().unwrap();
+    let ok = Command::new(DELPHI).args(["init", "--non-interactive", "--workspace", "w", "--project"]).arg(&proj).arg("--home").arg(&home).stdin(Stdio::null()).output().unwrap();
+    assert!(ok.status.success(), "{}", text(&ok.stderr));
+    (t, home)
+}
+
+#[test]
+fn status_is_a_few_lines_without_a_terminal_or_a_daemon() {
+    let (_t, home) = workspace();
+    let o = Command::new(DELPHI).args(["status", "--workspace", "w", "--home"]).arg(&home).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    let labels: Vec<&str> = out.lines().filter_map(|l| l.split_whitespace().next()).collect();
+    assert_eq!(labels, ["workspace", "daemon", "models", "health", "mission"], "{}", out);
+    assert!(out.contains("not running"), "{}", out);
+    assert!(out.contains("none configured: run `delphi setup`"), "a fresh workspace has no model: {}", out);
+    assert!(out.contains("none yet"), "no mission before the first run: {}", out);
+    // Reading the status started nothing.
+    assert!(!home.join("run").read_dir().map(|mut d| d.any(|e| e.unwrap().path().extension().is_some_and(|x| x == "sock"))).unwrap_or(false), "no daemon was started");
+}
+
+#[test]
+fn missions_lists_what_is_on_disk_newest_first() {
+    let (_t, home) = workspace();
+    let o = Command::new(DELPHI).args(["missions", "--workspace", "w", "--home"]).arg(&home).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert!(text(&o.stdout).contains("no missions yet"), "{}", text(&o.stdout));
+    let ev = home.join("workspaces/w/local/missions/2026-10-25-session/events");
+    std::fs::create_dir_all(&ev).unwrap();
+    std::fs::write(ev.join("000001.jsonl"), "{}\n").unwrap();
+    std::fs::create_dir_all(home.join("workspaces/w/local/missions/2026-10-20-session")).unwrap();
+    let o = Command::new(DELPHI).args(["missions", "--workspace", "w", "--home"]).arg(&home).stdin(Stdio::null()).output().unwrap();
+    let out = text(&o.stdout);
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines[0].contains("2026-10-25-session") && lines[0].ends_with("(latest)"), "{}", out);
+    assert!(lines.iter().any(|l| l.contains("2026-10-20-session")), "{}", out);
+    assert!(out.contains("delphi chat --mission <id>"), "{}", out);
 }
 
 #[test]
@@ -63,7 +131,7 @@ fn help_for_a_command_works_before_or_after_flags() {
 
 #[test]
 fn an_unknown_command_is_named_and_exits_two() {
-    for bad in ["status", "bogus"] {
+    for bad in ["stat", "bogus"] {
         let (o, touched) = run(&[bad]);
         assert_eq!(o.status.code(), Some(2));
         let err = text(&o.stderr);
