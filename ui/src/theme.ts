@@ -10,7 +10,10 @@ export type RoleInfo = { name: string; chassis: string; face: string; crown?: st
  * reaches it without a change to this file.
  */
 export type AvatarRole = {
-  chassis: string; crown: string; crown_rgb: string; mascot_face: string;
+  chassis: string;
+  /** The ANSI colour (0-15) for a 16-colour terminal, chosen in the library. */
+  ansi?: number;
+  crown: string; crown_rgb: string; mascot_face: string;
   /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
   badge: Record<string, { cells: string; mouth: number | null }>;
   /** Per activity: the seven cells of the mascot's face row. */
@@ -155,7 +158,9 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
  */
 export function badge(role: string, state: AgentState, info: Info, p: Pal): string {
   const chassis = roleColor(role, info);
-  const eye = caps.color === 'none' ? chalk.bold : chalk.hex(eyeColor(role, state, info, p));
+  // The library's eye colours need true colour; below it the eyes are the terminal's own foreground, bold (`005e` §12).
+  const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
+    : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
   const { cells, mouth } = badgeCells(role, state, info);
   return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : eye(c))).join('') + chassis('⟧');
 }
@@ -174,7 +179,11 @@ export function envTheme(env: Record<string, string | undefined> = process.env):
 }
 
 export const roleName = (role: string, info: Info) => info.roles[role]?.name ?? role;
-export const roleColor = (role: string, info: Info): ChalkInstance => tone(info.avatar?.roles[role]?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
+export const roleColor = (role: string, info: Info): ChalkInstance => {
+  const ansi = info.avatar?.roles[role]?.ansi;
+  if (caps.color === '16' && ansi !== undefined) return chalk.ansi256(ansi); // the library's own choice, not the nearest guess
+  return tone(info.avatar?.roles[role]?.chassis ?? info.roles[role]?.chassis ?? '#94a3b8');
+};
 /** A role's colour (`005e` §5): its chassis from the theme under colour; plain, with the glyphs carrying it, under none. */
 export const role = roleColor;
 

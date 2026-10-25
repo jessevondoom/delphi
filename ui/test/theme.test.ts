@@ -134,6 +134,32 @@ test('with 16 colours the semantic palette is the terminal\'s own ANSI colours, 
   } finally { T.useCapabilities(prev); }
 });
 
+test('at 16 colours each role gets the ANSI colour the avatar library chose, not a nearest guess', () => {
+  const spec = JSON.parse(readFileSync(join(SRC, '..', 'test', 'fixtures', 'avatar-spec.json'), 'utf8')) as T.AvatarSpec;
+  const withSpec = { ...info, avatar: spec };
+  const prev = T.currentCapabilities();
+  T.useCapabilities(T.capabilities({ TERM: 'xterm' }));
+  try {
+    const sgr = (role: string) => /\x1b\[(\d+)m/.exec(T.roleColor(role, withSpec)('x'))![1];
+    // 005e §5: orchestrator 13, architect 14, builder 11, red-team 9, strategist 10, scout 3
+    assert.deepEqual(['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'].map(sgr), ['95', '96', '93', '91', '92', '33']);
+    T.useCapabilities(T.capabilities({ COLORTERM: 'truecolor' }));
+    assert.ok(T.roleColor('scout', withSpec)('x').includes('38;2;255;255;0'), 'truecolor still uses the RGB');
+  } finally { T.useCapabilities(prev); }
+});
+
+test('below true colour the badge eyes are the terminal\'s own foreground, bold; true colour keeps the library\'s eyes', () => {
+  const prev = T.currentCapabilities();
+  const eyes = (role: string, state: T.AgentState) => T.badge(role, state, info, { dark: true }).replace(/\x1b\[(?:22|39|27)m/g, '');
+  try {
+    T.useCapabilities(T.capabilities({ TERM: 'xterm-256color' }));
+    const idle = eyes('architect', 'idle');
+    assert.ok(/\x1b\[1m•/.test(idle) && !idle.includes('38;2;255;255;255'), idle);
+    T.useCapabilities(T.capabilities({ COLORTERM: 'truecolor' }));
+    assert.ok(eyes('architect', 'idle').includes('38;2;255;255;255'), 'white eyes on a dark terminal');
+  } finally { T.useCapabilities(prev); }
+});
+
 test('the approval mode auto is warning-red and bold, never reverse video', () => {
   const prev = T.currentCapabilities();
   try {
