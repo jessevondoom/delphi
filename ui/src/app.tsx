@@ -57,6 +57,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   const [inbox, setInbox] = useState(() => I.newInbox(Date.now()));
   const [mode, setMode] = useState('default');
   const [panel, setPanel] = useState<P.Panel | null>(null);
+  const [noModel, setNoModel] = useState(false);
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -92,7 +93,10 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
     // Frames arrive many times a second; fold them in batches so a stream costs one repaint per 33 ms, not one per frame.
     let queued: any[] = [], timer: ReturnType<typeof setTimeout> | null = null;
     const flush = () => { timer = null; const q = queued; queued = []; setState((s) => q.reduce((a, n) => fold(a, n, Date.now()), s)); };
-    const onNote = (n: any) => { queued.push(n); timer ??= setTimeout(flush, 33); };
+    const onNote = (n: any) => {
+      queued.push(n); timer ??= setTimeout(flush, 33);
+      if (n?.method === 'event' && n.params?.type === 'model.recovered') checkModels();
+    };
     ev.on('notification', onNote);
     const onClosed = () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed; trying to reconnect…', at: Date.now() }));
     const onBack = () => { // what happened meanwhile is in the log: rebuild from it, keep what is only on screen
@@ -105,6 +109,11 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
 
   useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => v?.mode && setMode(String(v.mode))).catch(() => {}); }, []);
 
+  // Does the workspace have any model at all? Asked on attach, when something is sent and when a model comes back
+  // (`005e` §6.2). A daemon that does not say (older) is taken to have one.
+  function checkModels() { cmd.call('models.get', {}).then((v: any) => setNoModel(v?.configured === false)).catch(() => {}); }
+  useEffect(checkModels, []);
+
   const note = (text: string) => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now() }));
 
   const send = (text: string) => {
@@ -116,6 +125,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       if (target) prompt = m[2]!;
     }
     setBack(0);
+    checkModels();
     cmd.call('task.submit', { mission_id: mission, prompt, ...(target ? { target } : {}) }).catch((e) => note('could not send: ' + (e?.message ?? JSON.stringify(e))));
   };
 
@@ -171,7 +181,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       execFile(info.delphi_exe, ['connectors', 'status', '--workspace', info.workspace_name ?? '', '--home', info.home ?? ''], { timeout: 15000 }, (err, out, errOut) => note((out || errOut || String(err?.message ?? 'no output')).trimEnd()));
       return;
     }
-    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note });
+    // A command may have changed what the workspace can run on (`/ratify apply`), so ask again afterwards.
+    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note }).then(checkModels);
   };
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
@@ -320,7 +331,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel, noModel };
   const lineCount = useMemo(() => transcriptCount(base, size.w), [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -330,7 +341,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel]);
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel]);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
       <Text>{lines.join('\n')}</Text>

@@ -390,7 +390,7 @@ impl EngineService {
     fn models_get(&self) -> RpcOutcome {
         let cfg = self.engine.cfg.get();
         let now = (self.engine.clock_unix)();
-        Ok(json!({"text": crate::models_cli::render(&cfg, &self.engine.pool.snapshot(), now)}))
+        Ok(json!({"text": crate::models_cli::render(&cfg, &self.engine.pool.snapshot(), now), "configured": !cfg.pool_entries().is_empty()}))
     }
 
     async fn usage_get(&self, p: Value) -> RpcOutcome {

@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+
+delphi v0.5 · /proj · chat
+
+
+  Ask anything about /proj, or hand out work:
+
+    @architect draft a spec for …       one role answers
+    /build implement @specs/011-x.md
+      a Builder task: worktree, tests, audit
+    /council Should we …?               three seats argue it out blind
+
+  / lists commands · ? shows the keys · ← → move between decks
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+0 tokens                                                         ← / ? → · ○ ● ○

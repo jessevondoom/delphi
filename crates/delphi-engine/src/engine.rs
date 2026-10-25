@@ -225,6 +225,10 @@ pub(crate) struct Asker<'a> {
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
 
+/// The reason when the workspace has no model at all (an empty pool, no harness to fall back to). Distinct from
+/// `EXHAUSTED`: waiting would never help, and the consoles show "run delphi setup", not "throttled".
+pub(crate) const NO_MODEL: &str = "no_model_configured: no model is configured for this workspace";
+
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
 pub(crate) struct Escalate(pub(crate) String);
 
@@ -792,6 +796,7 @@ impl Engine {
                     }
                     (key.clone(), Some((target.clone(), format!("{}; confirmed by the operator, with {}", why, lost.join(" and ")))))
                 }
+                Route::NoModel { .. } if cfg.pool_entries().is_empty() => return Ok(Err(Escalate(NO_MODEL.to_string()))),
                 Route::NoModel { back_at, .. } => {
                     *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: route.explain(now) });
                     return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now)))));
@@ -1994,6 +1999,19 @@ mod tests {
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
         assert!(!events_of(&f, "task.blocked").is_empty());
         assert_eq!(events_of(&f, "task.unblocked").last().unwrap().payload["resumed"], false, "it gave up after park_max, however many times it asked");
+    }
+
+    // specs/005e §6.2: an empty pool is "no model is configured", not "throttled", and waiting would never help.
+    #[tokio::test]
+    async fn an_empty_pool_escalates_as_no_model_configured_without_waiting() {
+        let f = setup(vec![Step::text("never asked")], 5.0, |s| s.park_max = Some(Duration::from_secs(60)));
+        let text = crate::testkit::CONFIG.split("[[endpoints]]").next().unwrap().to_string();
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        assert!(f.engine.cfg.get().pool_entries().is_empty());
+        let out = f.engine.run_task(&f.m, "orchestrator", "hello").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.starts_with("no_model_configured") && !r.contains("throttled")), "{:?}", out.status);
+        assert!(f.model.requests().is_empty(), "no call was made");
+        assert!(events_of(&f, "task.blocked").is_empty(), "it did not park waiting for a model that cannot arrive");
     }
 
     // specs/002 §4.1, [H-007] and [H-008]: a critic stays out of the author's family, and says so when it cannot.
