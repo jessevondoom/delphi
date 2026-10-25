@@ -1027,8 +1027,16 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         let mut s = Session::start(&launch(prog, d.path())).await.unwrap();
         let ev = s.next(Duration::from_secs(3)).await;
         assert!(matches!(ev, Some(Event::Exit { code: None })), "{:?}", ev);
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        // Under load the script can be slow to write its pid, and a killed process stays visible to `kill(pid, 0)` until it is reaped.
+        let mut pid: Option<i32> = None;
+        for _ in 0..100 {
+            pid = pid.or_else(|| std::fs::read_to_string(&pidfile).ok().and_then(|s| s.trim().parse().ok()));
+            if pid.is_some_and(|p| unsafe { libc::kill(p, 0) } != 0) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let pid = pid.expect("the script wrote its pid");
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the background process must be gone");
         assert!(s.next(Duration::from_millis(50)).await.is_none());
     }

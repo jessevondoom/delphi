@@ -72,8 +72,12 @@ pub fn stats() -> (u64, u64, usize) {
 mod tests {
     use super::*;
 
+    // Both tests assert on the process-wide hit and miss counters, so they must not interleave.
+    static COUNTERS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_repeat_read_is_a_hit_and_a_different_request_or_content_is_not() {
+        let _g = COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
         let big = format!("{}\n", "a line of text that makes the file big enough to cache. ".repeat(400));
         let (h0, m0, _) = stats();
         let a = extract_cached(big.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
@@ -90,6 +94,7 @@ mod tests {
 
     #[test]
     fn small_inputs_and_errors_bypass_the_cache() {
+        let _g = COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
         let (_, m0, _) = stats();
         let _ = extract_cached(b"tiny", "t.txt", &Request::default(), &Limits::default()).unwrap();
         assert_eq!(stats().1, m0, "small files are not looked up");
