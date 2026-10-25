@@ -94,9 +94,28 @@ test('mascots are seven columns in every state; the builder keeps its white crow
     for (const row of mascot(role, st, info, { dark: true })) assert.equal(stringWidth(row), 7, `${role} ${st}`);
   }
   const roster = observeFrame(model('agents'), 110, 40).map(plain).join('\n');
-  assert.match(roster, /athena\s+orchestrator\s+○ idle/);
+  assert.match(roster, /hephaestus\s+builder\s+● running/);
+  assert.match(roster, /ares\s+red-team\s+► waiting on you/);
+  assert.doesNotMatch(roster, /daedalus|odysseus|hermes|athena/, 'idle agents are not listed');
   assert.match(roster, /frontier · claude-x/);
-  assert.match(roster, /350 tokens/);
+  assert.match(roster, /1050 tokens/);
+});
+
+test('the roster lists generic sub-agents while they run, and only the idle orchestrator when nothing does', () => {
+  const st = sample();
+  st.nodes['n_9'] = { id: 'n_9', role: 'general-purpose', parent: 'n_1', depth: 1, task_id: 't_1', state: 'running', tokens: 700, cost_usd: 0, started_ms: 0, ended_ms: null, after: [] };
+  const busy = observeFrame(model('agents', { st }), 110, 40).map(plain).join('\n');
+  assert.match(busy, /general-purpose\s+● running/);
+  assert.match(busy, /700 tokens/);
+
+  const quiet = sample();
+  for (const a of Object.values(quiet.agents)) a.state = 'idle';
+  quiet.nodes = {};
+  const idle = observeFrame(model('agents', { st: quiet }), 110, 40).map(plain).join('\n');
+  assert.match(idle, /athena\s+orchestrator\s+○ idle/);
+  assert.match(idle, /the system is idle/);
+  assert.doesNotMatch(idle, /daedalus|hephaestus|ares|odysseus|hermes/);
+  for (const w of [110, 70]) for (const l of observeFrame(model('agents', { st: quiet }), w, 20)) assert.ok(stringWidth(l) <= w);
 });
 
 test('council: the question, the track, a card per seat and the verdict card; an escalation says what you can choose', () => {

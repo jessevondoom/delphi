@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Two thirds of spend is compute</title>
+<desc id="chart-desc">Donut chart. usd: minimum $1,300 at Network, maximum $8,400 at Compute. Values: Compute $8,400; Storage $2,900; Network $1,300.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+.sl{stroke:var(--surface);stroke-width:2}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Two thirds of spend is compute</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">monthly cloud cost</text>
+<path class="f1 sl" fill-rule="evenodd" d="M184,79 A144,144 0 1 1 59.29,295 L109.18,266.2 A86.4,86.4 0 1 0 184,136.6 Z"/>
+<path class="f2 sl" fill-rule="evenodd" d="M59.29,295 A144,144 0 0 1 97.05,108.21 L131.83,154.13 A86.4,86.4 0 0 0 109.18,266.2 Z"/>
+<path class="f3 sl" fill-rule="evenodd" d="M97.05,108.21 A144,144 0 0 1 184,79 L184,136.6 A86.4,86.4 0 0 0 131.83,154.13 Z"/>
+<text x="184" y="227" class="t1 b" font-size="20" text-anchor="middle">$12,600</text>
+<text x="184" y="245" class="t3" font-size="11" text-anchor="middle">Total</text>
+<rect class="f1" x="368" y="195" width="10" height="10" rx="2"/>
+<text x="386" y="204" class="t2" font-size="12" text-anchor="start">Compute</text>
+<text x="660" y="204" class="t2" font-size="12" text-anchor="end">$8,400</text>
+<text x="704" y="204" class="t3" font-size="12" text-anchor="end">67%</text>
+<rect class="f2" x="368" y="217" width="10" height="10" rx="2"/>
+<text x="386" y="226" class="t2" font-size="12" text-anchor="start">Storage</text>
+<text x="660" y="226" class="t2" font-size="12" text-anchor="end">$2,900</text>
+<text x="704" y="226" class="t3" font-size="12" text-anchor="end">23%</text>
+<rect class="f3" x="368" y="239" width="10" height="10" rx="2"/>
+<text x="386" y="248" class="t2" font-size="12" text-anchor="start">Network</text>
+<text x="660" y="248" class="t2" font-size="12" text-anchor="end">$1,300</text>
+<text x="704" y="248" class="t3" font-size="12" text-anchor="end">10%</text>
+</svg>

@@ -234,7 +234,13 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             },
             Some("agy") => match run("agy", &["--version"]) {
                 None => missing(r, id, "the `agy` program was not found on PATH; install the Antigravity CLI".into()),
-                Some((_, ver)) => r.push(Level::Ok, "10 harness", id.to_string(), format!("agy {} is installed; it has no status command, so run `delphi endpoints test --probe` to prove it is signed in. Read-only roles only: no approval bridge, output is untrusted", ver.trim())),
+                Some((_, ver)) => {
+                    // `[harness.agy]` (`specs/020` §8): with the bridge on (the default) a span carries Delphi's tools in a plugin and a
+                    // hook gates its other tools; off, it is the old read-only, untrusted seat. Either way: no file edits or commands.
+                    let bridge = v.get("harness").and_then(|h| h.get("agy")).and_then(|a| a.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true);
+                    let what = if bridge { "Delphi's tools reach it through a plugin and a hook denies its other tools, but its output is untrusted and it is never a Builder; `delphi endpoints test --probe` proves the gate holds" } else { "the bridge is off: read-only roles only, nothing gates its own tools, output is untrusted" };
+                    r.push(Level::Ok, "10 harness", id.to_string(), format!("agy {} is installed; it has no status command, so run `delphi endpoints test --probe` to prove it is signed in. {}", ver.trim(), what))
+                }
             },
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
@@ -833,7 +839,7 @@ mod tests {
         let mut r2 = Report::default();
         check_harnesses(&format!("{}\n[harness.claude]\nbridge = false\napprovals = \"delphi\"\nclaudeai_connectors = false\n", cfg), &run_ok, false, &mut r2);
         assert!(r2.findings.iter().any(|f| f.location == "c" && f.message.contains("bridge off (roles run text-only), approvals by delphi, account connectors off")), "{:?}", r2.findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>());
-        assert!(text.iter().any(|t| t.starts_with("Ok a") && t.contains("endpoints test --probe")), "{:?}", text);
+        assert!(text.iter().any(|t| t.starts_with("Ok a") && t.contains("endpoints test --probe") && t.contains("plugin and a hook denies its other tools")), "{:?}", text);
         assert!(text.iter().any(|t| t.starts_with("Warn g") && t.contains("Antigravity")), "{:?}", text);
         assert!(!text.iter().any(|t| t.contains("secret@example.com")), "the account email is never printed");
         assert_eq!(r.findings.len(), 3, "API endpoints are not harness checks");

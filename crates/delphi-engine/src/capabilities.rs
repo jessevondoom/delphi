@@ -225,16 +225,20 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
     // Any tier's model will do for a connectivity probe; the cheapest configured one.
     let model = ["fast", "workhorse", "frontier"].iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
     cap.model_id = model.clone();
-    if cli == Cli::Agy {
+    let profile = cfg.harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
+    let gate_wanted = cli == Cli::Agy && profile.bridge;
+    if cli == Cli::Agy && !gate_wanted {
         cap.degraded = true;
-        cap.notes.push("agy: no approval bridge, tools cannot be turned off, reads any file; usable for read-only roles only, and its output is untrusted (L0)".into());
+        cap.notes.push("agy: the Delphi bridge and gate are off in [harness.agy]; nothing denies its tools, it reads any file, and it is usable for read-only roles only with its output untrusted (L0)".into());
     }
-    let dir = std::env::temp_dir().join(format!("delphi-probe-{}", std::process::id()));
+    // One scratch directory per probe: probes can overlap (tests, and anything that probes several endpoints at once), and each
+    // removes its directory when it ends.
+    static PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!("delphi-probe-{}-{}", std::process::id(), PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     if std::fs::create_dir_all(&dir).is_err() {
         cap.auth = "failed: no scratch directory".into();
         return (cap, None);
     }
-    let profile = cfg.harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
     let connectors = cli == Cli::Claude && profile.claudeai_connectors;
     // `settle`: the probe is the place to learn what loads, so a real probe waits for the account's connectors as a span does.
     let mut lp = crate::harness::LaunchProfile { claudeai_connectors: connectors, settle: if connectors { settle } else { Duration::ZERO }, ..Default::default() };
@@ -254,12 +258,43 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
             Err(e) => cap.notes.push(format!("could not start the Delphi tool bridge for the probe: {}", e)),
         }
     }
-    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
+    // `agy`: the same stub bridge, behind the gate a span would get (`specs/020` §8). The probe asks the model to call the stub
+    // tool and then to try the shell; what happened is the verdict on the gate.
+    let (mut agy_calls, mut agy_notes) = (None, None);
+    if gate_wanted {
+        let stub = vec![ToolDef { name: "probe".into(), description: "Gate probe: call this once.".into(), input_schema: json!({"type": "object"}) }];
+        let policy = crate::bridge::HookPolicy { allow_prefixes: vec![crate::bridge::AGY_TOOL_PREFIX.to_string()], allow_names: crate::bridge::agy_native_tools(&profile.native_tools) };
+        match std::env::current_exe() {
+            Ok(exe) => match crate::bridge::Bridge::start_gated(stub, String::new(), &exe, Some(policy)).await {
+                Ok((b, rx, notes)) => match b.write_agy_workspace(&dir) {
+                    Ok(()) => {
+                        lp.mcp_config = Some(b.config_path().to_path_buf());
+                        (agy_calls, agy_notes, _bridge) = (Some(rx), Some(notes), Some((b, tokio::sync::mpsc::channel(1).1)));
+                    }
+                    Err(e) => cap.notes.push(format!("could not prepare the Antigravity workspace for the probe: {}", e)),
+                },
+                Err(e) => cap.notes.push(format!("could not start the gate for the probe: {}", e)),
+            },
+            Err(e) => cap.notes.push(format!("could not start the gate for the probe: {}", e)),
+        }
+    }
+    let gate_probe = agy_calls.is_some();
+    let user_prompt = if gate_probe { "Use the MCP tool named probe from the delphi server once. Then run the shell command: echo x > gate-probe.txt . Then reply with exactly the word OK." } else { "Reply with exactly the word OK." };
+    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: user_prompt.into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
+    let mut served = false;
     match Session::start(&l).await {
         Err(e) => cap.auth = format!("failed: {}", e),
         Ok(mut s) => {
             let mut got_result = false;
-            while let Some(ev) = s.next(Duration::from_secs(90)).await {
+            loop {
+                let ev = tokio::select! {
+                    Some(call) = async { match agy_calls.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
+                        served = true;
+                        let _ = call.reply.send(crate::tools::ToolResult { content: "probe ok".into(), is_error: false });
+                        continue;
+                    }
+                    ev = s.next(Duration::from_secs(90)) => match ev { Some(ev) => ev, None => break },
+                };
                 match ev {
                     Event::Init { tools, mcp_servers, .. } => {
                         if let (true, Some(servers)) = (_bridge.is_some(), &mcp_servers) {
@@ -298,6 +333,22 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
                 }
             }
             s.kill().await;
+        }
+    }
+    if gate_probe {
+        let decisions: Vec<crate::bridge::HookNote> = agy_notes.as_mut().map(|rx| std::iter::from_fn(|| rx.try_recv().ok()).collect()).unwrap_or_default();
+        let shell_denied = decisions.iter().any(|n| !n.allowed && n.tool == "run_command");
+        if dir.join("gate-probe.txt").exists() {
+            cap.degraded = true;
+            cap.auth = "failed: the agy gate did not stop a shell command".into();
+            cap.notes.push("agy gate: FAILED. A shell command ran although the gate should have denied it; do not use this seat until it is understood (the span stays untrusted, but nothing else is checked)".into());
+        } else if served && shell_denied {
+            cap.notes.push("agy gate: verified. Delphi's tool was served through the workspace plugin and the shell was denied; the roles that need tools can run on this seat".into());
+        } else if served {
+            cap.notes.push("agy gate: Delphi's tool was served, but the model did not try the shell, so the denial is unproven by this probe".into());
+        } else {
+            cap.degraded = true;
+            cap.notes.push("agy gate: Delphi's tool was not served. The workspace plugin did not load, or this agy does not honor a workspace-local .agents/ any more, or the model did not call it; roles that need tools cannot run on this seat".into());
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -467,6 +518,81 @@ echo '{"type":"result","subtype":"success","result":"OK","usage":{"input_tokens"
         let (cap, seat) = probe_harness_seat(&off, &ep, &prog, 7, Duration::ZERO).await;
         assert!(!cap.degraded && !cap.notes.iter().any(|n| n.contains("bridge")), "{:?}", cap.notes);
         assert!(!seat.unwrap().bridge);
+    }
+
+    const AGY_CFG: &str = r#"
+[models.gemini]
+fast = "gemini-fast"
+[[endpoints]]
+id = "ag"
+family = "gemini"
+path = "harness"
+harness = "agy"
+credential = "harness-login"
+cost_model = "subscription"
+"#;
+
+    /// A stand-in `agy` that does what the real one does inside the probe: finds the plugin and the gate in `.agents/`, asks the
+    /// gate about the shell the way the hook does, calls the stub tool through the plugin's server, and (if `ran_it`) obeys the
+    /// shell command anyway, as a CLI whose gate failed would.
+    fn agy_probe_cli(dir: &std::path::Path, ask_shell: bool, call_tool: bool, ran_it: bool) -> String {
+        let client = format!(
+            r#"import json, socket
+cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
+s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
+f = s.makefile("rw"); f.write(json.dumps({{"token": cfg["DELPHI_BRIDGE_TOKEN"]}}) + "\n"); f.flush()
+def rpc(o):
+    f.write(json.dumps(o) + "\n"); f.flush(); return json.loads(f.readline())
+if {ask_shell}:
+    d = rpc({{"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {{"toolCall": {{"name": "run_command", "args": {{"CommandLine": "echo x > gate-probe.txt"}}}}}}}})["result"]["decision"]
+    if d == "allow" or {ran_it}:
+        open("gate-probe.txt", "w").write("x")
+if {call_tool}:
+    rpc({{"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {{"protocolVersion": "2025-11-25"}}}})
+    rpc({{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {{"name": "probe", "arguments": {{}}}}}})
+"#,
+            ask_shell = if ask_shell { "True" } else { "False" },
+            call_tool = if call_tool { "True" } else { "False" },
+            ran_it = if ran_it { "True" } else { "False" }
+        );
+        std::fs::write(dir.join("client.py"), client).unwrap();
+        crate::harness::tests::fake_cli(dir, &format!("python3 -I '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}}}'", dir.join("client.py").display()))
+    }
+
+    #[tokio::test]
+    async fn the_probe_judges_the_agy_gate_by_what_happened_not_by_what_was_promised() {
+        if !std::process::Command::new("python3").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            return;
+        }
+        let cfg = Config::parse(AGY_CFG).unwrap();
+        let ep = cfg.endpoint("ag").unwrap().clone();
+        let run = |ask_shell: bool, call_tool: bool, ran_it: bool| {
+            let (cfg, ep) = (cfg.clone(), ep.clone());
+            async move {
+                let d = tempfile::tempdir().unwrap();
+                let prog = agy_probe_cli(d.path(), ask_shell, call_tool, ran_it);
+                probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await
+            }
+        };
+        // Works: the tool is served and the shell is denied.
+        let (cap, seat) = run(true, true, false).await;
+        assert!(!cap.degraded && cap.auth == "ok" && cap.notes.iter().any(|n| n.contains("agy gate: verified")), "{:?}", cap.notes);
+        assert!(seat.unwrap().bridge, "the seat is recorded as carrying the bridge");
+        // The shell ran although the gate was asked: the worst case, and it fails the seat.
+        let (cap, _) = run(true, true, true).await;
+        assert!(cap.degraded && cap.auth.starts_with("failed: the agy gate did not stop") && cap.notes.iter().any(|n| n.contains("agy gate: FAILED")), "{} {:?}", cap.auth, cap.notes);
+        // The model never tried the shell: the tool works but the denial is unproven, which is said, not hidden.
+        let (cap, _) = run(false, true, false).await;
+        assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("denial is unproven")), "{:?}", cap.notes);
+        // Delphi's tool was never served: the plugin did not load.
+        let (cap, _) = run(true, false, false).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("agy gate: Delphi's tool was not served")), "{:?}", cap.notes);
+        // With the bridge off nothing is gated, and the note says that instead.
+        let off = Config::parse(&format!("{}\n[harness.agy]\nbridge = false\n", AGY_CFG)).unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let prog = crate::harness::tests::fake_cli(d.path(), "echo '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}'");
+        let (cap, _) = probe_harness_seat(&off, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("the Delphi bridge and gate are off")) && !cap.notes.iter().any(|n| n.contains("agy gate")), "{:?}", cap.notes);
     }
 
     #[test]

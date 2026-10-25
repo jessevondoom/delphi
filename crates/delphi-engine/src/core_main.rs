@@ -27,6 +27,10 @@ pub fn run(args: Vec<String>) -> ! {
     if args.first().map(String::as_str) == Some("__mcp-bridge") {
         std::process::exit(crate::bridge::run_relay(&args[1..]));
     }
+    // The Antigravity CLI's `PreToolUse` gate hook (`bridge.rs`): it asks the span's server whether a tool call may run.
+    if args.first().map(String::as_str) == Some("__agy-hook") {
+        std::process::exit(crate::bridge::run_agy_hook());
+    }
     if args.first().map(String::as_str) == Some("auth") {
         let workspace = PathBuf::from(arg(&args, "--workspace").unwrap_or_else(|| die("--workspace is required")));
         std::process::exit(crate::auth_cli::run(&workspace, &args[1..]));

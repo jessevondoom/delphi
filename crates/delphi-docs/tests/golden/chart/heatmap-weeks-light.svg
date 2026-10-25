@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 304" width="720" height="304" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Worker load rose while api load fell</title>
+<desc id="chart-desc">Heatmap chart. web: minimum 43% at W1, maximum 70% at W10. api: minimum 37% at W10, maximum 59.5% at W1. cache: minimum 12.4% at W5, maximum 47.5% at W2. worker: minimum 12.4% at W1, maximum 57% at W10. batch: minimum 55% at W1, maximum 55% at W1. Values: W1 43% / 59.5% / 44.1% / 12.4% / 55%; W2 46% / 57% / 47.5% / 13.8% / 55%; W3 49% / 54.5% / 37.7% / 16.1% / 55%; W4 52% / 52% / 22% / 19.2% / 55%; W5 55% / 49.5% / 12.4% / 23.2% / 55%; W6 58% / 47% / 16.1% / 28.2% / 55%; W7 61% / 44.5% / 30.3% / 34% / 55%; W8 64% / 42% / 44.3% / 40.8% / 55%; W9 67% / 39.5% / 47.5% / 48.5% / 55%; W10 70% / 37% / 37.4% / 57% / 55%.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--h0:#dfeaf6;--ht0:#0b0b0b;--h1:#b5cfee;--ht1:#0b0b0b;--h2:#8bb5e7;--ht2:#0b0b0b;--h3:#619ae0;--ht3:#0b0b0b;--h4:#3780d8;--ht4:#0b0b0b;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--h0:#1e2731;--ht0:#f0efec;--h1:#233952;--ht1:#f0efec;--h2:#284a73;--ht2:#f0efec;--h3:#2d5b93;--ht3:#f0efec;--h4:#316bb0;--ht4:#f0efec;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--h0:#1e2731;--ht0:#f0efec;--h1:#233952;--ht1:#f0efec;--h2:#284a73;--ht2:#f0efec;--h3:#2d5b93;--ht3:#f0efec;--h4:#316bb0;--ht4:#f0efec;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--h0:#1e2731;--ht0:#f0efec;--h1:#233952;--ht1:#f0efec;--h2:#284a73;--ht2:#f0efec;--h3:#2d5b93;--ht3:#f0efec;--h4:#316bb0;--ht4:#f0efec;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+.h0{fill:var(--h0)}.ht0{fill:var(--ht0)}.h1{fill:var(--h1)}.ht1{fill:var(--ht1)}.h2{fill:var(--h2)}.ht2{fill:var(--ht2)}.h3{fill:var(--h3)}.ht3{fill:var(--ht3)}.h4{fill:var(--h4)}.ht4{fill:var(--ht4)}
+@media (forced-colors: active){.ht0,.ht1,.ht2,.ht3,.ht4{fill:CanvasText}.h4{fill:CanvasText}.h0,.h1,.h2,.h3{fill:Canvas;stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="304"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Worker load rose while api load fell</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">percent utilisation by week</text>
+<text x="50.32" y="91" class="t2" font-size="11" text-anchor="end">web</text>
+<rect class="h2" x="60.82" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="92.5" y="91" class="ht2" font-size="11" text-anchor="middle">43%</text>
+<rect class="h2" x="125.19" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="156.87" y="91" class="ht2" font-size="11" text-anchor="middle">46%</text>
+<rect class="h3" x="189.56" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="221.24" y="91" class="ht3" font-size="11" text-anchor="middle">49%</text>
+<rect class="h3" x="253.92" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="285.61" y="91" class="ht3" font-size="11" text-anchor="middle">52%</text>
+<rect class="h3" x="318.29" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="349.98" y="91" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="382.66" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="414.34" y="91" class="ht3" font-size="11" text-anchor="middle">58%</text>
+<rect class="h4" x="447.03" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="478.71" y="91" class="ht4" font-size="11" text-anchor="middle">61%</text>
+<rect class="h4" x="511.4" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="543.08" y="91" class="ht4" font-size="11" text-anchor="middle">64%</text>
+<rect class="h4" x="575.76" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="607.45" y="91" class="ht4" font-size="11" text-anchor="middle">67%</text>
+<rect class="h4" x="640.13" y="70.5" width="63.37" height="33" rx="2"/>
+<text x="671.82" y="91" class="ht4" font-size="11" text-anchor="middle">70%</text>
+<text x="50.32" y="125" class="t2" font-size="11" text-anchor="end">api</text>
+<rect class="h4" x="60.82" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="92.5" y="125" class="ht4" font-size="11" text-anchor="middle">59.5%</text>
+<rect class="h3" x="125.19" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="156.87" y="125" class="ht3" font-size="11" text-anchor="middle">57%</text>
+<rect class="h3" x="189.56" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="221.24" y="125" class="ht3" font-size="11" text-anchor="middle">54.5%</text>
+<rect class="h3" x="253.92" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="285.61" y="125" class="ht3" font-size="11" text-anchor="middle">52%</text>
+<rect class="h3" x="318.29" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="349.98" y="125" class="ht3" font-size="11" text-anchor="middle">49.5%</text>
+<rect class="h3" x="382.66" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="414.34" y="125" class="ht3" font-size="11" text-anchor="middle">47%</text>
+<rect class="h2" x="447.03" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="478.71" y="125" class="ht2" font-size="11" text-anchor="middle">44.5%</text>
+<rect class="h2" x="511.4" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="543.08" y="125" class="ht2" font-size="11" text-anchor="middle">42%</text>
+<rect class="h2" x="575.76" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="607.45" y="125" class="ht2" font-size="11" text-anchor="middle">39.5%</text>
+<rect class="h2" x="640.13" y="104.5" width="63.37" height="33" rx="2"/>
+<text x="671.82" y="125" class="ht2" font-size="11" text-anchor="middle">37%</text>
+<text x="50.32" y="159" class="t2" font-size="11" text-anchor="end">cache</text>
+<rect class="h2" x="60.82" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="92.5" y="159" class="ht2" font-size="11" text-anchor="middle">44.1%</text>
+<rect class="h3" x="125.19" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="156.87" y="159" class="ht3" font-size="11" text-anchor="middle">47.5%</text>
+<rect class="h2" x="189.56" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="221.24" y="159" class="ht2" font-size="11" text-anchor="middle">37.7%</text>
+<rect class="h0" x="253.92" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="285.61" y="159" class="ht0" font-size="11" text-anchor="middle">22%</text>
+<rect class="h0" x="318.29" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="349.98" y="159" class="ht0" font-size="11" text-anchor="middle">12.4%</text>
+<rect class="h0" x="382.66" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="414.34" y="159" class="ht0" font-size="11" text-anchor="middle">16.1%</text>
+<rect class="h1" x="447.03" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="478.71" y="159" class="ht1" font-size="11" text-anchor="middle">30.3%</text>
+<rect class="h2" x="511.4" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="543.08" y="159" class="ht2" font-size="11" text-anchor="middle">44.3%</text>
+<rect class="h3" x="575.76" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="607.45" y="159" class="ht3" font-size="11" text-anchor="middle">47.5%</text>
+<rect class="h2" x="640.13" y="138.5" width="63.37" height="33" rx="2"/>
+<text x="671.82" y="159" class="ht2" font-size="11" text-anchor="middle">37.4%</text>
+<text x="50.32" y="193" class="t2" font-size="11" text-anchor="end">worker</text>
+<rect class="h0" x="60.82" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="92.5" y="193" class="ht0" font-size="11" text-anchor="middle">12.4%</text>
+<rect class="h0" x="125.19" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="156.87" y="193" class="ht0" font-size="11" text-anchor="middle">13.8%</text>
+<rect class="h0" x="189.56" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="221.24" y="193" class="ht0" font-size="11" text-anchor="middle">16.1%</text>
+<rect class="h0" x="253.92" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="285.61" y="193" class="ht0" font-size="11" text-anchor="middle">19.2%</text>
+<rect class="h0" x="318.29" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="349.98" y="193" class="ht0" font-size="11" text-anchor="middle">23.2%</text>
+<rect class="h1" x="382.66" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="414.34" y="193" class="ht1" font-size="11" text-anchor="middle">28.2%</text>
+<rect class="h1" x="447.03" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="478.71" y="193" class="ht1" font-size="11" text-anchor="middle">34%</text>
+<rect class="h2" x="511.4" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="543.08" y="193" class="ht2" font-size="11" text-anchor="middle">40.8%</text>
+<rect class="h3" x="575.76" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="607.45" y="193" class="ht3" font-size="11" text-anchor="middle">48.5%</text>
+<rect class="h3" x="640.13" y="172.5" width="63.37" height="33" rx="2"/>
+<text x="671.82" y="193" class="ht3" font-size="11" text-anchor="middle">57%</text>
+<text x="50.32" y="227" class="t2" font-size="11" text-anchor="end">batch</text>
+<rect class="h3" x="60.82" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="92.5" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="125.19" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="156.87" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="189.56" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="221.24" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="253.92" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="285.61" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="318.29" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="349.98" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="382.66" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="414.34" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="447.03" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="478.71" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="511.4" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="543.08" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="575.76" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="607.45" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<rect class="h3" x="640.13" y="206.5" width="63.37" height="33" rx="2"/>
+<text x="671.82" y="227" class="ht3" font-size="11" text-anchor="middle">55%</text>
+<text x="92.5" y="254" class="t3" font-size="11" text-anchor="middle">W1</text>
+<text x="156.87" y="254" class="t3" font-size="11" text-anchor="middle">W2</text>
+<text x="221.24" y="254" class="t3" font-size="11" text-anchor="middle">W3</text>
+<text x="285.61" y="254" class="t3" font-size="11" text-anchor="middle">W4</text>
+<text x="349.98" y="254" class="t3" font-size="11" text-anchor="middle">W5</text>
+<text x="414.34" y="254" class="t3" font-size="11" text-anchor="middle">W6</text>
+<text x="478.71" y="254" class="t3" font-size="11" text-anchor="middle">W7</text>
+<text x="543.08" y="254" class="t3" font-size="11" text-anchor="middle">W8</text>
+<text x="607.45" y="254" class="t3" font-size="11" text-anchor="middle">W9</text>
+<text x="671.82" y="254" class="t3" font-size="11" text-anchor="middle">W10</text>
+<text x="60.32" y="275" class="t3" font-size="11" text-anchor="start">12.4%</text>
+<rect class="h0" x="98.24" y="266" width="26" height="10"/>
+<rect class="h1" x="124.24" y="266" width="26" height="10"/>
+<rect class="h2" x="150.24" y="266" width="26" height="10"/>
+<rect class="h3" x="176.24" y="266" width="26" height="10"/>
+<rect class="h4" x="202.24" y="266" width="26" height="10"/>
+<text x="236.24" y="275" class="t3" font-size="11" text-anchor="start">70%</text>
+</svg>

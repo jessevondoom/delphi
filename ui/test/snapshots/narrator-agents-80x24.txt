@@ -3,22 +3,22 @@ delphi v0.5 · agents
 
  ✔ nothing needs you
 
-    ▄▄▄     athena  orchestrator  ○ idle
-    •─•     frontier · x
-  ▀▀▀▀▀▀▀   0 tokens
-
-  ▄▄▄▄▄▄▄   daedalus  architect  ○ idle
-    •_•     frontier · x
-  ▀▀▀▀▀▀▀   0 tokens
-
   ▄▄▄▄▄▄▄   hephaestus  builder  ● running
    •───•    workhorse · claude-sonnet-x · t_1
-  ▀▀▀▀▀▀▀   12.6k tokens
+            12.6k tokens
 
   ▄     ▄   ares  red-team  ► waiting on you
     x?x     frontier · x · t_1
-  ▀▀▀▀▀▀▀   0 tokens
+            0 tokens
 
-  ▄▄ ▄ ▄▄   odysseus  strategist  ○ idle
+
+
+
+
+
+
+
+
+
 ────────────────────────────────────────────────────────────────────────────────
 1 running  ·  14.2k tokens                                     ← →  ·  ○ ○ ● ○ ○

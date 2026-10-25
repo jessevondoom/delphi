@@ -1,0 +1,46 @@
+[
+ {
+  "q": "what do we do in the first half hour of an incident",
+  "expect": "knowledge/runbooks/incident-first-30-minutes.md"
+ },
+ {
+  "q": "why not DynamoDB for billing",
+  "expect": "knowledge/decisions/0042-postgres-over-dynamo.md"
+ },
+ {
+  "q": "how do we ship a service to all clusters",
+  "expect": "knowledge/runbooks/rolling-deploy.md"
+ },
+ {
+  "q": "what is our checkout latency target",
+  "expect": "knowledge/decisions/0031-latency-budget.md"
+ },
+ {
+  "q": "how many clusters do we run",
+  "expect": "knowledge/architecture/overview.md"
+ },
+ {
+  "q": "how should services call each other",
+  "expect": "knowledge/architecture/service-mesh.md"
+ },
+ {
+  "q": "which calls may never be retried",
+  "expect": "knowledge/architecture/service-mesh.md"
+ },
+ {
+  "q": "what does cluster mean here",
+  "expect": "knowledge/glossary.md"
+ },
+ {
+  "q": "who is incident commander at first",
+  "expect": "knowledge/runbooks/incident-first-30-minutes.md"
+ },
+ {
+  "q": "how do we rotate the on-call pager vendor",
+  "expect": null
+ },
+ {
+  "q": "what is the office wifi password policy",
+  "expect": null
+ }
+]

@@ -1,6 +1,7 @@
 //! `delphi`: roadmap Step 1 commands (`specs/001`, `specs/006`).
 
 mod avatar;
+mod bundle_cmd;
 mod check;
 mod chat;
 mod console;
@@ -57,6 +58,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "relay", about: "send approval cards to your email or Telegram", synopsis: "  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]", detail: "Takes your replies too. Run it in a terminal or a tmux pane." },
     Cmd { group: "Set up", name: "skills", about: "agentskills.io skills in and out", synopsis: "  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role>\n    [--description \"…\"] [--workspace <name>] [--home <dir>]", detail: "An import is a pending proposal until you /ratify it." },
+    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. Exit codes: 0 pass · 1 failed · 2 usage." },
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
@@ -204,6 +206,8 @@ fn main() {
         }
         // The tool bridge's relay, started by a subscription CLI as its MCP server (`delphi_engine::bridge`).
         Some("__mcp-bridge") if ci == Some(0) => delphi_engine::bridge::run_relay(&args),
+        // The Antigravity CLI's `PreToolUse` gate hook: asks the span's server whether a tool call may run.
+        Some("__agy-hook") if ci == Some(0) => delphi_engine::bridge::run_agy_hook(),
         Some("lint") => cmd_lint(&args),
         Some("check") => cmd_check(&args),
         Some("setup") => cmd_setup(&args),
@@ -217,6 +221,7 @@ fn main() {
         Some("relay") => cmd_relay(&args),
         Some("decisions") => cmd_decisions(&args),
         Some("skills") => cmd_skills(&args),
+        Some("bundle") => bundle_cmd::run(&args),
         Some("hooks") => cmd_hooks(&args),
         Some("timers") => cmd_timers(&args),
         Some("daemon") => cmd_daemon(&args),

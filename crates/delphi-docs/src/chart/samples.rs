@@ -6,7 +6,35 @@ pub fn all() -> Vec<(&'static str, Value)> {
     let days: Vec<Value> = (0..60).map(|d| json!([format!("2026-{:02}-{:02}", 8 + d / 31, 1 + d % 31), 1200.0 + (d as f64 * 0.35).sin() * 140.0 + d as f64 * 9.0])).collect();
     let scatter_rows: Vec<Value> = (0..60).map(|i| { let x = i as f64 * 1.7 + (i as f64 * 1.3).sin() * 6.0; json!([x, 20.0 + x * 0.8 + (i as f64 * 2.1).cos() * 9.0, if i % 3 == 0 { "arm64" } else { "x86_64" }]) }).collect();
     let hist_rows: Vec<Value> = (0..240).map(|i| { let a = (i as f64 * 0.37).sin() * 20.0 + (i as f64 * 0.11).cos() * 15.0; json!([i, 100.0 + a + (i % 17) as f64 * 3.0]) }).collect();
+    let box_rows: Vec<Value> = (0..90).map(|i| {
+        let (region, base) = [("us-east", 100.0), ("eu-west", 130.0), ("ap-south", 170.0)][i % 3];
+        let wave = (i as f64 * 1.9).sin() * 14.0 + (i as f64 * 0.7).cos() * 9.0;
+        json!([region, if i % 29 == 0 { base + 95.0 } else { base + wave }])
+    }).collect();
+    let heat_rows: Vec<Value> = (1..=10).map(|w| {
+        let x = w as f64;
+        json!([format!("W{}", w), 40.0 + x * 3.0, 62.0 - x * 2.5, 30.0 + (x * 0.9).sin() * 18.0, 12.0 + x * x * 0.45, 55.0])
+    }).collect();
+    let spark_rows: Vec<Value> = (0..40).map(|i| json!([i, 50.0 + (i as f64 * 0.4).sin() * 12.0 + i as f64 * 0.8])).collect();
     vec![
+        ("stacked-three-parts", json!({
+            "type": "stacked-bar", "title": "Tests are the largest share of build time", "subtitle": "minutes per build",
+            "data": {"columns": ["quarter", "compile", "test", "link"], "rows": [["Q1", 6.1, 9.4, 1.2], ["Q2", 5.8, 8.9, 1.1], ["Q3", 5.2, 7.7, 1.0], ["Q4", 4.9, 7.1, 1.0]]},
+            "x": "quarter", "format": {"y": "0.0"}})),
+        ("donut-three", json!({
+            "type": "donut", "title": "Two thirds of spend is compute", "subtitle": "monthly cloud cost",
+            "data": {"columns": ["item", "usd"], "rows": [["Compute", 8400], ["Storage", 2900], ["Network", 1300]]},
+            "x": "item", "y": "usd", "format": {"y": "$0,0"}})),
+        ("heatmap-weeks", json!({
+            "type": "heatmap", "title": "Worker load rose while api load fell", "subtitle": "percent utilisation by week",
+            "data": {"columns": ["week", "web", "api", "cache", "worker", "batch"], "rows": heat_rows},
+            "x": "week", "format": {"y": "0\"%\""}})),
+        ("box-regions", json!({
+            "type": "box", "title": "ap-south is slower and more variable", "subtitle": "request latency, ms",
+            "data": {"columns": ["region", "ms"], "rows": box_rows}, "x": "region", "y": "ms", "format": {"y": "0 ms"}})),
+        ("sparkline-trend", json!({
+            "type": "sparkline", "title": "Weekly active users", "subtitle": "last 40 weeks",
+            "data": {"columns": ["week", "users"], "rows": spark_rows}, "x": "week", "y": "users", "format": {"y": "0,0"}})),
         ("line-two-series", json!({
             "type": "line", "title": "Median latency fell 12% in 0.2.3", "subtitle": "ms, lower is better",
             "data": {"columns": ["release", "p50", "p95"], "rows": [["0.2.1", 120, 340], ["0.2.2", 118, 310], ["0.2.3", 104, 255], ["0.2.4", 103, 262], ["0.2.5", 101, 248]]},

@@ -54,6 +54,11 @@ pub fn files() -> Vec<SeedFile> {
     v
 }
 
+/// The built-in manifest of a canonical role (`agents/<role>/AGENT.md`), as shipped in this binary.
+pub fn builtin_agent(role: &str) -> Option<&'static str> {
+    AGENTS.get_file(format!("{}/AGENT.md", role))?.contents_utf8()
+}
+
 /// Built-in theme names (`themes/<name>/theme.md`).
 pub fn builtin_themes() -> Vec<String> {
     THEMES.dirs().map(|d| d.path().to_string_lossy().to_string()).filter(|n| THEMES.get_file(format!("{}/theme.md", n)).is_some()).collect()

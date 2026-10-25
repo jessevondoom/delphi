@@ -1,0 +1,40 @@
+[bundle]
+schema = 1
+name = "acme-platform"
+org = "acme"
+version = "1.4.0"
+title = "Acme Platform Engineering"
+description = "How Acme builds and runs its platform: architecture, decisions, runbooks, review habits, this year's goals."
+license = "Proprietary"
+homepage = "https://wiki.acme.example/platform-bundle"
+audience = "org"
+review_by = "2027-01-31"
+language = "en"
+
+[compat]
+delphi = ">=0.2.0"
+bundle_schema = 1
+
+[publisher]
+name = "Acme Platform Engineering"
+contact = "platform-eng@acme.example"
+
+[applies_to]
+repos = ["acme/platform-*", "acme/billing"]
+tech = ["rust", "postgres", "kubernetes"]
+paths = ["services/**", "infra/**"]
+
+[sections]
+knowledge = true
+skills = true
+agents = true
+behavior = true
+evals = true
+
+[agents.reviewer]
+role = "red-team"
+
+[touches]
+roles = ["strategist", "architect", "builder", "red-team"]
+connectors = []
+network = false

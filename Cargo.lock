@@ -751,6 +751,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "delphi-adapter",
+ "delphi-bundle",
  "delphi-core",
  "delphi-engine",
  "delphi-sandbox",
@@ -798,6 +799,21 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "delphi-bundle"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "delphi-core",
+ "regex",
+ "semver",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "toml",
+ "unicode-normalization",
 ]
 
 [[package]]

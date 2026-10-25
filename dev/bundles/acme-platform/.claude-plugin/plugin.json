@@ -1,0 +1,20 @@
+{
+  "author": {
+    "email": "platform-eng@acme.example",
+    "name": "Acme Platform Engineering"
+  },
+  "description": "How Acme builds and runs its platform: architecture, decisions, runbooks, review habits, this year's goals.",
+  "keywords": [
+    "acme",
+    "rust",
+    "postgres",
+    "kubernetes"
+  ],
+  "license": "Proprietary",
+  "metadata": {
+    "delphi.bundle": "1",
+    "delphi.org": "acme"
+  },
+  "name": "acme-platform",
+  "version": "1.4.0"
+}

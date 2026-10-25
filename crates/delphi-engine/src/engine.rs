@@ -1561,6 +1561,40 @@ impl Engine {
 }
 
 #[cfg(test)]
+mod tool_schema_tests {
+    use super::*;
+
+    fn arrays_without_items(v: &Value, path: &str, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if m.get("type").is_some_and(|t| t == "array") && !m.contains_key("items") {
+                    out.push(path.to_string());
+                }
+                for (k, x) in m {
+                    arrays_without_items(x, &format!("{}.{}", path, k), out);
+                }
+            }
+            Value::Array(l) => l.iter().enumerate().for_each(|(i, x)| arrays_without_items(x, &format!("{}[{}]", path, i), out)),
+            _ => {}
+        }
+    }
+
+    /// Gemini rejects a request (and so a whole span on the Antigravity CLI) if any tool's schema has an array with no
+    /// `items`. Claude does not notice, so this slipped through when `write_report` and `write_deck` were added.
+    #[test]
+    fn every_tool_delphi_defines_has_a_schema_the_strictest_provider_accepts() {
+        let mut defs = tools::tool_defs(true);
+        defs.extend([dispatch_def(), timer_def(), run_command_def()]);
+        assert!(defs.len() >= 14);
+        let mut bad = Vec::new();
+        for d in &defs {
+            arrays_without_items(&d.input_schema, &d.name, &mut bad);
+        }
+        assert!(bad.is_empty(), "arrays with no `items`: {:?}", bad);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::testkit::{events_of, kinds, setup, Fx};

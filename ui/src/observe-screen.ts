@@ -68,25 +68,39 @@ const sevColor = (sev: string, _m: OModel): Paint => (sev === 'P0' ? T.alert : s
 const dim = (s: string) => T.dim(s);
 const text = (m: OModel) => T.text(m.pal);
 
-/** The 3-line solid mascot, seven columns (spec 005a): crown in the bottom half of row one, a painted face, a flush chin. */
+/**
+ * The 3-line solid mascot, seven columns (spec 005a): crown in the top row, a painted face, a chin.
+ * Every cell is painted with a background colour, never drawn as a half-block glyph: `▄` and `▀` leave seams between
+ * neighbours and, where the terminal adds line spacing, a gap between rows. The crown is a cell whose upper half is
+ * the terminal's own colour (a `▀` in the background colour on the crown's tint), so it keeps its half height; the
+ * chin is a darker shade of the body. Without a known background the crown falls back to `▄`, and without colour the
+ * whole figure to glyphs.
+ */
 export function mascot(role: string, state: string, info: T.Info, pal: T.Pal): [string, string, string] {
   const r = info.roles[role], lib = info.avatar?.roles[role];
-  const slice = lib?.crown ?? r?.crown;
+  // A role the library has no sprite for (a generic sub-agent) gets a plain slate one.
+  const generic = !r && !lib;
+  const slice = generic ? '  ▄▄▄  ' : lib?.crown ?? r?.crown;
   if (!slice) return [' '.repeat(7), ' '.repeat(7), ' '.repeat(7)];
-  const crownColor = lib?.crown_rgb ?? r?.crown_rgb ?? T.CROWN_DEFAULT;
-  const chassis = lib?.chassis ?? r!.chassis;
-  const crown = [...slice].map((c, i) => (c !== '▄' ? ' ' : T.tone(role === 'builder' && i >= 1 && i <= 5 ? T.CROWN_LIGHT : crownColor)('▄'))).join('');
+  const crownColor = generic ? T.GENERIC_CROWN : lib?.crown_rgb ?? r?.crown_rgb ?? T.CROWN_DEFAULT;
+  const chassis = generic ? T.GENERIC_CHASSIS : lib?.chassis ?? r!.chassis;
+  const bgc = pal.bg;
+  const crown = [...slice].map((c, i) => {
+    if (c !== '▄') return ' ';
+    const hex = role === 'builder' && i >= 1 && i <= 5 ? T.CROWN_LIGHT : crownColor;
+    return T.crownCell(hex, bgc);
+  }).join('');
   // The face row comes from the library's data; the built-in rows serve an older `delphi` that does not send it.
   let row = lib?.mascot[T.ACTIVITY[state as T.AgentState] ?? 'idle'];
   if (!row) {
     let face: string;
     if (role === 'scout') face = state === 'waiting on you' ? 'x ? x' : state === 'running' ? '· · ·' : '• • •';
     else if (role === 'builder' && state !== 'waiting on you' && state !== 'escalated') face = '•───•';
-    else face = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? '•─•' : r!.face;
+    else face = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? '•─•' : r?.face ?? '•_•';
     const pad = 7 - [...face].length;
     row = ' '.repeat(Math.floor(pad / 2)) + face + ' '.repeat(pad - Math.floor(pad / 2));
   }
-  return [crown, T.onChassis(chassis, row), T.tone(chassis)('▀▀▀▀▀▀▀')];
+  return [crown, T.onChassis(chassis, row), T.chin(chassis)];
 }
 
 const name = (m: OModel, role: string) => T.roleName(role, m.info);
@@ -115,12 +129,31 @@ const band = (m: OModel, line: string, w: number): string => {
   return t ? t.fill(padded) : chalk.bold(line);
 };
 
-/** The roster the strip no longer names: a mascot per agent with its name, role, state in words, model, task and tokens. */
+/** An agent row for a DAG node whose role has no agent of its own: a generic sub-agent the work spawned. */
+const NO_TOKENS: Tokens = { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0 };
+const subAgent = (n: OState['nodes'][string]): AgentRow => ({ role: n.role, state: n.state, task_id: n.task_id, endpoint: '', tier: '', model: '', upscaled: false, tokens: { ...NO_TOKENS, input: n.tokens }, cost_usd: n.cost_usd, calls: 0 });
+
+/** Who is at work right now: the agents that are not idle, and every running node whose role has no agent (sub-agents). */
+export function activeAgents(st: OState): AgentRow[] {
+  const rows = ordered(st).filter((a) => a.state !== 'idle');
+  const seen = new Set<string>();
+  for (const n of Object.values(st.nodes)) {
+    if (n.state !== 'running' || st.agents[n.role] || seen.has(n.role)) continue;
+    seen.add(n.role);
+    rows.push(subAgent(n));
+  }
+  return rows;
+}
+
+/** The roster: a mascot per agent that is working, with its name, role, state in words, model, task and tokens. With none working, the orchestrator alone, and a line saying the system is idle. */
 function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
-  for (const a of ordered(m.st)) {
+  const active = activeAgents(m.st);
+  const idle = active.length === 0;
+  const orch: AgentRow = m.st.agents.orchestrator ?? { role: 'orchestrator', state: 'idle', task_id: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: NO_TOKENS, cost_usd: 0, calls: 0 };
+  for (const a of idle ? [orch] : active) {
     const mk = mascot(a.role, a.state, m.info, m.pal);
-    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : 'no call yet';
+    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : idle ? 'the system is idle' : 'no call yet';
     const nm = name(m, a.role);
     const total = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
     const meta = [
@@ -135,6 +168,7 @@ function agents(m: OModel, w: number, _h: number): string[] {
     });
     out.push('');
   }
+  if (idle) out.push(dim('  nothing is running: the system is idle. agents appear here while they work.'));
   return out;
 }
 

@@ -318,10 +318,9 @@ pub fn mascot_row(role: AgentRole, activity: AgentActivity) -> String {
 /// Renders a 3-line solid mascot (exact 7 display columns per row).
 /// Line 1: Crown (bottom half block `▄`)
 /// Line 2: Face (chassis background fill, black facial features)
-/// Line 3: Chin (chassis `▀▀▀▀▀▀▀`, flush)
+/// Line 3: Chin (seven spaces on a darker shade of the chassis: painted, not a `▀` glyph, which leaves a gap above it)
 pub fn render_mascot(role: AgentRole, activity: AgentActivity) -> [String; 3] {
     let t = get_theme(role);
-    let c_fg = fg(t.chassis_rgb);
     let c_bg = bg(t.chassis_rgb);
     let eye_fg = "\x1b[38;2;15;23;42m"; // Black features on solid body
 
@@ -344,7 +343,8 @@ pub fn render_mascot(role: AgentRole, activity: AgentActivity) -> [String; 3] {
     };
 
     // Line 3: Flush Chin
-    let l3 = format!("{c_fg}▀▀▀▀▀▀▀{RESET}");
+    let shade = |v: u8| (f32::from(v) * 0.6).round() as u8;
+    let l3 = format!("{}       {RESET}", bg((shade(t.chassis_rgb.0), shade(t.chassis_rgb.1), shade(t.chassis_rgb.2))));
 
     [l1, l2, l3]
 }

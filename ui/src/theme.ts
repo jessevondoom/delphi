@@ -104,6 +104,21 @@ export const tone = (hex: string): ChalkInstance => (caps.color === 'none' ? pla
 /** Colours drawn by the mascot that are not a role's own: the crown's default and highlight. */
 export const CROWN_DEFAULT = '#facc15';
 export const CROWN_LIGHT = '#ffffff';
+/** The sprite of a role the library has no look for (a generic sub-agent): slate. */
+export const GENERIC_CHASSIS = '#94a3b8';
+export const GENERIC_CROWN = '#cbd5e1';
+/**
+ * One cell of a mascot's crown. Painted as a background with the terminal's own colour in its upper half (a `▀`), so
+ * neighbouring cells have no seam and the row meets the face with no gap however the terminal spaces its lines; the
+ * glyph `▄` is the fallback when the terminal's background is not known.
+ */
+export const crownCell = (hex: string, bg: Rgb | null | undefined): string => (caps.color !== 'none' && bg ? chalk.bgHex(hex).rgb(...bg)('▀') : tone(hex)('▄'));
+/** A mascot's chin: seven cells of a darker shade of the body, painted, not drawn with `▀`. Glyphs where there is no colour. */
+export const chin = (chassis: string): string => {
+  if (caps.color === 'none') return '▀▀▀▀▀▀▀';
+  const dark = '#' + [1, 3, 5].map((i) => Math.round(parseInt(chassis.slice(i, i + 2), 16) * 0.6).toString(16).padStart(2, '0')).join('');
+  return chalk.bgHex(dark)(' '.repeat(7));
+};
 /** A mascot's face row: dark ink on the role-coloured body. */
 export const onChassis = (chassis: string, row: string): string => (caps.color === 'none' ? row : chalk.bgHex(chassis).hex('#0f172a')(row));
 
