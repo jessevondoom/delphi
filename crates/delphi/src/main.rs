@@ -24,6 +24,7 @@ mod selfupdate;
 mod setup;
 mod start;
 mod theme;
+mod timers_cmd;
 mod update;
 
 use std::path::PathBuf;
@@ -40,6 +41,7 @@ const USAGE: &str = "usage:
   delphi lint --repo <path>
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
   delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>] [--workspace <name>] [--home <dir>]   (review an optimistic build's provisional decisions)
+  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>] [--mission <id>] [--workspace <name>] [--home <dir>]   (the wakes the daemon is keeping for roles)
   delphi relay [check] [--workspace <name>] [--home <dir>]   (send approval cards to your email and take your replies; run it in a terminal or tmux pane)
   delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>] [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]   (no terminal needed; exit 0 ok · 1 gates · 2 card denied · 3 budget · 4 infrastructure)
   delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
@@ -79,6 +81,7 @@ fn main() {
         Some("run") => cmd_run(&args[1..]),
         Some("relay") => cmd_relay(&args[1..]),
         Some("decisions") => cmd_decisions(&args[1..]),
+        Some("timers") => cmd_timers(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
         Some("needs") => cmd_needs(&args[1..]),
@@ -323,6 +326,25 @@ fn cmd_decisions(args: &[String]) -> i32 {
     };
     let rest: Vec<String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !matches!(args[*i - 1].as_str(), "--workspace" | "--home" | "--mission"))).map(|(_, a)| a.clone()).collect();
     decisions::cli(&home, &ws.dir, flag(args, "--mission"), &rest)
+}
+
+/// `delphi timers [list|set|cancel]`: the wakes the daemon is keeping (`timers_cmd.rs`, `specs/017`).
+fn cmd_timers(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("timers", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    // `--in`, `--at` and `--every` belong to `set`; only the shared flags are taken out here.
+    let mut rest: Vec<String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if matches!(a.as_str(), "--workspace" | "--home" | "--mission") {
+            it.next();
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    timers_cmd::cli(&home, &ws.dir, flag(args, "--mission"), &rest)
 }
 
 /// `delphi relay [check]`: the email relay for approval cards (`relay/`, `specs/014`).

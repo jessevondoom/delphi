@@ -190,6 +190,8 @@ pub struct Engine {
     pub(crate) optimistic: Mutex<HashSet<String>>,
     /// Woken when the operator reviews a decision, so a task waiting for review looks again at once.
     pub(crate) decisions_changed: tokio::sync::Notify,
+    /// Durable timers (`specs/017`): wakes the daemon keeps on behalf of roles and the operator.
+    pub timers: Arc<crate::timers::TimerStore>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -306,6 +308,17 @@ fn dispatch_def() -> ToolDef {
     }
 }
 
+fn timer_def() -> ToolDef {
+    ToolDef {
+        name: "timer".into(),
+        description: "Ask Delphi to wake you later. You cannot wait, sleep or watch a clock yourself: if you say you will check back and have not set a timer, nothing will happen. `set` takes `note` (why you are waking: you will read it in a new task, with nothing else carried over), and either `in_secs` (seconds from now) or `at` (an RFC 3339 time, which must still be in the future), and optionally `every_secs` (at least 60) to repeat. The result gives the real current time and the exact wake time. `list` shows your pending timers; `cancel` takes the `id` of one you set. A timer wakes you, and only you.".into(),
+        input_schema: json!({"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["set", "list", "cancel"]},
+            "note": {"type": "string"}, "in_secs": {"type": "integer", "minimum": 1}, "at": {"type": "string"},
+            "every_secs": {"type": "integer", "minimum": 60}, "id": {"type": "string"}}}),
+    }
+}
+
 impl Engine {
     pub(crate) fn now(&self) -> String {
         (self.clock)()
@@ -338,10 +351,16 @@ impl Engine {
     /// As [`Engine::run_task`] for a task id the caller already allocated (so it can be reported
     /// to the console before the task finishes).
     pub async fn run_task_with_id(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
-        self.start_task(m, task_id, target, prompt, true).await
+        self.start_task(m, task_id, target, prompt, true, None).await
     }
 
-    async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool) -> Result<TaskOutcome, EngineError> {
+    /// A task started by a timer (`specs/017`): it begins at the trust ceiling of whoever set the timer, so waiting
+    /// cannot turn a note written under untrusted input into a clean instruction.
+    pub async fn run_task_woken(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, ceiling: delphi_core::provenance::Tier) -> Result<TaskOutcome, EngineError> {
+        self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("timer", ceiling))).await
+    }
+
+    async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         if target == "builder" {
             // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
@@ -357,7 +376,7 @@ impl Engine {
             m.append(created).await?;
         }
         self.reprobe_due(m).await?;
-        let outcome = self.run_span(m, &task_id, handoff, None, 0).await;
+        let outcome = self.run_span(m, &task_id, handoff, parent, 0).await;
         self.broker.end_task(&task_id);
         self.degraded.lock().unwrap().remove(&task_id);
         self.finish_task(m, task_id, outcome?).await
@@ -499,6 +518,9 @@ impl Engine {
             let mut defs = self.tools.defs(!sc.manifest.write.is_empty());
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
                 defs.push(dispatch_def());
+            }
+            if sc.manifest.execute.iter().any(|e| e == "timers") {
+                defs.push(timer_def());
             }
             if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
                 defs.push(run_command_def());
@@ -710,7 +732,7 @@ impl Engine {
         self.reprobe_due(m).await?;
         let Some(root) = t.root_span.clone() else {
             // It never started a span: run it from the saved request.
-            return self.start_task(m, task_id.to_string(), &t.target, &t.prompt, false).await;
+            return self.start_task(m, task_id.to_string(), &t.target, &t.prompt, false, None).await;
         };
         let st = rec.spans.get(&root).ok_or_else(|| EngineError::Invalid(format!("no recorded span `{}`", root)))?;
         let outcome = match &st.status {
@@ -1053,6 +1075,13 @@ impl Engine {
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
         }
+        if name == "timer" {
+            // As with dispatch: the schema is only offered to roles that may set timers; a forged call is refused here.
+            if !sc.manifest.execute.iter().any(|e| e == "timers") {
+                return Ok(tool_result_error("this role's manifest does not authorize timers"));
+            }
+            return self.exec_timer(sc, args).await;
+        }
         if let Some((connector, tool)) = self.connectors.parse_wire(name) {
             return self.exec_connector(sc, call_id, &connector, &tool, args).await;
         }
@@ -1311,6 +1340,53 @@ impl Engine {
             text = format!("{}\n(the {} did not finish: {})", text, role, r);
         }
         tools::ToolResult { content: text, is_error: matches!(status, NodeStatus::Escalated(_)) }
+    }
+
+    /// The `timer` tool: set, list or cancel this role's wakes (`specs/017`). Every change is logged in the span, so the
+    /// operator can see what each role has promised to come back to.
+    async fn exec_timer(self: &Arc<Self>, sc: &mut SpanCtx, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        use crate::timers::{relative, NewTimer};
+        let now = (self.clock_unix)();
+        let at = |t: i64| delphi_core::time::format_unix_millis(t, 0).replace(".000Z", "Z");
+        match args["action"].as_str() {
+            Some("set") => {
+                let at_unix = match args["at"].as_str() {
+                    Some(s) => match delphi_core::time::parse_rfc3339(s) {
+                        Some(t) => Some(t),
+                        None => return Ok(tool_result_error(format!("`at` must be an RFC 3339 time such as {}; it is now {}", at(now + 600), at(now)))),
+                    },
+                    None => None,
+                };
+                let req = NewTimer { mission_id: sc.m.id.clone(), target: sc.role.clone(), note: args["note"].as_str().unwrap_or("").into(), creator: sc.role.clone(), ceiling: sc.span.ceiling().as_str().into(), in_secs: args["in_secs"].as_i64(), at_unix, every_secs: args["every_secs"].as_i64() };
+                match self.timers.set(req, now) {
+                    Ok(t) => {
+                        sc.m.append(sc.ev("timer.set", t.to_json())).await?;
+                        let every = t.every_secs.map(|e| format!(", then every {}s", e)).unwrap_or_default();
+                        Ok(tools::ToolResult { content: format!("timer {} set. It is now {}. You will be woken as `{}` at {} ({}){}. That wake is a new task: you will not be running in between, and you will see only your note: \"{}\"", t.id, at(now), t.target, at(t.due_unix), relative(t.due_unix, now), every, t.note), is_error: false })
+                    }
+                    Err(e) => Ok(tool_result_error(e.0)),
+                }
+            }
+            Some("list") => {
+                let mine: Vec<_> = self.timers.pending().into_iter().filter(|t| t.creator == sc.role).collect();
+                let mut out = format!("It is now {}. ", at(now));
+                if mine.is_empty() {
+                    out.push_str("You have no pending timers.");
+                }
+                for t in mine {
+                    out.push_str(&format!("\n{}  {} ({}){}  \"{}\"", t.id, at(t.due_unix), relative(t.due_unix, now), t.every_secs.map(|e| format!(" every {}s", e)).unwrap_or_default(), t.note));
+                }
+                Ok(tools::ToolResult { content: out, is_error: false })
+            }
+            Some("cancel") => match self.timers.cancel(args["id"].as_str().unwrap_or(""), &sc.role) {
+                Ok(t) => {
+                    sc.m.append(sc.ev("timer.cancelled", t.to_json())).await?;
+                    Ok(tools::ToolResult { content: format!("timer {} cancelled", t.id), is_error: false })
+                }
+                Err(e) => Ok(tool_result_error(e.0)),
+            },
+            _ => Ok(tool_result_error("`action` must be set, list or cancel")),
+        }
     }
 
     async fn exec_dispatch(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
