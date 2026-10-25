@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Build time grows with changed lines</title>
+<desc id="chart-desc">Scatter chart. arm64: minimum 29 at 0, maximum 106.3 at 97.1. x86_64: minimum 16.5 at 1.5, maximum 103.1 at 106.1.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Build time grows with changed lines</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">seconds vs lines changed (hundreds)</text>
+<circle class="d1" cx="21" cy="70" r="5"/>
+<text x="32" y="74" class="t2" font-size="12" text-anchor="start">arm64</text>
+<circle class="d2" cx="79.64" cy="70" r="5"/>
+<text x="90.64" y="74" class="t2" font-size="12" text-anchor="start">x86_64</text>
+<line class="g" x1="45.14" y1="360" x2="700" y2="360"/>
+<text x="37.14" y="364" class="t3" font-size="11" text-anchor="end">0</text>
+<line class="g" x1="45.14" y1="316" x2="700" y2="316"/>
+<text x="37.14" y="320" class="t3" font-size="11" text-anchor="end">20</text>
+<line class="g" x1="45.14" y1="272" x2="700" y2="272"/>
+<text x="37.14" y="276" class="t3" font-size="11" text-anchor="end">40</text>
+<line class="g" x1="45.14" y1="228" x2="700" y2="228"/>
+<text x="37.14" y="232" class="t3" font-size="11" text-anchor="end">60</text>
+<line class="g" x1="45.14" y1="184" x2="700" y2="184"/>
+<text x="37.14" y="188" class="t3" font-size="11" text-anchor="end">80</text>
+<line class="g" x1="45.14" y1="140" x2="700" y2="140"/>
+<text x="37.14" y="144" class="t3" font-size="11" text-anchor="end">100</text>
+<line class="g" x1="45.14" y1="96" x2="700" y2="96"/>
+<text x="37.14" y="100" class="t3" font-size="11" text-anchor="end">120</text>
+<line class="ax" x1="45.14" y1="360" x2="700" y2="360"/>
+<line class="ax" x1="45.14" y1="360" x2="45.14" y2="364"/>
+<text x="45.14" y="378" class="t3" font-size="11" text-anchor="middle">0</text>
+<line class="ax" x1="154.28" y1="360" x2="154.28" y2="364"/>
+<text x="154.28" y="378" class="t3" font-size="11" text-anchor="middle">20</text>
+<line class="ax" x1="263.43" y1="360" x2="263.43" y2="364"/>
+<text x="263.43" y="378" class="t3" font-size="11" text-anchor="middle">40</text>
+<line class="ax" x1="372.57" y1="360" x2="372.57" y2="364"/>
+<text x="372.57" y="378" class="t3" font-size="11" text-anchor="middle">60</text>
+<line class="ax" x1="481.71" y1="360" x2="481.71" y2="364"/>
+<text x="481.71" y="378" class="t3" font-size="11" text-anchor="middle">80</text>
+<line class="ax" x1="590.86" y1="360" x2="590.86" y2="364"/>
+<text x="590.86" y="378" class="t3" font-size="11" text-anchor="middle">100</text>
+<line class="ax" x1="700" y1="360" x2="700" y2="364"/>
+<text x="700" y="378" class="t3" font-size="11" text-anchor="middle">120</text>
+<circle class="d1" cx="45.14" cy="296.2" r="4"/>
+<circle class="d1" cx="50.45" cy="294.49" r="4"/>
+<circle class="d1" cx="133.5" cy="267.71" r="4"/>
+<circle class="d1" cx="103.69" cy="277.34" r="4"/>
+<circle class="d1" cx="159.99" cy="259.2" r="4"/>
+<circle class="d1" cx="204.12" cy="245" r="4"/>
+<circle class="d1" cx="179.81" cy="252.87" r="4"/>
+<circle class="d1" cx="267.05" cy="224.77" r="4"/>
+<circle class="d1" cx="260.78" cy="226.83" r="4"/>
+<circle class="d1" cx="278.72" cy="221.09" r="4"/>
+<circle class="d1" cx="355.01" cy="196.54" r="4"/>
+<circle class="d1" cx="322.37" cy="207.13" r="4"/>
+<circle class="d1" cx="389.54" cy="185.53" r="4"/>
+<circle class="d1" cx="420.73" cy="175.54" r="4"/>
+<circle class="d1" cx="404.35" cy="180.9" r="4"/>
+<circle class="d1" cx="493.01" cy="152.38" r="4"/>
+<circle class="d1" cx="476.74" cy="157.72" r="4"/>
+<circle class="d1" cx="507.77" cy="147.8" r="4"/>
+<circle class="d1" cx="575.06" cy="126.19" r="4"/>
+<circle class="d1" cx="542.41" cy="136.83" r="4"/>
+<circle class="d2" cx="85.97" cy="312.83" r="4"/>
+<circle class="d2" cx="80.57" cy="314.28" r="4"/>
+<circle class="d2" cx="53.32" cy="323.64" r="4"/>
+<circle class="d2" cx="98.57" cy="308.18" r="4"/>
+<circle class="d2" cx="120.53" cy="302.25" r="4"/>
+<circle class="d2" cx="92.25" cy="309.93" r="4"/>
+<circle class="d2" cx="151.67" cy="292.49" r="4"/>
+<circle class="d2" cx="179.5" cy="281.49" r="4"/>
+<circle class="d2" cx="135.32" cy="298.04" r="4"/>
+<circle class="d2" cx="155.22" cy="289.02" r="4"/>
+<circle class="d2" cx="223.99" cy="269.72" r="4"/>
+<circle class="d2" cx="199.3" cy="274.51" r="4"/>
+<circle class="d2" cx="207.68" cy="275.25" r="4"/>
+<circle class="d2" cx="255.65" cy="256.03" r="4"/>
+<circle class="d2" cx="238.76" cy="265.49" r="4"/>
+<circle class="d2" cx="225.82" cy="265.34" r="4"/>
+<circle class="d2" cx="306.01" cy="244.06" r="4"/>
+<circle class="d2" cx="308.85" cy="238.26" r="4"/>
+<circle class="d2" cx="273.36" cy="254.86" r="4"/>
+<circle class="d2" cx="314.21" cy="236.22" r="4"/>
+<circle class="d2" cx="349.59" cy="230.53" r="4"/>
+<circle class="d2" cx="319.47" cy="234.21" r="4"/>
+<circle class="d2" cx="367.64" cy="224.96" r="4"/>
+<circle class="d2" cx="402.54" cy="207.1" r="4"/>
+<circle class="d2" cx="361.27" cy="227.26" r="4"/>
+<circle class="d2" cx="372.74" cy="216.4" r="4"/>
+<circle class="d2" cx="448.53" cy="199.37" r="4"/>
+<circle class="d2" cx="429" cy="197.93" r="4"/>
+<circle class="d2" cx="424.28" cy="207.43" r="4"/>
+<circle class="d2" cx="473.19" cy="183.36" r="4"/>
+<circle class="d2" cx="468.3" cy="193.47" r="4"/>
+<circle class="d2" cx="448.85" cy="190.89" r="4"/>
+<circle class="d2" cx="524.71" cy="175.51" r="4"/>
+<circle class="d2" cx="536.07" cy="162.44" r="4"/>
+<circle class="d2" cx="494.86" cy="185.37" r="4"/>
+<circle class="d2" cx="529.84" cy="164.12" r="4"/>
+<circle class="d2" cx="577.86" cy="158.83" r="4"/>
+<circle class="d2" cx="547.73" cy="158.03" r="4"/>
+<circle class="d2" cx="583.27" cy="157.3" r="4"/>
+<circle class="d2" cx="624.06" cy="133.09" r="4"/>
+</svg>

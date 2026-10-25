@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Daily active users grew through the summer</title>
+<desc id="chart-desc">Area chart. users: minimum 1,178.8 at 2026-08-14, maximum 1,867.3 at 2026-09-29. From 1,200 to 1,867.3 it rises 56%. Values: 2026-08-01 1,200; 2026-08-02 1,257; 2026-08-03 1,308.2; 2026-08-04 1,348.4; 2026-08-05 1,374; 2026-08-06 1,382.8; 2026-08-07 1,374.8; 2026-08-08 1,352.3; 2026-08-09 1,318.9; 2026-08-10 1,279.8; 2026-08-11 1,240.9; 2026-08-12 1,207.9; 2026-08-13 1,186; 2026-08-14 1,178.8; 2026-08-15 1,188.5; 2026-08-16 1,214.7; 2026-08-17 1,255.6; 2026-08-18 1,307.2; 2026-08-19 1,364.4; 2026-08-20 1,421.2; 2026-08-21 1,472; 2026-08-22 1,511.6; 2026-08-23 1,536.3; 2026-08-24 1,544.3; 2026-08-25 1,535.6; 2026-08-26 1,512.5; 2026-08-27 1,478.7; 2026-08-28 1,439.5; 2026-08-29 1,400.7; 2026-08-30 1,368.1; 2026-08-31 1,346.8; 2026-09-01 1,340.5; 2026-09-02 1,350.9; 2026-09-03 1,378; 2026-09-04 1,419.5; 2026-09-05 1,471.4; 2026-09-06 1,528.7; 2026-09-07 1,585.4; 2026-09-08 1,635.7; 2026-09-09 1,674.7; 2026-09-10 1,698.7; 2026-09-11 1,705.8; 2026-09-12 1,696.4; 2026-09-13 1,672.6; 2026-09-14 1,638.4; 2026-09-15 1,599.1; 2026-09-16 1,560.5; 2026-09-17 1,528.4; 2026-09-18 1,507.7; 2026-09-19 1,502.2; 2026-09-20 1,513.4; 2026-09-21 1,541.2; 2026-09-22 1,583.3; 2026-09-23 1,635.7; 2026-09-24 1,693.1; 2026-09-25 1,749.6; 2026-09-26 1,799.5; 2026-09-27 1,837.8; 2026-09-28 1,861; 2026-09-29 1,867.3.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Daily active users grew through the summer</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">Axis does not start at zero</text>
+<line class="g" x1="50.64" y1="360" x2="647.3" y2="360"/>
+<text x="42.64" y="364" class="t3" font-size="11" text-anchor="end">1.1K</text>
+<line class="g" x1="50.64" y1="323.75" x2="647.3" y2="323.75"/>
+<text x="42.64" y="327.75" class="t3" font-size="11" text-anchor="end">1.2K</text>
+<line class="g" x1="50.64" y1="287.5" x2="647.3" y2="287.5"/>
+<text x="42.64" y="291.5" class="t3" font-size="11" text-anchor="end">1.3K</text>
+<line class="g" x1="50.64" y1="251.25" x2="647.3" y2="251.25"/>
+<text x="42.64" y="255.25" class="t3" font-size="11" text-anchor="end">1.4K</text>
+<line class="g" x1="50.64" y1="215" x2="647.3" y2="215"/>
+<text x="42.64" y="219" class="t3" font-size="11" text-anchor="end">1.5K</text>
+<line class="g" x1="50.64" y1="178.75" x2="647.3" y2="178.75"/>
+<text x="42.64" y="182.75" class="t3" font-size="11" text-anchor="end">1.6K</text>
+<line class="g" x1="50.64" y1="142.5" x2="647.3" y2="142.5"/>
+<text x="42.64" y="146.5" class="t3" font-size="11" text-anchor="end">1.7K</text>
+<line class="g" x1="50.64" y1="106.25" x2="647.3" y2="106.25"/>
+<text x="42.64" y="110.25" class="t3" font-size="11" text-anchor="end">1.8K</text>
+<line class="g" x1="50.64" y1="70" x2="647.3" y2="70"/>
+<text x="42.64" y="74" class="t3" font-size="11" text-anchor="end">1.9K</text>
+<line class="ax" x1="50.64" y1="360" x2="647.3" y2="360"/>
+<line class="ax" x1="91.09" y1="360" x2="91.09" y2="364"/>
+<text x="91.09" y="378" class="t3" font-size="11" text-anchor="middle">2026-08-05</text>
+<line class="ax" x1="192.22" y1="360" x2="192.22" y2="364"/>
+<text x="192.22" y="378" class="t3" font-size="11" text-anchor="middle">2026-08-15</text>
+<line class="ax" x1="293.35" y1="360" x2="293.35" y2="364"/>
+<text x="293.35" y="378" class="t3" font-size="11" text-anchor="middle">2026-08-25</text>
+<line class="ax" x1="394.48" y1="360" x2="394.48" y2="364"/>
+<text x="394.48" y="378" class="t3" font-size="11" text-anchor="middle">2026-09-04</text>
+<line class="ax" x1="495.61" y1="360" x2="495.61" y2="364"/>
+<text x="495.61" y="378" class="t3" font-size="11" text-anchor="middle">2026-09-14</text>
+<line class="ax" x1="596.74" y1="360" x2="596.74" y2="364"/>
+<text x="596.74" y="378" class="t3" font-size="11" text-anchor="middle">2026-09-24</text>
+<path class="a1" d="M50.64,360 L50.64,323.75 L60.75,303.09 L70.87,284.53 L80.98,269.94 L91.09,260.69 L101.2,257.5 L111.32,260.37 L121.43,268.55 L131.54,280.65 L141.66,294.81 L151.77,308.93 L161.88,320.88 L171.99,328.83 L182.11,331.42 L192.22,327.93 L202.33,318.4 L212.45,303.59 L222.56,284.89 L232.67,264.17 L242.78,243.56 L252.9,225.16 L263.01,210.8 L273.12,201.83 L283.24,198.93 L293.35,202.08 L303.46,210.48 L313.57,222.73 L323.69,236.94 L333.8,251 L343.91,262.8 L354.03,270.52 L364.14,272.83 L374.25,269.04 L384.37,259.24 L394.48,244.2 L404.59,225.35 L414.7,204.59 L424.82,184.04 L434.93,165.79 L445.04,151.67 L455.16,142.98 L465.27,140.38 L475.38,143.8 L485.49,152.43 L495.61,164.82 L505.72,179.07 L515.83,193.07 L525.95,204.71 L536.06,212.19 L546.17,214.22 L556.28,210.14 L566.4,200.05 L576.51,184.8 L586.62,165.81 L596.74,145.02 L606.85,124.53 L616.96,106.44 L627.07,92.55 L637.19,84.14 L647.3,81.84 L647.3,360 Z"/>
+<path class="k1" d="M50.64,323.75 L60.75,303.09 L70.87,284.53 L80.98,269.94 L91.09,260.69 L101.2,257.5 L111.32,260.37 L121.43,268.55 L131.54,280.65 L141.66,294.81 L151.77,308.93 L161.88,320.88 L171.99,328.83 L182.11,331.42 L192.22,327.93 L202.33,318.4 L212.45,303.59 L222.56,284.89 L232.67,264.17 L242.78,243.56 L252.9,225.16 L263.01,210.8 L273.12,201.83 L283.24,198.93 L293.35,202.08 L303.46,210.48 L313.57,222.73 L323.69,236.94 L333.8,251 L343.91,262.8 L354.03,270.52 L364.14,272.83 L374.25,269.04 L384.37,259.24 L394.48,244.2 L404.59,225.35 L414.7,204.59 L424.82,184.04 L434.93,165.79 L445.04,151.67 L455.16,142.98 L465.27,140.38 L475.38,143.8 L485.49,152.43 L495.61,164.82 L505.72,179.07 L515.83,193.07 L525.95,204.71 L536.06,212.19 L546.17,214.22 L556.28,210.14 L566.4,200.05 L576.51,184.8 L586.62,165.81 L596.74,145.02 L606.85,124.53 L616.96,106.44 L627.07,92.55 L637.19,84.14 L647.3,81.84"/>
+<circle class="d1" cx="647.3" cy="81.84" r="4"/>
+<text x="657.3" y="85.84" class="t2" font-size="11" text-anchor="start">1,867.3</text>
+</svg>

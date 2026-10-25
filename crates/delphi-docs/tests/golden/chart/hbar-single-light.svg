@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Most calls go to three endpoints</title>
+<desc id="chart-desc">Horizontal bar chart. calls: minimum 640 at /v1/files/upload-large, maximum 48,200 at /v1/messages. Values: /v1/messages 48,200; /v1/models 21,300; /v1/complete 18,900; /healthz 5,200; /v1/batches 2,100; /v1/files/upload-large 640.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Most calls go to three endpoints</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">requests per day</text>
+<line class="g" x1="154.48" y1="70" x2="154.48" y2="360"/>
+<text x="154.48" y="376" class="t3" font-size="11" text-anchor="middle">0</text>
+<line class="g" x1="257.18" y1="70" x2="257.18" y2="360"/>
+<text x="257.18" y="376" class="t3" font-size="11" text-anchor="middle">10K</text>
+<line class="g" x1="359.89" y1="70" x2="359.89" y2="360"/>
+<text x="359.89" y="376" class="t3" font-size="11" text-anchor="middle">20K</text>
+<line class="g" x1="462.59" y1="70" x2="462.59" y2="360"/>
+<text x="462.59" y="376" class="t3" font-size="11" text-anchor="middle">30K</text>
+<line class="g" x1="565.3" y1="70" x2="565.3" y2="360"/>
+<text x="565.3" y="376" class="t3" font-size="11" text-anchor="middle">40K</text>
+<line class="g" x1="668" y1="70" x2="668" y2="360"/>
+<text x="668" y="376" class="t3" font-size="11" text-anchor="middle">50K</text>
+<line class="ax" x1="154.48" y1="70" x2="154.48" y2="360"/>
+<text x="144.48" y="98.17" class="t2" font-size="11" text-anchor="end">/v1/messages</text>
+<path class="f1" d="M154.48,82.17 L645.51,82.17 Q649.51,82.17 649.51,86.17 L649.51,102.17 Q649.51,106.17 645.51,106.17 L154.48,106.17 Z"/>
+<text x="144.48" y="146.5" class="t2" font-size="11" text-anchor="end">/v1/models</text>
+<path class="f1" d="M154.48,130.5 L369.24,130.5 Q373.24,130.5 373.24,134.5 L373.24,150.5 Q373.24,154.5 369.24,154.5 L154.48,154.5 Z"/>
+<text x="144.48" y="194.83" class="t2" font-size="11" text-anchor="end">/v1/complete</text>
+<path class="f1" d="M154.48,178.83 L344.59,178.83 Q348.59,178.83 348.59,182.83 L348.59,198.83 Q348.59,202.83 344.59,202.83 L154.48,202.83 Z"/>
+<text x="144.48" y="243.17" class="t2" font-size="11" text-anchor="end">/healthz</text>
+<path class="f1" d="M154.48,227.17 L203.89,227.17 Q207.89,227.17 207.89,231.17 L207.89,247.17 Q207.89,251.17 203.89,251.17 L154.48,251.17 Z"/>
+<text x="144.48" y="291.5" class="t2" font-size="11" text-anchor="end">/v1/batches</text>
+<path class="f1" d="M154.48,275.5 L172.05,275.5 Q176.05,275.5 176.05,279.5 L176.05,295.5 Q176.05,299.5 172.05,299.5 L154.48,299.5 Z"/>
+<text x="144.48" y="339.83" class="t2" font-size="11" text-anchor="end">/v1/files/upload-large</text>
+<path class="f1" d="M154.48,323.83 L157.05,323.83 Q161.05,323.83 161.05,327.83 L161.05,343.83 Q161.05,347.83 157.05,347.83 L154.48,347.83 Z"/>
+<text x="655.51" y="98.17" class="t2" font-size="11" text-anchor="start">48,200</text>
+<text x="379.24" y="146.5" class="t2" font-size="11" text-anchor="start">21,300</text>
+<text x="354.59" y="194.83" class="t2" font-size="11" text-anchor="start">18,900</text>
+<text x="213.89" y="243.17" class="t2" font-size="11" text-anchor="start">5,200</text>
+<text x="182.05" y="291.5" class="t2" font-size="11" text-anchor="start">2,100</text>
+<text x="167.05" y="339.83" class="t2" font-size="11" text-anchor="start">640</text>
+</svg>
