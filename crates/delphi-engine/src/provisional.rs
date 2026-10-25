@@ -255,14 +255,22 @@ pub struct Decision {
     pub second: String,
     pub effects: Vec<Value>,
     pub review: Option<Review>,
+    /// The edit was rolled back after the operator rejected it (or another decision on the same file). A reverted
+    /// decision enabled nothing that remains, so it no longer counts toward gate 6.
+    pub reverted: bool,
 }
 
 impl Decision {
+    /// The worktree-relative path of the edit this decision allowed, if it was one.
+    pub fn path(&self) -> Option<String> {
+        self.effects.iter().find(|e| e["kind"] == "worktree_edit").and_then(|e| e["path"].as_str()).map(|p| p.trim_start_matches("@worktree/").to_string())
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "decision_id": self.id, "task_id": self.task_id, "role": self.role, "tool": self.tool, "summary": self.summary,
             "payload_blake3": self.payload_blake3, "outcome": self.outcome, "rationale": self.rationale, "risk": self.risk, "decided_by": self.decided_by, "second": self.second, "effects": self.effects,
-            "review": self.review.as_ref().map(|r| json!({"resolution": r.resolution, "note": r.note, "by": r.by})),
+            "review": self.review.as_ref().map(|r| json!({"resolution": r.resolution, "note": r.note, "by": r.by})), "reverted": self.reverted,
         })
     }
 }
@@ -308,7 +316,13 @@ pub fn ledger(events: &[EventEnvelope], task_id: &str) -> Vec<Decision> {
                 second: p["second"].as_str().unwrap_or("").into(),
                 effects: p["effects"].as_array().cloned().unwrap_or_default(),
                 review: None,
+                reverted: false,
             }),
+            "decision.reverted" => {
+                if let Some(d) = out.iter_mut().find(|d| d.id == p["decision_id"].as_str().unwrap_or("\u{0}")) {
+                    d.reverted = true;
+                }
+            }
             "decision.reviewed" => {
                 // The latest review of a decision wins, so an operator can change their mind before the merge.
                 if let Some(d) = out.iter_mut().find(|d| d.id == p["decision_id"].as_str().unwrap_or("\u{0}")) {
@@ -335,7 +349,7 @@ pub fn ledger_all(events: &[EventEnvelope]) -> Vec<Decision> {
 }
 
 pub fn counts(ds: &[Decision]) -> DecisionCounts {
-    let allowed: Vec<&Decision> = ds.iter().filter(|d| d.outcome == "allow").collect();
+    let allowed: Vec<&Decision> = ds.iter().filter(|d| d.outcome == "allow" && !d.reverted).collect();
     DecisionCounts {
         allowed: allowed.len(),
         pending: allowed.iter().filter(|d| d.review.is_none()).map(|d| d.id.clone()).collect(),
@@ -447,6 +461,26 @@ mod tests {
         assert_eq!((SecondSeat::parse("off"), SecondSeat::parse("any"), SecondSeat::parse("cross-family"), SecondSeat::parse("always")), (Some(SecondSeat::Off), Some(SecondSeat::Any), Some(SecondSeat::CrossFamily), None));
         assert_eq!((Unseconded::parse("park"), Unseconded::parse("allow"), Unseconded::parse("yes")), (Some(Unseconded::Park), Some(Unseconded::Allow), None));
         assert_eq!((Second::NotNeeded.as_text(), Second::Unseconded.as_text(), Second::Concurred("red-team/claude".into()).as_text()), (String::new(), "unseconded".to_string(), "concurred:red-team/claude".to_string()));
+    }
+
+    #[test]
+    fn a_reverted_decision_no_longer_counts_and_its_path_is_known() {
+        let v = Verdict::by_rule(true, "ok".into(), Risk::Routine);
+        let c = edit("@worktree/src/a.rs");
+        let log = vec![
+            ev(1, "decision.provisional", "t_1", decision_event("dec_a", &c, Tier::Amber, &v, "builder")),
+            ev(2, "decision.reviewed", "t_1", json!({"decision_id": "dec_a", "resolution": "rejected", "note": "no", "by": "console-1"})),
+            ev(3, "decision.provisional", "t_1", decision_event("dec_b", &edit("@worktree/src/b.rs"), Tier::Amber, &v, "builder")),
+        ];
+        let before = counts(&ledger(&log, "t_1"));
+        assert_eq!((before.allowed, before.rejected.clone(), before.pending.clone()), (2, vec!["dec_a".to_string()], vec!["dec_b".to_string()]));
+        let mut log = log;
+        log.push(ev(4, "decision.reverted", "t_1", json!({"decision_id": "dec_a", "path": "src/a.rs"})));
+        let ds = ledger(&log, "t_1");
+        let after = counts(&ds);
+        assert_eq!((after.allowed, after.rejected, after.pending), (1, vec![], vec!["dec_b".to_string()]), "the rejection was acted on; the other decision still needs its review");
+        assert!(ds[0].reverted && !ds[1].reverted);
+        assert_eq!(ds[0].path().as_deref(), Some("src/a.rs"));
     }
 
     #[test]

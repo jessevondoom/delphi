@@ -19,6 +19,7 @@ import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
 import type { Ev } from './input.ts';
+import { useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
@@ -175,7 +176,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       return;
     }
     if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }
-    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls the transcript' : 'mouse off: select and copy text with the terminal; scroll with PgUp/PgDn'); return; }
+    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls; drag to select and copy (double-click a word, triple-click a line)' : 'mouse off: select and copy with the terminal itself; scroll with PgUp/PgDn'); return; }
     if (name === '/sources') { openPanel(P.openSources()); return; }
     if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
     if (name === '/pin') {
@@ -241,7 +242,9 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       // Shift+Tab cycles the approval mode from anywhere.
       if (e.t === 'key' && e.k === 'shift-tab') {
         const next = nextMode(modeRef.current);
-        cmd.call('permissions.set', { mode: next }).then((v: any) => { const got = String(v?.mode ?? next); setMode(got); note(modeNote(got)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        const set = (m: string) => cmd.call('permissions.set', { mode: m }).then((v: any) => { const got = String(v?.mode ?? m); setMode(got); note(modeNote(got)); });
+        // Optimistic needs the OS sandbox; without one the cycle skips it and wraps to default.
+        set(next).catch((er) => (next === 'optimistic' ? set('default') : Promise.reject(er))).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
         return;
       }
 
@@ -359,9 +362,10 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
   const model: Model = { ...base, still, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
   const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
-      <Text>{lines.join('\n')}</Text>
+      <Text>{shown.join('\n')}</Text>
     </Box>
   );
 }

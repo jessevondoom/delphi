@@ -22,7 +22,7 @@ export type Model = {
   queue: string[];
   inbox: I.Inbox;
   panel: P.Panel | null;
-  /** permissions mode: default, accept-edits or mission-auto */
+  /** permissions mode: default, accept-edits mission-auto or optimistic */
   mode: string;
   /** The daemon says the workspace has no model at all (`models.get`): the welcome becomes the no-model card, and the footer says so. */
   noModel?: boolean;
@@ -63,7 +63,7 @@ export function header(m: Model, w: number): string[] {
   return [T.clip(strip, w), titleRow(m, w)];
 }
 
-const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('auto') : mode === 'accept-edits' ? T.body('accept edits') : T.dim(mode === 'default' ? 'default' : mode));
+const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('auto') : mode === 'optimistic' ? T.auto('auto · optimistic') : mode === 'accept-edits' ? T.body('accept edits') : T.dim(mode === 'default' ? 'default' : mode));
 
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
@@ -234,9 +234,10 @@ const KEYS = [
   'esc    clear the prompt; with it empty, stop what is running',
   '↑ ↓    history             ctrl+r  search history      tab  complete',
   '← →    decks (empty prompt) · shift+← →  decks any time',
+  'drag  select and copy text   double-click a word · triple-click a line',
   'pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end',
   '/  commands   @role …  one role   @specs/…  a file   ?  this help',
-  'shift+tab  approval mode (default → accept edits → auto)',
+  'shift+tab  approval mode (default → accept edits → auto → optimistic)',
   'inbox:  y approve · n reject · a all amber · d payload · tab list/focus',
   'ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)',
 ];

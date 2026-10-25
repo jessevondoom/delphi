@@ -5,9 +5,9 @@ import { InputParser, type Ev } from './input.ts';
 
 const SCREEN = '\x1b[?1049h';
 const PASTE = '\x1b[?2004h';
-const MOUSE = '\x1b[?1000h\x1b[?1006h';
+const MOUSE = '\x1b[?1000h\x1b[?1002h\x1b[?1006h'; // presses and releases, and motion while a button is held (a drag)
 const KEYS = '\x1b[>4;1m'; // modifyOtherKeys, level 1: Shift+Enter becomes distinguishable where the terminal knows it
-export const OFF = '\x1b[>4;0m\x1b[?2004l\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[?25h';
+export const OFF = '\x1b[>4;0m\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l\x1b[?25h';
 export const ON = SCREEN + PASTE + KEYS + MOUSE;
 
 export class Term extends EventEmitter {
@@ -22,10 +22,10 @@ export class Term extends EventEmitter {
 
   get mouse() { return this.mouseOn; }
 
-  /** Mouse reporting makes the wheel scroll the transcript but stops the terminal selecting text; this switches it. */
+  /** Mouse reporting makes the wheel scroll the transcript and lets the console select text itself (`select.ts`); it stops the terminal's own selection, which `/mouse` switches back. */
   setMouse(on: boolean) {
     this.mouseOn = on;
-    if (this.active) process.stdout.write(on ? MOUSE : '\x1b[?1006l\x1b[?1000l');
+    if (this.active) process.stdout.write(on ? MOUSE : '\x1b[?1006l\x1b[?1002l\x1b[?1000l');
   }
 
   start() {
@@ -55,6 +55,7 @@ export class Term extends EventEmitter {
 
   private input(e: Ev) {
     if (e.t === 'ctrl' && e.c === 'z') { this.suspend(); return; }
+    if (e.t === 'mouse') { this.emit('mouse', e); return; } // selection (`select.ts`); the keyboard handlers never see it
     this.emit('ev', e);
   }
 

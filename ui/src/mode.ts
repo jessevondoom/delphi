@@ -2,7 +2,7 @@
 // the safeguards are that the mode is always in the footer (`auto` in the warning colour) and that each change leaves
 // one line saying what it means. Red actions ask in every mode.
 
-export const MODES = ['default', 'accept-edits', 'mission-auto'] as const;
+export const MODES = ['default', 'accept-edits', 'mission-auto', 'optimistic'] as const;
 
 export const nextMode = (mode: string): string => MODES[(MODES.indexOf(mode as (typeof MODES)[number]) + 1) % MODES.length]!;
 
@@ -10,6 +10,7 @@ export function modeNote(mode: string): string {
   switch (mode) {
     case 'mission-auto': return '· approval mode: auto — Amber actions run without asking this mission; Red actions always ask';
     case 'accept-edits': return '· approval mode: accept edits — file edits run without asking; commands and Red actions still ask';
+    case 'optimistic': return '· approval mode: auto · optimistic — as auto, and a build you start decides provisionally; Red actions always ask';
     default: return '· approval mode: default';
   }
 }

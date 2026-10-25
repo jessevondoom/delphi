@@ -132,8 +132,9 @@ test('auto is the only mode drawn in the warning-red colour', () => {
   } finally { T.useCapabilities(prev); }
 });
 
-test('Shift+Tab cycles default → accept edits → auto and each change says what it means', () => {
-  assert.deepEqual(['default', 'accept-edits', 'mission-auto'].map(nextMode), ['accept-edits', 'mission-auto', 'default']);
+test('Shift+Tab cycles default → accept edits → auto → auto · optimistic and each change says what it means', () => {
+  assert.deepEqual(['default', 'accept-edits', 'mission-auto', 'optimistic'].map(nextMode), ['accept-edits', 'mission-auto', 'optimistic', 'default']);
+  assert.match(modeNote('optimistic'), /^· approval mode: auto · optimistic — /);
   assert.equal(modeNote('mission-auto'), '· approval mode: auto — Amber actions run without asking this mission; Red actions always ask');
   assert.equal(modeNote('accept-edits'), '· approval mode: accept edits — file edits run without asking; commands and Red actions still ask');
   assert.equal(modeNote('default'), '· approval mode: default');

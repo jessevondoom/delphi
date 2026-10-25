@@ -5,7 +5,11 @@ export type Key =
   | 'enter' | 'tab' | 'shift-tab' | 'backspace' | 'delete' | 'esc'
   | 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pgup' | 'pgdn';
 
+/** A left-button press, drag or release at a 0-based cell. */
+export type Mouse = { t: 'mouse'; k: 'down' | 'drag' | 'up'; x: number; y: number };
+
 export type Ev =
+  | Mouse
   | { t: 'text'; s: string }
   | { t: 'paste'; s: string }
   | { t: 'key'; k: Key; alt: boolean; shift: boolean; ctrl: boolean }
@@ -77,12 +81,17 @@ export class InputParser {
       const body = s.slice(i + 2, j), fin = s[j]!, len = j + 1 - i;
       if (fin === '~' && body === '200') return { len, ev: 'paste-start' };
       if (fin === 'M' || fin === 'm') {
-        const m = /^<(\d+);\d+;\d+$/.exec(body);
+        const m = /^<(\d+);(\d+);(\d+)$/.exec(body);
         if (m) {
-          const b = Number(m[1]);
+          const b = Number(m[1]), x = Number(m[2]) - 1, y = Number(m[3]) - 1;
           if (fin === 'M' && b === 64) return { len, ev: { t: 'wheel', dir: 'up' } };
           if (fin === 'M' && b === 65) return { len, ev: { t: 'wheel', dir: 'down' } };
-          return { len, ev: null }; // clicks and drags are not used
+          // The left button, with or without shift, alt or ctrl held (bits 4, 8, 16); other buttons are not used.
+          const base = b & ~28;
+          if (fin === 'M' && base === 0) return { len, ev: { t: 'mouse', k: 'down', x, y } };
+          if (fin === 'M' && base === 32) return { len, ev: { t: 'mouse', k: 'drag', x, y } };
+          if (fin === 'm' && (base & 3) === 0 && base < 32) return { len, ev: { t: 'mouse', k: 'up', x, y } };
+          return { len, ev: null };
         }
       }
       const mods = /;(\d+)$/.exec(body);

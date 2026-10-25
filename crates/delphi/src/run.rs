@@ -65,16 +65,17 @@ fn value_of(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
-/// `30`, `30s`, `5m`, `2h`.
+/// `30`, `30s`, `5m`, `2h`, `1d`.
 pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let s = s.trim();
     let (num, mult) = match s.chars().last() {
         Some('s') => (&s[..s.len() - 1], 1),
         Some('m') => (&s[..s.len() - 1], 60),
         Some('h') => (&s[..s.len() - 1], 3600),
+        Some('d') => (&s[..s.len() - 1], 86_400),
         _ => (s, 1),
     };
-    num.parse::<u64>().ok().filter(|n| *n > 0).map(|n| Duration::from_secs(n * mult)).ok_or_else(|| format!("`{}` is not a duration (use 90, 90s, 5m or 2h)", s))
+    num.parse::<u64>().ok().filter(|n| *n > 0).map(|n| Duration::from_secs(n * mult)).ok_or_else(|| format!("`{}` is not a duration (use 90, 90s, 5m, 2h or 1d)", s))
 }
 
 pub fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -107,8 +108,8 @@ pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     };
     let permissions = value_of(args, "--permissions");
     if let Some(p) = &permissions {
-        if !["default", "accept-edits", "mission-auto"].contains(&p.as_str()) {
-            return Err(format!("--permissions takes default, accept-edits or mission-auto, not `{}`", p));
+        if !["default", "accept-edits", "mission-auto", "optimistic"].contains(&p.as_str()) {
+            return Err(format!("--permissions takes default, accept-edits, mission-auto or optimistic, not `{}`", p));
         }
     }
     let budget = match value_of(args, "--budget") {
@@ -595,6 +596,7 @@ mod tests {
         assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
         assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
         assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
+        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86_400));
         assert!(parse_duration("0").is_err() && parse_duration("m").is_err());
     }
 
