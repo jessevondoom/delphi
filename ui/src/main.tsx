@@ -66,10 +66,7 @@ if (observeAt >= 0) {
       console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
       process.exit(0);
     } catch (e: any) {
-      const why = String(e?.message ?? JSON.stringify(e));
-      console.error('delphi observe: ' + (/interactive terminal/.test(why)
-        ? 'the daemon gives the narrator only to a process that belongs to a terminal session (piping the output is fine; a cron job or CI step has none)'
-        : 'cannot read the daemon: ' + why));
+      console.error('delphi observe: cannot read the daemon: ' + String(e?.message ?? JSON.stringify(e)));
       process.exit(1);
     }
   }

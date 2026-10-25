@@ -1369,6 +1369,35 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
+/// `delphi observe --once` from a process with no controlling terminal (a script, cron): the narrator scope is
+/// read-only, so the daemon issues it without one; the same process asking for a console token is refused.
+#[test]
+fn observe_once_prints_a_frame_without_any_terminal() {
+    use std::os::unix::process::CommandExt;
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    let mut cmd = Command::new(DELPHI);
+    cmd.args(["observe", "council", "--once", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_UI", &launcher).stdin(Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid(); // a session of its own: no controlling terminal
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    let (code, frame) = (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned());
+    assert_eq!(code, 0, "{}\n{}", frame, String::from_utf8_lossy(&out.stderr));
+    assert!(frame.contains("delphi v") && frame.contains("· council") && frame.contains("needs you"), "{}", frame);
+    assert_eq!(frame.lines().count(), 24, "no terminal means 80x24:\n{}", frame);
+    c.leave();
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
 #[test]
 fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the_notebook() {
     let m = mock(vec![reply_text("The ladder is described in specs/003-collaboration-and-council.md#ladder and in REVIEW.md.")]);
