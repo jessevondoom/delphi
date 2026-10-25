@@ -12,6 +12,7 @@ mod frontmatter {
 mod home;
 mod lint;
 mod needs;
+mod xenia_cmd;
 mod observer;
 mod ratify_console;
 mod report;
@@ -44,6 +45,7 @@ const USAGE: &str = "usage:
   delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]
   delphi observe [council|epic|forge|agents|spend|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
+  delphi xenia whoami [--home <dir>]
   delphi --version";
 
 fn main() {
@@ -71,6 +73,7 @@ fn main() {
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
         Some("needs") => cmd_needs(&args[1..]),
+        Some("xenia") => xenia_cmd::run(&args[1..]),
         Some("connectors") => cmd_core("connectors", &args[1..]),
         Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
         Some("auth") => cmd_core("auth", &args[1..]),
