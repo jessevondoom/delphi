@@ -118,6 +118,14 @@ pub struct Node {
     pub tier: String,
     /// What it is waiting for, if anything: `waiting on you`, or `waiting for a model: <why>`.
     pub waiting: String,
+    /// When the node was added and when it finished (`done` or `escalated`), as Unix milliseconds from the event
+    /// timestamps. `ended_ms` is absent while it runs. 0 when the event carried no readable timestamp.
+    pub started_ms: u64,
+    pub ended_ms: Option<u64>,
+    /// The nodes this one comes after. Taken from the event's `after` list when the plan recorded one; otherwise
+    /// **derived**, because the event log does not record plan edges: the first child follows its parent and every
+    /// later child follows the sibling created just before it. Roots have none.
+    pub after: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -205,6 +213,31 @@ pub struct ObserverState {
     pub series: VecDeque<f64>,
     /// Live text per span while it streams (cleared when the node finishes).
     pub live: BTreeMap<String, String>,
+    /// Tokens per minute for the last twelve minutes, oldest first, the last one being the minute of the newest
+    /// `agent.usage` event (the pace row of the narrator).
+    pub pace: VecDeque<u64>,
+    /// The minute (Unix minutes) the last `pace` bucket is for.
+    #[serde(skip)]
+    pace_minute: u64,
+    /// The newest child of each parent node, to derive `Node::after`.
+    #[serde(skip)]
+    last_child: BTreeMap<String, String>,
+}
+
+const PACE_MINUTES: usize = 12;
+
+/// Unix milliseconds of an event envelope's RFC 3339 `timestamp`, or 0.
+fn ts_ms(e: &Value) -> u64 {
+    let t = e["timestamp"].as_str().unwrap_or("");
+    let secs = delphi_core::time::parse_rfc3339(t).unwrap_or(0).max(0) as u64;
+    let millis = t
+        .get(19..)
+        .and_then(|r| r.strip_prefix('.'))
+        .map(|r| r.chars().take_while(|c| c.is_ascii_digit()).take(3).collect::<String>())
+        .filter(|d| !d.is_empty())
+        .map(|d| format!("{:0<3}", d).parse::<u64>().unwrap_or(0))
+        .unwrap_or(0);
+    secs * 1000 + millis
 }
 
 fn s(v: &Value) -> String {
@@ -308,7 +341,15 @@ impl ObserverState {
             "dag.node.added" => {
                 let id = s(&p["node_id"]);
                 let r = s(&p["role"]);
-                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent: p["parent"].as_str().filter(|x| !x.is_empty() && *x != "operator").map(String::from), depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), ..Default::default() });
+                let parent = p["parent"].as_str().filter(|x| !x.is_empty() && *x != "operator").map(String::from);
+                let after: Vec<String> = match p["after"].as_array() {
+                    Some(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+                    None => parent.as_ref().map(|par| vec![self.last_child.get(par).cloned().unwrap_or_else(|| par.clone())]).unwrap_or_default(),
+                };
+                if let Some(par) = &parent {
+                    self.last_child.insert(par.clone(), id.clone());
+                }
+                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), started_ms: ts_ms(e), after, ..Default::default() });
                 if let Some(a) = self.agents.get_mut(&r) {
                     a.state = "running".into();
                     a.task_id = task;
@@ -323,6 +364,7 @@ impl ObserverState {
                     r = n.role.clone();
                     if st == "done" || st == "escalated" {
                         n.waiting.clear();
+                        n.ended_ms = Some(ts_ms(e));
                     }
                 }
                 if st == "done" || st == "escalated" {
@@ -364,6 +406,7 @@ impl ObserverState {
                 let cost = p["cost_usd"].as_f64().unwrap_or(0.0);
                 self.spent_usd += cost;
                 self.tokens.add(p);
+                self.add_pace(ts_ms(e) / 60_000, p["input_tokens"].as_u64().unwrap_or(0) + p["output_tokens"].as_u64().unwrap_or(0));
                 self.series.push_back(cost);
                 while self.series.len() > 240 {
                     self.series.pop_front();
@@ -525,6 +568,27 @@ impl ObserverState {
     }
 
     /// Remember the endpoint, model and tier an agent's latest call went to. Empty values leave what is known alone.
+    /// Count `tokens` into the bucket for Unix minute `minute`, opening new (and empty, for quiet minutes) buckets as
+    /// the minutes advance. An event from an earlier minute than the newest is counted in the newest.
+    fn add_pace(&mut self, minute: u64, tokens: u64) {
+        if self.pace.is_empty() {
+            self.pace.push_back(0);
+            self.pace_minute = minute;
+        }
+        if minute > self.pace_minute {
+            for _ in 0..(minute - self.pace_minute).min(PACE_MINUTES as u64) {
+                self.pace.push_back(0);
+            }
+            self.pace_minute = minute;
+            while self.pace.len() > PACE_MINUTES {
+                self.pace.pop_front();
+            }
+        }
+        if let Some(last) = self.pace.back_mut() {
+            *last += tokens;
+        }
+    }
+
     fn note_model(&mut self, span: &str, endpoint: &str, model: &str, tier: &str) {
         if let Some(n) = self.nodes.get_mut(span) {
             for (field, value) in [(&mut n.endpoint, endpoint), (&mut n.model, model), (&mut n.tier, tier)] {
@@ -736,6 +800,64 @@ mod tests {
         }
         assert_eq!((a.spent_usd, a.last_seq, a.agents["orchestrator"].calls), (b.spent_usd, b.last_seq, b.agents["orchestrator"].calls));
         assert_eq!(b.agents["orchestrator"].calls, 1);
+    }
+
+    fn at(mut e: Value, timestamp: &str) -> Value {
+        e["timestamp"] = json!(timestamp);
+        e
+    }
+
+    // specs/005e §9.3: the rail and the pace row need node times, edges and tokens per minute.
+    #[test]
+    fn nodes_carry_start_and_end_times_and_derived_edges() {
+        let mut st = ObserverState::new(&roles());
+        let add = |seq, id: &str, parent: Option<&str>, t: &str| {
+            let mut p = json!({"node_id": id, "role": "builder", "depth": 1});
+            if let Some(par) = parent {
+                p["parent"] = json!(par);
+            }
+            at(ev(seq, "dag.node.added", "t_1", "builder", p), t)
+        };
+        st.apply(&add(1, "n1", None, "2026-10-25T10:00:00.250Z"));
+        st.apply(&add(2, "n2", Some("n1"), "2026-10-25T10:00:05.000Z"));
+        st.apply(&add(3, "n3", Some("n1"), "2026-10-25T10:00:06.000Z"));
+        st.apply(&add(4, "n4", Some("n3"), "2026-10-25T10:00:07.000Z"));
+        let done = at(ev(5, "dag.node.state", "t_1", "builder", json!({"node_id": "n2", "state": "done"})), "2026-10-25T10:00:09.500Z");
+        st.apply(&done);
+        let (n1, n2, n3, n4) = (&st.nodes["n1"], &st.nodes["n2"], &st.nodes["n3"], &st.nodes["n4"]);
+        assert_eq!(n1.started_ms % 1000, 250, "milliseconds are kept");
+        assert_eq!(n2.started_ms - n1.started_ms, 4750);
+        assert_eq!(n2.ended_ms, Some(n2.started_ms + 4500));
+        assert_eq!(n1.ended_ms, None, "still running");
+        assert!(n1.after.is_empty(), "a root follows nothing");
+        assert_eq!(n2.after, vec!["n1"], "the first child follows its parent");
+        assert_eq!(n3.after, vec!["n2"], "a later child follows the sibling before it");
+        assert_eq!(n4.after, vec!["n3"]);
+        // A plan that records its edges wins over the derived ones.
+        st.apply(&at(ev(6, "dag.node.added", "t_1", "builder", json!({"node_id": "n5", "role": "builder", "depth": 1, "parent": "n1", "after": ["n2", "n3"]})), "2026-10-25T10:00:10.000Z"));
+        assert_eq!(st.nodes["n5"].after, vec!["n2", "n3"]);
+        let j = serde_json::to_value(&st).unwrap();
+        assert!(j["nodes"]["n1"]["started_ms"].is_u64() && j["nodes"]["n2"]["ended_ms"].is_u64() && j["nodes"]["n1"]["ended_ms"].is_null());
+        assert!(j.get("pace_minute").is_none() && j.get("last_child").is_none(), "bookkeeping is not sent");
+    }
+
+    #[test]
+    fn pace_is_tokens_per_minute_for_the_last_twelve_minutes() {
+        let mut st = ObserverState::new(&roles());
+        assert!(st.pace.is_empty());
+        // 1200 tokens (1000 in + 200 out) each; two in minute 0, one in minute 1, then a quiet gap to minute 4.
+        for (seq, t) in [(1, "2026-10-25T10:00:10Z"), (2, "2026-10-25T10:00:50Z"), (3, "2026-10-25T10:01:05Z"), (4, "2026-10-25T10:04:00Z")] {
+            st.apply(&at(usage(seq, "n1", "builder", "fast", 0.01), t));
+        }
+        assert_eq!(st.pace.iter().copied().collect::<Vec<_>>(), vec![2400, 1200, 0, 0, 1200]);
+        // More than twelve minutes later, only the last twelve remain and the old ones are gone.
+        st.apply(&at(usage(5, "n1", "builder", "fast", 0.01), "2026-10-25T10:40:00Z"));
+        assert_eq!(st.pace.len(), 12);
+        assert_eq!(st.pace.back(), Some(&1200));
+        assert_eq!(st.pace.iter().sum::<u64>(), 1200, "everything older fell out");
+        // Events without a timestamp count into the newest bucket rather than being lost.
+        st.apply(&usage(6, "n1", "builder", "fast", 0.01));
+        assert_eq!(st.pace.back(), Some(&2400));
     }
 
     #[test]

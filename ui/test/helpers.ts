@@ -37,14 +37,14 @@ const tk = (n: number) => ({ input: n, cache_read: n * 2, cache_write: 0, output
 /** The Observer's view model with a council, a build, spend and a narrative. */
 export function observerWorld(): OState {
   const s = emptyState();
-  s.mission_id = '2026-10-24-ui'; s.spent_usd = 0.42; s.budget = { cap_usd: 5 }; s.retries = 1; s.cache_hit_ratio = 0.5; s.series = [0.01, 0.05, 0.02, 0.2, 0.14];
+  s.mission_id = '2026-10-24-ui'; s.spent_usd = 0.42; s.budget = { cap_usd: 5 }; s.retries = 1; s.cache_hit_ratio = 0.5; s.series = [0.01, 0.05, 0.02, 0.2, 0.14]; s.pace = [0, 800, 2400, 1200, 3000, 600];
   s.tokens = tk(1000);
   for (const [i, r] of ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'].entries()) {
     s.agents[r] = { role: r, state: r === 'builder' ? 'running' : r === 'red-team' ? 'waiting on you' : 'idle', task_id: 't_1', endpoint: 'direct', tier: 'frontier', model: 'claude-x', upscaled: false, tokens: tk(100 * (i + 1)), cost_usd: 0.07, calls: i + 1 };
   }
   s.tasks['t_1'] = { id: 't_1', flow: 'build', prompt: 'Implement the deck router', status: 'running' };
-  s.nodes['n_1'] = { id: 'n_1', role: 'orchestrator', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 1200, cost_usd: 0.1 };
-  s.nodes['n_2'] = { id: 'n_2', role: 'builder', parent: 'n_1', depth: 1, task_id: 't_1', state: 'done', tokens: 8000, cost_usd: 0.2 };
+  s.nodes['n_1'] = { id: 'n_1', role: 'orchestrator', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 1200, cost_usd: 0.1, started_ms: 1_000_000, ended_ms: null, after: [] };
+  s.nodes['n_2'] = { id: 'n_2', role: 'builder', parent: 'n_1', depth: 1, task_id: 't_1', state: 'done', tokens: 8000, cost_usd: 0.2, started_ms: 1_005_000, ended_ms: 1_065_000, after: ['n_1'] };
   s.narrative = ['t_1 started', 'builder finished'];
   s.councils = [{ task_id: 't_2', proposition: 'Table or file?', seats: [{ role: 'architect', family: 'a' }, { role: 'red-team', family: 'b' }, { role: 'strategist', family: 'c' }], homogeneous: false, phase: 'verdict', stances: [{ role: 'architect', answered: true, text: 'Use a table.\nIt indexes.' }, { role: 'red-team', answered: false, text: 'no answer' }], critiques: [{ role: 'architect', recommendation: 'revise', concur: false, findings: [['P1', 'lost updates']] }], escalation: 'seats deadlocked', path: 'missions/m/councils/008.md', unresolved: [['P0', 'red-team', 'the race']], options: [['table', ['architect']], ['file', ['strategist']]] }];
   s.builds = [{ task_id: 't_1', branch: 'delphi/t_1', attempts: ['attempt 1: red'], sha: 'abc1234', gates: [{ name: 'tests', state: 'green', detail: '12 passed' }, { name: 'audit', state: 'red', detail: '1 finding' }], findings: [['P1', 'unchecked unwrap']], flaky: true, merge: '' }];

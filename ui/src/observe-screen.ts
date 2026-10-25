@@ -9,11 +9,11 @@ export type Tokens = { input: number; cache_read: number; cache_write: number; o
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
 export type OState = {
   agents: Record<string, AgentRow>;
-  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; tokens: number; cost_usd: number }>;
+  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
   tasks: Record<string, { id: string; flow: string; prompt: string; status: string }>;
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
-  spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[];
+  spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
   cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
@@ -38,7 +38,7 @@ export type OModel = {
 
 export const emptyState = (): OState => ({
   agents: {}, nodes: {}, tasks: {}, councils: [], builds: [], spent_usd: 0, tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0 },
-  retries: 0, narrative: [], series: [], cache_hit_ratio: 0, default_view: 'epic', mission_id: '', budget: { cap_usd: 0 }, pending_proposals: 0,
+  retries: 0, narrative: [], series: [], pace: [], cache_hit_ratio: 0, default_view: 'epic', mission_id: '', budget: { cap_usd: 0 }, pending_proposals: 0,
 });
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
