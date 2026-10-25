@@ -129,8 +129,8 @@ Cost and budget telemetry stay out of the console footer (there is no money in t
 The Observer is the **narrator**: one read-only Ink window, six views in this order: `council`, `epic`, `forge`, `agents`, `archives`, `thinking` (there is no `spend` view and no money anywhere). Chrome on every view: the badge strip, `delphi v0.5 · <view>`, a blank row, the **attention slot** (`✔ nothing needs you`, or an amber band `▼ needs you   <what>` with `answer in the console`), the body, a hairline and a footer `<N> running  ·  <tokens> tokens` / `← →  ·  ● ○ ○ ○ ○ ○`. `←` `→` change view and stop at the ends; `↑ ↓ PgUp PgDn` scroll; `Ctrl+C` leaves; nothing else is bound, and the footer shows no `/` or `?`. `delphi observe --once` prints one frame of the same renderer without a terminal. The classic Rust Observer is gone.
 1. **council (the Weave):** the question, a track `● blind ╌╌ ○ debate ╌╌ ○ verdict`, one tinted card per seat and a verdict card. **The blind round is sealed**: cards say only `sealed` and whether the seat has answered; no stance text is on screen until every seat has. Debate reveals positions and the live tail of the seat answering; the verdict shows agreement and the minority.
 2. **epic (the Rail):** one row per task on a time axis with a `┆` waterline for now, done / running / queued bars, dependency elbows, the critical path in the warning colour, `now` / `next` / `path` lines and the pace sparkline on the last body row.
-3. **forge:** worktree diffs and verification gates.
-4. **agents:** the roster: role, state in words, task, model and tokens (the strip carries none of it).
+3. **forge:** worktree diffs and verification gates; the running gate is on a tinted band.
+4. **agents:** the roster: name, role, state in words, model, task and one token total (the strip carries none of it); the running agent's facts are on a tinted band.
 5. **archives:** the knowledge base; searching stays in the console (`Ctrl+K`).
 6. **thinking:** each running agent's reasoning, in memory only.
 
