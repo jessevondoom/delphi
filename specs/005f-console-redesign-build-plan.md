@@ -117,7 +117,7 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 
 **Goal.** `005e` §10.4-10.6, findings 7, 14, 16, 18.
 
-**Do.** One list of commands feeding both the Ink console and the Rust `HELP` (generated, or exported as JSON and read; a test diffs them); `/models` and `/agents` in the Ink console (`ui/src/run.ts`); `/narrator` opens tmux splits when `$TMUX` is set, else prints the command; slash menu shows up to 8 items and `· N more`, descriptions wrap rather than clip below 100 columns; `Ctrl+C` asks once when there is text, a queue or a running task, else leaves; `Esc` clears the prompt first then stops the running task (the inline console gains `task.cancel`); `Ctrl+D` leaves on an empty prompt; `delphi observe --once` works without a terminal (see slice 8).
+**Do.** One list of commands feeding both the Ink console and the Rust `HELP` (generated, or exported as JSON and read; a test diffs them); `/models` and `/agents` in the Ink console (`ui/src/run.ts`); `/observe` (alias `/narrator`) opens one narrator window, a tmux window when `$TMUX` is set (amended 2026-10-25: it was tmux splits); slash menu shows up to 8 items and `· N more`, descriptions wrap rather than clip below 100 columns; `Ctrl+C` asks once when there is text, a queue or a running task, else leaves; `Esc` clears the prompt first then stops the running task (the inline console gains `task.cancel`); `Ctrl+D` leaves on an empty prompt; `delphi observe --once` works without a terminal (see slice 8).
 
 **Tests.** `commands.test.ts` (Ink and Rust names equal); `screen.test.ts` (menu overflow); `e2e.rs` for `Ctrl+C` and `Esc`.
 
