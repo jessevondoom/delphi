@@ -514,6 +514,11 @@ impl PtyConsole {
     }
 
     fn start_env(home: &Path, args: &[&str], rows: u16, cols: u16, envs: &[(&str, &str)]) -> PtyConsole {
+        PtyConsole::start_in(None, home, args, rows, cols, envs)
+    }
+
+    /// `start_env`, run from `cwd` (bare `delphi` picks its workspace from the directory it is in).
+    fn start_in(cwd: Option<&Path>, home: &Path, args: &[&str], rows: u16, cols: u16, envs: &[(&str, &str)]) -> PtyConsole {
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
         let (mut master, mut slave) = (0, 0);
@@ -523,6 +528,9 @@ impl PtyConsole {
         }
         let dup = |fd| unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(fd))) };
         let mut cmd = Command::new(DELPHI);
+        if let Some(d) = cwd {
+            cmd.current_dir(d);
+        }
         cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env_remove("TMUX").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
         unsafe {
             cmd.pre_exec(|| {
@@ -611,6 +619,11 @@ impl PtyConsole {
         let mut p = self.replay(5000);
         p.set_scrollback(self.rows as usize);
         p.screen().scrollback()
+    }
+
+    /// How many times `needle` was written in all, including text the full-screen console's alternate screen has since hidden.
+    fn written(&self, needle: &str) -> usize {
+        String::from_utf8_lossy(&self.bytes.lock().unwrap()).matches(needle).count()
     }
 
     fn visible(&self) -> String {
@@ -829,6 +842,47 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     assert!(c2.visible().contains("❯ Tell me something"), "{}", c2.visible());
     drop(c2);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §6.7: a first run with no model. Declining the guided setup asks once, the console says plainly that
+/// nothing can answer, and a prompt is met by an attention card that names the problem and the fix: never
+/// "throttled", never the engine's bracketed wrapper.
+#[test]
+fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
+    let t = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
+    let (home, proj) = (t.path().join("h"), t.path().join("app"));
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    let Some(wrapper) = ui_launcher(t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_in(Some(&proj), &home, &[], 30, 100, &envs);
+    c.wait_for("Run the guided setup now?");
+    c.type_keys("n\r");
+    // Whatever else the doctor offers is declined too; the console opens once the questions stop.
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut answered = 1; // the setup question, answered above
+    while !c.visible().contains("delphi v") {
+        assert!(Instant::now() < deadline, "the console did not open:\n{}", c.everything());
+        let asks = c.written("[Y/n]");
+        if asks > answered {
+            answered = asks;
+            c.type_keys("n\r");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(c.written("Run the guided setup now?"), 1, "the setup is offered once:\n{}", c.everything());
+    c.wait_for("delphi · no model configured");
+    c.wait_for("0 tokens · no model");
+    c.type_keys("hello");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Stopped: no model is configured for this workspace.");
+    c.wait_for("needs you");
+    let screen = c.visible();
+    assert!(!screen.contains("throttled") && !screen.contains("[escalated"), "{}", screen);
+    assert!(screen.contains("delphi setup") && screen.contains("/models"), "{}", screen);
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "app", "--home"]).arg(&home).output();
 }
 
 #[test]

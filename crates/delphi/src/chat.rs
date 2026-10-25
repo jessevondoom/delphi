@@ -203,6 +203,11 @@ pub struct Renderer {
     quiet: HashSet<String>,
 }
 
+/// Two spaces at the left of every non-empty line.
+fn indent(text: &str) -> String {
+    text.lines().map(|l| if l.is_empty() { String::new() } else { format!("  {}", l) }).collect::<Vec<_>>().join("\n")
+}
+
 fn brief(args: &Value) -> String {
     let pick = ["path", "pattern", "role"].iter().find_map(|k| args[*k].as_str());
     let s = pick.map(String::from).or_else(|| args.as_object().and_then(|o| o.values().find_map(|v| v.as_str().map(String::from)))).unwrap_or_default();
@@ -261,12 +266,14 @@ impl Renderer {
         self.council = false;
         let num = |k: &str| k.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
         let role = self.spans.iter().filter(|(_, (_, d))| *d == 0).max_by_key(|(k, _)| num(k)).map(|(_, (r, _))| r.clone()).unwrap_or_else(|| "orchestrator".into());
+        let escalated = e["payload"]["status"] == "escalated";
+        let text = delphi_engine::observe::sanitize(e["payload"]["text"].as_str().unwrap_or(""));
         Reply {
             task_id: e["task_id"].as_str().unwrap_or("").to_string(),
             name: self.name(&role),
             role,
-            text: delphi_engine::observe::sanitize(e["payload"]["text"].as_str().unwrap_or("")),
-            status: if e["payload"]["status"] == "escalated" { "escalated".into() } else { "done".into() },
+            text: if escalated { crate::escalation::classify(&text).body() } else { text },
+            status: if escalated { "escalated".into() } else { "done".into() },
         }
     }
 
@@ -318,7 +325,7 @@ impl Renderer {
             "model.exhausted" => Some(format!("\n  ! {} is out of quota ({}){}; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"), p["reason"].as_str().unwrap_or("?"), p["reset_at"].as_i64().map(|t| format!(", back at {}", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
             "endpoint.reauth_required" => Some(format!("\n  ! re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
             "turn.interrupted" => Some("\n  ! the stream was interrupted; retrying the turn\n".to_string()),
-            "task.failed" => Some(format!("\n✗ task failed: {}\n", p["error"].as_str().unwrap_or(""))),
+            "task.failed" => Some(format!("\n! {} needs you\n{}\n", e["task_id"].as_str().unwrap_or("task"), indent(&crate::escalation::classify(p["error"].as_str().unwrap_or("")).body()))),
             "task.output" => {
                 let root_streamed = self.streamed.iter().any(|s| self.spans.get(s).map(|(_, d)| *d == 0).unwrap_or(false));
                 let tid = e["task_id"].as_str().unwrap_or("");
@@ -326,7 +333,7 @@ impl Renderer {
                 self.council = false;
                 let text = p["text"].as_str().unwrap_or("");
                 Some(match p["status"].as_str() {
-                    Some("escalated") => format!("\n! {} needs you: {}\n", tid, text),
+                    Some("escalated") => format!("\n! {} needs you\n{}\n", tid, indent(&crate::escalation::classify(text).body())),
                     _ if root_streamed => format!("\n✓ {} done\n", tid),
                     _ => {
                         // A reply that finished before any live frame arrived still says who is speaking.
@@ -1075,7 +1082,11 @@ mod tests {
         let mut fresh = Renderer::new(names());
         assert!(fresh.event(&json!({"type": "task.output", "task_id": "t_0002", "payload": {"status": "done", "text": "The answer."}})).unwrap().contains("The answer."));
         let esc = fresh.event(&json!({"type": "task.output", "task_id": "t_0003", "payload": {"status": "escalated", "text": "[escalated to the operator: mission budget]"}})).unwrap();
-        assert!(esc.contains("t_0003 needs you") && esc.contains("mission budget"), "{}", esc);
+        assert!(esc.contains("t_0003 needs you") && esc.contains("Stopped: this mission's ceiling is reached.") && !esc.contains("[escalated"), "{}", esc);
+        let none = fresh.event(&json!({"type": "task.output", "task_id": "t_0004", "payload": {"status": "escalated", "text": "[escalated to the operator: no_model_configured: no model is configured for this workspace]"}})).unwrap();
+        assert!(none.contains("Stopped: no model is configured for this workspace.") && !none.contains("throttled") && !none.contains("[escalated"), "{}", none);
+        let failed = fresh.event(&json!({"type": "task.failed", "task_id": "t_0005", "payload": {"error": "disk full"}})).unwrap();
+        assert!(failed.contains("t_0005 needs you") && failed.contains("Stopped: disk full"), "{}", failed);
     }
 
     #[test]

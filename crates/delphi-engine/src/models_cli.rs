@@ -36,7 +36,7 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
     };
     let entries = cfg.pool_entries();
     if entries.is_empty() {
-        println!("no model is configured: fill in [models.<family>] and an [[endpoints]] block (see config.example.toml)");
+        println!("{}", NONE_CONFIGURED);
         return 0;
     }
     let path = ws_dir.join("local/pool-state.json");
@@ -94,8 +94,14 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
     }
 }
 
+/// What `delphi models` and `/models` say when nothing is configured (`specs/005e` §6.6), instead of an empty table.
+pub const NONE_CONFIGURED: &str = "no model is configured for this workspace — run delphi setup";
+
 /// The table `delphi models` prints: the pool in preference order, then the targets.
 pub fn render(cfg: &Config, state: &[Entry], now: i64) -> String {
+    if cfg.pool_entries().is_empty() {
+        return format!("{}\n", NONE_CONFIGURED);
+    }
     let mut out = format!("{:>2}  {:<16} {:<28} {:<10} state\n", "#", "endpoint", "model", "tier");
     let find = |endpoint_id: &str, model_id: &str| state.iter().find(|e| e.endpoint_id == endpoint_id && e.model_id == model_id);
     for (i, k) in cfg.pool_entries().iter().enumerate() {
@@ -126,6 +132,13 @@ mod tests {
 
     fn out_of_quota(endpoint_id: &str, model_id: &str, until: Option<i64>) -> Entry {
         Entry { endpoint_id: endpoint_id.into(), model_id: model_id.into(), state: State::Exhausted, since: NOW, until, reason: "quota reached".into(), throttles: vec![], probe_interval_secs: 900, next_probe_at: until.is_none().then_some(NOW + 900) }
+    }
+
+    #[test]
+    fn an_empty_pool_says_no_model_is_configured_instead_of_printing_an_empty_table() {
+        let none = Config::parse(crate::testkit::CONFIG.split("[[endpoints]]").next().unwrap()).unwrap();
+        let text = render(&none, &[], NOW);
+        assert_eq!(text, "no model is configured for this workspace — run delphi setup\n");
     }
 
     #[test]
