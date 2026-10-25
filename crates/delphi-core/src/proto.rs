@@ -13,6 +13,10 @@ pub enum Scope {
     Console,
     /// Read-only (pause and inspect arrive in Step 5).
     Narrator,
+    /// A relay that carries approval cards to the operator on another channel and brings answers back
+    /// (`specs/014`). It sees only approval and task-outcome events, and can answer an Amber card or deny any
+    /// card. It cannot change the budget, the permission mode, a ratification or anything else.
+    Relay,
 }
 
 impl Scope {
@@ -20,6 +24,7 @@ impl Scope {
         match self {
             Scope::Console => "console",
             Scope::Narrator => "narrator",
+            Scope::Relay => "relay",
         }
     }
 }

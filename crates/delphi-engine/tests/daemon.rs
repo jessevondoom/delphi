@@ -18,6 +18,7 @@ struct Fixture {
     _dir: tempfile::TempDir,
     sock: PathBuf,
     narrator_sock: PathBuf,
+    relay_sock: PathBuf,
     daemon: Arc<Daemon>,
 }
 
@@ -28,19 +29,22 @@ async fn start(policy: TtyPolicy, queue_cap: usize) -> Fixture {
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
     let narrator_sock = dir.path().join("n.sock");
     let narrator_listener = tokio::net::UnixListener::bind(&narrator_sock).unwrap();
+    let relay_sock = dir.path().join("r.sock");
+    let relay_listener = tokio::net::UnixListener::bind(&relay_sock).unwrap();
     let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
     cfg.tty_policy = policy;
     cfg.queue_cap = queue_cap;
     cfg.auth_timeout = Duration::from_millis(500);
     let daemon = Daemon::new(cfg).unwrap();
-    tokio::spawn(daemon.clone().serve_sockets(listener, Some(narrator_listener)));
-    Fixture { _dir: dir, sock, narrator_sock, daemon }
+    tokio::spawn(daemon.clone().serve_all(listener, Some(narrator_listener), Some(relay_listener)));
+    Fixture { _dir: dir, sock, narrator_sock, relay_sock, daemon }
 }
 
 fn authed(f: &Fixture, scope: Scope) -> Client {
     let (sock, token) = match scope {
         Scope::Console => (&f.sock, f.daemon.console_token()),
         Scope::Narrator => (&f.narrator_sock, f.daemon.narrator_token()),
+        Scope::Relay => (&f.relay_sock, f.daemon.relay_token()),
     };
     let mut c = Client::connect(sock).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();

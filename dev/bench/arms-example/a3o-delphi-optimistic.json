@@ -1,0 +1,9 @@
+{
+  "name": "a3o-delphi-optimistic",
+  "kind": "delphi",
+  "template_home": "/path/to/a/ratified/bench-home",
+  "workspace": "bench",
+  "input": "/build --optimistic {prompt}",
+  "flags": ["--permissions", "default", "--budget", "5", "--on-card", "policy:{policy}"],
+  "timeout": 1800
+}

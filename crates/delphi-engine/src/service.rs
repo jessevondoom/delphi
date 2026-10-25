@@ -214,6 +214,11 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "the builder role is not enabled"));
         }
         let task_id = m.next_task_id();
+        let optimistic = p["optimistic"].as_bool().unwrap_or(false);
+        if optimistic {
+            // Refused before anything starts: the mode runs work ahead of the operator's review and needs the sandbox.
+            self.engine.mark_optimistic(&task_id).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        }
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "builder".into(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
         let h = tokio::spawn(async move {
@@ -225,7 +230,86 @@ impl EngineService {
             running.lock().unwrap().remove(&tid);
         });
         self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
-        Ok(json!({"task_id": task_id, "mission_id": mid}))
+        Ok(json!({"task_id": task_id, "mission_id": mid, "optimistic": optimistic}))
+    }
+
+    /// `decisions.list`: the provisional decisions of a mission (or one task), with their reviews.
+    async fn decisions_list(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let ds: Vec<_> = match p["task_id"].as_str() {
+            Some(t) => crate::provisional::ledger(&events, t),
+            None => crate::provisional::ledger_all(&events),
+        };
+        let pending = ds.iter().filter(|d| d.outcome == "allow" && d.review.is_none()).count();
+        Ok(json!({"mission_id": m.id, "decisions": ds.iter().map(|d| d.to_json()).collect::<Vec<_>>(), "pending": pending}))
+    }
+
+    /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
+    /// decision's payload hash, so a review of one thing cannot ratify another, and only an allowed decision (the
+    /// kind that enabled work) is reviewed.
+    async fn decisions_review(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let (Some(id), Some(hash)) = (p["decision_id"].as_str(), p["payload_blake3"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`decision_id` and `payload_blake3` are required"));
+        };
+        let resolution = match p["resolution"].as_str() {
+            Some(r @ ("ratified" | "rejected")) => r,
+            _ => return Err(err(code::INVALID_PARAMS, "`resolution` must be ratified or rejected")),
+        };
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let Some(d) = crate::provisional::ledger_all(&events).into_iter().find(|d| d.id == id) else {
+            return Err(err(code::NOT_FOUND, format!("no provisional decision `{}`", id)));
+        };
+        if d.outcome != "allow" {
+            return Err(err(code::INVALID_PARAMS, "that decision refused something; there is nothing to review"));
+        }
+        if d.payload_blake3 != hash {
+            return Err(err(code::INVALID_PARAMS, result_msg(id)));
+        }
+        let note: String = p["note"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(500).collect();
+        let by = format!("console-{}", ctx.client_id);
+        let mut e = EventEnvelope::new(&m.id, "decision.reviewed", json!({"decision_id": id, "resolution": resolution, "note": note, "by": by, "payload_blake3": hash}));
+        e.task_id = Some(d.task_id.clone());
+        m.append(e).await.map_err(|e| err(-32000, e.to_string()))?;
+        self.engine.decisions_changed.notify_one();
+        Ok(json!({"decision_id": id, "resolution": resolution, "task_id": d.task_id}))
+    }
+
+    /// `build.merge`: run the gates and the merge card again for a build whose branch was kept, for example after
+    /// the operator reviewed its provisional decisions. The result is logged as `build.merge_finished`.
+    async fn build_merge(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let Some(task_id) = p["task_id"].as_str().filter(|t| t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !t.is_empty()).map(String::from) else {
+            return Err(err(code::INVALID_PARAMS, "`task_id` is required (for example t_0003)"));
+        };
+        if self.running.lock().unwrap().contains_key(&task_id) {
+            return Err(err(code::INVALID_PARAMS, format!("{} is still running", task_id)));
+        }
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        if !events.iter().any(|e| e.kind == "worktree.created" && e.task_id.as_deref() == Some(task_id.as_str())) {
+            return Err(err(code::NOT_FOUND, format!("{} has no kept branch in this mission", task_id)));
+        }
+        self.running.lock().unwrap().insert(task_id.clone(), Running { target: "builder".into(), prompt: format!("merge {}", task_id), started: Instant::now() });
+        let (engine, running, tid) = (self.engine.clone(), self.running.clone(), task_id.clone());
+        let mm = m.clone();
+        let h = tokio::spawn(async move {
+            let (outcome, detail) = match engine.finalize_build(&mm, &tid).await {
+                Ok(o) => {
+                    let (a, b) = o.headline();
+                    (a.to_string(), b)
+                }
+                Err(e) => ("failed".to_string(), engine.secrets.redact(&e.to_string())),
+            };
+            let mut ev = EventEnvelope::new(&mm.id, "build.merge_finished", json!({"outcome": outcome, "detail": detail}));
+            ev.task_id = Some(tid.clone());
+            let _ = mm.append(ev).await;
+            running.lock().unwrap().remove(&tid);
+        });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
+        Ok(json!({"task_id": task_id, "mission_id": m.id}))
     }
 
     /// `council.start`: a three-round Council on a proposition (`council.rs`), in the background.
@@ -267,6 +351,37 @@ impl EngineService {
         match self.engine.broker.resolve(id, hash, answer, &format!("console-{}", ctx.client_id)) {
             Ok(r) => Ok(r.event_payload(id, &format!("console-{}", ctx.client_id))),
             Err(ResolveError::Gone { resolution, by }) => Err(RpcError { code: code::NOT_FOUND, message: format!("{}", ResolveError::Gone { resolution: resolution.clone(), by: by.clone() }), data: Some(json!({"by": by, "resolution": resolution.map(|r| r.event_payload(id, "")) })) }),
+            Err(e) => Err(err(code::INVALID_PARAMS, e.to_string())),
+        }
+    }
+
+    /// `approval.relay_resolve`: the answer a relay brings back from the operator's other channel (`specs/014` §2).
+    /// Narrower than `approval.resolve` on purpose: it needs the relay scope, takes only `allow` or `deny` (never
+    /// "allow similar"), and **cannot allow a Red card**, whatever the channel, so a stolen mailbox or chat
+    /// account can deny anything but approve only what the operator already treats as routine. The answer is
+    /// still bound to the payload hash and still loses to an earlier answer or a timeout.
+    fn approval_relay_resolve(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        if ctx.scope != Scope::Relay {
+            return Err(err(code::FORBIDDEN, "this method is for the relay scope; the console uses approval.resolve"));
+        }
+        let (Some(id), Some(hash)) = (p["approval_id"].as_str(), p["payload_blake3"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`approval_id` and `payload_blake3` are required"));
+        };
+        let allow = match p["decision"].as_str() {
+            Some("allow") => true,
+            Some("deny") => false,
+            _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow or deny")),
+        };
+        if allow && self.engine.broker.get(id).is_some_and(|r| r.tier == crate::approval::Tier::Red) {
+            return Err(err(code::FORBIDDEN, "a Red action is answered at the console, not through a relay (it can still be denied here)"));
+        }
+        // Who answered, for the log: the channel and the sender it vouches for, printable and short.
+        let clean = |v: &Value, max: usize| -> String { v.as_str().unwrap_or("").chars().take(max).map(|c| if c.is_ascii_alphanumeric() || "@._:+-".contains(c) { c } else { '_' }).collect() };
+        let by = format!("relay:{}:{}", clean(&p["channel"], 24), clean(&p["sender"], 80));
+        let answer = if allow { Answer::Allow } else { Answer::Deny { reason: p["reason"].as_str().unwrap_or("").chars().take(500).collect() } };
+        match self.engine.broker.resolve(id, hash, answer, &by) {
+            Ok(r) => Ok(r.event_payload(id, &by)),
+            Err(ResolveError::Gone { resolution, by: who }) => Err(RpcError { code: code::NOT_FOUND, message: format!("{}", ResolveError::Gone { resolution: resolution.clone(), by: who.clone() }), data: Some(json!({"by": who, "resolution": resolution.map(|r| r.event_payload(id, "")) })) }),
             Err(e) => Err(err(code::INVALID_PARAMS, e.to_string())),
         }
     }
@@ -481,6 +596,9 @@ impl Extension for ServiceExt {
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "task.cancel" => svc.task_cancel(params, ctx).await,
                 "build.start" => svc.build_start(params, ctx).await,
+                "build.merge" => svc.build_merge(params, ctx).await,
+                "decisions.list" => svc.decisions_list(params).await,
+                "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
@@ -489,6 +607,7 @@ impl Extension for ServiceExt {
                 "kb.index" => svc.kb_index(ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
+                "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
                 "usage.get" => svc.usage_get(params).await,
                 "models.get" => svc.models_get(),
                 "budget.get" => svc.mission(params["mission_id"].as_str()).await.map(|m| EngineService::budget_json(&m)),
@@ -524,8 +643,10 @@ mod tests {
     struct Served {
         sock: PathBuf,
         narrator_sock: PathBuf,
+        relay_sock: PathBuf,
         console: String,
         narrator: String,
+        relay: String,
         _dir: tempfile::TempDir,
     }
 
@@ -537,8 +658,10 @@ mod tests {
         let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
         let sock = dir.path().join("d.sock");
         let narrator_sock = dir.path().join("n.sock");
+        let relay_sock = dir.path().join("r.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         let narrator_listener = tokio::net::UnixListener::bind(&narrator_sock).unwrap();
+        let relay_listener = tokio::net::UnixListener::bind(&relay_sock).unwrap();
         let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
         cfg.tty_policy = TtyPolicy::Disabled;
         if let Some(c) = queue_cap {
@@ -548,9 +671,9 @@ mod tests {
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         daemon.set_extension(svc.extension());
-        let (console, narrator) = (daemon.console_token().to_string(), daemon.narrator_token().to_string());
-        tokio::spawn(daemon.serve_sockets(listener, Some(narrator_listener)));
-        Served { sock, narrator_sock, console, narrator, _dir: dir }
+        let (console, narrator, relay) = (daemon.console_token().to_string(), daemon.narrator_token().to_string(), daemon.relay_token().to_string());
+        tokio::spawn(daemon.serve_all(listener, Some(narrator_listener), Some(relay_listener)));
+        Served { sock, narrator_sock, relay_sock, console, narrator, relay, _dir: dir }
     }
 
     async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -670,6 +793,232 @@ mod tests {
         .await;
         assert_eq!(f.model.requests().len(), 0);
         assert!(f.m.replay().unwrap().iter().all(|e| e.kind != "task.created"), "nothing was started");
+    }
+
+    // ── the relay scope (specs/014) ──────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_socket_accepts_only_its_own_token_and_the_relay_socket_issues_only_relay_tokens() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (c_sock, n_sock, r_sock) = (s.sock.clone(), s.narrator_sock.clone(), s.relay_sock.clone());
+        let (c_tok, n_tok, r_tok) = (s.console.clone(), s.narrator.clone(), s.relay.clone());
+        blocking(move || {
+            let try_hello = |sock: &PathBuf, tok: &str| {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                c.hello(tok).is_ok()
+            };
+            assert!(try_hello(&r_sock, &r_tok) && try_hello(&c_sock, &c_tok) && try_hello(&n_sock, &n_tok));
+            for (sock, tok, what) in [(&r_sock, &c_tok, "console token on the relay socket"), (&r_sock, &n_tok, "narrator token on the relay socket"), (&c_sock, &r_tok, "relay token on the console socket"), (&n_sock, &r_tok, "relay token on the narrator socket")] {
+                assert!(!try_hello(sock, tok), "{} must be refused", what);
+            }
+            let mut c = Client::connect(&r_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "console"}))), Some(code::FORBIDDEN), "the relay socket cannot hand out a console token");
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "narrator"}))), Some(code::FORBIDDEN));
+            assert!(c.issue_token(delphi_core::proto::Scope::Relay).is_ok(), "it issues its own kind");
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            assert_eq!(rpc_code(c.call("auth.issue", json!({"scope": "relay"}))), Some(code::FORBIDDEN), "and the console socket cannot issue one");
+            let mut c = Client::connect(&r_sock).unwrap();
+            assert_eq!(c.hello(&r_tok).unwrap()["scope"], "relay");
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_relay_socket_answers_a_fixed_short_list_and_refuses_everything_else_by_name() {
+        let mut listed: Vec<&str> = delphi_core::server::RELAY_METHODS.to_vec();
+        listed.sort();
+        assert_eq!(listed, vec!["approval.list", "approval.relay_resolve", "budget.get", "events.subscribe", "session.ping"], "the list is the contract; adding to it is a decision");
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            for m in everything_a_relay_must_not_reach {
+                assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
+            }
+            for m in delphi_core::server::RELAY_METHODS {
+                assert_ne!(rpc_code(c.call(m, json!({}))), Some(code::FORBIDDEN), "{} is on the list, so it must be answered", m);
+            }
+        })
+        .await;
+        assert_eq!(f.model.requests().len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_relay_is_sent_cards_and_outcomes_but_never_what_an_agent_says() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-relay.md", "content": "# Relay\nbody"})), Step::text("A very private model reply.")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (c_sock, r_sock, c_tok, r_tok) = (s.sock.clone(), s.relay_sock.clone(), s.console.clone(), s.relay.clone());
+        let kinds = blocking(move || {
+            let mut relay = Client::connect(&r_sock).unwrap();
+            relay.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            relay.hello(&r_tok).unwrap();
+            relay.call("events.subscribe", json!({})).unwrap();
+            let mut console = Client::connect(&c_sock).unwrap();
+            console.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            console.hello(&c_tok).unwrap();
+            console.call("task.submit", json!({"target": "architect", "prompt": "Draft a spec"})).unwrap();
+            let mut kinds: Vec<String> = Vec::new();
+            let mut answered = false;
+            loop {
+                let n = relay.next_notification().unwrap();
+                assert_ne!(n["method"], "delta.frame", "live model text must not reach a relay");
+                if n["method"] != "event" {
+                    continue;
+                }
+                let e = &n["params"];
+                kinds.push(e["type"].as_str().unwrap().to_string());
+                assert!(!e.to_string().contains("private model reply"), "model text leaked to the relay: {}", e);
+                if e["type"] == "approval.requested" && !answered {
+                    answered = true;
+                    let p = &e["payload"];
+                    let r = relay.call("approval.relay_resolve", json!({"approval_id": p["approval_id"], "payload_blake3": p["payload_blake3"], "decision": "allow", "channel": "email", "sender": "me@example.com"})).unwrap();
+                    assert_eq!(r["resolution"], "approved");
+                }
+                if e["type"] == "task.completed" {
+                    break;
+                }
+            }
+            kinds
+        })
+        .await;
+        for k in &kinds {
+            assert!(delphi_core::hub::RELAY_EVENTS.contains(&k.as_str()), "a relay was sent `{}`", k);
+        }
+        assert!(kinds.contains(&"approval.requested".to_string()) && kinds.contains(&"approval.resolved".to_string()) && kinds.contains(&"task.completed".to_string()), "{:?}", kinds);
+        assert!(f.root.join("workspaces/w/team/specs/009-relay.md").exists(), "the relay's answer approved the write");
+        let resolved = events_of(&f, "approval.resolved");
+        assert_eq!(resolved[0].payload["by"], "relay:email:me@example.com", "the log says who answered: {}", resolved[0].payload);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_relay_can_approve_amber_deny_anything_and_never_approve_red() {
+        use crate::approval::{Request, Tier};
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let mk = |tier: Tier, tool: &str| Request { approval_id: String::new(), task_id: "t_0001".into(), span_id: "sp1".into(), role: "architect".into(), tier, tool: tool.into(), pattern: tool.into(), worktree: None, summary: "s".into(), payload: json!({"tool": tool}), payload_blake3: String::new(), timeout: Duration::from_secs(60) };
+        let amber = f.engine.broker.request(mk(Tier::Amber, "write_file"));
+        let red = f.engine.broker.request(mk(Tier::Red, "merge"));
+        let red2 = f.engine.broker.request(mk(Tier::Red, "pull_request"));
+        let amber2 = f.engine.broker.request(mk(Tier::Amber, "write_file"));
+        let hash = |id: &str| f.engine.broker.get(id).unwrap().payload_blake3;
+        let ids = [amber.approval_id.clone(), red.approval_id.clone(), red2.approval_id.clone(), amber2.approval_id.clone()];
+        let hashes: Vec<String> = ids.iter().map(|i| hash(i)).collect();
+        let (r_sock, r_tok, c_sock, c_tok) = (s.relay_sock.clone(), s.relay.clone(), s.sock.clone(), s.console.clone());
+        let ids_in = ids.clone();
+        blocking(move || {
+            let ids = ids_in;
+            let mut r = Client::connect(&r_sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&r_tok).unwrap();
+            let call = |r: &mut Client, i: usize, decision: &str| r.call("approval.relay_resolve", json!({"approval_id": ids[i], "payload_blake3": hashes[i], "decision": decision, "channel": "email", "sender": "me@example.com"}));
+            // Red: allow is refused by the daemon, whoever asks; the card is still waiting.
+            assert_eq!(rpc_code(call(&mut r, 1, "allow")), Some(code::FORBIDDEN));
+            assert_eq!(rpc_code(call(&mut r, 2, "allow")), Some(code::FORBIDDEN));
+            // "Allow similar" is not a relay decision at all.
+            assert_eq!(rpc_code(call(&mut r, 0, "allow_similar")), Some(code::INVALID_PARAMS));
+            // A wrong payload hash approves nothing.
+            let bad = r.call("approval.relay_resolve", json!({"approval_id": ids[0], "payload_blake3": "0000", "decision": "allow", "channel": "email", "sender": "x"}));
+            assert!(bad.is_err(), "a changed payload is a new approval");
+            // Amber: allowed. Red: denied is fine.
+            assert_eq!(call(&mut r, 0, "allow").unwrap()["resolution"], "approved");
+            assert!(call(&mut r, 1, "deny").is_ok());
+            // The first answer wins: a second answer to the same card learns it lost.
+            assert_eq!(rpc_code(call(&mut r, 0, "deny")), Some(code::NOT_FOUND));
+            // The console's method is not the relay's, and the relay's is not the console's.
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            assert_eq!(rpc_code(c.call("approval.relay_resolve", json!({"approval_id": ids[3], "payload_blake3": hashes[3], "decision": "allow"}))), Some(code::FORBIDDEN), "a console uses approval.resolve");
+        })
+        .await;
+        assert!(matches!(amber.wait().await, crate::approval::Resolution::Approved { .. }));
+        assert!(matches!(red.wait().await, crate::approval::Resolution::Denied { .. }));
+        assert!(f.engine.broker.get(&ids[2]).is_some() && f.engine.broker.get(&ids[3]).is_some(), "the refused and untouched cards are still waiting");
+        drop((red2, amber2));
+    }
+
+    // ── provisional decisions (specs/015) ────────────────────────────────────
+
+    async fn seed_decision(f: &Fx, id: &str, allow: bool) -> String {
+        let c = crate::tools::Classified { tool: "write_file".into(), tier: crate::tools::ToolTier::Amber, kind: crate::tools::ActionKind::WorktreeEdit, summary: format!("write src/{}.rs", id), payload: json!({"tool": "write_file", "path": format!("@worktree/src/{}.rs", id), "bytes": 3, "blake3": "ab"}), pattern: "write_file @worktree/src/*".into() };
+        let v = crate::provisional::Verdict { allow, rationale: "ok".into(), risk: crate::provisional::Risk::Routine };
+        let ev = crate::provisional::decision_event(id, &c, crate::approval::Tier::Amber, &v, "builder");
+        let hash = ev["payload_blake3"].as_str().unwrap().to_string();
+        let mut e = EventEnvelope::new(&f.m.id, "decision.provisional", ev);
+        e.task_id = Some("t_0001".into());
+        e.agent = Some("builder".into());
+        f.m.append(e).await.unwrap();
+        hash
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn decisions_are_listed_and_reviewed_by_the_console_only_and_a_review_is_bound_to_the_payload_hash() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let hash_a = seed_decision(&f, "dec_a", true).await;
+        let _ = seed_decision(&f, "dec_b", false).await;
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let l = c.call("decisions.list", json!({})).unwrap();
+            assert_eq!((l["pending"].as_u64(), l["decisions"].as_array().unwrap().len()), (Some(1), 2), "the refusal is listed but needs no review: {}", l);
+            let review = |c: &mut Client, id: &str, hash: &str, res: &str| c.call("decisions.review", json!({"decision_id": id, "payload_blake3": hash, "resolution": res, "note": "looked fine"}));
+            assert_eq!(rpc_code(review(&mut c, "dec_missing", &hash_a, "ratified")), Some(code::NOT_FOUND));
+            assert_eq!(rpc_code(review(&mut c, "dec_a", "0000", "ratified")), Some(code::INVALID_PARAMS), "a changed payload is a new decision");
+            assert_eq!(rpc_code(review(&mut c, "dec_a", &hash_a, "maybe")), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(review(&mut c, "dec_b", "x", "ratified")), Some(code::INVALID_PARAMS), "there is nothing to review in a refusal");
+            let ok = review(&mut c, "dec_a", &hash_a, "ratified").unwrap();
+            assert_eq!((ok["decision_id"].as_str(), ok["resolution"].as_str()), (Some("dec_a"), Some("ratified")));
+            let l = c.call("decisions.list", json!({"task_id": "t_0001"})).unwrap();
+            assert_eq!(l["pending"], 0);
+            assert_eq!(l["decisions"][0]["review"]["resolution"], "ratified");
+            assert_eq!(l["decisions"][0]["review"]["note"], "looked fine");
+            // The narrator and the relay cannot review (the methods are not on their lists), and cannot even list.
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("decisions.review", json!({"decision_id": "dec_a", "payload_blake3": "x", "resolution": "ratified"}))), Some(code::FORBIDDEN));
+                assert_eq!(rpc_code(c.call("build.merge", json!({"task_id": "t_0001"}))), Some(code::FORBIDDEN));
+            }
+        })
+        .await;
+        let reviewed = events_of(&f, "decision.reviewed");
+        assert_eq!(reviewed.len(), 1);
+        assert!(reviewed[0].payload["by"].as_str().unwrap().starts_with("console-") && reviewed[0].task_id.as_deref() == Some("t_0001"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_merge_needs_a_task_with_a_kept_branch() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            assert_eq!(rpc_code(c.call("build.merge", json!({}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("build.merge", json!({"task_id": "../x"}))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("build.merge", json!({"task_id": "t_0099"}))), Some(code::NOT_FOUND), "no such branch in this mission");
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_relay_is_told_that_decisions_await_review_and_the_list_of_relay_events_is_pinned() {
+        let mut listed: Vec<&str> = delphi_core::hub::RELAY_EVENTS.to_vec();
+        listed.sort();
+        assert_eq!(listed, vec!["approval.parked", "approval.requested", "approval.resolved", "decisions.review_requested", "task.completed", "task.failed"], "the list is the contract; adding to it is a decision");
     }
 
     #[tokio::test(flavor = "multi_thread")]

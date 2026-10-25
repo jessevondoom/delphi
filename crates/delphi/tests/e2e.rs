@@ -687,10 +687,24 @@ fn the_inline_console_pins_a_block_prints_into_scrollback_and_never_takes_over_t
     for _ in 0..3 {
         c.type_keys("/help\r");
     }
+    // Wait for what this means, not for a line of help text (which scrolls out of the visible history as help grows):
+    // lines have scrolled into the terminal's history, and then the screen has stopped changing.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while c.everything().matches("/usage [mission|role|task|model]").count() < 2 {
+    while c.lines_in_scrollback() < 10 {
         assert!(Instant::now() < deadline, "{}", c.everything());
         std::thread::sleep(Duration::from_millis(60));
+    }
+    let (mut last, mut stable) = (c.visible(), 0);
+    while stable < 6 {
+        assert!(Instant::now() < deadline, "the screen never settled:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+        let now = c.visible();
+        if now == last {
+            stable += 1;
+        } else {
+            stable = 0;
+            last = now;
+        }
     }
     assert!(c.lines_in_scrollback() >= 10, "output scrolled into the terminal's scrollback ({} lines), it was not redrawn over:\n{}", c.lines_in_scrollback(), c.everything());
     let tail = c.visible();
@@ -1230,4 +1244,309 @@ fn the_daemon_reports_the_release_of_the_program_that_started_it() {
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
     let stop = PtyConsole::start_env(&e.home, &["daemon", "stop", "--workspace", "e2e"], 10, 80, &[]);
     assert_eq!(stop.wait_exit(), 0);
+}
+
+// ── delphi run: no terminal, a summary and an exit code ─────────────────────
+
+/// Ratify the endpoints through a short console session, then stop that daemon so `delphi run` starts its own
+/// (a script has no terminal, so it can only use a daemon it spawned).
+fn ratify_and_stop(e: &Env) {
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/ratify");
+    s.wait_for("pending proposal");
+    s.send("/ratify apply 1");
+    s.wait_for("ratified ws:config.toml#access");
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    kill_daemon(pid_in(&out));
+}
+
+/// Run `delphi run` with no stdin and no terminal; returns (exit code, stdout, stderr).
+fn delphi_run(e: &Env, args: &[&str]) -> (i32, String, String) {
+    let o = Command::new(DELPHI).arg("run").args(args).args(["--workspace", "e2e", "--home", e.home.to_str().unwrap()]).env("DELPHI_E2E_KEY", KEY).stdin(Stdio::null()).output().unwrap();
+    (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string())
+}
+
+fn summary_of(stdout: &str) -> Value {
+    let line = stdout.lines().rev().find(|l| l.contains("\"run.summary\"")).unwrap_or_else(|| panic!("no summary in:\n{}", stdout));
+    serde_json::from_str(line).unwrap()
+}
+
+#[test]
+fn delphi_run_answers_a_task_with_no_terminal_and_reports_a_summary() {
+    let m = mock(vec![reply_tool("toolu_1", "read_file", json!({"path": "@project/proj/src/lib.rs"})), reply_text("The file defines `needle`, which returns 42.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let (code, out, err) = delphi_run(&e, &["What does @project/proj/src/lib.rs define?", "--json", "--timeout", "90s"]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["outcome"].as_str(), s["exit_code"].as_i64()), (Some("completed"), Some(0)));
+    assert!(s["text"].as_str().unwrap().contains("needle"), "{}", s);
+    assert_eq!(s["cards"]["total"], 0);
+    assert!(s["usage"]["rows"].as_array().map(|r| !r.is_empty()).unwrap_or(false), "the cost is in the summary: {}", s["usage"]);
+    assert!(!out.contains(KEY) && !err.contains(KEY), "the credential never reaches the output");
+    assert_eq!(m.seen.lock().unwrap().len(), 2);
+    let (code2, ..) = delphi_run(&e, &["--task", "", "--json"]);
+    assert_eq!(code2, 4, "an empty task is refused before any daemon is touched");
+}
+
+#[test]
+fn delphi_run_denies_a_card_by_default_and_reports_it_and_a_policy_can_allow_amber() {
+    let write = || reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"}));
+    // Run 1: --on-card deny (the default). The model is told no; nothing is written.
+    let m = mock(vec![write(), reply_text("I could not write the spec.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let (code, out, err) = delphi_run(&e, &["@architect Draft a spec called 009-e2e", "--json", "--timeout", "90s"]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["cards"]["total"].as_u64(), s["cards"]["denied"].as_u64()), (Some(1), Some(1)), "{}", s);
+    assert_eq!(s["cards"]["list"][0]["tool"], "write_file");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "a denied card writes nothing");
+}
+
+#[test]
+fn delphi_run_with_a_policy_allows_exactly_the_amber_tool_it_names() {
+    let write = || reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"}));
+    let m = mock(vec![write(), reply_text("Drafted specs/009-e2e.md.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let policy = e._t.path().join("policy.toml");
+    std::fs::write(&policy, "[[allow]]\ntool = \"write_file\"\npattern = \"write_file specs/*\"\n").unwrap();
+    let (code, out, err) = delphi_run(&e, &["@architect Draft a spec called 009-e2e", "--json", "--timeout", "90s", "--on-card", &format!("policy:{}", policy.display())]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["cards"]["allowed"].as_u64(), s["cards"]["denied"].as_u64()), (Some(1), Some(0)), "{}", s);
+    assert!(e.ws.join("team/specs/009-e2e.md").exists(), "the allowed card ran");
+}
+
+#[test]
+fn delphi_run_refuses_a_policy_that_tries_to_allow_a_merge_before_touching_anything() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let policy = e._t.path().join("bad.toml");
+    std::fs::write(&policy, "[[allow]]\ntool = \"merge\"\n").unwrap();
+    let (code, out, err) = delphi_run(&e, &["anything", "--on-card", &format!("policy:{}", policy.display())]);
+    assert_eq!(code, 4, "{}{}", out, err);
+    assert!(err.contains("no policy can allow it"), "{}", err);
+    assert_eq!(m.seen.lock().unwrap().len(), 0);
+}
+
+// ── delphi relay: a card by email and an approval by reply ──────────────────
+
+/// A just-enough SMTP server that records every message it is given.
+fn fake_smtp(received: Arc<Mutex<Vec<String>>>) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let received = received.clone();
+            std::thread::spawn(move || {
+                let mut w = s.try_clone().unwrap();
+                let mut r = BufReader::new(s);
+                let _ = w.write_all(b"220 fake ESMTP\r\n");
+                let (mut line, mut data, mut in_data) = (String::new(), String::new(), false);
+                while {
+                    line.clear();
+                    r.read_line(&mut line).unwrap_or(0) > 0
+                } {
+                    if in_data {
+                        if line == ".\r\n" {
+                            in_data = false;
+                            received.lock().unwrap().push(std::mem::take(&mut data));
+                            let _ = w.write_all(b"250 queued\r\n");
+                        } else {
+                            data.push_str(&line);
+                        }
+                        continue;
+                    }
+                    let up = line.to_uppercase();
+                    let reply: &[u8] = if up.starts_with("EHLO") || up.starts_with("HELO") {
+                        b"250-fake\r\n250 AUTH PLAIN LOGIN\r\n"
+                    } else if up.starts_with("AUTH") {
+                        b"235 ok\r\n"
+                    } else if up.starts_with("DATA") {
+                        in_data = true;
+                        b"354 go\r\n"
+                    } else if up.starts_with("QUIT") {
+                        let _ = w.write_all(b"221 bye\r\n");
+                        return;
+                    } else {
+                        b"250 ok\r\n"
+                    };
+                    let _ = w.write_all(reply);
+                }
+            });
+        }
+    });
+    port
+}
+
+/// A just-enough IMAP server over a shared inbox of `(raw message, seen)`.
+type Inbox = Arc<Mutex<Vec<(Vec<u8>, bool)>>>;
+
+fn fake_imap(inbox: Inbox) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let inbox = inbox.clone();
+            std::thread::spawn(move || {
+                let mut w = s.try_clone().unwrap();
+                let mut r = BufReader::new(s);
+                let _ = w.write_all(b"* OK fake IMAP ready\r\n");
+                let mut line = String::new();
+                while {
+                    line.clear();
+                    r.read_line(&mut line).unwrap_or(0) > 0
+                } {
+                    let mut parts = line.trim_end().splitn(3, ' ');
+                    let (tag, cmd, rest) = (parts.next().unwrap_or(""), parts.next().unwrap_or("").to_uppercase(), parts.next().unwrap_or(""));
+                    let ids = |set: &str| -> Vec<usize> { set.split(',').filter_map(|x| x.trim().parse().ok()).collect() };
+                    match cmd.as_str() {
+                        "LOGIN" => {
+                            let _ = w.write_all(format!("{} OK logged in\r\n", tag).as_bytes());
+                        }
+                        "SELECT" => {
+                            let n = inbox.lock().unwrap().len();
+                            let _ = w.write_all(format!("* {} EXISTS\r\n* 0 RECENT\r\n* FLAGS (\\Seen)\r\n{} OK [READ-WRITE] done\r\n", n, tag).as_bytes());
+                        }
+                        "SEARCH" => {
+                            let list = inbox.lock().unwrap().iter().enumerate().filter(|(_, (_, seen))| !seen).map(|(i, _)| (i + 1).to_string()).collect::<Vec<_>>().join(" ");
+                            let _ = w.write_all(format!("* SEARCH {}\r\n{} OK done\r\n", list, tag).as_bytes());
+                        }
+                        "FETCH" => {
+                            let (set, what) = rest.split_once(' ').unwrap_or((rest, ""));
+                            for i in ids(set) {
+                                let m = inbox.lock().unwrap()[i - 1].0.clone();
+                                if what.contains("RFC822.SIZE") {
+                                    let _ = w.write_all(format!("* {} FETCH (RFC822.SIZE {})\r\n", i, m.len()).as_bytes());
+                                } else {
+                                    let _ = w.write_all(format!("* {} FETCH (BODY[] {{{}}}\r\n", i, m.len()).as_bytes());
+                                    let _ = w.write_all(&m);
+                                    let _ = w.write_all(b")\r\n");
+                                }
+                            }
+                            let _ = w.write_all(format!("{} OK done\r\n", tag).as_bytes());
+                        }
+                        "STORE" => {
+                            let (set, _) = rest.split_once(' ').unwrap_or((rest, ""));
+                            for i in ids(set) {
+                                inbox.lock().unwrap()[i - 1].1 = true;
+                            }
+                            let _ = w.write_all(format!("{} OK stored\r\n", tag).as_bytes());
+                        }
+                        "LOGOUT" => {
+                            let _ = w.write_all(format!("* BYE\r\n{} OK bye\r\n", tag).as_bytes());
+                            return;
+                        }
+                        _ => {
+                            let _ = w.write_all(format!("{} BAD unknown\r\n", tag).as_bytes());
+                        }
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+fn relay_block(smtp: u16, imap: u16) -> String {
+    format!(
+        r#"
+[relay]
+channel = "email"
+poll_secs = 5
+[relay.email]
+mailbox = "delphi.relay@example.net"
+operator = "me@example.com"
+imap_host = "127.0.0.1"
+imap_port = {imap}
+smtp_host = "127.0.0.1"
+smtp_port = {smtp}
+tls = "none"
+credential = "env:DELPHI_E2E_MAIL_PW"
+authserv_id = "mx.example.net"
+"#
+    )
+}
+
+fn reply_mail(token: &str, id: &str, auth: &str) -> Vec<u8> {
+    format!("From: Me <me@example.com>\r\nTo: delphi.relay@example.net\r\nSubject: Re: card\r\nMessage-ID: <{}@example.com>\r\nAuthentication-Results: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nAPPROVE {}\r\n\r\nOn Mon, Delphi wrote:\r\n> stuff\r\n", id, auth, token).into_bytes()
+}
+
+#[test]
+fn a_card_goes_out_by_email_a_forged_reply_is_ignored_and_the_real_one_approves_it() {
+    let sent = Arc::new(Mutex::new(Vec::<String>::new()));
+    let inbox: Inbox = Arc::new(Mutex::new(Vec::new()));
+    let (smtp, imap) = (fake_smtp(sent.clone()), fake_imap(inbox.clone()));
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-relay.md", "content": "# Relay\nbody"})), reply_text("Drafted specs/009-relay.md.")]);
+    let e = setup(m.port);
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, relay_block(smtp, imap))).unwrap();
+    ratify_and_stop(&e);
+
+    // A headless run raises the card and leaves it for the operator.
+    let run = Command::new(DELPHI)
+        .args(["run", "@architect Draft a spec called 009-relay", "--on-card", "relay", "--json", "--timeout", "120s", "--workspace", "e2e", "--home", e.home.to_str().unwrap()])
+        .env("DELPHI_E2E_KEY", KEY)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // The relay runs in a terminal, as it must (the daemon gives a relay token only to a peer with one).
+    let mut relay = PtyConsole::start_env(&e.home, &["relay", "--workspace", "e2e"], 24, 120, &[("DELPHI_E2E_MAIL_PW", "app-password")]);
+    relay.wait_for("delphi relay: ready");
+
+    // The card arrives by email, with a token and no secret payload.
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let card_mail = loop {
+        if let Some(m) = sent.lock().unwrap().iter().find(|m| m.contains("[delphi:ap_")).cloned() {
+            break m;
+        }
+        assert!(Instant::now() < deadline, "no card email arrived; relay shows:\n{}", relay.everything());
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(card_mail.contains("To: me@example.com") && card_mail.contains("write specs/009-relay.md") && card_mail.contains("Auto-Submitted: auto-generated"), "{}", card_mail);
+    assert!(!card_mail.contains("# Relay"), "the file's content stays home by default");
+    let token = card_mail.split("APPROVE ").nth(1).unwrap().chars().take(32).collect::<String>();
+    assert_eq!(token.len(), 32);
+
+    // A forgery: the right address, the right token, but the provider says the sender did not authenticate.
+    inbox.lock().unwrap().push((reply_mail(&token, "forged", "mx.example.net; dmarc=fail; spf=fail"), false));
+    // The operator's real reply.
+    inbox.lock().unwrap().push((reply_mail(&token, "real", "mx.example.net; dkim=pass header.d=example.com; dmarc=pass"), false));
+
+    let out = run.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(0), "stdout:\n{}\nstderr:\n{}\nrelay:\n{}", stdout, String::from_utf8_lossy(&out.stderr), relay.everything());
+    let s = summary_of(&stdout);
+    assert_eq!((s["cards"]["allowed"].as_u64(), s["cards"]["left"].as_u64()), (Some(1), Some(0)), "{}", s);
+    assert!(s["cards"]["list"][0]["reason"].as_str().unwrap().contains("relay:email:me@example.com"), "the log names the channel and sender: {}", s);
+    assert!(e.ws.join("team/specs/009-relay.md").exists(), "the emailed approval ran the write");
+
+    // The forgery was ignored (the operator was told once that a message claiming to be them failed authentication),
+    // and the real reply used the code; both were marked read. Had the forgery been accepted, the real reply would
+    // have found a used code and the notice would not exist.
+    assert!(inbox.lock().unwrap().iter().all(|(_, seen)| *seen));
+    let sent_now = sent.lock().unwrap().clone();
+    assert_eq!(sent_now.iter().filter(|m| m.contains("failed authentication")).count(), 1, "{:#?}", sent_now);
+    assert!(!sent_now.iter().any(|m| m.contains("that code is not valid")), "the real reply found its code unused: the forgery did not take it");
+    let _ = relay.child.kill();
+}
+
+#[test]
+fn an_unratified_relay_block_is_ignored_so_a_local_edit_cannot_add_an_approver() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, relay_block(1, 1))).unwrap();
+    // Nothing is ratified: the relay must refuse to start rather than trust the edited file.
+    let o = Command::new(DELPHI).args(["relay", "check", "--workspace", "e2e", "--home", e.home.to_str().unwrap()]).env("DELPHI_E2E_MAIL_PW", "x").stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(err.contains("no [relay] table in the ratified config"), "{}", err);
 }

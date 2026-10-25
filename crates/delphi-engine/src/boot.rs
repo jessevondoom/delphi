@@ -55,6 +55,12 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("hitl").and_then(|b| b.get("approval_timeout_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.approval_timeout = Duration::from_secs(v as u64);
     }
+    if let Some(v) = root.get("away").and_then(|b| b.get("approval_park_max_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+        s.approval_park_max = Duration::from_secs(v as u64);
+    }
+    if let Some(v) = root.get("optimistic").and_then(|b| b.get("review_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+        s.decision_review_wait = Duration::from_secs(v as u64);
+    }
     if let Some(list) = root.get("agents").and_then(|a| a.get("enabled")).and_then(|v| v.as_array()) {
         let roles: Vec<String> = list.iter().filter_map(|x| x.as_str().map(String::from)).collect();
         if !roles.is_empty() {
@@ -267,6 +273,8 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         pool,
         clock_unix: crate::pool::system_clock(),
         degraded: Default::default(),
+        optimistic: Default::default(),
+        decisions_changed: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);
@@ -293,11 +301,12 @@ mod tests {
 
     #[test]
     fn the_engine_is_assembled_from_config_toml() {
-        let (t, ws) = workspace_with_config("[budget]\nmission_budget_usd = 12.5\n[hitl]\napproval_timeout_sec = 90\n[agents]\nenabled = [\"orchestrator\", \"architect\"]\n");
+        let (t, ws) = workspace_with_config("[budget]\nmission_budget_usd = 12.5\n[hitl]\napproval_timeout_sec = 90\n[away]\napproval_park_max_sec = 3600\n[agents]\nenabled = [\"orchestrator\", \"architect\"]\n");
         pin_config(&ws);
         let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
         assert_eq!(b.engine.settings.mission_budget_usd, 12.5);
         assert_eq!(b.engine.settings.approval_timeout, Duration::from_secs(90));
+        assert_eq!(b.engine.settings.approval_park_max, Duration::from_secs(3600));
         assert_eq!(b.engine.settings.enabled_agents, vec!["orchestrator", "architect"]);
         assert_eq!(b.engine.projects.len(), 1);
         assert_eq!(b.engine.projects[0].0, "proj");

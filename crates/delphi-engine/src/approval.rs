@@ -332,6 +332,11 @@ impl Broker {
     }
 
     /// A pending request by id.
+    /// Who ended a card, as the broker recorded it (`console-<id>`, `relay:<channel>:<sender>`, `timeout`, `daemon`).
+    pub fn resolved_by(&self, approval_id: &str) -> Option<String> {
+        self.state.lock().unwrap().resolved.get(approval_id).map(|(_, by)| by.clone())
+    }
+
     pub fn get(&self, approval_id: &str) -> Option<Request> {
         self.state.lock().unwrap().pending.get(approval_id).map(|p| p.req.clone())
     }
