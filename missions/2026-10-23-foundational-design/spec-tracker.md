@@ -22,7 +22,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 004 Memory and coaching | yes | FTS5 `kb`, `needs`, `miss` only | tests | vectors, coaching automation (Step 6, gated by `delphi needs`) |
 | 005 Console and Narrator | yes | yes (daemon, Narrator, 005-A6 events) | Narrator never watched by a person | operator trial of `delphi narrator`; fixes from it |
 | 005a Avatar system | `active` (not `approved`) | yes (`ui/AVATARS.md`) | no | confirm status wording; look at it in real terminals |
-| 005b Decks, inbox, chromeless viewer | yes (+005b-A1) | mostly, via 005d (decks, inbox, arrows) | no | header badge state machine, chromeless viewer; the file is still untracked in the operator's checkout and fails lint (see memory note) |
+| 005b Decks, inbox, chromeless viewer | yes (+005b-A1) | mostly, via 005d (decks, inbox, arrows) | no | header badge state machine, chromeless viewer |
 | 005c Inline console | yes | yes | tests | none; interim step, superseded by 005d |
 | 005d Full-screen console (Ink, D-28) | yes | yes, phases 0 to 6; v0.2.3 released | CI pty tests only | Terminal.app, iTerm2, Ghostty, tmux, ssh by a person; `Shift+Enter`; release workflow end to end; `/models` view and target-versus-actual strip |
 | 006 Installer and updater | yes | yes (init, doctor, update, rollback, self-update) | installer and self-update checked on a real release | `brew install` not run; Ed25519 release signing replaced by SHA-256 plus attestation (deviation); `install.sh` skips attestation without `gh`; diff3 update (Step 6) |
@@ -45,5 +45,5 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 
 ## Open items that are not specs
 
-- Operator: Step 2 go/no-go; try the Narrator and the console in real terminals; create the Google OAuth client; tidy and commit 005b and the wireframes; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
+- Operator: Step 2 go/no-go; try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
 - Builder: red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`).
