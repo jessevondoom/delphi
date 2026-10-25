@@ -667,7 +667,7 @@ mod tests {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
         assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html", "write_chart", "write_report", "write_deck"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -1059,6 +1059,6 @@ mod tests {
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
         assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html", "write_chart", "write_report", "write_deck"]);
     }
 }

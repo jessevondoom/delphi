@@ -26,7 +26,7 @@ export function filter(query: string, cmds: Command[] = COMMANDS): Command[] {
     for (const ch of n) if (ch === q[i]) i++;
     return i === q.length ? 2 : null;
   };
-  // A command is found by its name or by an alias (`/obs` finds `/narrator`), under its own name.
+  // A command is found by its name or by an alias (`/narr` finds `/observe`), under its own name.
   const score = (c: Command): number | null => {
     const all = [c.name, ...(c.aliases ?? [])].map(rank).filter((x): x is number => x !== null);
     return all.length ? Math.min(...all) : null;

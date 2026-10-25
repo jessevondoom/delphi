@@ -78,3 +78,56 @@ table[data-sortable] thead th[aria-sort="descending"]::after { content: " ▼"; 
   h1, h2, h3 { break-after: avoid; }
   table, pre, blockquote { break-inside: avoid; }
 }
+
+/* charts and grids */
+figure.chart { margin: 0 0 1rem; }
+figure.chart svg { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+figcaption { color: var(--muted); font-size: .9rem; margin-top: .4rem; }
+.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin: 0 0 1rem; }
+.grid > * { margin-bottom: 0; min-width: 0; }
+@media (min-width: 720px) {
+  .grid.cols2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.cols3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+/* reports */
+.report-head .sub { color: var(--muted); margin: -.5rem 0 1.25rem; font-size: 1.1rem; }
+.report .lede { font-size: 1.1rem; }
+.toc { border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); padding: .5rem 1rem; margin: 0 0 1.5rem; }
+.toc h2 { font-size: 1rem; margin: .25rem 0; }
+.toc ol { margin: .25rem 0 .5rem; padding-left: 1.25rem; }
+.section { margin-top: 2rem; }
+.section > h2 { border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+/* decks: every slide shows in turn until the runtime makes it one at a time */
+.deck { max-width: 64rem; margin: 0 auto; padding: 16px; }
+.slide { border: 1px solid var(--line); border-radius: var(--radius); padding: 1.5rem; margin: 0 0 1.5rem; background: var(--bg); }
+.slide h1 { font-size: clamp(2rem, 5vw, 3.2rem); margin: 0 0 .5rem; }
+.slide h2 { font-size: clamp(1.5rem, 3.2vw, 2.4rem); margin-top: 0; }
+.slide .sub { font-size: 1.3rem; color: var(--muted); margin: 0; }
+.slide .by { color: var(--muted); margin-top: 1.5rem; }
+.slide-body { font-size: clamp(1rem, 1.9vw, 1.4rem); }
+.notes { border-top: 1px dashed var(--line); margin-top: 1rem; padding-top: .5rem; color: var(--muted); font-size: .95rem; }
+.notes h3 { font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 .25rem; }
+.deck-ui, .deck-index { display: none; }
+.deck.enhanced { position: fixed; inset: 0; max-width: none; margin: 0; padding: 0; display: flex; flex-direction: column; background: var(--bg); }
+.deck.enhanced .slide { flex: 1; overflow: auto; border: 0; border-radius: 0; margin: 0; padding: clamp(1rem, 4vw, 3.5rem); display: flex; flex-direction: column; justify-content: center; }
+.deck.enhanced .slide[hidden] { display: none; }
+.deck.enhanced .notes { display: none; }
+.deck.enhanced.notes-on .notes { display: block; }
+.deck.enhanced .deck-ui { display: flex; gap: .5rem; align-items: center; justify-content: center; padding: .5rem; border-top: 1px solid var(--line); background: var(--soft); }
+.deck-ui button { font: inherit; padding: .3rem .8rem; min-width: 2.5rem; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; cursor: pointer; }
+.deck-ui button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.deck-ui [data-deck-count] { min-width: 4.5rem; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.deck.enhanced .deck-index { position: absolute; inset: 0; background: var(--bg); overflow: auto; padding: 2rem; z-index: 2; }
+.deck.enhanced .deck-index:not([hidden]) { display: block; }
+.deck-index ol { columns: 2 16rem; }
+@media print {
+  @page { size: landscape; margin: 12mm; }
+  .deck, .deck.enhanced { position: static; display: block; max-width: none; padding: 0; }
+  .deck .slide, .deck.enhanced .slide, .deck .slide[hidden] { display: block !important; border: 0; padding: 0; margin: 0; page-break-after: always; break-after: page; min-height: 0; }
+  .deck .slide:last-of-type { break-after: auto; page-break-after: auto; }
+  .deck .notes, .deck.enhanced .notes { display: block !important; color: #333; }
+  .deck-ui, .deck-index, .deck.enhanced .deck-index { display: none !important; }
+  figure.chart svg { border: 0; }
+  .section { break-inside: auto; }
+  .toc { break-after: avoid; }
+}

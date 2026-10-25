@@ -6,11 +6,13 @@
 
 pub mod archive;
 mod cache;
+pub mod chart;
 mod csv;
 mod data;
 mod docx;
 mod epub;
 mod html;
+pub mod htmlkinds;
 pub mod htmllint;
 pub mod htmlpage;
 mod image;
@@ -37,6 +39,7 @@ mod zipwriter;
 pub use zipwriter::{safe_member_name, ZipWriter};
 
 pub use cache::{extract_cached, stats as cache_stats};
+pub use csv::read_table;
 pub use limits::Limits;
 pub use sniff::{detect, Format};
 

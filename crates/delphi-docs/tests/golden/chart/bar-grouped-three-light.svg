@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Builds are slowest on Windows</title>
+<desc id="chart-desc">Bar chart. linux: minimum 3.7 at Q3, maximum 4.2 at Q1. macos: minimum 5.2 at Q3, maximum 6.1 at Q1. windows: minimum 8.4 at Q3, maximum 9.8 at Q1. Values: Q1 4.2 / 6.1 / 9.8; Q2 4.0 / 5.8 / 9.1; Q3 3.7 / 5.2 / 8.4.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Builds are slowest on Windows</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">minutes per build</text>
+<rect class="f1" x="16" y="65" width="10" height="10" rx="2"/>
+<text x="32" y="74" class="t2" font-size="12" text-anchor="start">linux</text>
+<rect class="f2" x="72.48" y="65" width="10" height="10" rx="2"/>
+<text x="88.48" y="74" class="t2" font-size="12" text-anchor="start">macos</text>
+<rect class="f3" x="133.28" y="65" width="10" height="10" rx="2"/>
+<text x="149.28" y="74" class="t2" font-size="12" text-anchor="start">windows</text>
+<line class="g" x1="49.54" y1="360" x2="704" y2="360"/>
+<text x="41.54" y="364" class="t3" font-size="11" text-anchor="end">0.0</text>
+<line class="g" x1="49.54" y1="307.2" x2="704" y2="307.2"/>
+<text x="41.54" y="311.2" class="t3" font-size="11" text-anchor="end">2.0</text>
+<line class="g" x1="49.54" y1="254.4" x2="704" y2="254.4"/>
+<text x="41.54" y="258.4" class="t3" font-size="11" text-anchor="end">4.0</text>
+<line class="g" x1="49.54" y1="201.6" x2="704" y2="201.6"/>
+<text x="41.54" y="205.6" class="t3" font-size="11" text-anchor="end">6.0</text>
+<line class="g" x1="49.54" y1="148.8" x2="704" y2="148.8"/>
+<text x="41.54" y="152.8" class="t3" font-size="11" text-anchor="end">8.0</text>
+<line class="g" x1="49.54" y1="96" x2="704" y2="96"/>
+<text x="41.54" y="100" class="t3" font-size="11" text-anchor="end">10.0</text>
+<line class="ax" x1="49.54" y1="360" x2="704" y2="360"/>
+<path class="f1" d="M120.62,360 L120.62,253.12 Q120.62,249.12 124.62,249.12 L140.62,249.12 Q144.62,249.12 144.62,253.12 L144.62,360 Z"/>
+<path class="f2" d="M146.62,360 L146.62,202.96 Q146.62,198.96 150.62,198.96 L166.62,198.96 Q170.62,198.96 170.62,202.96 L170.62,360 Z"/>
+<path class="f3" d="M172.62,360 L172.62,105.28 Q172.62,101.28 176.62,101.28 L192.62,101.28 Q196.62,101.28 196.62,105.28 L196.62,360 Z"/>
+<text x="158.62" y="376" class="t3" font-size="11" text-anchor="middle">Q1</text>
+<path class="f1" d="M338.77,360 L338.77,258.4 Q338.77,254.4 342.77,254.4 L358.77,254.4 Q362.77,254.4 362.77,258.4 L362.77,360 Z"/>
+<path class="f2" d="M364.77,360 L364.77,210.88 Q364.77,206.88 368.77,206.88 L384.77,206.88 Q388.77,206.88 388.77,210.88 L388.77,360 Z"/>
+<path class="f3" d="M390.77,360 L390.77,123.76 Q390.77,119.76 394.77,119.76 L410.77,119.76 Q414.77,119.76 414.77,123.76 L414.77,360 Z"/>
+<text x="376.77" y="376" class="t3" font-size="11" text-anchor="middle">Q2</text>
+<path class="f1" d="M556.92,360 L556.92,266.32 Q556.92,262.32 560.92,262.32 L576.92,262.32 Q580.92,262.32 580.92,266.32 L580.92,360 Z"/>
+<path class="f2" d="M582.92,360 L582.92,226.72 Q582.92,222.72 586.92,222.72 L602.92,222.72 Q606.92,222.72 606.92,226.72 L606.92,360 Z"/>
+<path class="f3" d="M608.92,360 L608.92,142.24 Q608.92,138.24 612.92,138.24 L628.92,138.24 Q632.92,138.24 632.92,142.24 L632.92,360 Z"/>
+<text x="594.92" y="376" class="t3" font-size="11" text-anchor="middle">Q3</text>
+<text x="132.62" y="243.12" class="t2" font-size="11" text-anchor="middle">4.2</text>
+<text x="158.62" y="192.96" class="t2" font-size="11" text-anchor="middle">6.1</text>
+<text x="184.62" y="95.28" class="t2" font-size="11" text-anchor="middle">9.8</text>
+<text x="350.77" y="248.4" class="t2" font-size="11" text-anchor="middle">4.0</text>
+<text x="376.77" y="200.88" class="t2" font-size="11" text-anchor="middle">5.8</text>
+<text x="402.77" y="113.76" class="t2" font-size="11" text-anchor="middle">9.1</text>
+<text x="568.92" y="256.32" class="t2" font-size="11" text-anchor="middle">3.7</text>
+<text x="594.92" y="216.72" class="t2" font-size="11" text-anchor="middle">5.2</text>
+<text x="620.92" y="132.24" class="t2" font-size="11" text-anchor="middle">8.4</text>
+</svg>

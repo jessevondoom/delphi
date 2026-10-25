@@ -10,7 +10,7 @@ npm run check-deps  # supply-chain gate: allowlist, exact pins, hashes, no insta
 npm run build     # one executable with Bun (needs the bun dev dependency's binary)
 ```
 
-How it is put together: `terminal.ts` owns stdin (bracketed paste, wheel, mouse, background-colour query with its RGB) and feeds `input.ts`; `fold.ts` turns daemon notifications into state (including the activity deck's running spans and finished history); `screen.ts` turns state into exactly `h` lines of `w` columns (pure, tested); `app.tsx` wires them and Ink paints the lines. Around `screen.ts`: `blocks.ts` (tinted blocks and cards, the rail fallback), `theme.ts` (semantic colours, the tint, badges, capabilities), `motion.ts` (badge frames and the one repaint timer), `help.ts` and `mode.ts` (the `?` card and `Shift+Tab`), `commands.json` (the one command list the Rust consoles generate their help from), `narrator.ts` (`/narrator` in tmux). The narrator window is `observe-screen.ts` (chrome, attention slot, forge, agents, archives, thinking), `weave.ts` (council) and `epic-rail.ts` (epic), run by `observer.tsx`. `dev/drive.py` drives it in a pseudo-terminal.
+How it is put together: `terminal.ts` owns stdin (bracketed paste, wheel, mouse, background-colour query with its RGB) and feeds `input.ts`; `fold.ts` turns daemon notifications into state (including the activity deck's running spans and finished history); `screen.ts` turns state into exactly `h` lines of `w` columns (pure, tested); `app.tsx` wires them and Ink paints the lines. Around `screen.ts`: `blocks.ts` (tinted blocks and cards, the rail fallback), `theme.ts` (semantic colours, the tint, badges, capabilities), `motion.ts` (badge frames and the one repaint timer), `help.ts` and `mode.ts` (the `?` card and `Shift+Tab`), `commands.json` (the one command list the Rust consoles generate their help from), `narrator.ts` (`/observe` in tmux). The narrator window is `observe-screen.ts` (chrome, attention slot, forge, agents, archives, thinking), `weave.ts` (council) and `epic-rail.ts` (epic), run by `observer.tsx`. `dev/drive.py` drives it in a pseudo-terminal.
 
 ## What the console looks like
 
@@ -18,7 +18,7 @@ How it is put together: `terminal.ts` owns stdin (bracketed paste, wheel, mouse,
 - **Chat:** messages are tinted, square blocks with the speaker and time above; yours is right-aligned and dim. A long reply is pinned at its first line with a `↓ N more lines` marker (`Space` or `PgDn` pages, `Enter` on an empty prompt jumps to the end, typing resumes following). Tool calls are one line inside the agent's block.
 - **Activity deck** (`←`): running spans at the bottom (last six lines of their reasoning or words), finished work above as `✔ finished` entries.
 - **Keys:** `?` on an empty prompt lists them. `Esc` clears the prompt, then stops the running task; `Ctrl+C` leaves at once when nothing would be lost and otherwise asks once; `Ctrl+D` leaves on an empty prompt.
-- **Narrator** (`delphi observe`, or `/narrator`): see `skills/tui-design` §4. `delphi observe --once` prints one frame without a terminal.
+- **Narrator** (`delphi observe`, or `/observe`): see `skills/tui-design` §4. `delphi observe --once` prints one frame without a terminal.
 - **Environment:** `NO_COLOR` or `TERM=dumb` (no colour, rail instead of tint, static badges), `DELPHI_REDUCE_MOTION=1` (static badges), `DELPHI_THEME=dark|light` (overrides the terminal's answer), `DELPHI_NO_MOUSE=1`, `DELPHI_NO_TITLE=1`.
 
 ## Terminals, keys and limits

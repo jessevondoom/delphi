@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Median latency fell 12% in 0.2.3</title>
+<desc id="chart-desc">Line chart. p50: minimum 101 ms at 0.2.5, maximum 120 ms at 0.2.1. From 120 ms to 101 ms it falls 16%. p95: minimum 248 ms at 0.2.5, maximum 340 ms at 0.2.1. From 340 ms to 248 ms it falls 27%. Values: 0.2.1 120 ms / 340 ms; 0.2.2 118 ms / 310 ms; 0.2.3 104 ms / 255 ms; 0.2.4 103 ms / 262 ms; 0.2.5 101 ms / 248 ms.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Median latency fell 12% in 0.2.3</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">ms, lower is better</text>
+<path class="k1" d="M16,70 L34,70"/><circle class="d1" cx="34" cy="70" r="4"/>
+<text x="44" y="74" class="t2" font-size="12" text-anchor="start">p50</text>
+<path class="k2" d="M76.88,70 L94.88,70"/><circle class="d2" cx="94.88" cy="70" r="4"/>
+<text x="104.88" y="74" class="t2" font-size="12" text-anchor="start">p95</text>
+<line class="g" x1="62.3" y1="339" x2="623.76" y2="339"/>
+<text x="54.3" y="343" class="t3" font-size="11" text-anchor="end">100 ms</text>
+<line class="g" x1="62.3" y1="290.4" x2="623.76" y2="290.4"/>
+<text x="54.3" y="294.4" class="t3" font-size="11" text-anchor="end">150 ms</text>
+<line class="g" x1="62.3" y1="241.8" x2="623.76" y2="241.8"/>
+<text x="54.3" y="245.8" class="t3" font-size="11" text-anchor="end">200 ms</text>
+<line class="g" x1="62.3" y1="193.2" x2="623.76" y2="193.2"/>
+<text x="54.3" y="197.2" class="t3" font-size="11" text-anchor="end">250 ms</text>
+<line class="g" x1="62.3" y1="144.6" x2="623.76" y2="144.6"/>
+<text x="54.3" y="148.6" class="t3" font-size="11" text-anchor="end">300 ms</text>
+<line class="g" x1="62.3" y1="96" x2="623.76" y2="96"/>
+<text x="54.3" y="100" class="t3" font-size="11" text-anchor="end">350 ms</text>
+<line class="ax" x1="62.3" y1="339" x2="623.76" y2="339"/>
+<line class="ax" x1="62.3" y1="339" x2="62.3" y2="343"/>
+<text x="62.3" y="357" class="t3" font-size="11" text-anchor="middle">0.2.1</text>
+<line class="ax" x1="202.67" y1="339" x2="202.67" y2="343"/>
+<text x="202.67" y="357" class="t3" font-size="11" text-anchor="middle">0.2.2</text>
+<line class="ax" x1="343.03" y1="339" x2="343.03" y2="343"/>
+<text x="343.03" y="357" class="t3" font-size="11" text-anchor="middle">0.2.3</text>
+<line class="ax" x1="483.4" y1="339" x2="483.4" y2="343"/>
+<text x="483.4" y="357" class="t3" font-size="11" text-anchor="middle">0.2.4</text>
+<line class="ax" x1="623.76" y1="339" x2="623.76" y2="343"/>
+<text x="623.76" y="357" class="t3" font-size="11" text-anchor="middle">0.2.5</text>
+<line class="ref" x1="343.03" y1="96" x2="343.03" y2="339"/>
+<text x="338.03" y="108" class="t2" font-size="11" text-anchor="end">daemon rewrite</text>
+<path class="k1" d="M62.3,319.56 L202.67,321.5 L343.03,335.11 L483.4,336.08 L623.76,338.03"/>
+<circle class="d1" cx="623.76" cy="338.03" r="4"/>
+<path class="k2" d="M62.3,105.72 L202.67,134.88 L343.03,188.34 L483.4,181.54 L623.76,195.14"/>
+<circle class="d2" cx="623.76" cy="195.14" r="4"/>
+<text x="633.76" y="199.14" class="t2" font-size="11" text-anchor="start">p95  248 ms</text>
+<text x="633.76" y="342.03" class="t2" font-size="11" text-anchor="start">p50  101 ms</text>
+<text x="16" y="384" class="t3" font-size="11" text-anchor="start">Source: missions/m1/latency.csv</text>
+</svg>

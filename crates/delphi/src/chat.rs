@@ -52,7 +52,7 @@ pub enum Input {
     Merge(String),
     /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
-    /// `/narrator [view]`: open the read-only window (a tmux split when inside tmux, else the command to run).
+    /// `/observe [view]` (`/narrator` is an unlisted alias): open the read-only window (a tmux split when inside tmux, else the command to run).
     Narrator(Option<String>),
     /// `/more`: the rest of a reply the inline console shortened.
     More,
@@ -98,7 +98,7 @@ pub fn parse_input(line: &str) -> Input {
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
             "narrator" | "observe" | "visualize" => match rest.first() {
-                Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge, agents, archives or tile, not `{}`", v)),
+                Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/observe takes council, epic, forge, agents, archives or tile, not `{}`", v)),
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
             "more" => Input::More,

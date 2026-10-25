@@ -185,7 +185,10 @@ fn build_openai(i: &BuildInput) -> Result<HttpRequest, BuildError> {
         (i.register)(v);
         headers.push((k.to_lowercase(), v.clone()));
     }
-    headers.push(("authorization".into(), format!("Bearer {}", token(i.creds, "a compat gateway")?)));
+    // A keyless local server (`credential = "none"`, loopback only) gets no authorization header.
+    if e.credential != "none" {
+        headers.push(("authorization".into(), format!("Bearer {}", token(i.creds, "a compat gateway")?)));
+    }
     let mut core = i.compiled.body.as_object().cloned().unwrap_or_default();
     core.insert("model".into(), json!(i.model_id));
     core.insert("stream".into(), json!(true));
@@ -407,6 +410,17 @@ mod tests {
         }
         let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("cc").unwrap(), model_id: "m", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
         assert_eq!(header(&r, "x-team"), Some("t1"));
+    }
+
+    #[test]
+    fn a_local_ollama_endpoint_is_keyless() {
+        let extra = "[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\npath = \"gateway-compat\"\nbase_url = \"http://localhost:11434\"\ncredential = \"none\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"ollama\"]"), extra)).unwrap();
+        let c = crate::openai::compile(&ipr(), &[], &crate::claude::tests::opts(None)).unwrap();
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("ollama").unwrap(), model_id: "qwen3:8b", compiled: &c, creds: &Resolved::None, now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!(r.url, "http://localhost:11434/v1/chat/completions");
+        assert_eq!(header(&r, "authorization"), None, "no token is invented for a local server");
+        assert_eq!(body(&r)["model"], "qwen3:8b");
     }
 
     #[test]

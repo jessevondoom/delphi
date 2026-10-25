@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Most requests finish within 140 ms</title>
+<desc id="chart-desc">Histogram chart. Distribution of ms (240 values, minimum 85.7, maximum 156.6).</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="400"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Most requests finish within 140 ms</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">request latency, ms</text>
+<line class="g" x1="38.76" y1="360" x2="704" y2="360"/>
+<text x="30.76" y="364" class="t3" font-size="11" text-anchor="end">0</text>
+<line class="g" x1="38.76" y1="311.67" x2="704" y2="311.67"/>
+<text x="30.76" y="315.67" class="t3" font-size="11" text-anchor="end">10</text>
+<line class="g" x1="38.76" y1="263.33" x2="704" y2="263.33"/>
+<text x="30.76" y="267.33" class="t3" font-size="11" text-anchor="end">20</text>
+<line class="g" x1="38.76" y1="215" x2="704" y2="215"/>
+<text x="30.76" y="219" class="t3" font-size="11" text-anchor="end">30</text>
+<line class="g" x1="38.76" y1="166.67" x2="704" y2="166.67"/>
+<text x="30.76" y="170.67" class="t3" font-size="11" text-anchor="end">40</text>
+<line class="g" x1="38.76" y1="118.33" x2="704" y2="118.33"/>
+<text x="30.76" y="122.33" class="t3" font-size="11" text-anchor="end">50</text>
+<line class="g" x1="38.76" y1="70" x2="704" y2="70"/>
+<text x="30.76" y="74" class="t3" font-size="11" text-anchor="end">60</text>
+<line class="ax" x1="38.76" y1="360" x2="704" y2="360"/>
+<path class="f1" d="M39.76,360 L39.76,349.5 Q39.76,345.5 43.76,345.5 L107.68,345.5 Q111.68,345.5 111.68,349.5 L111.68,360 Z"/>
+<path class="f1" d="M113.68,360 L113.68,344.67 Q113.68,340.67 117.68,340.67 L181.59,340.67 Q185.59,340.67 185.59,344.67 L185.59,360 Z"/>
+<path class="f1" d="M187.59,360 L187.59,252.83 Q187.59,248.83 191.59,248.83 L255.51,248.83 Q259.51,248.83 259.51,252.83 L259.51,360 Z"/>
+<path class="f1" d="M261.51,360 L261.51,194.83 Q261.51,190.83 265.51,190.83 L329.42,190.83 Q333.42,190.83 333.42,194.83 L333.42,360 Z"/>
+<path class="f1" d="M335.42,360 L335.42,88.5 Q335.42,84.5 339.42,84.5 L403.34,84.5 Q407.34,84.5 407.34,88.5 L407.34,360 Z"/>
+<path class="f1" d="M409.34,360 L409.34,107.83 Q409.34,103.83 413.34,103.83 L477.25,103.83 Q481.25,103.83 481.25,107.83 L481.25,360 Z"/>
+<path class="f1" d="M483.25,360 L483.25,194.83 Q483.25,190.83 487.25,190.83 L551.17,190.83 Q555.17,190.83 555.17,194.83 L555.17,360 Z"/>
+<path class="f1" d="M557.17,360 L557.17,243.17 Q557.17,239.17 561.17,239.17 L625.08,239.17 Q629.08,239.17 629.08,243.17 L629.08,360 Z"/>
+<path class="f1" d="M631.08,360 L631.08,339.83 Q631.08,335.83 635.08,335.83 L699,335.83 Q703,335.83 703,339.83 L703,360 Z"/>
+<text x="38.76" y="376" class="t3" font-size="11" text-anchor="middle">80</text>
+<text x="121.91" y="376" class="t3" font-size="11" text-anchor="middle">90</text>
+<text x="205.07" y="376" class="t3" font-size="11" text-anchor="middle">100</text>
+<text x="288.23" y="376" class="t3" font-size="11" text-anchor="middle">110</text>
+<text x="371.38" y="376" class="t3" font-size="11" text-anchor="middle">120</text>
+<text x="454.53" y="376" class="t3" font-size="11" text-anchor="middle">130</text>
+<text x="537.69" y="376" class="t3" font-size="11" text-anchor="middle">140</text>
+<text x="620.85" y="376" class="t3" font-size="11" text-anchor="middle">150</text>
+<text x="704" y="376" class="t3" font-size="11" text-anchor="middle">160</text>
+</svg>

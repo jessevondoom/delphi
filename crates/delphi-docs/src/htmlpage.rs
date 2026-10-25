@@ -4,8 +4,9 @@
 //! The finished page is re-parsed and checked by [`crate::htmllint`] before it is returned, so a bug in the
 //! generator cannot produce an unsafe page.
 
+use crate::chart::{self, ChartSpec};
 use crate::htmllint::{lint, lint_user_script, RUNTIME_JS};
-use crate::markdown::{escape, to_html};
+use crate::markdown::{escape, to_html_shift};
 use crate::DocError;
 use serde_json::Value;
 
@@ -21,6 +22,8 @@ const MAX_TEXT: usize = 1 << 20;
 const MAX_SCRIPT: usize = 20_000;
 const MAX_TABS: usize = 12;
 const MAX_STATS: usize = 12;
+pub const MAX_CHARTS: usize = 12;
+const MAX_GRID: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
@@ -53,6 +56,10 @@ pub enum Block {
     Code { text: String, copy: bool },
     Callout { kind: String, text: String },
     Stats(Vec<Stat>),
+    /// A chart drawn into the page as an inline SVG, with an optional caption.
+    Chart { spec: Box<ChartSpec>, caption: Option<String> },
+    /// Blocks side by side (2 or 3 columns; one column on a narrow screen).
+    Grid { cols: usize, blocks: Vec<Block> },
 }
 
 #[derive(Debug, Clone)]
@@ -67,13 +74,17 @@ pub struct PageSpec {
 
 // ---------------------------------------------------------------------------------------------- input
 
-struct Budget {
-    blocks: usize,
-    text: usize,
+pub(crate) struct Budget {
+    pub(crate) blocks: usize,
+    pub(crate) text: usize,
+    pub(crate) charts: usize,
 }
 
 impl Budget {
-    fn text(&mut self, s: &str) -> Result<(), DocError> {
+    pub(crate) fn new() -> Budget {
+        Budget { blocks: 0, text: 0, charts: 0 }
+    }
+    pub(crate) fn text(&mut self, s: &str) -> Result<(), DocError> {
         self.text += s.len();
         if self.text > MAX_TEXT {
             return Err(DocError(format!("the page's text is over {} bytes", MAX_TEXT)));
@@ -96,12 +107,12 @@ fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
 }
 
-fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Block, DocError> {
+pub(crate) fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Block, DocError> {
     b.blocks += 1;
     if b.blocks > MAX_BLOCKS {
         return Err(DocError(format!("a page has at most {} blocks", MAX_BLOCKS)));
     }
-    let kind = str_field(v, "type").ok_or_else(|| DocError("every block needs a `type`: markdown, table, tabs, code, callout or stats".into()))?;
+    let kind = str_field(v, "type").ok_or_else(|| DocError("every block needs a `type`: markdown, table, tabs, code, callout, stats, chart or grid".into()))?;
     let need = |key: &str| str_field(v, key).ok_or_else(|| DocError(format!("a `{}` block needs a `{}` string", kind, key)));
     Ok(match kind {
         "markdown" => {
@@ -149,6 +160,37 @@ fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Block, DocErro
             }
             Block::Table(Table { caption: str_field(v, "caption").map(String::from), columns: cols, rows, sortable: v.get("sortable").and_then(|x| x.as_bool()).unwrap_or(false), filter: v.get("filter").and_then(|x| x.as_bool()).unwrap_or(false) })
         }
+        "chart" => {
+            b.charts += 1;
+            if b.charts > MAX_CHARTS {
+                return Err(DocError(format!("a page has at most {} charts", MAX_CHARTS)));
+            }
+            let spec = v.get("chart").ok_or_else(|| DocError("a `chart` block needs a `chart` object: the same description write_chart takes (type, title, data, ...)".into()))?;
+            let spec = chart::from_json(spec).map_err(|e| DocError(format!("chart block: {}", e)))?;
+            let caption = str_field(v, "caption").map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+            for t in spec.series.iter().map(|s| s.name.len()).chain(std::iter::once(spec.title.len())) {
+                b.text += t;
+            }
+            b.text += spec.x.len() * spec.series.len() * 8;
+            if b.text > MAX_TEXT {
+                return Err(DocError(format!("the page's content is over {} bytes", MAX_TEXT)));
+            }
+            Block::Chart { spec: Box::new(spec), caption }
+        }
+        "grid" => {
+            if depth >= 1 {
+                return Err(DocError("a grid cannot sit inside tabs or another grid".into()));
+            }
+            let cols = v.get("columns").and_then(|c| c.as_u64()).unwrap_or(2);
+            if !(2..=3).contains(&cols) {
+                return Err(DocError("a grid has 2 or 3 `columns`".into()));
+            }
+            let inner = v.get("blocks").and_then(|x| x.as_array()).ok_or_else(|| DocError("a grid needs a `blocks` array".into()))?;
+            if inner.is_empty() || inner.len() > MAX_GRID {
+                return Err(DocError(format!("a grid holds between 1 and {} blocks", MAX_GRID)));
+            }
+            Block::Grid { cols: cols as usize, blocks: inner.iter().map(|x| parse_block(x, depth + 1, b)).collect::<Result<Vec<_>, _>>()? }
+        }
         "tabs" => {
             if depth >= 1 {
                 return Err(DocError("tabs cannot be nested inside tabs".into()));
@@ -181,7 +223,7 @@ fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Block, DocErro
             }
             Block::Stats(out)
         }
-        other => return Err(DocError(format!("unknown block type `{}`; use markdown, table, tabs, code, callout or stats", other))),
+        other => return Err(DocError(format!("unknown block type `{}`; use markdown, table, tabs, code, callout, stats, chart or grid", other))),
     })
 }
 
@@ -192,7 +234,8 @@ pub fn from_json(v: &Value) -> Result<PageSpec, DocError> {
     if title.chars().count() > 200 {
         return Err(DocError("the title is over 200 characters".into()));
     }
-    let mut b = Budget { blocks: 0, text: title.len() };
+    let mut b = Budget::new();
+    b.text = title.len();
     let mut blocks = vec![];
     if let Some(md) = str_field(v, "body_md") {
         b.text(md)?;
@@ -223,9 +266,18 @@ pub fn from_json(v: &Value) -> Result<PageSpec, DocError> {
 
 // ---------------------------------------------------------------------------------------------- output
 
-struct Cx {
-    ids: usize,
-    runtime: bool,
+pub(crate) struct Cx {
+    pub(crate) ids: usize,
+    pub(crate) runtime: bool,
+    pub(crate) charts: bool,
+    /// How far markdown headings are pushed down: 1 on a page (the title is the h1), 2 under a section or slide title.
+    pub(crate) shift: usize,
+}
+
+impl Cx {
+    pub(crate) fn new(shift: usize) -> Cx {
+        Cx { ids: 0, runtime: false, charts: false, shift }
+    }
 }
 
 fn numeric(s: &str) -> bool {
@@ -233,11 +285,11 @@ fn numeric(s: &str) -> bool {
     !t.is_empty() && t.parse::<f64>().is_ok()
 }
 
-fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
+pub(crate) fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
     cx.ids += 1;
     let n = cx.ids;
     match b {
-        Block::Markdown(t) => out.push_str(&format!("<section class=\"md\">\n{}</section>\n", to_html(t))),
+        Block::Markdown(t) => out.push_str(&format!("<section class=\"md\">\n{}</section>\n", to_html_shift(t, cx.shift))),
         Block::Code { text, copy } => {
             out.push_str("<div class=\"code\">");
             if *copy {
@@ -246,7 +298,22 @@ fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
             }
             out.push_str(&format!("<pre id=\"code{}\"><code>{}</code></pre></div>\n", n, escape(text)));
         }
-        Block::Callout { kind, text } => out.push_str(&format!("<aside class=\"callout {}\" role=\"note\">{}</aside>\n", kind, to_html(text))),
+        Block::Callout { kind, text } => out.push_str(&format!("<aside class=\"callout {}\" role=\"note\">{}</aside>\n", kind, to_html_shift(text, cx.shift))),
+        Block::Chart { spec, caption } => {
+            cx.charts = true;
+            out.push_str(&format!("<figure class=\"chart\">{}", chart::inline_svg(spec, &format!("c{}", n))));
+            if let Some(c) = caption {
+                out.push_str(&format!("<figcaption>{}</figcaption>", escape(c)));
+            }
+            out.push_str("</figure>\n");
+        }
+        Block::Grid { cols, blocks } => {
+            out.push_str(&format!("<div class=\"grid cols{}\">\n", cols));
+            for b in blocks {
+                render_block(b, cx, out);
+            }
+            out.push_str("</div>\n");
+        }
         Block::Table(t) => {
             let id = format!("table{}", n);
             if t.filter {
@@ -301,9 +368,61 @@ fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
 }
 
 /// Text safe to put inside an HTML comment: no `--`, no `>`, no control characters, bounded.
-fn comment_text(s: &str) -> String {
+pub fn comment_text(s: &str) -> String {
     let flat: String = s.chars().filter(|c| !c.is_control() || *c == ' ').take(400).collect();
     flat.replace("--", "- -").replace(['>', '<'], " ")
+}
+
+/// What every generated document has in common: the head with its content security policy, the stylesheet, the
+/// runtime when something needs it, and the final safety check on the whole result.
+pub(crate) struct Shell<'a> {
+    pub title: &'a str,
+    pub theme: Theme,
+    pub comment: Option<&'a str>,
+    pub charts: bool,
+    pub runtime: bool,
+    pub script: Option<&'a str>,
+    /// Markup between `<body>` and the content, and after it.
+    pub open: &'a str,
+    pub body: &'a str,
+    pub close: &'a str,
+}
+
+pub(crate) fn assemble(sh: &Shell) -> Result<String, DocError> {
+    let theme = match sh.theme {
+        Theme::Auto => "",
+        Theme::Light => " data-theme=\"light\"",
+        Theme::Dark => " data-theme=\"dark\"",
+    };
+    let mut html = String::with_capacity(sh.body.len() + CSS.len() + 2048);
+    html.push_str("<!doctype html>\n");
+    if let Some(c) = sh.comment {
+        html.push_str(&format!("<!-- {} -->\n", comment_text(c)));
+    }
+    let chart_css = if sh.charts { chart::css() } else { String::new() };
+    html.push_str(&format!(
+        "<html lang=\"en\"{}>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{}\">\n<title>{}</title>\n<style>\n{}{}</style>\n</head>\n<body>\n{}",
+        theme,
+        CSP,
+        escape(sh.title),
+        CSS,
+        chart_css,
+        sh.open
+    ));
+    html.push_str(sh.body);
+    html.push_str(sh.close);
+    if sh.runtime {
+        html.push_str(&format!("<script>\n{}</script>\n", RUNTIME_JS.trim_end()));
+    }
+    if let Some(s) = sh.script {
+        html.push_str(&format!("<script>\n'use strict';\n{}\n</script>\n", s));
+    }
+    html.push_str("</body>\n</html>\n");
+    let problems = lint(&html);
+    if !problems.is_empty() {
+        return Err(DocError(format!("the page failed its safety check: {}", problems.join("; "))));
+    }
+    Ok(html)
 }
 
 /// Build the page. Fails if the generator would produce something the safety check rejects.
@@ -314,36 +433,22 @@ pub fn render(spec: &PageSpec) -> Result<String, DocError> {
             return Err(DocError(format!("the script failed its safety check: {}", problems.join("; "))));
         }
     }
-    let mut cx = Cx { ids: 0, runtime: false };
+    let mut cx = Cx::new(1);
     let mut body = String::new();
     for b in &spec.blocks {
         render_block(b, &mut cx, &mut body);
     }
-    let theme = match spec.theme {
-        Theme::Auto => "",
-        Theme::Light => " data-theme=\"light\"",
-        Theme::Dark => " data-theme=\"dark\"",
-    };
-    let mut html = String::with_capacity(body.len() + CSS.len() + 2048);
-    html.push_str("<!doctype html>\n");
-    if let Some(c) = &spec.comment {
-        html.push_str(&format!("<!-- {} -->\n", comment_text(c)));
-    }
-    html.push_str(&format!("<html lang=\"en\"{}>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{}\">\n<title>{}</title>\n<style>\n{}</style>\n</head>\n<body>\n<main>\n<h1>{}</h1>\n", theme, CSP, escape(&spec.title), CSS, escape(&spec.title)));
-    html.push_str(&body);
-    html.push_str("</main>\n");
-    if cx.runtime {
-        html.push_str(&format!("<script>\n{}</script>\n", RUNTIME_JS.trim_end()));
-    }
-    if let Some(s) = &spec.script {
-        html.push_str(&format!("<script>\n'use strict';\n{}\n</script>\n", s));
-    }
-    html.push_str("</body>\n</html>\n");
-    let problems = lint(&html);
-    if !problems.is_empty() {
-        return Err(DocError(format!("the page failed its safety check: {}", problems.join("; "))));
-    }
-    Ok(html)
+    assemble(&Shell {
+        title: &spec.title,
+        theme: spec.theme,
+        comment: spec.comment.as_deref(),
+        charts: cx.charts,
+        runtime: cx.runtime,
+        script: spec.script.as_deref(),
+        open: &format!("<main>\n<h1>{}</h1>\n", escape(&spec.title)),
+        body: &body,
+        close: "</main>\n",
+    })
 }
 
 #[cfg(test)]
