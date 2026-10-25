@@ -7,6 +7,7 @@
 pub mod archive;
 mod cache;
 pub mod chart;
+pub mod diagram;
 mod csv;
 mod data;
 mod docx;
