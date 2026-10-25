@@ -1735,3 +1735,69 @@ fn an_unratified_relay_block_is_ignored_so_a_local_edit_cannot_add_an_approver()
     let err = String::from_utf8_lossy(&o.stderr).to_string();
     assert!(err.contains("no [relay] table in the ratified config"), "{}", err);
 }
+
+// ── delphi hooks: an observe hook runs when a task completes ────────────────
+
+fn hooks_block(log: &Path) -> String {
+    format!(
+        r#"
+[[hooks.observe]]
+name = "log-done"
+events = ["task.completed"]
+command = ["/bin/sh", "-c", "cat >> {log}; echo >> {log}"]
+"#,
+        log = log.display()
+    )
+}
+
+#[test]
+fn an_observe_hook_runs_when_a_task_completes_and_only_for_the_events_it_asked_for() {
+    let m = mock(vec![reply_text("Hello there.")]);
+    let e = setup(m.port);
+    let log = e._t.path().join("hook.log");
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, hooks_block(&log))).unwrap();
+
+    // A console keeps the daemon alive; the hooks process attaches to it from a terminal of its own.
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/ratify");
+    s.wait_for("pending proposal");
+    s.send("/ratify apply 1");
+    s.wait_for("ratified ws:config.toml#access");
+    let hooks = PtyConsole::start(&e.home, &["hooks", "--workspace", "e2e"], 24, 120);
+    hooks.wait_for("delphi hooks: ready (1 hook(s): log-done)");
+    std::thread::sleep(Duration::from_millis(500));
+
+    s.send("Say hello");
+    s.wait_for("✓ t_0001 done");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let seen = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("task.completed") {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "the hook never ran; hooks shows:\n{}", hooks.everything());
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let line = seen.lines().find(|l| l.contains("task.completed")).unwrap();
+    let ev: Value = serde_json::from_str(line).unwrap();
+    assert_eq!((ev["type"].as_str(), ev["task_id"].as_str(), ev["payload"]["status"].as_str()), (Some("task.completed"), Some("t_0001"), Some("done")));
+    assert_eq!(seen.matches("task.completed").count(), 1, "one completion, one run; other events did not trigger it:\n{}", seen);
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    kill_daemon(pid_in(&out));
+}
+
+#[test]
+fn hooks_that_are_not_ratified_do_not_run_and_the_command_says_so() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let log = e._t.path().join("hook.log");
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, hooks_block(&log))).unwrap();
+    let o = Command::new(DELPHI).args(["hooks", "--workspace", "e2e", "--home", e.home.to_str().unwrap()]).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("no observe hooks in the ratified [hooks] config"), "an edit to the file alone adds no hook: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(!log.exists());
+}
