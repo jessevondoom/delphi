@@ -68,6 +68,12 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(a) = o.get("second_seat").and_then(|v| v.as_str()).and_then(crate::provisional::SecondSeat::parse) {
             s.second_seat = a;
         }
+        if let Some(n) = o.get("max_decisions").and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+            s.max_decisions = n as u32;
+        }
+        if let Some(n) = o.get("max_approver_calls").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+            s.max_approver_calls = n as u32;
+        }
         if let Some(a) = o.get("unseconded").and_then(|v| v.as_str()).and_then(crate::provisional::Unseconded::parse) {
             s.unseconded = a;
         }
@@ -290,6 +296,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         decisions_changed: Default::default(),
         timers: Arc::new(timers),
         toolless: Default::default(),
+        approver_calls: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

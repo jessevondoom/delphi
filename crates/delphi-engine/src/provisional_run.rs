@@ -31,6 +31,11 @@ pub(crate) enum Provisional {
 
 impl Engine {
     pub(crate) async fn decide_provisionally(self: &Arc<Self>, sc: &SpanCtx, c: &Classified, decision_id: &str) -> Result<Provisional, EngineError> {
+        // A runaway task cannot run up a ledger nobody will read: past the cap the operator is asked as usual.
+        let made = provisional::ledger_of(&sc.m, &sc.task_id)?.len() as u32;
+        if made >= self.settings.max_decisions {
+            return self.defer(sc, c, decision_id, &format!("this task reached its limit of {} provisional decisions", self.settings.max_decisions)).await;
+        }
         let mut v = RuleApprover { host_exec: &self.exec.cfg.host_exec_paths }.decide(c);
         if !v.allow || self.settings.approver == ApproverKind::Rules {
             return Ok(Provisional::Decided(v));
@@ -72,6 +77,33 @@ impl Engine {
         Ok(Provisional::Decided(v))
     }
 
+    /// Roll back the edits the operator rejected, so the Builder can try again without them. Each rejected edit's
+    /// file goes back to the base commit (or is removed if the base never had it), every allowed decision on that
+    /// file is marked reverted (it enabled nothing that remains), and the change is committed. Returns, per rejected
+    /// edit, its path and the operator's note, for the Builder's next attempt.
+    pub(crate) async fn revert_rejected(self: &Arc<Self>, m: &Arc<crate::mission::MissionState>, task_id: &str, ids: &[String]) -> Result<Vec<(String, String)>, EngineError> {
+        let ds = provisional::ledger_of(m, task_id)?;
+        let wt = match self.exec.known_worktree(task_id) {
+            Some(w) => w,
+            None => self.exec.worktrees.adopt(task_id).map_err(|e| EngineError::Invalid(e.to_string()))?,
+        };
+        let mut notes: Vec<(String, String)> = Vec::new();
+        for d in ds.iter().filter(|d| ids.contains(&d.id) && !d.reverted) {
+            let Some(path) = d.path() else { continue };
+            let (w, p) = (wt.clone(), path.clone());
+            let how = tokio::task::spawn_blocking(move || w.restore_to_base(&p)).await.map_err(|e| EngineError::Invalid(e.to_string()))?.map_err(|e| EngineError::Invalid(e.to_string()))?;
+            for same in ds.iter().filter(|x| x.outcome == "allow" && !x.reverted && x.path().as_deref() == Some(path.as_str())) {
+                let mut e = delphi_core::event::EventEnvelope::new(&m.id, "decision.reverted", json!({"decision_id": same.id, "path": path, "restored": how}));
+                e.task_id = Some(task_id.to_string());
+                m.append(e).await?;
+            }
+            notes.push((path, d.review.as_ref().map(|r| r.note.clone()).unwrap_or_default()));
+        }
+        let w = wt.clone();
+        tokio::task::spawn_blocking(move || w.commit_all("Revert the edits the operator rejected", "delphi")).await.map_err(|e| EngineError::Invalid(e.to_string()))?.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        Ok(notes)
+    }
+
     /// Hand the card to the operator, and say why in the log.
     async fn defer(&self, sc: &SpanCtx, c: &Classified, decision_id: &str, why: &str) -> Result<Provisional, EngineError> {
         sc.m.append(sc.ev("decision.deferred", json!({"decision_id": decision_id, "tool": c.tool, "summary": c.summary, "reason": why}))).await?;
@@ -81,6 +113,14 @@ impl Engine {
     /// One reviewer's answer: `Some((allow, reason))`, or `None` if it did not give a usable one.
     #[allow(clippy::too_many_arguments)]
     async fn model_seat(self: &Arc<Self>, sc: &SpanCtx, c: &Classified, v: &Verdict, decision_id: &str, role: &str, family: Option<String>, second: bool) -> Result<Option<(bool, String)>, EngineError> {
+        {
+            let mut calls = self.approver_calls.lock().unwrap();
+            let n = calls.entry(sc.task_id.clone()).or_insert(0);
+            if *n >= self.settings.max_approver_calls {
+                return Ok(None);
+            }
+            *n += 1;
+        }
         let (prompt, spec) = task_facts(&sc.m, &sc.task_id)?;
         let objective = provisional::approver_objective(c, v, &prompt, spec.as_deref(), second);
         let pointers: Vec<ContextPointer> = spec.iter().map(|s| ContextPointer { uri: s.clone(), heading: String::new(), blake3: String::new(), reason: "the spec this build implements".into() }).collect();
@@ -279,6 +319,25 @@ mod tests {
         let Some(f) = fixture(vec![write("@worktree/Cargo.toml"), allow("part of the task."), Step::text("Understood.")], |s| s.second_seat = SecondSeat::CrossFamily) else { return };
         assert_eq!(run_denying_cards(&f).await, 1);
         assert_eq!(f.model.requests().len(), 3, "builder, strategist, builder: no reviewer could run, and none was faked");
+    }
+
+    #[tokio::test]
+    async fn past_the_decision_cap_the_operator_is_asked_as_usual() {
+        let steps = vec![write("@worktree/src/a.rs"), allow("fine."), write("@worktree/src/b.rs"), Step::text("Understood.")];
+        let Some(f) = fixture(steps, |s| s.max_decisions = 1) else { return };
+        assert_eq!(run_denying_cards(&f).await, 1, "the first edit was decided; the second went to the operator");
+        assert_eq!(ledger(&f).len(), 1);
+        assert!(events_of(&f, "decision.deferred")[0].payload["reason"].as_str().unwrap().contains("limit of 1 provisional decisions"));
+    }
+
+    #[tokio::test]
+    async fn past_the_approver_call_cap_the_operator_is_asked_as_usual() {
+        let steps = vec![write("@worktree/src/a.rs"), allow("fine."), write("@worktree/src/b.rs"), Step::text("Understood.")];
+        let Some(f) = fixture(steps, |s| s.max_approver_calls = 1) else { return };
+        assert_eq!(run_denying_cards(&f).await, 1);
+        assert_eq!(ledger(&f).len(), 1, "only the first edit was judged");
+        assert_eq!(f.model.requests().len(), 4, "builder, strategist, builder, builder: no second Strategist call");
+        assert!(events_of(&f, "decision.deferred")[0].payload["reason"].as_str().unwrap().contains("readable"), "an exhausted budget of calls is simply no answer");
     }
 
     #[tokio::test]
