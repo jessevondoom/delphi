@@ -2,7 +2,6 @@
 
 delphi v0.5 · /proj · chat
 
-
   • transactions
   • one place to query
 
@@ -27,6 +26,7 @@ delphi v0.5 · /proj · chat
 
 keys
   enter send · alt+enter or ctrl+j newline · esc clear · ↑↓ history
+  drag to select text and copy it (double-click a word, triple-click a line; /mouse off hands selec…
   pgup pgdn or the mouse wheel scroll · ← → with an empty prompt (or shift+← shift+→ any time) move…
   ctrl+a ctrl+e line start/end · ctrl+u ctrl+k ctrl+w delete · ctrl+c leave
   / opens the command menu · tab or enter completes

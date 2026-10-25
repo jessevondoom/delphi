@@ -16,6 +16,7 @@ import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
 import { frame, transcriptCount, type Model } from './screen.ts';
 import type { Ev } from './input.ts';
+import { useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
@@ -164,7 +165,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       return;
     }
     if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }
-    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls the transcript' : 'mouse off: select and copy text with the terminal; scroll with PgUp/PgDn'); return; }
+    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls; drag to select and copy (double-click a word, triple-click a line)' : 'mouse off: select and copy with the terminal itself; scroll with PgUp/PgDn'); return; }
     if (name === '/sources') { openPanel(P.openSources()); return; }
     if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
     if (name === '/pin') {
@@ -342,9 +343,10 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
   const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
   const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel]);
+  const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
-      <Text>{lines.join('\n')}</Text>
+      <Text>{shown.join('\n')}</Text>
     </Box>
   );
 }

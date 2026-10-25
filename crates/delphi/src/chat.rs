@@ -45,6 +45,8 @@ pub enum Input {
     Build(String),
     /// `/decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [note]]`: provisional decisions (`specs/015`).
     Decisions(Vec<String>),
+    /// `/timer [@role] <span> <note>` · `/timer list` · `/timer cancel <id>`: wake a role later (`specs/017`).
+    Timer(Vec<String>),
     /// `/merge <task>`: run the gates and the merge card again for a kept branch, after review.
     Merge(String),
     /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
@@ -99,6 +101,7 @@ pub fn parse_input(line: &str) -> Input {
             },
             "more" => Input::More,
             "decisions" => Input::Decisions(rest.iter().map(|s| s.to_string()).collect()),
+            "timer" | "timers" => Input::Timer(rest.iter().map(|s| s.to_string()).collect()),
             "merge" => match rest.first() {
                 Some(t) => Input::Merge(t.to_string()),
                 None => Input::Unknown("/merge needs the build's task id, for example `/merge t_0003`".into()),
@@ -163,6 +166,7 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /mission                           the current mission
   /build [--optimistic] <request>    a Builder task: worktree, tests, audit, then your approval to merge. --optimistic decides
                                      its worktree edits itself, records each, and blocks the merge until you have reviewed them all
+  /timer <when> <note>               wake the orchestrator later (/timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>)
   /decisions [show|ratify|reject]    review the provisional decisions of an optimistic build (/decisions ratify all-routine)
   /merge <task>                      run the gates and the merge card again for a kept branch, after review
   /narrator [council|epic|forge|agents|spend|archives|tile]   the read-only live window (a tmux split, or the command to run in a second terminal)
@@ -763,6 +767,7 @@ impl Session {
                 }
             }
             Input::Decisions(args) => say(&crate::decisions::handle(&mut self.cmd, &self.mission_id, &args)),
+            Input::Timer(args) => say(&crate::timers_cmd::handle(&mut self.cmd, &self.mission_id, &crate::timers_cmd::chat_args(&args))),
             Input::Merge(task) => match self.cmd.call("build.merge", json!({"mission_id": self.mission_id, "task_id": task})) {
                 Ok(v) => {
                     self.shared.running.fetch_add(1, Ordering::SeqCst);
@@ -1045,6 +1050,8 @@ mod tests {
         assert_eq!(split_build_flags("--optimisticx foo"), (false, "--optimisticx foo".to_string()));
         assert_eq!(split_build_flags("--optimistic"), (true, String::new()));
         assert_eq!(parse_input("/build --optimistic do it"), Input::Build("--optimistic do it".into()));
+        assert_eq!(parse_input("/timer 20m check CI"), Input::Timer(vec!["20m".into(), "check".into(), "CI".into()]));
+        assert_eq!(parse_input("/timers"), Input::Timer(vec![]));
         assert_eq!(parse_input("/decisions"), Input::Decisions(vec![]));
         assert_eq!(parse_input("/decisions ratify dec_a dec_b"), Input::Decisions(vec!["ratify".into(), "dec_a".into(), "dec_b".into()]));
         assert_eq!(parse_input("/merge t_0003"), Input::Merge("t_0003".into()));
