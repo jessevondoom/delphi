@@ -143,6 +143,13 @@ pub async fn endpoints(client: &reqwest::Client, a: &AuthBlock) -> Result<Endpoi
             return Err(OauthError::Http { status, message: "OIDC discovery failed".into() });
         }
         let doc: Value = serde_json::from_str(&body).map_err(|_| OauthError::Malformed("discovery document is not JSON".into()))?;
+        // OIDC Discovery §4.3: the document must name the issuer it was fetched for, or a look-alike host
+        // (or a redirect to one) could hand us its own token endpoint.
+        match doc["issuer"].as_str() {
+            Some(named) if named.trim_end_matches('/') == issuer.trim_end_matches('/') => {}
+            Some(_) => return Err(OauthError::Malformed("the discovery document names a different issuer than the configured one".into())),
+            None => return Err(OauthError::Malformed("the discovery document names no issuer".into())),
+        }
         let pick = |k: &str| doc[k].as_str().map(String::from);
         token = token.or_else(|| pick("token_endpoint"));
         device = device.or_else(|| pick("device_authorization_endpoint"));
@@ -232,22 +239,42 @@ impl Pacing {
     pub const INSTANT: Pacing = Pacing { floor: Duration::ZERO, slow_down_step: Duration::ZERO };
 }
 
-/// Poll until the operator approves.
-pub async fn device_poll(client: &reqwest::Client, ep: &Endpoints, a: &AuthBlock, g: &DeviceGrant, pacing: Pacing) -> Result<Tokens, OauthError> {
+/// Consecutive failures to reach the token endpoint (or 5xx/429 answers) before polling gives up. A
+/// pending authorization is not a failure and does not count.
+const MAX_TRANSIENT_POLLS: u32 = 5;
+
+fn transient(e: &OauthError) -> bool {
+    matches!(e, OauthError::Transport(_)) || matches!(e, OauthError::Http { status, .. } if *status == 429 || *status >= 500)
+}
+
+/// Poll until the operator approves. `client_secret` is sent when the client has one (confidential clients,
+/// and Google's, refuse the device-code exchange without it). A network blip or a 5xx answer is retried at
+/// the polling interval (RFC 8628 §3.5); only a run of them ends the sign-in.
+pub async fn device_poll(client: &reqwest::Client, ep: &Endpoints, a: &AuthBlock, client_secret: Option<&str>, g: &DeviceGrant, pacing: Pacing) -> Result<Tokens, OauthError> {
     let deadline = Instant::now() + Duration::from_secs(g.expires_in);
     let mut interval = Duration::from_secs(g.interval).max(pacing.floor);
+    let mut failures = 0;
     loop {
         tokio::time::sleep(interval).await;
         if Instant::now() >= deadline {
             return Err(OauthError::Expired);
         }
         let mut p = vec![("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", g.device_code.as_str())];
-        p.extend(base_params(a, None));
+        p.extend(base_params(a, client_secret));
         match post_form(client, &ep.token, &p).await {
             Ok(v) => return tokens(&v),
-            Err(OauthError::Rejected { code, .. }) if code == "authorization_pending" => {}
-            Err(OauthError::Rejected { code, .. }) if code == "slow_down" => interval += pacing.slow_down_step,
+            Err(OauthError::Rejected { code, .. }) if code == "authorization_pending" => failures = 0,
+            Err(OauthError::Rejected { code, .. }) if code == "slow_down" => {
+                failures = 0;
+                interval += pacing.slow_down_step;
+            }
             Err(OauthError::Rejected { code, .. }) if code == "expired_token" => return Err(OauthError::Expired),
+            Err(e) if transient(&e) => {
+                failures += 1;
+                if failures >= MAX_TRANSIENT_POLLS {
+                    return Err(e);
+                }
+            }
             Err(e) => return Err(e),
         }
     }
@@ -490,6 +517,38 @@ impl SecretStore for SystemSecretStore {
     }
 }
 
+/// Asks Google how long an access token has left (the `tokeninfo` endpoint; the token travels in a POST
+/// body to Google, the party that issued it, never in a URL). Any failure is `None`, and the caller assumes
+/// a short life.
+pub struct GoogleTokenInfo {
+    http: reqwest::Client,
+    handle: tokio::runtime::Handle,
+    url: String,
+}
+
+impl GoogleTokenInfo {
+    pub fn new(http: reqwest::Client, handle: tokio::runtime::Handle) -> GoogleTokenInfo {
+        GoogleTokenInfo { http, handle, url: "https://oauth2.googleapis.com/tokeninfo".into() }
+    }
+
+    #[cfg(test)]
+    fn at(mut self, url: String) -> GoogleTokenInfo {
+        self.url = url;
+        self
+    }
+}
+
+impl crate::credential::ExpiryProbe for GoogleTokenInfo {
+    fn seconds_left(&self, access_token: &str) -> Option<i64> {
+        let ask = async {
+            let v = tokio::time::timeout(Duration::from_secs(10), post_form(&self.http, &self.url, &[("access_token", access_token)])).await.ok()?.ok()?;
+            v["expires_in"].as_i64().or_else(|| v["expires_in"].as_str().and_then(|s| s.parse().ok()))
+        };
+        // From a thread of our own, so this is safe whether or not the caller is inside the runtime.
+        std::thread::scope(|s| s.spawn(|| self.handle.block_on(ask)).join().ok().flatten())
+    }
+}
+
 /// How `delphi auth login` talks to the operator.
 pub trait LoginUi {
     fn device(&self, grant: &DeviceGrant);
@@ -501,7 +560,10 @@ pub trait LoginUi {
 fn client_secret_of(a: &AuthBlock, store: &dyn SecretStore) -> Result<Option<String>, String> {
     let Some(r) = &a.client_secret else { return Ok(None) };
     let name = r.strip_prefix("keychain:").unwrap_or(r);
-    store.get(name)?.map(Some).ok_or_else(|| format!("no keychain entry `{}` for the client secret", name))
+    store.get(name)?.map(Some).ok_or_else(|| {
+        let add = if cfg!(target_os = "macos") { format!("security add-generic-password -s delphi -a {} -w", name) } else { format!("secret-tool store --label=Delphi service delphi name {}", name) };
+        format!("no keychain entry `{}` for the client secret; add it with `{}` (it prompts for the value)", name, add)
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -524,7 +586,7 @@ pub async fn sign_in(client: &reqwest::Client, name: &str, a: &AuthBlock, store:
         AuthFlow::DeviceCode => {
             let g = device_start(client, &ep, a).await.map_err(|e| e.to_string())?;
             ui.device(&g);
-            device_poll(client, &ep, a, &g, pacing).await.map_err(|e| e.to_string())?
+            device_poll(client, &ep, a, secret.as_deref(), &g, pacing).await.map_err(|e| e.to_string())?
         }
         AuthFlow::LoopbackPkce => {
             let pkce = Pkce::generate()?;
@@ -561,13 +623,17 @@ pub struct Oauth2Provider {
     cache: Mutex<HashMap<String, (String, i64)>>,
     /// One refresh at a time: two spans needing a token must not both spend the refresh token.
     flight: Mutex<()>,
+    /// Rotated refresh tokens the keychain refused. The provider has already killed the old one, so this
+    /// copy is the only live sign-in until the keychain accepts it; it is retried on every refresh and
+    /// never leaves memory.
+    unsaved: Mutex<HashMap<String, String>>,
     now: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl Oauth2Provider {
     pub fn new(cfg: SharedConfig, store: Arc<dyn SecretStore>, http: reqwest::Client, handle: tokio::runtime::Handle) -> Oauth2Provider {
         let now: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0));
-        Oauth2Provider { cfg, store, http, handle, cache: Mutex::new(HashMap::new()), flight: Mutex::new(()), now }
+        Oauth2Provider { cfg, store, http, handle, cache: Mutex::new(HashMap::new()), flight: Mutex::new(()), unsaved: Mutex::new(HashMap::new()), now }
     }
 
     #[cfg(test)]
@@ -605,7 +671,11 @@ impl OauthSource for Oauth2Provider {
             match a.flow {
                 AuthFlow::ClientCredentials => client_credentials(&self.http, &ep, &a, secret.as_deref().unwrap_or("")).await,
                 _ => {
-                    let stored = self.store.get(&entry).map_err(OauthError::Transport)?;
+                    let held = self.unsaved.lock().unwrap().get(name).cloned();
+                    let stored = match held {
+                        Some(rt) => Some(rt),
+                        None => self.store.get(&entry).map_err(OauthError::Transport)?,
+                    };
                     let Some(rt) = stored else { return Err(OauthError::Rejected { code: "invalid_grant".into(), description: "not signed in".into() }) };
                     refresh(&self.http, &ep, &a, secret.as_deref(), &rt).await
                 }
@@ -613,9 +683,19 @@ impl OauthSource for Oauth2Provider {
         };
         match self.handle.block_on(fetch) {
             Ok(t) => {
-                if let Some(new_rt) = &t.refresh {
-                    // Providers may rotate the refresh token; the old one is dead the moment this returns.
-                    self.store.set(&entry, new_rt).map_err(|e| CredentialError::Failed(format!("could not store the rotated refresh token: {}", e)))?;
+                // Providers may rotate the refresh token; the old one is dead the moment this returns. If the
+                // keychain will not take the new one, the access token we already hold is still good: keep both
+                // in memory rather than throw the sign-in away, and try the keychain again next time.
+                let pending = t.refresh.clone().or_else(|| self.unsaved.lock().unwrap().get(name).cloned());
+                if let Some(rt) = pending {
+                    match self.store.set(&entry, &rt) {
+                        Ok(()) => {
+                            self.unsaved.lock().unwrap().remove(name);
+                        }
+                        Err(_) => {
+                            self.unsaved.lock().unwrap().insert(name.to_string(), rt);
+                        }
+                    }
                 }
                 let exp = now + t.expires_in.unwrap_or(DEFAULT_LIFETIME_SECS);
                 self.cache.lock().unwrap().insert(name.to_string(), (t.access.clone(), exp));
@@ -623,6 +703,7 @@ impl OauthSource for Oauth2Provider {
             }
             Err(e) if e.needs_reauth() => {
                 self.cache.lock().unwrap().remove(name);
+                self.unsaved.lock().unwrap().remove(name);
                 let _ = self.store.delete(&entry);
                 Err(Self::reauth(name))
             }
@@ -744,7 +825,7 @@ mod tests {
         let ep = endpoints(&client(), &a).await.unwrap();
         let g = device_start(&client(), &ep, &a).await.unwrap();
         assert_eq!((g.user_code.as_str(), g.verification_uri.as_str()), ("ABCD-1234", "https://idp/activate"));
-        let t = device_poll(&client(), &ep, &a, &g, Pacing::INSTANT).await.unwrap();
+        let t = device_poll(&client(), &ep, &a, None, &g, Pacing::INSTANT).await.unwrap();
         assert_eq!((t.access.as_str(), t.refresh.as_deref(), t.expires_in), ("AT", Some("RT"), Some(1800)));
         assert_eq!(polls.load(Ordering::SeqCst), 3);
         let start = &log.lock().unwrap()[0].1;
@@ -757,19 +838,105 @@ mod tests {
         let a = block(&base, "device_code", "");
         let ep = endpoints(&client(), &a).await.unwrap();
         let g = DeviceGrant { device_code: "DC".into(), user_code: "U".into(), verification_uri: "v".into(), verification_uri_complete: None, expires_in: 60, interval: 0 };
-        match device_poll(&client(), &ep, &a, &g, Pacing::INSTANT).await.unwrap_err() {
+        match device_poll(&client(), &ep, &a, None, &g, Pacing::INSTANT).await.unwrap_err() {
             OauthError::Rejected { code, .. } => assert_eq!(code, "access_denied"),
             e => panic!("{:?}", e),
         }
     }
 
+    fn grant() -> DeviceGrant {
+        DeviceGrant { device_code: "DC".into(), user_code: "U".into(), verification_uri: "v".into(), verification_uri_complete: None, expires_in: 60, interval: 0 }
+    }
+
     #[tokio::test]
-    async fn discovery_fills_what_the_block_omits_and_refuses_plain_http_elsewhere() {
-        let (base, _) = idp(Box::new(|path, _| match path {
-            "/.well-known/openid-configuration" => json(serde_json::json!({"token_endpoint": "http://evil.example.com/t", "device_authorization_endpoint": "https://i/d"})),
-            _ => (404, "{}".into()),
+    async fn device_polling_sends_the_client_secret() {
+        let (base, log) = idp(Box::new(|_, _| json(serde_json::json!({"access_token": "AT", "refresh_token": "RT"})))).await;
+        let a = block(&base, "device_code", "");
+        let ep = endpoints(&client(), &a).await.unwrap();
+        device_poll(&client(), &ep, &a, Some("S3CRET"), &grant(), Pacing::INSTANT).await.unwrap();
+        let sent = log.lock().unwrap()[0].1.clone();
+        assert_eq!((sent["client_secret"].as_str(), sent["client_id"].as_str()), ("S3CRET", "cid"));
+    }
+
+    #[tokio::test]
+    async fn device_polling_survives_a_transient_failure_but_not_a_run_of_them() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let n2 = n.clone();
+        let (base, _) = idp(Box::new(move |_, _| match n2.fetch_add(1, Ordering::SeqCst) {
+            0 => (503, "unavailable".into()),
+            1 => (400, r#"{"error":"authorization_pending"}"#.into()),
+            2 => (502, "bad gateway".into()),
+            _ => json(serde_json::json!({"access_token": "AT"})),
         }))
         .await;
+        let a = block(&base, "device_code", "");
+        let ep = endpoints(&client(), &a).await.unwrap();
+        let t = device_poll(&client(), &ep, &a, None, &grant(), Pacing::INSTANT).await.unwrap();
+        assert_eq!(t.access, "AT");
+        // A provider that stays down ends the sign-in with the real error.
+        let (base, log) = idp(Box::new(|_, _| (503, "down".into()))).await;
+        let a = block(&base, "device_code", "");
+        let ep = endpoints(&client(), &a).await.unwrap();
+        let e = device_poll(&client(), &ep, &a, None, &grant(), Pacing::INSTANT).await.unwrap_err();
+        assert!(matches!(e, OauthError::Http { status: 503, .. }), "{:?}", e);
+        assert_eq!(log.lock().unwrap().len(), MAX_TRANSIENT_POLLS as usize);
+        // A connection that cannot be made at all is transient too, and ends the same way.
+        let a = block("http://127.0.0.1:1", "device_code", "");
+        let ep = endpoints(&client(), &a).await.unwrap();
+        assert!(matches!(device_poll(&client(), &ep, &a, None, &grant(), Pacing::INSTANT).await.unwrap_err(), OauthError::Transport(_)));
+    }
+
+    #[tokio::test]
+    async fn discovery_must_name_the_configured_issuer() {
+        let (base, _) = idp(Box::new(|_, _| json(serde_json::json!({"issuer": "https://accounts.evil.example", "token_endpoint": "https://i/t"})))).await;
+        let mut a = block(&base, "loopback_pkce", "");
+        a.token_url = None;
+        a.authorization_url = None;
+        a.issuer = Some(base.clone());
+        let err = endpoints(&client(), &a).await.unwrap_err();
+        assert!(matches!(err, OauthError::Malformed(ref m) if m.contains("different issuer")), "{:?}", err);
+        // No issuer in the document is as bad.
+        let (base, _) = idp(Box::new(|_, _| json(serde_json::json!({"token_endpoint": "https://i/t", "authorization_endpoint": "https://i/a"})))).await;
+        a.issuer = Some(base);
+        let err = endpoints(&client(), &a).await.unwrap_err();
+        assert!(matches!(err, OauthError::Malformed(ref m) if m.contains("no issuer")), "{:?}", err);
+    }
+
+    /// A discovery server whose document names itself (plus `suffix`, e.g. a trailing slash) as its issuer.
+    async fn discovery_server(suffix: &str, token_endpoint: &str) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let doc = serde_json::json!({"issuer": format!("{}{}", base, suffix), "token_endpoint": token_endpoint, "authorization_endpoint": "https://i/a", "device_authorization_endpoint": "https://i/d"}).to_string();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else { return };
+                let doc = doc.clone();
+                tokio::spawn(async move {
+                    let mut tmp = [0u8; 2048];
+                    let _ = s.read(&mut tmp).await;
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", doc.len(), doc).as_bytes()).await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        base
+    }
+
+    #[tokio::test]
+    async fn discovery_accepts_the_matching_issuer_with_or_without_a_trailing_slash() {
+        for suffix in ["", "/"] {
+            let base = discovery_server(suffix, "https://i/t").await;
+            let mut a = block(&base, "loopback_pkce", "");
+            a.token_url = None;
+            a.authorization_url = None;
+            a.issuer = Some(base);
+            assert_eq!(endpoints(&client(), &a).await.unwrap().token, "https://i/t");
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_fills_what_the_block_omits_and_refuses_plain_http_elsewhere() {
+        let base = discovery_server("", "http://evil.example.com/t").await;
         let mut a = block(&base, "device_code", "");
         a.token_url = None;
         a.issuer = Some(base.clone());
@@ -896,6 +1063,58 @@ mod tests {
         assert_eq!(n.load(Ordering::SeqCst), 2);
     }
 
+    /// A keychain that refuses writes while `locked`.
+    struct Lockable {
+        inner: Mem,
+        locked: std::sync::atomic::AtomicBool,
+    }
+
+    impl SecretStore for Lockable {
+        fn get(&self, n: &str) -> Result<Option<String>, String> {
+            self.inner.get(n)
+        }
+        fn set(&self, n: &str, v: &str) -> Result<(), String> {
+            if self.locked.load(Ordering::SeqCst) {
+                return Err("keychain is locked".into());
+            }
+            self.inner.set(n, v)
+        }
+        fn delete(&self, n: &str) -> Result<(), String> {
+            self.inner.delete(n)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rotated_refresh_token_the_keychain_refuses_does_not_lose_the_sign_in() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let n2 = n.clone();
+        let (base, log) = idp(Box::new(move |_, _| {
+            let i = n2.fetch_add(1, Ordering::SeqCst);
+            json(serde_json::json!({"access_token": format!("AT{}", i), "refresh_token": format!("RT{}", i + 2), "expires_in": 300}))
+        }))
+        .await;
+        let store = Arc::new(Lockable { inner: Mem::default(), locked: std::sync::atomic::AtomicBool::new(true) });
+        store.inner.set("oauth2.x", "RT1").unwrap();
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cfg = Config::parse(&format!("[auth.x]\nflow = \"device_code\"\ntoken_url = \"{}/token\"\ndevice_authorization_url = \"{}/device\"\nclient_id = \"cid\"\n", base, base)).unwrap();
+        let now2 = now.clone();
+        let p = Arc::new(Oauth2Provider::new(SharedConfig::new(cfg), store.clone(), client(), tokio::runtime::Handle::current()).with_clock(Arc::new(move || now2.load(Ordering::SeqCst))));
+        let run = |p: Arc<Oauth2Provider>| tokio::task::spawn_blocking(move || p.access_token("x"));
+        // The write fails, but the token the provider just issued is returned, not an error.
+        assert_eq!(run(p.clone()).await.unwrap().unwrap().expose(), "AT0");
+        assert_eq!(store.inner.get("oauth2.x").unwrap().as_deref(), Some("RT1"), "the keychain still holds the dead token");
+        // The next refresh uses the rotated token from memory, not the dead one in the keychain.
+        now.store(1_250, Ordering::SeqCst);
+        assert_eq!(run(p.clone()).await.unwrap().unwrap().expose(), "AT1");
+        assert_eq!(log.lock().unwrap()[1].1["refresh_token"], "RT2");
+        // Once the keychain accepts writes, the newest token lands there.
+        store.locked.store(false, Ordering::SeqCst);
+        now.store(1_500, Ordering::SeqCst);
+        assert_eq!(run(p.clone()).await.unwrap().unwrap().expose(), "AT2");
+        assert_eq!(log.lock().unwrap()[2].1["refresh_token"], "RT3");
+        assert_eq!(store.inner.get("oauth2.x").unwrap().as_deref(), Some("RT4"));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_revoked_refresh_token_means_sign_in_again_but_a_network_error_does_not() {
         let (base, _) = idp(Box::new(|_, _| (400, r#"{"error":"invalid_grant","error_description":"revoked"}"#.into()))).await;
@@ -931,6 +1150,19 @@ mod tests {
         assert_eq!((s.expose(), s.expires_at), ("AT", Some(130)));
         assert_eq!(log.lock().unwrap()[0].1["scope"], "llm.invoke");
         assert_eq!(store.get("oauth2.x").unwrap(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn token_info_reports_the_real_lifetime_and_nothing_on_failure() {
+        use crate::credential::ExpiryProbe;
+        let (base, log) = idp(Box::new(|_, f| if f["access_token"] == "good" { json(serde_json::json!({"expires_in": "1742", "aud": "x"})) } else { (400, r#"{"error_description":"Invalid Value"}"#.into()) })).await;
+        let probe = Arc::new(GoogleTokenInfo::new(client(), tokio::runtime::Handle::current()).at(format!("{}/tokeninfo", base)));
+        let p = probe.clone();
+        let (good, bad) = tokio::task::spawn_blocking(move || (p.seconds_left("good"), p.seconds_left("bad"))).await.unwrap();
+        assert_eq!((good, bad), (Some(1742), None));
+        assert_eq!(log.lock().unwrap()[0].0, "/tokeninfo", "the token goes in the body, not the path");
+        let down = Arc::new(GoogleTokenInfo::new(client(), tokio::runtime::Handle::current()).at("http://127.0.0.1:1/tokeninfo".into()));
+        assert_eq!(tokio::task::spawn_blocking(move || down.seconds_left("good")).await.unwrap(), None);
     }
 
     #[test]
