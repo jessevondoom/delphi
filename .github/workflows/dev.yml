@@ -14,9 +14,12 @@ on:
 permissions:
   contents: read
 
+# A running build is allowed to finish (a build takes longer than the gap between merges, so cancelling it would
+# starve the channel); only the newest waiting push is kept, and the publish step skips a build that main has
+# already moved past.
 concurrency:
   group: dev-build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   model:
