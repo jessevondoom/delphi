@@ -39,8 +39,8 @@ Step 3c builds on the endpoint, Gemini and Council work of Steps 3–4 and does 
 
 | Gate | Decision | Ratified choice |
 | :--- | :--- | :--- |
-| 0 | Language/stack | Rust (Tokio, Ratatui, rusqlite + FTS5, pulldown-cmark, serde, include_dir!). `sqlite-vec` linked only after D-01 reopens. |
-| 1 | Embeddings (D-01) | BM25-only; vectors behind an `Embedder` trait after >50 missions **and** a logged miss |
+| 0 | Language/stack | Rust (Tokio, Ratatui, rusqlite + FTS5, pulldown-cmark, serde, include_dir!). `sqlite-vec` and `candle` linked since D-01 reopened (2026-10-24). |
+| 1 | Embeddings (D-01) | BM25-only at first. Reopened by the operator 2026-10-24: a local `candle` model in the binary, vectors in `sqlite-vec` behind the `Embedder` trait (spec 004-A1) |
 | 2 | Deterministic helpers (D-02) | Compiled into the runtime as state-machine code; user scripts sandboxed at Amber |
 | 3 | Workspace layout (D-03) | Installed tool; all state in `$DELPHI_HOME/workspaces/<name>/`; project repos stay clean (spec 006 §3.1) |
 | 4 | Sandbox (D-04) | `sandbox-exec` / `bubblewrap`; no sandbox → execution is Amber |

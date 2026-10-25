@@ -91,6 +91,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 **Recommendation:** **A.** Reopen when there are more than 50 missions *and* there's a logged search miss on a terminology-shift query.
 **Blocks:** spec 004 Part B, and the ExpeL deduplicator's similarity signal.
 **Status:** ✅ RATIFIED 2026-10-23: A — FTS5 BM25-only; reopen at >50 missions **and** a logged terminology-shift miss
+**Reopened 2026-10-24 by the operator:** option B, with the size limit raised: up to 150 MB of model in the binary, chosen for retrieval accuracy over size, run with `candle`, with local vectors in `sqlite-vec` fused with the lexical rankings by RRF. The operator did not wait for the reopen trigger. Recorded as Amendment 004-A1 (`specs/004` §3.5); `delphi init` still works offline because the model is inside the binary, not downloaded. Why B is acceptable now: the "~10 MB static binary" was a goal, not a requirement, and the measured gain (`delphi kb eval`, §3.5) is large on questions worded differently from the documents.
 
 ## 🟠 D-02 — Gate 2: Where deterministic helpers live
 **Context:** The barrier, provenance gate, base-branch rubric loader, path guard, and DAG validator are what keep agents in bounds. As Python scripts in `skills/*/scripts/`, they could be edited by the very agents and syncs they constrain, and they'd make Python a runtime dependency.

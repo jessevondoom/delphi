@@ -75,7 +75,7 @@ The architecture is already chosen in `context/domains/federation-rag-and-distri
 
 1. Lexical (FTS5) over frontmatter plus headings, with `summary`/`domain`/`tags` as filterable columns.
 2. Measure recall on a fixed question set drawn from past missions.
-3. Add embeddings only if lexical recall on that set is inadequate. Retrieved chunks keep their source provenance tier.
+3. Embeddings were added once the set showed lexical recall was inadequate on questions worded differently from the documents (Amendment 004-A1; `delphi kb eval` prints the comparison). Retrieved chunks keep their source provenance tier.
 4. Index is derived state: rebuildable from the Markdown, never a source of truth, never synced as authoritative (`specs/007`).
 
 ## 8. Naming (decided: operator, 2026-10-24)
