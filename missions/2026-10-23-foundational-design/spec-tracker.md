@@ -44,8 +44,8 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 
 | Slice | Delivers | Spec / build plan | Depends on | Effort | State |
 | :-- | :-- | :-- | :-- | --: | :-- |
-| B0 | amendments of 022 §5 applied (001, 002, 004, 006, 010, 011, 012, 013, 019, GOVERNANCE §5.7, four role manifests, CATALOG) | 022 §5–6 | PR #155 merged | 4 h | not started |
-| B1 | `delphi-bundle` crate, `delphi bundle validate` (15 steps, `--against`, `--claude`), golden fixture `dev/bundles/acme-platform` in CI | 023 §14 | B0 | 20 h | not started |
+| B0 | amendments of 022 §5 applied (001, 002, 004, 006, 010, 011, 012, 013, 019, GOVERNANCE §5.7, four role manifests, CATALOG) | 022 §5–6 | PR #155 merged | 4 h | done (PR #155 merged 2026-10-25) |
+| B1 | `delphi-bundle` crate, `delphi bundle validate` (15 steps, `--against`, `--claude`), golden fixture `dev/bundles/acme-platform` in CI | 023 §14 | B0 | 20 h | built (AC-1..11 green; as-built differences in 023 §14) |
 | B2 | `bundle add` from a directory: `local/bundles.lock` with history, cache under `$DELPHI_HOME/bundles/`, `@bundle/` path, kb zone `bundles` at L2 with lexical search at once, provenance level in breadcrumbs, printed summary, `remove`, staleness | 024 §10 | B1 | 16 h | not started |
 | B3 | vector pipeline: key match, re-keying, seeded spot check, fallback to local embedding, progress, incremental re-embed, resumability, `package --vectors` | 027 §10 | B2 | 14 h | not started |
 | B4 | behavior and agents on add: skills for named roles, bundle subagents on host roles with intersected tools, guidance block, bundle rules block in the team budget, tighten-only deny rules | 024 §10 | B2 | 18 h | not started |

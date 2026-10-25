@@ -1,0 +1,14 @@
+[policy]
+schema = 1
+
+[[policy.deny_commands]]
+pattern = "^terraform (apply|destroy)"
+reason = "Infrastructure changes go through the platform pipeline, never from an agent."
+
+[[policy.red_paths]]
+glob = "infra/prod/**"
+reason = "Production infrastructure."
+
+[[policy.connector_denied]]
+tool = "slack.post_message"
+roles = ["*"]

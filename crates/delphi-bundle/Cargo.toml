@@ -1,0 +1,23 @@
+[package]
+name = "delphi-bundle"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "The org bundle standard: manifest, layout and the deterministic `validate` (specs/023). Pure functions over a directory tree; no network, no model calls."
+license = "MIT"
+publish = false
+
+[dependencies]
+# Everything here is already in the workspace's dependency tree. This crate must not depend on delphi-engine, so it can be
+# fuzzed alone like delphi-docs (specs/023 §14); the engine-bound checks arrive through the `Host` trait.
+delphi-core = { path = "../delphi-core" }
+serde_json = "1.0"
+serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
+toml = "1.1"
+regex = "1.9"
+blake3 = "1.8.7"
+unicode-normalization = "0.1"
+semver = "1"
+
+[dev-dependencies]
+tempfile = "3.8"

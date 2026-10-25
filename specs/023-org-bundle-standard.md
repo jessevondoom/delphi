@@ -459,5 +459,16 @@ Unit tests in the (future) `delphi-bundle` crate, one per criterion, named `ac_N
 
 `delphi-bundle` must not depend on `delphi-engine` (so it can be fuzzed alone, as `delphi-docs` is); the few engine checks it needs (`checks::check_text`, the `DLPHVEC1` header reader) are either already in `delphi-core`-level crates or are moved to a small shared module in the same PR, with the move reviewed as its own commit.
 
+### 14.1 As built (slice B1)
+`Implements-Spec: specs/023-org-bundle-standard.md` (AC-1..11). The crate is `crates/delphi-bundle`; the command is `delphi bundle validate|manifest`. Where the build differs from, or settles, the text above:
+- **Engine checks arrive through a `Host` trait**, not by moving `skills_cmd.rs` into a library: `delphi-bundle` depends only on `delphi-core` (for the redactor), and `crates/delphi/src/bundle_cmd.rs` supplies the provenance check, the skill-standard check and the built-in role scopes. The effect is the one §14 asks for (the crate is fuzzable alone); nothing moved.
+- **The no-relaxation check is new and lives in the crate** (`relax.rs`): a keyword and pattern linter over one line at a time, fenced quotations skipped. It is an error in agents, role guidance, goals, perspectives and rules, and a warning in `knowledge/`.
+- **Step 6 never reports a signature as verified.** A `sig.json` is a warning ("present but not verified by this build") until B6 lands the verification; it still fails when `publisher.did` is missing.
+- **Step 12 reachability needs the install's chunker**, which is slice B3. `Host::chunk_keys` returns `None` in this build and the step says "key reachability was not checked"; the 1% / 0% thresholds are implemented and tested with a fake chunker. Header, index, cap and truncation checks run now.
+- **`delphi bundle manifest [--claude]`** writes `.delphi-bundle/files.json` (and the generated `plugin.json`) and prints the bundle hash, as the stepping stone before `package` (B6). The generated `plugin.json` carries no `delphi.bundle_hash`: the hash covers `plugin.json`, so it cannot also contain it.
+- **`write:missions` fits** a role that holds any `missions/` write glob (a planning role holds a slice of the area); the role's own scope still caps what it may write. The tools a role may use, for intersecting an agent's `tools` list, are derived from its scope (read tools for all; `Write`/`Edit` with a write glob; `Bash` with the scoped shell).
+- **`review_by` in the past** is a warning in `validate` and an error with `--package`.
+- **Kept unchecked for now:** the decision-record headings of §4.3 (not in the §10 table) and `compat.delphi` against the running version (that is `add`'s refusal, slice B2).
+
 ## 15. Open Questions
 B-4, B-5, B-11, B-17 in `specs/022` §7.
