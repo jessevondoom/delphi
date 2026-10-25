@@ -3,7 +3,7 @@ id: spec-005d-full-screen-console
 title: "005d: The Full-Screen Console (an Ink client of the daemon)"
 author: architect
 timestamp: 2026-10-24T18:00:00Z
-status: approved
+status: approved   # footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"

@@ -3,7 +3,7 @@ id: spec-ui-wireframes-and-blueprints
 title: "Delphi Interface Architecture & Visual Blueprints"
 author: architect
 timestamp: 2026-10-24T02:00:00Z
-status: approved
+status: approved   # header and footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"

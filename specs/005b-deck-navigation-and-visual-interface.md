@@ -3,7 +3,7 @@ id: spec-005b-deck-navigation-and-visual-interface
 title: "005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer"
 author: architect
 timestamp: 2026-10-24T00:52:00Z
-status: approved
+status: approved   # Amendment 005b-A2 (header and footer tidy) approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
