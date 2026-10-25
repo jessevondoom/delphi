@@ -254,7 +254,7 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
             Err(e) => cap.notes.push(format!("could not start the Delphi tool bridge for the probe: {}", e)),
         }
     }
-    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp };
+    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
     match Session::start(&l).await {
         Err(e) => cap.auth = format!("failed: {}", e),
         Ok(mut s) => {

@@ -99,6 +99,8 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("harness").and_then(|h| h.get("subscription_budget_tokens")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.harness_token_cap = v as u64;
     }
+    s.harness_claude = crate::harness_opts::parse(root, crate::harness::Cli::Claude).0;
+    s.harness_agy = crate::harness_opts::parse(root, crate::harness::Cli::Agy).0;
     if let Some(v) = root.get("harness").and_then(|h| h.get("connector_settle_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.connector_settle = Duration::from_secs(v as u64);
     }
@@ -280,6 +282,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     let connectors = connector_host(cfg.clone(), secrets.clone(), ws_dir);
     let (timers, timer_notice) = crate::timers::TimerStore::open(&ws_dir.join("local/timers.json"));
     notices.extend(timer_notice);
+    notices.extend(crate::harness_opts::problems(&root));
     // A hook left out for being malformed is Delphi less strict than the operator meant: say so on attach.
     notices.extend(crate::hooks::parse(&root).1.into_iter().map(|p| format!("hooks: {}", p)));
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
@@ -324,6 +327,15 @@ mod tests {
     use crate::testkit::CONFIG;
     use crate::workspace::tests::make_workspace;
     use std::fs;
+
+    #[test]
+    fn harness_blocks_become_cli_options_and_a_typo_is_a_notice() {
+        let root: toml::Value = toml::from_str("[harness]\nsubscription_budget_tokens = 9000\n[harness.claude]\neffort = \"low\"\npartial_messages = true\n[harness.agy]\nmode = \"yolo\"\n").unwrap();
+        let s = settings_from(&root);
+        assert_eq!((s.harness_token_cap, s.harness_claude.effort.as_deref(), s.harness_claude.partial_messages, s.harness_agy.mode.clone()), (9000, Some("low"), true, None));
+        let bad = crate::harness_opts::problems(&root);
+        assert!(bad.len() == 1 && bad[0].contains("[harness.agy] mode"), "{:?}", bad);
+    }
 
     fn workspace_with_config(extra: &str) -> (tempfile::TempDir, WorkspacePaths) {
         let t = tempfile::tempdir().unwrap();

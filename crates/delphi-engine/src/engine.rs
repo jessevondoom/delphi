@@ -68,6 +68,9 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
+    pub harness_claude: crate::harness::Opts,
+    pub harness_agy: crate::harness::Opts,
     /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
     pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
@@ -121,6 +124,8 @@ impl Default for Settings {
             agy_program: "agy".into(),
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            harness_claude: Default::default(),
+            harness_agy: Default::default(),
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),

@@ -75,6 +75,7 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
             tools: Tools::None,
             env: cli_env(),
             profile: LaunchProfile { mcp_config: Some(bridge.config_path().to_path_buf()), auto_approve: auto, claudeai_connectors: defaults, native_tools: if defaults { vec!["WebSearch".into(), "WebFetch".into()] } else { vec![] }, settle: if defaults { std::time::Duration::from_secs(10) } else { std::time::Duration::ZERO }, expect_servers: vec![] },
+            opts: Default::default(),
         };
         let mut s = Session::start(&l).await.expect("claude starts");
         let (mut asked, mut served, mut connected, mut done) = (false, false, false, false);

@@ -244,11 +244,41 @@ pub struct HarnessProfile {
     /// Reserved for the strict (sandboxed) profile of `specs/009` §7; read and ignored today.
     #[serde(default)]
     pub profile: Option<String>,
+    /// CLI features (`specs/021`): `effort`, `max_turns`, `max_budget_usd`, `fallback_models`, `partial_messages`, `session`,
+    /// `json_schema`, `add_dirs`, `agents`, `settings`, and for agy `mode`, `sandbox`, `print_timeout_secs`. They are kept as
+    /// raw values here so the block stays ratified and strict about unknown keys; the engine checks and reads them
+    /// (`harness_opts.rs`), and reports a bad value on attach.
+    #[serde(default)]
+    pub effort: Option<toml::Value>,
+    #[serde(default)]
+    pub json_schema: Option<toml::Value>,
+    #[serde(default)]
+    pub session: Option<toml::Value>,
+    #[serde(default)]
+    pub add_dirs: Option<toml::Value>,
+    #[serde(default)]
+    pub sandbox: Option<toml::Value>,
+    #[serde(default)]
+    pub print_timeout_secs: Option<toml::Value>,
+    #[serde(default)]
+    pub max_turns: Option<toml::Value>,
+    #[serde(default)]
+    pub max_budget_usd: Option<toml::Value>,
+    #[serde(default)]
+    pub fallback_models: Option<toml::Value>,
+    #[serde(default)]
+    pub partial_messages: Option<toml::Value>,
+    #[serde(default)]
+    pub agents: Option<toml::Value>,
+    #[serde(default)]
+    pub settings: Option<toml::Value>,
+    #[serde(default)]
+    pub mode: Option<toml::Value>,
 }
 
 impl Default for HarnessProfile {
     fn default() -> Self {
-        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None }
+        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None, effort: None, json_schema: None, session: None, add_dirs: None, sandbox: None, print_timeout_secs: None, max_turns: None, max_budget_usd: None, fallback_models: None, partial_messages: None, agents: None, settings: None, mode: None }
     }
 }
 
