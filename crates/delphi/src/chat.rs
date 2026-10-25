@@ -52,7 +52,7 @@ pub enum Input {
     Merge(String),
     /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
-    /// `/observe [view]` (`/narrator` is an unlisted alias): open the read-only window (a tmux split when inside tmux, else the command to run).
+    /// `/observe [view]` (`/narrator` is an unlisted alias): open the narrator, the read-only full-screen window (a new tmux window when inside tmux, else the command to run).
     Narrator(Option<String>),
     /// `/more`: the rest of a reply the inline console shortened.
     More,
@@ -98,7 +98,7 @@ pub fn parse_input(line: &str) -> Input {
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
             "narrator" | "observe" | "visualize" => match rest.first() {
-                Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/observe takes council, epic, forge, agents, archives or tile, not `{}`", v)),
+                Some(v) if crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/observe takes council, epic, forge, agents or archives, not `{}`", v)),
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
             "more" => Input::More,
@@ -827,20 +827,16 @@ impl Session {
             Input::Narrator(view) => {
                 let ws = self.ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let exe = daemon_exe().map(|p| p.display().to_string()).unwrap_or_else(|| "delphi".into());
-                let tile = view.as_deref() == Some("tile");
-                let views: Vec<String> = if tile { ["council", "epic", "forge", "agents"].iter().map(|s| s.to_string()).collect() } else { vec![view.unwrap_or_default()] };
-                let lines: Vec<String> = views.iter().map(|v| format!("{} observe {} --workspace {} --home {}", exe, v, ws, self.home.display())).collect();
+                let line = format!("{} observe {} --workspace {} --home {}", exe, view.unwrap_or_default(), ws, self.home.display());
                 if std::env::var_os("TMUX").is_some() {
-                    // One window per view, laid out by tmux: Delphi never tiles inside a window.
-                    let opened = lines.iter().enumerate().all(|(i, l)| std::process::Command::new("tmux").args(["split-window", if i % 2 == 0 { "-h" } else { "-v" }, l]).status().map(|s| s.success()).unwrap_or(false));
-                    if opened {
-                        let _ = std::process::Command::new("tmux").args(["select-layout", "tiled"]).status();
-                        say(&format!("({} observer window(s) opened in tmux)\n", lines.len()));
+                    // The narrator is one full-screen window of its own; the views switch inside it.
+                    if std::process::Command::new("tmux").args(["new-window", &line]).status().map(|s| s.success()).unwrap_or(false) {
+                        say("(the narrator is open in a new tmux window)\n");
                     } else {
-                        say(&format!("could not open tmux panes; run these in other terminals:\n  {}\n", lines.join("\n  ")));
+                        say(&format!("could not open a tmux window; run this in another terminal:\n  {}\n", line));
                     }
                 } else {
-                    say(&format!("Run {} in another terminal (it only watches):\n  {}\n", if tile { "each of these" } else { "this" }, lines.join("\n  ")));
+                    say(&format!("Run this in another terminal (it only watches):\n  {}\n", line));
                 }
             }
             Input::Council { proposition, seats, author } => match self.cmd.call("council.start", json!({"mission_id": self.mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
@@ -1156,7 +1152,7 @@ mod tests {
         assert_eq!(parse_input("/narrator"), Input::Narrator(None));
         assert_eq!(parse_input("/observe council"), Input::Narrator(Some("council".into())));
         assert!(matches!(parse_input("/narrator nonsense"), Input::Unknown(m) if m.contains("council, epic")));
-        assert_eq!(parse_input("/narrator tile"), Input::Narrator(Some("tile".into())));
+        assert!(matches!(parse_input("/narrator tile"), Input::Unknown(_)), "the four-pane tile is gone");
         assert!(matches!(parse_input("/observe spend"), Input::Unknown(m) if m.contains("not `spend`")), "the spend view is retired");
         assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
         assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
