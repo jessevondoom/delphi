@@ -92,6 +92,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      actions: read # to see whether a newer dev run is waiting
       contents: write
       id-token: write
       attestations: write
@@ -110,9 +111,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}  # this job has no checkout, so gh cannot find the repository from git
         run: |
-          # Only the newest push matters; an older run that finishes late must not replace a newer build.
-          latest="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          [ "$latest" = "$GITHUB_SHA" ] || { echo "main has moved on to $latest; not publishing $GITHUB_SHA"; exit 0; }
+          # An older run that finishes late must not replace a newer build: stand down when a newer run is waiting
+          # or building. (Not "is this still the head of main": the release workflow's own Homebrew commit moves
+          # main without starting a run, and that would skip every build that came before it.)
+          newer="$(gh run list --workflow dev.yml --branch main --limit 30 --json databaseId,status --jq "[.[] | select(.databaseId > $GITHUB_RUN_ID and .status != \"completed\")] | length")"
+          [ "$newer" = 0 ] || { echo "a newer dev build is on its way; not publishing $GITHUB_SHA"; exit 0; }
           gh release delete dev --cleanup-tag --yes 2>/dev/null || true
           gh release create dev dist/* --prerelease --target "$GITHUB_SHA" --title "dev (main@${GITHUB_SHA::7})" \
             --notes "Rolling build of main at $GITHUB_SHA, for \`delphi self-update --dev\`. Not a release: it is replaced on every push to main."
