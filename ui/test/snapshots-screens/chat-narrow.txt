@@ -1,7 +1,7 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧
 delphi v0.5 · /proj · chat
 
- Error> {
+   Error> {
        // lock the row
        Ok(())
    }
