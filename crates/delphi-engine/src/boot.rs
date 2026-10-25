@@ -302,6 +302,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         tools: Arc::new(crate::tools::Registry::builtin()),
         exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
+        schemas: Default::default(),
         connectors,
         pool,
         clock_unix: crate::pool::system_clock(),

@@ -77,10 +77,15 @@ credential = "keychain:anthropic-work"   # or env:… or command:[…]; not harn
 
 This is built and tested with stand-in CLIs. It has **not** been run against a real key, because the operator has none.
 
-## 5. Not done, and why
+## 5. Structured answers per handoff
+
+`Engine::schemas` maps a handoff id to a JSON Schema, and a span built from that handoff passes it to its CLI (a profile-level `json_schema` wins if both exist). The first user is **Council Round 2**: `critique_schema()` describes the critique (`recommendation`, `alternative`, `findings[{severity, title}]`, `concur`), and `parse_critique` reads either that object or the old line format, so API endpoints and CLIs both work. The same rules hold in both: no readable recommendation is no critique, an alternative needs a label, and a finding with an unreadable severity still blocks as a P1. Verified live with `claude` and the exact Delphi flags: the answer arrives as `structured_output` and raises no permission request.
+
+Other roles can use the same side channel when they have a fixed answer shape.
+
+## 6. Not done, and why
 
 - **Resume across spans**: `session = "persist"` records ids and `Opts.session` can `Resume`, but nothing yet resumes a retried span. A retry starts from its saved request as before (`specs/009` §7B).
 - **Channels, `/goal`, Remote Control, cloud sessions, agent teams**: overlap Delphi's daemon, relay and council, or route work through the vendor's infrastructure. Channels (push events into a running session) are worth a later spike for timers (`specs/017`).
-- **Role-level schemas**: `json_schema` is per profile. No role declares its own schema yet.
 - **`--bare`**: skips the claude.ai login and does not read the subscription token, so it cannot be used on a seat.
 - **Checkpoint/rewind**: overlaps `specs/008`; compare before building.
