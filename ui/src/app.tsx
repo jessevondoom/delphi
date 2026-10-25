@@ -222,9 +222,11 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
 
       // Shift+Tab cycles the approval mode from anywhere.
       if (e.t === 'key' && e.k === 'shift-tab') {
-        const order = ['default', 'accept-edits', 'mission-auto'];
+        const order = ['default', 'accept-edits', 'mission-auto', 'optimistic'];
         const next = order[(order.indexOf(modeRef.current) + 1) % order.length]!;
-        cmd.call('permissions.set', { mode: next }).then((v: any) => { setMode(String(v?.mode ?? next)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        const set = (m: string) => cmd.call('permissions.set', { mode: m }).then((v: any) => { setMode(String(v?.mode ?? m)); });
+        // Optimistic needs the OS sandbox; without one the cycle skips it and wraps to default.
+        set(next).catch((er) => (next === 'optimistic' ? set('default') : Promise.reject(er))).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
         return;
       }
 

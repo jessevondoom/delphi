@@ -28,6 +28,9 @@ pub enum Mode {
     AcceptEdits,
     /// Additionally auto-approves dependency installs pinned in a committed lockfile.
     MissionAuto,
+    /// As `MissionAuto`, and a build started in it decides its eligible cards provisionally (`specs/015`), as if
+    /// started with `--optimistic`. Needs the OS sandbox.
+    Optimistic,
 }
 
 impl Mode {
@@ -36,6 +39,7 @@ impl Mode {
             "default" => Mode::Default,
             "accept-edits" => Mode::AcceptEdits,
             "mission-auto" => Mode::MissionAuto,
+            "optimistic" => Mode::Optimistic,
             _ => return None,
         })
     }
@@ -45,6 +49,7 @@ impl Mode {
             Mode::Default => "default",
             Mode::AcceptEdits => "accept-edits",
             Mode::MissionAuto => "mission-auto",
+            Mode::Optimistic => "optimistic",
         }
     }
 }
@@ -228,6 +233,7 @@ fn mode_from(i: u8) -> Mode {
     match i {
         1 => Mode::AcceptEdits,
         2 => Mode::MissionAuto,
+        3 => Mode::Optimistic,
         _ => Mode::Default,
     }
 }
@@ -253,6 +259,7 @@ impl Broker {
             Mode::Default => 0,
             Mode::AcceptEdits => 1,
             Mode::MissionAuto => 2,
+            Mode::Optimistic => 3,
         };
     }
 
@@ -265,7 +272,7 @@ impl Broker {
         let mode = mode_from(st.mode_idx);
         let auto = matches!(
             (mode, c.kind),
-            (Mode::AcceptEdits | Mode::MissionAuto, ActionKind::WorktreeEdit) | (Mode::MissionAuto, ActionKind::PinnedDependencyInstall)
+            (Mode::AcceptEdits | Mode::MissionAuto | Mode::Optimistic, ActionKind::WorktreeEdit) | (Mode::MissionAuto | Mode::Optimistic, ActionKind::PinnedDependencyInstall)
         );
         if auto {
             return Need::No("permission mode");
@@ -391,7 +398,7 @@ mod tests {
         let note = classify("write_file", &json!({"path": "missions/m/n.md", "content": "x"})).unwrap();
         assert_eq!(b.need("t1", None, &note), Need::No("green"));
         let spec = spec_write("x");
-        for m in [Mode::Default, Mode::AcceptEdits, Mode::MissionAuto] {
+        for m in [Mode::Default, Mode::AcceptEdits, Mode::MissionAuto, Mode::Optimistic] {
             b.set_mode(m);
             assert_eq!(b.need("t1", None, &spec), Need::Yes(Tier::Amber), "a draft spec outside the worktree asks in {:?}", m);
         }
@@ -406,7 +413,10 @@ mod tests {
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::Yes(Tier::Amber)));
         b.set_mode(Mode::MissionAuto);
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::No("permission mode")));
+        b.set_mode(Mode::Optimistic);
+        assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::No("permission mode")));
         assert_eq!(Mode::parse("mission-auto"), Some(Mode::MissionAuto));
+        assert_eq!(Mode::parse("optimistic"), Some(Mode::Optimistic));
         assert_eq!(Mode::parse("yolo"), None);
     }
 
