@@ -81,7 +81,7 @@ test('tint: an unknown background, or no colour, means no tint: the rail fallbac
 });
 
 const model = (over: Partial<Model> = {}): Model => ({
-  info, pal: { dark: true }, state: stateWorld(), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
+  info, pal: { dark: true, bg: [15, 23, 42] }, state: stateWorld(), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'mission-auto', panel: null, help: false, ...over,
 });
 const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, diff: null, live: {}, connected: true });

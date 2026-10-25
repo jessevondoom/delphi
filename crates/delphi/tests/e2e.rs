@@ -559,6 +559,10 @@ impl PtyConsole {
                 }
                 let mut all = b2.lock().unwrap();
                 all.extend_from_slice(&buf[..n]);
+                // A real terminal answers the background-colour query (the full-screen console tints its blocks from it).
+                if buf[..n].windows(7).any(|w| w == b"\x1b]11;?\x07") {
+                    let _ = answer.write_all(b"\x1b]11;rgb:0f0f/1717/2a2a\x07");
+                }
                 // A real terminal answers "where is the cursor?"; the inline viewport asks at start-up.
                 if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
                     let mut p = vt100::Parser::new(rows, cols, 0);
@@ -866,10 +870,10 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c.type_keys("\r");
     c.wait_for("Hello from the daemon.");
     // The text first shows dim as it streams; the finished reply (badge line, rendered list) follows.
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     c.wait_for("• one");
     let screen = c.visible();
-    assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
+    assert!(screen.contains("you · ") && screen.contains("Tell me something") && screen.contains("• one") && screen.contains("Athena · "), "{}", screen);
     assert!(screen.lines().nth(1).unwrap().contains("· chat"), "the title row is directly under the strip: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
     c.type_keys("\x03");
@@ -878,7 +882,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     // Reopen: the conversation is replayed from the mission's events.
     let c2 = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     c2.wait_for("Hello from the daemon.");
-    assert!(c2.visible().contains("❯ Tell me something"), "{}", c2.visible());
+    assert!(c2.visible().contains("Tell me something") && c2.visible().contains("you · "), "{}", c2.visible());
     drop(c2);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
@@ -950,6 +954,49 @@ fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
     c.type_keys("?");
     c.wait_for("❯ why?");
     assert!(!c.visible().contains("keys · esc closes"), "a ? inside text is a character:\n{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §7.2 and finding 6: a long reply starts at its label row instead of scrolling its beginning off the
+/// screen; a marker says how much waits below; `Space` pages, `Enter` on an empty prompt jumps to the end. The blocks
+/// are tinted from the terminal's own background, which the console asks for and this terminal answers.
+#[test]
+fn a_long_reply_is_pinned_at_its_label_row_and_space_pages_and_enter_jumps_to_the_end() {
+    let long = (1..=40).map(|i| format!("Paragraph {} of the long answer.", i)).collect::<Vec<_>>().join("\n\n");
+    let m = mock(vec![reply_text(&long)]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap()), ("COLORTERM", "")]; // 256 colours: the depth is decided by TERM alone
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Explain everything.");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("more lines · pgdn or space · enter jumps to the end");
+    std::thread::sleep(Duration::from_millis(300));
+    let screen = c.visible();
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows[3].contains("Athena · "), "the first body row is the reply's label row:\n{}", screen);
+    assert!(rows[4].trim_start().starts_with('▄') && screen.contains("Paragraph 1 of the long answer."), "the block's top cap, then its beginning:\n{}", screen);
+    assert!(String::from_utf8_lossy(&c.bytes.lock().unwrap()).contains("48;5;"), "the tint reached the terminal as a 256-colour background");
+    c.type_keys(" ");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("Paragraph 1 of the long answer.") {
+        assert!(Instant::now() < deadline, "Space did not page down:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    assert!(c.visible().contains("more lines"), "still lines below after one page:\n{}", c.visible());
+    c.type_keys("\r");
+    c.wait_for("Paragraph 40 of the long answer.");
+    assert!(!c.visible().contains("more lines"), "at the end there is no marker:\n{}", c.visible());
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
@@ -1151,7 +1198,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("Observed answer.");
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
     let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
     o.wait_for("MASCOT ROSTER");
@@ -1192,7 +1239,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     c.type_keys("Where is the retry ladder described?");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     // Where the answer came from: the reply cites two documents.
     c.type_keys("/sources");
     std::thread::sleep(Duration::from_millis(150));
@@ -1282,7 +1329,13 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Understood, nothing was written.");
-    c.wait_for("· architect ·"); // the text streams dim first; the finished reply (its badge line) is what /pin keeps
+    c.wait_for("Daedalus · ");
+    // The reply streams in a block labelled "writing"; the finished one (labelled with its time) is what /pin keeps.
+    let settled = Instant::now() + Duration::from_secs(20);
+    while c.everything().contains("Daedalus · writing") {
+        assert!(Instant::now() < settled, "the reply never finished:\n{}", c.everything());
+        std::thread::sleep(Duration::from_millis(60));
+    }
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the denied action never ran");
 
     // Arrows edit a prompt that has text and move between decks when it is empty; Shift+arrows always move a deck.
@@ -1398,7 +1451,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("First answer.");
-    c.wait_for("orchestrator ·");
+    c.wait_for("Athena · ");
     // The daemon is stopped and started again behind the console's back.
     // (the CLI asks for a terminal, as the console does, so it runs in one)
     let restart = PtyConsole::start_env(&e.home, &["daemon", "restart", "--workspace", "e2e"], 10, 80, &[]);

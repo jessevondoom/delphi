@@ -7,7 +7,9 @@ import { sanitize, type AgentState } from './theme.ts';
  * An `attention` block is a task that stopped and needs the operator (an escalation or a failure): `text` is the
  * headline, `reason` the engine's reason without its wrapper, `cause` which stop it is (`attention.ts`).
  */
-export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause };
+export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause;
+  /** For a note: how it is marked in the chat (`·` information, `✖` error, `✔` success; `005e` §10.6). */
+  tone?: 'info' | 'error' | 'ok' };
 export type Agent = {
   state: AgentState; doing: string;
   /** When it entered `escalated`, so the strip can let go of the face (`005e` §6.2). */
@@ -85,6 +87,12 @@ function attention(role: string, text: string, at: number): Omit<Block, 'id'> {
   return { kind: 'attention', role, text: a.headline, reason, cause: a.cause, at, status: 'escalated' };
 }
 
+/** Who is speaking now: the role of the newest top-level span (the orchestrator before any has started). */
+export function speakerOf(s: State): string {
+  const tops = Object.entries(s.spans).filter(([, v]) => v.depth === 0).sort((a, b) => spanNum(b[0]) - spanNum(a[0]));
+  return tops[0]?.[1].role ?? 'orchestrator';
+}
+
 const setAgent = (s: State, role: string, a: Agent): State => ({ ...s, agents: { ...s.agents, [role]: a } });
 const spanNum = (k: string) => Number(k.split('_').pop()) || 0;
 
@@ -128,8 +136,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {
-      const tops = Object.entries(s.spans).filter(([, v]) => v.depth === 0).sort((a, b) => spanNum(b[0]) - spanNum(a[0]));
-      const role = tops[0]?.[1].role ?? 'orchestrator';
+      const role = speakerOf(s);
       const idle: Record<string, Agent> = {};
       for (const [r, a] of Object.entries(s.agents)) idle[r] = a.state === 'waiting on you' ? a : { state: 'idle', doing: '' };
       const escalated = pl.status === 'escalated';
@@ -159,8 +166,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       return { ...s, activity: act, blocks: s.blocks.map((x) => (x.kind === 'tool' && x.ref === ref ? { ...x, status: pl.is_error ? 'error' : 'ok', detail } : x)) };
     }
     case 'task.failed': {
-      const tops = Object.entries(s.spans).filter(([, v]) => v.depth === 0).sort((a, b) => spanNum(b[0]) - spanNum(a[0]));
-      return addBlock({ ...s, live: '', running: without(s.running, e.task_id), lastActivity: now }, attention(tops[0]?.[1].role ?? 'orchestrator', sanitize(String(pl.error ?? '')), now));
+      return addBlock({ ...s, live: '', running: without(s.running, e.task_id), lastActivity: now }, attention(speakerOf(s), sanitize(String(pl.error ?? '')), now));
     }
     case 'approval.requested': {
       const id = String(pl.approval_id ?? '');

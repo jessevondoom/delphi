@@ -46,7 +46,7 @@ Terminal user interfaces for AI developer tools must solve for **developer cogni
 ### 1.1 Focus Over Density (The Quiet Terminal)
 - **Primary conversational focus:** Human-agent collaboration happens in the center deck. Dialog must be quiet, stable, and readable.
 - **Isolate telemetry from conversation:** Unfiltered 60Hz token streams, live reasoning deltas, and tool parameter payloads must never be spewed into the primary chat stream. They belong in dedicated auxiliary decks (`Shift+Left`).
-- **Stabilized Viewports (`less`-Style Paging):** Incoming assistant responses pin the viewport at the top of the message block with a subtle scroll indicator (`[MORE: Space/PageDown to scroll]`). Fast token generation must never shoot text off-screen while the operator is reading.
+- **Stabilized Viewports (`less`-Style Paging):** Incoming assistant responses pin the viewport at the top of the message block with a marker on the last body row (`↓ N more lines · pgdn or space · enter jumps to the end`); `Space` or `PgDn` pages, `Enter` on an empty prompt jumps to the end, and typing resumes following. Fast token generation must never shoot text off-screen while the operator is reading.
 - **Sticky Prompt Focus:** Prompt input remains permanently anchored at the bottom of the viewport. Keystrokes are never dropped during live output.
 
 ### 1.2 "Not Everything is in a Box"

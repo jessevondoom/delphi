@@ -14,7 +14,7 @@ import * as I from './inbox.ts';
 import * as P from './panel.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
-import { frame, transcriptCount, type Model } from './screen.ts';
+import { anchorBack, bodyHeight, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
 import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
@@ -22,9 +22,9 @@ import type { Ev } from './input.ts';
 import { useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
-import type { Info } from './theme.ts';
+import type { Info, Pal, Rgb } from './theme.ts';
 
-type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; themeForced?: boolean; history: State };
+type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; mission: string; dark: boolean; bg?: Rgb | null; themeForced?: boolean; history: State };
 
 /** Entries of a directory under the workspace's team root, for `@specs/…` completion. Read-only, names only. */
 const listTeamDir = (info: Info): ListDir => (rel) => {
@@ -44,16 +44,17 @@ export function exportMarkdown(s: State, info: Info, mission: string): string {
   return out.join('\n');
 }
 
-export function App({ cmd, ev, term, info, mission, dark, themeForced, history }: Props) {
+export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, history }: Props) {
   const { exit } = useApp();
   const stdout = useStdout().stdout as unknown as NodeJS.WriteStream;
   const [size, setSize] = useState({ w: stdout.columns || 100, h: stdout.rows || 30 });
   const [now, setNow] = useState(Date.now());
-  const [pal, setPal] = useState({ dark });
+  const [pal, setPal] = useState<Pal>({ dark, bg: bg ?? null });
   const [state, setState] = useState<State>(history);
   const [composer, setComposer] = useState(() => C.empty());
   const [deck, setDeck] = useState<0 | 1 | 2>(1);
   const [back, setBack] = useState(0);
+  const [activityBack, setActivityBack] = useState(0);
   const [help, setHelp] = useState(false);
   const [sel, setSel] = useState(0);
   const [expandTools, setExpandTools] = useState(false);
@@ -67,6 +68,11 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
   const comp = useRef(composer);
   const selRef = useRef(0);
+  const backRef = useRef(0);
+  backRef.current = back;
+  /** The transcript line of the label row a long reply is pinned to, while it is (`005e` §7.2), and which reply that is. */
+  const anchorRef = useRef<number | null>(null);
+  const lastReply = useRef<'live' | number | null>(null);
   const sizeRef = useRef(size);
   sizeRef.current = size;
   const stateRef = useRef(state);
@@ -126,7 +132,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   function checkModels() { cmd.call('models.get', {}).then((v: any) => setNoModel(v?.configured === false)).catch(() => {}); }
   useEffect(checkModels, []);
 
-  const note = (text: string) => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now() }));
+  const note = (text: string, tone?: 'info' | 'error' | 'ok') => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now(), tone }));
 
   const send = (text: string) => {
     const m = /^@(\S+)\s+([\s\S]+)$/.exec(text);
@@ -137,8 +143,9 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       if (target) prompt = m[2]!;
     }
     setBack(0);
+    anchorRef.current = null;
     checkModels();
-    cmd.call('task.submit', { mission_id: mission, prompt, ...(target ? { target } : {}) }).catch((e) => note('could not send: ' + (e?.message ?? JSON.stringify(e))));
+    cmd.call('task.submit', { mission_id: mission, prompt, ...(target ? { target } : {}) }).catch((e) => note('could not send: ' + (e?.message ?? JSON.stringify(e)), 'error'));
   };
 
   // A queued message goes out when nothing is running.
@@ -150,6 +157,17 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
     }
   }, [running]);
 
+  /** Scroll the deck that is showing: the chat and the activity deck each keep their own place. Reaching the end resumes following. */
+  const scroll = (by: number) => {
+    if (deckRef.current === 0) { setActivityBack((b) => Math.max(0, b + by)); return; }
+    const next = Math.max(0, backRef.current + by);
+    if (next === 0) anchorRef.current = null;
+    backRef.current = next;
+    setBack(next);
+  };
+  /** Back to the end of the chat, following new output. */
+  const follow = () => { anchorRef.current = null; backRef.current = 0; setBack(0); };
+
   const stop = () => {
     const had = queueRef.current.length;
     queueRef.current = []; setQueue([]);
@@ -157,7 +175,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       const n = (r?.cancelled ?? []).length;
       if (!n) note('nothing was running');
       else if (had) note(`${had} queued message(s) were dropped`);
-    }).catch((e) => note('could not stop: ' + (e?.message ?? JSON.stringify(e))));
+    }).catch((e) => note('could not stop: ' + (e?.message ?? JSON.stringify(e)), 'error'));
   };
 
   const run = (line: string) => {
@@ -171,8 +189,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         mkdirSync(dir, { recursive: true });
         const file = join(dir, `conversation-${Date.now()}.md`);
         writeFileSync(file, exportMarkdown(stateRef.current, info, mission));
-        note(`exported to ${file.replace(info.workspace + '/', '')}`);
-      } catch (e: any) { note('could not export: ' + e.message); }
+        note(`exported to ${file.replace(info.workspace + '/', '')}`, 'ok');
+      } catch (e: any) { note('could not export: ' + e.message, 'error'); }
       return;
     }
     if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }
@@ -184,8 +202,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
       const text = arg || last?.text;
       if (!text) { note('nothing to pin yet: /pin keeps the last reply, or /pin <text>'); return; }
-      try { pin(info, mission, arg ? 'typed by the operator' : `${info.roles[last!.role ?? '']?.name ?? last!.role} (${last!.role})`, text); note('pinned to the mission notebook (/notes)'); }
-      catch (e: any) { note('could not pin: ' + e.message); }
+      try { pin(info, mission, arg ? 'typed by the operator' : `${info.roles[last!.role ?? '']?.name ?? last!.role} (${last!.role})`, text); note('pinned to the mission notebook (/notes)', 'ok'); }
+      catch (e: any) { note('could not pin: ' + e.message, 'error'); }
       return;
     }
     if (name === '/connectors') {
@@ -244,7 +262,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         const next = nextMode(modeRef.current);
         const set = (m: string) => cmd.call('permissions.set', { mode: m }).then((v: any) => { const got = String(v?.mode ?? m); setMode(got); note(modeNote(got)); });
         // Optimistic needs the OS sandbox; without one the cycle skips it and wraps to default.
-        set(next).catch((er) => (next === 'optimistic' ? set('default') : Promise.reject(er))).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        set(next).catch((er) => (next === 'optimistic' ? set('default') : Promise.reject(er))).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er)), 'error'));
         return;
       }
 
@@ -259,7 +277,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         else if (action.t === 'search') doSearch(action.q);
         else if (action.t === 'load') { const cur = panelRef.current; if (cur && cur.kind !== 'notes') openPanel({ ...cur, lines: previewOf(info, action.path) }); }
         else if (action.t === 'insert') { openPanel(null); upd((c) => C.insert(c, action.text)); }
-        else if (action.t === 'pin') { try { pin(info, mission, action.from, action.text); note('pinned to the mission notebook (/notes)'); openPanel({ ...(panelRef.current as P.Panel), flash: 'pinned to the mission notebook (/notes)' }); } catch (er: any) { openPanel({ ...(panelRef.current as P.Panel), flash: 'could not pin: ' + er.message }); } }
+        else if (action.t === 'pin') { try { pin(info, mission, action.from, action.text); note('pinned to the mission notebook (/notes)', 'ok'); openPanel({ ...(panelRef.current as P.Panel), flash: 'pinned to the mission notebook (/notes)' }); } catch (er: any) { openPanel({ ...(panelRef.current as P.Panel), flash: 'could not pin: ' + er.message }); } }
         return;
       }
 
@@ -269,18 +287,21 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
         inboxRef.current = next; setInbox(next);
         if (action.t === 'chat') { setDeck(1); deckRef.current = 1; }
-        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => bad && note(bad));
-        else if (action.t === 'resolve-all') for (const c of action.cards) void resolveCard(cmd, c, 'allow').then((bad) => bad && note(bad));
+        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => bad && note(bad, 'error'));
+        else if (action.t === 'resolve-all') for (const c of action.cards) void resolveCard(cmd, c, 'allow').then((bad) => bad && note(bad, 'error'));
         return;
       }
 
       const m = menuNow();
       const items = m?.items ?? [];
       switch (e.t) {
-        case 'bg': if (!themeForced) setPal({ dark: e.dark }); return;
-        case 'wheel': setBack((b) => Math.max(0, b + (e.dir === 'up' ? 3 : -3))); return;
-        case 'paste': upd((c) => C.insert(c, e.s)); return;
-        case 'text': upd((c) => C.insert(c, e.s)); return;
+        case 'bg': setPal((p) => ({ dark: themeForced ? p.dark : e.dark, bg: e.rgb })); return;
+        case 'wheel': scroll(e.dir === 'up' ? 3 : -3); return;
+        case 'paste': follow(); upd((c) => C.insert(c, e.s)); return;
+        case 'text':
+          // Space pages down while lines wait below and the prompt is empty (`005e` §7.3); typing resumes following.
+          if (e.s === ' ' && comp.current.chars.length === 0 && deckRef.current === 1 && backRef.current > 0) { scroll(-(bodyH - 1)); return; }
+          follow(); upd((c) => C.insert(c, e.s)); return;
         case 'ctrl':
           if (e.c === 'c') { exit(); return; }
           if (e.c === 'j') { upd((c) => C.insert(c, '\n')); return; }
@@ -289,7 +310,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
           if (e.c === 'u') { upd(C.killToStart); return; }
           if (e.c === 'k') { upd(C.killToEnd); return; }
           if (e.c === 'w') { upd(C.killWord); return; }
-          if (e.c === 'l') { setBack(0); return; }
+          if (e.c === 'l') { follow(); return; }
           if (e.c === 'o') { setExpandTools((x) => !x); return; }
           if (e.c === 'r') { setS({ q: '', at: hist.length, match: null }); return; }
           return;
@@ -307,8 +328,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
             return { ...c, chars: next, cur: m!.from + ins.length, histAt: null };
           });
           switch (e.k) {
-            case 'pgup': setBack((b) => b + bodyH - 1); return;
-            case 'pgdn': setBack((b) => Math.max(0, b - bodyH + 1)); return;
+            case 'pgup': scroll(bodyH - 1); return;
+            case 'pgdn': scroll(-(bodyH - 1)); return;
             case 'left': upd(C.left); return;
             case 'right': upd(C.right); return;
             case 'home': upd(C.home); return;
@@ -332,11 +353,12 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
                 const tok = comp.current.chars.slice(m!.from, m!.to).join('');
                 if (tok !== it.insert.trimEnd()) { accept(it); return; }
               }
+              if (!text && deckRef.current === 1 && backRef.current > 0) { follow(); return; } // Enter on an empty prompt jumps to the end
               const { text: t, next } = C.submit(comp.current);
               if (!t) return;
               comp.current = next; setComposer(next);
               if (t.startsWith('/') && COMMANDS.some((c) => c.name === t.split(/\s/)[0])) run(t);
-              else if (t.startsWith('/')) note(`unknown command ${t.split(/\s/)[0]}; / shows the list`);
+              else if (t.startsWith('/')) note(`unknown command ${t.split(/\s/)[0]}; / shows the list`, 'error');
               else if (Object.keys(stateRef.current.running).length) { queueRef.current = [...queueRef.current, t]; setQueue(queueRef.current); }
               else send(t);
               return;
@@ -349,19 +371,34 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
     return () => { term.off('ev', onEv); };
   }, [term, help, info, listDir]);
 
-  // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
+  // Scrolled up, new output must not move what is being read: grow the offset by what was added below. A reply that
+  // begins while the operator is at the end is pinned by its label row once it outgrows the body (`005e` §7.2).
   const total = useRef(0);
   const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel, noModel };
-  const lineCount = useMemo(() => transcriptCount(base, size.w), [state.blocks, state.live, size.w, pal, expandTools, queue]);
+  const dense = size.h < 16;
+  const lineCount = useMemo(() => transcriptCount(base, size.w, dense), [state.blocks, state.live, size.w, dense, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
     total.current = lineCount;
-    if (added > 0) setBack((b) => (b > 0 ? b + added : 0));
+    const a = replyAnchor(base, size.w, dense);
+    const id = a?.id ?? null, prev = lastReply.current;
+    if (id !== prev) {
+      lastReply.current = id;
+      const sameReply = prev === 'live' && typeof id === 'number'; // the streamed text became its block
+      if (a && !sameReply) anchorRef.current = backRef.current === 0 ? a.row : null;
+    }
+    if (added <= 0) return;
+    const bodyH = bodyHeight({ ...base, composer: C.empty() }, size.w, size.h);
+    setBack((b) => {
+      const next = b > 0 ? b + added : anchorRef.current != null ? anchorBack(lineCount, anchorRef.current, bodyH) : 0;
+      backRef.current = next;
+      return next;
+    });
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, still, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const model: Model = { ...base, still, now, back, activityBack, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, activityBack, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
