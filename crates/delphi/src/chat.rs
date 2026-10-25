@@ -564,7 +564,7 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
         eprintln!("delphi chat: cannot locate this program to start the daemon");
         return Err(1);
     };
-    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: None }) {
+    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));
@@ -826,7 +826,7 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
         eprintln!("delphi chat: cannot locate this program to start the daemon");
         return 1;
     };
-    match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: None }) {
+    match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
         Ok(a) => {
             if let Some(n) = daemon_note(&a) {
                 eprintln!("{}", n);
@@ -910,11 +910,11 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
             return 1;
         }
     };
-    let connect = || -> Result<Client, ClientError> {
+    let connect = || -> Result<(Client, String), ClientError> {
         let mut c = Client::connect(&l.sock)?;
         let t = c.issue_token(delphi_core::proto::Scope::Console)?;
-        c.hello(&t)?;
-        Ok(c)
+        let hello = c.hello(&t)?;
+        Ok((c, hello["binary_version"].as_str().unwrap_or("?").to_string()))
     };
     match action {
         // For clients written in other languages: where the daemon's sockets are.
@@ -923,9 +923,10 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
             0
         }
         "status" => match connect() {
-            Ok(mut c) => match c.call("session.snapshot", json!({})) {
+            Ok((mut c, version)) => match c.call("session.snapshot", json!({})) {
                 Ok(s) => {
-                    println!("running · mission {} · {} task(s) running · {} approval(s) waiting", s["mission_id"].as_str().unwrap_or("?"), s["running_tasks"].as_array().map(|a| a.len()).unwrap_or(0), s["pending_approvals"].as_array().map(|a| a.len()).unwrap_or(0));
+                    let note = if version != env!("CARGO_PKG_VERSION") { format!(" (this program is {}: `delphi daemon restart` runs the new one)", env!("CARGO_PKG_VERSION")) } else { String::new() };
+                    println!("running · delphi {}{} · mission {} · {} task(s) running · {} approval(s) waiting", version, note, s["mission_id"].as_str().unwrap_or("?"), s["running_tasks"].as_array().map(|a| a.len()).unwrap_or(0), s["pending_approvals"].as_array().map(|a| a.len()).unwrap_or(0));
                     0
                 }
                 Err(e) => {
@@ -934,12 +935,17 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
                 }
             },
             Err(_) => {
-                println!("not running");
+                // The socket answering but refusing a token means a daemon is there and this shell has no terminal.
+                if Client::connect(&l.sock).is_ok() {
+                    println!("running (asking it for details needs a terminal)");
+                } else {
+                    println!("not running");
+                }
                 0
             }
         },
         "stop" | "restart" => {
-            match connect() { Ok(mut c) => {
+            match connect() { Ok((mut c, _)) => {
                 let _ = c.call("daemon.shutdown", json!({}));
                 for _ in 0..100 {
                     if Client::connect(&l.sock).is_err() {
@@ -956,7 +962,7 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
                     eprintln!("cannot locate this program to start the daemon");
                     return 1;
                 };
-                return match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: None }) {
+                return match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
                     Ok(a) => {
                         println!("daemon started (pid {})", a.daemon_pid);
                         0
