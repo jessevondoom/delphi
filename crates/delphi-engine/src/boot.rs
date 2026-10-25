@@ -61,6 +61,17 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("optimistic").and_then(|b| b.get("review_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.decision_review_wait = Duration::from_secs(v as u64);
     }
+    if let Some(o) = root.get("optimistic") {
+        if let Some(a) = o.get("approver").and_then(|v| v.as_str()).and_then(crate::provisional::ApproverKind::parse) {
+            s.approver = a;
+        }
+        if let Some(a) = o.get("second_seat").and_then(|v| v.as_str()).and_then(crate::provisional::SecondSeat::parse) {
+            s.second_seat = a;
+        }
+        if let Some(a) = o.get("unseconded").and_then(|v| v.as_str()).and_then(crate::provisional::Unseconded::parse) {
+            s.unseconded = a;
+        }
+    }
     if let Some(list) = root.get("agents").and_then(|a| a.get("enabled")).and_then(|v| v.as_array()) {
         let roles: Vec<String> = list.iter().filter_map(|x| x.as_str().map(String::from)).collect();
         if !roles.is_empty() {
@@ -278,6 +289,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         optimistic: Default::default(),
         decisions_changed: Default::default(),
         timers: Arc::new(timers),
+        toolless: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

@@ -759,6 +759,7 @@ mod tests {
             steps,
             5.0,
             move |s| {
+                s.approver = crate::provisional::ApproverKind::Rules;
                 if let Some(w) = window {
                     s.decision_review_wait = w;
                 }
@@ -906,7 +907,7 @@ mod tests {
         let c = card(&f).await;
         // While the card waits, another provisional decision is made on the task.
         let extra = crate::tools::Classified { tool: "write_file".into(), tier: crate::tools::ToolTier::Amber, kind: crate::tools::ActionKind::WorktreeEdit, summary: "write src/more.rs".into(), payload: json!({"tool": "write_file", "path": "@worktree/src/more.rs", "bytes": 1, "blake3": "00"}), pattern: "write_file @worktree/src/*".into() };
-        let v = crate::provisional::Verdict { allow: true, rationale: "ok".into(), risk: crate::provisional::Risk::Routine };
+        let v = crate::provisional::Verdict::by_rule(true, "ok".into(), crate::provisional::Risk::Routine);
         let mut ev = delphi_core::event::EventEnvelope::new(&f.m.id, "decision.provisional", crate::provisional::decision_event("dec_late", &extra, crate::approval::Tier::Amber, &v, "builder"));
         ev.task_id = Some("t_0001".into());
         f.m.append(ev).await.unwrap();

@@ -127,9 +127,16 @@ fn healthy_before(ws_dir: &Path) -> bool {
 
 /// Run what `remedies` found, asking before each. Returns true if anything ran.
 pub fn apply(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path, found: &[Remedy]) -> bool {
+    apply_asking(ui, home, ws, cwd, found).0
+}
+
+/// `apply`, also returning the remedies the operator declined, so the caller does not offer them again in the same run.
+fn apply_asking(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path, found: &[Remedy]) -> (bool, Vec<Remedy>) {
     let mut ran = false;
+    let mut declined = Vec::new();
     for r in found {
         if !ui.yes_no(r.question(), true) {
+            declined.push(r.clone());
             continue;
         }
         ran = true;
@@ -158,7 +165,7 @@ pub fn apply(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path, found: &[
             }
         }
     }
-    ran
+    (ran, declined)
 }
 
 /// Drifted files are never ratified in bulk: each is reviewed with its diff in the console.
@@ -199,20 +206,27 @@ pub fn preflight(home: &Path, cwd: &Path, explicit: Option<String>, interactive:
     if !interactive {
         return Ok(ws);
     }
-    let mut ui = setup::TerminalUi { auto: false };
+    onboard(&mut setup::TerminalUi { auto: false }, home, &ws, cwd);
+    Ok(ws)
+}
+
+/// The interactive part of the preflight. The guided setup is offered once per run: a decline is remembered, and the
+/// doctor's own `Setup` remedy is skipped afterwards (`specs/005e` §6.2).
+fn onboard(ui: &mut dyn Ui, home: &Path, ws: &Workspace, cwd: &Path) {
+    let mut declined: Vec<Remedy> = Vec::new();
     if endpoint_count(&ws.dir) == 0 {
         eprintln!("delphi: no model access is configured yet, so let's connect one.\n");
-        apply(&mut ui, home, &ws, cwd, &[Remedy::Setup]);
+        declined.extend(apply_asking(ui, home, ws, cwd, &[Remedy::Setup]).1);
     }
     if !healthy_before(&ws.dir) {
         let opts = crate::doctor::Options { require_providers: false };
-        let report = crate::doctor::run(home, &ws, &opts);
-        let found = remedies(&report);
+        let report = crate::doctor::run(home, ws, &opts);
+        let found: Vec<Remedy> = remedies(&report).into_iter().filter(|r| !declined.contains(r)).collect();
         if !found.is_empty() {
-            apply(&mut ui, home, &ws, cwd, &found);
+            apply(ui, home, ws, cwd, &found);
         }
         // Only a clean bill of health is remembered; a failure is shown again next time.
-        let after = if found.is_empty() { report } else { crate::doctor::run(home, &ws, &opts) };
+        let after = if found.is_empty() { report } else { crate::doctor::run(home, ws, &opts) };
         if after.worst() < Level::Fail {
             let _ = std::fs::write(marker(&ws.dir), env!("CARGO_PKG_VERSION"));
         } else {
@@ -223,7 +237,6 @@ pub fn preflight(home: &Path, cwd: &Path, explicit: Option<String>, interactive:
             eprintln!("  run `delphi doctor` for the full report.\n");
         }
     }
-    Ok(ws)
 }
 
 #[cfg(test)]
@@ -300,6 +313,40 @@ mod tests {
         assert_eq!(remedies(&r), vec![Remedy::RatifyConfig]);
         r.warn("7 model-access", "", "no endpoints configured (`delphi endpoints add`, specs/009)");
         assert_eq!(remedies(&r), vec![Remedy::Setup], "setup ends with the same review");
+    }
+
+    /// Answers "no" to everything and remembers what it was asked.
+    #[derive(Default)]
+    struct Decliner {
+        asked: Vec<String>,
+    }
+
+    impl Ui for Decliner {
+        fn say(&mut self, _text: &str) {}
+        fn yes_no(&mut self, question: &str, _default: bool) -> bool {
+            self.asked.push(question.to_string());
+            false
+        }
+        fn line(&mut self, _question: &str, default: &str) -> String {
+            default.to_string()
+        }
+        fn secret(&mut self, _question: &str) -> String {
+            String::new()
+        }
+        fn open_url(&mut self, _url: &str) {}
+    }
+
+    #[test]
+    fn declining_the_guided_setup_is_asked_once_not_twice() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let proj = git_dir(t.path(), "app");
+        let (ws, _) = ensure_workspace(&home, &proj, None).unwrap();
+        assert_eq!(endpoint_count(&ws.dir), 0, "a new workspace has no model access");
+        let mut ui = Decliner::default();
+        onboard(&mut ui, &home, &ws, &proj);
+        let setup_asks = ui.asked.iter().filter(|q| q.as_str() == Remedy::Setup.question()).count();
+        assert_eq!(setup_asks, 1, "asked: {:?}", ui.asked);
     }
 
     #[test]

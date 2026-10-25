@@ -3,7 +3,7 @@ id: spec-014-relay-and-away-mode
 title: "014: The Relay and Away Mode (approval cards by email)"
 author: architect
 timestamp: 2026-10-25T20:00:00Z
-status: draft   # awaiting the operator's ratification
+status: approved   # by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

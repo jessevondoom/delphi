@@ -95,6 +95,8 @@ Delphi asks a human to approve specs and cards, and the benchmark can't. For mea
 
 ## 6. Pre-registered success criteria
 
+> **Approved as proposed by the operator, 2026-10-25 (D-30).** These thresholds are now frozen: change them only by a new, dated decision made before the first measured run.
+
 To be edited and ratified by the operator **before** the pilot. Placeholders are my proposals.
 
 Delphi is justified, as a team and not just a wrapper, if **all** of these hold on T1 and T4, comparing A3 with the better of A1 and A2:

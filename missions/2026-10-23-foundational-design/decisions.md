@@ -387,3 +387,34 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 - **2026-10-24:** the operator said "ratify all". Approved as whole documents: `GOVERNANCE.md` (v0.4) and specs 002, 003, 004, 005, 005c, 007, 008, 011, 012 and 013. This waives two earlier conditions, both the operator's call: D-29's two-family confirming read before 011/012 are approved, and 013's §6 trigger. Building 011/012/013 still waits for the core, per D-29 and the roadmap. `ratified.lock` hashes are not yet refreshed: run `delphi update`.
 - **2026-10-25:** the operator asked for a tidier full-screen header and footer and approved spec 005b amendment 005b-A2 (the deck hint only in the footer as `← / ? →`, the pane name in the header, no idle label, no `shortcuts: ?` and no default-mode label), with 005d, the wireframes document and the tui-design skill aligned to it. The operator also asked for a development update channel and approved spec 006 amendment 006-A5 (`delphi self-update --dev` installs a rolling build of main).
 - **2026-10-25:** the operator confirmed that the Xenia direction is approved and directed that building start, **lifting D-29 item 4** ("no implementation until the core is finished") and treating the text of `specs/011` and `specs/012` as ratified as written (their banners now say so). The operator also ratified two amendments: **007-A1** (a steward-endorsed Xenia `memory` record is a second route to $L_2$) and **007-A2** (Plane 3 `delphi sync` stamps plain merges `federated_peer`, $L_1$; only Xenia reaches $L_2$ for shared knowledge). The plan and its milestones are in [`xenia-phase-1-plan.md`](xenia-phase-1-plan.md). The operator also confirmed that vectors and hybrid search are built, so D-01's reopen rule is stale and the Step 6 line that listed vectors is removed.
+
+---
+
+## ✅ D-30 — Away mode, headless runs and provisional decisions
+
+**Context.** A comparison with Claude Code, `agy`, `hermes-agent` and Vellum found that Delphi's approval cards only work at the terminal, that it had no headless entry point, and that nothing proved the team beats one good agent. The plan is [`gap-closure-plan-2026-10-25.md`](gap-closure-plan-2026-10-25.md); the evaluation design is [`evaluation-plan-2026-10-25.md`](evaluation-plan-2026-10-25.md).
+
+**Decision (operator, 2026-10-25):**
+1. **Specs 014 (relay and away mode), 015 (provisional decisions) and 016 (headless run) are approved**, and the charter amendments in spec 015 §8 are approved and applied: `GOVERNANCE.md` §5.9 and §5.10, `REVIEW.md` `[REV-SEC-08]` and `[REV-SEC-09]`, merge gate 6 in `specs/003`, the console commands in `specs/005`, the eligibility and remote-answer notes in `specs/008`, and the enforcement map.
+2. **"A provisional decision is not an approval."** It lets work proceed on a branch that can be thrown away; the merge stays the operator's and is blocked until every decision is reviewed.
+3. **The approver is the Strategist** (not the Builder, which is the requester). The second seat is **optional**, because some operators have one provider; an unseconded elevated decision **parks** (waits for the operator) by default.
+4. **Email is the first relay channel,** with a dedicated free Gmail account and an app password as the starting mailbox. The Gmail connector is not reused (untrusted-ingress separation).
+5. **Headless runs get no standing authorisation to open pull requests.** They end at "ready to merge".
+6. **Evaluation plan §6 thresholds are approved as proposed** and are frozen before the first measured run.
+7. **A live trial of the relay against a real mailbox is a future project task,** not part of this decision (roadmap §4).
+
+**Status:** ✅ APPROVED 2026-10-25 by the operator.
+
+---
+
+## ✅ D-31 — Timers
+
+**Context.** A role that says it will check back later has no clock and no way to wake, so the promise is a hallucination unless something outside the model keeps it. The same mechanism gives the orchestrator and the operator one place to see what the daemon will do later. The design is [`specs/017`](../../specs/017-timers.md).
+
+**Decision (operator, 2026-10-25):**
+1. **Spec 017 is approved**, including the new `timers` capability under `execute` in `agents/orchestrator/AGENT.md`, which gives the orchestrator (and no other role) the `timer` tool.
+2. **A timer wakes a role; it never runs a command.** It wakes only its creator, starts at its creator's trust ceiling, and every approval applies as for any task.
+3. **No cron syntax for now.** One-shot `in`/`at` and a fixed `every` (at least 60 s) only; calendar expressions wait for a recorded need.
+4. **The zero-token watch engine (`specs/008` §2) stays unbuilt.** When it is built it keeps its schedule in the timer store.
+
+**Status:** ✅ APPROVED 2026-10-25 by the operator.

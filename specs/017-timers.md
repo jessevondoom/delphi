@@ -3,7 +3,7 @@ id: spec-017-timers
 title: "017: Timers (durable wakes for roles)"
 author: architect
 timestamp: 2026-10-25T18:00:00Z
-status: draft   # awaiting the operator's ratification, including the new `timers` execute capability (§3)
+status: approved   # by the operator, 2026-10-25, including the new `timers` execute capability (§3)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

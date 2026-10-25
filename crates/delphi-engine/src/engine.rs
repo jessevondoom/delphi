@@ -82,6 +82,13 @@ pub struct Settings {
     /// `[optimistic] review_wait_sec`: how long a finished optimistic build waits for the operator to review its
     /// provisional decisions before it stops and keeps its branch (`specs/015`).
     pub decision_review_wait: Duration,
+    /// `[optimistic] approver`: who decides a provisional card (`specs/015` §3). The Strategist by default.
+    pub approver: crate::provisional::ApproverKind,
+    /// `[optimistic] second_seat`: a second reviewer for elevated edits. Never required: with one provider there
+    /// is none to give.
+    pub second_seat: crate::provisional::SecondSeat,
+    /// `[optimistic] unseconded`: what happens to an elevated edit no second reviewer looked at.
+    pub unseconded: crate::provisional::Unseconded,
 }
 
 impl Default for Settings {
@@ -106,6 +113,9 @@ impl Default for Settings {
             park_max: None,
             degrade_wait: Duration::from_secs(300),
             decision_review_wait: Duration::from_secs(24 * 3600),
+            approver: crate::provisional::ApproverKind::Strategist,
+            second_seat: crate::provisional::SecondSeat::CrossFamily,
+            unseconded: crate::provisional::Unseconded::Park,
         }
     }
 }
@@ -192,6 +202,8 @@ pub struct Engine {
     pub(crate) decisions_changed: tokio::sync::Notify,
     /// Durable timers (`specs/017`): wakes the daemon keeps on behalf of roles and the operator.
     pub timers: Arc<crate::timers::TimerStore>,
+    /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
+    pub(crate) toolless: Mutex<HashSet<String>>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -227,6 +239,10 @@ pub(crate) struct Asker<'a> {
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
 
+/// The reason when the workspace has no model at all (an empty pool, no harness to fall back to). Distinct from
+/// `EXHAUSTED`: waiting would never help, and the consoles show "run delphi setup", not "throttled".
+pub(crate) const NO_MODEL: &str = "no_model_configured: no model is configured for this workspace";
+
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
 pub(crate) struct Escalate(pub(crate) String);
 
@@ -257,6 +273,8 @@ pub(crate) struct SpanCtx {
     /// Families this span should stay out of if it can (from the handoff), and whether it already said it could not.
     pub(crate) avoid_families: Vec<String>,
     pub(crate) said_homogeneous: Mutex<bool>,
+    /// This span is offered no tools, and refuses any it is not offered (`provisional_run.rs`).
+    pub(crate) toolless: bool,
     /// A harness was already tried for this span (and failed for a reason that is not a spent quota, so the pool does not know).
     pub(crate) harness_tried: std::sync::atomic::AtomicBool,
 }
@@ -454,7 +472,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false) };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id) };
 
             if fresh {
                 let mut open = vec![
@@ -526,6 +544,9 @@ impl Engine {
                 defs.push(run_command_def());
             }
             defs.extend(self.connector_defs(&sc).await?);
+            if sc.toolless {
+                defs.clear();
+            }
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             // A family whose first allowed endpoint is a harness runs the whole span in the subscription CLI
@@ -814,6 +835,7 @@ impl Engine {
                     }
                     (key.clone(), Some((target.clone(), format!("{}; confirmed by the operator, with {}", why, lost.join(" and ")))))
                 }
+                Route::NoModel { .. } if cfg.pool_entries().is_empty() => return Ok(Err(Escalate(NO_MODEL.to_string()))),
                 Route::NoModel { back_at, .. } => {
                     *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: route.explain(now) });
                     return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now)))));
@@ -1065,6 +1087,9 @@ impl Engine {
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
     async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+        if sc.toolless {
+            return Ok(tool_result_error("this span answers in text only; it has no tools"));
+        }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;
         }
@@ -1248,16 +1273,18 @@ impl Engine {
 
     /// As [`Engine::ask`] for a classified tool call. In an optimistic task an eligible call is decided provisionally
     /// (`provisional.rs`) instead of raising a card; anything else, and every other task, asks as before.
-    pub(crate) async fn ask_classified(&self, sc: &SpanCtx, tier: ApprovalTier, c: &tools::Classified) -> Result<Option<tools::ToolResult>, EngineError> {
+    pub(crate) async fn ask_classified(self: &Arc<Self>, sc: &SpanCtx, tier: ApprovalTier, c: &tools::Classified) -> Result<Option<tools::ToolResult>, EngineError> {
         if self.optimistic.lock().unwrap().contains(sc.task_id.as_str()) && crate::provisional::eligible(c, tier) {
-            let verdict = crate::provisional::RuleApprover { host_exec: &self.exec.cfg.host_exec_paths }.decide(c);
             let id = crate::provisional::new_decision_id();
-            sc.m.append(sc.ev("decision.provisional", crate::provisional::decision_event(&id, c, tier, &verdict, &sc.role))).await?;
-            return Ok(if verdict.allow {
-                None
-            } else {
-                Some(tool_result_error(format!("This action was refused ({}). Do not retry it; propose an alternative or ask.", verdict.rationale)))
-            });
+            if let crate::provisional_run::Provisional::Decided(verdict) = self.decide_provisionally(sc, c, &id).await? {
+                sc.m.append(sc.ev("decision.provisional", crate::provisional::decision_event(&id, c, tier, &verdict, &sc.role))).await?;
+                return Ok(if verdict.allow {
+                    None
+                } else {
+                    Some(tool_result_error(format!("This action was refused ({}). Do not retry it; propose an alternative or ask.", verdict.rationale)))
+                });
+            }
+            // Not decided (no usable answer, or the reviewers disagreed): the operator is asked, as without the mode.
         }
         self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await
     }
@@ -2070,6 +2097,19 @@ mod tests {
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("throttled")), "{:?}", out.status);
         assert!(!events_of(&f, "task.blocked").is_empty());
         assert_eq!(events_of(&f, "task.unblocked").last().unwrap().payload["resumed"], false, "it gave up after park_max, however many times it asked");
+    }
+
+    // specs/005e §6.2: an empty pool is "no model is configured", not "throttled", and waiting would never help.
+    #[tokio::test]
+    async fn an_empty_pool_escalates_as_no_model_configured_without_waiting() {
+        let f = setup(vec![Step::text("never asked")], 5.0, |s| s.park_max = Some(Duration::from_secs(60)));
+        let text = crate::testkit::CONFIG.split("[[endpoints]]").next().unwrap().to_string();
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        assert!(f.engine.cfg.get().pool_entries().is_empty());
+        let out = f.engine.run_task(&f.m, "orchestrator", "hello").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.starts_with("no_model_configured") && !r.contains("throttled")), "{:?}", out.status);
+        assert!(f.model.requests().is_empty(), "no call was made");
+        assert!(events_of(&f, "task.blocked").is_empty(), "it did not park waiting for a model that cannot arrive");
     }
 
     // specs/002 §4.1, [H-007] and [H-008]: a critic stays out of the author's family, and says so when it cannot.
