@@ -824,8 +824,10 @@ dependencies = [
 name = "delphi-docs"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "crc32fast",
  "flate2",
+ "rusqlite",
  "serde_json",
  "serde_yaml_ng",
  "toml",

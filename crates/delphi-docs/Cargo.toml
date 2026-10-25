@@ -16,6 +16,9 @@ crc32fast = "1.5"
 serde_json = "1.0"
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 toml = "1.1"
+# SQLite reading (from memory, read-only) and the extraction cache key; both already in the workspace.
+rusqlite = { version = "0.40.2", features = ["bundled", "serialize"] }
+blake3 = "1.5"
 
 [features]
 # Test-only: archive builders for other crates' tests. The real writers arrive with slice C0.
