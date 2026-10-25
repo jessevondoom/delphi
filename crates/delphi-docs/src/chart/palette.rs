@@ -60,9 +60,49 @@ pub fn contrast(a: &str, b: &str) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// `a` over `b` at weight `t` (0 to 1) in sRGB, the same mix a browser makes, as a hex colour.
+pub fn mix(a: &str, b: &str, t: f64) -> String {
+    let (ra, rb) = (rgb(a), rgb(b));
+    let m = |x: u8, y: u8| (x as f64 * t + y as f64 * (1.0 - t)).round().clamp(0.0, 255.0) as u8;
+    format!("#{:02x}{:02x}{:02x}", m(ra.0, rb.0), m(ra.1, rb.1), m(ra.2, rb.2))
+}
+
+/// How much of the first series colour each heatmap step carries: one hue, light to dark. The dark surface stops
+/// short of full strength, because a mid blue on dark has no label colour that reads at 4.5:1.
+pub const HEAT_WEIGHTS_LIGHT: [f64; 5] = [0.14, 0.34, 0.54, 0.74, 0.94];
+pub const HEAT_WEIGHTS_DARK: [f64; 5] = [0.12, 0.28, 0.44, 0.60, 0.74];
+
+/// The heatmap's five fills for a surface, each with the label colour that reads best on it (the primary ink or
+/// the surface colour itself), chosen by contrast so a value printed in a cell is always legible.
+pub fn heat(light: bool) -> [(String, &'static str); 5] {
+    let (surface, ink, base) = if light { (SURFACE_LIGHT, INK_LIGHT[0], SERIES_LIGHT[0]) } else { (SURFACE_DARK, INK_DARK[0], SERIES_DARK[0]) };
+    (if light { HEAT_WEIGHTS_LIGHT } else { HEAT_WEIGHTS_DARK }).map(|w| {
+        let fill = mix(base, surface, w);
+        let text = if contrast(ink, &fill) >= contrast(surface, &fill) { ink } else { surface };
+        (fill, text)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heat_cells_carry_legible_labels_and_get_steadily_darker_in_both_modes() {
+        for light in [true, false] {
+            let steps = heat(light);
+            let surface = if light { SURFACE_LIGHT } else { SURFACE_DARK };
+            let mut last = contrast(&steps[0].0, surface);
+            for (i, (fill, text)) in steps.iter().enumerate() {
+                assert!(contrast(text, fill) >= 4.5, "step {} label {} on {} (light: {})", i, text, fill, light);
+                let c = contrast(fill, surface);
+                assert!(c >= last - 1e-9, "step {} is not further from the surface than step {}", i, i.saturating_sub(1));
+                last = c;
+            }
+            assert!(contrast(&steps[0].0, surface) < 1.6 && contrast(&steps[4].0, surface) >= 3.0, "the ramp spans faint to strong");
+        }
+        assert_eq!(mix("#000000", "#ffffff", 0.5), "#808080");
+    }
 
     #[test]
     fn contrast_matches_the_published_figures() {

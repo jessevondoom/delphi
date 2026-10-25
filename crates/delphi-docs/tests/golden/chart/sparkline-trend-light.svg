@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 360 88" width="360" height="88" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Weekly active users</title>
+<desc id="chart-desc">Sparkline chart. users: minimum 47.4 at 11, maximum 90.4 at 36. From 50 to 82.5 it rises 65%. Values: 0 50; 1 55.5; 2 60.2; 3 63.6; 4 65.2; 5 64.9; 6 62.9; 7 59.6; 8 55.7; 9 51.9; 10 48.9; 11 47.4; 12 47.6; 13 49.8; 14 53.6; 15 58.6; 16 64.2; 17 69.5; 18 73.9; 19 76.8; 20 77.9; 21 77.1; 22 74.6; 23 71.1; 24 67.1; 25 63.5; 26 60.9; 27 59.8; 28 60.6; 29 63.3; 30 67.6; 31 72.8; 32 78.4; 33 83.5; 34 87.5; 35 89.9; 36 90.4; 37 89.1; 38 86.2; 39 82.5.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="360" height="88"/>
+<text x="16" y="20" class="t1 b" font-size="13" text-anchor="start">Weekly active users</text>
+<text x="16" y="36" class="t3" font-size="11" text-anchor="start">last 40 weeks</text>
+<path class="k1" d="M19,72.36 L26.26,69.06 L33.53,66.22 L40.79,64.19 L48.06,63.22 L55.32,63.39 L62.59,64.6 L69.85,66.57 L77.12,68.93 L84.38,71.22 L91.65,73.01 L98.91,73.93 L106.18,73.77 L113.44,72.48 L120.7,70.18 L127.97,67.16 L135.23,63.82 L142.5,60.61 L149.76,57.97 L157.03,56.23 L164.29,55.6 L171.56,56.09 L178.82,57.55 L186.09,59.68 L193.35,62.07 L200.62,64.25 L207.88,65.82 L215.14,66.45 L222.41,65.95 L229.67,64.34 L236.94,61.8 L244.2,58.64 L251.47,55.29 L258.73,52.21 L266,49.8 L273.26,48.37 L280.53,48.07 L287.79,48.87 L295.06,50.57 L302.32,52.82"/>
+<circle class="d1" cx="302.32" cy="52.82" r="4"/>
+<text x="312.32" y="56.82" class="t2" font-size="12" text-anchor="start">82.5</text>
+</svg>

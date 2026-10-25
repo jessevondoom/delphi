@@ -10,15 +10,15 @@ use super::{ChartSpec, Kind, Series, Size, Theme, XAxis};
 use crate::markdown::escape;
 
 const FONT: &str = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-const PAD: f64 = 16.0;
+pub(super) const PAD: f64 = 16.0;
 
 /// Estimated width of `s` in `px`-sized system type. Deliberately a little wide: a label that is judged to fit
 /// then fits with room to spare.
-fn tw(s: &str, px: f64) -> f64 {
+pub(super) fn tw(s: &str, px: f64) -> f64 {
     s.chars().map(|c| if c.is_ascii_digit() { 0.58 } else if c.is_uppercase() { 0.68 } else if matches!(c, 'i' | 'l' | 'I' | '.' | ',' | ':' | ';' | '\'' | '|' | '!' | ' ' | 'j' | 't' | 'f' | 'r') { 0.40 } else if c.is_ascii() { 0.58 } else { 1.0 }).sum::<f64>() * px
 }
 
-fn trunc(s: &str, max_w: f64, px: f64) -> String {
+pub(super) fn trunc(s: &str, max_w: f64, px: f64) -> String {
     if tw(s, px) <= max_w {
         return s.to_string();
     }
@@ -32,10 +32,10 @@ fn trunc(s: &str, max_w: f64, px: f64) -> String {
     format!("{}…", out.trim_end())
 }
 
-fn vars(light: bool) -> String {
+fn vars(light: bool, heat: bool) -> String {
     let (surface, ink, series, grid, axis) = if light { (SURFACE_LIGHT, INK_LIGHT, SERIES_LIGHT, GRID_LIGHT, AXIS_LIGHT) } else { (SURFACE_DARK, INK_DARK, SERIES_DARK, GRID_DARK, AXIS_DARK) };
     format!(
-        "color-scheme:{};--surface:{};--ink:{};--ink2:{};--muted:{};--grid:{};--axis:{};--s1:{};--s2:{};--s3:{};--s4:{};",
+        "color-scheme:{};--surface:{};--ink:{};--ink2:{};--muted:{};--grid:{};--axis:{};--s1:{};--s2:{};--s3:{};--s4:{};{}",
         if light { "light" } else { "dark" },
         surface,
         ink[0],
@@ -46,32 +46,52 @@ fn vars(light: bool) -> String {
         series[0],
         series[1],
         series[2],
-        series[3]
+        series[3],
+        if heat { super::more::mode_vars(light) } else { String::new() }
     )
 }
 
-/// The chart stylesheet. A standalone SVG carries it; a page that embeds charts includes it once.
+/// The stylesheet for every chart form, for a page that embeds charts (it includes this once).
 pub fn css() -> String {
+    css_for(None)
+}
+
+/// The stylesheet for one form (a standalone SVG carries only what it draws with), or for all of them.
+fn css_for(kind: Option<Kind>) -> String {
+    let wants = |k: Kind| kind.is_none_or(|x| x == k);
+    let heat = wants(Kind::Heatmap);
     let mut s = String::new();
-    s.push_str(&format!(".viz-root{{{}font-family:{};}}\n", vars(true), FONT));
-    s.push_str(&format!("@media (prefers-color-scheme: dark){{.viz-root:where(:root:not([data-theme=\"light\"])){{{d}}}:root:where(:not([data-theme=\"light\"])) .viz-root:where(:not([data-theme=\"light\"])){{{d}}}}}\n", d = vars(false)));
-    s.push_str(&format!(".viz-root[data-theme=\"dark\"],:root[data-theme=\"dark\"] .viz-root{{{}}}\n", vars(false)));
+    s.push_str(&format!(".viz-root{{{}font-family:{};}}\n", vars(true, heat), FONT));
+    s.push_str(&format!("@media (prefers-color-scheme: dark){{.viz-root:where(:root:not([data-theme=\"light\"])){{{d}}}:root:where(:not([data-theme=\"light\"])) .viz-root:where(:not([data-theme=\"light\"])){{{d}}}}}\n", d = vars(false, heat)));
+    s.push_str(&format!(".viz-root[data-theme=\"dark\"],:root[data-theme=\"dark\"] .viz-root{{{}}}\n", vars(false, heat)));
     s.push_str(".surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}\n");
     s.push_str(".t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}\n");
     for i in 1..=4 {
         s.push_str(&format!(".f{i}{{fill:var(--s{i})}}.k{i}{{stroke:var(--s{i});fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}}.a{i}{{fill:var(--s{i});fill-opacity:.1}}.d{i}{{fill:var(--s{i});stroke:var(--surface);stroke-width:2}}\n", i = i));
     }
     s.push_str("@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}\n");
+    if wants(Kind::Donut) {
+        s.push_str(".sl{stroke:var(--surface);stroke-width:2}\n");
+    }
+    if wants(Kind::Box) {
+        s.push_str(".bx{fill:var(--s1);fill-opacity:.18;stroke:var(--s1);stroke-width:2}.wh{stroke:var(--s1);stroke-width:1.5;fill:none}\n@media (forced-colors: active){.wh{stroke:GrayText}.bx{fill:Canvas;stroke:CanvasText}}\n");
+    }
+    if heat {
+        for i in 0..5 {
+            s.push_str(&format!(".h{i}{{fill:var(--h{i})}}.ht{i}{{fill:var(--ht{i})}}", i = i));
+        }
+        s.push_str("\n@media (forced-colors: active){.ht0,.ht1,.ht2,.ht3,.ht4{fill:CanvasText}.h4{fill:CanvasText}.h0,.h1,.h2,.h3{fill:Canvas;stroke:CanvasText}}\n");
+    }
     s
 }
 
-struct Fmt<'a>(&'a ChartSpec);
+pub(super) struct Fmt<'a>(&'a ChartSpec);
 
 impl Fmt<'_> {
-    fn val(&self, v: f64) -> String {
+    pub(super) fn val(&self, v: f64) -> String {
         self.0.y_fmt.full(v)
     }
-    fn tick(&self, v: f64) -> String {
+    pub(super) fn tick(&self, v: f64) -> String {
         self.0.y_fmt.axis(v)
     }
     fn xnum(&self, v: f64) -> String {
@@ -79,16 +99,16 @@ impl Fmt<'_> {
     }
 }
 
-fn text(out: &mut String, x: f64, y: f64, class: &str, size: f64, anchor: &str, s: &str) {
+pub(super) fn text(out: &mut String, x: f64, y: f64, class: &str, size: f64, anchor: &str, s: &str) {
     out.push_str(&format!("<text x=\"{}\" y=\"{}\" class=\"{}\" font-size=\"{}\" text-anchor=\"{}\">{}</text>\n", f(x), f(y), class, f(size), anchor, escape(s)));
 }
 
-fn line(out: &mut String, class: &str, x1: f64, y1: f64, x2: f64, y2: f64) {
+pub(super) fn line(out: &mut String, class: &str, x1: f64, y1: f64, x2: f64, y2: f64) {
     out.push_str(&format!("<line class=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\n", class, f(x1), f(y1), f(x2), f(y2)));
 }
 
 /// A column from `y0` (the baseline) to `y1` (the data end): the data end is rounded, the baseline square.
-fn column_path(x: f64, w: f64, y0: f64, y1: f64) -> String {
+pub(super) fn column_path(x: f64, w: f64, y0: f64, y1: f64) -> String {
     let h = (y0 - y1).abs();
     let r = 4f64.min(w / 2.0).min(h);
     let s = if y1 < y0 { 1.0 } else { -1.0 }; // 1: grows upward
@@ -182,7 +202,23 @@ fn describe(spec: &ChartSpec, fmt: &Fmt) -> String {
         Kind::Area => "Area",
         Kind::Scatter => "Scatter",
         Kind::Hist => "Histogram",
+        Kind::Stacked => "Stacked bar",
+        Kind::Donut => "Donut",
+        Kind::Heatmap => "Heatmap",
+        Kind::Box => "Box plot",
+        Kind::Sparkline => "Sparkline",
     });
+    if spec.kind == Kind::Box {
+        d.push_str(&format!("{} by {}. ", spec.series[0].name, spec.x_name));
+        for (i, g) in spec.groups.iter().enumerate() {
+            let label = match &spec.x {
+                XAxis::Categories(c) => c[i].clone(),
+                _ => String::new(),
+            };
+            d.push_str(&format!("{}: median {}, middle half {} to {}, range {} to {} ({} values). ", label, fmt.val(super::more::quantile(g, 0.5)), fmt.val(super::more::quantile(g, 0.25)), fmt.val(super::more::quantile(g, 0.75)), fmt.val(g[0]), fmt.val(g[g.len() - 1]), g.len()));
+        }
+        return d.trim().to_string();
+    }
     let xl = |i: usize| match &spec.x {
         XAxis::Categories(c) => c[i].clone(),
         XAxis::Numbers(n) => fmt.xnum(n[i]),
@@ -199,7 +235,7 @@ fn describe(spec: &ChartSpec, fmt: &Fmt) -> String {
         }
         let (lo, hi) = (pts.iter().cloned().fold(pts[0], |a, b| if b.1 < a.1 { b } else { a }), pts.iter().cloned().fold(pts[0], |a, b| if b.1 > a.1 { b } else { a }));
         d.push_str(&format!("{}: minimum {} at {}, maximum {} at {}.", s.name, fmt.val(lo.1), xl(lo.0), fmt.val(hi.1), xl(hi.0)));
-        if matches!(spec.kind, Kind::Line | Kind::Area) && pts.len() > 1 {
+        if matches!(spec.kind, Kind::Line | Kind::Area | Kind::Sparkline) && pts.len() > 1 {
             let (a, b) = (pts[0], pts[pts.len() - 1]);
             if a.1 != 0.0 {
                 let ch = (b.1 - a.1) / a.1.abs() * 100.0;
@@ -221,7 +257,7 @@ fn describe(spec: &ChartSpec, fmt: &Fmt) -> String {
 fn table_rows(spec: &ChartSpec, fmt: &Fmt) -> Vec<Vec<String>> {
     let mut rows = vec![];
     match (&spec.x, spec.kind) {
-        (XAxis::Categories(c), Kind::Bar | Kind::HBar) => {
+        (XAxis::Categories(c), Kind::Bar | Kind::HBar | Kind::Stacked) => {
             let mut head = vec![spec.x_name.clone()];
             head.extend(spec.series.iter().map(|s| s.name.clone()));
             rows.push(head);
@@ -280,6 +316,7 @@ pub fn inline_svg(spec: &ChartSpec, id: &str) -> String {
 fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String {
     let fmt = Fmt(spec);
     let (w, base_h) = match spec.size {
+        _ if spec.kind == Kind::Sparkline => (360.0, 88.0),
         Size::Wide => (720.0, 400.0),
         Size::Square => (480.0, 480.0),
         Size::Tall => (480.0, 640.0),
@@ -288,10 +325,12 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     let multi = k >= 2;
     let needs_relief = k >= 3; // slots 3 and 4 are under 3:1 on the light surface
 
-    // --- header
+    // --- header (a sparkline sets its own title inside its small plot)
     let mut head = String::new();
     let mut y = PAD;
-    text(&mut head, PAD, y + 16.0, "t1 b", 18.0, "start", &trunc(&spec.title, w - 2.0 * PAD, 18.0));
+    if spec.kind != Kind::Sparkline {
+        text(&mut head, PAD, y + 16.0, "t1 b", 18.0, "start", &trunc(&spec.title, w - 2.0 * PAD, 18.0));
+    }
     y += 24.0;
     let mut sub: Vec<String> = vec![];
     if let Some(s) = &spec.subtitle {
@@ -303,11 +342,11 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     if spec.truncated {
         sub.push("Axis does not start at zero".into());
     }
-    if !sub.is_empty() {
+    if !sub.is_empty() && spec.kind != Kind::Sparkline {
         text(&mut head, PAD, y + 12.0, "t2", 13.0, "start", &trunc(&sub.join(" · "), w - 2.0 * PAD, 13.0));
         y += 20.0;
     }
-    if multi {
+    if multi && matches!(spec.kind, Kind::Bar | Kind::HBar | Kind::Line | Kind::Area | Kind::Scatter | Kind::Stacked) {
         let l = legend(&mut head, spec, y + 14.0, w, spec.kind == Kind::Line, spec.kind == Kind::Scatter);
         y += 8.0 + l.rows as f64 * 18.0;
     }
@@ -319,6 +358,9 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
         foot.push(format!("Source: {}", s));
     }
     foot.extend(spec.notes.iter().cloned());
+    if spec.kind == Kind::Sparkline {
+        foot.clear();
+    }
 
     // --- body (needs the plot box, which needs the label widths)
     let ticks_text = |a: &Axis| a.ticks.iter().map(|t| fmt.tick(*t)).collect::<Vec<_>>();
@@ -333,13 +375,19 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     let want_table: bool;
     let plot_bottom = base_h - PAD - foot_h - x_axis_h;
 
+    let mut content_end: Option<f64> = None;
     let horizontal = spec.kind == Kind::HBar;
     let cats: Vec<String> = match &spec.x {
         XAxis::Categories(c) => c.clone(),
         _ => vec![],
     };
 
-    if horizontal {
+    if super::more::handles(spec.kind) {
+        let o = super::more::draw(spec, &fmt, w, plot_top, plot_bottom, needs_relief);
+        body = o.body;
+        want_table = o.table;
+        content_end = o.end;
+    } else if horizontal {
         // categories down the left; values along the bottom
         let label_w = cats.iter().map(|c| tw(c, 11.0)).fold(0.0, f64::max).min(w * 0.38);
         let (x0, x1) = (PAD + label_w + 10.0, w - PAD - 36.0);
@@ -591,6 +639,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
         let th = table(&mut tbl, &rows, 0.0, w, spec);
         extra_h = th + 14.0;
     }
+    let base_h = content_end.map_or(base_h, |e| base_h.min(e + 8.0 + foot_h + PAD));
     let h = base_h + extra_h;
 
     // --- assemble
@@ -617,7 +666,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     ));
     svg.push_str(&format!("<title id=\"{p}chart-title\">{}</title>\n<desc id=\"{p}chart-desc\">{}</desc>\n", escape(&spec.title), escape(&desc), p = idp));
     if inline.is_none() {
-        svg.push_str(&format!("<style>\n{}</style>\n", css()));
+        svg.push_str(&format!("<style>\n{}</style>\n", css_for(Some(spec.kind))));
     }
     svg.push_str(&format!("<rect class=\"surface\" width=\"{}\" height=\"{}\"/>\n", f(w), f(h)));
     svg.push_str(&head);

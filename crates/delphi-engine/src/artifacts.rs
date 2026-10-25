@@ -603,10 +603,10 @@ pub fn specs() -> Vec<ToolSpec> {
     ToolSpec {
         def: ToolDef {
             name: "write_chart".into(),
-            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), line, area (one series), scatter (at most 2 series) or hist (a distribution of one column); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
+            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), stacked-bar (parts of a total per category: one column per part in `y`, parts are zero or more), line, area (one series), scatter (at most 2 series), hist (a distribution of one column), box (spread within groups: `x` names the group column and `y` the value column, one row per measurement, at least 5 per group, 2 to 12 groups), heatmap (a grid: `x` names the column categories and each `y` column is a row, up to 24 rows and 40 columns, values shaded and printed), donut (2 to 4 parts of a whole: one value column in `y`, one row per part, with the total in the middle and each part's value and share listed) or sparkline (a small line with no axes for a trend, at least 3 points); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
             input_schema: json!({"type": "object", "required": ["path", "type", "title", "data"], "properties": {
                 "path": {"type": "string"},
-                "type": {"type": "string", "enum": ["bar", "hbar", "line", "area", "scatter", "hist"]},
+                "type": {"type": "string", "enum": ["bar", "hbar", "stacked-bar", "line", "area", "scatter", "hist", "box", "heatmap", "donut", "sparkline"]},
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "data": {"type": "object", "description": "{columns: [names], rows: [[...]]} or {from: path to a .csv/.tsv}"},
@@ -1060,8 +1060,8 @@ mod tests {
     fn a_chart_that_does_not_fit_its_data_is_refused_before_anyone_is_asked_with_a_better_form() {
         let reg = Registry::builtin();
         let mut pie = chart_args();
-        pie["type"] = json!("pie");
-        assert!(reg.classify("write_chart", &pie).unwrap_err().0.contains("use `hbar`"));
+        pie["type"] = json!("radar");
+        assert!(reg.classify("write_chart", &pie).unwrap_err().0.contains("unknown chart type `radar`; use bar, hbar, stacked-bar"));
         let mut one = chart_args();
         one["type"] = json!("bar");
         one["data"] = json!({"columns": ["k", "v"], "rows": [["only", 5]]});
@@ -1205,7 +1205,7 @@ mod tests {
         }
         // a bad chart inside a slide is refused with the chart's reason before anyone is asked
         let mut bad = deck_args(None);
-        bad["slides"][1]["chart"]["type"] = json!("pie");
+        bad["slides"][1]["chart"]["type"] = json!("radar");
         assert!(reg.classify("write_deck", &bad).unwrap_err().0.contains("chart block"));
         // a page may hold a chart too
         let page = json!({"path": "p", "title": "P", "blocks": [{"type": "grid", "columns": 2, "blocks": [{"type": "chart", "chart": chart_block(None)}, {"type": "markdown", "text": "x"}]}]});
