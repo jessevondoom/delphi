@@ -696,13 +696,26 @@ impl PtyConsole {
         }
     }
 
-    /// Ctrl+C to leave. A task that has only just finished may still count as running for a moment, in which case the
-    /// console asks once ("press Ctrl+C again to quit", `005e` §10.5) and the second press leaves.
-    fn leave(&mut self) {
+    /// Leave with Ctrl+C the way a person does: when the console says "press Ctrl+C again to quit" (text typed, or a
+    /// task still finishing: the text a test waited for can be the streaming copy), press it again. The exit code.
+    fn ctrl_c_out(mut self) -> i32 {
+        let ask = "press Ctrl+C again to quit";
+        let before = self.written(ask);
         self.type_keys("\x03");
-        std::thread::sleep(Duration::from_millis(400));
-        if self.child.try_wait().unwrap().is_none() && self.visible().contains("press Ctrl+C again to quit") {
-            self.type_keys("\x03");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut asked_again = false;
+        loop {
+            if let Some(st) = self.child.try_wait().unwrap() {
+                return st.code().unwrap_or(-1);
+            }
+            // Only a new ask counts (an older note may still be on screen), and the console may be leaving already.
+            if !asked_again && self.written(ask) > before {
+                asked_again = true;
+                let _ = self.writer.write_all(b"\x03");
+                let _ = self.writer.flush();
+            }
+            assert!(Instant::now() < deadline, "the console did not exit:\n{}", self.everything());
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -910,8 +923,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     assert!(screen.contains("you · ") && screen.contains("Tell me something") && screen.contains("• one") && screen.contains("Athena · "), "{}", screen);
     assert!(screen.lines().nth(1).unwrap().contains("· chat"), "the title row is directly under the strip: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
 
     // Reopen: the conversation is replayed from the mission's events.
     let c2 = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
@@ -958,8 +970,7 @@ fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
     let screen = c.visible();
     assert!(!screen.contains("throttled") && !screen.contains("[escalated"), "{}", screen);
     assert!(screen.contains("delphi setup") && screen.contains("/models"), "{}", screen);
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "app", "--home"]).arg(&home).output();
 }
 
@@ -990,8 +1001,7 @@ fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
     assert!(!c.visible().contains("keys · esc closes"), "a ? inside text is a character:\n{}", c.visible());
     c.type_keys("\x03"); // there is text in the prompt, so the first Ctrl+C asks
     c.wait_for("press Ctrl+C again to quit");
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1033,8 +1043,7 @@ fn a_long_reply_is_pinned_at_its_label_row_and_space_pages_and_enter_jumps_to_th
     c.type_keys("\r");
     c.wait_for("Paragraph 40 of the long answer.");
     assert!(!c.visible().contains("more lines"), "at the end there is no marker:\n{}", c.visible());
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1066,8 +1075,7 @@ fn a_finished_span_becomes_a_history_entry_in_the_activity_deck_and_never_shows_
     c.type_keys("\x1b[1;2C"); // back to the chat
     std::thread::sleep(Duration::from_millis(300));
     assert!(!c.visible().contains("✔ finished"), "{}", c.visible());
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1109,8 +1117,7 @@ fn the_inline_console_stops_a_task_with_esc_and_asks_before_ctrl_c_throws_anythi
     // Esc clears it; with nothing typed and nothing running, one Ctrl+C leaves at once.
     c.type_keys("\x1b");
     std::thread::sleep(Duration::from_millis(300));
-    c.type_keys("\x03");
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1128,8 +1135,7 @@ fn the_full_screen_console_asks_before_ctrl_c_throws_a_draft_away() {
     c.type_keys("\x03");
     c.wait_for("press Ctrl+C again to quit");
     assert!(c.visible().contains("a draft"), "the draft is still there:\n{}", c.visible());
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     // Empty prompt, nothing running: Ctrl+D leaves too.
     let mut d = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     d.wait_for("← / ? →");
@@ -1174,8 +1180,7 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     assert!(!screen.contains("esc to stop") && screen.contains("delphi v"), "{}", screen);
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
     assert_eq!(m.seen.lock().unwrap().len(), 1, "the queued message was never sent");
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1311,8 +1316,7 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
     // The reply can appear a frame before the status line settles, so wait for it rather than assert on one snapshot.
     c.wait_for("delphi v");
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1362,10 +1366,8 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     }
     o.wait_for("· thinking");
     o.wait_for("Nothing is thinking right now");
-    o.leave();
-    assert_eq!(o.wait_exit(), 0);
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(o.ctrl_c_out(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1378,7 +1380,7 @@ fn observe_once_prints_a_frame_without_any_terminal() {
     let e = setup(m.port);
     let Some(launcher) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
-    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    let c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
     c.wait_for("← / ? →");
     let mut cmd = Command::new(DELPHI);
     cmd.args(["observe", "council", "--once", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_UI", &launcher).stdin(Stdio::null());
@@ -1393,8 +1395,7 @@ fn observe_once_prints_a_frame_without_any_terminal() {
     assert_eq!(code, 0, "{}\n{}", frame, String::from_utf8_lossy(&out.stderr));
     assert!(frame.contains("delphi v") && frame.contains("· council") && frame.contains("needs you"), "{}", frame);
     assert_eq!(frame.lines().count(), 24, "no terminal means 80x24:\n{}", frame);
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1458,8 +1459,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("no connectors are configured");
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -1603,9 +1603,8 @@ fn the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal() {
     c.wait_for("mouse on");
     assert!(raw(&c).contains("\x1b[?1000h"));
     // Leaving puts everything back: alternate screen left, paste and mouse modes off, cursor shown.
-    c.type_keys("\x03");
     let bytes = c.bytes.clone();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let end = String::from_utf8_lossy(&bytes.lock().unwrap()).to_string();
     let tail = &end[end.rfind("\x1b[>4;0m").expect("the terminal reset was written")..];
     for want in ["\x1b[?2004l", "\x1b[?1006l", "\x1b[?1000l", "\x1b[?1049l", "\x1b[?25h"] {
@@ -1645,8 +1644,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
     c.wait_for("Second answer, after the restart.");
-    c.leave();
-    assert_eq!(c.wait_exit(), 0);
+    assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 

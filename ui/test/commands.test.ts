@@ -21,7 +21,7 @@ test('the shared list is well formed, with only /more left to the Rust consoles'
   assert.equal(new Set(names).size, names.length, 'no name or alias twice');
   for (const c of LIST) { assert.match(c.name, /^\/[a-z]+$/); assert.ok(c.desc.length > 8, c.name); assert.ok(c.ink || c.rust, `${c.name} is on some console`); }
   assert.deepEqual(LIST.filter((c) => c.rust && !c.ink).map((c) => c.name), ['/more'], 'the only command this console lacks');
-  assert.deepEqual(COMMANDS.map((c) => c.name), LIST.filter((c) => c.ink).map((c) => c.name), 'the menu is the list');
+  assert.deepEqual(COMMANDS.map((c) => c.name), LIST.filter((c) => c.ink).map((c) => c.name).sort((a, b) => a.localeCompare(b)), 'the menu is the list, alphabetical');
 });
 
 test('every command of this console is handled: a daemon call in run.ts, or a local one in app.tsx; aliases resolve', async () => {
@@ -79,6 +79,34 @@ test('/decisions reject carries the reason; /merge needs a task id and asks the 
   assert.match(m.out[0]!, /needs the build's task id/);
   await runSlash('/merge t_1', m.c);
   assert.deepEqual(m.calls[0], ['build.merge', { mission_id: 'm1', task_id: 't_1' }]);
+});
+
+test('the slash menu lists commands alphabetically', () => {
+  const names = COMMANDS.map((c) => c.name);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+});
+
+test('/observe opens a new window on every call, with the view', async () => {
+  const opened: string[][] = [];
+  delete process.env.TMUX;
+  const { c, out } = ctx(() => ({}));
+  const full = { ...c, info: { roles: {}, delphi_exe: '/bin/delphi', workspace_name: 'w', home: '/h' } as unknown as Info, open: async (a: string[]) => { opened.push(a); return null; } };
+  await runSlash('/observe council', full);
+  await runSlash('/observe council', full);
+  assert.equal(opened.length, 2);
+  assert.deepEqual(opened[0], ['sh', '-c', '/bin/delphi observe council --workspace w --home /h']);
+  assert.match(out[0]!, /new terminal window/);
+  await runSlash('/observe nonsense', full);
+  assert.equal(opened.length, 2);
+  await runSlash('/observe', { ...full, open: async () => 'no terminal' });
+  assert.match(out.at(-1)!, /could not open a terminal window \(no terminal\)/);
+});
+
+test('windowCommand: Terminal.app by default, iTerm when that is the terminal', async () => {
+  const { windowCommand } = await import('../src/window.ts');
+  assert.ok(windowCommand(['a b', "c'd"], 'darwin', {})!.join('\n').includes('tell application "Terminal"'));
+  assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with default profile'));
+  assert.equal(windowCommand(['x'], 'win32', {}), null);
 });
 
 test('/models prints the daemon\'s pool text; /agents lists what is running', async () => {

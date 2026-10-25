@@ -101,7 +101,11 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
         for ep in &targets {
             if ep.path == AccessPath::Harness {
                 let program = if ep.harness.as_deref() == Some("agy") { "agy" } else { "claude" };
-                let cap = crate::capabilities::probe_harness(&cfg, ep, program, now()).await;
+                let (cap, seat) = crate::capabilities::probe_harness_seat(&cfg, ep, program, now(), std::time::Duration::from_secs(10)).await;
+                // What the CLI said it can do goes where the daemon reads it, so the orchestrator knows before the first span.
+                if let Some(seat) = seat {
+                    crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json")).record(seat);
+                }
                 print_row(&cap, cap.probed_at);
                 out.push(cap);
                 continue;
