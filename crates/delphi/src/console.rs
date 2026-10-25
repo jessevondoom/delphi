@@ -568,15 +568,13 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
                             mode = session.permission_mode();
                         }
                     }
+                    // Leave at once when nothing would be lost; with text typed or a task running, ask once (`005e` §10.5).
                     KeyCode::Char('c') if ctrl => {
-                        if !editor.is_empty() {
-                            editor.kill_line();
-                        } else if last_ctrl_c.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+                        if (editor.is_empty() && !session.busy()) || last_ctrl_c.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
                             return 0;
-                        } else {
-                            last_ctrl_c = Some(Instant::now());
-                            notice = Some(("press Ctrl+C again to quit".into(), Instant::now()));
                         }
+                        last_ctrl_c = Some(Instant::now());
+                        notice = Some(("press Ctrl+C again to quit".into(), Instant::now()));
                     }
                     KeyCode::Char('d') if ctrl && editor.is_empty() => return 0,
                     KeyCode::Char('a') if ctrl => editor.home(),
@@ -585,7 +583,7 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
                     KeyCode::Char('k') if ctrl => editor.kill_to_end(),
                     KeyCode::Char('w') if ctrl => editor.kill_word(),
                     KeyCode::Char('?') if editor.is_empty() => {
-                        let _ = print_lines(term, &chat::HELP.lines().map(String::from).collect::<Vec<_>>(), width, pal);
+                        let _ = print_lines(term, &chat::help().lines().map(String::from).collect::<Vec<_>>(), width, pal);
                     }
                     KeyCode::Char(c) if !ctrl => editor.insert(c),
                     KeyCode::Backspace => editor.backspace(),
@@ -596,7 +594,14 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
                     KeyCode::End => editor.end(),
                     KeyCode::Up => editor.history_prev(),
                     KeyCode::Down => editor.history_next(),
-                    KeyCode::Esc => editor.kill_line(),
+                    // Esc clears the prompt first; with it empty, it stops what is running (`005e` §10.5).
+                    KeyCode::Esc => {
+                        if !editor.is_empty() {
+                            editor.kill_line();
+                        } else if session.busy() {
+                            session.cancel();
+                        }
+                    }
                     _ => {}
                 }
             }

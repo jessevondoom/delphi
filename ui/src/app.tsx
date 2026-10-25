@@ -5,7 +5,7 @@ import { Box, Text, useApp, useStdout } from 'ink';
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as C from './composer.ts';
-import { COMMANDS } from './commands.ts';
+import { lookup } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { loadHistory } from './attach.ts';
@@ -180,8 +180,9 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   };
 
   const run = (line: string) => {
-    const name = line.split(/\s/)[0]!;
-    if (name === '/quit' || name === '/exit') { exit(); return; }
+    const typed = line.split(/\s/)[0]!;
+    const name = lookup(typed)?.name ?? typed; // `/exit` is `/quit`, `/observe` is `/narrator`
+    if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
     if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
     if (name === '/export') {
@@ -367,7 +368,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
               const { text: t, next } = C.submit(comp.current);
               if (!t) return;
               comp.current = next; setComposer(next);
-              if (t.startsWith('/') && (COMMANDS.some((c) => c.name === t.split(/\s/)[0]) || t.split(/\s/)[0] === '/exit')) run(t);
+              if (t.startsWith('/') && lookup(t.split(/\s/)[0]!)) run(t);
               else if (t.startsWith('/')) note(`unknown command ${t.split(/\s/)[0]}; / shows the list`, 'error');
               else if (Object.keys(stateRef.current.running).length) { queueRef.current = [...queueRef.current, t]; setQueue(queueRef.current); }
               else send(t);

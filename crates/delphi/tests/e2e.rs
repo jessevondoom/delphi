@@ -512,6 +512,16 @@ struct PtyConsole {
     start_size: (u16, u16),
 }
 
+impl Drop for PtyConsole {
+    /// However the test ends, the console it started does not outlive it.
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 impl PtyConsole {
     fn start(home: &Path, args: &[&str], rows: u16, cols: u16) -> PtyConsole {
         PtyConsole::start_env(home, args, rows, cols, &[])
@@ -529,6 +539,13 @@ impl PtyConsole {
         let ws = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
         unsafe {
             assert_eq!(libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), &ws as *const _ as *mut _), 0);
+        }
+        // The master must not leak into the console we spawn: a copy held there keeps the pty open for good, so the
+        // console never gets its hangup when this test ends or fails, and the machine runs out of ptys.
+        unsafe {
+            for fd in [master, slave] {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
         }
         let dup = |fd| unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(fd))) };
         let mut cmd = Command::new(DELPHI);
@@ -954,6 +971,8 @@ fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
     c.type_keys("?");
     c.wait_for("❯ why?");
     assert!(!c.visible().contains("keys · esc closes"), "a ? inside text is a character:\n{}", c.visible());
+    c.type_keys("\x03"); // there is text in the prompt, so the first Ctrl+C asks
+    c.wait_for("press Ctrl+C again to quit");
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
@@ -1032,6 +1051,73 @@ fn a_finished_span_becomes_a_history_entry_in_the_activity_deck_and_never_shows_
     assert!(!c.visible().contains("✔ finished"), "{}", c.visible());
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §10.5, inline console: `Esc` clears the prompt first and, with it empty, stops the running task;
+/// `Ctrl+C` asks once when there is text or a task running, and leaves at once when nothing would be lost.
+#[test]
+fn the_inline_console_stops_a_task_with_esc_and_asks_before_ctrl_c_throws_anything_away() {
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec"}))]);
+    let e = setup(m.port);
+    let mut c = PtyConsole::start(&e.home, &["chat", "--workspace", "e2e"], 24, 100);
+    c.wait_for("shortcuts: ?");
+    c.type_keys("/ratify\r");
+    c.wait_for("pending proposal");
+    c.type_keys("/ratify apply 1\r");
+    c.wait_for("ratified ws:config.toml#access");
+    c.type_keys("@architect Draft a spec called 009-e2e\r");
+    c.wait_for("approval needed"); // the task now waits for the operator: it is running
+    // Typed text first: Esc clears it and does not stop the task.
+    c.type_keys("half a thought");
+    std::thread::sleep(Duration::from_millis(200));
+    c.type_keys("\x1b");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("half a thought") {
+        assert!(Instant::now() < deadline, "Esc did not clear the prompt:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    assert!(!c.everything().contains("stopping"), "the first Esc only cleared the prompt");
+    // Now the prompt is empty: Esc stops the task.
+    c.type_keys("\x1b");
+    c.wait_for("stopping");
+    c.wait_for("■ stopped");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
+    // Idle with text typed: Ctrl+C asks and keeps the text.
+    c.type_keys("abc");
+    std::thread::sleep(Duration::from_millis(200));
+    c.type_keys("\x03");
+    c.wait_for("press Ctrl+C again to quit");
+    assert!(c.visible().contains("abc"), "the text was not thrown away:\n{}", c.visible());
+    // Esc clears it; with nothing typed and nothing running, one Ctrl+C leaves at once.
+    c.type_keys("\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// The same rule in the full-screen console: text in the prompt means the first `Ctrl+C` asks.
+#[test]
+fn the_full_screen_console_asks_before_ctrl_c_throws_a_draft_away() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    c.type_keys("a draft");
+    std::thread::sleep(Duration::from_millis(200));
+    c.type_keys("\x03");
+    c.wait_for("press Ctrl+C again to quit");
+    assert!(c.visible().contains("a draft"), "the draft is still there:\n{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    // Empty prompt, nothing running: Ctrl+D leaves too.
+    let mut d = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    d.wait_for("← / ? →");
+    d.type_keys("\x04");
+    assert_eq!(d.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 

@@ -2,6 +2,7 @@
 // `delphi chat --inline`, ported so the full-screen console depends on nothing but the socket.
 import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
+import { openNarrator } from './narrator.ts';
 import type { Approval, State } from './fold.ts';
 import { roleName, type Info } from './theme.ts';
 
@@ -170,10 +171,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (v) { ctx.post(`(${v.task_id ?? rest[0]} is being checked again; if the gates are green you will be asked to merge)`); ctx.started?.(); }
       return;
     }
-    case 'observe': case 'narrator': case 'visualize': {
-      const view = rest[0] ?? '';
-      ctx.post(`The Observer only watches. Run this in another terminal (or a tmux split):\n  delphi observe ${view}`.trimEnd()); return;
-    }
+    case 'observe': case 'narrator': case 'visualize': ctx.post(openNarrator(rest[0], ctx.info)); return;
     case 'y': case 'yes': case 'a': case 'always': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
       const key = name === 'approve' ? rest[0] : name;
       const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;
