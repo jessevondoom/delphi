@@ -74,8 +74,8 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 - `Esc`: Clear prompt, dismiss modal peek, or return focus to prompt from an active card.
 - `/operator` or `/decide`: Immediately opens the **Right Deck** (Decision Inbox).
 
-### 2.2 Amendment 005b-A1: Arrow Keys on an Empty Prompt (proposed 2026-10-24, at the operator's request; part of the approved spec only once the operator approves it)
-> Proposed text. Until the operator approves it, §2.1 and the `navigate:` hint in §1.3 and §3 stand as written.
+### 2.2 Amendment 005b-A1: Arrow Keys on an Empty Prompt (approved by the operator 2026-10-24)
+> This amendment is part of the approved spec. Where §2.1 and the `navigate:` hint in §1.3 and §3 differ from it, this amendment governs.
 
 **Rule.** In the full-screen console, `←` and `→` with **nothing typed in the prompt** move one deck, left to right: Left Deck, Center Deck, Right Deck. They stop at the ends (no wrap-around). With **any text in the prompt** they move the cursor, as in any line editor.
 
