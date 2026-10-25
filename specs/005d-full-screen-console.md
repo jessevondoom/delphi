@@ -36,7 +36,7 @@ Alternate screen, no boxes, hairlines only (`skills/tui-design`).
 - **Header, two lines.** Line 1 is one of: the active agent's badge and what it is doing; the **decision alert** (the red-team badge, `decision needed` or `N decisions pending`, and the time left); or, after 30 seconds without activity, the strip of every role's badge. Deck dots are right-aligned. Line 2 is `delphi v<version> · <directory>`.
 - **Transcript.** Messages as blocks: the operator's text after `❯`; agent replies under a badge, the role's theme name, the role and the time, rendered as Markdown with highlighted code; tool calls as one dim line (`Ctrl+O` opens their output); approval cards unboxed; notes. Scrolling up freezes the view and says how many lines wait below; new output never moves what is being read.
 - **Status row.** While anything runs: a spinner, the elapsed time, how many messages are queued, and `esc to stop`.
-- **Prompt.** Multi-line, with history, bracketed paste, kill keys and a growing height. Beneath it the footer: tokens, the approval mode, `shortcuts: ?`, and the deck dots. No money.
+- **Prompt.** Multi-line, with history, bracketed paste, kill keys and a growing height. Beneath it the footer: tokens, the approval mode when it is not the default, and the hint and deck dots `← / ? → · ○ ● ○` (005b-A2). No money.
 - **Decks** (`Shift+←`/`Shift+→`): left, the **activity and thinking stream** (reasoning, replies and tool calls per agent, in memory only: never written, never replayed, and a council's blind round stays blind there); centre, the chat; right, the **Decision Inbox**.
 - **Too small.** Below 28 by 9 the window says so instead of drawing.
 

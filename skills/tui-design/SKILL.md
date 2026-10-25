@@ -110,21 +110,21 @@ The operator console organizes context into 3 horizontal decks swiped via `Shift
 ### 3.2 Two-Line Stacked Header
 The header provides maximum telemetry flexibility without clutter:
 - **Line 1 (Top Priority):**
-  - *Active Turn:* Single active agent status top-left, deck navigation top-right:
-    `⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks       navigate: shift+arrows · ○ ● ○`
+  - *Active Turn:* Single active agent status:
+    `⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks`
   - *Decision Alert:* Prioritizes blocker in crimson:
-    `⟦x?x⟧ red-team: decision needed · 09:42 remaining               navigate: shift+arrows · ○ ○ ●`
+    `⟦x?x⟧ red-team: decision needed · 09:42 remaining`
   - *Idle / Steady State (30s timeout):* Compact strip of 1-line badges:
-    `⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧  all agents idle            navigate: shift+arrows · ○ ● ○`
-- **Line 2 (Sub-Header):** Clean tool branding and working directory:
-  `delphi v0.5 · ~/projects/work/delphi`
+    `⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧`
+- **Line 2 (Sub-Header),** after one blank row: tool branding, working directory and the pane (`activity`, `chat` or `decisions`):
+  `delphi v0.5 · ~/projects/work/delphi · chat`
 
 ### 3.3 Minimal Console Footer
 To avoid developer anxiety and clutter, cost and budget telemetry is removed from the console footer (isolated in `delphi observe spend`):
-- **Left-Aligned:** Session token usage, autonomy mode, shortcuts hint:
-  `42.1k tokens · approvals · shortcuts: ?`
-- **Right-Aligned:** Navigation directive and unbracketed navigation dots:
-  `navigate: shift+arrows · ○ ● ○`
+- **Left-Aligned:** Session token usage, then the autonomy mode only when it is not the default:
+  `42.1k tokens`
+- **Right-Aligned:** Navigation hint and unbracketed navigation dots:
+  `← / ? → · ○ ● ○`
 - **Unbracketed dots rule:** Bare dots `○ ● ○` ensure the indicator is never visually confused with robot avatar brackets (`⟦...⟧`).
 
 ---
