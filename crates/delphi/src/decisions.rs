@@ -37,9 +37,21 @@ fn state(d: &Value) -> String {
     }
 }
 
+/// What to look at first: pending decisions nobody second-checked, then other pending elevated ones, then the
+/// rest of the pending ones, then everything already reviewed or refused. Within a group, the order they were made.
+fn priority(d: &Value) -> u8 {
+    match (state(d).as_str(), d["second"].as_str(), d["risk"].as_str()) {
+        ("PENDING", Some("unseconded"), _) => 0,
+        ("PENDING", _, Some("elevated")) => 1,
+        ("PENDING", _, _) => 2,
+        _ => 3,
+    }
+}
+
 /// The ledger as a short table: what was decided, how risky, and what is waiting for the operator.
 pub fn render_list(v: &Value) -> String {
-    let ds = v["decisions"].as_array().cloned().unwrap_or_default();
+    let mut ds = v["decisions"].as_array().cloned().unwrap_or_default();
+    ds.sort_by_key(priority);
     if ds.is_empty() {
         return "no provisional decisions in this mission (they exist only for builds started with --optimistic)\n".into();
     }
@@ -48,7 +60,11 @@ pub fn render_list(v: &Value) -> String {
     for d in &ds {
         out.push_str(&format!("  {:<14} {:<7} {:<8} {:<9} {}\n", d["decision_id"].as_str().unwrap_or("?"), d["task_id"].as_str().unwrap_or("?"), state(d), d["risk"].as_str().unwrap_or("?"), short(d["summary"].as_str().unwrap_or(""), 60)));
         if state(d) == "PENDING" || d["outcome"] == "deny" {
-            out.push_str(&format!("      why: {}\n", short(d["rationale"].as_str().unwrap_or(""), 110)));
+            let who = match (d["decided_by"].as_str().unwrap_or("rule"), d["second"].as_str().unwrap_or("")) {
+                (by, "") => format!("by {}", by),
+                (by, second) => format!("by {}; {}", by, second.replace("concurred:", "second seat: ")),
+            };
+            out.push_str(&format!("      why: {} ({})\n", short(d["rationale"].as_str().unwrap_or(""), 110), who));
         }
     }
     if pending > 0 {
@@ -190,6 +206,20 @@ mod tests {
         assert!(out.contains("dec_a") && out.contains("PENDING") && out.contains("ratified") && out.contains("refused") && out.contains("elevated"), "{}", out);
         assert!(out.contains("/decisions ratify"), "{}", out);
         assert!(handle(&mut Fake { list: json!({"decisions": [], "pending": 0}), calls: vec![], fail_review: None }, "m1", &[]).contains("only for builds started with --optimistic"));
+    }
+
+    #[test]
+    fn what_nobody_second_checked_comes_first_and_the_list_says_who_decided() {
+        let mut un = d("dec_u", "allow", "elevated", None);
+        un["second"] = json!("unseconded");
+        un["decided_by"] = json!("strategist");
+        let mut conc = d("dec_k", "allow", "elevated", None);
+        conc["second"] = json!("concurred:red-team");
+        let list = json!({"decisions": [d("dec_r", "allow", "routine", Some("ratified")), d("dec_p", "allow", "routine", None), conc, un], "pending": 3});
+        let out = render_list(&list);
+        let at = |id: &str| out.find(id).unwrap_or_else(|| panic!("{} missing in\n{}", id, out));
+        assert!(at("dec_u") < at("dec_k") && at("dec_k") < at("dec_p") && at("dec_p") < at("dec_r"), "{}", out);
+        assert!(out.contains("by strategist; unseconded") && out.contains("by rule; second seat: red-team"), "{}", out);
     }
 
     #[test]

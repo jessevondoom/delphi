@@ -80,5 +80,14 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Writer never documents unbuilt features as working | GOV §2.8 | — | **Prompt-only** | — |
 | Strategist scope audit (scope audit) | GOV §2.6 | — | **Prompt-only** | — |
 | Mythological blind-spot counterweights in general | GOV §2 | — | **Prompt-only** | — |
+| A provisional decision applies only to an Amber worktree edit (allow-list, default no) | GOV §5.9, spec 015 §2 | `provisional::eligible` | Daemon | ✅ |
+| Provisional decisions are written by the daemon from the classified card, never by an agent | GOV §5.9, spec 015 §4 | `Engine::ask_classified` | Daemon | ✅ |
+| The merge waits for every allowed provisional decision to be ratified; re-checked when the merge is approved | GOV §5.9, spec 003 §3 gate 6 | `gates::decisions`, `finalize_build` | Daemon | ✅ |
+| Optimistic mode refuses to start without the OS sandbox | GOV §5.9, §5.5 | `Engine::mark_optimistic` | Daemon | ✅ |
+| A review is bound to the decision's payload hash and made at the console only | spec 015 §6 | `decisions.review` (console scope) | Daemon | ✅ |
+| A relay sees only the listed event kinds and calls only the listed methods | GOV §5.10, spec 014 §2 | `RELAY_EVENTS`, `RELAY_METHODS`; pinned by tests | Daemon | ✅ |
+| A relay can never approve a Red card, or "allow similar" | GOV §5.10, spec 014 §3 | `approval.relay_resolve` | Daemon | ✅ |
+| Relay settings (who may answer) are read only from the ratified copy | GOV §5.10, spec 014 §4 | `lock::ACCESS_KEYS` includes `relay` | Daemon | ✅ |
+| A relay reply counts only with its single-use code, from an authenticated allowlisted sender, on the first line | GOV §5.10, spec 014 §5 | `relay/mod.rs`, `relay/email.rs` (the relay process) | Relay process | ✅ |
 
 **Reading the table:** every security invariant now has a daemon or CI enforcement point. The prompt-only rows are about the quality of judgment, which no deterministic check can verify. They are where a heterogeneous Council and human review earn their keep.

@@ -3,7 +3,7 @@ id: spec-016-headless-run
 title: "016: Headless Run (`delphi run`)"
 author: architect
 timestamp: 2026-10-25T16:00:00Z
-status: draft   # awaiting the operator's ratification
+status: approved   # by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

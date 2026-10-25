@@ -336,6 +336,7 @@ impl Renderer {
             "agent.block.complete" if p["block"]["type"] == "tool_call" => Some(format!("\n  → {}({})", p["block"]["name"].as_str().unwrap_or("?"), brief(&p["block"]["arguments"]))),
             "tool.result" if p["is_error"] == true => Some(format!("\n    ✗ {}", p["content"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(120).collect::<String>())),
             "decision.provisional" => Some(format!("\n  decided provisionally ({}): {}: {}\n", p["outcome"].as_str().unwrap_or("?"), p["summary"].as_str().unwrap_or("?"), p["rationale"].as_str().unwrap_or(""))),
+            "decision.deferred" => Some(format!("\n  ! the approver passed this to you ({}): {}\n", p["reason"].as_str().unwrap_or("no reason given"), p["summary"].as_str().unwrap_or("?"))),
             "decisions.review_requested" => Some(format!("\n  ! {} provisional decision(s) await your review before anything can merge: /decisions\n", p["count"].as_u64().unwrap_or(0))),
             "build.merge_finished" => Some(format!("\n  merge check for {}: {} — {}\n", e["task_id"].as_str().unwrap_or("?"), p["outcome"].as_str().unwrap_or("?"), p["detail"].as_str().unwrap_or(""))),
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
