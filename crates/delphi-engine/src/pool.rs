@@ -125,10 +125,10 @@ pub fn fmt_secs(secs: i64) -> String {
 pub fn describe(e: &Entry, now: i64) -> String {
     match (e.state, e.until, e.next_probe_at) {
         (State::Available, ..) => "available".into(),
-        (State::CoolingDown, Some(t), _) => format!("cooling down, back in {} ({})", fmt_secs(t - now), e.reason),
+        (State::CoolingDown, Some(t), _) => format!("cooling down, back in {} ({})", fmt_secs(t.saturating_sub(now)), e.reason),
         (State::CoolingDown, None, _) => format!("cooling down ({})", e.reason),
-        (State::Exhausted, Some(t), _) => format!("exhausted: {}; resets {} (in {})", e.reason, delphi_core::time::format_unix_millis(t, 0).trim_end_matches(".000Z").replace('T', " "), fmt_secs(t - now)),
-        (State::Exhausted, None, Some(p)) => format!("exhausted: {}; no reset time known, next probe in {}", e.reason, fmt_secs(p - now)),
+        (State::Exhausted, Some(t), _) => format!("exhausted: {}; resets {} (in {})", e.reason, delphi_core::time::format_unix_millis(t, 0).trim_end_matches(".000Z").replace('T', " "), fmt_secs(t.saturating_sub(now))),
+        (State::Exhausted, None, Some(p)) => format!("exhausted: {}; no reset time known, next probe in {}", e.reason, fmt_secs(p.saturating_sub(now))),
         (State::Exhausted, None, None) => format!("exhausted: {}", e.reason),
     }
 }
@@ -227,13 +227,14 @@ impl Pool {
                 return (None, false); // already known to be out; a throttle adds nothing
             }
             e.throttles.push(now);
+            // Bound the list but keep the first entry: it is when this run of throttles began, which rule 3 measures from.
             if e.throttles.len() > KEEP_THROTTLES {
-                e.throttles.remove(0);
+                e.throttles.remove(1);
             }
             let n = t.throttle_attempts as usize;
             // A run of at least `n` consecutive throttles that has lasted `throttle_window_secs`.
-            if e.throttles.len() >= n && now - e.throttles[0] >= t.throttle_window_secs {
-                let reason = format!("throttled {} times in a row over {} minutes", e.throttles.len(), (now - e.throttles[0]) / 60);
+            if e.throttles.len() >= n && now.saturating_sub(e.throttles[0]) >= t.throttle_window_secs {
+                let reason = format!("throttled {} times in a row over {} minutes", e.throttles.len(), now.saturating_sub(e.throttles[0]) / 60);
                 e.state = State::Exhausted;
                 e.since = now;
                 e.until = None;
@@ -358,6 +359,38 @@ mod tests {
         assert!(x.reason.contains("4 times in a row over 12 minutes") && x.reset_at.is_none(), "{}", x.reason);
         let e = p.entry("a", "m").unwrap();
         assert_eq!((e.state, e.next_probe_at, e.probe_interval_secs), (State::Exhausted, Some(now.load(Ordering::SeqCst) + 900), 900));
+    }
+
+    #[test]
+    fn a_long_run_of_frequent_throttles_still_becomes_exhaustion_however_many_are_recorded() {
+        let (p, now) = pool();
+        // One throttle every 5 seconds: more entries than the list keeps, and a run that lasts 10 minutes.
+        let mut tripped_at = None;
+        for i in 0..200 {
+            if p.record_throttle("a", "m", Some(Duration::from_secs(1))).is_some() {
+                tripped_at = Some(i);
+                break;
+            }
+            advance(&now, 5);
+        }
+        let i = tripped_at.expect("sustained throttling is exhaustion; the list cap must not hide it");
+        assert!((120..=122).contains(&i), "after about 600 s of throttling, not before: {}", i);
+        assert!(p.entry("a", "m").unwrap().throttles.len() <= 40, "the list stays bounded");
+    }
+
+    #[test]
+    fn timestamps_from_a_corrupt_state_file_cannot_overflow_the_arithmetic() {
+        let (p, _) = pool();
+        p.record_throttle("a", "m", None);
+        let mut e = p.entry("a", "m").unwrap();
+        e.throttles = vec![i64::MIN, i64::MIN, i64::MIN];
+        e.until = Some(i64::MIN);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.json");
+        std::fs::write(&path, serde_json::to_string(&File { entries: vec![e.clone()] }).unwrap()).unwrap();
+        let (q, _) = pool_at(Some(path));
+        assert!(q.record_throttle("a", "m", None).is_some() || q.state("a", "m") != State::Available, "no panic: the corrupt run counts as a long one");
+        assert!(!describe(&Entry { state: State::Exhausted, until: Some(i64::MAX), ..e }, i64::MIN).is_empty());
     }
 
     #[test]
