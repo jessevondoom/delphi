@@ -7,7 +7,7 @@
 //! task begins again from its saved request.
 
 use crate::approval::{Need, Tier as ApprovalTier};
-use crate::bridge::{Bridge, BridgeCall, TOOL_PREFIX};
+use crate::bridge::{agy_native_tools, Bridge, BridgeCall, HookNote, HookPolicy, AGY_TOOL_PREFIX, TOOL_PREFIX};
 use crate::engine::{Engine, SpanCtx};
 use crate::exec::{self, GitGuard, Verdict};
 use crate::harness::{cli_env_with, Cli, Decision, Event, Launch, LaunchProfile, Permission, Session, SessionMode, Tools};
@@ -92,7 +92,8 @@ const DUPLICATED_FOR_BUILDERS: [&str; 5] = ["read_file", "list_dir", "search", "
 const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
 
 /// What the CLI needs to know about Delphi's logical paths and its own situation.
-fn harness_note(builder: bool, delphi: &[ToolDef], native: &[String]) -> String {
+fn harness_note(builder: bool, delphi: &[ToolDef], native: &[String], agy: bool) -> String {
+    let prefix = if agy { AGY_TOOL_PREFIX } else { TOOL_PREFIX };
     let mut s = String::from("<harness_note>You are running inside Delphi. ");
     if builder {
         s.push_str("Your working directory is this task's git worktree, a checkout of the project at its current commit. Paths written as @worktree/x or @project/<name>/x in the task mean the file x in your working directory (the project's own files are at the top of it, for example src/lib.rs). Make the change by editing files here with your tools, run the checks you need, and do not commit: Delphi commits, verifies and asks the operator to merge. When the change is made, reply with a short summary of what you changed.");
@@ -100,8 +101,12 @@ fn harness_note(builder: bool, delphi: &[ToolDef], native: &[String]) -> String 
         s.push_str("Your working directory is empty; the task quotes what you need.");
     }
     if !delphi.is_empty() {
-        let names: Vec<String> = delphi.iter().map(|d| format!("`{}{}`", TOOL_PREFIX, d.name)).collect();
+        let names: Vec<String> = delphi.iter().map(|d| format!("`{}{}`", prefix, d.name)).collect();
         s.push_str(&format!(" Delphi's own tools are available to you as {}. They work on Delphi's logical paths (`@project/<name>/…`, `missions/…`, `specs/…`), keep their own record of what you did, and some ask the operator before they run. Use them instead of saying you cannot do something: to wait, call the timer tool; to hand work to another role, call dispatch_agent.", names.join(", ")));
+        if agy {
+            // Its own shell, file, browser and scheduling tools exist but a gate denies them; the model should not spend turns finding out.
+            s.push_str(" Your own shell, file, browser, scheduling and subagent tools are switched off in this task: a call to one is denied. Use the Delphi tools.");
+        }
     } else if !builder {
         s.push_str(" You have no Delphi tools in this task.");
     }
@@ -305,10 +310,11 @@ impl Engine {
                 if builder {
                     return Ok(Err(HarnessErr::retry("the agy harness has no approval bridge (its headless mode cannot ask), so it cannot run a Builder")));
                 }
-                // It can read any file the operator can and its tools cannot be turned off, so nothing it
-                // returns can be vouched for: the span is untrusted from the start.
+                // Its own tools cannot be turned off, only denied by a hook that Delphi cannot check from outside (the hook
+                // sampled well but was not tested against every tool), and a web tool brings in text nobody vetted. So
+                // nothing it returns can be vouched for: the span is untrusted from the start, and the projects are checked afterwards.
                 if sc.span.observe_input(Tier::L0) {
-                    sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "agy harness can read any file"}))).await?;
+                    sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "agy harness: its tools are gated by a hook Delphi cannot verify"}))).await?;
                 }
             }
         }
@@ -351,24 +357,36 @@ impl Engine {
         // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
         let profile: HarnessProfile = self.cfg.get().harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
         let delegate = cli == Cli::Claude && !builder && profile.approvals == ApprovalSource::Delegate;
-        // Delphi's tools for this role, offered over the bridge. Only the Claude CLI can load one. A Builder keeps the
-        // CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
-        let mut bridge_defs: Vec<ToolDef> = if cli == Cli::Claude && profile.bridge { self.span_tool_defs(sc).await? } else { vec![] };
+        // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
+        // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
+        // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
+        let mut bridge_defs: Vec<ToolDef> = if profile.bridge { self.span_tool_defs(sc).await? } else { vec![] };
         if builder {
             bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()));
         }
         let connectors = cli == Cli::Claude && !builder && profile.claudeai_connectors;
         // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
         let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
+        // The CLI's own tools the span may use: for the Claude CLI they are given with `--tools`; for `agy` they are what its gate lets through.
+        let agy_native = if cli == Cli::Agy { agy_native_tools(&profile.native_tools) } else { vec![] };
         let mut lp = LaunchProfile { native_tools: if builder || cli == Cli::Agy { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
+        let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
         if !bridge_defs.is_empty() {
+            let policy = (cli == Cli::Agy).then(|| HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.to_string()], allow_names: agy_native.clone() });
             let started = match std::env::current_exe() {
-                Ok(exe) => Bridge::start(bridge_defs.clone(), bridge_instructions(&bridge_defs), &exe).await,
+                Ok(exe) => Bridge::start_gated(bridge_defs.clone(), bridge_instructions(&bridge_defs), &exe, policy).await,
                 Err(e) => Err(e),
             };
             match started {
-                Ok((b, rx)) => {
+                Ok((b, rx, notes)) => {
+                    // `agy` has no flag for an MCP config or a hook: both go in the span's own working directory.
+                    if cli == Cli::Agy {
+                        if let Err(e) = b.write_agy_workspace(&cwd) {
+                            return Ok(Err(HarnessErr::retry(format!("could not prepare the Antigravity workspace: {}", e))));
+                        }
+                        gate_rx = Some(notes);
+                    }
                     lp.mcp_config = Some(b.config_path().to_path_buf());
                     (_bridge, bridge_rx) = (Some(b), Some(rx));
                 }
@@ -376,14 +394,14 @@ impl Engine {
             }
         }
         let bridge_on = bridge_rx.is_some();
-        let native_for_note = if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
-        let note = harness_note(builder, &bridge_defs, &native_for_note);
+        let native_for_note = if cli == Cli::Agy { if bridge_on { agy_native.clone() } else { vec![] } } else if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
+        let note = harness_note(builder, &bridge_defs, &native_for_note, cli == Cli::Agy);
         let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", ipr.system_sections().join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
         let ctl = Ctl { bridge_on, delegate, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
-        sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
+        sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
         let mut session = match Session::start(&launch).await {
             Ok(s) => s,
             Err(e) => return Ok(Err(HarnessErr::retry(e))),
@@ -409,6 +427,14 @@ impl Engine {
                         session.kill().await;
                         failure = Some((why, false));
                         break;
+                    }
+                    continue;
+                }
+                // Each decision the `agy` gate makes is logged (the Delphi tools are logged as bridge calls when they run).
+                Some(note) = async { match gate_rx.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
+                    if !note.allowed || !note.tool.starts_with(AGY_TOOL_PREFIX) {
+                        let summary = self.secrets.redact(&note.summary);
+                        sc.m.append(sc.agent_ev("harness.gate", json!({"tool": note.tool, "decision": if note.allowed { "allow" } else { "deny" }, "summary": summary}), ep, &launch.model)).await?;
                     }
                     continue;
                 }
@@ -863,7 +889,8 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
         assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("agy")), "its output is untrusted");
         let u = &events_of(&f, "agent.usage")[0].payload;
         assert_eq!((u["provider"].as_str(), u["cost_model"].as_str(), u["input_tokens"].as_u64()), (Some("google"), Some("subscription"), Some(900)));
-        assert_eq!(events_of(&f, "harness.started")[0].payload["tools"], "none");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["tools"].as_str(), started["gated"].clone(), started["native_tools"].clone()), (Some("native"), json!(true), json!(["search_web", "read_url_content"])), "the gate lets the web tools through by default: {}", started);
         // A Builder is never put on `agy` (it cannot ask the operator). Its usual family is Gemini and only `agy`
         // serves it, but the family is a preference: it is served by an eligible model instead (`specs/002` §4.1).
         crate::testkit::ratify_spec(&f);
@@ -871,6 +898,130 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
         assert_eq!((b.status.clone(), b.text.as_str()), (Status::Done, "Built on the API."), "{}", b.text);
         assert_eq!(events_of(&f, "harness.started").len(), 1, "agy ran for the architect only");
         assert_eq!(f.model.requests().last().unwrap().endpoint_id, "direct", "the Builder went to an API endpoint");
+    }
+
+    /// `agy` serving the roles named (Gemini family), nothing else.
+    fn use_agy_for(f: &Fx, roles: &str, extra: &str) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", &format!("[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = {{ frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }}\n[access]\nrole_family = {{ {} }}", roles.split(',').map(|r| format!("{} = \"gemini\"", r.trim())).collect::<Vec<_>>().join(", ")))
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"direct\", \"backup\"], gemini = [\"agy-sub\"] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n{}", text, extra)).unwrap());
+    }
+
+    const AGY_FINISH: &str = r#"echo '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Done."}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"Done.","usage":{"input_tokens":10,"output_tokens":3}}}'"#;
+
+    #[tokio::test]
+    async fn an_agy_span_gets_the_plugin_and_the_gate_in_its_own_directory_and_is_told_which_tools_it_has() {
+        let scripts = tempfile::tempdir().unwrap();
+        let seen = scripts.path().join("seen");
+        std::fs::create_dir_all(&seen).unwrap();
+        // The stand-in reports what it was started with: the first turn, and the `.agents/` it finds in its working directory.
+        let prog = fake_cli(
+            scripts.path(),
+            &format!(
+                "printf '%s' \"$first\" > '{seen}/first-turn.json'\ncp -R .agents '{seen}/agents' 2>/dev/null\npwd > '{seen}/cwd'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[]}}}}'\n{finish}",
+                seen = seen.display(),
+                finish = AGY_FINISH
+            ),
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Done."), "{}", out.text);
+        let first = fs::read_to_string(seen.join("first-turn.json")).unwrap();
+        assert!(first.contains("mcp_delphi_delphi_timer") && first.contains("mcp_delphi_delphi_dispatch_agent"), "the note names the tools as agy shows them: {}", first);
+        assert!(first.contains("search_web, read_url_content") && first.contains("switched off in this task"), "{}", first);
+        assert!(!first.contains("Do not call any tools"), "there are tools to call now");
+        let plugin = seen.join("agents/plugins/delphi");
+        assert_eq!(fs::read_to_string(plugin.join("plugin.json")).unwrap(), r#"{"name":"delphi"}"#);
+        let mcp: serde_json::Value = serde_json::from_str(&fs::read_to_string(plugin.join("mcp_config.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["delphi"]["args"], json!(["__mcp-bridge"]));
+        let hooks: serde_json::Value = serde_json::from_str(&fs::read_to_string(seen.join("agents/hooks.json")).unwrap()).unwrap();
+        let cmd = hooks["delphi-gate"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.ends_with(" __agy-hook") && cmd.contains("DELPHI_BRIDGE_SOCKET=") && cmd.contains("DELPHI_BRIDGE_TOKEN="), "{}", cmd);
+        assert!(fs::read_to_string(seen.join("cwd")).unwrap().trim_end().ends_with("harness-empty"), "the span's own scratch directory, not a project");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert!(started["gated"] == true && started["bridge"].as_array().unwrap().iter().any(|v| v == "timer"), "{}", started);
+        // Still untrusted from the start; the gate is a control Delphi cannot verify from outside.
+        assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("agy")));
+    }
+
+    /// A stand-in `agy` client: asks the span's gate about some tool calls the way the hook does, then calls a Delphi tool
+    /// through the plugin's MCP server. Everything it learns goes to a file.
+    const AGY_CLIENT: &str = r#"import json, socket, sys
+cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
+def connect():
+    s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
+    f = s.makefile("rw"); f.write(json.dumps({"token": cfg["DELPHI_BRIDGE_TOKEN"]}) + "\n"); f.flush()
+    return f
+def rpc(f, o):
+    f.write(json.dumps(o) + "\n"); f.flush(); return json.loads(f.readline())
+f = connect()
+out = {"gate": {}}
+for name, args in [("mcp_delphi_delphi_timer", {"note": "x"}), ("search_web", {"query": "rust"}), ("run_command", {"CommandLine": "echo leaked > proof.txt"}), ("view_file", {"Path": "/etc/hosts"}), ("call_mcp_tool", {"ServerName": "delphi_delphi"})]:
+    r = rpc(f, {"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {"toolCall": {"name": name, "args": args}}})
+    out["gate"][name] = r["result"]["decision"]
+rpc(f, {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}})
+out["call"] = rpc(f, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "timer", "arguments": {"action": "set", "in_secs": 90, "note": "check CI"}}})
+open(sys.argv[1], "w").write(json.dumps(out))
+"#;
+
+    #[tokio::test]
+    async fn the_orchestrator_on_agy_sets_a_timer_through_the_plugin_while_the_gate_denies_its_shell_and_files_and_every_decision_is_logged() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_client.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_CLIENT).unwrap();
+        let prog = fake_cli(scripts.path(), &format!("python3 -I '{}' '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\n{}", helper.display(), out_file.display(), AGY_FINISH));
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Done."), "{}", out.text);
+        let got: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        // The gate: Delphi's tools and the profile's web tools pass; the shell, files and the generic MCP caller do not.
+        assert_eq!(got["gate"], json!({"mcp_delphi_delphi_timer": "allow", "search_web": "allow", "run_command": "deny", "view_file": "deny", "call_mcp_tool": "deny"}));
+        // The Delphi tool ran as an orchestrator's tool runs anywhere else: a pending timer, logged, durable.
+        assert!(got["call"]["result"]["content"][0]["text"].as_str().unwrap().starts_with("timer tm_0001 set."), "{}", got["call"]);
+        assert_eq!((f.engine.timers.pending().len(), events_of(&f, "timer.set").len()), (1, 1));
+        let call = &events_of(&f, "harness.bridge_call")[0].payload;
+        assert_eq!((call["name"].as_str(), call["is_error"].as_bool()), (Some("timer"), Some(false)));
+        // Each denial and each allowed CLI tool is in the log; Delphi's own tool is logged once, as the call.
+        let gate: Vec<(String, String)> = events_of(&f, "harness.gate").iter().map(|e| (e.payload["tool"].as_str().unwrap().to_string(), e.payload["decision"].as_str().unwrap().to_string())).collect();
+        assert_eq!(gate, [("search_web", "allow"), ("run_command", "deny"), ("view_file", "deny"), ("call_mcp_tool", "deny")].map(|(a, b)| (a.to_string(), b.to_string())).to_vec());
+        let shell = events_of(&f, "harness.gate").into_iter().find(|e| e.payload["tool"] == "run_command").unwrap();
+        assert_eq!(shell.payload["summary"], "echo leaked > proof.txt");
+        // What the span learned about its seat is kept for the orchestrator's picture.
+        let seat = f.engine.inventory.seats().into_iter().find(|r| r.endpoint_id == "agy-sub").unwrap();
+        assert!(seat.bridge && seat.harness == "agy" && seat.tools == ["run_command"]);
+    }
+
+    #[tokio::test]
+    async fn an_agy_profile_with_the_bridge_off_gets_no_workspace_and_the_old_text_only_instruction() {
+        let scripts = tempfile::tempdir().unwrap();
+        let seen = scripts.path().join("seen");
+        fs::create_dir_all(&seen).unwrap();
+        let prog = fake_cli(scripts.path(), &format!("printf '%s' \"$first\" > '{seen}/first-turn.json'\nls -a . > '{seen}/ls'\n{finish}", seen = seen.display(), finish = AGY_FINISH));
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "architect", "[harness.agy]\nbridge = false\n");
+        f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        let first = fs::read_to_string(seen.join("first-turn.json")).unwrap();
+        assert!(first.contains("Do not call any tools") && first.contains("You have no Delphi tools in this task"), "{}", first);
+        assert!(!fs::read_to_string(seen.join("ls")).unwrap().contains(".agents"), "nothing is written for the CLI to load");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["gated"].clone(), started["bridge"].clone(), started["tools"].as_str()), (json!(false), json!([]), Some("none")));
+    }
+
+    #[test]
+    fn the_profile_names_the_web_tools_the_claude_way_and_agy_gets_its_own_names_for_them() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(agy_native_tools(&v(&["WebSearch", "WebFetch"])), v(&["search_web", "read_url_content"]));
+        // An agy tool name is kept; a name only the Claude CLI knows means nothing here and is dropped, never passed through.
+        assert_eq!(agy_native_tools(&v(&["search_web", "Read", "Bash", "Edit", "", "run-command"])), v(&["search_web"]));
+        assert!(agy_native_tools(&[]).is_empty());
     }
 
     /// One Claude harness endpoint whose credential is a key source instead of the CLI's own login.

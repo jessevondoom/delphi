@@ -588,7 +588,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "subtitle": {"type": "string"},
                 "summary": {"type": "string"},
                 "toc": {"type": "boolean"},
-                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}}}},
+                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array", "items": {"type": "object"}}, "chart": {"type": "object"}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },
@@ -605,7 +605,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "author": {"type": "string"},
-                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
+                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array", "items": {"type": "object"}}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },

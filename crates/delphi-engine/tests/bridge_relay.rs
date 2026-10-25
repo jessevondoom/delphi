@@ -120,39 +120,32 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
     }
 }
 
-/// The real `agy` against the real bridge and relay, with nothing in the operator's own configuration touched: the
-/// plugin that carries the MCP server and the hook that gates every tool both live in the span's own working
-/// directory (`.agents/`), which agy loads from there. The hook allows Delphi's tool and denies everything else.
-/// `cargo test -p delphi-engine --test bridge_relay -- --ignored --nocapture live_agy`. Flash, a few tenths of a cent.
+/// The real `agy` against Delphi's own pieces, with nothing in the operator's configuration touched: the bridge, the relay,
+/// the `.agents/` the engine writes for a span ([`Bridge::write_agy_workspace`]) and the real `delphi __agy-hook` gate. The
+/// plugin and the gate live in the span's working directory, which `agy` loads them from. Delphi's tool is allowed and
+/// served; the shell is denied. `cargo test -p delphi-engine --test bridge_relay -- --ignored --nocapture live_agy`.
+/// Flash, a few tenths of a cent.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "uses the operator's Antigravity login"]
 async fn live_agy_calls_a_delphi_tool_through_a_workspace_plugin_while_a_hook_denies_its_other_tools() {
+    use delphi_engine::bridge::{HookPolicy, AGY_TOOL_PREFIX};
     use delphi_engine::harness::{cli_env, Cli, Event, Launch, LaunchProfile, Session, Tools};
-    use std::os::unix::fs::PermissionsExt;
-    let (bridge, mut calls) = Bridge::start(defs(), "Delphi's timer tool wakes you later.".into(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core"))).await.unwrap();
+    let policy = HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec![] };
+    let (bridge, mut calls, mut notes) = Bridge::start_gated(defs(), "Delphi's timer tool wakes you later.".into(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core")), Some(policy)).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    // The plugin: the bridge's own config, as the engine already writes it for the Claude CLI.
-    let plugin = root.join(".agents/plugins/delphi");
-    std::fs::create_dir_all(&plugin).unwrap();
-    std::fs::write(plugin.join("plugin.json"), r#"{"name":"delphi"}"#).unwrap();
-    std::fs::copy(bridge.config_path(), plugin.join("mcp_config.json")).unwrap();
-    // The gate: allow the Delphi tool, deny every other tool, and note what it saw.
-    let seen = root.join("hook-saw.txt");
-    let gate = root.join("gate.sh");
-    std::fs::write(&gate, format!("#!/bin/sh\npayload=$(cat)\nname=$(printf '%s' \"$payload\" | python3 -I -c 'import sys,json; print(json.load(sys.stdin)[\"toolCall\"][\"name\"])')\necho \"$name\" >> '{seen}'\ncase \"$name\" in\n  mcp_delphi_*) echo '{{\"decision\":\"allow\"}}';;\n  *) echo '{{\"decision\":\"deny\",\"reason\":\"denied by the Delphi gate: only the delphi MCP tools are available in this task\"}}';;\nesac\n", seen = seen.display())).unwrap();
-    std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(root.join(".agents/hooks.json"), json!({"delphi-gate": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": gate.display().to_string(), "timeout": 20}]}]}}).to_string()).unwrap();
+    bridge.write_agy_workspace(&root).unwrap();
     let l = Launch {
         cli: Cli::Agy,
         program: "agy".into(),
         model: "gemini-3.8-flash-low".into(),
-        system_prompt: "You are a test fixture. Be brief.".into(),
+        system_prompt: "You are a test fixture. Be brief. Delphi's tools are named mcp_delphi_delphi_<tool>; your own shell, file and scheduling tools are switched off.".into(),
         user_prompt: "Use the MCP tool named timer from the delphi server (not your built-in scheduler) once, with note 'check CI' and in_secs 90. Then run the shell command: echo leaked > proof.txt . Then say what each one returned.".into(),
         cwd: root.clone(),
-        tools: Tools::Standard,
+        tools: Tools::None,
         env: cli_env(),
-        profile: LaunchProfile::default(),
+        // The engine marks a span that has a bridge this way; it is what keeps "do not call any tools" out of the first turn.
+        profile: LaunchProfile { mcp_config: Some(bridge.config_path().to_path_buf()), ..Default::default() },
         opts: Default::default(),
     };
     let mut s = Session::start(&l).await.expect("agy starts");
@@ -179,11 +172,64 @@ async fn live_agy_calls_a_delphi_tool_through_a_workspace_plugin_while_a_hook_de
             _ => {}
         }
     }
-    let saw = std::fs::read_to_string(&seen).unwrap_or_default();
-    println!("hook saw: {:?}\nagy said: {}", saw.lines().collect::<Vec<_>>(), text.replace('\n', " "));
+    let decisions: Vec<(String, bool)> = std::iter::from_fn(|| notes.try_recv().ok()).map(|n| (n.tool, n.allowed)).collect();
+    println!("gate decided: {:?}\nagy said: {}", decisions, text.replace('\n', " "));
     assert!(served, "the Delphi tool reached the span through the plugin");
-    assert!(saw.lines().any(|n| n.starts_with("mcp_delphi_")) && saw.lines().any(|n| n == "run_command"), "the hook saw both the Delphi tool and the shell: {:?}", saw);
-    assert!(!root.join("proof.txt").exists(), "the shell command was denied and never ran");
+    assert!(decisions.iter().any(|(t, ok)| t.starts_with("mcp_delphi_") && *ok), "the gate allowed Delphi's tool: {:?}", decisions);
+    assert!(decisions.iter().any(|(t, ok)| t == "run_command" && !*ok), "and denied the shell: {:?}", decisions);
+    assert!(!root.join("proof.txt").exists(), "the shell command never ran");
+}
+
+/// Run `delphi __agy-hook` the way the Antigravity CLI does: the tool call as JSON on stdin, the gate's address in the
+/// environment. Returns its exit code and what it printed, parsed.
+fn run_hook(socket: Option<&std::path::Path>, token: Option<&str>, stdin: &str) -> (Option<i32>, Value) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_delphi-core"));
+    cmd.arg("__agy-hook").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_remove("DELPHI_BRIDGE_SOCKET").env_remove("DELPHI_BRIDGE_TOKEN");
+    if let Some(s) = socket {
+        cmd.env("DELPHI_BRIDGE_SOCKET", s);
+    }
+    if let Some(t) = token {
+        cmd.env("DELPHI_BRIDGE_TOKEN", t);
+    }
+    let mut child = cmd.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    (out.status.code(), serde_json::from_slice(&out.stdout).unwrap_or_else(|_| json!({"unparsed": String::from_utf8_lossy(&out.stdout)})))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agy_hook_asks_the_gate_and_every_way_it_can_fail_is_a_denial_that_says_why() {
+    use delphi_engine::bridge::{HookPolicy, AGY_TOOL_PREFIX};
+    let policy = HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec!["search_web".into()] };
+    let (bridge, _calls, _notes) = Bridge::start_gated(defs(), String::new(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core")), Some(policy)).await.unwrap();
+    let (socket, token) = (bridge.socket(), bridge.token().to_string());
+    let call = |name: &str, args: Value| json!({"toolCall": {"name": name, "args": args}, "conversationId": "c", "stepIdx": 3}).to_string();
+    let results = tokio::task::spawn_blocking(move || {
+        vec![
+            run_hook(Some(&socket), Some(&token), &call("mcp_delphi_delphi_timer", json!({"note": "x"}))),
+            run_hook(Some(&socket), Some(&token), &call("search_web", json!({"query": "rust"}))),
+            run_hook(Some(&socket), Some(&token), &call("run_command", json!({"CommandLine": "echo leaked > proof.txt"}))),
+            run_hook(Some(&socket), Some(&token), "this is not json"),
+            run_hook(Some(&socket), Some(&token), ""),
+            run_hook(Some(&socket), Some("not-the-token"), &call("mcp_delphi_delphi_timer", json!({}))),
+            run_hook(Some(std::path::Path::new("/nonexistent/b.sock")), Some(&token), &call("mcp_delphi_delphi_timer", json!({}))),
+            run_hook(None, None, &call("mcp_delphi_delphi_timer", json!({}))),
+        ]
+    })
+    .await
+    .unwrap();
+    let decisions: Vec<(Option<i32>, &str)> = results.iter().map(|(code, v)| (*code, v["decision"].as_str().unwrap_or("?"))).collect();
+    assert_eq!(decisions, [(Some(0), "allow"), (Some(0), "allow"), (Some(0), "deny"), (Some(0), "deny"), (Some(0), "deny"), (Some(0), "deny"), (Some(0), "deny"), (Some(0), "deny")], "{:?}", results);
+    // The model is told why, in words that point it at what it can use.
+    assert!(results[2].1["reason"].as_str().unwrap().contains("run_command") && results[2].1["reason"].as_str().unwrap().contains("mcp_delphi_delphi_"), "{}", results[2].1);
+    for (i, why) in [(3, "valid JSON"), (4, "valid JSON"), (5, "not understood"), (6, "could not be reached"), (7, "not configured")] {
+        assert!(results[i].1["reason"].as_str().unwrap().starts_with("denied by Delphi:") && results[i].1["reason"].as_str().unwrap().contains(why), "case {}: {}", i, results[i].1);
+    }
+    // A bridge with no gate (a Claude span) never answers an allow, whoever asks.
+    let (open, _rx) = Bridge::start(defs(), String::new(), std::path::Path::new("/x")).await.unwrap();
+    let (socket, token) = (open.socket(), open.token().to_string());
+    let (code, v) = tokio::task::spawn_blocking(move || run_hook(Some(&socket), Some(&token), &json!({"toolCall": {"name": "run_command"}}).to_string())).await.unwrap();
+    assert_eq!((code, v["decision"].as_str()), (Some(0), Some("deny")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
