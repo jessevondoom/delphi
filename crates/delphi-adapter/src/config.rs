@@ -195,19 +195,29 @@ pub struct Connector {
     pub identity: Option<String>,
 }
 
-/// Who answers the tool-permission questions a subscription CLI raises (`specs/018` §5).
+/// Who answers the tool-permission questions a subscription CLI raises (`specs/020` §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ApprovalSource {
-    /// Delphi's own tiers, taint gates and cards decide every request (the default).
-    #[default]
+    /// Delphi's own tiers, taint gates and cards decide every request.
     Delphi,
     /// For roles that do not edit files or run commands, the CLI's own policy decides (organization settings and
-    /// its auto-mode classifier); Delphi is asked only about what that policy cannot settle. Builders always stay on Delphi's rules.
+    /// its auto-mode classifier); Delphi is asked only about what that policy cannot settle. Builders always stay on
+    /// Delphi's rules. This is the default: the organization's own policy is the stronger authority (operator, 2026-10-25).
+    #[default]
     Delegate,
 }
 
-/// One `[harness.<name>]` block (`specs/018` §3). Pinned by hash with `[access]`, so a local edit cannot widen it.
+/// The CLI's own tools every role without a worktree gets unless a profile says otherwise. File access is not here on
+/// purpose: Delphi's own file tools carry the role's scope and the provenance stamps the CLI's cannot.
+pub const DEFAULT_NATIVE_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+
+fn default_native_tools() -> Vec<String> {
+    DEFAULT_NATIVE_TOOLS.iter().map(|s| s.to_string()).collect()
+}
+
+/// One `[harness.<name>]` block (`specs/020` §3). Optional: with no block every default below applies, so nothing has to
+/// be ratified to use them. A block is pinned by hash with `[access]`, so a local edit cannot widen what it narrows.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessProfile {
@@ -216,13 +226,12 @@ pub struct HarnessProfile {
     pub bridge: bool,
     #[serde(default)]
     pub approvals: ApprovalSource,
-    /// The CLI's own built-in tools given to roles that have no worktree (for example `WebSearch`, `WebFetch`).
-    /// Builders always get the CLI's standard set.
-    #[serde(default)]
+    /// The CLI's own built-in tools given to roles that have no worktree. Builders always get the CLI's standard set.
+    #[serde(default = "default_native_tools")]
     pub native_tools: Vec<String>,
-    /// Let the CLI load the connectors its signed-in account has (claude.ai connectors, set up by the organization).
-    /// Off, the CLI is started with only the Delphi bridge (`--strict-mcp-config`).
-    #[serde(default)]
+    /// Let the CLI load the MCP servers its sign-in provides (claude.ai connectors the organization set up, and any the
+    /// operator configured for the CLI). Off, the CLI is started with only the Delphi bridge (`--strict-mcp-config`).
+    #[serde(default = "yes")]
     pub claudeai_connectors: bool,
     /// Exact names (`mcp__<server>__<tool>`) of the account's connector tools that only read. A listed tool is allowed
     /// without a card; any other connector tool the CLI asks about is treated as a possible write (a Red card).
@@ -239,7 +248,7 @@ pub struct HarnessProfile {
 
 impl Default for HarnessProfile {
     fn default() -> Self {
-        HarnessProfile { bridge: true, approvals: ApprovalSource::Delphi, native_tools: vec![], claudeai_connectors: false, connector_reads: vec![], env_allow: vec![], profile: None }
+        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None }
     }
 }
 
@@ -423,10 +432,15 @@ impl Config {
                 Err(e) => errs.push(format!("[connectors.*]: {}", e)),
             }
         }
-        if let Some(h) = root.get("harness") {
-            match h.clone().try_into::<BTreeMap<String, HarnessProfile>>() {
-                Ok(v) => cfg.harness = v,
-                Err(e) => errs.push(format!("[harness.*]: {}", e)),
+        // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
+        if let Some(h) = root.get("harness").and_then(|h| h.as_table()) {
+            for (name, v) in h.iter().filter(|(_, v)| v.is_table()) {
+                match v.clone().try_into::<HarnessProfile>() {
+                    Ok(p) => {
+                        cfg.harness.insert(name.clone(), p);
+                    }
+                    Err(e) => errs.push(format!("[harness.{}]: {}", name, e)),
+                }
             }
         }
         if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
@@ -601,10 +615,8 @@ impl Config {
                     errs.push(format!("[harness.{}] env_allow entry `{}` must be an environment variable name (A-Z, 0-9, `_`); give names, never values", name, v));
                 }
             }
-            // agy has no per-span MCP injection, no way to choose its tools and no approval bridge (`specs/009` §7B).
-            if name == "agy" && (!h.native_tools.is_empty() || h.claudeai_connectors || !h.connector_reads.is_empty() || h.approvals != ApprovalSource::Delphi) {
-                errs.push("[harness.agy] only `env_allow` applies: agy has no tool bridge, no tool selection and no approval bridge (`specs/009` §7B)".to_string());
-            }
+            // agy has no per-span MCP injection, no way to choose its tools and no approval bridge (`specs/009` §7B,
+            // `specs/020` §8), so only `env_allow` means anything for it; the engine reads nothing else from its block.
         }
         for (name, c) in &self.connectors {
             let ok_name = !name.is_empty() && name.len() <= 32 && name.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') && !name.starts_with('-');
@@ -931,14 +943,23 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
     }
 
     #[test]
-    fn harness_profiles_parse_default_to_the_safe_setting_and_reject_what_cannot_apply() {
-        assert_eq!(Config::parse(SAMPLE).unwrap().harness.len(), 0, "no block, no profile: the bridge default applies in the engine");
-        let ok = format!("{}\n[harness.claude]\napprovals = \"delegate\"\nnative_tools = [\"WebSearch\", \"WebFetch\"]\nclaudeai_connectors = true\nconnector_reads = [\"mcp__claude_ai_Slack__slack_search\"]\nenv_allow = [\"AWS_PROFILE\", \"CLAUDE_CODE_USE_BEDROCK\"]\nprofile = \"default\"\n[harness.agy]\nenv_allow = [\"HTTPS_PROXY\"]\n", SAMPLE);
+    fn harness_profiles_default_to_full_capability_and_a_partial_block_keeps_the_other_defaults() {
+        assert_eq!(Config::parse(SAMPLE).unwrap().harness.len(), 0, "no block is the normal case: the defaults apply in the engine, nothing to ratify");
+        let d = HarnessProfile::default();
+        assert_eq!((d.bridge, d.approvals, d.claudeai_connectors, d.native_tools.as_slice(), d.connector_reads.len()), (true, ApprovalSource::Delegate, true, &["WebSearch".to_string(), "WebFetch".to_string()][..], 0), "the operator's 2026-10-25 decision: full capability out of the box");
+        // A block that names one thing changes only that thing.
+        // `[harness]` has scalar settings of its own, which must not be mistaken for a profile.
+        let mixed = Config::parse(&format!("{}\n[harness]\nsubscription_budget_tokens = 1000\n[harness.claude]\nbridge = false\n", SAMPLE)).unwrap();
+        assert_eq!(mixed.harness.keys().collect::<Vec<_>>(), ["claude"]);
+        let narrow = Config::parse(&format!("{}\n[harness.claude]\napprovals = \"delphi\"\n", SAMPLE)).unwrap();
+        assert_eq!(narrow.harness["claude"], HarnessProfile { approvals: ApprovalSource::Delphi, ..Default::default() });
+        let off = Config::parse(&format!("{}\n[harness.claude]\nbridge = false\nclaudeai_connectors = false\nnative_tools = []\n", SAMPLE)).unwrap();
+        assert_eq!((off.harness["claude"].bridge, off.harness["claude"].claudeai_connectors, off.harness["claude"].native_tools.len(), off.harness["claude"].approvals), (false, false, 0, ApprovalSource::Delegate));
+        let ok = format!("{}\n[harness.claude]\nconnector_reads = [\"mcp__claude_ai_Slack__slack_search\"]\nenv_allow = [\"AWS_PROFILE\", \"CLAUDE_CODE_USE_BEDROCK\"]\nprofile = \"default\"\n[harness.agy]\nenv_allow = [\"HTTPS_PROXY\"]\n", SAMPLE);
         let c = Config::parse(&ok).unwrap();
         let h = &c.harness["claude"];
-        assert_eq!((h.bridge, h.approvals, h.claudeai_connectors, h.native_tools.len(), h.env_allow.len()), (true, ApprovalSource::Delegate, true, 2, 2));
+        assert_eq!((h.connector_reads.len(), h.env_allow.len()), (1, 2));
         assert_eq!(c.harness["agy"], HarnessProfile { env_allow: vec!["HTTPS_PROXY".into()], ..Default::default() });
-        assert_eq!(HarnessProfile::default().approvals, ApprovalSource::Delphi, "Delphi's own rules unless the operator ratifies otherwise");
         for (bad, needle) in [
             ("[harness.claude]\nenv_allow = [\"aws_profile\"]\n", "environment variable name"),
             ("[harness.claude]\nenv_allow = [\"TOKEN=abc\"]\n", "give names, never values"),
@@ -946,8 +967,6 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
             ("[harness.claude]\nconnector_reads = [\"slack_search\"]\n", "exact tool name"),
             ("[harness.claude]\nsurprise = 1\n", "unknown field"),
             ("[harness.codex]\n", "only `claude` and `agy`"),
-            ("[harness.agy]\napprovals = \"delegate\"\n", "no tool bridge"),
-            ("[harness.agy]\nnative_tools = [\"Read\"]\n", "no tool bridge"),
         ] {
             let errs = Config::parse(&format!("{}\n{}", SAMPLE, bad)).unwrap_err().join("; ");
             assert!(errs.contains(needle), "{} -> {}", bad, errs);

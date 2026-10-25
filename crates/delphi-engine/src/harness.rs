@@ -57,7 +57,7 @@ pub enum Tools {
     Standard,
 }
 
-/// What a profile (`[harness.<cli>]`, `specs/018`) changes about how the Claude CLI is started.
+/// What a profile (`[harness.<cli>]`, `specs/020`) changes about how the Claude CLI is started.
 #[derive(Debug, Clone, Default)]
 pub struct LaunchProfile {
     /// The MCP config file that starts the Delphi tool bridge (`bridge.rs`).
@@ -68,6 +68,12 @@ pub struct LaunchProfile {
     pub auto_approve: bool,
     /// Do not pass `--strict-mcp-config`: the signed-in account's own connectors load too.
     pub claudeai_connectors: bool,
+    /// With account connectors on: how long to wait, before the first turn, for them to finish loading. They load in the
+    /// background and can arrive after the first model request, so a model asked at once may not be offered them. Zero
+    /// does not wait (tests, and a CLI that does not answer).
+    pub settle: Duration,
+    /// MCP servers a previous session of this CLI had connected, which the wait holds out for until its cap.
+    pub expect_servers: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +142,8 @@ pub enum Event {
     /// Share of the subscription's window used, 0 to 1.
     /// `status` is `allowed`, `allowed_warning` or `rejected` (empty when the CLI does not say); `resets_at` is Unix seconds or milliseconds, as the CLI sent it.
     RateLimit { utilization: f64, window: String, status: String, resets_at: Option<i64> },
+    /// The answer to Delphi's own `mcp_status` request: `(server, status)`. Only the connector wait asks.
+    McpStatus(Vec<(String, String)>),
     Result { text: String, is_error: bool, stop_reason: Option<String>, total_cost_usd: f64, usage: Tokens },
     /// The process ended; no more events follow.
     Exit { code: Option<i32> },
@@ -170,6 +178,10 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 }
             }
         }
+        Some("control_response") if m["response"]["request_id"].as_str().is_some_and(|id| id.starts_with(MCP_STATUS_ID)) => {
+            let servers = m["response"]["response"]["mcpServers"].as_array().into_iter().flatten().map(|s| (s["name"].as_str().unwrap_or("").to_string(), s["status"].as_str().unwrap_or("").to_string())).collect();
+            out.push(Event::McpStatus(servers));
+        }
         Some("rate_limit_event") => {
             let i = &m["rate_limit_info"];
             let status = i["status"].as_str().unwrap_or("");
@@ -200,6 +212,9 @@ pub fn parse_line(line: &str) -> Vec<Event> {
     }
     out
 }
+
+/// The id prefix of Delphi's own `mcp_status` requests, so their answers are told from the CLI's other replies.
+const MCP_STATUS_ID: &str = "delphi-mcp-";
 
 /// Tool names from a list that holds either strings or objects with a `name`.
 fn names_of(v: &Value) -> Vec<String> {
@@ -334,6 +349,37 @@ fn args(l: &Launch) -> Vec<String> {
     a
 }
 
+/// Wait for the account's connectors to finish loading: ask for the MCP status until nothing is pending, every server
+/// a previous session had is connected, and three answers in a row agree; or until `cap`. A CLI that does not answer a
+/// status request (a stand-in, or an older release) is not waited on.
+async fn settle_connectors(stdin: &mut ChildStdin, rx: &mut mpsc::Receiver<Event>, cap: Duration, expect: &[String]) {
+    let deadline = tokio::time::Instant::now() + cap;
+    let (mut last, mut agree, mut n): (Option<Vec<(String, String)>>, u32, u32) = (None, 0, 0);
+    while tokio::time::Instant::now() < deadline {
+        n += 1;
+        let req = json!({"type": "control_request", "request_id": format!("{}{}", MCP_STATUS_ID, n), "request": {"subtype": "mcp_status"}}).to_string() + "\n";
+        if stdin.write_all(req.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+            return;
+        }
+        let answer = loop {
+            match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+                Ok(Some(Event::McpStatus(s))) => break Some(s),
+                Ok(Some(_)) => continue,
+                _ => break None,
+            }
+        };
+        let Some(mut servers) = answer else { return };
+        servers.sort();
+        let ready = servers.iter().all(|(_, st)| st != "pending") && expect.iter().all(|e| servers.iter().any(|(n, st)| n == e && st == "connected"));
+        agree = if ready && last.as_ref() == Some(&servers) { agree + 1 } else { 0 };
+        last = Some(servers);
+        if ready && agree >= 2 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+    }
+}
+
 /// A running CLI session.
 pub struct Session {
     child: Child,
@@ -355,9 +401,7 @@ impl Session {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let first = first_turn(l);
         let cli = l.cli;
-        stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
-        stdin.flush().await.map_err(|e| e.to_string())?;
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, mut rx) = mpsc::channel(256);
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut buf = Vec::new();
@@ -375,6 +419,12 @@ impl Session {
                 }
             }
         });
+        // The CLI says nothing until it has a first turn, but it answers control requests: settle the connectors first.
+        if cli == Cli::Claude && l.profile.claudeai_connectors && !l.profile.settle.is_zero() {
+            settle_connectors(&mut stdin, &mut rx, l.profile.settle, &l.profile.expect_servers).await;
+        }
+        stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
+        stdin.flush().await.map_err(|e| e.to_string())?;
         Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false })
     }
 
@@ -447,7 +497,7 @@ pub fn cli_env() -> BTreeMap<String, String> {
     cli_env_with(&[])
 }
 
-/// [`cli_env`] plus the variable names a ratified `[harness.<cli>] env_allow` lists (`specs/018` §3).
+/// [`cli_env`] plus the variable names a ratified `[harness.<cli>] env_allow` lists (`specs/020` §3).
 pub fn cli_env_with(extra: &[String]) -> BTreeMap<String, String> {
     const KEEP: [&str; 9] = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "XDG_CONFIG_HOME"];
     std::env::vars().filter(|(k, _)| KEEP.contains(&k.as_str()) || k.starts_with("LC_") || k == "CLAUDE_CONFIG_DIR" || extra.iter().any(|e| e == k)).collect()
@@ -624,6 +674,74 @@ pub(crate) mod tests {
 
     fn launch(program: String, dir: &std::path::Path) -> Launch {
         Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env(), profile: Default::default() }
+    }
+
+    #[tokio::test]
+    async fn the_first_turn_waits_until_the_accounts_connectors_have_stopped_loading() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("log.txt");
+        // A stand-in that answers `mcp_status` (two pending answers, then connected) and notes what arrived when.
+        let prog = d.path().join("fake-claude-slow");
+        std::fs::write(
+            &prog,
+            format!(
+                r#"#!/bin/sh
+n=0
+while read line; do
+  case "$line" in
+    *mcp_status*)
+      n=$((n+1))
+      id=$(echo "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+      if [ $n -lt 3 ]; then st=pending; else st=connected; fi
+      echo "status $n $st" >> '{log}'
+      echo "{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{{\"mcpServers\":[{{\"name\":\"claude.ai Docs\",\"status\":\"$st\"}}]}}}}}}";;
+    *'"type":"user"'*)
+      echo "first turn after $n status answers" >> '{log}'
+      echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[],"mcp_servers":[{{"name":"claude.ai Docs","status":"connected"}}]}}'
+      echo '{{"type":"result","subtype":"success","result":"fin","usage":{{}}}}'
+      exit 0;;
+  esac
+done
+"#,
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut l = launch(prog.display().to_string(), d.path());
+        l.tools = Tools::None;
+        l.profile = LaunchProfile { claudeai_connectors: true, settle: Duration::from_secs(20), ..Default::default() };
+        let mut s = Session::start(&l).await.unwrap();
+        let mut saw_init = false;
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            match ev {
+                Event::Init { mcp_servers, .. } => saw_init = mcp_servers.is_some_and(|m| m == vec![("claude.ai Docs".to_string(), "connected".to_string())]),
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(saw_init);
+        let log = std::fs::read_to_string(&log).unwrap();
+        // pending, pending, connected, then two more equal answers; only then the first turn.
+        assert!(log.contains("status 5 connected") && log.trim_end().ends_with("first turn after 5 status answers"), "{}", log);
+
+        // Without account connectors, or with no wait configured, the first turn goes out at once.
+        let d2 = tempfile::tempdir().unwrap();
+        let quick = fake_cli(d2.path(), r#"echo '{"type":"system","subtype":"init","session_id":"s2"}'
+echo '{"type":"result","subtype":"success","result":"fin","usage":{}}'"#);
+        for profile in [LaunchProfile { claudeai_connectors: false, settle: Duration::from_secs(20), ..Default::default() }, LaunchProfile { claudeai_connectors: true, settle: Duration::ZERO, ..Default::default() }] {
+            let mut l = launch(quick.clone(), d2.path());
+            l.profile = profile;
+            let started = std::time::Instant::now();
+            let mut s = Session::start(&l).await.unwrap();
+            while let Some(ev) = s.next(Duration::from_secs(10)).await {
+                if matches!(ev, Event::Exit { .. }) {
+                    break;
+                }
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "no wait: {:?}", started.elapsed());
+        }
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-//! The Delphi tool bridge (`specs/018` §2): Delphi's own tools, offered to a subscription CLI as one MCP server.
+//! The Delphi tool bridge (`specs/020` §2): Delphi's own tools, offered to a subscription CLI as one MCP server.
 //!
 //! A harness span used to be text-only: the CLI ran its own loop and could not reach `timer`, `dispatch_agent`,
 //! the scoped file tools or the connectors. For each span the daemon now listens on a unix socket in a private
@@ -82,7 +82,7 @@ impl Bridge {
         let listener = UnixListener::bind(&socket)?;
         let token = random_hex(32)?;
         let config_path = dir.join("mcp.json");
-        let config = json!({"mcpServers": {SERVER_NAME: {"command": program.display().to_string(), "args": ["__mcp-bridge", "--socket", socket.display().to_string()], "env": {"DELPHI_BRIDGE_TOKEN": token}}}});
+        let config = json!({"mcpServers": {SERVER_NAME: {"command": program.display().to_string(), "args": ["__mcp-bridge"], "env": {"DELPHI_BRIDGE_SOCKET": socket.display().to_string(), "DELPHI_BRIDGE_TOKEN": token}}}});
         {
             use std::os::unix::fs::OpenOptionsExt;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&config_path)?;
@@ -206,18 +206,20 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
     })
 }
 
-/// `delphi __mcp-bridge --socket <path>`: the relay the CLI starts as its MCP server. It connects to the span's
-/// socket, sends the token from `DELPHI_BRIDGE_TOKEN`, and copies lines both ways. Exit code 0 when either side closes.
+/// `delphi __mcp-bridge`: the relay the CLI starts as its MCP server. It connects to the span's socket
+/// (`DELPHI_BRIDGE_SOCKET`, or `--socket <path>`), sends the token from `DELPHI_BRIDGE_TOKEN`, and copies lines both
+/// ways. Exit code 0 when either side closes. The command line is the same for every span, so an administrator who
+/// allows MCP servers by command (`allowedMcpServers` with `serverCommand`) can pin it once.
 pub fn run_relay(args: &[String]) -> i32 {
-    let socket = args.iter().position(|a| a == "--socket").and_then(|i| args.get(i + 1));
+    let socket = args.iter().position(|a| a == "--socket").and_then(|i| args.get(i + 1)).cloned().or_else(|| std::env::var("DELPHI_BRIDGE_SOCKET").ok()).filter(|s| !s.is_empty());
     let token = std::env::var("DELPHI_BRIDGE_TOKEN").unwrap_or_default();
     let (Some(socket), false) = (socket, token.is_empty()) else {
-        eprintln!("usage: delphi __mcp-bridge --socket <path> (with DELPHI_BRIDGE_TOKEN set)");
+        eprintln!("usage: delphi __mcp-bridge (with DELPHI_BRIDGE_SOCKET and DELPHI_BRIDGE_TOKEN set)");
         return 2;
     };
     // SAFETY: single-threaded here; the child tools the CLI runs never inherit the token.
     unsafe { std::env::remove_var("DELPHI_BRIDGE_TOKEN") };
-    let mut stream = match std::os::unix::net::UnixStream::connect(socket) {
+    let mut stream = match std::os::unix::net::UnixStream::connect(&socket) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("cannot reach the Delphi bridge: {}", e);
@@ -329,8 +331,8 @@ mod tests {
         assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
         assert_eq!(std::fs::metadata(b.config_path()).unwrap().permissions().mode() & 0o777, 0o600);
         let cfg: Value = serde_json::from_str(&std::fs::read_to_string(b.config_path()).unwrap()).unwrap();
-        assert_eq!(cfg["mcpServers"]["delphi"]["args"][0], "__mcp-bridge");
-        assert!(!cfg["mcpServers"]["delphi"]["args"].to_string().contains(b.token()), "the token is in the environment, not on a command line");
+        assert_eq!(cfg["mcpServers"]["delphi"]["args"], json!(["__mcp-bridge"]), "the same command line for every span, so an administrator can allow it once by command");
+        assert_eq!(cfg["mcpServers"]["delphi"]["env"]["DELPHI_BRIDGE_SOCKET"], b.socket().display().to_string());
         assert_eq!(cfg["mcpServers"]["delphi"]["env"]["DELPHI_BRIDGE_TOKEN"], b.token());
         drop(b);
         assert!(!dir.exists());

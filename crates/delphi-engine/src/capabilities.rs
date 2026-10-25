@@ -194,13 +194,13 @@ pub async fn probe(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_i
 /// signed in and reachable, and records what it reports. Tool calling is not probed here (the Claude
 /// approval bridge was verified separately, and agy has none).
 pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64) -> Capability {
-    probe_harness_seat(cfg, ep, program, now).await.0
+    probe_harness_seat(cfg, ep, program, now, Duration::ZERO).await.0
 }
 
 /// [`probe_harness`], and what the CLI reported at start-up (its tools and MCP servers), for `local/harness-tools.json`.
 /// A Claude seat whose profile has the Delphi bridge on is started with it, so the probe shows whether an organization's
 /// MCP policy lets the bridge load, and which of the account's own connectors came with it.
-pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now: i64) -> (Capability, Option<crate::inventory::SeatRecord>) {
+pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now: i64, settle: Duration) -> (Capability, Option<crate::inventory::SeatRecord>) {
     let mut seat: Option<crate::inventory::SeatRecord> = None;
     let mut cap = Capability {
         endpoint_id: ep.id.clone(),
@@ -235,7 +235,9 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
         return (cap, None);
     }
     let profile = cfg.harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
-    let mut lp = crate::harness::LaunchProfile { claudeai_connectors: cli == Cli::Claude && profile.claudeai_connectors, ..Default::default() };
+    let connectors = cli == Cli::Claude && profile.claudeai_connectors;
+    // `settle`: the probe is the place to learn what loads, so a real probe waits for the account's connectors as a span does.
+    let mut lp = crate::harness::LaunchProfile { claudeai_connectors: connectors, settle: if connectors { settle } else { Duration::ZERO }, ..Default::default() };
     let bridge_wanted = cli == Cli::Claude && profile.bridge;
     // Kept alive for the probe; no call is expected, so the receiver is only held.
     let mut _bridge = None;
@@ -451,18 +453,18 @@ echo '{"type":"result","subtype":"success","result":"OK","usage":{"input_tokens"
             (d, prog)
         };
         let (_d, prog) = run(r#"{"name":"delphi","status":"connected"},{"name":"claude.ai Slack","status":"pending"}"#);
-        let (cap, seat) = probe_harness_seat(&cfg, &ep, &prog, 7).await;
+        let (cap, seat) = probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await;
         assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("Delphi tool bridge: loaded")) && cap.notes.iter().any(|n| n.contains("account connectors loaded: claude.ai Slack (pending)")), "{:?}", cap.notes);
         let seat = seat.expect("the seat's start-up report is returned");
         assert_eq!((seat.endpoint_id.as_str(), seat.bridge, seat.tools.as_slice()), ("sub", true, &["mcp__delphi__probe".to_string()][..]));
         // Policy keeps the bridge out: the seat is marked degraded and the note says what to do.
         let (_d2, prog) = run(r#"{"name":"delphi","status":"failed"}"#);
-        let (cap, _) = probe_harness_seat(&cfg, &ep, &prog, 7).await;
+        let (cap, _) = probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await;
         assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("NOT loaded (status: failed)") && n.contains("organization policy")), "{:?}", cap.notes);
         // A profile with the bridge off does not look for it.
         let off = Config::parse(&format!("{}\n[harness.claude]\nbridge = false\n", HARNESS_CFG)).unwrap();
         let (_d3, prog) = run(r#"{"name":"delphi","status":"failed"}"#);
-        let (cap, seat) = probe_harness_seat(&off, &ep, &prog, 7).await;
+        let (cap, seat) = probe_harness_seat(&off, &ep, &prog, 7, Duration::ZERO).await;
         assert!(!cap.degraded && !cap.notes.iter().any(|n| n.contains("bridge")), "{:?}", cap.notes);
         assert!(!seat.unwrap().bridge);
     }

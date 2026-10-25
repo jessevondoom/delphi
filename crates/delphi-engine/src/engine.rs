@@ -68,6 +68,8 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
+    pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
     pub council_budget_usd: f64,
     /// A Council seat that has not answered by then abstains.
@@ -112,6 +114,7 @@ impl Default for Settings {
             agy_program: "agy".into(),
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
             park_poll: Duration::from_secs(5),
@@ -209,7 +212,7 @@ pub struct Engine {
     pub(crate) decisions_changed: tokio::sync::Notify,
     /// Durable timers (`specs/017`): wakes the daemon keeps on behalf of roles and the operator.
     pub timers: Arc<crate::timers::TimerStore>,
-    /// What each subscription CLI last reported it could do (`specs/018` §4), shown to roles that dispatch work.
+    /// What each subscription CLI last reported it could do (`specs/020` §4), shown to roles that dispatch work.
     pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,

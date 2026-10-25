@@ -144,7 +144,7 @@ impl Engine {
                     deny("this task has no Delphi tool bridge")
                 }
             }
-            // A connector the signed-in account has (`specs/018` §6). Whatever it returns is outside Delphi's sight, so
+            // A connector the signed-in account has (`specs/020` §6). Whatever it returns is outside Delphi's sight, so
             // the span is untrusted from here; a tool the operator has not listed as read-only may write, so it is Red.
             n if n.starts_with("mcp__") => {
                 if !ctl.profile.claudeai_connectors {
@@ -321,7 +321,7 @@ impl Engine {
             }
         };
         let program = if cli == Cli::Agy { self.settings.agy_program.clone() } else { self.settings.harness_program.clone() };
-        // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/018`).
+        // `[harness.<cli>]` (ratified): how this CLI is equipped and who answers its permission questions (`specs/020`).
         let profile: HarnessProfile = self.cfg.get().harness.get(if cli == Cli::Agy { "agy" } else { "claude" }).cloned().unwrap_or_default();
         let delegate = cli == Cli::Claude && !builder && profile.approvals == ApprovalSource::Delegate;
         // Delphi's tools for this role, offered over the bridge. Only the Claude CLI can load one. A Builder keeps the
@@ -330,7 +330,10 @@ impl Engine {
         if builder {
             bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()));
         }
-        let mut lp = LaunchProfile { native_tools: if builder || cli == Cli::Agy { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: cli == Cli::Claude && !builder && profile.claudeai_connectors, mcp_config: None };
+        let connectors = cli == Cli::Claude && !builder && profile.claudeai_connectors;
+        // Servers a previous session had connected besides ours: the wait for the account's connectors holds out for them.
+        let expect_servers: Vec<String> = self.inventory.seats().into_iter().find(|r| r.endpoint_id == ep.id).map(|r| r.mcp_servers.into_iter().filter(|(n, st)| n != crate::bridge::SERVER_NAME && st == "connected").map(|(n, _)| n).collect()).unwrap_or_default();
+        let mut lp = LaunchProfile { native_tools: if builder || cli == Cli::Agy { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         if !bridge_defs.is_empty() {
             let started = match std::env::current_exe() {
@@ -403,6 +406,7 @@ impl Engine {
                         }
                     }
                 }
+                Event::McpStatus(_) => {}
                 Event::RateLimit { ref status, resets_at, ref window, .. } => {
                     if let Some(x) = delphi_adapter::exhaust::classify_rate_limit_event(status, resets_at, window) {
                         exhaustion.get_or_insert(x);
@@ -637,7 +641,7 @@ mod tests {
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
         assert!(f.model.requests().is_empty(), "no API call is made on a harness endpoint");
         let started = events_of(&f, "harness.started");
-        assert_eq!((started[0].payload["tools"].as_str(), started[0].endpoint_id.as_deref()), (Some("none"), Some("claude-sub")));
+        assert_eq!((started[0].payload["tools"].as_str(), started[0].endpoint_id.as_deref()), (Some("native"), Some("claude-sub")), "the CLI's web tools by default; its file tools are not offered");
         let usage = events_of(&f, "agent.usage");
         assert_eq!((usage[0].payload["cost_model"].as_str(), usage[0].payload["usage_source"].as_str(), usage[0].payload["cost_usd"].as_f64()), (Some("subscription"), Some("reported"), Some(0.0)));
         assert_eq!((usage[0].payload["output_tokens"].as_u64(), usage[0].payload["cache_read_tokens"].as_u64()), (Some(40), Some(5000)));
@@ -989,14 +993,14 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{}}
         assert!(!out.text.contains("ok"), "the output is discarded");
     }
 
-    // ---- the Delphi tool bridge (`specs/018`) ----
+    // ---- the Delphi tool bridge (`specs/020`) ----
 
     /// A stand-in MCP client: reads the config the engine gave the CLI, connects to the bridge's socket with the span's
     /// token, initializes, and calls one tool with the id a real CLI would send. Its answer goes to a file.
     const MCP_CLIENT: &str = r#"import json, socket, sys
 cfg = json.load(open(sys.argv[1]))["mcpServers"]["delphi"]
 s = socket.socket(socket.AF_UNIX)
-s.connect(cfg["args"][2])
+s.connect(cfg["env"]["DELPHI_BRIDGE_SOCKET"])
 f = s.makefile("rw")
 def rpc(o):
     f.write(json.dumps(o) + "\n"); f.flush()
@@ -1047,12 +1051,12 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
         let (f, _s) = fixture(&body, |_| {});
         let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
-        // The CLI was launched with the bridge, no built-in tools, and only that MCP server.
+        // The CLI was launched with the bridge, and the defaults: the web tools and the organization's own approval policy.
         let argv = fs::read_to_string(&argv_file).unwrap();
         let args: Vec<&str> = argv.lines().collect();
         let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
-        assert!(args.contains(&"--strict-mcp-config") && after("--mcp-config").ends_with("mcp.json"), "{:?}", args);
-        assert_eq!((after("--tools"), after("--permission-mode")), ("", "manual"), "no built-ins, and Delphi's approvals, by default");
+        assert!(after("--mcp-config").ends_with("mcp.json"), "{:?}", args);
+        assert_eq!((after("--tools"), after("--permission-mode")), ("WebSearch,WebFetch", "auto"), "{:?}", args);
         // The tool ran, and the model got the real answer back.
         let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
         let listed: Vec<&str> = answer["listed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
@@ -1066,7 +1070,7 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
         let call = &events_of(&f, "harness.bridge_call")[0].payload;
         assert_eq!((call["name"].as_str(), call["tool_call_id"].as_str(), call["is_error"].as_bool()), (Some("timer"), Some("toolu_test"), Some(false)));
         let started = &events_of(&f, "harness.started")[0].payload;
-        assert!(started["bridge"].as_array().unwrap().iter().any(|v| v == "timer") && started["approvals"] == "delphi", "{}", started);
+        assert!(started["bridge"].as_array().unwrap().iter().any(|v| v == "timer") && started["approvals"] == "delegate", "{}", started);
         // What the CLI reported at start-up is kept for the orchestrator's picture of its seats.
         let seats = f.engine.inventory.seats();
         assert_eq!((seats.len(), seats[0].endpoint_id.as_str(), seats[0].bridge, seats[0].tools.as_slice()), (1, "claude-sub", true, &["mcp__delphi__timer".to_string()][..]));
@@ -1139,20 +1143,37 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
     }
 
     #[tokio::test]
-    async fn a_delegated_profile_starts_the_cli_in_auto_mode_with_the_chosen_built_ins_and_lets_the_organizations_policy_answer_first() {
+    async fn with_no_profile_at_all_the_cli_gets_the_full_default_equipment_and_the_organizations_policy_answers_first() {
         let scripts = tempfile::tempdir().unwrap();
         let (body, _o, argv) = bridge_cli(scripts.path(), "timer", "{}", "connected");
         let (f, _s) = fixture(&body, |_| {});
-        use_harness_profile(&f, "[harness.claude]\napprovals = \"delegate\"\nnative_tools = [\"WebSearch\", \"WebFetch\"]\nenv_allow = [\"AWS_PROFILE\"]\n");
+        // No `[harness.claude]` block: nothing was ratified, and nothing needs to be.
         f.engine.run_task(&f.m, "architect", "Find the vendor's changelog").await.unwrap();
         let argv = fs::read_to_string(argv).unwrap();
         let args: Vec<&str> = argv.lines().collect();
         let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
         assert_eq!((after("--permission-mode"), after("--tools")), ("auto", "WebSearch,WebFetch"));
-        assert!(args.contains(&"--strict-mcp-config"), "the account's own connectors stay out unless the profile lets them in");
+        assert!(!args.contains(&"--strict-mcp-config"), "the account's own connectors load by default");
+        assert!(after("--mcp-config").ends_with("mcp.json"), "and so does Delphi's bridge");
         let started = &events_of(&f, "harness.started")[0].payload;
-        assert_eq!((started["approvals"].as_str(), started["tools"].as_str(), started["native_tools"].clone()), (Some("delegate"), Some("native"), json!(["WebSearch", "WebFetch"])));
+        assert_eq!((started["approvals"].as_str(), started["tools"].as_str(), started["native_tools"].clone(), started["claudeai_connectors"].clone()), (Some("delegate"), Some("native"), json!(["WebSearch", "WebFetch"]), json!(true)));
         assert!(argv.contains("Your own built-in tools: WebSearch, WebFetch"), "{}", argv);
+    }
+
+    #[tokio::test]
+    async fn an_operator_can_narrow_the_profile_back_to_delphis_own_rules_and_a_closed_door() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _o, argv) = bridge_cli(scripts.path(), "timer", "{}", "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\napprovals = \"delphi\"\nnative_tools = []\nclaudeai_connectors = false\nenv_allow = [\"AWS_PROFILE\"]\n");
+        f.engine.run_task(&f.m, "architect", "Find the vendor's changelog").await.unwrap();
+        let argv = fs::read_to_string(argv).unwrap();
+        let args: Vec<&str> = argv.lines().collect();
+        let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!((after("--permission-mode"), after("--tools")), ("manual", ""));
+        assert!(args.contains(&"--strict-mcp-config"));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["approvals"].as_str(), started["tools"].as_str(), started["claudeai_connectors"].clone()), (Some("delphi"), Some("none"), json!(false)));
     }
 
     /// A fake CLI that asks permission for one tool and records Delphi's answer.
@@ -1198,11 +1219,12 @@ echo "$answer" > '{answer_file}'
     }
 
     #[tokio::test]
-    async fn the_accounts_own_connectors_are_denied_unless_enabled_and_then_only_listed_reads_skip_the_red_card() {
-        // Not enabled: refused without a card.
+    async fn the_accounts_own_connectors_are_on_by_default_a_closed_door_denies_them_and_only_listed_reads_skip_the_red_card() {
+        // Closed by the operator (the default is open): refused without a card.
         let scripts = tempfile::tempdir().unwrap();
         let (body, answer) = ask_cli(scripts.path(), "mcp__claude_ai_Slack__slack_search", r#"{"query":"outage"}"#, r#"{"name":"delphi","status":"connected"}"#);
         let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nclaudeai_connectors = false\n");
         f.engine.run_task(&f.m, "architect", "Search Slack").await.unwrap();
         let a = fs::read_to_string(&answer).unwrap();
         assert!(a.contains("\"behavior\":\"deny\"") && a.contains("not enabled"), "{}", a);

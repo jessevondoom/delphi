@@ -13,8 +13,9 @@ fn defs() -> Vec<ToolDef> {
     vec![ToolDef { name: "timer".into(), description: "Wake me later.".into(), input_schema: json!({"type": "object"}) }]
 }
 
+/// Started the way a CLI starts it from the generated config: no arguments, the socket and token in the environment.
 fn relay(socket: &std::path::Path, token: &str) -> std::process::Child {
-    Command::new(env!("CARGO_BIN_EXE_delphi-core")).args(["__mcp-bridge", "--socket", &socket.display().to_string()]).env("DELPHI_BRIDGE_TOKEN", token).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_delphi-core")).args(["__mcp-bridge"]).env("DELPHI_BRIDGE_SOCKET", socket).env("DELPHI_BRIDGE_TOKEN", token).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -60,7 +61,8 @@ async fn the_relay_carries_a_cli_session_to_the_span_and_back() {
 #[ignore = "uses the operator's Claude login"]
 async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_modes() {
     use delphi_engine::harness::{cli_env, Cli, Decision, Event, Launch, LaunchProfile, Session, Tools};
-    for auto in [false, true] {
+    // Strict and manual; strict and auto; and the shipped default: auto, the web tools, the account's own connectors loaded.
+    for (auto, defaults) in [(false, false), (true, false), (true, true)] {
         let (bridge, mut calls) = Bridge::start(defs(), "Delphi's timer tool wakes you later.".into(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core"))).await.unwrap();
         let dir = tempfile::tempdir().unwrap();
         let l = Launch {
@@ -72,7 +74,7 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
             cwd: dir.path().to_path_buf(),
             tools: Tools::None,
             env: cli_env(),
-            profile: LaunchProfile { mcp_config: Some(bridge.config_path().to_path_buf()), auto_approve: auto, ..Default::default() },
+            profile: LaunchProfile { mcp_config: Some(bridge.config_path().to_path_buf()), auto_approve: auto, claudeai_connectors: defaults, native_tools: if defaults { vec!["WebSearch".into(), "WebFetch".into()] } else { vec![] }, settle: if defaults { std::time::Duration::from_secs(10) } else { std::time::Duration::ZERO }, expect_servers: vec![] },
         };
         let mut s = Session::start(&l).await.expect("claude starts");
         let (mut asked, mut served, mut connected, mut done) = (false, false, false, false);
@@ -90,7 +92,12 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
             match ev {
                 Event::Init { mcp_servers, tools, .. } => {
                     connected = mcp_servers.as_ref().is_some_and(|m| m.iter().any(|(n, st)| n == "delphi" && st == "connected"));
-                    assert_eq!(tools, vec!["mcp__delphi__timer".to_string()], "only the bridge's tool is offered");
+                    if defaults {
+                        assert!(tools.contains(&"mcp__delphi__timer".to_string()) && tools.contains(&"WebSearch".to_string()), "{:?}", tools);
+                    } else {
+                        assert_eq!(tools, vec!["mcp__delphi__timer".to_string()], "only the bridge's tool is offered");
+                    }
+                    println!("  servers: {:?}", mcp_servers);
                 }
                 Event::Permission(p) => {
                     asked = true;
@@ -106,7 +113,7 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
                 _ => {}
             }
         }
-        println!("auto={} connected={} asked_permission={} served={} done={}", auto, connected, asked, served, done);
+        println!("auto={} defaults={} connected={} asked_permission={} served={} done={}", auto, defaults, connected, asked, served, done);
         assert!(connected && served && done, "auto={}", auto);
         assert_eq!(asked, !auto, "manual asks first; auto asks nothing");
     }
@@ -128,6 +135,6 @@ async fn a_relay_with_the_wrong_token_gets_nothing_and_a_relay_without_one_refus
     .unwrap();
     assert!(silent.is_empty(), "no tool list for a stranger: {:?}", silent);
     assert!(tokio::task::spawn_blocking(move || child.wait().unwrap()).await.unwrap().success(), "the relay ends when the server closes on it");
-    let no_token = Command::new(env!("CARGO_BIN_EXE_delphi-core")).args(["__mcp-bridge", "--socket", "/nonexistent"]).env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
+    let no_token = Command::new(env!("CARGO_BIN_EXE_delphi-core")).args(["__mcp-bridge"]).env("DELPHI_BRIDGE_SOCKET", "/nonexistent").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();
     assert_eq!(no_token.code(), Some(2));
 }

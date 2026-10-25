@@ -93,6 +93,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("harness").and_then(|h| h.get("subscription_budget_tokens")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.harness_token_cap = v as u64;
     }
+    if let Some(v) = root.get("harness").and_then(|h| h.get("connector_settle_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.connector_settle = Duration::from_secs(v as u64);
+    }
     s
 }
 
