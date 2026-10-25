@@ -9,7 +9,8 @@ export type Command = { name: string; desc: string; local: boolean; args?: strin
 type Entry = Command & { ink: boolean; rust: boolean };
 
 const ALL = raw as Entry[];
-export const COMMANDS: Command[] = ALL.filter((c) => c.ink).map(({ name, desc, local, args, aliases }) => ({ name, desc, local, args, aliases }));
+// Alphabetical: the slash menu lists them in this order until you type, whatever the order in `commands.json`.
+export const COMMANDS: Command[] = ALL.filter((c) => c.ink).map(({ name, desc, local, args, aliases }) => ({ name, desc, local, args, aliases })).sort((a, b) => a.name.localeCompare(b.name));
 
 /** The command a typed name means (`/exit` is `/quit`), or `undefined` when this console has no such command. */
 export const lookup = (typed: string): Command | undefined => COMMANDS.find((c) => c.name === typed || c.aliases?.includes(typed));
