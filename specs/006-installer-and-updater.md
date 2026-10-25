@@ -3,7 +3,7 @@ id: spec-006-installer-and-updater
 title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
-status: approved   # by the operator, 2026-10-23, after Council 002
+status: approved   # by the operator, 2026-10-23, after Council 002. The embedded-model note in §2.1 and doctor check 6 in §5 (Amendment 004-A1) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified

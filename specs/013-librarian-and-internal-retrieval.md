@@ -3,7 +3,7 @@ id: spec-013-librarian-and-internal-retrieval
 title: "013: The Librarian Role & Internal Retrieval (scoped, not yet built)"
 author: architect
 timestamp: 2026-10-24T18:00:00Z
-status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document. §7 step 3 (Amendment 004-A1) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

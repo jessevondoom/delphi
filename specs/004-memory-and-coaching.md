@@ -3,7 +3,7 @@ id: spec-004-memory-and-coaching
 title: "004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
 author: architect
 timestamp: 2026-10-23T07:53:00Z
-status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document. Amendment 004-A1 (§3.3-§3.5, §4.2, §6 tests 16-20) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -201,7 +201,7 @@ A vector match counts only at or above the model's similarity floor (§3.5), so 
 Results return **at most 10 `path#Lstart-Lend` pointers + 3-line previews** (`<150` lines total, enforcing `[H-002]`). Each pointer carries the chunk's `heading_path` and `blake3`. When a file has been edited since indexing, the resolver re-anchors by heading. If the heading is gone, it reports the pointer as stale rather than returning the wrong lines.
 
 ### 3.5 Local Embeddings (Amendment 004-A1)
-**Directed by the operator on 2026-10-24**, reopening D-01: use the most accurate embedding model that runs well on a recent Mac laptop, up to 150 MB added to the binary, run with `candle`, vectors in `sqlite-vec`. The file's hash pin in a workspace needs the usual `/ratify` after this change.
+**Directed by the operator on 2026-10-24**, reopening D-01: use the most accurate embedding model that runs well on a recent Mac laptop, up to 150 MB added to the binary, run with `candle`, vectors in `sqlite-vec`. Approved by the operator on 2026-10-25, with the matching edits to `006` and `013`.
 
 **Model.** `BAAI/bge-base-en-v1.5` (110M parameters, 768 dimensions, MIT), stored as int8 with one scale per row: a 111 MB package, one file, compiled into release binaries. Four candidates were run on this repository's own documents (112 files, 910 chunks, 40 hand-written questions that are worded differently from the answers or are identifiers, plus 8 questions the documents do not answer; `dev/kb-eval.json`, run with `delphi kb eval`):
 
