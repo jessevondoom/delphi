@@ -3,24 +3,22 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
- ◐ Add a retry queue to the claim loop                                             ▰▰▰▱▱▱ 3/7 · ~7m
-   ✔ done chose table 2 of 3 · design · plan
-   ▶ now  hephaestus building 5:00 · tests 12 of 14 passed
-   ○ next audit → research → wrap up
+ ▌ critical path  Vector database choice → Pricing tiers                               about 11 min
 
- ◐ Compare managed vector databases for the kn…          ⇢ feeds Draft the knowl…  ▰▰▱▱▱▱ 1/3 · ~4m
-   ✔ done research
-   ▶ now  daedalus designing 11:00
-   ○ next audit
+▌◐ Vector database choice                                      ⇢ feeds Pricing tiers  ▰▰▱▱▱▱ 1 of 3
+▌  ✔ 1 step done
+▌  ▶ daedalus designing 11:00
+▌  ○ audit
 
- ○ Draft the knowledge base pricing tiers            ⇠ waits on Compare managed…  ▱▱▱▱▱▱ 0/2 · ~11m
-   ○ next plan → wrap up
+▌○ Pricing tiers                                         ⇠ waits on Vector database…  ▱▱▱▱▱▱ 0 of 2
+▌  ○ plan → wrap up
 
- ✔ Survey competitor onboarding flows                                                    ▰▰▰▰▰▰ 2/2
+ ◐ Retry queue                                                                        ▰▰▰▱▱▱ 3 of 7
+   ✔ chose table 2 of 3 · 2 steps done
+   ▶ hephaestus building 5:00 · tests 12 of 14 passed
+   ○ audit → research → wrap up
 
-
-
-
+  ✔ settled  Competitor onboarding
 
 
 
@@ -29,6 +27,8 @@ delphi v0.5 · epic
 
 
 
- ↑ ↓  open a thread                                                              pace  ▁▁▂▃▄▆█▇▅▄▃▂
+
+
+                                                                                 pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-1 running  ·  14.2k tokens                                                       ← →  ·  ○ ● ○ ○ ○ ○
+1 running  ·  14.2k tokens                                                         ← →  ·  ○ ● ○ ○ ○

@@ -1,9 +1,9 @@
 ---
 id: spec-005g-epic-threads
-title: "005g: The epic pane as threads (supersedes the rail in 005e §9.2 and absorbs the forge view)"
+title: "005g: The epic pane as threads (supersedes the rail in 005e §9.2 and replaces the forge view)"
 author: architect
-timestamp: 2026-10-25T21:00:00Z
-status: draft   # prototype built on branch worktree-epic-threads; awaits the operator's decision on §7
+timestamp: 2026-10-25T22:00:00Z
+status: draft   # built on branch worktree-epic-threads; the operator decided the open questions of the first draft on 2026-10-25 (§7)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -16,31 +16,33 @@ tags: [spec, ui, tui, narrator, epic, strategy, research]
 
 ## 1. Why
 
-The rail (`005e` §9.2) answers "which agent is busy and what is the critical path of one build". Delphi is not only a build tool: much of the work is strategy and research, where there is no single epic, no one critical path, and the question a person asks is "what is going on, and does one thing change another?". The forge view is the same story from the other end: it is one build's gates, which is useful during a build and empty otherwise.
+The rail (`005e` §9.2) answers "which agent is busy and what is the critical path of one build". Delphi is not only a build tool: much of the work is strategy and research, where there is no single epic and the question a person asks is "what is going on, what decides when it is finished, and does one thing change another?". The forge view was one build's gates and diff: useful during a build and empty otherwise.
 
-The pane keeps its name, `epic`, and becomes **one overview of everything in progress, grouped by what the work is about, not by who does it.** When it is complete the `forge` view is removed (§6).
+The pane keeps its name, `epic`, and becomes **a few highlights of everything in progress, grouped by what the work is about, with the critical path drawn through it.** An operator should be able to watch it and get a handle on what is happening without reading anything closely. `forge` is removed (§6); the live diff is dropped (§7).
 
-## 2. Decided design (prototype)
+## 2. Decided design
 
-**A thread** is a group of tasks that are about the same thing. Each thread is a small checklist told in three beats:
+**A thread** is a group of tasks that are about one thing. The orchestrator names each one (§4); until it does, the window groups tasks by what their requests say (§3). Each thread is a checklist of at most three lines:
 
-| beat | meaning | style |
-|---|---|---|
-| `✔ done` | what has happened; a council's verdict first, then the finished steps | dim |
-| `▶ now`  | what is happening: who, for how long, and what the step is doing (a build's running gate, a council's split) | normal, the only bright line |
-| `○ next` | what comes next, in order, joined with `→` | dim |
+| line | meaning |
+|---|---|
+| `✔` | what has happened: the decisions first (a council's verdict, `chose table 2 of 3`), then a count (`2 steps done`) |
+| `▶` | what is happening now: who, for how long, and one fact (a build's running gate, a council's split) |
+| `○` | what is next: the next three steps joined with `→`, then `+n` |
 
-A beat with nothing in it is not drawn, so a thread that has not started is a header and one `next` line, and a thread that has finished is a header (dim) and nothing else.
+A line with nothing in it is not drawn. A thread that has finished is not drawn as a block at all: finished threads are one dim line at the bottom, `✔ settled  <labels>`. The header is `<state> <label>`, then, on the right, a tie and a meter: `▰▰▱▱▱▱ 1 of 3`. State glyphs: `▼` needs you (a split council, a failing audit), `◐` in flight, `○` not started. Nothing deeper than this is shown; there is no per-step detail, no gates, no diff.
 
-**Header.** `<state> <label>      <tie>   <meter> done/total · ~eta`. State glyphs: `▼` needs you (a stuck step or a split council), `◐` in flight, `○` ahead, `✔` settled. The label is what the work is about (the first task's request, or the daemon's label, §4). The ETA is the plan's estimate of the last unfinished step (`epic-plan.ts`, the old rail's timing model).
+**The critical path** is the chain of work that decides when everything is finished (`epic-plan.ts`: finished work from its recorded times, the rest estimated from its role's history, placed after what it waits on, across threads). It is summarised once, on the first row of the pane:
 
-**Order.** Needs you, then in flight, then ahead, then settled. The body never needs a legend and the first thing on screen is the thing to look at.
+`▌ critical path  Vector database choice → Pricing tiers      about 11 min`
 
-**Influence (the tie).** When a step in one thread waits on a step in another, both headers say so: `⇠ waits on <thread>` on the dependent one (warning colour while the other step is open, dim once it has finished) and `⇢ feeds <thread>` on the one it waits for. A dependency inside a thread is not a tie. This is the whole "how work moves other work" story at overview size; the opened thread spells it out (`⇠ waits on the audit in <thread>`).
+and drawn through the pane: **every thread the path passes through has a bar `▌` down its left edge in the warning colour, its steps that are on the path are bold in the warning colour, and those threads are listed first** (after anything that needs you). Work off the path has no bar and its steps are dim, so the eye lands on what the finish depends on. The bar and the bold survive `NO_COLOR` (the warning style is bold there). With nothing waiting on anything the row reads `no critical path: nothing is waiting on anything else`.
 
-**Opening a thread.** `↓` opens the first thread, then the next; `↑` goes back, and above the first the pane is the overview again. An opened thread shows its whole checklist in time order, with a build's gates, audit findings and flaky note nested under the step that produced them (what `forge` showed), and its ties in full. The other threads stay as three-beat summaries, and the pane scrolls to keep the opened one in view. `←` `→` still change view; nothing new is bound.
+**Influence.** When a step in one thread waits on a step in another, both headers say so, in the warning colour while the other step is open: `⇠ waits on <thread>` and `⇢ feeds <thread>`. A dependency inside a thread is not a tie.
 
-**Pace** stays on the last row on the right. The hint (`↑ ↓  open a thread`) sits on the same row on the left.
+**Order.** Needs you, then on the critical path (in path order), then in flight, then not started, then settled.
+
+**Keys.** `←` `→` change view and `↑` `↓` scroll when the threads do not fit (a `↑ ↓  more` hint appears bottom left); nothing else is bound. **Pace** stays on the last row on the right.
 
 ```text
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
@@ -48,70 +50,56 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
- ◐ Add a retry queue to the claim loop                         ▰▰▰▱▱▱ 3/7 · ~7m
-   ✔ done chose table 2 of 3 · design · plan
-   ▶ now  hephaestus building 5:00 · tests 12 of 14 passed
-   ○ next audit → research → wrap up
+ ▌ critical path  Vector database choice → Pricing tiers           about 11 min
 
- ◐ Compare managed vector databases… ⇢ feeds Draft the knowl…  ▰▰▱▱▱▱ 1/3 · ~4m
-   ✔ done research
-   ▶ now  daedalus designing 11:00
-   ○ next audit
+▌◐ Vector database choice                  ⇢ feeds Pricing tiers  ▰▰▱▱▱▱ 1 of 3
+▌  ✔ 1 step done
+▌  ▶ architect designing 11:00
+▌  ○ audit
 
- ○ Draft the knowledge base pri… ⇠ waits on Compare managed…  ▱▱▱▱▱▱ 0/2 · ~11m
-   ○ next plan → wrap up
+▌○ Pricing tiers                     ⇠ waits on Vector database…  ▱▱▱▱▱▱ 0 of 2
+▌  ○ plan → wrap up
 
- ✔ Survey competitor onboarding flows                                ▰▰▰▰▰▰ 2/2
+ ◐ Retry queue                                                    ▰▰▰▱▱▱ 3 of 7
+   ✔ chose table 2 of 3 · 2 steps done
+   ▶ builder building 5:00 · tests 12 of 14 passed
+   ○ audit → research → wrap up
 
-
- ↑ ↓  open a thread                                          pace  ▁▁▂▃▄▆█▇▅▄▃▂
+  ✔ settled  Competitor onboarding
+                                                             pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────────────────────────────────────────────
-1 running  ·  14.2k tokens                                   ← →  ·  ○ ● ○ ○ ○ ○
+1 running  ·  14.2k tokens                                     ← →  ·  ○ ● ○ ○ ○
 ```
 
-After `↓` (the first thread opened; the build's gates are where `forge` showed them):
+In that frame the retry queue is the busiest thing on screen but is *not* what the finish waits on: the vector database choice and the pricing tiers that depend on it are. That is what the bar is for.
 
-```text
- ◐ Add a retry queue to the claim loop                         ▰▰▰▱▱▱ 3/7 · ~7m
-   ✔ design
-   ✔ council: Should the retry queue be a table or a …  chose table 2 of 3
-   ✔ plan
-   ▶ build  hephaestus building 5:00
-      ▶ tests 12 of 14 passed
-      ○ audit
-      ○ merge waits for you
-   ○ audit
-   ○ research · Document the retry queue fo…
-   ○ wrap up
-```
+## 3. How threads are formed when nobody has named them
 
-## 3. How threads are formed
+`epic-threads.ts` (pure, tested): every task id seen anywhere (a task, a node, a council, a build) is a candidate; two tasks join one thread when their request words overlap enough (stop words and endings dropped; at least two words shared and either half of the shorter request or 40 % of the union). A council or a build shares its task id, so it joins by construction. A dependency between nodes of different tasks does not join them; it becomes a tie. The window's guess is a fallback, and a task the orchestrator has placed is never moved by it.
 
-Today the daemon sends tasks, nodes, councils and builds but no topics, so the window derives them (`epic-threads.ts`, pure, tested):
+## 4. The orchestrator names each thread (built)
 
-1. Every task id seen anywhere (a task, a node, a council, a build) is a candidate.
-2. Two tasks join one thread when their request words overlap enough (stop words and endings dropped; at least two words shared and either half of the shorter request or 40 % of the union). A council or a build already shares its task id, so it joins by construction.
-3. A dependency between nodes of different tasks does **not** join them; it becomes a tie. A task that only depends on another is its own thread.
-4. The daemon's own grouping (`OState.threads`, §4) wins where it speaks.
-
-This is deliberately modest: word overlap groups "add a retry queue" with "document the retry queue" and keeps "compare vector databases" apart from "knowledge base pricing". It will be wrong sometimes, which is why §4 exists.
-
-## 4. What the daemon should send (not built)
-
-- `threads: [{ id, label, tasks: [task_id] }]`: the orchestrator's own grouping and a human label per thread, written when it plans or when a task starts. The window already accepts it (an optional field; the prototype test covers it) and falls back to §3 for anything not listed.
-- A one-line `activity` per running node (what it is doing, from the narrator) to replace the current `<name> <verb-ing> <time>` in the `now` beat. Not required.
+- **Tool `name_thread {thread, label, tasks[]}`** (`crates/delphi-engine/src/tools.rs`), offered to every role, accepted only from the orchestrator (the others get an error that tells them to say it in their report). Green tier: it touches only the overview. It asks the engine to log a `thread.named` event; calling it again with the same `thread` renames the thread or changes its tasks.
+- **Event `thread.named`** is in the narrator's kinds (`observe.rs`); the fold keeps `threads: [{id, label, tasks}]` in `observe.state`, cleaned (control characters removed, whitespace collapsed, label 80 and id 60 characters), replaced by id, at most 40 threads of 50 tasks.
+- **`agents/orchestrator/AGENT.md` §2.7** tells the orchestrator when to call it: when it plans, again when the plan changes, before the first dispatch of a thread, with a label a person would say.
+- **Not covered:** the tool exists in the engine's own tool loop. Seats that reach Delphi's tools over the harness bridge (`020`) do not get it yet, so a Claude-subscription orchestrator will not name threads until the bridge lists it. Until then the window's grouping (§3) is what shows.
 
 ## 5. Acceptance criteria
-- The epic pane at 80x24 and 100x34 matches the goldens (`ui/test/snapshots/epic-threads-*.txt`), opened and not, narrow, and empty.
-- Grouping, ordering, ties, the three beats and the opened checklist are tested on a fixture of four threads (`ui/test/threads-fixture.ts`).
-- Model text cannot widen a row or move the cursor, at any size and any open thread.
+- The epic pane matches its goldens (`ui/test/snapshots/epic-threads-*.txt`): named threads at 80x24 and 100x34, derived labels, narrow, scrolled, empty.
+- Grouping, the orchestrator's names winning over words, ordering, ties, the three lines, settled threads, the critical-path row, the bar on the threads it passes through and bold on its steps (in colour and under `NO_COLOR`) are tested on a fixture of four threads (`ui/test/threads-fixture.ts`).
+- Model text cannot widen a row or move the cursor, at any size and scroll.
+- `thread.named` folds, cleans, replaces and is bounded (`observe.rs` test); `name_thread` is orchestrator-only and logs the event (`tools.rs` test).
 - No new key is bound; `delphi observe --once` prints the overview.
 
-## 6. Removing `forge` (the plan, not yet done)
-`forge` is removed only after the operator accepts this pane: delete the view from `VIEWS`, `parseView` (`forge` and `diffs` become aliases of `epic`), the footer's dots (six becomes five), `forge()` and the diff polling in `observer.tsx`, and `observe.diff`'s only caller. Everything `forge` showed except the **live diff** is in the opened thread. See Q1.
+## 6. The forge view is removed (done)
+`forge` is gone from the views (five remain: council, epic, agents, archives, thinking), the footer dots, `delphi observe` and `/observe`, the live-diff polling, and `--once`. `forge` and `diffs` still parse, as aliases of `epic`, so an old habit or script lands somewhere sensible. The daemon's `observe.diff` RPC is left in place and unused; deleting it is a later cleanup.
 
-## 7. Open questions for the operator
-- **Q1. The live diff.** The forge view showed a coloured `git diff` of the build's worktree. The opened thread does not. Options: drop it (the console and the PR already show it); or show only the stat (`crates/queue.rs | 12 +++++-----`) under the build step; or open the full diff on `Enter` from the build step. Recommended: the stat only.
-- **Q2. Grouping.** Is word overlap enough for the first release, or should the orchestrator be required to name threads (§4) before this ships?
-- **Q3. Keys.** `↓` from the overview opens thread 1, which makes "open a thread" the same key as "scroll". Recommended as built; the alternative is `Enter` to open and arrows to move, which advertises one more key.
-- **Q4. The critical path.** The rail named the critical path and its length. Threads show an ETA per thread instead; `plan()` still computes the path, nothing draws it. Keep, or delete the dead field?
+## 7. Decisions (operator, 2026-10-25)
+- **The live diff is dropped.** Not shown anywhere in the window.
+- **The orchestrator names each thread** (§4), not the window.
+- **Highlights only**: no opened checklist, no gates, no per-step detail.
+- **The critical path summarises what matters** and is drawn through the threads it touches (§2).
+
+## 8. Open
+- Seats on the harness bridge cannot call `name_thread` yet (§4); until they can, those missions show derived labels.
+- `plan()` still returns every item's `critical` flag; the pane uses it for the path and the bar. The old per-thread ETA was dropped; the path's own estimate is the only time shown.

@@ -106,6 +106,8 @@ pub struct ToolCtx<'a> {
     pub now_rfc3339: &'a str,
     /// Stamps produced by this call (to be logged).
     pub stamps: Vec<Stamp>,
+    /// Events this call asks the engine to log, as `(kind, payload)` (for example `thread.named`).
+    pub events: Vec<(String, Value)>,
 }
 
 /// How a registered tool runs. Local tools are synchronous and touch only Delphi's own files; external
@@ -171,6 +173,12 @@ impl Registry {
             requires_write_scope: true,
             classify: classify_write,
             exec: ToolExec::Local(write_file),
+        });
+        r.register(ToolSpec {
+            def: read_def("name_thread", "Name a thread of work so the operator's overview groups it sensibly. A thread is the tasks that are about one thing (a question being researched, a feature being built, a decision being made), not the agents doing them. Give `thread` a short stable id (`pricing`), `label` a few plain words a person would say (`Pricing for the knowledge base`), and `tasks` the task ids in it. Call it again with the same `thread` to rename it or change its tasks. Orchestrator only.", json!({"type": "object", "required": ["thread", "label", "tasks"], "properties": {"thread": {"type": "string", "maxLength": 60}, "label": {"type": "string", "maxLength": 80}, "tasks": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 50}}})),
+            requires_write_scope: false,
+            classify: classify_name_thread,
+            exec: ToolExec::Local(name_thread),
         });
         for spec in crate::artifacts::specs() {
             r.register(spec);
@@ -243,6 +251,32 @@ pub fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
 fn classify_read(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     let path = str_arg(args, "path")?;
     Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: format!("{} {}", tool, path), payload: args.clone(), pattern: format!("{} {}", tool, path) })
+}
+
+/// Naming a thread touches nothing but the operator's overview, so it never asks.
+fn classify_name_thread(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let thread = str_arg(args, "thread")?;
+    str_arg(args, "label")?;
+    if !args.get("tasks").is_some_and(|t| t.is_array()) {
+        return Err(ToolError("missing array argument `tasks`".into()));
+    }
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: format!("{} {}", tool, thread), payload: args.clone(), pattern: format!("{} {}", tool, thread) })
+}
+
+fn name_thread(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    if ctx.role != "orchestrator" {
+        return ToolResult::err("only the orchestrator names threads; say what the work is about in your report instead");
+    }
+    let (thread, label) = match (str_arg(args, "thread"), str_arg(args, "label")) {
+        (Ok(t), Ok(l)) => (t.trim(), l.trim()),
+        (Err(e), _) | (_, Err(e)) => return ToolResult::err(e.0),
+    };
+    let tasks: Vec<&str> = args.get("tasks").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+    if thread.is_empty() || label.is_empty() || tasks.is_empty() {
+        return ToolResult::err("`thread`, `label` and at least one task id are required");
+    }
+    ctx.events.push(("thread.named".into(), json!({"thread": thread, "label": label, "tasks": tasks})));
+    ToolResult::ok(format!("thread `{}` is now \"{}\" with {} task(s)", thread, label, tasks.len()))
 }
 
 fn classify_write(tool: &str, args: &Value) -> Result<Classified, ToolError> {
@@ -666,8 +700,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -720,8 +754,23 @@ mod tests {
     }
 
     fn run_tool(f: &mut Fx, tool: &str, args: Value) -> ToolResult {
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-24T00:00:00.000Z", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-24T00:00:00.000Z", stamps: vec![], events: vec![] };
         run(&mut ctx, tool, &args)
+    }
+
+    #[test]
+    fn only_the_orchestrator_names_a_thread_and_the_engine_is_asked_to_log_it() {
+        let mut f = fx(&[]);
+        let args = json!({"thread": "pricing", "label": "Pricing for the knowledge base", "tasks": ["t_1", "t_2"]});
+        let c = Registry::builtin().classify("name_thread", &args).unwrap();
+        assert!(c.tier == ToolTier::Green, "naming a thread never asks");
+        assert!(Registry::builtin().classify("name_thread", &json!({"thread": "x", "label": "y"})).is_err(), "tasks are required");
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "orchestrator", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        let r = run(&mut ctx, "name_thread", &args);
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(ctx.events, vec![("thread.named".to_string(), json!({"thread": "pricing", "label": "Pricing for the knowledge base", "tasks": ["t_1", "t_2"]}))]);
+        let none = run_tool(&mut f, "name_thread", args);
+        assert!(none.is_error && none.content.contains("only the orchestrator"), "{}", none.content);
     }
 
     #[test]
@@ -1058,7 +1107,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet"]);
     }
 }

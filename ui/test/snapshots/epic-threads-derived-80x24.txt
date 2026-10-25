@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · epic
+
+ ✔ nothing needs you
+
+ ▌ critical path  Compare managed vector da… → Draft the knowledg… about 11 min
+
+▌◐ Compare managed vector databases fo… ⇢ feeds Draft the knowl…  ▰▰▱▱▱▱ 1 of 3
+▌  ✔ 1 step done
+▌  ▶ daedalus designing 11:00
+▌  ○ audit
+
+▌○ Draft the knowledge base pricing… ⇠ waits on Compare managed…  ▱▱▱▱▱▱ 0 of 2
+▌  ○ plan → wrap up
+
+ ◐ Add a retry queue to the claim loop                            ▰▰▰▱▱▱ 3 of 7
+   ✔ chose table 2 of 3 · 2 steps done
+   ▶ hephaestus building 5:00 · tests 12 of 14 passed
+   ○ audit → research → wrap up
+
+  ✔ settled  Survey competitor onboarding …
+                                                             pace  ▁▁▂▃▄▆█▇▅▄▃▂
+────────────────────────────────────────────────────────────────────────────────
+1 running  ·  14.2k tokens                                     ← →  ·  ○ ● ○ ○ ○

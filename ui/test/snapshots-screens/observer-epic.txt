@@ -3,8 +3,10 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
- ◐ Implement the deck router                                                       ▱▱▱▱▱▱ 0/1 · ~3m
-   ▶ now  athena wrapping up 0:01
+ ▌ critical path  Implement the deck router                                             about 3 min
+
+▌◐ Implement the deck router                                                          ▱▱▱▱▱▱ 0 of 1
+▌  ▶ athena wrapping up 0:01
 
 
 
@@ -24,7 +26,5 @@ delphi v0.5 · epic
 
 
 
-
- ↑ ↓  open a thread
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-1 running  ·  3500 tokens                                                        ← →  ·  ○ ● ○ ○ ○ ○
+1 running  ·  3500 tokens                                                          ← →  ·  ○ ● ○ ○ ○

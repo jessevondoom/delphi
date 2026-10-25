@@ -29,3 +29,15 @@ export function threadsWorld(): OState {
   s.builds = [{ task_id: 't_3', branch: 'delphi/t_3', attempts: ['attempt 1: tests red, fixed'], sha: 'abc1234', gates: [{ name: 'tests', state: 'running', detail: '12 of 14 passed' }, { name: 'audit', state: 'pending', detail: '' }, { name: 'merge', state: 'pending', detail: 'waits for you' }], findings: [], flaky: false, merge: '' }];
   return s;
 }
+
+/** The same work after the orchestrator has named its threads: short labels people would say. */
+export function namedWorld(): OState {
+  const s = threadsWorld();
+  s.threads = [
+    { id: 'vectors', label: 'Vector database choice', tasks: ['t_1'] },
+    { id: 'pricing', label: 'Pricing tiers', tasks: ['t_2'] },
+    { id: 'retry', label: 'Retry queue', tasks: ['t_3', 't_4'] },
+    { id: 'onboarding', label: 'Competitor onboarding', tasks: ['t_5'] },
+  ];
+  return s;
+}

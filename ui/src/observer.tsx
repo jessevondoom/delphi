@@ -35,7 +35,6 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     const t = setInterval(() => setNow(Date.now()), 300);
     return () => clearInterval(t);
   }, [still, busy]);
-  const [diff, setDiff] = useState<OModel['diff']>(null);
   const [search, setSearch] = useState<OModel['search']>({ editing: false, query: '', hits: [], note: '' });
   const R = useRef({ view, pick, st, search, scroll, selNode, size });
   R.current = { view, pick, st, search, scroll, selNode, size };
@@ -84,18 +83,6 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { ev.off('notification', onNote); ev.off('closed', down); ev.off('reconnected', up); if (timer) clearTimeout(timer); };
   }, [ev]);
 
-  const refreshDiff = () => {
-    const b = R.current.st.builds[Math.min(R.current.pick, R.current.st.builds.length - 1)];
-    if (!b) { setDiff(null); return; }
-    cmd.call('observe.diff', { task_id: b.task_id }).then(setDiff).catch(() => setDiff(null));
-  };
-  useEffect(() => { // the live diff follows the build on screen
-    if (view !== 'forge') return;
-    refreshDiff();
-    const t = setInterval(refreshDiff, 3000);
-    return () => clearInterval(t);
-  }, [view, pick, st.builds.length]);
-
   useEffect(() => {
     // Only left and right change the view, and they stop at the ends; up, down, the page keys and the wheel scroll.
     // Nothing else is bound and nothing else is advertised (`005e` §9.2).
@@ -118,7 +105,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, search, diff, live, connected, think, now, still };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, search, live, connected, think, now, still };
   const lines = observeFrame(model, size.w, size.h);
   const shown = useSelection(term, lines);
   return (

@@ -62,7 +62,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|forge|agents|archives|thinking] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
+    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|agents|archives|thinking] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
@@ -643,7 +643,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (council, epic, forge, agents, archives or thinking)", v);
+                eprintln!("delphi narrator: unknown view `{}` (council, epic, agents, archives or thinking)", v);
                 return 2;
             }
         },

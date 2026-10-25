@@ -3,16 +3,14 @@ delphi v0.5 · epic
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
- ▼ Table or file?                                                                        ▱▱▱▱▱▱ 0/1
-   ✖ now  council is split: table or file · needs you
+ ▌ critical path  Implement the deck router                                             about 2 min
 
- ◐ Implement the deck router                                                       ▰▰▰▱▱▱ 1/2 · ~2m
-   ✔ done build
-   ▶ now  athena wrapping up 1:06
+▌▼ Implement the deck router                                                          ▰▰▰▱▱▱ 1 of 2
+▌  ✔ 1 step done
+▌  ▶ athena wrapping up 1:06
 
-
-
-
+ ▼ Table or file?                                                                     ▱▱▱▱▱▱ 0 of 1
+   ✖ council is split: table or file · needs you
 
 
 
@@ -25,6 +23,8 @@ delphi v0.5 · epic
 
 
 
- ↑ ↓  open a thread                                                                    pace  ▁▃▇▄█▂
+
+
+                                                                                       pace  ▁▃▇▄█▂
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-1 running  ·  3500 tokens                                                        ← →  ·  ○ ● ○ ○ ○ ○
+1 running  ·  3500 tokens                                                          ← →  ·  ○ ● ○ ○ ○

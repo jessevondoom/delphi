@@ -541,7 +541,7 @@ impl Engine {
                 let resolved = {
                     let mut idx = m.index.lock().unwrap();
                     let now = self.now();
-                    let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &m.id, now_rfc3339: &now, stamps: vec![] };
+                    let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &m.id, now_rfc3339: &now, stamps: vec![], events: vec![] };
                     let r = tools::read_pointer(&mut ctx, &p.uri);
                     stamps_unused.append(&mut ctx.stamps);
                     r
@@ -1184,14 +1184,15 @@ impl Engine {
             }
         }
         let before = sc.span.ceiling();
-        let (result, stamps) = {
+        let (result, stamps, asked) = {
             let mut idx = sc.m.index.lock().unwrap();
             let now = self.now();
-            let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![] };
+            let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![], events: vec![] };
             let r = self.tools.run(&mut ctx, name, args);
-            (r, std::mem::take(&mut ctx.stamps))
+            (r, std::mem::take(&mut ctx.stamps), std::mem::take(&mut ctx.events))
         };
         let mut events: Vec<EventEnvelope> = stamps.iter().map(|s| sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(s.zone, &s.path, &s.blake3, s.tier))).collect();
+        events.extend(asked.into_iter().map(|(kind, payload)| sc.ev(&kind, payload)));
         if sc.span.ceiling() != before {
             events.push(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": name})));
         }

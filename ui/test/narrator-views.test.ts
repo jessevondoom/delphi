@@ -1,4 +1,4 @@
-// forge, agents, archives and thinking in the narrator's style (`005f` slice 10): lowercase section rules, a tinted
+// agents, archives and thinking in the narrator's style (`005f` slice 10): lowercase section rules, a tinted
 // band for the running row, no money, no columns the operator cannot act on. Goldens at 80x24, 100x34 and 40x12.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,21 +19,19 @@ function world(): OState {
   return s;
 }
 const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({
-  info, pal: { dark: true }, st: world(), view, pick: 0, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff: null, live: {}, connected: true, still: true, now: NOW, ...over,
+  info, pal: { dark: true }, st: world(), view, pick: 0, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true, still: true, now: NOW, ...over,
 } as OModel);
 const SIZES = [[80, 24], [100, 34], [40, 12]] as const;
-const diff = { available: true, stat: ' crates/queue.rs | 12 +++++-----', diff: '@@ -10,3 +10,5 @@\n-old line\n+new line\n+another', untracked: ['notes.md'] };
 const hits = [{ pointer: 'specs/003.md#retry', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' }];
 const thinkText = { n3: 'The queue needs a visibility timeout.\nA claim without one can be lost for good.' };
 
 const cases: [string, Partial<OModel>][] = [
-  ['forge', { diff }],
   ['agents', {}],
   ['archives', { search: { editing: false, query: 'retry', hits, note: '' } }],
   ['thinking', { think: thinkText }],
 ];
 
-test('goldens: forge, agents, archives and thinking at 80x24, 100x34 and 40x12', () => {
+test('goldens: agents, archives and thinking at 80x24, 100x34 and 40x12', () => {
   for (const [view, over] of cases) for (const [w, h] of SIZES) {
     const r = snapshot(`narrator-${view}-${w}x${h}`, observeFrame(model(view as (typeof VIEWS)[number], over), w, h));
     assert.ok(r.ok, r.message);
@@ -56,18 +54,6 @@ test('agents leads with the roster: name, role, state in words, model, task and 
   assert.match(t, /12\.6k tokens|12600 tokens/, 'one figure: input + cache + output + thinking');
   assert.match(t, /ares {2}red-team {2}► waiting on you/);
   assert.ok(!/cache \d|think \d|call\(s\)/.test(t), 'the per-kind token split is gone');
-});
-
-test('forge: lowercase header, gates with their state, a running gate, the findings and a diff section', () => {
-  const t = observeFrame(model('forge', { diff }), 100, 34).map(plain).join('\n');
-  assert.match(t, / build 1\/1 {2}t_1 {2}delphi\/t_1 · abc1234 · in progress/);
-  assert.match(t, /✔ tests {6}12 passed/);
-  assert.match(t, /● audit {6}red-team is reading the diff/);
-  assert.match(t, /audit P1 unchecked unwrap in claim\.rs/);
-  assert.match(t, /── diff ─+/);
-  assert.match(t, /\n\+new line/);
-  assert.match(observeFrame(model('forge'), 100, 34).map(plain).join('\n'), /no live worktree for this build: it has finished, or has not started/);
-  assert.ok(!/ r refreshes/.test(t), 'no hint for a key that is not bound');
 });
 
 test('archives and thinking keep their calm empty states', () => {
