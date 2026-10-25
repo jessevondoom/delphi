@@ -51,6 +51,25 @@ if (observeAt >= 0) {
   const { parseView } = await import('./observe-screen.ts');
   const arg = process.argv[observeAt + 1];
   const view = arg && !arg.startsWith('--') ? parseView(arg) : null;
+  if (process.argv.includes('--once')) {
+    // One frame as text, no terminal needed: the size is the terminal's when there is one, else 80x24.
+    const { observeFrame, emptyState } = await import('./observe-screen.ts');
+    try {
+      const c = await Rpc.connect(info.narrator_socket);
+      await c.attachAsNarrator();
+      const st = { ...emptyState(), ...(await c.call('observe.state', {})) };
+      const shown = view ?? (st.default_view as typeof view) ?? 'epic';
+      const b = shown === 'forge' ? st.builds[st.builds.length - 1] : undefined;
+      const diff = b ? await c.call('observe.diff', { task_id: b.task_id }).catch(() => null) : null;
+      c.close();
+      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff, live: {}, connected: true, still: true, now: 0 }, process.stdout.columns || 80, process.stdout.rows || 24);
+      console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
+      process.exit(0);
+    } catch (e: any) {
+      console.error('delphi observe: cannot read the daemon: ' + (e?.message ?? JSON.stringify(e)));
+      process.exit(1);
+    }
+  }
   let cmd: Rpc, ev: Rpc;
   try {
     cmd = await Rpc.connect(info.narrator_socket);

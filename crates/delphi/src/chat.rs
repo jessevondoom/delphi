@@ -96,7 +96,7 @@ pub fn parse_input(line: &str) -> Input {
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
             "narrator" | "observe" | "visualize" => match rest.first() {
-                Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge, agents, spend, archives or tile, not `{}`", v)),
+                Some(v) if *v != "tile" && crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/narrator takes council, epic, forge, agents, archives or tile, not `{}`", v)),
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
             "more" => Input::More,
@@ -917,7 +917,7 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
 
 /// The full-screen Observer: the same UI executable in its read-only mode. It needs a running daemon (it only watches).
 /// Exit code 3 means the UI is not this release and the classic Observer should run instead.
-pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&str>, names: &HashMap<String, String>) -> i32 {
+pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&str>, names: &HashMap<String, String>, once: bool) -> i32 {
     let l = match layout(home, ws_dir) {
         Ok(l) => l,
         Err(e) => {
@@ -932,13 +932,16 @@ pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&s
     let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names);
     let mut cmd = std::process::Command::new(ui);
     cmd.arg("--info").arg(info.to_string()).arg("--observe");
+    if once {
+        cmd.arg("--once");
+    }
     if let Some(v) = view {
         cmd.arg(v);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("delphi observe: cannot start the full-screen Observer ({}); try `delphi observe --classic`", e);
+            eprintln!("delphi observe: cannot start the narrator window ({})", e);
             1
         }
     }
@@ -1084,7 +1087,7 @@ mod tests {
         assert_eq!(parse_input("/observe council"), Input::Narrator(Some("council".into())));
         assert!(matches!(parse_input("/narrator nonsense"), Input::Unknown(m) if m.contains("council, epic")));
         assert_eq!(parse_input("/narrator tile"), Input::Narrator(Some("tile".into())));
-        assert_eq!(parse_input("/observe spend"), Input::Narrator(Some("spend".into())));
+        assert!(matches!(parse_input("/observe spend"), Input::Unknown(m) if m.contains("not `spend`")), "the spend view is retired");
         assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
         assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
         assert_eq!(parse_input("/pause"), Input::Pause);
