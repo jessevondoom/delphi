@@ -2,12 +2,12 @@
 delphi v0.5 · /proj · chat
 
  → read_file(specs/002-adapter-and-routing.md) ✔
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
                                                                                       you · 00:00:03
                                                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                                        Now write it
-                                                                                      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
 ── approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
