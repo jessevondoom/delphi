@@ -24,6 +24,7 @@
   { "name": "/resume", "args": "[task…]", "desc": "After a restart: continue the tasks it interrupted", "ink": true, "rust": true, "local": false },
   { "name": "/pause", "desc": "After a restart: leave the interrupted tasks as they are", "ink": true, "rust": true, "local": false },
   { "name": "/mission", "desc": "The current mission", "ink": true, "rust": true, "local": false },
+  { "name": "/missions", "desc": "This workspace's missions, newest first; reopen one with delphi chat --mission <id>", "ink": true, "rust": true, "local": false },
   { "name": "/more", "desc": "The rest of the last reply, when it was shortened", "ink": false, "rust": true, "local": false },
   { "name": "/y", "aliases": ["/yes"], "desc": "Approve the waiting card once", "ink": true, "rust": true, "local": false },
   { "name": "/a", "aliases": ["/always"], "desc": "Approve similar actions this task (Amber only)", "ink": true, "rust": true, "local": false },
