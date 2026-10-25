@@ -1,6 +1,6 @@
 ---
 id: spec-005e-console-ux-review-and-redesign
-title: "005e: Console UX Review and Redesign (chat, activity ticker, Observer chrome, first run)"
+title: "005e: Console UX Review and Redesign (chat, activity ticker, narrator, first run)"
 author: architect
 timestamp: 2026-10-25T12:00:00Z
 status: draft
@@ -14,19 +14,19 @@ tags: [spec, ui, tui, console, observer, ink, review, d-28]
 
 # Spec 005e: Console UX Review and Redesign
 
-**Status.** Draft for the operator's review. Part I is a critical review of the interface as built under D-28 ([`005d`](005d-full-screen-console.md)), with evidence. Part II is the buildable specification for the changes it recommends, including the operator's requests of 2026-10-25 (chat as a real chat window, an activity *ticker*, the Observer aligned with the console, colours derived from the terminal). Where this spec and [`005b`](005b-deck-navigation-and-visual-interface.md) or `005d` differ, this spec governs once approved; the amendments to `005b` and to `skills/tui-design` it needs are listed in §12.
+**Status.** Draft for the operator's approval. Part I (§§2-4) is a critical review of the interface as built under D-28 ([`005d`](005d-full-screen-console.md)), with evidence. Part II (§§5-17) is the buildable specification for the changes it recommends, **as decided by the operator on 2026-10-25 after reviewing rendered mockups** (`specs/assets/005e/`): chat as tinted square blocks with the speaker above, an activity *ticker* with finished history, the narrator window (the former Observer) as an epic rail and a live council weave, animated badge strip, colours derived from the terminal. The decisions are recorded in §16. The ordered build plan for an implementing model is [`005f`](005f-console-redesign-build-plan.md). Where this spec and [`005b`](005b-deck-navigation-and-visual-interface.md) or `005d` differ, this spec governs once approved; the amendments it needs are listed in §12.
 
 ## 1. Scope
 
 **Reviewed.** The full-screen console (`ui/src`, Ink), the Observer window (`ui/src/observe-screen.ts`, `observer.tsx`), the inline and plain Rust consoles (`crates/delphi/src/console.rs`, `chat.rs`), the classic Rust Observer (`observer.rs`), the first run (`main.rs`, `start.rs`, `setup.rs`) and the CLI surface (`main.rs` usage text, `doctor`, `models`, `needs`).
 
-**Changed by this spec.** Visual language and palette (§5), first run and the no-model state (§6), the chat deck (§7), the activity deck (§8), the Observer chrome and navigation (§9), discoverability and keyboard flow (§10), degradation at narrow widths and without colour (§11). Rust fallbacks (inline and plain consoles) adopt only the copy and state changes (§6, §10.5); their layout is out of scope.
+**Changed by this spec.** Visual language and palette (§5), first run and the no-model state (§6), the chat deck (§7), the activity deck (§8), the narrator window (§9), discoverability and keyboard flow (§10), degradation at narrow widths and without colour (§11). Rust fallbacks (inline and plain consoles) adopt only the copy and state changes (§6, §10.5); their layout is out of scope.
 
 **Not changed.** The daemon protocol, approval semantics (payload-hash binding, the 300 ms guard, one approval per option, Red never auto-approved), the Decision Inbox's rules, the deck model, the badge and mascot invariants of [`005a`](005a-terminal-avatar-system.md). Windows is not supported. The chromeless viewer of `005b` §5 stays later work.
 
 ### 1.1 Simpler Alternative Considered
 
-Keep the current look and fix only the P0/P1 defects (§3). That removes the dead ends but leaves the three things the operator named: the chat reads as a log rather than a conversation, the activity deck repeats the chat, and the Observer looks like a different product. The redesign below reuses the existing pure `frame(model, w, h)` architecture (`ui/src/screen.ts`) and changes renderers, not state or protocol, so its cost is bounded (§13: about 40 hours in total, 14 for the P0/P1 set alone) and every screen stays snapshot-testable.
+Keep the current look and fix only the P0/P1 defects (§3). That removes the dead ends but leaves the three things the operator named: the chat reads as a log rather than a conversation, the activity deck repeats the chat, and the Observer looks like a different product. The redesign below reuses the existing pure `frame(model, w, h)` architecture (`ui/src/screen.ts`) and changes renderers, not state or protocol, so its cost is bounded (§13: about 71 hours in total, 18 for the P0/P1 set alone) and every screen stays snapshot-testable.
 
 ## 2. Method and evidence
 
@@ -51,7 +51,7 @@ P0 blocks a new operator or misleads them about safety; P1 costs every session; 
 
 ### P1
 
-4. **The footer promises a key that does nothing.** `← / ? → · ○ ● ○` says `?` opens help (005b-A2 §3). Pressing `?` types a question mark (`app.tsx:252`: `case 'text'` inserts; no handler). `/help` works, and toggles a block *appended to the transcript* (`screen.ts:228`) that scrolls away and is clipped at 80 columns (observed: four of eight help lines end in `…`).
+4. **The footer promises a key that does nothing.** `          ← / ? →  ·  ○ ● ○
 5. **The pane name is lost at 80 columns.** Header line 2 clips from the right (`screen.ts:44-45`, `T.clip`), so with a path longer than about 55 columns the pane name (`chat`, `activity`, `decisions`), the one piece of that line that changes, disappears. Observed at 80 and 100 columns in this repository's worktree path.
 6. **Streaming shoots the start of a reply off screen.** `005b` §3.2 and `skills/tui-design` §1.1 require `less`-style anchoring (the view pins at the top of a new reply). The console follows the tail (`screen.ts:231-234`); after a 40-paragraph answer the operator sees paragraphs 33-39 and must `PgUp` to find the beginning. Observed with the fake daemon at 80x24 and 120x40. The "new output waits here" marker only appears once the operator has scrolled up.
 7. **The two consoles disagree on commands.** `/models` and `/agents` exist in the Rust console (`chat.rs:68-69`, `HELP` lines 140-141) and are "unknown command" in the Ink console (`commands.ts` lacks them; observed). `/narrator` opens tmux splits in Rust (`chat.rs:736-744`) and prints a command to copy in Ink (`run.ts:85-88`). `Ctrl+C` quits at once in Ink (`app.tsx:254`) and needs two presses within two seconds in the inline console (`console.rs:570-579`). `Esc` clears the prompt in both but stops a task only in Ink.
@@ -78,9 +78,9 @@ The badge system and role colours; the two-line header's state machine; hairline
 
 1. **The terminal's theme is the palette.** Delphi draws with the terminal's default foreground and background, the 16 ANSI colours and the attributes bold, dim, italic, reverse and underline. The only true colour on screen is a role's chassis colour (from the ratified theme pack), and it has an ANSI-16 fallback. So a Solarized, a Dracula and a stock Terminal.app each get a console that looks native to them.
 2. **Structure survives without colour.** Every state is also carried by a glyph, a position or an attribute (`○ ● ► ❯ ✔ ✖`, indentation, bold), so `NO_COLOR` and monochrome terminals lose nothing but emphasis.
-3. **Conversation reads as conversation.** The operator is on the right, agents on the left, each message a bounded shape with breathing room. Agent text is the highest-contrast text on screen; chrome and the operator's own words step back.
+3. **Conversation reads as conversation.** The operator is on the right, agents on the left, each message a tinted block with its speaker above it. Agent text is the highest-contrast text on screen; chrome and the operator's own words step back.
 4. **The activity deck is a ticker, not a log.** It shows only what is happening now and empties when it is done.
-5. **One chrome for every window.** The console and the Observer share the header, footer, navigation keys and the pane-name convention.
+5. **One chrome for every window.** The console and the narrator share the header, footer, navigation keys and the pane-name convention.
 6. **Degrade in steps, never overflow.** Rules for 64, 48 and 40 columns and for 16 and 12 rows are written down (§11) and tested.
 
 ## 5. The palette (every window)
@@ -95,9 +95,10 @@ The badge system and role colours; the two-line header's state machine; hairline
 | success `✔` | ANSI 2 (green) | same | glyph only |
 | warning, Amber tier, countdowns under 60 s | ANSI 3 (yellow) | same | `bold` |
 | alert, Red tier, errors `✖`, escalations | ANSI 1 (red) + `bold` | same | `bold` + `reverse` on the one word that matters (`RED`, `needs you`) |
-| role chassis (badges, names, frame of an agent card) | the theme's RGB when `COLORTERM` is `truecolor`/`24bit` | nearest of ANSI 1-6/9-14 per role, written in the theme pack (`orchestrator` 13, `architect` 14, `builder` 11, `red-team` 9, `strategist` 10, `scout` 3) | badges keep their glyphs; names `bold` |
+| role chassis (badges, names) | the theme's RGB when `COLORTERM` is `truecolor`/`24bit` | nearest of ANSI 1-6/9-14 per role, written in the theme pack (`orchestrator` 13, `architect` 14, `builder` 11, `red-team` 9, `strategist` 10, `scout` 3) | badges keep their glyphs; names `bold` |
 | badge eyes | default fg `bold` (dark or light, whatever the terminal is) | same | same |
-| background tint (option B only, §7.3) | ANSI 0 on light, ANSI 8 on dark backgrounds | same | none (edges drawn with `▁ ▔`) |
+| message tint (§7.2) | background moved 8 % toward white (dark) or 6 % toward black (light) under true colour; grey-ramp entry in 256 colours; ANSI 8 (dark) or 7 (light) in 16 | same, else the rail fallback | none: rail fallback (`│` at the left of each row) |
+| approval mode `auto` in the footer | the warning-red colour: ANSI 9 `bold` (theme RGB orange under true colour); never reverse video | same | `bold` |
 
 Rules:
 - `NO_COLOR` set (any value) or `TERM=dumb`: no SGR colour codes at all; attributes stay unless `TERM=dumb`. Checked once at start (`ui/src/theme.ts` gains `capabilities(env, term)`), and the same decision is made by the Rust consoles (`observer::Pal`).
@@ -119,22 +120,22 @@ Findings 1, 2 and 9: the operator can decline setup twice, land in a console tha
 ### 6.3 Layout, 80x24 (no model yet, nothing typed)
 
 ```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
                                                                                 
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
-  ╭─ delphi · no model configured ───────────────────────────────────────────╮  
-  │                                                                          │  
-  │ Welcome. This workspace has no model access yet, so nothing can answer.  │  
-  │                                                                          │  
-  │   delphi setup      connect Claude Code, agy or an API key (guided)      │  
-  │   delphi models     what is configured, and what is usable right now     │  
-  │                                                                          │  
-  │ When a model is connected: type a request below, @architect … sends it   │  
-  │ to one role, / lists commands and ? shows the keys.                      │  
-  │                                                                          │  
-  ╰──────────────────────────────────────────────────────────────────────────╯  
+  delphi · no model configured                                                  
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
                                                                                 
+   Welcome. This workspace has no model access yet, so nothing can answer.      
+                                                                                
+     delphi setup      connect Claude Code, agy or an API key (guided)          
+     delphi models     what is configured, and what is usable right now         
+                                                                                
+   When a model is connected: type a request below, @architect … sends it       
+   to one role, / lists commands and ? shows the keys.                          
+                                                                                
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
                                                                                 
                                                                                 
                                                                                 
@@ -142,38 +143,38 @@ delphi v0.5 · ~/projects/app · chat
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens · no model                                              ← / ? → · ○ ● ○
+0 tokens  ·  no model                                          ← / ? →  ·  ○ ● ○
 ```
 
-The same card at 120 columns is the same card: it is at most 76 columns wide and centred by two columns of margin, never stretched.
+The same card at 120 columns is the same card: it is at most 76 columns wide with a two-column margin at the left, never stretched. The `▄` and `▀` rows stand for the tinted half-block caps of §7.2 (the tint itself cannot be shown in text).
 
-### 6.4 Layout: an escalation card after a prompt (option A chrome, §7)
+### 6.4 Layout: an escalation card after a prompt (soft-fill block, §7)
 
 ```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
                                                                                 
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
-                    ╭──────────────────────────────────────────────────────────╮
-                    │                                                          │
-                    │ hello there                                              │
-                    │                                                          │
-                    ╰──────────────────────────────────────────────────────────╯
+                                                                   you · 09:10:02
+                                                                   ▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                                    hello there 
+                                                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                                 
-╭─ ⟦x_x⟧ orchestrator · needs you ─────────────────────────╮                    
-│                                                          │                    
-│ Stopped: no model is configured for this workspace.      │                    
-│                                                          │                    
-│   delphi setup     connects one                          │                    
-│   /models          shows the pool and what is usable     │                    
-│                                                          │                    
-╰──────────────────────────────────────────────────────────╯                    
+⟦x_x⟧ orchestrator · needs you                                                  
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                  
+                                                                                
+ Stopped: no model is configured for this workspace.                            
+                                                                                
+   delphi setup     connects one                                                
+   /models          shows the pool and what is usable                           
+                                                                                
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  
                                                                                 
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens · no model                                              ← / ? → · ○ ● ○
+0 tokens  ·  no model                                          ← / ? →  ·  ○ ● ○
 ```
 
 ### 6.5 Layout: a ready console with nothing said yet (replaces the blank screen)
@@ -202,7 +203,7 @@ delphi v0.5 · ~/projects/app · chat
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
+0 tokens                                                       ← / ? →  ·  ○ ● ○
 ```
 
 The welcome text disappears at the first message and never comes back for that mission.
@@ -232,732 +233,542 @@ The welcome text disappears at the first message and never comes back for that m
 ### 7.1 Problem
 Findings 6 and 9 and the operator's request: the chat reads as a log; replies and the operator's own text look the same; streaming moves what is being read.
 
-### 7.2 Behaviour common to all options
-- **Shapes.** The operator's message is a bounded shape, right-aligned, three quarters of the width (`floor(w * 3 / 4)`), one cell of padding left and right, one row above and below the text. An agent's reply is the same shape, left-aligned, carrying the badge, theme name, role and time as its title.
-- **Contrast.** Agent text is default foreground at normal weight (the brightest text on screen). The operator's text is `dim`. Chrome (edges, rules, timestamps) is `dim`; the agent's name and the frame of an agent card take the role colour.
-- **Streaming.** While a reply streams its shape is *open* (no bottom edge) and the title reads `<name> · <role> · writing`. The shape closes and the time appears when the task ends. Markdown is rendered as today (`markdown.ts`), inside the shape; code blocks keep their two-space inset and language label.
-- **Anchoring (`less`-style, 005b §3.2).** When a new reply begins and the operator is at the bottom, the viewport pins the *top* of that reply at the top of the body and stays there. A yellow marker on the last body row reads `↓ N more lines · pgdn or space · enter jumps to the end` while lines wait below. `Space`/`PgDn` page down; `Enter` with an empty prompt jumps to the end and resumes following; typing anything resumes following too, so a question can be answered without reading to the end. Replies shorter than the body need no anchor and simply appear.
-- **Tool calls** stay one dim line inside the agent's shape (`→ read_file(…) ✔`), `Ctrl+O` expands them as today.
-- **Notes** (command output, system notes) are not shapes: they stay two-space-indented dim lines, but gain a leading mark: `·` for information, `✖` in alert colour for an error (finding 15).
-- **Approval cards** keep their unboxed form in the chat (the inbox is the place to decide); the attention card (§6.2) uses the agent shape with the alert colour.
-- **Density.** Below 20 rows, or with `/density compact`, the vertical padding rows are dropped (shapes stay). `/density comfortable` restores them. The setting is per terminal (`localStorage`-equivalent: `~/.delphi/ui.json`).
+### 7.2 Decided design: soft-fill bubbles
 
-### 7.3 Three options
+The operator chose this from four studies (hairline, tail, soft fill, seam) on 2026-10-25. The rejected studies are summarised in §7.6. Rendered mockups: [`chat-dark-100x34.png`](assets/005e/chat-dark-100x34.png), [`chat-light-100x34.png`](assets/005e/chat-light-100x34.png), [`chat-dark-80x24.png`](assets/005e/chat-dark-80x24.png), [`chat-streaming-dark-100x34.png`](assets/005e/chat-streaming-dark-100x34.png).
 
-#### Option A — Rounded frames (recommended)
+![Chat, dark](assets/005e/chat-dark-100x34.png)
 
-Rationale: the literal answer to "a rectangle": a hairline frame with rounded corners, the title set into the top edge so it costs no row, the role colour on the agent's frame. It survives `NO_COLOR` unchanged, needs no background colour, and reads as a conversation at a glance because the two columns of shapes alternate sides. It adds a message-level frame to a house style that bans *window* frames; §12 amends `skills/tui-design` §1.2 to allow rounded frames no wider than three quarters of the window and never around the whole screen (`delphi check tui` already flags only `┌ ┐ └ ┘`).
+![Chat, light](assets/005e/chat-light-100x34.png)
 
-80x24:
+**Geometry** (all numbers are terminal cells; `w` is the window width):
+
+- **A message is a tinted block with square edges.** No frame, no corners. The block's background is the *tint* (§5). Above the first text row sits a *top cap* row and below the last a *bottom cap* row. The caps are drawn with `▄` (top) and `▀` (bottom) in the tint colour over the terminal background across the **full width of the block, including both end cells**, so the corners are square and each cap reads as half a row of padding.
+- **Padding.** One column of tint on each side of the text. The two caps are the vertical padding.
+- **Width.** The block hugs its longest line, at least 12 text columns, at most `floor(w * 4 / 5)` columns including padding. Text wraps at `maxText = floor(w * 4 / 5) - 2`. The width is never padded out to the maximum.
+- **Alignment.** The operator's block is flush right; an agent's block is flush left.
+- **Label.** One row directly above the block, starting at the block's left edge, carries the speaker and the time. An agent: its badge, its theme name in `bold` + role colour, `·`, the time in `dim` (`⟦•_•⟧ architect · 09:00:05`). The operator: `you · 09:03:38`, all `dim`. The label is never inside the block. While a reply streams the time reads `writing` and becomes the clock time when the task ends.
+- **Rhythm.** One blank row between messages. The first message follows the blank row after the header (§10.2).
+- **Contrast.** Agent text: default foreground, normal weight (the brightest text on screen). Operator text: `dim`. Tool lines (`→ read_file(…) ✔`) are `dim` with a green `✔` and live inside the agent's block; `Ctrl+O` expands them as today. The agent's block is **not** role-coloured: the role colour lives in the label only.
+- **Streaming.** The block grows as text arrives and ends in an accent `▊`. The status row above the prompt shows `⠹ <name> · writing <what>`. There is no open or dashed frame.
+- **Anchoring (`less`-style, 005b §3.2).** Unchanged from the earlier draft: when a new reply begins and the operator is at the bottom, the viewport pins the *top* of that reply's label row at the top of the body. A yellow marker on the last body row reads `↓ N more lines · pgdn or space · enter jumps to the end` while lines wait below. `Space`/`PgDn` page; `Enter` with an empty prompt jumps to the end and resumes following; typing resumes following. Replies shorter than the body need no anchor.
+- **Finished markers are not shown in the chat.** The `✔ finished` chip lives in the activity deck only (§8).
+- **Notes** (command output, system notes) are not blocks: two-space-indented `dim` lines with a leading mark (`·` information, `✖` in the alert colour for an error).
+- **Attention cards** (§6.2) use the same block, with the label `⟦x_x⟧ <name> · needs you` in the alert colour; the block's text is default foreground.
+- **Approval cards** keep their unboxed form in the chat; the inbox is the place to decide.
+- **Density.** Below 16 rows the blank row between messages is dropped; the caps stay.
+
+**The tint** (palette row in §5): with true colour and a known terminal background (OSC 11, `DELPHI_THEME`, `COLORFGBG`, in that order, else dark), the tint is the background moved 8 % toward white on a dark terminal and 6 % toward black on a light one. With 256 colours it is the grey-ramp entry (232-255) two to three steps from the background. With 16 colours it is ANSI 8 on dark and ANSI 7 on light when that differs from the background, else the *rail fallback*. **Rail fallback** (also used under `NO_COLOR` and `TERM=dumb`): no fill and no caps; every text row starts with a `dim` `│` at the block's left edge and the text follows after one column. The label row is unchanged. This keeps structure without colour and never uses vertical half blocks that 005a [INV-AVATAR-01] bans for frames.
+
+**Mode in the footer.** The footer's left cluster reads `<tokens>  ·  <mode>`: the token count in `dim`, then the approval mode: `default` in `dim`, `accept-edits` in default foreground, `auto` in the **warning-red** colour (ANSI 9, `bold`; the theme may supply an orange RGB, `#ff8a4c` on dark, `#c2410c` on light). It is coloured text, never reverse video. Separators between footer clusters are `  ·  ` (two spaces, a middle dot, two spaces) on both sides of the footer, in every pane.
+
+80x24, idle (mid-scroll; the tint and the half-block caps are drawn as `▄` and `▀` here):
 
 ```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
                                                                                 
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
-                    ╭──────────────────────────────────────────────────────────╮
-                    │                                                          │
-                    │ Should the retry queue be a table or a file?             │
-                    │                                                          │
-                    ╰──────────────────────────────────────────────────────────╯
-                                                                                
-╭─ ⟦•_•⟧ architect · 09:00:05 ─────────────────────────────╮                    
-│                                                          │                    
-│ A table gives indexes and transactions.                  │                    
-│ • atomic claims                                          │                    
-│ • easy audit                                             │                    
-│ → read_file(specs/003.md) ✔                              │                    
-│                                                          │                    
-╰──────────────────────────────────────────────────────────╯                    
-                                                                                
-                                                                                
-────────────────────────────────────────────────────────────────────────────────
-❯                                                                               
-────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
-```
-
-120x40:
-
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                                                                     
-                                                                                                                        
-delphi v0.5 · ~/projects/app · chat                                                                                     
-                                                                                                                        
-                              ╭────────────────────────────────────────────────────────────────────────────────────────╮
-                              │                                                                                        │
-                              │ Should the retry queue be a table or a file?                                           │
-                              │                                                                                        │
-                              ╰────────────────────────────────────────────────────────────────────────────────────────╯
-                                                                                                                        
-╭─ ⟦•_•⟧ architect · 09:00:05 ───────────────────────────────────────────────────────────╮                              
-│                                                                                        │                              
-│ A table gives indexes and transactions, so a claim is atomic and the audit             │                              
-│ trail is one query away. A file needs a lock file and careful fsync.                   │                              
-│                                                                                        │                              
-│ • atomic claims                                                                        │                              
-│ • easy audit                                                                           │                              
-│                                                                                        │                              
-│ See specs/003-collaboration-and-council.md#ladder.                                     │                              
-│ → read_file(specs/003-collaboration-and-council.md) ✔                                  │                              
-│                                                                                        │                              
-╰────────────────────────────────────────────────────────────────────────────────────────╯                              
-                                                                                                                        
-                              ╭────────────────────────────────────────────────────────────────────────────────────────╮
-                              │                                                                                        │
-                              │ Now write it.                                                                          │
-                              │                                                                                        │
-                              ╰────────────────────────────────────────────────────────────────────────────────────────╯
-                                                                                                                        
-╭─ ⟦•─•⟧ builder · 09:03:40 ─────────────────────────────────────────────────────────────╮                              
-│                                                                                        │                              
-│ Starting in a worktree. Tests first.                                                   │                              
-│ → write_file(crates/queue.rs) …                                                        │                              
-│                                                                                        │                              
-╰────────────────────────────────────────────────────────────────────────────────────────╯                              
-                                                                                                                        
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯                                                                                                                       
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                                                                 ← / ? → · ○ ● ○
-```
-
-Colour derivation: operator frame and text `dim`; agent frame in the role colour, agent text default fg, title `bold` role colour with `dim` role and time; tool lines `dim`; `✔` green, `…` dim. `NO_COLOR`: frames and `❯` carry the structure; the agent's name stays `bold`. 40 columns: shapes widen to `w - 10` (the alignment gap shrinks to 10 columns so each shape still sits on its side); below 48 columns the title drops the role and time (`⟦•_•⟧ architect`); below 16 rows the header's blank row goes:
-
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧     
-delphi v0.5 · chat                      
-          ╭────────────────────────────╮
-          │ Table or a file?           │
-          ╰────────────────────────────╯
-╭─ ⟦•_•⟧ architect ──────────╮          
-│ A table: indexes and tx.   │          
-╰────────────────────────────╯          
-────────────────────────────────────────
-❯                                       
-────────────────────────────────────────
-0 tokens                           ○ ● ○
-```
-
-While a reply streams (open frame, cursor block, status row):
-
-```text
-⟦•─•⟧ architect: writing                                                        
-                                                                                
-delphi v0.5 · ~/projects/app · chat                                             
-                                                                                
-                    ╭──────────────────────────────────────────────────────────╮
-                    │                                                          │
-                    │ Should the retry queue be a table or a file?             │
-                    │                                                          │
-                    ╰──────────────────────────────────────────────────────────╯
-                                                                                
-╭─ ⟦•─•⟧ architect · writing ──────────────────────────────╮                    
-│                                                          │                    
-│ A table gives indexes and transactions, so               │                    
-│ a claim is atomic and the audit trail is▊                │                    
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-◐ working · 4s                                                       esc to stop
-────────────────────────────────────────────────────────────────────────────────
-❯                                                                               
-────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
-```
-
-Anchored at the top of a long reply (the marker on the last body row):
-
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
-delphi v0.5 · ~/projects/app · chat                                             
-                                                                                
-╭─ ⟦•_•⟧ architect · 09:00:05 ─────────────────────────────╮                    
-│                                                          │                    
-│ Retry ladder                                             │                    
-│                                                          │                    
-│ The ladder has three rungs. Each rung retries the        │                    
-│ same call with a wider budget and a different            │                    
-│ endpoint; the third escalates to you. The table          │                    
-│ below shows the rungs for the architect role.            │                    
-│                                                          │                    
-│   rung  endpoint     budget   on failure                 │                    
-│   1     claude-sub   $0.10    next rung                  │                    
-│   2     bedrock-us   $0.25    next rung                  │                    
-                        ↓ 23 more lines · pgdn or space · enter jumps to the end
-                                                                                
-                                                                                
-                                                                                
-────────────────────────────────────────────────────────────────────────────────
-❯                                                                               
-────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
-```
-
-#### Option B — Shelves (tinted cards)
-
-Rationale: the chat-app look without vertical lines. Each message sits on a shelf: a `▁` row above, a `▔` row below, and a background tint between them (ANSI 8 on dark terminals, ANSI 0 on light) so the card reads as a solid panel. The agent's title sits above its shelf in the role colour. Quietest option in colour terminals; the most dependent on the terminal's palette (ANSI 0/8 are unpredictable: on some light themes ANSI 0 is black and the card goes dark), so it is offered with that risk stated.
-
-80x24:
-
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
-delphi v0.5 · ~/projects/app · chat                                             
-                                                                                
-                    ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
-                     Should the retry queue be a table or a file?               
-                    ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
-                                                                                
-⟦•_•⟧ architect · 09:00:05                                                      
-▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁                    
- A table gives indexes and transactions.                                        
- • atomic claims                                                                
  • easy audit                                                                   
- → read_file(specs/003.md) ✔                                                    
-▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔                    
+ → read_file(specs/003-collaboration.md) ✔                                      
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  
                                                                                 
+                                                                 you · 09:03:38 
+                                                                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                                  Now write it. 
+                                                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                                 
-                                                                                
-                                                                                
+⟦•_•⟧ builder · 09:03:40                                                        
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                     
+ Starting in a worktree. Tests first.                                           
+ → write_file(crates/queue.rs) ✔                                                
+ Schema and claim loop are in. The suite passes: 14 of 14.                      
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                     
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
+12.4k tokens  ·  auto                                          ← / ? →  ·  ○ ● ○
 ```
 
-120x40:
+100x34, idle:
 
 ```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                                                                     
-                                                                                                                        
-delphi v0.5 · ~/projects/app · chat                                                                                     
-                                                                                                                        
-                              ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
-                               Should the retry queue be a table or a file?                                             
-                              ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
-                                                                                                                        
-⟦•_•⟧ architect · 09:00:05                                                                                              
-▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁                              
- A table gives indexes and transactions, so a claim is atomic and the audit                                             
- trail is one query away. A file needs a lock file and careful fsync.                                                   
-                                                                                                                        
- • atomic claims                                                                                                        
- • easy audit                                                                                                           
-                                                                                                                        
- See specs/003-collaboration-and-council.md#ladder.                                                                     
- → read_file(specs/003-collaboration-and-council.md) ✔                                                                  
-▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔                              
-                                                                                                                        
-                              ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
-                               Now write it.                                                                            
-                              ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
-                                                                                                                        
-⟦•─•⟧ builder · 09:03:40                                                                                                
-▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁                              
- Starting in a worktree. Tests first.                                                                                   
- → write_file(crates/queue.rs) …                                                                                        
-▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔                              
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯                                                                                                                       
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                                                                 ← / ? → · ○ ● ○
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                                                 
+                                                                                                    
+delphi v0.5 · ~/projects/app · chat                                                                 
+                                                                                                    
+                                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                       Should the retry queue be a table or a file? 
+                                                      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                    
+⟦•_•⟧ architect · 09:00:05                                                                          
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                     
+ A table gives indexes and transactions, so a claim is atomic and the audit                         
+ trail is one query away. A file needs a lock file and careful fsync ordering.                      
+                                                                                                    
+ • atomic claims                                                                                    
+ • easy audit                                                                                       
+ → read_file(specs/003-collaboration.md) ✔                                                          
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                     
+                                                                                                    
+                                                                                     you · 09:03:38 
+                                                                                     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                                                      Now write it. 
+                                                                                     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                    
+⟦•_•⟧ builder · 09:03:40                                                                            
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                         
+ Starting in a worktree. Tests first.                                                               
+ → write_file(crates/queue.rs) ✔                                                                    
+ Schema and claim loop are in. The suite passes: 14 of 14.                                          
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                         
+                                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                   
+────────────────────────────────────────────────────────────────────────────────────────────────────
+12.4k tokens  ·  auto                                                              ← / ? →  ·  ○ ● ○
 ```
 
-Colour derivation: tint = ANSI 8 (dark) / ANSI 0 (light) background on the card rows, with the `▁ ▔` edge rows drawn in that same colour as foreground so the card has crisp edges; text as in §7.2. `NO_COLOR`: no tint; the `▁ ▔` rows alone bound the card (as drawn above), so the layout holds. 40 columns: as option A.
-
-#### Option C — Margins (edge rules)
-
-Rationale: the calmest and most "Delphi": no corners, no fill. The operator's lines are right-aligned and end in `❯│`; an agent's lines start with `│` in its role colour, the badge line first. The vertical rule is the speech side. It uses the least ink and the most whitespace, keeps every row available for text, and needs no amendment to the house style. It is the least literal reading of "a rectangle", and the operator's own messages are less distinct at a glance.
-
-80x24:
+80x24, a reply streaming:
 
 ```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
+⟦•_•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
                                                                                 
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
+ • easy audit                                                                   
+ → read_file(specs/003-collaboration.md) ✔                                      
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  
                                                                                 
-                    Should the retry queue be a table or a file?              ❯│
+                                                                 you · 09:03:38 
+                                                                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                                  Now write it. 
+                                                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                                 
-│ ⟦•_•⟧ architect · 09:00:05                                                    
-│ A table gives indexes and transactions.                                       
-│ • atomic claims                                                               
-│ • easy audit                                                                  
-│ → read_file(specs/003.md) ✔                                                   
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
+⟦•_•⟧ builder · 09:03:40                                                        
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                 
+ Starting in a worktree. Tests first.                                           
+ → write_file(crates/queue.rs) …                                                
+ Schema and claim loop are in, running the su▊                                  
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                 
+⠹ builder · writing crates/queue.rs                                             
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
+12.4k tokens  ·  auto                                          ← / ? →  ·  ○ ● ○
 ```
 
-120x40:
+### 7.3 Key bindings (chat deck)
+Unchanged from 005d except: `Space` pages down while a reply waits below and the prompt is empty; `Enter` on an empty prompt jumps to the end; `?` on an empty prompt opens the help overlay (§10.1).
 
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                                                                     
-                                                                                                                        
-delphi v0.5 · ~/projects/app · chat                                                                                     
-                                                                                                                        
-                                                                                                                        
-                              Should the retry queue be a table or a file?                                            ❯│
-                                                                                                                        
-│ ⟦•_•⟧ architect · 09:00:05                                                                                            
-│ A table gives indexes and transactions, so a claim is atomic and the audit                                            
-│ trail is one query away. A file needs a lock file and careful fsync.                                                  
-│                                                                                                                       
-│ • atomic claims                                                                                                       
-│ • easy audit                                                                                                          
-│                                                                                                                       
-│ See specs/003-collaboration-and-council.md#ladder.                                                                    
-│ → read_file(specs/003-collaboration-and-council.md) ✔                                                                 
-                                                                                                                        
-                              Now write it.                                                                           ❯│
-                                                                                                                        
-│ ⟦•─•⟧ builder · 09:03:40                                                                                              
-│ Starting in a worktree. Tests first.                                                                                  
-│ → write_file(crates/queue.rs) …                                                                                       
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯                                                                                                                       
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                                                                 ← / ? → · ○ ● ○
-```
+### 7.4 Acceptance criteria
+- At 80, 100 and 120 columns no block is wider than `floor(w * 4 / 5)` and none is wider than its text plus two columns (unless a label is longer, then the label sets the width).
+- Every cap row is exactly the block's width and consists only of `▄` (top) or `▀` (bottom) cells, including the end cells.
+- The label's first cell is in the same column as the block's first cell, for both speakers.
+- With `NO_COLOR=1` the output contains no SGR colour codes, no `▄ ▀` caps, and each text row starts with `│`.
+- A reply longer than the body: after it starts, the first body row is its label row; the marker appears; `Space` pages; `Enter` jumps.
+- The `✔ finished` text never appears in the chat deck.
+- `delphi check tui ui/src` reports nothing new.
 
-Colour derivation: `│` and `❯` in the role colour (agent) or `dim` (operator); text as in §7.2. `NO_COLOR`: identical. 40 columns: the operator's column keeps a 6-column indent; nothing else changes.
+### 7.5 Affected files
+`ui/src/screen.ts` (block rendering, labels, anchoring), `ui/src/theme.ts` (tint, rail fallback, semantic colours), `ui/src/markdown.ts` (wrap width), `ui/src/app.tsx` (`Space`/`Enter` keys), `ui/test/screen.test.ts` and new goldens.
 
-### 7.4 Recommendation
-**Option A.** It meets the request as stated, is the most legible without colour, and its open-frame streaming state gives the operator a clear "still writing" signal that B and C lack. Offer B later as `/style shelves` if the operator wants it after seeing A in a real terminal; C is the fallback for terminals that misrender `╭ ╮ ╰ ╯` (none known among the targets in `ui/TERMINALS.md`).
+### 7.6 Studies not chosen
+- **Hairline** (`╭╮╰╯` frame with the title in the top edge): safest on any terminal, busiest, least like a chat.
+- **Tail** (hairline frame with the speaker's bottom corner as `◢`/`◣`): the cheapest iMessage cue, but the triangles are missing from some fonts.
+- **Seam** (hairline frame with time and tokens in the bottom edge, no padding rows): densest; kept as a possible `/density compact` look, not built.
+- **Shelves** and **Margins** (earlier options B and C): superseded by the tinted block.
 
-### 7.5 Key bindings (chat deck)
-Unchanged from `005d` §4 except: `Space` with an empty prompt pages down when the view is anchored (otherwise types a space); `Enter` with an empty prompt jumps to the end when anchored; `?` with an empty prompt opens help (§10.1); `Ctrl+C` asks `press ctrl+c again to leave (the daemon keeps running)` when text is in the prompt, a message is queued or a task is running, and leaves at once otherwise (finding 18).
-
-### 7.6 Acceptance criteria
-- Every row of every screen is exactly `w` columns at 28 ≤ w ≤ 200 and 9 ≤ h ≤ 60 (existing fuzz test, re-pointed at the new renderer).
-- Operator shapes end at column `w`; agent shapes start at column 1; both are `floor(w*3/4)` wide at w ≥ 48 and `w - 10` below.
-- A reply longer than the body pins its first line at the top of the body and shows the marker; `Space` pages; typing resumes following.
-- A streaming reply has no bottom edge; a finished one does, and its title shows the time.
-- With `NO_COLOR=1` the pty output contains no `\x1b[3`/`\x1b[9`/`\x1b[4`-prefixed colour codes and the golden screen is byte-identical to the coloured one after stripping SGR.
-- `delphi check tui ui/src` passes (rounded corners are not flagged).
-
-### 7.7 Affected files
-`ui/src/screen.ts` (shape renderers, anchoring state `anchor: number | null` in `Model`), `ui/src/app.tsx` (anchor keys, `Ctrl+C` confirm, density setting), `ui/src/theme.ts` (semantic palette, capabilities), `ui/src/markdown.ts` (palette only), `ui/test/screen.test.ts`, `ui/test/snapshots*/` (new goldens), `skills/tui-design/SKILL.md` §1.2 (amendment, §12).
-
-## 8. The activity deck as a ticker
+## 8. The activity deck: a ticker with finished history
 
 ### 8.1 Problem
 Finding 10: the left deck is a second copy of the chat.
 
-### 8.2 Behaviour
-- The deck shows **one block per running span**, newest at the bottom: a title row `⟦badge⟧ <name> · <what> · <elapsed>` where `<what>` is `thinking`, `writing` or the tool call in progress (`→ read_file(…) …`), then up to six lines of the live text (thinking in `dim italic`, prose in default fg, code as typed), always the *tail*.
-- When the span finishes (its text became a reply, the tool returned, the node completed) its block **leaves the deck** after a 2 s fade (shown dim for 2 s, then gone). Nothing is kept; the deck is empty whenever nothing runs. Finished replies live in the chat; finished tool calls live in the chat's tool lines.
-- A council's blind round stays blind here (unchanged).
-- Header line 1 on this deck reads `⟦badge⟧ <name>: thinking · N running` for the newest span; the footer's left side reads `N running · <tokens> tokens`.
-- Scrolling: `PgUp` freezes the ticker and shows `↓ N lines below · pgdn`; `PgDn` to the bottom resumes. The offset is this deck's own (finding 13).
-- Replay: nothing (the ticker is in-memory only, as today).
+### 8.2 Decided design
+Rendered mockups: [`activity-dark-100x34.png`](assets/005e/activity-dark-100x34.png), [`activity-light-100x34.png`](assets/005e/activity-light-100x34.png), [`activity-dark-80x24.png`](assets/005e/activity-dark-80x24.png).
 
-### 8.3 Layout, 80x24
+![Activity ticker](assets/005e/activity-dark-100x34.png)
 
-```text
-⟦•─•⟧ orchestrator: thinking · 3 running                                        
-                                                                                
-delphi v0.5 · ~/projects/app · activity                                         
-                                                                                
-  ⟦•─•⟧ orchestrator · thinking · 00:12                                         
-    The question is whether claims need transactional guarantees. A             
-    table gives row locks for free; a file needs a lock file and careful        
-    fsync ordering. Leaning table, but check what 003 already decided…          
-                                                                                
-  ⟦•_•⟧ architect · → read_file(specs/003-collaboration-and-council.md) …       
-                                                                                
-  ⟦•─•⟧ builder · writing · 00:04 · t_0002                                      
-    fn claim(id: u64) -> Result<(), Error> {                                    
-        let row = tx.select_for_update(id)?;▊                                   
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-◐ working · 12s · 3 tasks                                            esc to stop
-────────────────────────────────────────────────────────────────────────────────
-❯                                                                               
-────────────────────────────────────────────────────────────────────────────────
-3 running · 4.1k tokens                                          ← / ? → · ● ○ ○
-```
-
-Empty:
-
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
-                                                                                
-delphi v0.5 · ~/projects/app · activity                                         
-                                                                                
-                                                                                
-  Activity                                                                      
-                                                                                
-  nothing running                                                               
-                                                                                
-  What the agents are thinking and doing appears here while it happens,         
-  and leaves when it is done. Finished replies are in the chat deck.            
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-────────────────────────────────────────────────────────────────────────────────
-❯                                                                               
-────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ● ○ ○
-```
-
-### 8.4 Acceptance criteria
-- After a task completes, the deck contains no block for it within 2 s (fold test: `task.output` removes the span's acts; screen test: block absent).
-- A running span never shows more than 6 lines; the lines shown are the last 6.
-- Thinking text is never written anywhere (unchanged; existing test).
-
-### 8.5 Affected files
-`ui/src/fold.ts` (`activity` keyed by span with `finishedAt`; prune on `task.output`/`tool.result`/node completion), `ui/src/screen.ts` (`activityView`), `ui/test/fold.test.ts`, `ui/test/screen.test.ts`.
-
-## 9. The Observer window
-
-### 9.1 Problem
-Finding 11 and the operator's request: adopt the console's header, drop the working directory, keep the lowercase pane name, navigate with plain arrows.
-
-### 9.2 Behaviour common to all options
-- **Header** = the console's: line 1 the agent strip (badges; a running or waiting role gets its name and state after its badge, in the state colour; idle roles show the badge only), blank, line 2 `delphi v<version> · <view>` with the view name lowercase (`council`, `epic dag`, `forge`, `agents`, `spend`, `archives`, `thinking`). No working directory. No `DELPHI OBSERVER` title: the window is recognisable by the missing prompt and the spend footer.
-- **Footer** = one hairline and one line: left `spend $x / $y ▓░░ · N tokens · cache N%` (money is allowed here, 005b §1.3), right the navigation hint `← / ? →` and the view dots (`○ ● ○ ○ ○ ○ ○`) when there is room. The three-line footer goes.
-- **Keys.** `←` `→` change view (no wrap). `↑` `↓` move the selection (epic) or scroll; `PgUp`/`PgDn` page; `1`-`7` jump; `?` help overlay; `q` or `Esc` quit; `/` search where a view searches (archives); `r` refresh (forge). `Shift+←/→` and `Tab` keep working as synonyms. `Enter` on a selected node opens its detail (where the view has one).
-- **Disconnected:** line 2 appends ` · disconnected` in the alert colour and the body keeps the last picture.
-
-### 9.3 Three options
-
-#### Option O1 — Same chrome
-
-Rationale: the console's header and footer verbatim, dots for the seven views. Minimum change, maximum consistency; the pane name on line 2 is the only indication of where you are, as in the console.
-
-```text
-⟦•─•⟧ orchestrator planning  ⟦•_•⟧  ⟦•─•⟧  ⟦-_-⟧ red-team queued  ⟦•_•⟧  ⟦•••⟧  
-                                                                                
-delphi v0.5 · epic dag                                                          
-                                                                                
- t_0001  build · Implement the deck router                  ▓▓▓▓▓▓░░░░  3 of 5  
-   ● orchestrator running    1.2k tok   $0.10   planning the merge              
-     ✔ builder      done       8.0k tok   $0.20   worktree t_0001, 12 tests     
-     ○ red-team     queued                        audit of the commit           
- t_0002  council · Table or file?                         ✔ verdict · minority 1
-   ✔ architect    done       2.1k tok   $0.07                                   
-   ✔ strategist   done       1.9k tok   $0.06                                   
-   ✖ red-team     abstained                                                     
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-── narrative ───────────────────────────────────────────────────────────────────
- 10:42:01  t_0001 started (orchestrator): implement the deck router             
- 10:42:09  builder takes this on · worktree delphi/t_0001                       
- 10:47:30  tests: 12 passed · audit queued for red-team                         
- 10:47:31  orchestrator is planning the merge                                   
-────────────────────────────────────────────────────────────────────────────────
-spend $0.42 / $5.00 ▓░░░░░░░ · 3.5k tokens · cache 50%   ← / ? → · ○ ● ○ ○ ○ ○ ○
-```
-
-#### Option O2 — Tab line (recommended)
-
-Rationale: line 2 names *every* view, the active one in brackets and `bold`, the rest `dim`: `delphi v0.5 · council  [epic dag]  forge  agents  spend  archives  thinking`. The pane name is still displayed lowercase, and the operator can see what `←`/`→` will do, which the console's three dots never had to explain for seven destinations. The dots are then redundant and the footer keeps only `← / ? →`. Below 72 columns the tab line falls back to O1's single name and the dots return to the footer.
+- **Two zones, one scroll.** History (finished spans) above, running spans below. The running zone is always the last thing in the body; new history entries are inserted between the two zones.
+- **Running spans.** One block per running span: a title row `<badge> <name> · <what> · <elapsed>` where `<what>` is `thinking`, `writing` or the tool call in progress (`→ read_file(…) …`), then up to six lines of the *tail* of the live text. Thinking text is `dim italic`, prose is default foreground, code is as typed. Text **wraps to the full window width** minus six columns (never a fixed narrow measure).
+- **Finished spans.** When a span ends, its running block is removed and one history entry is added: a `✔ finished` chip, the badge and name, then a `dim` one-line summary `· <what> · <elapsed>` (`answered "table or file?" · 4s`, `wrote crates/queue.rs · 12s`). The chip is the only place the green fill appears: background ANSI 2 (or the theme's success RGB), text in the terminal background colour, `bold`. Under `NO_COLOR` it is `[✔ finished]` in `bold`. Entries are separated by one blank row.
+- **History is kept** (up to the newest 500 entries, in memory, as the running spans are today) and scrolls: `PgUp` freezes the view and shows `↓ N lines below · pgdn`; a row `↑ N earlier · pgup` tops the body when older entries exist. The offset belongs to this deck alone (finding 13).
+- **The chip never appears in the chat deck** (§7.2).
+- **Empty.** Nothing running and no history: the empty copy of the earlier draft (`nothing running` and the one-paragraph explanation).
+- **A council's blind round stays blind** (unchanged): its spans show `thinking` with no text until every seat has answered.
+- **Header strip** shows the animated badges of §10.2; the spinner row above the prompt reads `◐ working · 12s · 3 tasks` with `esc to stop` at the right.
 
 80x24:
 
 ```text
-⟦•─•⟧ orchestrator planning  ⟦•_•⟧  ⟦•─•⟧  ⟦-_-⟧ red-team queued  ⟦•_•⟧  ⟦•••⟧  
+⟦•• ⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
                                                                                 
-delphi v0.5 · council  [epic dag]  forge  agents  spend  archives  thinking     
+delphi v0.5 · ~/projects/app · activity                                         
                                                                                 
- t_0001  build · Implement the deck router                  ▓▓▓▓▓▓░░░░  3 of 5  
-   ● orchestrator running    1.2k tok   $0.10   planning the merge              
-     ✔ builder      done       8.0k tok   $0.20   worktree t_0001, 12 tests     
-     ○ red-team     queued                        audit of the commit           
- t_0002  council · Table or file?                         ✔ verdict · minority 1
-   ✔ architect    done       2.1k tok   $0.07                                   
-   ✔ strategist   done       1.9k tok   $0.06                                   
-   ✖ red-team     abstained                                                     
+   ✔ finished   ⟦•_•⟧ builder · wrote crates/queue.rs · 12s                     
                                                                                 
+   ✔ finished   ⟦•_•⟧ red-team · audited the schema · 21s                       
                                                                                 
+  ⟦•• ⟧ orchestrator · thinking · 00:12                                         
+    The question is whether claims need transactional guarantees. A table       
+    gives row locks for free; a file needs a lock file and careful fsync        
+    ordering. Leaning table, but check what 003 already decided about the       
+    audit trail before committing to it.                                        
                                                                                 
+  ⟦•─•⟧ architect · → read_file(specs/003-collaboration-and-council.md) …       
                                                                                 
-                                                                                
-── narrative ───────────────────────────────────────────────────────────────────
- 10:42:01  t_0001 started (orchestrator): implement the deck router             
- 10:42:09  builder takes this on · worktree delphi/t_0001                       
- 10:47:30  tests: 12 passed · audit queued for red-team                         
- 10:47:31  orchestrator is planning the merge                                   
+  ⟦•─•⟧ builder · writing · 00:04                                               
+    fn claim(id: u64) -> Result<(), Error> {                                    
+        let row = tx.select_for_update(id)?;▊                                   
+◐ working · 12s · 3 tasks                                            esc to stop
 ────────────────────────────────────────────────────────────────────────────────
-spend $0.42 / $5.00 ▓░░░░░░░ · 3.5k tokens · cache 50%                   ← / ? →
-```
-
-120x40 (the epic view uses the width for a narrative column; the two columns are whitespace-separated, not a pane split):
-
-```text
-⟦•─•⟧ orchestrator planning  ⟦•_•⟧  ⟦•─•⟧  ⟦-_-⟧ red-team queued  ⟦•_•⟧  ⟦•••⟧                                          
-                                                                                                                        
-delphi v0.5 · council  [epic dag]  forge  agents  spend  archives  thinking                                             
-                                                                                                                        
- t_0001  build · Implement the deck router             ▓▓▓▓▓▓░░░░  3 of 5        narrative                              
-   ● orchestrator running    1.2k tok   $0.10   planning the merge               ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
-     ✔ builder done        8.0k tok   $0.20   12 tests green                     10:42:01  t_0001 started (orchestrator)
-     ○ red-team     queued                        audit of the commit            10:42:09  builder takes this on        
-                                                                                           worktree delphi/t_0001       
- t_0002  council · Table or file?                      ✔ verdict · minority 1    10:44:12  → cargo test -p delphi       
-   ✔ architect    done       2.1k tok   $0.07   table                            10:47:30  tests: 12 passed             
-   ✔ strategist   done       1.9k tok   $0.06   file                             10:47:30  audit queued for red-team    
-   ✖ red-team     abstained                     [P0] the race                    10:47:31  orchestrator plans the merge 
-                                                                                                                        
- t_0003  ask · what is the retry ladder?               ✔ done                    selected: t_0001 · orchestrator        
-   ✔ orchestrator done       0.9k tok   $0.03                                    ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
-                                                                                 attempt 1 of 3 · 00:05:30 elapsed      
-                                                                                 enter: details · f: forge diffs        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-spend $0.42 / $5.00 ▓░░░░░░░ · 3.5k tokens · cache 50% · retries 1 · 1 proposal awaits /ratify    ← / ? → · 1-7 · q quit
-```
-
-40x12 (falls back to the single name and dots):
-
-```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧     
-                                        
-delphi v0.5 · epic dag                  
-                                        
- t_0001 build        ▓▓▓▓▓▓░░░░         
-   ● orchestrator running  1.2k         
-     ✔ builder    done     8.0k         
-     ○ red-team   queued                
- t_0002 council      ✔ verdict          
-                                        
-────────────────────────────────────────
-$0.42 / $5.00              ○ ● ○ ○ ○ ○ ○
-```
-
-#### Option O3 — Board
-
-Rationale: the same chrome as O1, and the epic view becomes a board: `queued · running · done` lanes with one card per agent-task, badge first, progress bar on the running card. It answers "where are we?" faster than a tree for missions with several tasks, at the cost of hiding the parent-child structure (kept in the detail view on `Enter`). Offered as the *content* direction for the epic view; it can sit under either chrome.
-
-```text
-⟦•─•⟧ orchestrator planning  ⟦•_•⟧  ⟦•─•⟧  ⟦-_-⟧ red-team queued  ⟦•_•⟧  ⟦•••⟧  
-                                                                                
-delphi v0.5 · epic dag                                                          
-                                                                                
- queued (1)                 running (1)                done (4)                 
- ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
- ⟦-_-⟧ red-team             ⟦•─•⟧ orchestrator         ⟦•─•⟧ builder            
- t_0001 audit               t_0001 planning merge      t_0001 12 tests green    
-                            00:05:30 · 1.2k tok                                 
-                            ▓▓▓▓▓▓░░░░ 3 of 5          ⟦•_•⟧ ⟦•_•⟧ council seats
-                                                       t_0002 council · verdict 
-                                                                                
-                                                       ⟦•─•⟧ orchestrator       
-                                                       t_0003 retry ladder      
-                                                                                
-                                                                                
-                                                                                
-── narrative ───────────────────────────────────────────────────────────────────
- 10:42:01  t_0001 started (orchestrator): implement the deck router             
- 10:42:09  builder takes this on · worktree delphi/t_0001                       
- 10:47:30  tests: 12 passed · audit queued for red-team                         
- 10:47:31  orchestrator is planning the merge                                   
+❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-spend $0.42 / $5.00 ▓░░░░░░░ · 3.5k tokens · cache 50%   ← / ? → · ○ ● ○ ○ ○ ○ ○
+12.4k tokens  ·  auto                                          ← / ? →  ·  ● ○ ○
 ```
 
-### 9.4 Recommendation
-**O2 for the chrome** of every view (it makes the seven views discoverable without a legend and keeps the console's line-2 convention), with **O3's board as the epic view's layout at 100 columns and wider** in a second step; below 100 columns the epic view keeps today's tree. Council, forge, agents, spend, archives and thinking keep their bodies; the agents view drops its `Running now` section (the header strip carries it) and shows the roster only.
+### 8.3 Acceptance criteria
+- A completed span leaves the running zone within one frame and a history entry with the chip appears in the same frame.
+- History survives scrolling and resize; the running zone is never scrolled out of reach when the view is following.
+- A running span shows at most six lines, the last six, wrapped to `w - 6`.
+- With `NO_COLOR=1` the chip is `[✔ finished]`.
 
-### 9.5 Acceptance criteria
-- Header lines 1 and 2 of the Observer are produced by the same function as the console's (`theme.ts`/`screen.ts` shared `chrome()`), given `pane` and no `cwd`.
-- `←` and `→` change view in the pty test; `Shift+→` still does; `↓` still moves the epic selection.
-- The footer is two rows (hairline + one line) at every size; the dots appear at ≥ 64 columns, the tab line at ≥ 72.
-- No `DELPHI OBSERVER` or upper-case view title anywhere.
-- Golden screens for all seven views at 80x24, 120x40 and 40x12.
+### 8.4 Affected files
+`ui/src/fold.ts` (`activity` keeps finished entries with `summary` and `elapsed`; prunes only running text), `ui/src/screen.ts` (`deckBody` for deck 0, chip rendering, own scroll offset), `ui/test/fold.test.ts`, `ui/test/screen.test.ts`.
 
-### 9.6 Affected files
-`ui/src/observe-screen.ts` (header, footer, tab line, board), `ui/src/observer.tsx` (keys), a new `ui/src/chrome.ts` shared with `screen.ts`, `crates/delphi/src/observer.rs` (the classic Observer adopts the two-line header, lowercase pane name and arrow keys; its body is unchanged), `ui/test/observe.test.ts`, `ui/test/snapshots*/observe-*`.
+## 9. The narrator window (formerly the Observer)
+
+### 9.1 Problem
+Finding 11 and the operator's requests: adopt the console's header, drop the working directory, keep the lowercase pane name, navigate with plain arrows, drop money and unneeded data, show the epic as a rail and the council as live cards.
+
+### 9.2 Decided design
+Chosen from three directions (Rail, Strata, Weave) on 2026-10-25: **Rail** for `epic`, **Weave** for `council`. Gemini 3.8 Flash contributed the waterline ("Slipway"), the attention band ("Horizon Visor") and the sealed blind-round shutter ("Blind-Hash Shutter"); its braille threads were left out because braille glyphs usually come from a fallback font and break column alignment. Rendered mockups: [`epic-dark.png`](assets/005e/epic-dark.png), [`epic-light.png`](assets/005e/epic-light.png), [`council-blind-dark.png`](assets/005e/council-blind-dark.png), [`council-debate-dark.png`](assets/005e/council-debate-dark.png), [`council-verdict-dark.png`](assets/005e/council-verdict-dark.png), [`council-debate-light.png`](assets/005e/council-debate-light.png).
+
+![Epic](assets/005e/epic-dark.png)
+
+![Council, debating](assets/005e/council-debate-dark.png)
+
+**Views and names.** Six views, in this order: `council`, `epic`, `forge`, `agents`, `archives`, `thinking`. The seventh, `spend`, is removed (the narrator shows no money). The view is named in lowercase on the title row (`epic`, not `epic dag`). `delphi observe [view]` keeps working; `spend`, `dag`, `telemetry` and the digit aliases are dropped from `parseView`.
+
+**Chrome (identical on every view).**
+1. Row 1: the agent strip, **badges only** (no names, no state words). Each badge animates according to its agent's state (§10.2). Details of who is doing what live in the `agents` view.
+2. Row 2: blank.
+3. Row 3: `delphi v<version> · <view>`, `dim`, no working directory, no mission id.
+4. Row 4: blank.
+5. Body.
+6. Hairline, then one footer row: left `<N> running  ·  <tokens> tokens` (`dim`; `3 agents` on the council view), right `← →  ·  ○ ● ○ ○ ○ ○` with the active view's dot filled. **No `/` and no `?`**: the narrator has no commands.
+
+**Keys.** `←` and `→` change view (no wrap, no other way: `Shift+arrows`, `Tab` and digits are removed). `↑` `↓` `PgUp` `PgDn` scroll or move the selection in views that scroll (`forge`, `agents`, `archives`, `thinking`). `Ctrl+C` leaves. Nothing else is bound and nothing else is advertised. The archives view's in-window search is removed (search stays in the console, `Ctrl+K`); this is listed as an open question in §16.
+
+**The attention slot.** Body row 1 of every view is reserved. With nothing pending it reads `✔ nothing needs you` (green mark, `dim` text). When the Decision Inbox holds a pending decision or a council needs ratification it becomes an amber band across the full width: `▼ needs you   <what>` at the left and `answer in the console` at the right, in the warning colour on a warning-tinted background (tint: 18 % of the warning colour over the terminal background; under `NO_COLOR` the band is `bold` with a `reverse` `▼ needs you`). The slot is never removed, so the body never jumps.
+
+**epic (Rail).** One row per task, time left to right. The label column is 22 cells (` ✔ schema` plus the name padded to 19); the rail takes the rest (58 cells at 80 columns, `w - 22` wider). A row is built from cells:
+- **Window.** The rail spans from `earlier` (the start of the oldest visible task, or 20 minutes before now if that is nearer) to `later` (the estimated end of the last task). `now` is the waterline: a dim `┆` in the same column on every row, with the label `now` above it. At 80 columns the waterline is at rail cell 30 (about 52 % of the rail); it is `round(0.52 * railWidth)` at any width.
+- **Done:** dim `━` from the task's start to its end. **Running:** accent `━` from its start to the waterline, ending in an accent `●` on the waterline; the estimated remainder after the waterline is `═` in the critical-path colour when the task is on the critical path, else `╌`. **Queued:** `═` (critical) or `╌` (not) from the end of its predecessor.
+- **Dependencies** are elbows in the predecessor's colour: `╮` at the column where the predecessor ends, `╰` on the dependent's row at the same column, then the dependent's own bar. The last queued task ends in `▸`.
+- **Critical path.** The longest chain, by actual duration for finished tasks and estimated duration for the rest, from the running or first queued task to the epic's end. Estimated duration of a task that has not run is the median duration of finished tasks with the same role in this mission, else 3 minutes. Critical tasks are drawn in the warning colour with `═`.
+- **Narrative lines** under the rows: `now` (the running task and one fact: `builder is writing crates/queue.rs, 12 of 14 tests green`), `next` (what starts when it ends), `path` (the critical chain and its total: `retry queue → audit → merge  about 11 min`).
+- **Pace** is anchored to the **bottom right of the body**, on its last row: `pace  ▁▂▃▅▆▇█▇▅▄▃▂`, tokens per minute over the last twelve minutes (one cell per minute), accent colour.
+- Rows scroll with `↑ ↓` when there are more tasks than the body holds (the `now`, `next`, `path` lines and the pace row stay).
+- Narrower than 72 columns the rail is dropped and each task is a single row `glyph name  status  elapsed` (the list view); at 72 columns and wider the rail returns.
+
+```text
+⟦•• ⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
+                                                                                
+delphi v0.5 · epic                                                              
+                                                                                
+ ▼ needs you   approve the schema change in t_0003        answer in the console 
+                                                                                
+                      earlier                      now                     later
+ ✔ schema                ━━━━━━━━━━━━━━━            ┆                           
+ ✔ claim loop                   ━━━━━━━━━━━╮        ┆                           
+ ▶ retry queue                             ╰━━━━━━━━●═══════════╮               
+ ○ audit                                            ┆           ╰════════╮      
+ ○ merge                                            ┆                    ╰═════▸
+ ○ docs                                             ┆╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌           
+                                                                                
+ now   ⟦•─•⟧ builder is writing crates/queue.rs, 12 of 14 tests green           
+ next  ⟦-_-⟧ red-team audits the commit, then the merge                         
+ path  retry queue → audit → merge  about 11 min                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                             pace  ▁▂▃▅▆▇█▇▅▄▃▂ 
+────────────────────────────────────────────────────────────────────────────────
+2 running  ·  14.2k tokens                                   ← →  ·  ○ ● ○ ○ ○ ○
+```
+
+**council (Weave).** The question, a progress track, three role cards, and a verdict card. The cards are tinted blocks exactly as in §7.2 (square, half-block caps), 24 cells wide with two cells between them at 80 columns; the verdict card is 76 cells wide. Seats beyond three wrap onto a second row of cards; below 72 columns cards stack one per row.
+- **Track.** `round   ● blind ╌╌╌╌╌╌╌╌╌ ○ debate ╌╌╌╌╌╌╌╌╌ ○ verdict   <elapsed>`: finished steps are `✔` with an `ok` `━` connector, the current step is an accent `●` that pulses (alternates `●`/`○` every 600 ms) and a `bold` name, later steps are `○` with a `dim` `╌` connector. On verdict the right side reads `done <elapsed>`.
+- **Blind round** (`phase = "round 1"`). Each card shows the badge and name, `sealed`, then the seat's status: `✔ answered 00:09` (`ok`) or `● thinking 00:19` (accent, pulsing), then a two-row **shutter**: `▓` repeated for an answered seat (`dim`), alternating `░▒` for a seat still thinking (accent). No stance text exists on screen. The seat still thinking has the brighter tint. The verdict card reads `sealed until all three answer` and `2 of 3 answered` with a ten-cell `▰▱` meter.
+- **Debate** (`phase = "round 2"`). Stances are revealed: the card shows the stance word in `bold`, a status line (`listening`, `waiting`, or `● answering <name>` for the seat now writing), and either its two-line reason (`dim`) or, for the speaking seat, the live tail of its critique (`dim italic`) ending in an accent `▊`. The speaking seat's card has the brighter tint. The verdict card reads `none yet · round 2 of 3` and `positions  table 2 · file 1   scout is replying`.
+- **Verdict** (any later phase, or a `synthesis`). The strip badges show the success face (`⟦^─^⟧`). Each card shows the stance, `✔ agreed` (`ok`) or `✔ dissent noted` (`warn`), and its reason. The verdict card reads `verdict   table   2 of 3 · one round` and `agreement  ▰▰▰▰▰▰▰▰▰▰   minority: scout, noted`; the track is all `✔` with `done 00:48`.
+- **Escalated or ratification pending.** The attention slot becomes the amber band and the verdict card reads `needs you`.
+- Mapping: the daemon's `Council.phase` strings (`"round 1"`, `"round 2"`, then closed) map to blind, debate, verdict; `stances[].answered` and `critiques[]` supply the card states.
+
+```text
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦…  ⟧                                             
+                                                                                
+delphi v0.5 · council                                                           
+                                                                                
+ ✔ nothing needs you                                                            
+                                                                                
+ question  Should the retry queue be a table or a file?                         
+ round   ● blind ╌╌╌╌╌╌╌╌╌ ○ debate ╌╌╌╌╌╌╌╌╌ ○ verdict                   00:19 
+                                                                                
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
+   ⟦•_•⟧ architect           ⟦•_•⟧ strategist          ⟦…  ⟧ scout              
+   sealed                    sealed                    sealed                   
+   ✔ answered 00:09          ✔ answered 00:11          ● thinking 00:19         
+   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓      ░▒░▒░▒░▒░▒░▒░▒░▒░▒░▒     
+   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓            ▓▓▓▓▓▓▓▓▓▓▓▓▓▓            ░▒░▒░▒░▒░▒░▒░▒           
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                                                                
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
+   verdict   sealed until all three answer                                      
+   2 of 3 answered  ▰▰▰▰▰▰▰▱▱▱                                                  
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○
+```
+
+```text
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦···⟧                                             
+                                                                                
+delphi v0.5 · council                                                           
+                                                                                
+ ✔ nothing needs you                                                            
+                                                                                
+ question  Should the retry queue be a table or a file?                         
+ round   ✔ blind ━━━━━━━━━ ● debate ╌╌╌╌╌╌╌╌╌ ○ verdict                   00:34 
+                                                                                
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
+   ⟦•_•⟧ architect           ⟦•_•⟧ strategist          ⟦···⟧ scout              
+   table                     table                     file                     
+   listening                 waiting                   ● answering architect    
+   atomic claims and a       a table is already        migration cost is zero   
+   one-query audit           the house pattern         but the lock file…▊      
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                                                                
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
+   verdict   none yet · round 2 of 3                                            
+   positions  table 2 · file 1   scout is replying                              
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○
+```
+
+```text
+⟦•_•⟧ ⟦^─^⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦^─^⟧ ⟦^^^⟧                                             
+                                                                                
+delphi v0.5 · council                                                           
+                                                                                
+ ✔ nothing needs you                                                            
+                                                                                
+ question  Should the retry queue be a table or a file?                         
+ round   ✔ blind ━━━━━━━━━ ✔ debate ━━━━━━━━━ ✔ verdict              done 00:48 
+                                                                                
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
+   ⟦^─^⟧ architect           ⟦^─^⟧ strategist          ⟦^^^⟧ scout              
+   table                     table                     file                     
+   ✔ agreed                  ✔ agreed                  ✔ dissent noted          
+   atomic claims and a       a table is already        a file needs no          
+   one-query audit           the house pattern         migration                
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                                                                
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
+   verdict   table   2 of 3 · one round                                         
+   agreement  ▰▰▰▰▰▰▰▰▰▰   minority: scout, noted                               
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+3 agents  ·  14.2k tokens                                    ← →  ·  ● ○ ○ ○ ○ ○
+```
+
+**forge, agents, archives, thinking** adopt the chrome and the palette (§5) and drop money columns and any column the operator does not act on. `agents` becomes the home of per-agent detail the strip no longer carries: role, state in words, task, model, tokens. These four views keep their current content otherwise; their redesign is a later pass (§13, slice 10).
+
+**The classic Rust Observer is retired** (operator decision). `delphi observe --classic` and `observer.rs`'s interactive loop are removed; the Ink window is the only narrator. `delphi observe --once` keeps printing one text frame, produced by the same pure `observeFrame` renderer, and works without a terminal (finding 16).
+
+### 9.3 Data the narrator needs that the daemon does not send yet
+`observe.state` (`crates/delphi-engine/src/observe.rs`) carries nodes, tasks, councils, builds and a cost `series`, but **no start or end times, no dependency edges, no estimates and no tokens-per-minute series**. The rail and the pace row need: per node `started_ms`, `ended_ms` (absent while running), `after: [node id]` (predecessors, from the plan; if the plan's edges are not in the event log, derive them from `parent` and creation order and say so in the build notes), and a `pace` array of twelve per-minute token counts. The engine's `Council.phase` is already enough for the council. See the build plan, slice 7.
+
+### 9.4 Acceptance criteria
+- Every view's header is exactly: strip, blank, `delphi v<version> · <view>`, blank; the title has no path and no mission id.
+- The footer has no `/` and no `?`, and no money anywhere in the window.
+- `←` `→` change view and stop at the ends; `Shift+←`, `Tab` and digits do nothing.
+- The attention slot exists on every view and is the first body row.
+- Epic at 80x24 matches the reference frame above row for row (golden test); pace is on the last body row, right-aligned with one trailing space.
+- Council in each of the three phases matches its reference frame; the blind-round frame contains no stance text.
+- `delphi observe --once` prints a frame without a terminal; `delphi observe --classic` is an unknown flag.
+- `parseView('spend')` returns `null`.
+
+### 9.5 Affected files
+`ui/src/observe-screen.ts` (header, footer, slot, epic, council, `VIEWS`, `parseView`), `ui/src/observer.tsx` (keys), `ui/src/theme.ts` (badge frames), `crates/delphi-engine/src/observe.rs` (node times, edges, pace), `crates/delphi/src/main.rs` and `chat.rs` (remove `--classic`, keep `--once` through the UI), `crates/delphi/src/observer.rs` (retired), `ui/test/observe.test.ts`, goldens.
 
 ## 10. Discoverability and keyboard flow
 
 ### 10.1 `?` opens help (finding 4)
-With an empty prompt, `?` toggles a help overlay: a rounded frame 76 columns wide (or `w - 4`), centred, two columns of key/meaning pairs in the order a new operator needs them, `esc closes` in its title. Any key other than `?`/`Esc`/`PgUp`/`PgDn` closes it and is then handled normally. `/help` opens the same overlay. The overlay never scrolls the transcript. In the Observer, `?` shows that window's keys.
+With an empty prompt, `?` toggles a help overlay: a tinted card (§7.2, square), up to 76 columns wide, centred, with the label `keys · esc closes` above it. Any key other than `?`/`Esc`/`PgUp`/`PgDn` closes it and is then handled normally. `/help` opens the same overlay. The overlay never scrolls the transcript. The narrator has no overlay (it has no commands).
 
 ```text
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧                                             
+⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•_•⟧ ⟦•••⟧                                             
                                                                                 
 delphi v0.5 · ~/projects/app · chat                                             
                                                                                 
-  ╭─ keys · esc closes ──────────────────────────────────────────────────────╮  
-  │                                                                          │  
-  │ enter  send                alt+enter / ctrl+j  new line                  │  
-  │ esc    clear the prompt; with it empty, stop what is running             │  
-  │ ↑ ↓    history             ctrl+r  search history      tab  complete     │  
-  │ ← →    decks (empty prompt) · shift+← →  decks any time                  │  
-  │ pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end    │  
-  │ /  commands   @role …  one role   @specs/…  a file   ?  this help        │  
-  │ shift+tab  approval mode (default → accept edits → auto; confirms)       │  
-  │ inbox:  y approve · n reject · a all amber · d payload · tab list/focus  │  
-  │ ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)  │  
-  │                                                                          │  
-  ╰──────────────────────────────────────────────────────────────────────────╯  
+  keys · esc closes                                                             
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  
                                                                                 
+   enter  send                alt+enter / ctrl+j  new line                      
+   esc    clear the prompt; with it empty, stop what is running                 
+   ↑ ↓    history             ctrl+r  search history      tab  complete         
+   ← →    decks (empty prompt) · shift+← →  decks any time                      
+   pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end        
+   /  commands   @role …  one role   @specs/…  a file   ?  this help            
+   shift+tab  approval mode (default → accept edits → auto)                     
+   inbox:  y approve · n reject · a all amber · d payload · tab list/focus      
+   ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)      
+                                                                                
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
                                                                                 
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
-0 tokens                                                         ← / ? → · ○ ● ○
+12.4k tokens  ·  default                                       ← / ? →  ·  ○ ● ○
 ```
 
-### 10.2 The pane name survives (finding 5)
-Header line 2 clips the *path* from the left (`…/worktrees/agent-a42560a2ca3e1fc4b`) and never the pane name: the right-most item is kept whole, then the version, and the path takes what is left (at least 12 columns, else it is dropped entirely). At < 48 columns line 2 reads `delphi · chat`.
+### 10.2 The header: animated badges, one blank row (finding 5)
+- **Rows.** Console and narrator share the first rows: the agent strip, **one blank row**, the title row, then one blank row, then the body. In the console the title row is `delphi v<version> · <path> · <pane>`; in the narrator it is `delphi v<version> · <view>`. (The current console emits the blank row after the title twice, once in `frame` and once as the first block's leading blank; the build removes the duplicate.)
+- **The strip shows badges only**, in the fixed role order (orchestrator, architect, builder, red-team, strategist, scout), with no names and no state words, in the console and in the narrator. The state of an agent is carried by its badge's *animation*, drawn from the 005a §4 state machine:
 
-### 10.3 Changing the approval mode confirms (finding 3)
-`Shift+Tab` shows the next mode in the status row for 3 s as `approval mode → accept edits · shift+tab again to confirm · esc keeps default`; the second press applies it and posts a note: `· approval mode: accept edits — file edits run without asking; commands and Red actions still ask`. The `auto` mode's note reads `· approval mode: auto — Amber actions run without asking this mission; Red actions always ask`. Leaving `auto` posts `· approval mode: default`. The footer shows the mode as today, and the mode word in the footer is `bold` in the warning colour while `auto`.
+  | State | Trigger | Frames (5 cells) | Cadence |
+  | :-- | :-- | :-- | :-- |
+  | idle | resting | `⟦•_•⟧` (scout `⟦•••⟧`) | blinks to `⟦-_-⟧` (scout `⟦---⟧`) for 150 ms about every 5 s |
+  | thinking | reasoning deltas in the last 1.5 s | `⟦•• ⟧` ↔ `⟦ ••⟧` (scout `⟦…  ⟧` ↔ `⟦  …⟧`) | swap every 600 ms |
+  | working | a tool call or build is running | `⟦•─•⟧` (scout `⟦···⟧`) | static |
+  | waiting on you | `approval.requested` | `⟦x?x⟧` | static; the alert banner in the console header (005b) is unchanged |
+  | escalated | task escalated | `⟦x_x⟧` | static until the attention card has been on screen 10 s or a new task starts (finding 12) |
+  | success | task completed or council verdict | `⟦^─^⟧` (scout `⟦^^^⟧`) | shown for 3 s, then idle |
+
+- **One timer** drives all badge animation (every 150 ms it computes each badge's frame; the frame is redrawn only when it changed, so an idle window does not repaint). `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin every badge to its static frame (thinking shows `⟦•• ⟧`, idle never blinks).
+- **The pane name survives clipping** (finding 5). The title row clips the *path* from the left (`…/worktrees/agent-a42560a2ca3e1fc4b`) and never the pane name; at < 48 columns the title row is `delphi · <pane>`.
+- **Footer spacing.** Clusters are separated by `  ·  ` (two spaces, middle dot, two spaces) inside the left cluster, inside the right cluster, and between them the remainder is spaces. Console footer: `12.4k tokens  ·  auto` at the left, `← / ? →  ·  ○ ● ○` at the right. Narrator footer: `2 running  ·  14.2k tokens` and `← →  ·  ○ ● ○ ○ ○ ○`.
+
+### 10.3 Approval mode (finding 3, decision of 2026-10-25)
+**No confirmation step.** `Shift+Tab` cycles `default → accept-edits → auto` at once. The safeguards are visibility and a note: the mode is shown next to the token count in the footer at all times, `auto` in the warning-red colour (§7.2), and each change posts one `dim` note: `· approval mode: auto — Amber actions run without asking this mission; Red actions always ask`, `· approval mode: accept edits — file edits run without asking; commands and Red actions still ask`, `· approval mode: default`. The residual risk, recorded honestly: one stray `Shift+Tab` pair reaches `auto` with no pause. Red actions are never auto-approved in any mode (005b), which bounds the damage.
 
 ### 10.4 One command set (finding 7)
 `COMMANDS` in `ui/src/commands.ts` becomes the single list, generated into the Rust `HELP` at build time (or the Rust list is exported as JSON and read by the UI; either way one source). `/models` and `/agents` are added to the Ink console (`run.ts`: `models.get` → text; `/agents` from the fold's `agents` map). `/narrator` in the Ink console opens tmux splits when `$TMUX` is set, like the Rust console, else prints the command. The slash menu shows up to 8 items and a `· N more` line when truncated; descriptions wrap to a second dim line at < 100 columns rather than clipping mid-word (finding 14).
 
 ### 10.5 Consistent leave and stop (findings 7, 18)
-`Ctrl+C`: both consoles ask once when there is text, a queue or a running task, and leave at once otherwise. `Esc`: both clear the prompt first; with it empty, both stop the running task (the inline console gains `task.cancel`). `Ctrl+D` on an empty prompt leaves in both.
+`Ctrl+C`: both consoles ask once when there is text, a queue or a running task, and leave at once otherwise. `Esc`: both clear the prompt first; with it empty, both stop the running task (the inline console gains `task.cancel`). `Ctrl+D` on an empty prompt leaves in both. The narrator leaves on `Ctrl+C` only.
 
 ### 10.6 Notes have marks (finding 15)
 Information notes start with `·`, errors with `✖` in the alert colour, successes (exported, pinned) with `✔` in the success colour. The text stays `dim` except the mark.
 
 ### 10.7 Acceptance criteria
 - `?` on an empty prompt shows the overlay; `?` inside text types `?`.
-- At 80 columns with a 70-column path, line 2 ends in `· chat`.
-- One `Shift+Tab` changes nothing on the daemon; two within 3 s call `permissions.set` once and post the note.
+- At 80 columns with a 70-column path, the title row ends in `· chat`.
+- A strip frame contains only badges separated by single spaces; no letters other than those inside badges.
+- With a thinking agent the strip changes between two frames across 600 ms and does not repaint otherwise (a test drives a fake clock).
+- `Shift+Tab` once changes the mode and posts the note; the footer shows the mode; `auto` is the only mode drawn in the warning-red colour.
 - `COMMANDS` and `chat::HELP` list the same names (a test diffs them).
 
 ## 11. Degradation: width, height, colour
 
 | Condition | Behaviour |
 | :-- | :-- |
-| w ≥ 100 | everything; epic board in the Observer; slash descriptions on one line |
-| 72 ≤ w < 100 | tab line in the Observer; chat shapes at 3/4 width |
-| 64 ≤ w < 72 | Observer falls back to the single pane name and dots; footer hint `← / ? →` still shown |
-| 48 ≤ w < 64 | footer shows the dots only; agent titles drop the time |
-| 40 ≤ w < 48 | shapes are `w - 10` wide; titles are badge and name only; line 2 is `delphi · <pane>` |
-| 28 ≤ w < 40 | shapes are full width with a 2-column alignment gap; no footer hint |
+| w ≥ 100 | everything; epic rail widens to `w - 22`; blocks hug text up to 80 % |
+| 72 ≤ w < 100 | as designed at 80 columns |
+| 64 ≤ w < 72 | narrator: epic becomes the list view, council cards stack one per row |
+| 48 ≤ w < 64 | footer shows the dots only; labels drop the time |
+| 40 ≤ w < 48 | blocks are at most `w - 6` wide; title row is `delphi · <pane>`; labels are badge and name only |
+| 28 ≤ w < 40 | blocks are full width minus two; no footer hint |
 | w < 28 or h < 9 | the too-small message (unchanged) |
-| h < 20 | compact density (no vertical padding rows) |
-| h < 16 | header's blank row dropped |
-| `NO_COLOR`, `TERM=dumb`, 8/16-colour terminals | §5; every golden screen also pinned in its stripped form |
+| h < 20 | the narrator drops its narrative lines before the rows |
+| h < 16 | the blank row between messages is dropped; the title's trailing blank row is dropped |
+| `NO_COLOR`, `TERM=dumb`, 8/16-colour terminals | §5 and the rail fallback of §7.2; every golden screen also pinned in its stripped form |
+| `DELPHI_REDUCE_MOTION=1` | badges and the pulsing dot are static |
 
 ## 12. Amendments this spec needs elsewhere
-- `skills/tui-design/SKILL.md` §1.2: add "A *message* may be framed with rounded hairline corners (`╭ ╮ ╰ ╯`) when the frame is no wider than three quarters of the window; a frame around a deck, a window or the whole screen is still banned." §1.1: the anchoring marker's copy becomes `↓ N more lines · pgdn or space · enter jumps to the end`. §2.1: eye colours become "the terminal's default foreground, bold" with the theme's RGB eyes only under true colour.
-- `005b` §3.1 and §4.2 (Observer navigation and footer) are superseded by §9 here; `005b` §2.1's `Shift+Tab` toggle becomes the two-press confirm of §10.3.
+- `skills/tui-design/SKILL.md`: add the soft-fill message block (§7.2) as the sanctioned way to bound a message: a tinted, square block with half-block caps and a label above; frames around messages are still not used, so §1.2's ban on frames stands unchanged. §1.1: the anchoring marker's copy becomes `↓ N more lines · pgdn or space · enter jumps to the end`. §2.1: eye colours become "the terminal's default foreground, bold" with the theme's RGB eyes only under true colour. Add the narrator's "no commands, no `/ ?` in its footer" rule.
+- `005b` §3.1 and §4.2 (Observer navigation and footer) are superseded by §9 here; the seven Observer views become six; `005b` §2.1's `Shift+Tab` toggle stays as is (no confirm, §10.3).
+- `005a` §4 gains the rows `thinking` pan cadence and the 3 s `success` hold used by §10.2 (the faces are unchanged).
 - `005d` §3 (header, transcript, footer) and §7 (Observer keys) are superseded by §§5-10 here.
 - `ui/README.md` claims `NO_COLOR` support; it will be true after §5.
 
-## 13. Implementation plan, ordered, with sizing
+## 13. Implementation plan
 
-| # | Slice | Sizing | Depends on |
-| :-- | :-- | :-- | :-- |
-| 1 | §6 first run: ask once; `no_model_configured` error kind; attention card for escalations; no-model and welcome bodies; `/models` wording. P0 1, 2 and finding 9. | 6 h (2 Rust, 4 UI) | — |
-| 2 | §10.3 approval-mode confirm; §10.1 `?` overlay; §10.2 pane-name clipping; §10.6 note marks. P0 3, P1 4, 5. | 4 h | — |
-| 3 | §5 palette: `theme.ts` semantic functions, capabilities (`NO_COLOR`, `TERM`, `COLORTERM`), ANSI fallback for roles, no-hex test; Rust `Pal` mirrors it. P1 8. | 4 h | — |
-| 4 | §7 chat option A: shapes, open frame while streaming, anchoring, `Space`/`Enter` keys, density, new goldens. P1 6. | 10 h | 3 |
-| 5 | §8 ticker: fold pruning, per-deck scroll, new empty copy. P1 10, P2 13. | 4 h | 3 |
-| 6 | §9 Observer O2 chrome: shared `chrome.ts`, tab line, two-row footer, arrow keys, classic Observer header; goldens for seven views at three sizes. P1 11. | 6 h | 3 |
-| 7 | §10.4-10.5 one command set, `/models` `/agents` in Ink, `/narrator` tmux, `Ctrl+C`/`Esc` parity, slash menu `N more`. P1 7, P2 14, 16, 18. | 4 h | — |
-| 8 | §9.4 epic board at ≥ 100 columns; §7.3 option B behind `/style shelves`. | 6 h | 4, 6 |
-| 9 | Real-terminal pass of `ui/TERMINALS.md` on the new screens (Terminal.app, iTerm2, Ghostty, tmux), light and dark, `NO_COLOR`. | 3 h (operator) | 1-7 |
+The ordered, self-contained build plan for another model is [`005f-console-redesign-build-plan.md`](005f-console-redesign-build-plan.md). Summary:
 
-Slices 1-3 (14 h) remove every P0 and the P1s that mislead; 4-7 (24 h) deliver the redesign; 8 is optional.
+| # | Slice | Sizing |
+| :-- | :-- | :-- |
+| 1 | First run, no-model state, attention cards (§6) | 6 h |
+| 2 | Palette and capabilities: `theme.ts` semantic colours, tint, `NO_COLOR`, no-hex test (§5) | 4 h |
+| 3 | Header and footer: one blank row, animated badges, footer spacing, pane name clipping, `?` overlay, mode in the footer (§10) | 8 h |
+| 4 | Chat soft-fill blocks, labels, anchoring (§7) | 10 h |
+| 5 | Activity ticker with finished history (§8) | 5 h |
+| 6 | One command set and parity (§10.4-10.6) | 4 h |
+| 7 | Daemon data for the narrator: node times, edges, pace (§9.3) | 5 h |
+| 8 | Narrator chrome, six views, attention slot, arrows only, retire the classic Observer (§9) | 8 h |
+| 9 | Epic rail and council weave (§9.2) | 12 h |
+| 10 | Restyle forge, agents, archives, thinking | 6 h |
+| 11 | Real-terminal pass of `ui/TERMINALS.md` (operator) | 3 h |
+
+About 71 h in all; slices 1-3 (18 h) remove every P0 and the misleading P1s.
 
 ## 14. Verification Plan
 
-- **Unit (`ui/test`).** `screen.test.ts`: shapes at 80, 100, 120, 48, 40 and 28 columns; anchoring (offset pinned, marker text, `Space` pages, typing resumes); open vs closed frame; density. `fold.test.ts`: ticker pruning on `task.output`, `tool.result`, node completion; escalation → attention card with `kind`. `observe.test.ts`: header/footer at three widths; `←`/`→` change view; tab line fallback. `theme.test.ts`: no hex outside `theme.ts`; `capabilities()` for `NO_COLOR`, `TERM=dumb`, `COLORTERM`; ANSI fallback table. `commands.test.ts`: the Ink and Rust command names match.
-- **Golden screens.** New `snapshots-screens` for: welcome, no-model, escalation card, chat A idle/streaming/anchored at 80x24 and 120x40, chat A at 40x12, ticker running/empty, inbox focus in the new chrome, help overlay, Observer seven views at 80x24/120x40/40x12; each also in stripped (`NO_COLOR`) form.
+- **Unit (`ui/test`).** `screen.test.ts`: block geometry at 80, 100, 120, 48, 40 and 28 columns; cap rows full width; label alignment; anchoring (offset pinned, marker text, `Space` pages, typing resumes); rail fallback under `NO_COLOR`; footer text and spacing; the strip (badges only; animation frames with a fake clock). `fold.test.ts`: ticker keeps finished entries with summary and elapsed, prunes running text only; escalation → attention card with `kind`. `observe.test.ts`: header and footer at three widths; `←`/`→` change view and stop at the ends; attention slot always row 1; epic and council goldens; `parseView`. `theme.test.ts`: no hex outside `theme.ts`; `capabilities()` for `NO_COLOR`, `TERM=dumb`, `COLORTERM`; tint derivation; ANSI fallback table. `commands.test.ts`: the Ink and Rust command names match.
+- **Golden screens.** New `snapshots-screens` for: welcome, no-model, escalation card, chat idle/streaming/anchored at 80x24 and 100x34, chat at 40x12, activity running/empty/with history, help overlay, narrator six views at 80x24/100x34/40x12 (epic and council in each phase); each also in stripped (`NO_COLOR`) form. The reference frames in this spec are the goldens for the views they show.
 - **Fuzz.** The existing size-and-hostile-text fuzz runs against the new renderers; the invariant "exactly h rows of ≤ w columns" is unchanged.
-- **Real daemon pty (`crates/delphi/tests/e2e.rs`).** First run with a declined setup: the question appears once; the no-model card is on screen; a prompt yields the attention card with `Stopped: no model is configured`. `Shift+Tab` once changes nothing; twice changes the mode and the note appears. `?` shows the overlay. `NO_COLOR=1` session: no colour SGR in the capture.
-- **Rust.** `start.rs` test: `remedies()` after a declined `Setup` does not offer `Setup` again. `chat.rs`: escalation text has no `[escalated` wrapper. `observer.rs`: header is two lines with a lowercase pane name.
-- **Hand checklist** (`ui/TERMINALS.md`, extended): rounded corners render joined in each target terminal; the tint of option B on light and dark themes; the help overlay at 80x24 in tmux.
+- **Real daemon pty (`crates/delphi/tests/e2e.rs`).** First run with a declined setup: the question appears once; the no-model card is on screen; a prompt yields the attention card with `Stopped: no model is configured`. `Shift+Tab` changes the mode and the note appears. `?` shows the overlay. `NO_COLOR=1` session: no colour SGR in the capture. `delphi observe --once` works without a terminal.
+- **Rust.** `start.rs` test: `remedies()` after a declined `Setup` does not offer `Setup` again. `chat.rs`: escalation text has no `[escalated` wrapper. `observe.rs`: nodes carry `started_ms`, `ended_ms`, `after`, and `pace` has twelve entries.
+- **Hand checklist** (`ui/TERMINALS.md`, extended): the tint on light and dark themes in each target terminal (Terminal.app, iTerm2, Ghostty, tmux); the half-block caps join without a seam; badge animation does not flicker; the pulsing dot with `DELPHI_REDUCE_MOTION`.
 
-## 15. Screens that need high-fidelity mockups
+## 15. Rendered mockups
 
-The ASCII above fixes layout; colour, weight and the feel of the frames need a rendered pass (the operator may ask Gemini through `agy` to produce these; the brief is the mockup, the palette table of §5 and the terminal theme):
+All rendered by `specs/assets/005e/render.sh` from `specs/assets/005e/mockups.html` (headless Chrome, JetBrains Mono; open the HTML in a browser to compare states with controls). They are mockups, not screenshots of the product; a real terminal draws the half-block caps and glyphs per cell and may differ by a pixel.
 
-1. Chat option A at 80x24 and 120x40 on a dark and a light terminal theme (stock Terminal.app Basic, Solarized Light), showing an operator message, a streaming reply (open frame), a finished reply with a code block and a tool line, and an attention card.
-2. Chat option B (shelves) on the same two themes, specifically to judge the ANSI 0/8 tint.
-3. The first-run no-model screen and the welcome screen.
-4. The Observer with the O2 tab line: epic (tree at 80 columns, board at 120), council and agents, dark and light.
-5. The ticker with three running spans, including one code-writing span.
-6. The help overlay and the approval-mode confirmation moment (status row showing the pending change).
-7. `NO_COLOR` renderings of 1 and 4 to confirm the structure stands alone.
+| Screen | Dark | Light |
+| :-- | :-- | :-- |
+| Chat, idle, 100x34 | `chat-dark-100x34.png` | `chat-light-100x34.png` |
+| Chat, idle, 80x24 | `chat-dark-80x24.png` | |
+| Chat, streaming | `chat-streaming-dark-100x34.png` | `chat-streaming-light-100x34.png` |
+| Activity, 100x34 | `activity-dark-100x34.png` | `activity-light-100x34.png` |
+| Activity, 80x24 | `activity-dark-80x24.png` | |
+| Narrator epic | `epic-dark.png` | `epic-light.png` |
+| Council, blind round | `council-blind-dark.png` | |
+| Council, debating | `council-debate-dark.png` | `council-debate-light.png` |
+| Council, verdict | `council-verdict-dark.png` | |
 
-## 16. Open questions for the operator
+Not yet mocked: the no-model and welcome screens (§6, described there), the narrator's `forge`, `agents`, `archives` and `thinking` views, and the `NO_COLOR` renderings.
 
-1. Option A amends the "no boxes" rule for message frames; is that acceptable, or should C (margins) be the direction?
-2. Should the operator's own message be `dim`, or default fg with the *frame* dim? (A: the operator's words recede; B: they stay as legible as the agent's.)
-3. Does the ticker keep *anything* after a span finishes (a one-line `✔ builder finished · 8.0k tok` for a few seconds), or vanish outright as specified?
-4. Two-press confirm for `Shift+Tab`, or confirm only when entering `auto`?
-5. Is money in the Observer footer still wanted, given the console's rule against it?
-6. Should the classic Rust Observer be kept at all once the Ink Observer has the shared chrome, or reduced to `--once` text frames?
+## 16. Decisions and open questions
+
+Decided by the operator on 2026-10-25 (from the questions of the earlier draft and the mockup reviews):
+
+1. **Message frames.** No frames: messages are tinted square blocks (§7.2), so the amendment of the earlier draft is not needed. (The operator's answer was "TBD"; the chosen design makes the question moot, and `skills/tui-design` §1.2 stands.)
+2. **Operator text and shape.** Dim text and a dim frame/tint; agent text full contrast (§7.2).
+3. **Finished marker.** A `✔ finished` chip that stands out, kept in a scrollable history, in the activity deck only (§8).
+4. **Approval mode.** No two-press confirm; the mode is shown beside the token count, `auto` in the warning-red colour (§10.3).
+5. **Narrator content.** No money and no unneeded data; the pane stays on its goal (§9).
+6. **Classic Rust Observer.** Retired; the Ink window is the narrator (§9.2).
+7. Chat: tinted square blocks up to 80 % width, name and time above the block. Header: faces only, animated, one blank row. Narrator: plain arrows only, no `/ ?` in the footer, epic is the rail and is named `epic`, pace anchored bottom right, council is the weave with live states.
+
+Still open:
+
+- **Archives search.** The narrator has no keyboard commands, so the archives view loses its in-window search. Is browsing plus the console's `Ctrl+K` enough?
+- **Epic edges.** If the plan's dependency edges are not recorded in the event log, the rail will draw edges derived from parent and order (§9.3). Is approximate acceptable until the plan records them?
+- **Tint on unknown backgrounds.** A terminal that answers neither OSC 11 nor `COLORFGBG` is assumed dark; on a light terminal the tint would be nearly invisible. Is `DELPHI_THEME` guidance enough (it is for badge eyes, 005a)?
+- **Reduced motion default.** Animation is on by default. Should it start off over SSH or in tmux, where redraw cost matters more?
 
 ## 17. Notes from the external seat (Gemini 3.8 Flash through `agy`, plan mode, 2026-10-25)
 
-Asked for three chat options, three Observer options and a ticker under the constraints of §4-5, the seat returned "Rounded Cartouche" (the same construction as option A, independently), "Inverted Plinth" (square frames with `reverse`-video title ribbons), "Tabbed Dossier" (tabs notched into the frame, a nested frame per tool call, and the time and token count set into the *bottom* edge: `╰── 09:00:05 ── read_file: ok ── 412 tok ──╯`); for the Observer a boxed "circuit" DAG, a tree ledger with owner and status columns plus a *critical path* line, and swimlanes; for the ticker a header with `N working · 142 tok/s ▅▆▇` and `│` guidelines per agent.
+**Round 1.** Asked for three chat options, three Observer options and a ticker under the constraints of §4-5, the seat returned "Rounded Cartouche" (the same construction as the hairline study, independently), "Inverted Plinth", "Tabbed Dossier" (time and tokens in the bottom edge, which became the *seam* study); for the Observer a boxed circuit DAG, a tree ledger with a *critical path* line, and swimlanes; for the ticker a header with `N working · 142 tok/s ▅▆▇`. Rejected: square frames with inverted ribbons, nested frames inside a reply, full-height `│` swimlanes. Its column counts were off by one in two wide mockups.
 
-Taken into this spec: the bottom-edge metadata as an **option A variant** (`/style seam`: time and tokens move from the title to the bottom edge, leaving the title to badge and name; worth a look in the real-terminal pass); the **critical path / active blocker line** for the epic view's narrative section at ≥ 100 columns; **tokens per second** in the ticker's header when a span is streaming. Rejected: square corners and inverted ribbons (`delphi check tui` and the house style), nested frames inside a reply (depth without information), swimlane columns separated by full-height `│` (an internal pane split, `skills/tui-design` §1.4), and the seat's 40x12 behaviours, which assumed a one-line footer. Its column counts were correct in the 80-column mockups and off by one in two of the wide ones; the mockups above were generated and width-checked by script, not copied.
+**Round 2 (narrator panes).** Asked for three creative concepts for the whole narrator, it returned **Slipway** (a vertical `┆` waterline for "now", a double-rail critical path that thickens with zero slack, braille dependency threads), **Weft** (braille looms, a margin tab `a margin tab drawn with vertical half blocks`, a blind-hash shutter that dissolves when a council converges) and **Stratum** (horizontal strata, a critical-depth ruler, an amber "visor" that drops in from the top and pushes the layout down when the operator is needed). Taken: the waterline and the double critical rail (epic), the shutter (council blind round), the amber attention band (the reserved slot of §9.2, which does not push layout). Left out: braille threads (glyphs often come from a fallback font and break column alignment), the margin tab (vertical half blocks, banned by 005a [INV-AVATAR-01]), money-like telemetry, and the seat's lone-`delphi · narrator` label on the strip row. The mockups here were generated and width-checked by script, not copied.
