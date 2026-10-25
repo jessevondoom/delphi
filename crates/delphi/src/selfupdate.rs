@@ -123,6 +123,12 @@ pub fn find_dev(net: &dyn Net, api: &str, current: &str, target: &str) -> Result
     if tag.trim_start_matches('v') == current {
         return Ok(None);
     }
+    // Different is not newer: the channel can lag main (a failed build leaves the last good one in place), and a
+    // stale build of an older version must not replace this one.
+    let core = |v: &str| parse_version(v).map(|(a, b, c, _)| (a, b, c));
+    if core(&tag) < core(current) {
+        bail!("the latest dev build ({}) is older than this one ({}): no newer build of main has been published yet", tag.trim_start_matches('v'), current);
+    }
     Ok(Some(Release { tag, prerelease: true, assets: rel.assets }))
 }
 
@@ -575,6 +581,8 @@ mod tests {
         assert!(std::fs::read_to_string(d.path().join("delphi.prev")).unwrap().contains("'delphi 0.2.4'"));
         assert!(find_dev(&net, &api, "0.2.4-dev.gabc1234", T).unwrap().is_none(), "already that build");
         assert!(find_dev(&net, &api, "0.2.4-dev.golder00", T).unwrap().is_some(), "any other build is replaced, even from the same crate version");
+        assert!(find_dev(&net, &api, "0.2.3", T).unwrap().is_some(), "a dev build of main follows the release it grew from");
+        assert!(find_dev(&net, &api, "0.2.5", T).unwrap_err().to_string().contains("older than this one"), "a stale dev channel never downgrades");
         // The stable channel still never offers a prerelease, and a dev build moves to the release of its version.
         assert!(find(&net, &api, "0.2.4-dev.gabc1234", None).unwrap().is_none());
         assert!(newer("v0.2.4", "0.2.4-dev.gabc1234"));

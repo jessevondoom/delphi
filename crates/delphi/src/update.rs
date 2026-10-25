@@ -65,7 +65,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 pub fn merge(base: &Path, core: &Path, release: &str, seed: &Seed, apply: bool, allow_downgrade: bool) -> Result<Vec<Change>> {
     let mut manifest = read_lock(&base.join("manifest.lock")).with_context(|| format!("{} has no manifest.lock; run `delphi init` first", base.display()))?;
     if let (Some(installed), false) = (lock_release(base), allow_downgrade) {
-        if crate::selfupdate::newer(&installed, release) {
+        // The release a dev build grew from is not newer than the dev build (`0.2.6-dev.gabc` follows `0.2.6`).
+        let core = |v: &str| crate::selfupdate::parse_version(v).map(|(a, b, c, _)| (a, b, c));
+        if core(&installed) > core(release) {
             bail!("this binary is release {} but the workspace was updated to {}; refusing to downgrade (pass --allow-downgrade to override)", release, installed);
         }
     }
@@ -401,6 +403,14 @@ mod tests {
         assert!(err.contains("downgrade"), "{}", err);
         assert_eq!(fs::read_to_string(base.join("a.md")).unwrap(), "2");
         assert!(merge(&base, &core, "0.2.0", &seed(&[("a.md", "1")]), true, true).is_ok());
+    }
+
+    #[test]
+    fn a_dev_build_updates_the_workspace_of_the_release_it_grew_from() {
+        let (_t, base, core) = setup(&[("a.md", "1")]);
+        merge(&base, &core, "0.3.0", &seed(&[("a.md", "2")]), true, false).unwrap();
+        merge(&base, &core, "0.3.0-dev.gabc1234", &seed(&[("a.md", "3")]), true, false).unwrap();
+        assert_eq!(fs::read_to_string(base.join("a.md")).unwrap(), "3");
     }
 
     #[test]
