@@ -171,7 +171,7 @@ pub fn render_report(spec: &ReportSpec) -> Result<String, DocError> {
         body.push_str("</section>\n");
     }
     let open = format!("<main class=\"report\">\n<header class=\"report-head\"><h1>{}</h1>{}</header>\n", escape(&spec.title), spec.subtitle.as_ref().map(|s| format!("<p class=\"sub\">{}</p>", escape(s))).unwrap_or_default());
-    assemble(&Shell { title: &spec.title, theme: spec.theme, comment: spec.comment.as_deref(), charts: cx.charts, runtime: cx.runtime, script: None, open: &open, body: &body, close: "</main>\n" })
+    assemble(&Shell { title: &spec.title, theme: spec.theme, comment: spec.comment.as_deref(), charts: cx.charts, diagrams: cx.diagrams, runtime: cx.runtime, script: None, open: &open, body: &body, close: "</main>\n" })
 }
 
 pub fn render_deck(spec: &DeckSpec) -> Result<String, DocError> {
@@ -205,7 +205,7 @@ pub fn render_deck(spec: &DeckSpec) -> Result<String, DocError> {
         body.push_str(&format!("<li><a href=\"#s{}\">{}</a></li>", i + 2, escape(&s.title)));
     }
     body.push_str("</ol></div>\n");
-    assemble(&Shell { title: &spec.title, theme: spec.theme, comment: spec.comment.as_deref(), charts: cx.charts, runtime: true, script: None, open: "<div class=\"deck\" data-deck>\n", body: &body, close: "</div>\n" })
+    assemble(&Shell { title: &spec.title, theme: spec.theme, comment: spec.comment.as_deref(), charts: cx.charts, diagrams: cx.diagrams, runtime: true, script: None, open: "<div class=\"deck\" data-deck>\n", body: &body, close: "</div>\n" })
 }
 
 #[cfg(test)]
@@ -256,6 +256,21 @@ mod tests {
         assert_eq!(ids.len(), unique.len(), "every id in the page is unique: {:?}", ids);
         assert!(h.contains("<div class=\"grid cols2\">") && h.contains("<figcaption>Again</figcaption>"));
         assert!(crate::htmllint::lint(&h).is_empty());
+    }
+
+    #[test]
+    fn a_diagram_block_embeds_in_a_deck_and_a_report_with_the_stylesheet_once() {
+        let flow = json!({"type": "flow", "title": "Release", "nodes": [{"id": "a", "label": "Build", "group": "CI"}, {"id": "b", "label": "Ship"}], "edges": [{"from": "a", "to": "b", "label": "green"}]});
+        let d = render_deck(&deck_from_json(&json!({"title": "T", "slides": [{"title": "Flow", "blocks": [{"type": "diagram", "diagram": flow.clone(), "caption": "How it ships"}]}, {"title": "Chart", "chart": line_chart()}]})).unwrap()).unwrap();
+        assert!(d.contains("<figure class=\"diagram\"><svg class=\"viz-root\"") && d.contains("<figcaption>How it ships</figcaption>") && d.contains(">Build</text>"), "{}", d.len());
+        assert_eq!(d.matches(".nd1{fill:var(--n1)").count(), 1, "the diagram marks are styled once");
+        assert!(crate::htmllint::lint(&d).is_empty());
+        let ids: Vec<&str> = d.split(" id=\"").skip(1).map(|t| t.split('"').next().unwrap()).collect();
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(ids.len(), unique.len(), "ids stay unique with a chart and a diagram on one page: {:?}", ids);
+        let bad = json!({"title": "T", "sections": [{"heading": "H", "blocks": [{"type": "diagram", "diagram": {"type": "flow", "title": "x", "nodes": [{"id": "a"}], "edges": [{"from": "a", "to": "q"}]}}]}]});
+        assert!(report_from_json(&bad).unwrap_err().0.contains("diagram block: edge 1 ends at `q`"));
+        assert!(report_from_json(&json!({"title": "T", "sections": [{"heading": "H", "blocks": [{"type": "diagram"}]}]})).unwrap_err().0.contains("needs a `diagram` object"));
     }
 
     #[test]

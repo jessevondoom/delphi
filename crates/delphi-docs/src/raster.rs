@@ -9,7 +9,7 @@
 //! - Colours come from the class names the writers use, resolved against the palette for the chosen mode, so a
 //!   PNG needs no CSS engine. An element it does not recognise draws nothing.
 
-use crate::chart::palette::{heat, GRID_DARK, GRID_LIGHT, AXIS_DARK, AXIS_LIGHT, INK_DARK, INK_LIGHT, SERIES_DARK, SERIES_LIGHT, SURFACE_DARK, SURFACE_LIGHT};
+use crate::chart::palette::{heat, mix, GRID_DARK, GRID_LIGHT, AXIS_DARK, AXIS_LIGHT, INK_DARK, INK_LIGHT, SERIES_DARK, SERIES_LIGHT, SURFACE_DARK, SURFACE_LIGHT};
 use crate::font;
 use crate::png::{self, Image};
 use crate::xml::{attr, walk, Ev};
@@ -378,6 +378,17 @@ fn flatten(d: &str) -> Vec<(Vec<P>, bool)> {
                     at = e;
                 }
             }
+            'C' => {
+                for q in args.chunks_exact(6) {
+                    let (c1, c2, e) = ((q[0], q[1]), (q[2], q[3]), (q[4], q[5]));
+                    for s in 1..=24 {
+                        let t = s as f64 / 24.0;
+                        let u = 1.0 - t;
+                        cur.push((u * u * u * at.0 + 3.0 * u * u * t * c1.0 + 3.0 * u * t * t * c2.0 + t * t * t * e.0, u * u * u * at.1 + 3.0 * u * u * t * c1.1 + 3.0 * u * t * t * c2.1 + t * t * t * e.1));
+                    }
+                    at = e;
+                }
+            }
             'A' => {
                 for a in args.chunks_exact(7) {
                     let to = (a[5], a[6]);
@@ -427,6 +438,8 @@ struct Theme {
     axis: Rgb,
     series: [Rgb; 4],
     heat: [(Rgb, Rgb); 5],
+    /// A grouped diagram node's fill: its series colour at 14% on the surface.
+    tint: [Rgb; 4],
 }
 
 impl Theme {
@@ -439,6 +452,7 @@ impl Theme {
             grid: rgb(grid),
             axis: rgb(axis),
             series: [rgb(series[0]), rgb(series[1]), rgb(series[2]), rgb(series[3])],
+            tint: [0, 1, 2, 3].map(|i| rgb(&mix(series[i], surface, 0.14))),
             heat: [(rgb(&h[0].0), rgb(h[0].1)), (rgb(&h[1].0), rgb(h[1].1)), (rgb(&h[2].0), rgb(h[2].1)), (rgb(&h[3].0), rgb(h[3].1)), (rgb(&h[4].0), rgb(h[4].1))],
         }
     }
@@ -507,6 +521,33 @@ fn style_of(classes: &str, th: &Theme) -> Style {
             }
             ("h", Some(n @ 0..=4)) => s.fill = Some(th.heat[n].0),
             ("ht", Some(n @ 0..=4)) => s.text = Some(th.heat[n].1),
+            ("nd", None) => {
+                s.fill = Some(th.surface);
+                s.stroke = Some(th.ink[2]);
+                s.stroke_w = 1.5;
+            }
+            ("nd", Some(n @ 1..=4)) => {
+                s.fill = Some(th.tint[n - 1]);
+                s.stroke = Some(th.series[n - 1]);
+                s.stroke_w = 2.0;
+            }
+            ("ed", None) => {
+                s.stroke = Some(th.ink[1]);
+                s.stroke_w = 1.5;
+                s.fill = None;
+            }
+            ("ed", Some(2)) => {
+                s.stroke = Some(th.ink[2]);
+                s.stroke_w = 1.5;
+                s.fill = None;
+            }
+            ("ar", None) => s.fill = Some(th.ink[1]),
+            ("ar", Some(2)) => s.fill = Some(th.ink[2]),
+            ("ll", _) => {
+                s.stroke = Some(th.ink[2]);
+                s.stroke_w = 1.0;
+            }
+            ("bk", _) => s.fill = Some(th.surface),
             ("hit", _) | ("brush", _) => s.hidden = true,
             _ => {}
         }
