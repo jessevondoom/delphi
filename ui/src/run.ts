@@ -1,6 +1,7 @@
 // Slash commands: each is a call to the daemon's socket and a few lines of output. The same commands as
 // `delphi chat --inline`, ported so the full-screen console depends on nothing but the socket.
 import type { Rpc } from './rpc.ts';
+import { decisions } from './decisions.ts';
 import type { Approval, State } from './fold.ts';
 import type { Info } from './theme.ts';
 
@@ -156,6 +157,13 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (v) { ctx.post(`(${v.task_id ?? 'task'} council convened; the seats answer blind, then critique each other)`); ctx.started?.(); } return;
     }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
+    case 'decisions': { ctx.post(await decisions(ctx.cmd, ctx.mission, rest)); return; }
+    case 'merge': {
+      if (!rest[0]) { ctx.post('/merge needs the build\'s task id, for example `/merge t_0003`'); return; }
+      const v = await call('build.merge', { task_id: rest[0] });
+      if (v) { ctx.post(`(${v.task_id ?? rest[0]} is being checked again; if the gates are green you will be asked to merge)`); ctx.started?.(); }
+      return;
+    }
     case 'observe': case 'narrator': case 'visualize': {
       const view = rest[0] ?? '';
       ctx.post(`The Observer only watches. Run this in another terminal (or a tmux split):\n  delphi observe ${view}`.trimEnd()); return;
