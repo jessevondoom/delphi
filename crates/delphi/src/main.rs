@@ -47,7 +47,13 @@ fn main() {
         None => cmd_start(&args),
         Some(a) if a.starts_with("--") && a != "--version" => cmd_start(&args),
         // The daemon and its maintenance commands run from this same executable.
-        Some("__core") => delphi_engine::core_main::run(args[1..].to_vec()),
+        Some("__core") => {
+            // The daemon reports the release of this program, not of the library crate it is built from, so a client
+            // can tell a daemon left over from an older release.
+            // SAFETY: set before any thread exists.
+            unsafe { std::env::set_var("DELPHI_RELEASE_VERSION", env!("CARGO_PKG_VERSION")) };
+            delphi_engine::core_main::run(args[1..].to_vec())
+        }
         Some("lint") => cmd_lint(&args[1..]),
         Some("setup") => cmd_setup(&args[1..]),
         Some("self-update") => cmd_self_update(&args[1..]),

@@ -1216,3 +1216,18 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
+
+#[test]
+fn the_daemon_reports_the_release_of_the_program_that_started_it() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let start = PtyConsole::start_env(&e.home, &["daemon", "restart", "--workspace", "e2e"], 10, 120, &[]);
+    assert_eq!(start.wait_exit(), 0);
+    let status = PtyConsole::start_env(&e.home, &["daemon", "status", "--workspace", "e2e"], 10, 160, &[]);
+    status.wait_for(&format!("running · delphi {} ·", env!("CARGO_PKG_VERSION")));
+    assert!(!status.visible().contains("this program is"), "{}", status.visible());
+    assert_eq!(status.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+    let stop = PtyConsole::start_env(&e.home, &["daemon", "stop", "--workspace", "e2e"], 10, 80, &[]);
+    assert_eq!(stop.wait_exit(), 0);
+}
