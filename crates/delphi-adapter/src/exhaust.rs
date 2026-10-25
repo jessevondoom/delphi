@@ -15,6 +15,9 @@ use std::time::Duration;
 /// A wait longer than this is treated as a spent quota, not a rate limit.
 pub const LONG_RETRY_AFTER: Duration = Duration::from_secs(15 * 60);
 
+/// A reset further away than this is not believed (a spend cap resets within a month); text asking for more is ignored.
+const MAX_RESET: Duration = Duration::from_secs(400 * 86_400);
+
 /// Why a model is out of quota and, when known, when it comes back.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Exhaustion {
@@ -61,7 +64,8 @@ pub fn parse_go_duration(s: &str) -> Option<Duration> {
             _ => 1.0,
         };
     }
-    Some(Duration::from_secs_f64(secs))
+    // The text is the provider's: an absurd number must not panic `from_secs_f64`, or push a time past what is believable.
+    Duration::try_from_secs_f64(secs).ok().filter(|d| *d <= MAX_RESET)
 }
 
 /// A reset time stated in prose: `Resets in 136h12m57s`, or `regain access on 2026-09-01 at 00:00 UTC`.
@@ -112,7 +116,8 @@ pub fn classify_http(status: u16, retry_after: Option<Duration>, body: &str, now
 /// Classify a CLI's error text (`agy`, `claude`). Ignores the CLI's own "retryable" flag.
 pub fn classify_cli_error(text: &str, now: i64) -> Option<Exhaustion> {
     let lower = text.to_ascii_lowercase();
-    let reset = parse_reset(text, now);
+    // A reset that is already due ("Resets in 0s") says nothing is spent: it is not a reset time.
+    let reset = parse_reset(text, now).filter(|r| *r > now);
     let says_quota = ["quota reached", "usage limit reached", "reached your usage limit", "hit your limit", "hit your session limit"].iter().any(|p| lower.contains(p));
     if says_quota || (lower.contains("resource_exhausted") && reset.is_some()) {
         return exhausted("quota reached", reset, text);
@@ -209,6 +214,21 @@ mod tests {
         assert_eq!(e.reset_at, Some(NOW + 136 * 3600 + 12 * 60 + 54));
         let full = format!("RESOURCE_EXHAUSTED (code 429): {}", AGY);
         assert_eq!(classify_cli_error(&full, NOW).unwrap().reset_at, e.reset_at);
+    }
+
+    #[test]
+    fn absurd_numbers_in_a_provider_message_never_panic_and_a_reset_already_due_is_not_exhaustion() {
+        let huge = format!("RESOURCE_EXHAUSTED: Resets in {}h", "9".repeat(400));
+        assert_eq!(parse_go_duration(&format!("{}h", "9".repeat(400))), None, "infinity is not a duration");
+        assert_eq!(parse_go_duration("99999999999999999999999h"), None, "nor is a number past u64");
+        assert_eq!(parse_go_duration("40000h"), None, "nor a reset further away than is believable");
+        assert!(classify_cli_error(&huge, NOW).is_none(), "an unparseable reset is no signal");
+        assert_eq!(parse_reset("regain access on 2999-01-01 at 00:00 UTC", NOW).map(|t| t > NOW), Some(true), "a date is not capped here, only durations");
+        // "Resets in 0s" with RESOURCE_EXHAUSTED is a rate limit that has already cleared, not a spent quota.
+        assert!(classify_cli_error("RESOURCE_EXHAUSTED: slow down. Resets in 0s.", NOW).is_none());
+        assert!(classify_cli_error("RESOURCE_EXHAUSTED: slow down. Resets in 45s.", NOW).is_some(), "but a real wait still is");
+        // A message that says the quota is reached still is, whatever its reset says.
+        assert!(classify_cli_error("Individual quota reached. Resets in 0s.", NOW).unwrap().reset_at.is_none());
     }
 
     #[test]

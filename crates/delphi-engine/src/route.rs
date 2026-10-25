@@ -184,14 +184,16 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
 
     // The ideal pair: the target model if one is set, otherwise the preferred pair at the wanted tier,
     // or the nearest tier when that tier is not configured.
-    let ideal: Option<PoolKey> = match req.target.as_deref().filter(|t| !t.is_empty()) {
-        Some(t) => by_preference.iter().map(|(_, k)| k).find(|k| k.model_id == t).cloned(),
-        None => {
-            // The first pair, in preference order, at the nearest tier (`min_by_key` keeps the first minimum).
-            let want = rank(&req.tier);
-            by_preference.iter().map(|(_, k)| k).min_by_key(|k| ((rank_at(cfg, k, want) - want).abs(), (rank_at(cfg, k, want) < want) as i32)).cloned()
-        }
-    };
+    // A target is a preference. If nothing serves it, or every pair that does is ineligible for this request (a
+    // read-only harness model as a Builder's target, an unpriced model), the role falls back to the ordinary choice
+    // instead of being left with no model while other usable ones exist.
+    let target = req.target.as_deref().filter(|t| !t.is_empty());
+    let from_target = target.and_then(|t| by_preference.iter().map(|(_, k)| k).find(|k| k.model_id == t).cloned());
+    let ideal: Option<PoolKey> = from_target.clone().or_else(|| {
+        // The first pair, in preference order, at the nearest tier (`min_by_key` keeps the first minimum).
+        let want = rank(&req.tier);
+        by_preference.iter().map(|(_, k)| k).min_by_key(|k| ((rank_at(cfg, k, want) - want).abs(), (rank_at(cfg, k, want) < want) as i32)).cloned()
+    });
     let Some(ideal) = ideal else {
         return Route::NoModel { target: None, blocked: vec![], ineligible: rejected, back_at: None };
     };
@@ -202,7 +204,7 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
     }
 
     // The ideal is not usable. Classify the usable pairs against it.
-    let ideal_rank = if req.target.as_deref().is_some_and(|t| !t.is_empty()) { rank(&ideal.tier) } else { rank_at(cfg, &ideal, rank(&req.tier)) };
+    let ideal_rank = if from_target.is_some() { rank(&ideal.tier) } else { rank_at(cfg, &ideal, rank(&req.tier)) };
     let ideal_ctx = context_of(cfg, &ideal);
     let mut blocked: Vec<Blocked> = Vec::new();
     let mut usable: Vec<PoolKey> = Vec::new();
@@ -525,9 +527,24 @@ order = { claude = ["direct", "bedrock"] }
             Route::Weaker { key, lost, .. } => assert!(key.model_id == "opus-x" && lost[0].contains("200000-token context instead of 1000000"), "{:?}", r),
             other => panic!("{:?}", other),
         }
-        // A target nobody serves is ignored rather than fatal here (config validation rejects it earlier).
+        // A target nobody serves is a preference nothing can meet: the role gets its ordinary choice (config validation rejects it earlier).
         let r = resolve_route(&c, &[], NOW, &RouteRequest { target: Some("nope".into()), ..req("red-team", "workhorse") });
-        assert!(matches!(r, Route::NoModel { target: None, .. }), "{:?}", r);
+        assert_eq!(picked(&r), "direct/sonnet-x", "{:?}", r);
+    }
+
+    #[test]
+    fn a_target_that_cannot_serve_this_request_falls_back_instead_of_leaving_the_role_with_no_model() {
+        let c = cfg();
+        // `gem-agy` is the read-only subscription's model: it can never run a Builder.
+        let r = resolve_route(&c, &[], NOW, &RouteRequest { target: Some("gem-agy".into()), mutating: true, ..req("builder", "workhorse") });
+        assert_eq!(picked(&r), "direct/sonnet-x", "the Builder keeps working on an eligible model: {:?}", r);
+        // The same target is used as asked by a role that can use it.
+        let r = resolve_route(&c, &[], NOW, &RouteRequest { target: Some("gem-agy".into()), ..req("red-team", "workhorse") });
+        assert_eq!(picked(&r), "agy-sub/gem-agy");
+        // And an unpriced API model as the target is ignored the same way.
+        let unpriced = Config::parse(&CONFIG.replace("input_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0", "")).unwrap();
+        let r = resolve_route(&unpriced, &[], NOW, &RouteRequest { target: Some("gem-pro".into()), ..req("architect", "frontier") });
+        assert!(r.key().is_some_and(|k| k.model_id != "gem-pro"), "{:?}", r);
     }
 
     #[test]

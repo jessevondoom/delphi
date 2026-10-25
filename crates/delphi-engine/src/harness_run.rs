@@ -360,7 +360,9 @@ impl Engine {
         };
         let mut batch = vec![sc.agent_ev("agent.usage", payload.to_value(), ep, &launch.model), sc.agent_ev("harness.cost", json!({"total_cost_usd_equivalent": cost, "metered_tokens": metered}), ep, &launch.model)];
 
-        if let Some(x) = &exhaustion {
+        // Only a run that failed counts: if the CLI printed a rejection but still finished, the pair served, and marking it
+        // exhausted only for `record_success` to clear it a moment later would leave a false event in the log.
+        if let (Some(x), true) = (&exhaustion, failure.is_some()) {
             batch.push(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": launch.model, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)})));
             self.pool.record_exhausted(&ep.id, &launch.model, x);
         }
@@ -659,6 +661,60 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
         assert_eq!((b.status.clone(), b.text.as_str()), (Status::Done, "Built on the API."), "{}", b.text);
         assert_eq!(events_of(&f, "harness.started").len(), 1, "agy ran for the architect only");
         assert_eq!(f.model.requests().last().unwrap().endpoint_id, "direct", "the Builder went to an API endpoint");
+    }
+
+    // Independent review (Gemini, 2026-10-25): a harness cannot resume a span, so it must not take over after turns have run.
+    #[tokio::test]
+    async fn the_harness_does_not_take_over_a_span_that_has_already_run_turns() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &format!("{}\n{}", INIT, FINISH));
+        let steps = vec![crate::model::Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), crate::model::Step::Throttle, crate::model::Step::Throttle];
+        let f = setup_with_exec(steps, 5.0, |s| { s.harness_program = prog; s.degrade_wait = Duration::from_millis(50); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_harness_with(&f, "[\"direct\", \"claude-sub\"]", "[\"direct\", \"claude-sub\"]");
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?} {}", out.status, out.text);
+        assert!(events_of(&f, "harness.started").is_empty() && events_of(&f, "harness.fallback").is_empty(), "the harness would have started the span over, repeating its tool call");
+        assert_eq!(f.model.requests().len(), 2, "the first turn ran and the second was throttled");
+    }
+
+    // Independent review (Gemini, 2026-10-25): a failed harness may fall back to an API model that is only weaker; the operator is asked.
+    #[tokio::test]
+    async fn a_failed_harness_falls_back_to_a_weaker_api_model_after_the_operator_confirms() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "exit 3");
+        let f = setup_with_exec(vec![crate::model::Step::text("Answered by the weaker API model.")], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        two_methods(&f);
+        // The API's opus is out; the harness (also opus) is first in order but fails at once.
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        f.engine.pool.record_exhausted("direct", "opus-x", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let (e, m) = (f.engine.clone(), f.m.clone());
+        let task = tokio::spawn(async move { e.run_task(&m, "architect", "Plan the change").await });
+        let mut found = None;
+        for _ in 0..300 {
+            if let Some(c) = f.engine.broker.pending().into_iter().next() {
+                found = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let card = found.unwrap_or_else(|| panic!("no card appeared; events: {:?}", events_of(&f, "harness.fallback").iter().map(|e| e.payload.to_string()).collect::<Vec<_>>()));
+        assert_eq!(card.tool, "model", "the operator is asked before the weaker model runs, not escalated past");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Answered by the weaker API model."), "{}", out.text);
+        assert_eq!(f.model.requests()[0].model_id, "sonnet-x");
+        assert_eq!(events_of(&f, "harness.fallback").len(), 1);
+    }
+
+    // Independent review (Gemini, 2026-10-25): a run that finished is not exhausted, whatever a rate-limit event said on the way.
+    #[tokio::test]
+    async fn a_rejected_rate_limit_event_in_a_run_that_still_finished_does_not_mark_the_model_exhausted() {
+        let rejected = r#"echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792864800,"rateLimitType":"five_hour"}}'"#;
+        let (f, _s) = fixture(&format!("{}\n{}\n{}", INIT, rejected, FINISH), |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        assert!(events_of(&f, "model.exhausted").is_empty(), "no event for a pair that served");
+        assert!(f.engine.pool.snapshot().iter().all(|e| e.state == crate::pool::State::Available), "{:?}", f.engine.pool.snapshot());
     }
 
     /// A Gemini-family `agy` endpoint as the only allowed endpoint (no other family to fall back to).

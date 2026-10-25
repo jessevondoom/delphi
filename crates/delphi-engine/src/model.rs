@@ -82,15 +82,27 @@ impl ModelClient for HttpModelClient {
             let redact = self.redact.clone();
             match call_with_retry(&self.http, &req, self.idle_timeout, &self.retry, &*redact, on_event).await {
                 Ok(done) => Ok(done),
-                Err(CallError::RateLimited { message, .. }) => Err(ModelError::Throttled(message)),
-                Err(CallError::Exhausted(e)) => Err(ModelError::Exhausted(e)),
-                Err(CallError::Stream(StreamError::Incomplete)) => Err(ModelError::Interrupted("the stream ended before the message completed".into())),
-                Err(CallError::Unreachable(m)) => Err(ModelError::Throttled(m)), // nothing was sent: no charge, next endpoint
-                Err(CallError::Transport(m)) => Err(ModelError::Interrupted(m)),
-                Err(CallError::Stream(StreamError::Provider { kind, message })) if matches!(kind.as_str(), "overloaded_error" | "rate_limit_error" | "throttlingException" | "ThrottlingException" | "serviceUnavailableException" | "modelNotReadyException" | "RESOURCE_EXHAUSTED" | "UNAVAILABLE" | "rate_limit_exceeded") => Err(ModelError::Throttled(message)),
-                Err(other) => Err(ModelError::Failed(other.to_string())),
+                Err(e) => Err(map_call_error(e, now)),
             }
         })
+    }
+}
+
+/// How a failed call is told to the agent loop. A quota error that arrives inside a stream (an HTTP 200 followed by an
+/// error event) is classified by its text like a CLI's, so it is exhaustion and not a throttle that backs off in vain.
+pub fn map_call_error(e: CallError, now: i64) -> ModelError {
+    match e {
+        CallError::RateLimited { message, .. } => ModelError::Throttled(message),
+        CallError::Exhausted(e) => ModelError::Exhausted(e),
+        CallError::Stream(StreamError::Incomplete) => ModelError::Interrupted("the stream ended before the message completed".into()),
+        CallError::Unreachable(m) => ModelError::Throttled(m), // nothing was sent: no charge, next endpoint
+        CallError::Transport(m) => ModelError::Interrupted(m),
+        CallError::Stream(StreamError::Provider { kind, message }) => match delphi_adapter::exhaust::classify_cli_error(&message, now) {
+            Some(x) => ModelError::Exhausted(x),
+            None if matches!(kind.as_str(), "overloaded_error" | "rate_limit_error" | "throttlingException" | "ThrottlingException" | "serviceUnavailableException" | "modelNotReadyException" | "RESOURCE_EXHAUSTED" | "UNAVAILABLE" | "rate_limit_exceeded") => ModelError::Throttled(message),
+            None => ModelError::Failed(CallError::Stream(StreamError::Provider { kind, message }).to_string()),
+        },
+        other => ModelError::Failed(other.to_string()),
     }
 }
 
@@ -187,5 +199,31 @@ impl ModelClient for ScriptedModel {
                 Step::Hang => std::future::pending().await,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+    use delphi_adapter::claude::StreamError;
+
+    const NOW: i64 = 1_790_000_000;
+
+    fn stream(kind: &str, message: &str) -> CallError {
+        CallError::Stream(StreamError::Provider { kind: kind.into(), message: message.into() })
+    }
+
+    // Independent review (Gemini, 2026-10-25): a quota error delivered inside an HTTP 200 stream was always a throttle.
+    #[test]
+    fn a_quota_error_inside_the_stream_is_exhaustion_and_an_ordinary_overload_is_still_a_throttle() {
+        match map_call_error(stream("RESOURCE_EXHAUSTED", "Individual quota reached. Please upgrade. Resets in 10h0m0s."), NOW) {
+            ModelError::Exhausted(x) => assert_eq!(x.reset_at, Some(NOW + 36_000)),
+            other => panic!("{:?}", other),
+        }
+        assert!(matches!(map_call_error(stream("RESOURCE_EXHAUSTED", "too many requests, slow down"), NOW), ModelError::Throttled(_)), "no quota wording and no reset: unknown, so a throttle");
+        assert!(matches!(map_call_error(stream("overloaded_error", "Overloaded"), NOW), ModelError::Throttled(_)));
+        assert!(matches!(map_call_error(stream("invalid_request_error", "bad"), NOW), ModelError::Failed(_)));
+        assert!(matches!(map_call_error(CallError::Stream(StreamError::Incomplete), NOW), ModelError::Interrupted(_)));
+        assert!(matches!(map_call_error(CallError::Unreachable("dns".into()), NOW), ModelError::Throttled(_)));
     }
 }
