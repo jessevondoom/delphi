@@ -237,10 +237,15 @@ fn render_list(lines: &[&str], i: &mut usize, out: &mut String, depth: usize) {
 
 /// Render Markdown to HTML. Raw HTML in the source is shown as text.
 pub fn to_html(src: &str) -> String {
-    html_at(src, 0)
+    html_at(src, 0, 1)
 }
 
-fn html_at(src: &str, depth: usize) -> String {
+/// Like [`to_html`] with headings pushed down `shift` levels (`#` becomes `h{1+shift}`).
+pub fn to_html_shift(src: &str, shift: usize) -> String {
+    html_at(src, 0, shift)
+}
+
+fn html_at(src: &str, depth: usize, shift: usize) -> String {
     let text = src.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::with_capacity(text.len() * 2);
@@ -266,7 +271,7 @@ fn html_at(src: &str, depth: usize) -> String {
         } else if t.starts_with('#') && t.chars().take_while(|c| *c == '#').count() <= 6 && t.trim_start_matches('#').starts_with(' ') {
             let level = t.chars().take_while(|c| *c == '#').count();
             let body = t.trim_start_matches('#').trim().trim_end_matches('#').trim();
-            let tag = (level + 1).min(6);
+            let tag = (level + shift).min(6);
             out.push_str(&format!("<h{t} id=\"{}\">{}</h{t}>\n", slug(body), inline(body), t = tag));
             i += 1;
         } else if is_rule(t) && !list_item(line).is_some() {
@@ -280,7 +285,7 @@ fn html_at(src: &str, depth: usize) -> String {
                 i += 1;
             }
             if depth < MAX_QUOTE_DEPTH {
-                out.push_str(&format!("<blockquote>{}</blockquote>\n", html_at(&inner, depth + 1)));
+                out.push_str(&format!("<blockquote>{}</blockquote>\n", html_at(&inner, depth + 1, shift)));
             } else {
                 out.push_str(&format!("<blockquote><p>{}</p></blockquote>\n", escape(inner.trim())));
             }

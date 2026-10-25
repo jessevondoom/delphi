@@ -12,6 +12,7 @@ mod data;
 mod docx;
 mod epub;
 mod html;
+pub mod htmlkinds;
 pub mod htmllint;
 pub mod htmlpage;
 mod image;

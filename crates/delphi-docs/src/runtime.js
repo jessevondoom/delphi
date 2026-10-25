@@ -95,4 +95,61 @@
       setTimeout(function () { b.textContent = label; }, 1500);
     });
   });
+  // Slide decks: one slide at a time, by keys, buttons or swipe. Without this script every slide is shown in turn,
+  // and the notes are shown under each. Slide links are in-page anchors; the page is not navigated.
+  doc.querySelectorAll('[data-deck]').forEach(function (deck) {
+    var slides = Array.prototype.slice.call(deck.querySelectorAll('.slide'));
+    var count = deck.querySelector('[data-deck-count]');
+    var panel = deck.querySelector('[data-deck-index-panel]');
+    var notesBtn = deck.querySelector('[data-deck-notes]');
+    var cur = 0;
+    function show(i) {
+      cur = Math.max(0, Math.min(slides.length - 1, i));
+      slides.forEach(function (s, j) { s.hidden = j !== cur; });
+      if (count) { count.textContent = (cur + 1) + ' / ' + slides.length; }
+      if (panel) { panel.hidden = true; }
+      slides[cur].scrollTop = 0;
+    }
+    function toggleNotes() {
+      var on = deck.classList.toggle('notes-on');
+      if (notesBtn) { notesBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+    }
+    function toggleIndex() { if (panel) { panel.hidden = !panel.hidden; } }
+    function wire(selector, fn) {
+      deck.querySelectorAll(selector).forEach(function (b) { b.addEventListener('click', fn); });
+    }
+    wire('[data-deck-prev]', function () { show(cur - 1); });
+    wire('[data-deck-next]', function () { show(cur + 1); });
+    wire('[data-deck-index]', toggleIndex);
+    wire('[data-deck-notes]', toggleNotes);
+    if (panel) {
+      Array.prototype.forEach.call(panel.querySelectorAll('a'), function (a, i) {
+        a.addEventListener('click', function (e) { e.preventDefault(); show(i); });
+      });
+    }
+    doc.addEventListener('keydown', function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) { return; }
+      var t = e.target;
+      var k = e.key;
+      if (t && t.closest && t.closest('input, textarea, select, [role="tablist"]')) { return; }
+      if ((k === ' ' || k === 'Enter') && t && t.closest && t.closest('button, a')) { return; }
+      if (k === 'ArrowRight' || k === 'PageDown' || k === ' ') { e.preventDefault(); show(cur + 1); }
+      else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'Backspace') { e.preventDefault(); show(cur - 1); }
+      else if (k === 'Home') { show(0); }
+      else if (k === 'End') { show(slides.length - 1); }
+      else if (k === 'n' || k === 'N') { toggleNotes(); }
+      else if (k === 'i' || k === 'I') { toggleIndex(); }
+      else if (k === 'Escape' && panel && !panel.hidden) { panel.hidden = true; }
+    });
+    var x0 = null;
+    deck.addEventListener('touchstart', function (e) { x0 = e.changedTouches[0].clientX; });
+    deck.addEventListener('touchend', function (e) {
+      if (x0 === null) { return; }
+      var dx = e.changedTouches[0].clientX - x0;
+      x0 = null;
+      if (Math.abs(dx) > 50) { show(dx < 0 ? cur + 1 : cur - 1); }
+    });
+    deck.classList.add('enhanced');
+    show(0);
+  });
 })();
