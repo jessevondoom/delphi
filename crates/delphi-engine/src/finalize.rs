@@ -242,6 +242,19 @@ impl Engine {
         if self.ask_as(&who, ApprovalTier::Red, verb, &format!("{} {}", verb, sha), &summary, &payload).await?.is_some() {
             return Ok(BuildOutcome::Declined(report));
         }
+        // The card may have waited a long time. Gates 1 to 4 are evaluated again, against what is in the worktree now,
+        // before anything is recorded or merged: a spec edited, an audit superseded or a test broken meanwhile stops it.
+        let fresh = self.evaluate_gates(m, task_id).await?;
+        let changed = if fresh.sha != sha {
+            Some(format!("the worktree moved from {} to {} while the card waited", &sha[..sha.len().min(8)], &fresh.sha[..fresh.sha.len().min(8)]))
+        } else {
+            fresh.report.gates[..4].iter().find(|g| g.state == State::Red).map(|g| format!("gate {} ({}) is no longer green: {}", g.n, g.name, g.detail))
+        };
+        if let Some(why) = changed {
+            return Ok(BuildOutcome::MergeRefused { report: fresh.report, why: format!("{}; nothing was merged", why) });
+        }
+        report = fresh.report;
+        report.gates[4] = gates::approval(&sha, &[]);
         let mut e = delphi_core::event::EventEnvelope::new(&m.id, "merge.approved", json!({"sha": sha, "mode": verb}));
         e.task_id = Some(task_id.to_string());
         m.append(e).await?;
@@ -418,6 +431,31 @@ mod tests {
         for want in ["gates.evaluated", "audit.recorded", "merge.approved", "action.intent", "action.result"] {
             assert!(kinds.contains(&want.to_string()), "missing {}", want);
         }
+    }
+
+    #[tokio::test]
+    async fn gates_are_checked_again_when_the_card_is_answered_not_only_when_it_was_shown() {
+        let f = build_fixture(&["/bin/sh", "-c", "test -f src/new.rs"], builder_steps());
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        let out = run_build(&f).await;
+        let head = f.engine.exec.known_worktree(&out.task_id).unwrap().commit_all("x", "builder").unwrap();
+        let _ = head;
+        let sha = f.engine.exec.known_worktree(&out.task_id).unwrap().head().unwrap();
+        f.engine.record_audit(&f.m, &out.task_id, &sha, "red-team", &[]).await.unwrap();
+        let (e, m, t) = (f.engine.clone(), f.m.clone(), out.task_id.clone());
+        let fin = tokio::spawn(async move { e.finalize_build(&m, &t).await });
+        let c = card(&f).await;
+        // While the card waits, the ratified spec is edited: gate 3 is no longer green.
+        fs::write(f.root.join("workspaces/w/team/specs/011-retry.md"), "---\nstatus: approved\n---\n# Retry ladder, edited\n").unwrap();
+        f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
+        match fin.await.unwrap().unwrap() {
+            BuildOutcome::MergeRefused { why, .. } => assert!(why.contains("gate 3") && why.contains("nothing was merged"), "{}", why),
+            other => panic!("{:?}", other),
+        }
+        assert!(events_of(&f, "merge.approved").is_empty(), "a stale approval is not recorded");
+        assert!(!f.root.join("proj/src/new.rs").exists(), "the project is untouched");
     }
 
     #[tokio::test]

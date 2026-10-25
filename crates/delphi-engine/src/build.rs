@@ -83,7 +83,7 @@ impl Engine {
     }
 
     /// Have a Red-Team audit exactly this commit and record the verdict (what gate 4 reads).
-    async fn audit_build(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, n: u32, target: &AuditTarget<'_>, builder_family: &str) -> Result<Vec<(String, String)>, EngineError> {
+    async fn audit_build(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, n: u32, target: &AuditTarget<'_>, builder_family: &str) -> Result<(Vec<(String, String)>, Option<String>), EngineError> {
         let AuditTarget { sha, files, spec } = *target;
         const ATTACH_MAX: usize = 12;
         let mut pointers: Vec<ContextPointer> = files.iter().take(ATTACH_MAX).map(|f| ContextPointer { uri: format!("@worktree/{}", f), heading: String::new(), blake3: String::new(), reason: "changed in this build".into() }).collect();
@@ -102,13 +102,21 @@ impl Engine {
         h.routing_directive.model_family = self.other_family(builder_family, false);
         h.routing_directive.avoid_families = vec![builder_family.to_string()];
         let out = self.run_span(m, task_id, h, None, 0).await?;
-        let verdict = match (&out.status, parse_audit(&out.text)) {
-            (Status::Done, Some(f)) => f,
-            (Status::Done, None) => vec![("P1".to_string(), "the audit did not finish (no `AUDIT COMPLETE` line)".to_string())],
-            (Status::Escalated(r), _) => vec![("P1".to_string(), format!("the audit could not run: {}", r.chars().take(150).collect::<String>()))],
+        // An audit that did not run says nothing about the code. It is still recorded as a blocking finding, so gate 4
+        // stays red (fail closed), but the caller is told it did not run: that is not a defect for the Builder to fix.
+        let (verdict, not_run) = match (&out.status, parse_audit(&out.text)) {
+            (Status::Done, Some(f)) => (f, None),
+            (Status::Done, None) => {
+                let why = "the audit did not finish (no `AUDIT COMPLETE` line)".to_string();
+                (vec![("P1".to_string(), why.clone())], Some(why))
+            }
+            (Status::Escalated(r), _) => {
+                let why = format!("the audit could not run: {}", r.chars().take(150).collect::<String>());
+                (vec![("P1".to_string(), why.clone())], Some(why))
+            }
         };
         self.record_audit(m, task_id, sha, "red-team", &verdict).await?;
-        Ok(verdict)
+        Ok((verdict, not_run))
     }
 
     /// Run a build under the retry ladder and finish with the operator's merge decision.
@@ -189,7 +197,11 @@ impl Engine {
             // Tests and checks pass: audit this commit.
             n += 1;
             let files: Vec<String> = ev.diff.files.iter().map(|f| f.path.clone()).collect();
-            let findings = self.audit_build(m, task_id, n, &AuditTarget { sha: &ev.sha, files: &files, spec: spec.as_deref() }, &family).await?;
+            let (findings, not_run) = self.audit_build(m, task_id, n, &AuditTarget { sha: &ev.sha, files: &files, spec: spec.as_deref() }, &family).await?;
+            if let Some(why) = not_run {
+                // The build passed its tests and checks; a retry would only rebuild good work. It is the operator's call.
+                return Ok((Status::Escalated(why.clone()), format!("[the build is verified except for its audit: {}; the branch delphi/{} is kept]", why, task_id)));
+            }
             let blocking: Vec<&(String, String)> = findings.iter().filter(|(s, _)| s == "P0" || s == "P1").collect();
             if !blocking.is_empty() {
                 diagnostics.push(format!("Attempt {} was audited and has open findings:\n{}", attempt, blocking.iter().map(|(s, t)| format!("- {} {}", s, t)).collect::<Vec<_>>().join("\n")));
@@ -325,6 +337,24 @@ mod tests {
         let second_builder = f.model.requests()[3].body["messages"][0]["content"][0]["text"].to_string();
         assert!(second_builder.contains("off-by-one"), "{}", second_builder);
         assert_eq!(fs::read_to_string(f.root.join("proj/src/new.rs")).unwrap(), "two\n");
+    }
+
+    #[tokio::test]
+    async fn an_audit_that_did_not_finish_goes_to_the_operator_and_is_not_fed_back_as_a_defect() {
+        let f = fixture(vec![write("one\n"), Step::text("done"), Step::text("I ran out of room before finishing.")], "test -f src/new.rs");
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        let out = run(&f).await;
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("audit did not finish"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(events_of(&f, "build.attempt").len(), 1, "good work is not rebuilt because the auditor failed");
+        let audits = events_of(&f, "audit.recorded");
+        assert_eq!(audits.len(), 1);
+        assert_eq!(audits[0].payload["findings"][0]["severity"], "P1", "gate 4 stays red");
+        assert!(events_of(&f, "merge.approved").is_empty() && !f.root.join("proj/src/new.rs").exists());
     }
 
     #[tokio::test]
