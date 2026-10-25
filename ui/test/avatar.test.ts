@@ -99,6 +99,21 @@ test('the mascot is seven columns in every state and its face row is the library
   });
 });
 
+test('the mascot is painted with backgrounds: no seams between cells, no gap before the chin', () => {
+  withColour(() => {
+    for (const r of roles) {
+      const rows = mascot(r, 'idle', info, { dark: true, bg: [13, 17, 23] });
+      assert.ok(!rows[2].includes('▀') && !rows[2].includes('▄') && rows[2].includes('\x1b[48;'), `${r}: the chin is a background colour`);
+      assert.ok(!rows[0].includes('▄') && rows[0].includes('\x1b[48;'), `${r}: so is the crown`);
+      for (const row of rows) assert.equal(stringWidth(row), 7, r);
+    }
+    assert.ok(mascot('orchestrator', 'idle', info, { dark: true })[0].includes('▄'), 'with no known background the crown is the half block');
+  });
+  const none = currentCapabilities();
+  useCapabilities({ color: 'none', attributes: false });
+  try { assert.equal(mascot('orchestrator', 'idle', info, { dark: true, bg: [13, 17, 23] })[2], '▀▀▀▀▀▀▀', 'no colour: glyphs'); } finally { useCapabilities(none); }
+});
+
 test('light or dark: DELPHI_THEME wins, COLORFGBG is the fallback, nothing set means ask the terminal', async () => {
   const { envTheme } = await import('../src/theme.ts');
   assert.deepEqual(envTheme({ DELPHI_THEME: 'light', COLORFGBG: '15;0' }), { dark: false, forced: true });
