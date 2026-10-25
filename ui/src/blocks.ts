@@ -33,6 +33,16 @@ export type TintBlock = {
   tint: T.Tint | null;
 };
 
+/**
+ * The block without its label: a cap row, the text rows, a cap row, all `width` cells, square (`005e` §7.2). The council
+ * cards use it (`weave.ts`). Without a tint it is the rail: no caps, each row `│` and its padding, padded to `width`.
+ */
+export function tintCard(rows: string[], width: number, tint: T.Tint | null): string[] {
+  const fit = (r: string) => r + ' '.repeat(Math.max(0, width - stringWidth(r)));
+  if (!tint) return rows.map((r) => fit(T.dim('│') + r));
+  return [tint.ink('▄'.repeat(width)), ...rows.map((r) => tint.fill(fit(r))), tint.flip('▄'.repeat(width))];
+}
+
 export function tintBlock(o: TintBlock): string[] {
   const pad = ' '.repeat(Math.max(0, o.col));
   if (!o.tint) return [pad + o.label, ...o.rows.map((r) => pad + T.dim('│') + r)]; // the row's own padding column follows the rail

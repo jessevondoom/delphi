@@ -1,0 +1,30 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦…  ⟧
+delphi v0.5 · council
+
+ ✔ nothing needs you
+
+ question  Should the retry queue be a table or a file?
+ round   ✔ blind ━━━━━━━━ ● debate ╌╌╌╌╌╌╌╌ ○ verdict 00:34
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ⟦•_•⟧ daedalus
+   table
+   ✔ replied
+   atomic claims and a one-query audit
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ⟦•_•⟧ odysseus
+   table
+   ✔ replied
+   a table is already the house pattern
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ⟦…  ⟧ hermes
+   file
+   ● answering daedalus
+   ▊
+                                                   ↓ 6 more
+────────────────────────────────────────────────────────────
+3 agents  ·  14.2k tokens                        ● ○ ○ ○ ○ ○

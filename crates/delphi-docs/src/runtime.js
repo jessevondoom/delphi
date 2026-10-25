@@ -1,0 +1,98 @@
+(function () {
+  'use strict';
+  // Delphi page runtime. Audited code shipped in the binary; generated pages carry it unchanged.
+  // It reads nothing but the page it is in, makes no requests, builds no code, and leaves the page where it is.
+  var doc = document;
+
+  function text(el) { return (el.textContent || '').trim(); }
+  function num(s) {
+    var t = s.replace(/[,$%\s]/g, '');
+    return t !== '' && isFinite(t) ? parseFloat(t) : NaN;
+  }
+
+  // Sortable tables: click or press Enter on a column heading.
+  doc.querySelectorAll('table[data-sortable]').forEach(function (table) {
+    var heads = table.querySelectorAll('thead th');
+    heads.forEach(function (th, col) {
+      th.tabIndex = 0;
+      th.setAttribute('aria-sort', 'none');
+      function sort() {
+        var dir = th.getAttribute('aria-sort') === 'ascending' ? 'descending' : 'ascending';
+        heads.forEach(function (h) { h.setAttribute('aria-sort', 'none'); });
+        th.setAttribute('aria-sort', dir);
+        var body = table.tBodies[0];
+        var rows = Array.prototype.slice.call(body.rows);
+        rows.sort(function (a, b) {
+          var x = text(a.cells[col]);
+          var y = text(b.cells[col]);
+          var nx = num(x);
+          var ny = num(y);
+          var r = (!isNaN(nx) && !isNaN(ny)) ? nx - ny : x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' });
+          return dir === 'ascending' ? r : -r;
+        });
+        rows.forEach(function (r) { body.appendChild(r); });
+      }
+      th.addEventListener('click', sort);
+      th.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sort(); }
+      });
+    });
+  });
+
+  // Filter boxes: hide the rows of the named table that do not contain the typed text.
+  doc.querySelectorAll('input[data-filter]').forEach(function (input) {
+    var table = doc.getElementById(input.getAttribute('data-filter'));
+    if (!table) { return; }
+    input.addEventListener('input', function () {
+      var q = input.value.toLowerCase();
+      Array.prototype.forEach.call(table.tBodies[0].rows, function (r) {
+        r.hidden = q !== '' && text(r).toLowerCase().indexOf(q) < 0;
+      });
+    });
+  });
+
+  // Tabs: click, or arrow keys, Home and End on the tab list. Without this script every panel shows.
+  doc.querySelectorAll('[data-tabs]').forEach(function (box) {
+    var tabs = Array.prototype.slice.call(box.querySelectorAll('[role="tab"]'));
+    var panels = tabs.map(function (t) { return doc.getElementById(t.getAttribute('aria-controls')); });
+    function show(i) {
+      tabs.forEach(function (t, j) {
+        var on = i === j;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.tabIndex = on ? 0 : -1;
+        if (panels[j]) { panels[j].hidden = !on; }
+      });
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener('click', function () { show(i); });
+      t.addEventListener('keydown', function (e) {
+        var k = e.key;
+        var n = k === 'ArrowRight' ? (i + 1) % tabs.length : k === 'ArrowLeft' ? (i + tabs.length - 1) % tabs.length : k === 'Home' ? 0 : k === 'End' ? tabs.length - 1 : -1;
+        if (n >= 0) { e.preventDefault(); show(n); tabs[n].focus(); }
+      });
+    });
+    box.classList.add('enhanced');
+    show(0);
+  });
+
+  // Copy buttons: copy the text of the element the button names.
+  doc.querySelectorAll('button[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var target = doc.querySelector(b.getAttribute('data-copy'));
+      if (!target) { return; }
+      var ta = doc.createElement('textarea');
+      ta.value = target.textContent;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      doc.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = doc.execCommand('copy'); } catch (err) { ok = false; }
+      doc.body.removeChild(ta);
+      var label = b.textContent;
+      b.textContent = ok ? 'Copied' : 'Select and copy';
+      setTimeout(function () { b.textContent = label; }, 1500);
+    });
+  });
+})();
