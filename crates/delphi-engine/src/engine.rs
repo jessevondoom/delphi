@@ -211,6 +211,9 @@ pub struct Engine {
     pub exec: Arc<exec::ExecEnv>,
     /// Context slices a driver hands a span directly, by handoff id (Council Round 2 peers' stances).
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
+    /// A JSON Schema a handoff's answer must match, by handoff id (`specs/021` §5). A CLI harness validates against it;
+    /// an API endpoint ignores it, and the reader of the answer accepts either shape.
+    pub(crate) schemas: Mutex<HashMap<String, String>>,
     /// The connector host (`specs/010`): MCP sessions, pins, the payload store.
     pub connectors: Arc<crate::connectors::ConnectorHost>,
     /// Which `(endpoint, model)` pairs are usable now (`specs/002` §4.1). Outcomes are recorded here; routing reads it from M3.
@@ -307,6 +310,8 @@ pub(crate) struct SpanCtx {
     pub(crate) toolless: bool,
     /// A harness was already tried for this span (and failed for a reason that is not a spent quota, so the pool does not know).
     pub(crate) harness_tried: std::sync::atomic::AtomicBool,
+    /// The JSON Schema this span's answer must match, when its handoff named one.
+    pub(crate) output_schema: Option<String>,
 }
 
 impl SpanCtx {
@@ -502,7 +507,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id) };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned() };
 
             if fresh {
                 let mut open = vec![
