@@ -1,4 +1,5 @@
-//! `delphi self-update`: replace this executable with the latest release.
+//! The program step of `delphi update`: replace this executable with the latest release. (`main.rs` follows it with
+//! the workspace files and the daemons; see `cmd_update`.)
 //!
 //! * The release is found through the GitHub releases API (override with `DELPHI_RELEASES_URL` for a mirror).
 //! * The tarball for this machine is downloaded with its `.sha256`; the checksum must match before anything is
@@ -6,8 +7,6 @@
 //!   anything.
 //! * Replacement is a rename in the same directory, so a running `delphi` or daemon keeps working; the old
 //!   executable is kept as `delphi.prev` and `--rollback` puts it back.
-//! * Daemons that are running are restarted on the new executable (`--no-restart` leaves them), so an update never
-//!   leaves one on the old version.
 //! * Only releases newer than this one are installed, and never a prerelease unless asked for by version.
 //! * `--dev` follows `main` instead: every push to main publishes a build as the rolling `dev` release (see
 //!   `.github/workflows/dev.yml`). Its version is `<crate version>-dev.g<commit>`, so any other build is "different"
@@ -289,27 +288,36 @@ impl Net for RealNet {
     }
 }
 
-/// The command, restarting nothing. Returns the process exit code.
-#[cfg(test)]
-pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
-    run_with(args, net, dest, api, &mut |_| false)
+/// What the program step of `delphi update` did, for the caller to follow up on (workspace files, daemons).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Event {
+    /// A newer program is now at the destination.
+    Installed,
+    /// The previous program is back at the destination.
+    RolledBack,
+    /// This already is the newest release (or `--check` found nothing to install).
+    UpToDate,
 }
 
-/// `run`, calling `restart` with the new executable once an install or rollback has replaced it. It returns whether
-/// it found a running daemon (and said so); if not, the command tells the user how to restart one.
-pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, restart: &mut dyn FnMut(&Path) -> bool) -> i32 {
+/// The program step, ignoring what follows. Returns the process exit code.
+#[cfg(test)]
+pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
+    run_with(args, net, dest, api, &mut |_| {})
+}
+
+/// The program step of `delphi update`: `after` is told what happened once it is done and the executable at `dest`
+/// is the one to carry on with. It is not called after `--check` finds an update, or after an error.
+pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &mut dyn FnMut(Event)) -> i32 {
     let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
     if args.iter().any(|a| a == "--rollback") {
         return match rollback(dest) {
             Ok(()) => {
                 println!("Restored the previous version.");
-                if !restart(dest) {
-                    println!("A running daemon keeps the version it started with until it restarts: `delphi daemon restart`.");
-                }
+                after(Event::RolledBack);
                 0
             }
             Err(e) => {
-                eprintln!("delphi self-update: {:#}", e);
+                eprintln!("delphi update: {:#}", e);
                 1
             }
         };
@@ -318,11 +326,11 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, restart:
     let wanted = flag("--version");
     let dev = args.iter().any(|a| a == "--dev");
     if dev && wanted.is_some() {
-        eprintln!("delphi self-update: --dev and --version cannot be combined");
+        eprintln!("delphi update: --dev and --version cannot be combined");
         return 2;
     }
     let Some(target) = target() else {
-        eprintln!("delphi self-update: there is no build for this platform ({} {})", std::env::consts::OS, std::env::consts::ARCH);
+        eprintln!("delphi update: there is no build for this platform ({} {})", std::env::consts::OS, std::env::consts::ARCH);
         return 1;
     };
     let found = if dev { find_dev(net, api, current, target) } else { find(net, api, current, wanted.as_deref()) };
@@ -330,32 +338,30 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, restart:
         Ok(Some(r)) => r,
         Ok(None) => {
             println!("delphi {} is the latest {}.", current, if dev { "dev build" } else { "release" });
+            after(Event::UpToDate);
             return 0;
         }
         Err(e) => {
-            eprintln!("delphi self-update: {:#}", e);
+            eprintln!("delphi update: {:#}", e);
             return 1;
         }
     };
     println!("{} -> {}", current, rel.tag);
     if args.iter().any(|a| a == "--check") {
-        println!("An update is available. Run `delphi self-update{}` to install it.", if dev { " --dev" } else { "" });
+        println!("An update is available. Run `delphi update{}` to install it.", if dev { " --dev" } else { "" });
         return 0;
     }
     match install(net, &rel, target, dest) {
         Ok(i) => {
             if dev {
-                println!("This is a development build of main, not a release; `delphi self-update` returns to the latest release.");
+                println!("This is a development build of main, not a release; `delphi update` returns to the latest release.");
             }
-            println!("Installed {} at {} (the old version is kept as {}; `delphi self-update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
-            if !restart(dest) {
-                println!("A running daemon keeps the old version until it restarts: `delphi daemon restart`.");
-            }
-            println!("Then run `delphi update` to refresh the built-in agents, skills and themes in your workspaces.");
+            println!("Installed {} at {} (the old version is kept as {}; `delphi update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
+            after(Event::Installed);
             0
         }
         Err(e) => {
-            eprintln!("delphi self-update: {:#}", e);
+            eprintln!("delphi update: {:#}", e);
             1
         }
     }
@@ -599,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn daemons_are_restarted_on_the_new_executable_after_an_install_or_rollback_and_only_then() {
+    fn the_caller_is_told_what_happened_after_an_install_a_rollback_or_when_nothing_was_newer() {
         let d = tempfile::tempdir().unwrap();
         let dest = d.path().join("delphi");
         std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.1.0'\n").unwrap();
@@ -608,12 +614,15 @@ mod tests {
             std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let (net, api) = server("v99.0.0", "99.0.0", None);
-        let mut seen: Vec<PathBuf> = Vec::new();
-        assert_eq!(run_with(&["--check".into()], &net, &dest, &api, &mut |p| { seen.push(p.to_path_buf()); true }), 0);
-        assert!(seen.is_empty(), "--check changes nothing, so restarts nothing");
-        assert_eq!(run_with(&[], &net, &dest, &api, &mut |p| { seen.push(p.to_path_buf()); true }), 0);
-        assert_eq!(seen, vec![dest.clone()], "an install restarts the daemons, on the executable it just installed");
-        assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, &mut |p| { seen.push(p.to_path_buf()); true }), 0);
-        assert_eq!(seen.len(), 2, "a rollback restarts them too");
+        let mut seen: Vec<Event> = Vec::new();
+        assert_eq!(run_with(&["--check".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert!(seen.is_empty(), "--check that finds an update changes nothing and follows up on nothing");
+        assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(seen, vec![Event::Installed]);
+        assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(seen, vec![Event::Installed, Event::RolledBack]);
+        let (net, api) = server("v0.1.0", "0.1.0", None);
+        assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(seen.last(), Some(&Event::UpToDate), "nothing newer: the workspaces are still refreshed against this program");
     }
 }

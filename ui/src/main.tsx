@@ -42,7 +42,7 @@ const info = readInfo();
 const observeAt = process.argv.indexOf('--observe');
 if (VERSION !== 'dev' && VERSION !== info.version) {
   // Exit code 3 tells `delphi chat` to use the inline console instead.
-  console.error(`delphi-ui ${VERSION} does not match delphi ${info.version}; run \`delphi self-update\` (using the inline console for now)`);
+  console.error(`delphi-ui ${VERSION} does not match delphi ${info.version}; run \`delphi update\` (using the inline console for now)`);
   process.exit(3);
 }
 if (observeAt >= 0) {
