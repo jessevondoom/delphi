@@ -372,6 +372,47 @@ fn every_form_embeds_in_a_page_that_passes_the_safety_check_and_renders_determin
     }
 }
 
+fn view_size(svg: &str) -> (usize, usize) {
+    let vb = svg.split("viewBox=\"").nth(1).unwrap().split('"').next().unwrap();
+    let n: Vec<f64> = vb.split_whitespace().map(|v| v.parse().unwrap()).collect();
+    (n[2] as usize, n[3] as usize)
+}
+
+#[test]
+fn every_chart_form_draws_as_a_png_at_twice_the_size_in_both_modes() {
+    for (name, spec) in samples::all() {
+        for dark in [false, true] {
+            let mut spec = spec.clone();
+            spec["theme"] = json!(if dark { "dark" } else { "light" });
+            let s = render_svg(&chart(spec).unwrap(), None);
+            let (w, h) = view_size(&s);
+            let bytes = crate::raster::svg_to_png(&s, dark, 2, &[("Title", name)]).unwrap_or_else(|e| panic!("{}: {}", name, e));
+            let img = crate::png::decode(&bytes).unwrap();
+            assert_eq!((img.width, img.height), (w * 2, h * 2), "{}", name);
+            let surface = img.pixel(1, 1);
+            let (r, g, b) = palette::rgb(if dark { palette::SURFACE_DARK } else { palette::SURFACE_LIGHT });
+            assert_eq!(surface[..3], [r, g, b], "{}: corner is the surface", name);
+            let ink = img.rgba.chunks(4).filter(|p| p[..3] != surface[..3]).count();
+            assert!(ink * 100 > img.width * img.height, "{}: the chart drew almost nothing ({} of {} pixels)", name, ink, img.width * img.height);
+            assert!(bytes.len() < 2 << 20, "{}: {} bytes", name, bytes.len());
+        }
+    }
+}
+
+/// `DELPHI_DOCS_CHART_OUT=/dir cargo test -p delphi-docs write_png_samples -- --ignored`: every sample as a PNG.
+#[test]
+#[ignore = "writes files for a person to look at"]
+fn write_png_samples() {
+    let Ok(dir) = std::env::var("DELPHI_DOCS_CHART_OUT") else { return };
+    for (name, mut spec) in samples::all() {
+        for dark in [false, true] {
+            spec["theme"] = json!(if dark { "dark" } else { "light" });
+            let s = render_svg(&chart(spec.clone()).unwrap(), None);
+            std::fs::write(format!("{}/{}-{}.png", dir, name, if dark { "dark" } else { "light" }), crate::raster::svg_to_png(&s, dark, 2, &[("Title", name)]).unwrap()).unwrap();
+        }
+    }
+}
+
 #[test]
 fn only_charts_inside_a_page_answer_the_pointer_and_their_targets_are_bounded() {
     for (name, spec) in samples::all() {
