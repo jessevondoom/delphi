@@ -3,7 +3,7 @@ id: spec-005b-deck-navigation-and-visual-interface
 title: "005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer"
 author: architect
 timestamp: 2026-10-24T00:52:00Z
-status: approved
+status: approved   # Amendment 005b-A2 (header and footer tidy) approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -27,8 +27,8 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
    - **Quiet / Steady State (30s timeout):** Switches back to the compact **multi-badge strip** showing only badges (no stale text), with animated thinking faces active only for agents currently working. Exactly 1 badge per agent type regardless of concurrency.
    - **Decision Needed State:** Collapses all other badges to display **only the Red-Team badge** (`⟦x?x⟧` $\leftrightarrow$ `⟦●_●⟧`) and the prominent operator callout.
 3. **Simplified Footer & Ergonomics:**
-   - Left-aligned session telemetry: token usage (`42.1k tokens`), autonomy mode (`approvals` or `auto`), and shortcuts hint (`shortcuts: ?`). Distracting financial spend figures are eliminated from the primary console footer and reserved for `delphi observe spend`.
-   - Right-aligned deck swipe indicator: `navigate: shift+arrows · ○ ● ○` with unbracketed colored navigation dots to prevent visual collision with agent avatar badges (`⟦...⟧`).
+   - Left-aligned session telemetry: token usage (`42.1k tokens`), autonomy mode (shown only when it is not the default: `accept edits` or `auto`; 005b-A2). Distracting financial spend figures are eliminated from the primary console footer and reserved for `delphi observe spend`.
+   - Right-aligned deck swipe indicator: `← / ? → · ○ ● ○` (005b-A2) with unbracketed colored navigation dots to prevent visual collision with agent avatar badges (`⟦...⟧`).
 4. **Narrator Window Architecture (Full-Screen Panes, No Internal Tiling):**
    - Every Narrator window is strictly a **single full-pane view** that auto-resizes to 100% of the window geometry. No auto-splitting or multi-pane tiling within a single window.
    - Navigated via the same `Shift+Left` / `Shift+Right` keybindings in its footer (`[Council Chamber]`, `[Epic DAG]`, `[Forge Diffs]`, `[Archives/Telemetry]`).
@@ -89,6 +89,14 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 
 **Verification** (extends §6, test 1). With an empty prompt `←` and `→` switch decks and stop at the ends. With text typed, `←` moves the cursor and the deck does not change. `Shift+Left` and `Shift+Right` switch decks with text typed, and the draft is intact on return. `Alt+←` does not switch decks. In the Right Deck, List Mode `←` returns to the chat and Focus Mode `←` `→` change card. These are covered by `ui/test/decknav.test.ts` and the scripted session in `crates/delphi/tests/e2e.rs`.
 
+### 2.3 Amendment 005b-A2: Header and Footer Tidy (approved by the operator 2026-10-25)
+> This amendment is part of the approved spec. Where §1.3, §3 and A1 item 4 differ from it, this amendment governs; the full-screen drawings in §3 that still show `navigate: shift+arrows`, `shortcuts: ?`, `approvals` or `all agents idle` are illustrative of layout only. It applies to the full-screen console only.
+
+1. **Header line 1** carries the agent strip or the status/alert text only. The deck dots are no longer shown in the header, and the idle strip has no `all agents idle` label.
+2. **Header line 2** is separated from line 1 by one blank row, and reads `delphi v<version> · <working directory> · <pane>` where `<pane>` is `activity` (Left Deck), `chat` (Center Deck) or `decisions` (Right Deck).
+3. **Footer, right.** The only deck indicator reads `← / ? → · ○ ● ○`; it is the single place with navigation hints (`←` `→` move between decks, `?` opens help). Shown at 64 columns and wider; below that only the dots. The `shortcuts: ?` item is gone.
+4. **Footer, left.** `<tokens> tokens`, then the approval mode only when it is not the default (`accept edits`, `auto`), then `N waiting` when decisions are pending. The word `approvals` is no longer shown for the default mode.
+
 ---
 
 ## 3. High-Fidelity Text Wireframes
@@ -98,23 +106,24 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 To balance priority telemetry with calm typography, the header uses a **stacked two-line hierarchy**:
 
 #### Line 1 (Top Priority Line):
-- **Active Turn:** Displays the single active agent status top-left with immediate context, and deck swipe navigation top-right:
+- **Active Turn:** Displays the single active agent status with immediate context:
   ```text
-  ⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks navigate: shift+arrows · ○ ● ○
+  ⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks
   ```
 - **Decision Alert:** Prioritizes the blocker immediately in crimson:
   ```text
-  ⟦x?x⟧ red-team: decision needed · 09:42 remaining         navigate: shift+arrows · ○ ○ ●
+  ⟦x?x⟧ red-team: decision needed · 09:42 remaining
   ```
 - **Idle / Steady State (30s timeout):** Reverts to the full strip of 1-line agent badges in their canonical colors:
   ```text
-  ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧  all agents idle      navigate: shift+arrows · ○ ● ○
+  ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
   ```
 
-#### Line 2 (Sub-Header Branding):
+#### Line 2 (Sub-Header Branding), after one blank row (005b-A2):
 ```text
-delphi v0.5 · ~/projects/work/delphi
+delphi v0.5 · ~/projects/work/delphi · chat
 ```
+The last item names the pane: `activity`, `chat` or `decisions`.
 
 #### Avatar Badge Eye Contrast Rule:
 Every agent avatar badge displays chassis brackets and mouth in the agent's chassis color, with **contrasting eyes**:
@@ -134,10 +143,10 @@ Agent messages in the chat stream display their 1-line badge directly beside the
 The Console footer is intentionally minimal, removing cost and financial telemetry to prevent developer distraction (cost metrics are reserved for `delphi observe spend`):
 ```text
 ───────────────────────────────────────────────────────────────────────────────────────
-42.1k tokens · approvals · shortcuts: ?                 navigate: shift+arrows · ○ ● ○
+42.1k tokens                                             ← / ? → · ○ ● ○
 ```
-- **Left:** Contextual token usage (`42.1k tokens`), autonomy mode indicator (`auto` or `approvals`), and key shortcut hint (`shortcuts: ?`).
-- **Right:** Navigation directive (`navigate: shift+arrows`) and unbracketed 3-dot visual indicator (`○ ● ○`) with the active deck colored (`●`). Unbracketed dots eliminate visual confusion with agent robot badges (`⟦•─•⟧`).
+- **Left:** Contextual token usage (`42.1k tokens`), then the autonomy mode only when it is not the default (`accept edits`, `auto`), then `N waiting` when decisions are pending.
+- **Right:** Navigation hint (`← / ? →`: arrows move between decks, `?` opens help) and unbracketed 3-dot visual indicator (`○ ● ○`) with the active deck colored (`●`). Unbracketed dots eliminate visual confusion with agent robot badges (`⟦•─•⟧`).
 
 ---
 

@@ -202,7 +202,10 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
                     }
                 }
                 (Some("tool"), Some("ACTIVE")) => out.push(Event::ToolUse { id, name: s["tool_name"].as_str().unwrap_or("").into(), input: s["tool_info"]["parameters"].clone() }),
-                (Some("tool"), Some(state)) => out.push(Event::ToolResult { id, is_error: state == "ERROR" }),
+                // Only a finished step is a result. A step that is still pending or running says nothing yet, and a
+                // refused or cancelled one is a failure, not a completion.
+                (Some("tool"), Some("DONE" | "COMPLETED" | "SUCCESS")) => out.push(Event::ToolResult { id, is_error: false }),
+                (Some("tool"), Some("ERROR" | "FAILED" | "CANCELLED" | "CANCELED" | "DENIED" | "REJECTED")) => out.push(Event::ToolResult { id, is_error: true }),
                 _ => {}
             }
         }
@@ -233,6 +236,55 @@ pub fn response_line(p: &Permission, d: &Decision) -> String {
         Decision::Deny(why) => json!({"behavior": "deny", "message": why}),
     };
     json!({"type": "control_response", "response": {"subtype": "success", "request_id": p.request_id, "response": body}}).to_string()
+}
+
+/// The longest line of CLI output that is kept.
+const MAX_LINE: usize = 8 << 20;
+
+/// The first user turn, as the CLI's input format wants it.
+fn first_turn(l: &Launch) -> String {
+    match l.cli {
+        Cli::Claude => json!({"type": "user", "message": {"role": "user", "content": l.user_prompt}}),
+        // `agy` has no system-prompt flag: the governance and role come first in the user turn. It cannot turn
+        // its tools off either, so a role that should have none is told so (a request, not an enforcement: the
+        // engine treats every agy span as untrusted and checks the projects afterwards).
+        Cli::Agy => {
+            let no_tools = if l.tools == Tools::None { "Do not call any tools. Answer in text only.\n\n" } else { "" };
+            json!({"event": "user", "message": {"content": format!("{}\n\n{}{}", l.system_prompt, no_tools, l.user_prompt)}})
+        }
+    }
+    .to_string()
+        + "\n"
+}
+
+/// Read one line into `buf` (without its newline), keeping at most `cap` bytes. `Some(true)` is a line within the cap;
+/// `Some(false)` is a longer one, which has been read to its end and discarded; `None` is the end of the stream.
+async fn read_capped_line<R: tokio::io::AsyncBufRead + Unpin>(r: &mut R, cap: usize, buf: &mut Vec<u8>) -> std::io::Result<Option<bool>> {
+    buf.clear();
+    let (mut over, mut any) = (false, false);
+    loop {
+        let chunk = r.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok(any.then_some(!over));
+        }
+        any = true;
+        let (take, done) = match chunk.iter().position(|b| *b == b'\n') {
+            Some(i) => (i, true),
+            None => (chunk.len(), false),
+        };
+        if !over {
+            if buf.len() + take > cap {
+                over = true;
+                buf.clear();
+            } else {
+                buf.extend_from_slice(&chunk[..take]);
+            }
+        }
+        r.consume(take + usize::from(done));
+        if done {
+            return Ok(Some(!over));
+        }
+    }
 }
 
 fn args(l: &Launch) -> Vec<String> {
@@ -267,24 +319,21 @@ impl Session {
         let pgid = child.id().unwrap_or(0) as i32;
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
-        let first = match l.cli {
-            Cli::Claude => json!({"type": "user", "message": {"role": "user", "content": l.user_prompt}}),
-            // `agy` has no system-prompt flag: the governance and role come first in the user turn.
-            Cli::Agy => json!({"event": "user", "message": {"content": format!("{}\n\n{}", l.system_prompt, l.user_prompt)}}),
-        }
-        .to_string()
-            + "\n";
+        let first = first_turn(l);
         let cli = l.cli;
         stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
         let (tx, rx) = mpsc::channel(256);
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            // A single line is capped; a longer one is dropped rather than buffered without bound.
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line.len() > 8 << 20 {
+            let mut reader = BufReader::new(stdout);
+            let mut buf = Vec::new();
+            // A single line is capped while it is read; a longer one is dropped rather than buffered. A line that
+            // is not UTF-8 is decoded lossily (it then fails to parse and yields nothing) and never ends the reader.
+            while let Ok(Some(complete)) = read_capped_line(&mut reader, MAX_LINE, &mut buf).await {
+                if !complete {
                     continue;
                 }
+                let line = String::from_utf8_lossy(&buf);
                 for ev in if cli == Cli::Agy { parse_agy_line(&line) } else { parse_line(&line) } {
                     if tx.send(ev).await.is_err() {
                         return;
@@ -304,7 +353,14 @@ impl Session {
             Ok(Some(ev)) => Some(ev),
             Ok(None) => {
                 self.exited = true;
-                let code = self.child.wait().await.ok().and_then(|s| s.code());
+                // The output is closed; a process that stays alive anyway is killed rather than waited on forever.
+                let code = match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
+                    Ok(r) => r.ok().and_then(|s| s.code()),
+                    Err(_) => {
+                        self.kill().await;
+                        None
+                    }
+                };
                 Some(Event::Exit { code })
             }
             Err(_) => {
@@ -415,6 +471,67 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn agy_tool_steps_that_are_not_finished_are_not_reported_as_completed() {
+        let step = |state: &str| parse_agy_line(&format!(r#"{{"event":"step_update","step_update":{{"step_index":3,"state":"{}","step_type":"tool","tool_name":"run_command"}}}}"#, state));
+        assert_eq!(step("DONE"), vec![Event::ToolResult { id: "3".into(), is_error: false }]);
+        for failed in ["ERROR", "CANCELLED", "DENIED"] {
+            assert_eq!(step(failed), vec![Event::ToolResult { id: "3".into(), is_error: true }], "{}", failed);
+        }
+        for pending in ["PENDING", "WAITING", "SOMETHING_NEW"] {
+            assert!(step(pending).is_empty(), "{} is not a result", pending);
+        }
+    }
+
+    #[test]
+    fn agy_with_no_tools_is_told_so_in_its_first_turn() {
+        let mk = |tools| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new() };
+        assert!(first_turn(&mk(Tools::None)).contains("Do not call any tools"));
+        assert!(!first_turn(&mk(Tools::Standard)).contains("Do not call any tools"));
+    }
+
+    #[tokio::test]
+    async fn long_lines_are_dropped_while_read_and_the_next_line_still_arrives() {
+        let mut data = vec![b'x'; 100];
+        data.extend_from_slice(b"\nshort\n\nlast");
+        let mut r = tokio::io::BufReader::with_capacity(16, &data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(read_capped_line(&mut r, 10, &mut buf).await.unwrap(), Some(false));
+        assert!(buf.is_empty(), "nothing over the cap is kept");
+        assert_eq!(read_capped_line(&mut r, 10, &mut buf).await.unwrap(), Some(true));
+        assert_eq!(buf, b"short");
+        assert_eq!(read_capped_line(&mut r, 10, &mut buf).await.unwrap(), Some(true));
+        assert!(buf.is_empty());
+        assert_eq!(read_capped_line(&mut r, 10, &mut buf).await.unwrap(), Some(true));
+        assert_eq!(buf, b"last");
+        assert_eq!(read_capped_line(&mut r, 10, &mut buf).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_does_not_end_the_session() {
+        let d = tempfile::tempdir().unwrap();
+        let prog = fake_cli(d.path(), "printf '\\377\\376 bad\\n'\necho '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"after\",\"usage\":{}}'");
+        let mut s = Session::start(&launch(prog, d.path())).await.unwrap();
+        let mut got = false;
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            got |= matches!(&ev, Event::Result { text, .. } if text == "after");
+            if matches!(ev, Event::Exit { .. }) {
+                break;
+            }
+        }
+        assert!(got, "the line after the bad one was read");
+    }
+
+    #[tokio::test]
+    async fn a_cli_that_closes_its_output_but_stays_alive_is_killed_not_waited_for() {
+        let d = tempfile::tempdir().unwrap();
+        let prog = fake_cli(d.path(), "exec 1>&-\nsleep 60");
+        let mut s = Session::start(&launch(prog, d.path())).await.unwrap();
+        let t = std::time::Instant::now();
+        assert!(matches!(s.next(Duration::from_secs(30)).await, Some(Event::Exit { .. })));
+        assert!(t.elapsed() < Duration::from_secs(15));
+    }
+
+    #[test]
     fn permission_requests_parse_and_answers_never_carry_suggestions() {
         let line = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"touch a"},"tool_use_id":"tu1","blocked_path":"/w/a","description":"d","permission_suggestions":[{"type":"addRules","rules":[]}]}}"#;
         let ev = parse_line(line);
@@ -511,7 +628,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         let pidfile = d.path().join("pid");
         let prog = fake_cli(d.path(), &format!("sleep 60 &\necho $! > {}\nsleep 60", pidfile.display()));
         let mut s = Session::start(&launch(prog, d.path())).await.unwrap();
-        let ev = s.next(Duration::from_millis(500)).await;
+        let ev = s.next(Duration::from_secs(3)).await;
         assert!(matches!(ev, Some(Event::Exit { code: None })), "{:?}", ev);
         tokio::time::sleep(Duration::from_millis(300)).await;
         let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();

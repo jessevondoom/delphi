@@ -799,8 +799,8 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     let Some(wrapper) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("all agents idle");
-    c.wait_for("shortcuts: ?");
+    c.wait_for("delphi v");
+    c.wait_for("← / ? →");
     c.type_keys("/ratify");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
@@ -818,7 +818,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c.wait_for("• one");
     let screen = c.visible();
     assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
-    assert!(screen.lines().next().unwrap().contains("navigate: arrows"), "header: {}", screen);
+    assert!(screen.lines().nth(2).unwrap().contains("· chat"), "header: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
@@ -838,7 +838,7 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     let Some(wrapper) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     for line in ["/ratify", "/ratify apply 1"] {
         c.type_keys(line);
         std::thread::sleep(Duration::from_millis(150));
@@ -864,7 +864,7 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     c.wait_for("1 queued message(s) were dropped");
     std::thread::sleep(Duration::from_millis(500));
     let screen = c.visible();
-    assert!(!screen.contains("esc to stop") && screen.contains("all agents idle"), "{}", screen);
+    assert!(!screen.contains("esc to stop") && screen.contains("delphi v"), "{}", screen);
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
     assert_eq!(m.seen.lock().unwrap().len(), 1, "the queued message was never sent");
     c.type_keys("\x03");
@@ -897,7 +897,7 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     let Some(launcher) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     for line in ["/ratify", "/ratify apply 1"] {
         c.type_keys(line);
         std::thread::sleep(Duration::from_millis(150));
@@ -908,9 +908,9 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.type_keys("\x1b[Z");
     c.wait_for("accept edits");
     c.type_keys("\x1b[Z");
-    c.wait_for("· auto ·");
+    c.wait_for("· auto");
     c.type_keys("\x1b[Z");
-    c.wait_for("· approvals ·");
+    c.wait_for("tokens  "); // default mode: the footer names no mode
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
@@ -930,7 +930,7 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.wait_for("Drafted specs/009-e2e.md.");
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
     // The reply can appear a frame before the status line settles, so wait for it rather than assert on one snapshot.
-    c.wait_for("all agents idle");
+    c.wait_for("delphi v");
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
@@ -943,7 +943,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let Some(launcher) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     for line in ["/ratify", "/ratify apply 1"] {
         c.type_keys(line);
         std::thread::sleep(Duration::from_millis(150));
@@ -985,7 +985,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     let Some(launcher) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     for line in ["/ratify", "/ratify apply 1"] {
         c.type_keys(line);
         std::thread::sleep(Duration::from_millis(150));
@@ -1003,7 +1003,7 @@ fn research_panels_search_the_knowledge_base_cite_into_the_prompt_and_pin_to_the
     c.wait_for("Sources (2)");
     c.wait_for("specs/003-collaboration-and-council.md#ladder");
     c.type_keys("\x1b");
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     // Search the knowledge base with Ctrl+K; Enter on a hit puts its pointer in the prompt.
     c.type_keys("\x0b");
     c.wait_for("Search the knowledge base");
@@ -1069,7 +1069,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
         std::thread::sleep(Duration::from_millis(150));
         c.type_keys("\r");
     };
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     line(&mut c, "/ratify");
     c.wait_for("pending proposal");
     line(&mut c, "/ratify apply 1");
@@ -1094,19 +1094,19 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.type_keys("\x1b[D"); // Left, with text: the cursor moves, the deck stays
     std::thread::sleep(Duration::from_millis(300));
     let kept = c.visible();
-    assert!(kept.contains("❯ abc") && kept.contains("navigate: arrows · ○ ● ○"), "{}", kept);
+    assert!(kept.contains("❯ abc") && kept.contains("← / ? → · ○ ● ○"), "{}", kept);
     c.type_keys("\x1b[1;2D"); // Shift+Left: the left deck, the draft waits
-    c.wait_for("navigate: arrows · ● ○ ○");
+    c.wait_for("← / ? → · ● ○ ○");
     c.type_keys("\x1b[1;2C");
     c.wait_for("❯ abc");
     c.type_keys("\x05\x15"); // End, then delete to the start: an empty prompt
     std::thread::sleep(Duration::from_millis(300));
     assert!(!c.visible().contains("❯ abc"), "{}", c.visible());
     c.type_keys("\x1b[D"); // Left, now empty: the left deck
-    c.wait_for("navigate: arrows · ● ○ ○");
+    c.wait_for("← / ? → · ● ○ ○");
     c.type_keys("\x1b[C"); // and back to the chat
     std::thread::sleep(Duration::from_millis(300));
-    assert!(c.visible().contains("navigate: arrows · ○ ● ○"), "{}", c.visible());
+    assert!(c.visible().contains("← / ? → · ○ ● ○"), "{}", c.visible());
 
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
@@ -1117,7 +1117,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("exported to local/missions/");
 
     // Shift+Tab goes round the approval modes and ends where it started.
-    for footer in ["tokens · accept edits", "tokens · auto", "tokens · approvals"] {
+    for footer in ["tokens · accept edits", "tokens · auto", "tokens  "] {
         c.type_keys("\x1b[Z");
         c.wait_for(footer);
     }
@@ -1129,13 +1129,13 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     let rows: Vec<&str> = small.lines().collect();
     assert_eq!(rows.len(), 24, "{}", small);
     assert!(rows.iter().all(|l| l.chars().count() <= 70), "{}", small);
-    assert!(rows[23].contains("shortcuts: ?"), "the footer is on the last row after shrinking:\n{}", small);
+    assert!(rows[23].contains("← / ? →"), "the footer is on the last row after shrinking:\n{}", small);
     c.resize(36, 110);
     std::thread::sleep(Duration::from_millis(600));
     let big = c.visible();
     let rows: Vec<&str> = big.lines().collect();
     assert_eq!(rows.len(), 36, "{}", big);
-    assert!(rows[35].contains("shortcuts: ?") && rows[35].contains("navigate: arrows"), "{}", big);
+    assert!(rows[35].contains("← / ? →"), "{}", big);
     assert!(!big.contains("Pending decisions"), "no leftovers from the inbox:\n{}", big);
 
     // Leave, and the terminal comes back: alternate screen off, cursor on, mouse and paste modes off.
@@ -1159,7 +1159,7 @@ fn the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal() {
     let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
     // --no-mouse: the wheel is not captured, so the terminal can select and copy text.
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--no-mouse", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     let raw = |c: &PtyConsole| String::from_utf8_lossy(&c.bytes.lock().unwrap()).to_string();
     assert!(raw(&c).contains("\x1b[?1049h") && raw(&c).contains("\x1b[?2004h"), "alternate screen and bracketed paste are on");
     assert!(!raw(&c).contains("\x1b[?1000h"), "mouse reporting stays off with --no-mouse");
@@ -1188,7 +1188,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     let Some(launcher) = ui_launcher(e._t.path()) else { return };
     let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
     let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("shortcuts: ?");
+    c.wait_for("← / ? →");
     for line in ["/ratify", "/ratify apply 1"] {
         c.type_keys(line);
         std::thread::sleep(Duration::from_millis(150));

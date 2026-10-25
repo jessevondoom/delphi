@@ -288,6 +288,7 @@ Supporting rules:
 - **2026-10-24:** the operator ratified spec 005 amendment 005-A6 (the model-pool and task-blocking event types: `model.exhausted`, `model.recovered`, `model.promoted`, `model.degraded_confirm`, `model.homogeneous`, `task.blocked`, `task.unblocked`, and the Models section of `status.md`), built in Step 3c M7.
 - **2026-10-25:** at the operator's request the model pool (D-26, Step 3c) was reviewed by reviewers from other model families; findings, verification and fixes are in `councils/step-3c-review/report.md`. One question is left for the operator there: whether a harness serving a tool-using role (it can only answer in text) should need confirmation like a weaker model.
 - **2026-10-25:** the operator asked to see every running agent and the model it is on, and ratified spec 005 amendment 005-A7 (a Running now section in the Narrator's agents view, `/agents` in the inline console, and the per-agent endpoint, model, tier and waiting fields in `observe.state`).
+- **2026-10-25:** the operator decided that a subscription harness serving a role that normally has Delphi's tools (so it answers in text only) does **not** need an extra confirmation: listing the harness in `allowed_endpoints` is the consent, and the `harness.fallback` event shows the role is text-only there. Recorded in spec 002 §4.1.
 
 ---
 
@@ -384,3 +385,4 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 **Status:** ✅ APPROVED 2026-10-24 by the operator (design basis only; text pending, see 2 and 3).
 
 - **2026-10-24:** the operator said "ratify all". Approved as whole documents: `GOVERNANCE.md` (v0.4) and specs 002, 003, 004, 005, 005c, 007, 008, 011, 012 and 013. This waives two earlier conditions, both the operator's call: D-29's two-family confirming read before 011/012 are approved, and 013's §6 trigger. Building 011/012/013 still waits for the core, per D-29 and the roadmap. `ratified.lock` hashes are not yet refreshed: run `delphi update`.
+- **2026-10-25:** the operator asked for a tidier full-screen header and footer and approved spec 005b amendment 005b-A2 (the deck hint only in the footer as `← / ? →`, the pane name in the header, no idle label, no `shortcuts: ?` and no default-mode label), with 005d, the wireframes document and the tui-design skill aligned to it. The operator also asked for a development update channel and approved spec 006 amendment 006-A5 (`delphi self-update --dev` installs a rolling build of main).

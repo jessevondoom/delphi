@@ -138,6 +138,7 @@ pub fn credential_store(cfg: SharedConfig, secrets: Arc<SecretRegistry>) -> (Arc
     let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
     let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        resolver = resolver.with_gcloud_expiry(Arc::new(delphi_adapter::oauth2::GoogleTokenInfo::new(build_client(), handle.clone())));
         resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg, store.clone(), build_client(), handle)));
     }
     (Arc::new(CredentialStore::new(resolver)), store)
@@ -199,6 +200,7 @@ pub fn http_model_client(cfg: SharedConfig, secrets: Arc<SecretRegistry>) -> Arc
     let mut resolver = Resolver::system(Arc::new(move |s| reg.register(s)));
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         let store = Arc::new(delphi_adapter::oauth2::SystemSecretStore::new(resolver.runner()));
+        resolver = resolver.with_gcloud_expiry(Arc::new(delphi_adapter::oauth2::GoogleTokenInfo::new(build_client(), handle.clone())));
         resolver = resolver.with_oauth(Arc::new(delphi_adapter::oauth2::Oauth2Provider::new(cfg.clone(), store, build_client(), handle)));
     }
     let creds = Arc::new(CredentialStore::new(resolver));

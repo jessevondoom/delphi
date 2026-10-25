@@ -3,7 +3,7 @@ id: spec-ui-wireframes-and-blueprints
 title: "Delphi Interface Architecture & Visual Blueprints"
 author: architect
 timestamp: 2026-10-24T02:00:00Z
-status: approved
+status: approved   # header and footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -34,13 +34,13 @@ The operator deck uses **3 horizontal decks** navigated via `Shift+Left` and `Sh
 ### 1.2 Two-Line Stacked Header Architecture
 The header uses a **two-line stacked hierarchy** to prioritize agent telemetry:
 - **Line 1 (Top Priority Line):** 
-  - *Active Work:* Displays the single active agent status top-left (`⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks`) and deck navigation top-right (`navigate: shift+arrows · ○ ● ○`).
+  - *Active Work:* Displays the single active agent status top-left (`⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks`).
   - *Decision Alert:* Prioritizes the blocker (`⟦x?x⟧ red-team: decision needed · 09:42 remaining`).
-  - *Idle / Slow:* Shows the full strip of 1-line agent badges in their canonical colors (`⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧ all agents idle`).
-- **Line 2 (Sub-Header Line):** Clean tool branding and path (`delphi v0.5 · ~/projects/work/delphi`).
+  - *Idle / Slow:* Shows the full strip of 1-line agent badges in their canonical colors (`⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧`), with no label (005b-A2).
+- **Line 2 (Sub-Header Line):** Clean tool branding and path after one blank row (`delphi v0.5 · ~/projects/work/delphi · chat`; the last item is the pane: `activity`, `chat` or `decisions`; 005b-A2).
 
 ### 1.3 Minimal Footer & Typography Rules
-- **Simplified Footer:** Removed all cost and spend figures to prevent distraction (financial telemetry is isolated in `delphi observe spend`). Left side shows session token spend (`42.1k tokens`), autonomy mode (`approvals` or `auto`), and `shortcuts: ?`. Right side shows `navigate: shift+arrows · ○ ● ○` with unbracketed dots so they are never confused with robot avatar brackets (`⟦...⟧`).
+- **Simplified Footer:** Removed all cost and spend figures to prevent distraction (financial telemetry is isolated in `delphi observe spend`). Left side shows session token spend (`42.1k tokens`), autonomy mode only when it is not the default (`accept edits` or `auto`). Right side shows `← / ? → · ○ ● ○` (005b-A2) with unbracketed dots so they are never confused with robot avatar brackets (`⟦...⟧`).
 - **Avatar Eye Contrast:** Every 1-line badge uses the agent's chassis color for brackets and mouth, with bright contrasting eyes (white `#FFFFFF` or gold `#FACC15` for alert red-team).
 - **Typography:** Strict macOS standard `Andale Mono 12` on a true monospace character cell grid. No emojis; all structure conveyed through calm indentation, typographic weight, and ANSI color.
 

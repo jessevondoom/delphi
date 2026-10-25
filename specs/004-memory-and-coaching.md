@@ -3,7 +3,7 @@ id: spec-004-memory-and-coaching
 title: "004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
 author: architect
 timestamp: 2026-10-23T07:53:00Z
-status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document. Amendment 004-A1 (§3.3-§3.5, §4.2, §6 tests 16-20) approved by the operator, 2026-10-25
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document. Amendments 004-A1 (§3.3-§3.5, §4.2, §6 tests 16-20) and 004-A2 (§3.1, §3.6, §6 tests 21-24) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -66,6 +66,7 @@ flowchart TD
 | **5** | §3 FTS5 knowledge-base search |
 | **6** | §4.2 `/retro` distillation, `rule_stats` |
 | **Amendment 004-A1** | §3.5 local embeddings: the vector leg of §3.4 ships in the binary (D-01 reopened by the operator, 2026-10-24) |
+| **Amendment 004-A2** | §3.6 preloaded vectors for the shipped documents, and `agents/` and `skills/` in the index (approved by the operator, 2026-10-25) |
 
 §5.8 covers the §5 rows.
 
@@ -105,7 +106,7 @@ To prevent long-rule prose inflation:
    - Live source code (`src/**`, `.delphi/worktrees/**`) is **never** indexed into `sqlite-vec` (avoiding index staleness during TDD).
    - Agents always start by reading `context/index.md` and using `ripgrep` / `ast-grep` for live code navigation.
 2. **Gear 2 — Embedded SQLite Hybrid RAG (For Archival Missions, Domain Docs & Rule Deduplication):**
-   - `.delphi/state.db` indexes **only Markdown artifacts** (`context/**`, `specs/**`, `missions/**`, `memory/**`) using content-addressed `blake3` incremental hashes. Operator-scope files are **never indexed**; they reach agents only through the snapshot (§5.2).
+   - `.delphi/state.db` indexes **only Markdown artifacts** (`context/**`, `specs/**`, `missions/**`, `memory/**`, and from Amendment 004-A2 the shipped and team `agents/**` and `skills/**`) using content-addressed `blake3` incremental hashes. Operator-scope files are **never indexed**; they reach agents only through the snapshot (§5.2).
    - **Staging (D-01, ratified 2026-10-23; reopened by the operator 2026-10-24, Amendment 004-A1):** the first releases shipped **lexical-only** (FTS5 BM25). The vector leg (`kb_vec`, RRF) now ships behind the `Embedder` trait, with the model compiled into the binary (§3.5). `kb_meta` records `schema_version`, `embedding_model_id` and `embedding_dim`; changing the model forces a full re-embed. A build or install with no model keeps working lexically.
    - `state.db` is a **derived index**: deleting it and running `delphi kb reindex` must rebuild it completely from Markdown and `events.jsonl`.
 
@@ -121,7 +122,7 @@ Instead of arbitrary token windows or expensive LLM-generated chunk summaries, D
 CREATE TABLE IF NOT EXISTS kb_documents (
     doc_id          INTEGER PRIMARY KEY,
     rel_path        TEXT NOT NULL UNIQUE,
-    zone            TEXT NOT NULL, -- 'core' | 'context' | 'missions' | 'memory' | 'specs'
+    zone            TEXT NOT NULL, -- 'core' | 'context' | 'missions' | 'memory' | 'specs' | 'agents' | 'skills'
     content_blake3  TEXT NOT NULL,
     author          TEXT,
     source_type     TEXT NOT NULL DEFAULT 'external_untrusted'
@@ -226,6 +227,17 @@ Dense-only recall@10 on the paraphrase subset (30 questions): `bge-small` 0.77, 
 **Safety.** Visibility is decided by the same SQL filter as the lexical rankings (§3.4): the vector table's `trusted` and `scope` columns only skip rows that could never be returned. Nothing leaves the machine: the model runs locally and vectors are derived state in `state.db`. A model that is installed but cannot be loaded is reported once and search carries on lexically; `delphi doctor` check 6 reports a stale or incomplete vector index.
 
 **Not done.** A cross-encoder reranker over the top results is the next lever for accuracy; `delphi needs` tracks it against confirmed misses.
+
+### 3.6 Preloaded Vectors and Agent Skills in the Index (Amendment 004-A2)
+**Approved by the operator on 2026-10-25.** Two changes so that retrieval is accurate from the first query, not after the first indexing pass.
+
+**Agents and skills are indexed.** `agents/<role>/AGENT.md` and `skills/**/*.md` (the shipped copy under `base/`, and the team's own under `team/`, the team copy winning for a path) join the index as zones `agents` and `skills`, so an agent can find a skill or a role description by meaning. They are shared files, so they carry no per-role visibility rule. A shipped file has no `source_type` in its frontmatter, so a file that names none is `user_ratified` when it comes from `base/` (the release ratified it, §2.1 of `specs/006`) and `internal_generated` when it comes from `team/`; a file that names its own tier keeps it, and one that says `external_untrusted` stays out of default results like any untrusted document. Every other zone still defaults to `external_untrusted`.
+
+**Preloaded vectors.** The release embeds the documents Delphi ships (a fresh workspace's `base/`, `team/` and memory templates) with the shipped model and compiles the vectors into the executable (`DLPHVEC1`, about 0.6 MB). It is a cache from the hash of *exactly the text given to the model for a chunk* (every window, in order, each length-prefixed) to the vectors the model produced. It is not a copy of `state.db`: nothing in it depends on paths, positions or schema, so a document the operator or team edited has a different text, misses, and is embedded by the model as usual. A cache made for another model id, dimension or `embedding_format` is ignored whole, as is one that is damaged or absent (`DELPHI_SEED_VECTORS=off` switches it off; `DELPHI_SEED_VECTORS=<file>` replaces it).
+- `embed_pending` asks the cache before the model. `apply_seed_vectors` does only that, so it is cheap enough to run before a search: the daemon's `kb.search` and `kb.index` and the `delphi kb search` command apply it first, which gives a brand-new workspace semantic search on its first query. Chunks the cache does not cover wait for the background pass (§3.5).
+- `delphi kb index` reports how many chunks came from the preloaded vectors and how many from the model. `delphi kb seed-export <out>` writes the cache from a workspace whose chunks all have vectors.
+- `dev/build-seed-vectors.sh` makes the cache in a fresh seeded workspace and then checks it: a second fresh workspace is indexed with the cache and the model must read nothing (`0 by the model`), otherwise the script fails and the release stops. The release workflow runs it in the `model` job beside the model fetch. Anything that changes the shipped agents, skills, context or memory templates, the windowing, or the text around a window is covered by that check at release; the cache never needs to be committed.
+- Measured on a fresh workspace (34 documents, 170 chunks): 85 s for the model to embed them, 0 s and no model reads with the cache.
 
 ---
 
@@ -368,3 +380,7 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
 18. **Vector Sync Test (004-A1):** editing a document drops its old vectors, removing it leaves no orphaned vectors, a chunk without a vector is the only thing `embed_pending` embeds, and attaching a model with another id (or another `embedding_format`) empties the vector table so that every chunk is embedded again.
 19. **Package Test (004-A1):** a packed model loads and embeds within quantization error of the original f32 weights (cosine above 0.99), batch position does not change a vector, and a truncated package is refused.
 20. **Recall Eval (004-A1):** `delphi kb eval` over `dev/kb-eval.json` reports recall@1/3/5/10 and MRR for lexical, vector and hybrid, the share of off-topic questions that still got results, and the similarity ranges that set the floor. Hybrid must not be worse than either leg on recall@10, and must answer no off-topic question. It runs by hand after any change to the model, the windowing or the fusion weights, because it needs the model.
+21. **Preloaded Vector Test (004-A2):** vectors exported from one index and loaded as the cache of a fresh index mean the model reads no text for unchanged documents (`seeded()` equals the chunk count), search returns the same results, an edited document is the only one the model reads, and `apply_seed_vectors` fills what the cache covers without calling the model and leaves the rest pending without stalling.
+22. **Cache Integrity Test (004-A2):** a vector cache round-trips; keys differ when the same characters are split into windows differently; a cache for another model id, dimension or embedding format does not match; a truncated or foreign file is refused.
+23. **Agents and Skills Test (004-A2):** shipped and team `agents/` and `skills/` files are indexed with the tiers in §3.6, the team copy replaces the shipped one for the same path, and a file that declares itself untrusted is excluded from default results.
+24. **Seed Coverage Check (004-A2):** `dev/build-seed-vectors.sh` fails unless a second fresh workspace is fully covered by the cache it just made. It needs the shipped model, so it runs in the release workflow and by hand, not in CI.
