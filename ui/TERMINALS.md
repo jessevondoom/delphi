@@ -30,6 +30,7 @@ emulator is not Terminal.app, so the table below is a checklist, not a claim.
 | Mouse wheel | SGR mouse reporting | `PgUp` `PgDn` |
 | Paste | bracketed paste | pasting still works; a paste containing a return may be sent as separate lines |
 | Dark or light | `OSC 11` background reply | `DELPHI_THEME`, then `COLORFGBG`, then dark (see `AVATARS.md`) |
+| Message tint | the `OSC 11` reply's colour: 8 % toward white on dark, 6 % toward black on light (true colour); the grey ramp (256 colours); ANSI 8 or 7 (16 colours) | a terminal that does not answer, `NO_COLOR` and `TERM=dumb` get the rail: a dim `│` at the left of each message row, no fill, no caps. `DELPHI_THEME` still decides dark or light but cannot supply the colour itself |
 
 `Shift+Enter` is not used: most terminals send nothing distinct for it.
 

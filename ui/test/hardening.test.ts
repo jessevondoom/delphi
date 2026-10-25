@@ -96,7 +96,7 @@ test('sanitize removes escape sequences, controls and bidi overrides, keeps text
 
 // ── a session that keeps going, and a window that shrinks ───────────────────
 
-const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true }, state: initial(0), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, ...over });
+const model = (over: Partial<Model> = {}): Model => ({ info, pal: { dark: true, bg: [15, 23, 42] }, state: initial(0), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null, queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, ...over });
 
 test('a very long session draws a bounded window and says so; the work per frame does not grow with it', () => {
   let s = initial(0);

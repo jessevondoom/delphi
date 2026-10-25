@@ -15,7 +15,7 @@ export type Ev =
   | { t: 'key'; k: Key; alt: boolean; shift: boolean; ctrl: boolean }
   | { t: 'ctrl'; c: string } // ctrl+letter, lower case
   | { t: 'wheel'; dir: 'up' | 'down' }
-  | { t: 'bg'; dark: boolean }; // reply to the background-colour query
+  | { t: 'bg'; dark: boolean; rgb: [number, number, number] }; // reply to the background-colour query; rgb is 0-255
 
 const CSI_KEYS: Record<string, Key> = { A: 'up', B: 'down', C: 'right', D: 'left', H: 'home', F: 'end' };
 const TILDE: Record<string, Key> = { '1': 'home', '3': 'delete', '4': 'end', '5': 'pgup', '6': 'pgdn', '7': 'home', '8': 'end' };
@@ -128,7 +128,8 @@ export class InputParser {
       const m = /rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)/i.exec(s.slice(i, end));
       if (!m) return { len, ev: null };
       const v = (h: string) => parseInt(h, 16) / (16 ** h.length - 1);
-      return { len, ev: { t: 'bg', dark: 0.2126 * v(m[1]!) + 0.7152 * v(m[2]!) + 0.0722 * v(m[3]!) < 0.5 } };
+      const rgb = [m[1]!, m[2]!, m[3]!].map((h) => Math.round(v(h) * 255)) as [number, number, number];
+      return { len, ev: { t: 'bg', dark: 0.2126 * v(m[1]!) + 0.7152 * v(m[2]!) + 0.0722 * v(m[3]!) < 0.5, rgb } };
     }
     // Alt+key: ESC then a character (Alt+Enter is ESC CR).
     if (n === '\r' || n === '\n') return { len: 2, ev: { t: 'key', k: 'enter', alt: true, shift: false, ctrl: false } };

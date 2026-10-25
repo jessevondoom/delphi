@@ -12,7 +12,7 @@ import { newInbox } from '../src/inbox.ts';
 import { info, plain, snapshot } from './helpers.ts';
 
 const model = (over: Partial<Model> = {}): Model => ({
-  info, pal: { dark: true }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
+  info, pal: { dark: true, bg: [15, 23, 42] }, state: initial(0), now: 1000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, still: true, ...over,
 });
 const ev = (type: string, payload: any, task = 't_0001') => ({ method: 'event', params: { type, task_id: task, payload } });

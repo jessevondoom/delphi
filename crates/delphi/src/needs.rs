@@ -10,8 +10,6 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-/// A reranking pass over the top search results is worth building after this many confirmed misses.
-pub const RERANK_MISSES: usize = 3;
 /// Automatic diff3 merging is worth building after this many customized files had to be set aside.
 pub const DIFF3_CONFLICTS: usize = 3;
 /// A coaching pass has material to find patterns in after this many finished tasks.
@@ -27,8 +25,7 @@ pub struct Item {
     pub recorded: Vec<String>,
 }
 
-const ITEMS: [(&str, &str, &str); 10] = [
-    ("reranker", "a cross-encoder pass over the top search results (specs/004 §3.5)", "at least 3 confirmed search misses (`delphi kb miss`)"),
+const ITEMS: [(&str, &str, &str); 9] = [
     ("retro", "the /retro coaching pass and rule scores (specs/004 §4)", "at least 10 finished tasks to learn from"),
     ("diff3", "automatic three-way merge in `delphi update` (specs/006 §4)", "at least 3 customized files set aside by an update"),
     ("sync", "`delphi sync` for a shared team repo (specs/007 Plane 3)", "the team/ directory is a git repo with a remote"),
@@ -71,7 +68,6 @@ fn team_has_remote(ws: &Path) -> bool {
 
 pub fn report(ws: &Path) -> Vec<Item> {
     let recorded = lines(&ws.join("local/needs.jsonl"));
-    let (candidates, confirmed) = delphi_engine::kb::miss_counts(ws);
     let conflicts = lines(&ws.join("local/update-conflicts.jsonl")).len();
     let tasks = finished_tasks(ws);
     ITEMS
@@ -79,7 +75,6 @@ pub fn report(ws: &Path) -> Vec<Item> {
         .map(|(id, what, rule)| {
             let mine: Vec<String> = recorded.iter().filter(|r| r["item"] == *id).map(|r| r["reason"].as_str().unwrap_or("").to_string()).collect();
             let (evidence, met) = match *id {
-                "reranker" => (format!("{} confirmed miss(es), {} empty search(es) not yet confirmed", confirmed, candidates), Some(confirmed >= RERANK_MISSES)),
                 "retro" => (format!("{} finished task(s)", tasks), Some(tasks >= RETRO_TASKS)),
                 "diff3" => (format!("{} customized file(s) set aside so far", conflicts), Some(conflicts >= DIFF3_CONFLICTS)),
                 "sync" => (if team_has_remote(ws) { "team/ has a git remote".to_string() } else { "team/ has no git remote (single operator)".to_string() }, Some(team_has_remote(ws))),
@@ -141,23 +136,6 @@ mod tests {
         let items = report(d.path());
         assert!(items.iter().all(|i| i.met == Some(false)), "{:?}", items.iter().map(|i| (i.id, i.met)).collect::<Vec<_>>());
         assert!(render(&items).contains("not yet") && render(&items).contains("delphi needs add"));
-    }
-
-    #[test]
-    fn a_reranker_needs_confirmed_misses_not_just_empty_searches() {
-        let d = tempfile::tempdir().unwrap();
-        delphi_engine::kb::log_search(d.path(), "pipe buffer deadlock", None, 0);
-        let items = report(d.path());
-        assert_eq!(by(&items, "reranker").met, Some(false), "an empty search alone is only a candidate: {}", by(&items, "reranker").evidence);
-        for q in ["subprocess hang", "stuck child", "frozen pipe"] {
-            delphi_engine::kb::confirm_miss(d.path(), q, "it was filed as pipe buffer deadlock");
-        }
-        let items = report(d.path());
-        assert_eq!(by(&items, "reranker").met, Some(true));
-        assert!(by(&items, "reranker").evidence.contains("3 confirmed"));
-        // Searches that found something are not recorded at all.
-        delphi_engine::kb::log_search(d.path(), "found it", None, 3);
-        assert_eq!(delphi_engine::kb::miss_counts(d.path()), (1, 3));
     }
 
     #[test]

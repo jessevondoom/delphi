@@ -7,7 +7,7 @@ import type { Info } from './theme.ts';
 
 export type Ctx = {
   cmd: Rpc; mission: string; info: Info; state: () => State;
-  post: (text: string) => void;
+  post: (text: string, tone?: 'info' | 'error' | 'ok') => void;
   /** Called after a call that starts work, so the UI can show it as running. */
   started?: () => void;
 };
@@ -113,7 +113,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
   const arg = rest.join(' ');
   const call = async (method: string, params: object = {}) => {
     try { return await ctx.cmd.call(method, { mission_id: ctx.mission, ...params }); }
-    catch (e) { ctx.post(errText(e)); return undefined; }
+    catch (e) { ctx.post(errText(e), 'error'); return undefined; }
   };
   switch (name) {
     case 'mission': ctx.post(`mission ${ctx.mission}`); return;
