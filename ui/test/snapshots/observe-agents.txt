@@ -4,27 +4,27 @@ delphi v0.5 · agents
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
     ▄▄▄     athena  orchestrator  ○ idle
-    •─•     frontier · claude-x · direct
-  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · 1 call(s)
+    •─•     frontier · claude-x
+  ▀▀▀▀▀▀▀   350 tokens
 
   ▄▄▄▄▄▄▄   daedalus  architect  ○ idle
-    •_•     frontier · claude-x · direct
-  ▀▀▀▀▀▀▀   in 200 · cache 400 · out 100 · think 0 · 2 call(s)
+    •_•     frontier · claude-x
+  ▀▀▀▀▀▀▀   700 tokens
 
   ▄▄▄▄▄▄▄   hephaestus  builder  ● running
-   •───•    frontier · claude-x · direct · task t_1
-  ▀▀▀▀▀▀▀   in 300 · cache 600 · out 150 · think 0 · 3 call(s)
+   •───•    frontier · claude-x · t_1
+  ▀▀▀▀▀▀▀   1050 tokens
 
   ▄     ▄   ares  red-team  ► waiting on you
-    x?x     frontier · claude-x · direct · task t_1
-  ▀▀▀▀▀▀▀   in 400 · cache 800 · out 200 · think 0 · 4 call(s)
+    x?x     frontier · claude-x · t_1
+  ▀▀▀▀▀▀▀   1400 tokens
 
   ▄▄ ▄ ▄▄   odysseus  strategist  ○ idle
-    •_•     frontier · claude-x · direct
-  ▀▀▀▀▀▀▀   in 500 · cache 1000 · out 250 · think 0 · 5 call(s)
+    •_•     frontier · claude-x
+  ▀▀▀▀▀▀▀   1750 tokens
 
      ▄      hermes  scout  ○ idle
-   • • •    frontier · claude-x · direct
-  ▀▀▀▀▀▀▀   in 600 · cache 1200 · out 300 · think 0 · 6 call(s)
+   • • •    frontier · claude-x
+  ▀▀▀▀▀▀▀   2100 tokens
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 1 running  ·  3500 tokens                                                        ← →  ·  ○ ○ ○ ● ○ ○

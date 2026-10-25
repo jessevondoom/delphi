@@ -94,8 +94,8 @@ test('mascots are seven columns in every state; the builder keeps its white crow
   }
   const roster = observeFrame(model('agents'), 110, 40).map(plain).join('\n');
   assert.match(roster, /athena\s+orchestrator\s+○ idle/);
-  assert.match(roster, /frontier · claude-x · direct/);
-  assert.match(roster, /in 100 · cache 200 · out 50 · think 0 · 1 call\(s\)/);
+  assert.match(roster, /frontier · claude-x/);
+  assert.match(roster, /350 tokens/);
 });
 
 test('council: the question, the track, a card per seat and the verdict card; an escalation says what you can choose', () => {
@@ -130,12 +130,12 @@ test('epic: a row per task with its state glyph, and the now/next/path narrative
 test('forge: gates, attempts, findings, the flaky note and a coloured live diff', () => {
   const diff = { available: true, stat: ' a.rs | 2 +-', diff: '@@ -1 +1 @@\n-old\n+new', untracked: ['b.rs'] };
   const t = observeFrame(model('forge', { diff }), 110, 34).map(plain).join('\n');
-  assert.match(t, /Build 1\/1 · t_1 · branch delphi\/t_1 · commit abc1234 · in progress/);
+  assert.match(t, /build 1\/1 {2}t_1 {2}delphi\/t_1 · abc1234 · in progress/);
   assert.match(t, /✔ tests\s+12 passed/);
   assert.match(t, /✖ audit\s+1 finding/);
   assert.match(t, /audit P1 unchecked unwrap/);
   assert.match(t, /flaky/);
-  assert.match(t, /── Diff against the base commit/);
+  assert.match(t, /── diff ─/);
   assert.match(t, /\?\? b\.rs/);
   assert.match(t, /\n\+new/);
   assert.match(observeFrame(model('forge', { diff: { available: false } }), 110, 34).map(plain).join('\n'), /no live worktree for this build/);
@@ -162,6 +162,6 @@ test('thinking: reasoning per running agent with its badge, tier and model; empt
   const t = observeFrame(model('thinking', { st: s, think: { n_7: 'Weighing a table against a file.\nThe table indexes.' } }), 110, 30).map(plain).join('\n');
   assert.match(t, /⟦•─•⟧ daedalus\s+frontier · claude-x · t_1/);
   assert.match(t, /Weighing a table against a file\.\n\s+The table indexes\./);
-  assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /Nothing is thinking right now[\s\S]*never saved/);
+  assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /nothing is thinking right now[\s\S]*never saved/);
   assert.equal(parseView('reasoning'), 'thinking');
 });

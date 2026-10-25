@@ -4,12 +4,12 @@ delphi v0.5 · agents
  ✔ nothing needs you
 
     ▄▄▄     athena  orchestrator  ● running
-    •─•     frontier · claude-x · direct · task t_1
-  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · 2 call(s)
+    •─•     frontier · claude-x · t_1
+  ▀▀▀▀▀▀▀   350 tokens
 
   ▄     ▄   ares  red-team  ► waiting on you
-    x?x     frontier · claude-x · direct · task t_1
-  ▀▀▀▀▀▀▀   in 100 · cache 200 · out 50 · think 0 · 2 call(s)
+    x?x     frontier · claude-x · t_1
+  ▀▀▀▀▀▀▀   350 tokens
 
 
 

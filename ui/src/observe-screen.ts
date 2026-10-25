@@ -107,39 +107,55 @@ function epic(m: OModel, w: number, h: number): string[] {
   return epicRail(m, w, h);
 }
 
+/** A full-width tinted band for the row that is running or selected; bold where there is no tint (`005f` slice 10). */
+const band = (m: OModel, line: string, w: number): string => {
+  const t = T.tint(m.pal.bg ?? null, m.pal.dark);
+  const padded = line + ' '.repeat(Math.max(0, w - T.width(line)));
+  return t ? t.fill(padded) : chalk.bold(line);
+};
+
 function forge(m: OModel, w: number, h: number): string[] {
   const n = m.st.builds.length;
-  if (!n) return ['', dim('  No builds yet.'), '', dim('  Start one in the console:  /build <request>')];
+  if (!n) return ['', dim('  no builds yet'), '', dim('  start one in the console: /build <request>')];
   const idx = Math.min(m.pick, n - 1), b = m.st.builds[idx]!;
-  const head: string[] = [chalk.bold(text(m)(` Build ${idx + 1}/${n} · ${b.task_id} · branch ${b.branch || '…'} · commit ${b.sha || '…'} · ${b.merge || 'in progress'}`))];
-  for (const a of b.attempts) head.push(text(m)(`   ${a}`));
-  for (const g of b.gates) head.push(colored(`   ${glyph(g.state)} `, stateColor(g.state)) + text(m)(`${g.name.padEnd(10)} ${clean(g.detail, w - 18)}`));
+  const head: string[] = [chalk.bold(text(m)(` build ${idx + 1}/${n}  ${b.task_id}`)) + dim(`  ${b.branch || '…'} · ${b.sha || '…'} · ${b.merge || 'in progress'}`)];
+  for (const a of b.attempts) head.push(dim(`   ${a}`));
+  for (const g of b.gates) {
+    const row = colored(`   ${glyph(g.state)} `, stateColor(g.state)) + text(m)(`${g.name.padEnd(10)} ${clean(g.detail, w - 18)}`);
+    head.push(g.state === 'running' ? band(m, row, w) : row);
+  }
   for (const [sev, title] of b.findings) head.push(colored(`   audit ${sev} ${clean(title, 100)}`, sevColor(sev, m)));
   if (b.flaky) head.push(colored('   a test failed once and passed on a rerun (flaky)', T.warn));
-  const diff: string[] = [rule(m, w, 'Diff against the base commit')];
+  const diff: string[] = [rule(m, w, 'diff')];
   const d = m.diff;
   if (d?.available) {
     for (const l of sanitize(d.stat ?? '').split('\n')) diff.push(text(m)(l));
     for (const u of d.untracked ?? []) diff.push(colored(`?? ${sanitize(u)}`, T.warn));
     for (const l of sanitize(d.diff ?? '').split('\n')) diff.push(l.startsWith('+') && !l.startsWith('+++') ? colored(l, T.ok) : l.startsWith('-') && !l.startsWith('---') ? colored(l, T.syntax.del) : l.startsWith('@@') ? colored(l, T.accent) : text(m)(l));
-  } else diff.push(dim('  no live worktree for this build (it finished, or has not started). r refreshes.'));
+  } else diff.push(dim('  no live worktree for this build: it has finished, or has not started'));
   const headH = Math.min(head.length + 1, Math.max(3, h - 4));
   const body = diff.slice(m.scroll === 0 ? 0 : 1 + m.scroll);
   return [...head.slice(0, headH), ...(head.length < headH ? Array(headH - head.length).fill('') : []), ...body];
 }
 
-function agents(m: OModel, _w: number, _h: number): string[] {
+/** The roster the strip no longer names: a mascot per agent with its name, role, state in words, model, task and tokens. */
+function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
   for (const a of ordered(m.st)) {
     const mk = mascot(a.role, a.state, m.info, m.pal);
-    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''} · ${a.endpoint || '—'}` : 'no call yet';
+    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : 'no call yet';
     const nm = name(m, a.role);
+    const total = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
     const meta = [
-      roleCol(m, a.role).bold(nm) + colored(`  ${nm === a.role ? '' : a.role + '  '}${glyph(a.state)} ${a.state}`, stateColor(a.state)),
-      text(m)(model + (a.task_id && a.state !== 'idle' ? ` · task ${a.task_id}` : '')),
-      dim(`in ${kilo(a.tokens.input)} · cache ${kilo(a.tokens.cache_read)} · out ${kilo(a.tokens.output)} · think ${kilo(a.tokens.thinking)} · ${a.calls} call(s)`),
+      roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)),
+      text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : ''),
+      dim(`${kilo(total)} tokens`),
     ];
-    mk.forEach((line, i) => out.push('  ' + line + '   ' + meta[i]!));
+    // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
+    mk.forEach((line, i) => {
+      const tail = '   ' + meta[i]!;
+      out.push('  ' + line + (a.state === 'running' ? band(m, tail, Math.max(0, w - 9)) : tail));
+    });
     out.push('');
   }
   return out;
@@ -147,8 +163,9 @@ function agents(m: OModel, _w: number, _h: number): string[] {
 
 function archives(m: OModel, w: number, _h: number): string[] {
   const s = m.search;
-  const out = [rule(m, w, 'Knowledge base')];
-  out.push(chalk.bold(text(m)(s.query ? ` last search: ${s.query}` : ' Search specs, context, REVIEW.md and lessons from the console: ctrl+k')));
+  const out = [rule(m, w, 'knowledge base')];
+  if (s.query) out.push(chalk.bold(text(m)(` last search: ${s.query}`)));
+  else out.push(dim(' search specs, context, REVIEW.md and lessons from the console: ctrl+k'), dim(' the files an agent read, and the documents it cited, are listed there too: ctrl+s'));
   if (s.note) out.push(dim(` ${s.note}`));
   s.hits.forEach((hit, i) => {
     out.push(text(m)(` ${i + 1}. ${sanitize(hit.pointer)}`) + dim(`  ${clean(hit.heading, 60)}`));
@@ -159,13 +176,14 @@ function archives(m: OModel, w: number, _h: number): string[] {
 
 function thinking(m: OModel, w: number, h: number): string[] {
   const spans = Object.entries(m.think ?? {}).filter(([, t]) => t.trim());
-  if (!spans.length) return ['', dim('  Nothing is thinking right now.'), '', dim('  Reasoning of running agents appears here as it streams. It lives only in this window:'), dim('  it is never saved, and a window opened later starts empty.')];
+  if (!spans.length) return ['', dim('  nothing is thinking right now'), '', dim('  the reasoning of running agents appears here as it streams'), dim('  it lives only in this window: never saved, and a window opened later starts empty')];
   const out: string[] = [];
   for (const [id, t] of spans) {
     const node = m.st.nodes[id];
     const role = node?.role ?? '?';
     const a = m.st.agents[role];
-    out.push('', ' ' + T.badge(role, 'running', m.info, m.pal) + ' ' + roleCol(m, role).bold(name(m, role)) + dim(`  ${a?.tier ?? ''} · ${a?.model ? clean(a.model, 28) : 'model unknown'} · ${node?.task_id ?? ''}`), rule(m, w));
+    const title = ' ' + T.badge(role, 'running', m.info, m.pal) + ' ' + roleCol(m, role).bold(name(m, role)) + dim(`  ${a?.tier ?? ''} · ${a?.model ? clean(a.model, 28) : 'model unknown'} · ${node?.task_id ?? ''}`);
+    out.push('', band(m, title, w));
     out.push(...sanitize(t).split('\n').flatMap((l) => wrap(l, w - 4)).slice(-Math.max(4, Math.floor(h / spans.length) - 3)).map((l) => '  ' + chalk.italic(dim(l))));
   }
   return out.slice(-h);
