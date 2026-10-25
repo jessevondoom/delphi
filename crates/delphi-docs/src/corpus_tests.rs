@@ -41,6 +41,8 @@ fn real_world_corpus() {
         collect(Path::new(part), &mut files, 0);
     }
     let (mut ok, mut err, mut lossy) = (0, 0, 0);
+    // per format: files, read, refused or failed, with losses, milliseconds, characters
+    let mut by_format: std::collections::BTreeMap<String, [u64; 6]> = std::collections::BTreeMap::new();
     for f in &files {
         let Ok(bytes) = std::fs::read(f) else { continue };
         let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -53,6 +55,12 @@ fn real_world_corpus() {
                 if !e.loss.is_empty() {
                     lossy += 1;
                 }
+                let row = by_format.entry(e.format.name().to_string()).or_default();
+                row[0] += 1;
+                row[1] += 1;
+                row[3] += u64::from(!e.loss.is_empty());
+                row[4] += ms as u64;
+                row[5] += e.text.chars().count() as u64;
                 println!("OK   {:>6} ms  {:>9} B  {:<24} units {:<6} chars {:<8} loss {}  {}", ms, bytes.len(), e.format.name(), e.total_units.map(|n| n.to_string()).unwrap_or("-".into()), e.text.chars().count(), e.loss.len(), name);
                 for l in &e.loss {
                     println!("       - {}", l);
@@ -63,9 +71,17 @@ fn real_world_corpus() {
             }
             Err(e) => {
                 err += 1;
+                let row = by_format.entry(crate::detect(&bytes, &name).name().to_string()).or_default();
+                row[0] += 1;
+                row[2] += 1;
+                row[4] += ms as u64;
                 println!("ERR  {:>6} ms  {:>9} B  {}  -> {}", ms, bytes.len(), name, e);
             }
         }
+    }
+    println!("\n{:<38} {:>6} {:>6} {:>7} {:>7} {:>9} {:>10}", "format", "files", "read", "failed", "losses", "ms", "chars");
+    for (name, r) in &by_format {
+        println!("{:<38} {:>6} {:>6} {:>7} {:>7} {:>9} {:>10}", name, r[0], r[1], r[2], r[3], r[4], r[5]);
     }
     println!("\n{} file(s): {} read, {} refused or failed, {} with losses reported", files.len(), ok, err, lossy);
 }

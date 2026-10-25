@@ -5,6 +5,7 @@
 //! bounded work, bounded output, and a panic becomes an error result instead of taking the daemon down.
 
 pub mod archive;
+mod cache;
 mod csv;
 mod data;
 mod docx;
@@ -22,12 +23,14 @@ mod pdftext;
 mod pptx;
 mod rtf;
 pub mod sniff;
+mod sqlite;
 pub mod table;
 pub mod tarfile;
 mod xlsx;
 pub mod xml;
 pub mod zipfile;
 
+pub use cache::{extract_cached, stats as cache_stats};
 pub use limits::Limits;
 pub use sniff::{detect, Format};
 
@@ -48,6 +51,8 @@ pub struct Request {
     pub sheet: Option<String>,
     /// Rows and columns of a sheet or CSV: `A1:F200`, `5:20`, `B:D`.
     pub range: Option<String>,
+    /// A `SELECT` to run against a SQLite database.
+    pub query: Option<String>,
 }
 
 /// The unit a document is paged in.
@@ -95,7 +100,7 @@ pub fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, DocError>) -> Result
 
 /// Readers that exist. Grows slice by slice (`specs/014` §10); anything else answers "not built yet".
 pub fn is_supported(format: Format) -> bool {
-    matches!(format, Format::Pdf | Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Odt | Format::Ods | Format::Odp | Format::Epub | Format::Tar | Format::Gzip | Format::Png | Format::Jpeg | Format::Gif | Format::Webp) || format.is_text()
+    matches!(format, Format::Pdf | Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Odt | Format::Ods | Format::Odp | Format::Epub | Format::Sqlite | Format::Tar | Format::Gzip | Format::Png | Format::Jpeg | Format::Gif | Format::Webp) || format.is_text()
 }
 
 /// Extract text from `bytes`. `name` is the file name (a hint only).
@@ -109,6 +114,9 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
     }
     let format = detect(bytes, name);
     guarded(format.name(), || {
+        if req.query.is_some() && format != Format::Sqlite {
+            return Err(DocError(format!("`query` applies only to SQLite database files, not to {}", format.name())));
+        }
         if req.member.is_some() && !matches!(format, Format::Zip | Format::Tar | Format::Gzip | Format::Json | Format::Yaml | Format::Toml | Format::Mbox) {
             return Err(DocError(format!("this {} has no members; read it without `member`", format.name())));
         }
@@ -165,11 +173,14 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
                 Ok(e)
             }
             Format::Png | Format::Jpeg | Format::Gif | Format::Webp => image::extract(bytes, format),
+            Format::Sqlite => sqlite::extract(bytes, req, limits),
             f if f.is_text() => Ok(text_extract(bytes, f, limits)),
             _ => Ok(Extract {
                 format,
                 text: if format == Format::LegacyOffice {
                     format!("{} ({} bytes): the old binary Office formats are not supported; ask for the file to be saved as .docx, .xlsx or .pptx.", format.name(), bytes.len())
+                } else if format == Format::Unknown {
+                    format!("{} data ({} bytes): not a format this reader knows.", format.name(), bytes.len())
                 } else {
                     format!("{} ({} bytes): reading this format is not built yet.", format.name(), bytes.len())
                 },
@@ -281,8 +292,10 @@ mod tests {
         assert_eq!(e.format, Format::LegacyOffice);
         assert!(!e.supported);
         assert!(e.text.contains("legacy Office") && e.text.contains("saved as .docx"));
-        let s = extract(b"SQLite format 3\0\0\0", "a.db", &Request::default(), &Limits::default()).unwrap();
-        assert!(!s.supported && s.text.contains("not built yet"), "{}", s.text);
+        let s = extract(&[0, 159, 146, 150, 1, 2, 3], "a.bin", &Request::default(), &Limits::default()).unwrap();
+        assert!(!s.supported && s.text.contains("not a format this reader knows"), "{}", s.text);
+        let g = extract(b"GIF89a", "a.gif", &Request::default(), &Limits::default()).unwrap();
+        assert!(g.supported && g.loss.iter().any(|l| l.contains("damaged or truncated")), "{:?}", g.loss);
         assert_eq!(e.loss.len(), 1);
     }
 
