@@ -1,6 +1,6 @@
-⟦•─•⟧ daedalus: working                                                     navigate: arrows · ● ○ ○
-delphi v0.5 · /proj
+⟦•─•⟧ daedalus: working
 
+delphi v0.5 · /proj · activity
 
 
 
@@ -27,4 +27,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-3 tokens · approvals · shortcuts: ?                                         navigate: arrows · ● ○ ○
+3 tokens                                                                             ← / ? → · ● ○ ○

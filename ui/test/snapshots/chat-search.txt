@@ -1,7 +1,7 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                           navigate: arrows · ○ ● ○
-delphi v0.5 · /proj
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining
 
-❯ Now write it
+delphi v0.5 · /proj · chat
+
 
 ── approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
@@ -17,4 +17,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortcuts: ?                             navigate: arrows · ○ ● ○
+0 tokens · 2 waiting                                                                 ← / ? → · ○ ● ○

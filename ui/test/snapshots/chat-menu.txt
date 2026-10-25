@@ -1,6 +1,6 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                           navigate: arrows · ○ ● ○
-delphi v0.5 · /proj
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining
 
+delphi v0.5 · /proj · chat
 
   See specs/002-adapter-and-routing.md#4 for the ladder.
 
@@ -21,4 +21,4 @@ delphi v0.5 · /proj
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ /pa
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortcuts: ?                             navigate: arrows · ○ ● ○
+0 tokens · 2 waiting                                                                 ← / ? → · ○ ● ○

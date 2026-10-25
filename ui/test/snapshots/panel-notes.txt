@@ -1,5 +1,6 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining                           navigate: arrows · ○ ● ○
-delphi v0.5 · /proj
+⟦x?x⟧ ares: 2 decisions pending · 09:58 remaining
+
+delphi v0.5 · /proj · chat
 
 
   Mission notebook
@@ -16,9 +17,8 @@ delphi v0.5 · /proj
 
 
 
-
 ◐ working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ↑↓ scroll · esc close
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortcuts: ?                             navigate: arrows · ○ ● ○
+0 tokens · 2 waiting                                                                 ← / ? → · ○ ● ○

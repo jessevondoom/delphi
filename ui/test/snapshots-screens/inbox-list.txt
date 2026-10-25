@@ -1,5 +1,6 @@
-⟦x?x⟧ ares: 2 decisions pending · 09:56 remaining                           navigate: arrows · ○ ○ ●
-delphi v0.5 · /proj
+⟦x?x⟧ ares: 2 decisions pending · 09:56 remaining
+
+delphi v0.5 · /proj · decisions
 
 
   Pending decisions (2)
@@ -23,8 +24,7 @@ delphi v0.5 · /proj
 
 
 
-
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 enter open card · y approve · n reject · a approve all amber · tab focus mode · esc chat
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-0 tokens · approvals · 2 waiting · shortcuts: ?                             navigate: arrows · ○ ○ ●
+0 tokens · 2 waiting                                                                 ← / ? → · ○ ○ ●
