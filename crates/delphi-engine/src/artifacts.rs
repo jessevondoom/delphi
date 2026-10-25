@@ -12,7 +12,7 @@
 
 use crate::tools::{denied, observe, str_arg, with_provenance_header, zone_of, ActionKind, Classified, Stamp, ToolCtx, ToolError, ToolExec, ToolResult, ToolSpec, ToolTier};
 use delphi_adapter::claude::ToolDef;
-use delphi_docs::{chart, htmlpage};
+use delphi_docs::{chart, htmlkinds, htmlpage};
 use delphi_core::pathguard::{Access, Guard};
 use delphi_core::provenance::{gate_write, OutputCheck, Tier};
 use serde_json::{json, Value};
@@ -25,7 +25,7 @@ const OTHER_ROOTS: [&str; 6] = ["specs", "context", "memory", "skills", "agents"
 /// Mission folders tried, in order, for a plain path; the first one the role may write wins.
 const MISSION_FOLDERS: [&str; 7] = ["artifacts", "reports", "research", "specs", "comms", "councils", "threat-models"];
 
-const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart"];
+const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart", "write_report", "write_deck"];
 
 pub fn is_artifact_tool(name: &str) -> bool {
     TOOLS.contains(&name)
@@ -34,7 +34,7 @@ pub fn is_artifact_tool(name: &str) -> bool {
 fn extensions(tool: &str) -> &'static [&'static str] {
     match tool {
         "write_archive" => &["zip"],
-        "write_html" => &["html", "htm"],
+        "write_html" | "write_report" | "write_deck" => &["html", "htm"],
         "write_chart" => &["svg"],
         _ => &[],
     }
@@ -105,8 +105,8 @@ fn members_of(args: &Value) -> Result<Vec<String>, ToolError> {
 
 /// What the call would do, from the arguments alone (`specs/014` §7.2): Green in the mission, Amber in a worktree.
 fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
-    if tool == "write_html" {
-        return classify_html(args);
+    if is_page_tool(tool) {
+        return classify_page(tool, args);
     }
     if tool == "write_chart" {
         return classify_chart(args);
@@ -124,26 +124,133 @@ fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     Ok(Classified { tool: tool.into(), tier, kind, summary, payload: json!({"tool": tool, "path": path, "members": members, "args_blake3": args_hash}), pattern: format!("{} {}/*", tool, dir) })
 }
 
-/// A page. Without a script it is Green in the mission (Amber in a worktree, as any worktree edit). With a free-form
-/// script it is **always** put to the operator, in full: it is classified so that no permission mode approves it
-/// (`SpecDraft` asks every time), and "allow similar" covers only this exact call. That review, with the page's
-/// content security policy, is the safety of a script; the linter only catches accidents.
-fn classify_html(args: &Value) -> Result<Classified, ToolError> {
+fn is_page_tool(tool: &str) -> bool {
+    matches!(tool, "write_html" | "write_report" | "write_deck")
+}
+
+/// A page, report or deck built from the arguments: the file, its title, and a count of what it holds.
+struct Built {
+    html: String,
+    title: String,
+    holds: String,
+    script: Option<String>,
+}
+
+fn plural(n: usize, one: &str) -> String {
+    format!("{} {}{}", n, one, if n == 1 { "" } else { "s" })
+}
+
+/// Build the document, or say why it cannot be built (including failing its safety check). Only `write_html`
+/// takes a script; reports and decks are made of the audited runtime alone.
+fn build_page(tool: &str, args: &Value, comment: Option<String>) -> Result<Built, String> {
+    let e = |e: delphi_docs::DocError| e.0;
+    if tool != "write_html" && args.get("script").is_some() {
+        return Err(format!("{} takes no `script`; use write_html for a page that needs one (the operator approves it)", tool));
+    }
+    match tool {
+        "write_report" => {
+            let mut spec = htmlkinds::report_from_json(args).map_err(e)?;
+            spec.comment = comment;
+            let html = htmlkinds::render_report(&spec).map_err(e)?;
+            Ok(Built { html, title: spec.title.clone(), holds: plural(spec.sections.len(), "section"), script: None })
+        }
+        "write_deck" => {
+            let mut spec = htmlkinds::deck_from_json(args).map_err(e)?;
+            spec.comment = comment;
+            let html = htmlkinds::render_deck(&spec).map_err(e)?;
+            Ok(Built { html, title: spec.title.clone(), holds: plural(spec.slides.len() + 1, "slide"), script: None })
+        }
+        _ => {
+            let mut spec = htmlpage::from_json(args).map_err(e)?;
+            spec.comment = comment;
+            let html = htmlpage::render(&spec).map_err(e)?;
+            Ok(Built { html, title: spec.title.clone(), holds: plural(spec.blocks.len(), "block"), script: spec.script.clone() })
+        }
+    }
+}
+
+/// Does any embedded chart name a data file? Those are read through the role's access at run time, not here.
+fn has_data_from(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.iter().any(|(k, x)| (k == "chart" && x.pointer("/data/from").is_some()) || has_data_from(x)),
+        Value::Array(a) => a.iter().any(has_data_from),
+        _ => false,
+    }
+}
+
+/// The arguments with every embedded chart's `data: {from}` replaced by the file's rows. `on_read` sees each file
+/// read and may return its trust line, which is added to that chart's `source` so it prints under the chart.
+fn embed_data(guard: &Guard, args: &Value, on_read: &mut dyn FnMut(&str, &[u8]) -> Option<String>) -> Result<Value, ToolResult> {
+    fn walk(guard: &Guard, v: &mut Value, on_read: &mut dyn FnMut(&str, &[u8]) -> Option<String>) -> Result<(), ToolResult> {
+        match v {
+            Value::Object(m) => {
+                if let Some(c) = m.get_mut("chart").filter(|c| c.pointer("/data/from").is_some()) {
+                    let (mut a, read) = chart_args(guard, c)?;
+                    if let Some((from, bytes)) = read {
+                        if let Some(trust) = on_read(&from, &bytes) {
+                            let given = a.get("source").and_then(|s| s.as_str()).map(String::from);
+                            a["source"] = json!(match given {
+                                Some(g) => format!("{} · {}", g, trust),
+                                None => trust,
+                            });
+                        }
+                    }
+                    *c = a;
+                }
+                for x in m.values_mut() {
+                    walk(guard, x, on_read)?;
+                }
+            }
+            Value::Array(a) => {
+                for x in a {
+                    walk(guard, x, on_read)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut out = args.clone();
+    walk(guard, &mut out, on_read)?;
+    Ok(out)
+}
+
+/// A page, report or deck. Without a script it is Green in the mission (Amber in a worktree, as any worktree edit).
+/// A page with a free-form script is **always** put to the operator, in full: it is classified so that no
+/// permission mode approves it (`SpecDraft` asks every time), and "allow similar" covers only this exact call. That
+/// review, with the page's content security policy, is the safety of a script; the linter only catches accidents.
+/// Reports and decks never carry a script.
+fn classify_page(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     let path = str_arg(args, "path")?;
-    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_html").map_err(ToolError)?;
-    let spec = htmlpage::from_json(args).map_err(|e| ToolError(e.0))?;
-    // build it now, so a page that would fail its safety check is refused before anyone is asked
-    let html = htmlpage::render(&spec).map_err(|e| ToolError(e.0))?;
+    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, tool).map_err(ToolError)?;
+    // Build it now, so a page that would fail its safety check is refused before anyone is asked. Charts that name a
+    // data file cannot be drawn until the file is read, so those are only checked when the file is.
+    let (title, holds, script, bytes, hash) = if has_data_from(args) {
+        if tool != "write_html" && args.get("script").is_some() {
+            return Err(ToolError(format!("{} takes no `script`; use write_html for a page that needs one", tool)));
+        }
+        (args.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string(), "charts from data files".to_string(), args.get("script").and_then(|x| x.as_str()).map(String::from), None, None)
+    } else {
+        let b = build_page(tool, args, None).map_err(ToolError)?;
+        let h = blake3::hash(b.html.as_bytes()).to_hex().to_string();
+        let n = b.html.len();
+        (b.title, b.holds, b.script, Some(n), Some(h))
+    };
     let args_hash = blake3::hash(serde_json::to_string(args).unwrap_or_default().as_bytes()).to_hex().to_string();
     let dir = resolved.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-    let (tier, kind, pattern) = match &spec.script {
-        Some(_) => (ToolTier::Amber, ActionKind::SpecDraft, format!("write_html script {}", &args_hash[..16])),
-        None if resolved.starts_with("@worktree/") => (ToolTier::Amber, ActionKind::WorktreeEdit, format!("write_html {}/*", dir)),
-        None => (ToolTier::Green, ActionKind::MissionArtifact, format!("write_html {}/*", dir)),
+    let (tier, kind, pattern) = match &script {
+        Some(_) => (ToolTier::Amber, ActionKind::SpecDraft, format!("{} script {}", tool, &args_hash[..16])),
+        None if resolved.starts_with("@worktree/") => (ToolTier::Amber, ActionKind::WorktreeEdit, format!("{} {}/*", tool, dir)),
+        None => (ToolTier::Green, ActionKind::MissionArtifact, format!("{} {}/*", tool, dir)),
     };
-    let summary = format!("write {} (a page, {} block{}{})", path, spec.blocks.len(), if spec.blocks.len() == 1 { "" } else { "s" }, if spec.script.is_some() { ", WITH A SCRIPT to read before approving" } else { "" });
-    let payload = json!({"tool": "write_html", "path": path, "title": spec.title, "blocks": spec.blocks.len(), "script": spec.script, "bytes": html.len(), "page_blake3": blake3::hash(html.as_bytes()).to_hex().to_string(), "args_blake3": args_hash});
-    Ok(Classified { tool: "write_html".into(), tier, kind, summary, payload, pattern })
+    let what = match tool {
+        "write_report" => "a report",
+        "write_deck" => "a slide deck",
+        _ => "a page",
+    };
+    let summary = format!("write {} ({}, {}{})", path, what, holds, if script.is_some() { ", WITH A SCRIPT to read before approving" } else { "" });
+    let payload = json!({"tool": tool, "path": path, "title": title, "holds": holds, "script": script, "bytes": bytes, "page_blake3": hash, "args_blake3": args_hash});
+    Ok(Classified { tool: tool.into(), tier, kind, summary, payload, pattern })
 }
 
 /// A chart. Charts hold no script, so one is Green in the mission and Amber in a worktree like any worktree edit.
@@ -221,8 +328,9 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
             guard.check_policy(&m, Access::Read).map_err(denied)?;
         }
     }
-    if tool == "write_html" {
-        htmlpage::from_json(args).and_then(|s| htmlpage::render(&s)).map_err(|e| ToolResult::err(e.0))?;
+    if is_page_tool(tool) {
+        let a = embed_data(guard, args, &mut |_, _| None)?;
+        build_page(tool, &a, None).map_err(ToolResult::err)?;
     }
     if tool == "write_chart" {
         let (a, _) = chart_args(guard, args)?;
@@ -321,31 +429,55 @@ fn write_archive(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
 }
 
 fn write_html(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
-    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_html", args) {
+    write_page(ctx, "write_html", args)
+}
+
+fn write_report(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    write_page(ctx, "write_report", args)
+}
+
+fn write_deck(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    write_page(ctx, "write_deck", args)
+}
+
+fn write_page(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
+    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, tool, args) {
         Ok(t) => t,
         Err(e) => return e,
     };
-    let mut spec = match htmlpage::from_json(args) {
-        Ok(s) => s,
-        Err(e) => return ToolResult::err(e.0),
+    // Data files drawn into charts were read by this span: their trust counts against the document, and each chart says so.
+    let mut inputs = vec![];
+    let guard = ctx.guard;
+    let a = match embed_data(guard, args, &mut |from, bytes| {
+        let tier = observe(ctx, from, bytes);
+        inputs.push(format!("{} ({} bytes, blake3 {})", from, bytes.len(), blake3::hash(bytes).to_hex()));
+        Some(format!("data: {} (trust {} {})", from, tier, tier.name()))
+    }) {
+        Ok(a) => a,
+        Err(e) => return e,
     };
     // the in-file provenance comment (the sidecar has the hash, which cannot be inside the file it describes)
     let tier = ctx.span.output_tier(OutputCheck::Unverified);
-    spec.comment = Some(format!(
-        "delphi artifact: written by role {} in mission {} with write_html at {}; trust {} {}{}",
+    let comment = format!(
+        "delphi artifact: written by role {} in mission {} with {} at {}; trust {} {}{}",
         ctx.role,
         ctx.mission_id,
+        tool,
         ctx.now_rfc3339,
         tier,
         tier.name(),
         target.sidecar.as_ref().map(|s| format!("; provenance record: {}", s.rsplit('/').next().unwrap_or(s))).unwrap_or_default()
-    ));
-    let html = match htmlpage::render(&spec) {
-        Ok(h) => h,
-        Err(e) => return ToolResult::err(e.0),
+    );
+    let built = match build_page(tool, &a, Some(comment)) {
+        Ok(b) => b,
+        Err(e) => return ToolResult::err(e),
     };
-    let inputs = vec![format!("title: {}", spec.title.chars().take(120).collect::<String>()), format!("blocks: {}", spec.blocks.len()), format!("free-form script: {}", if spec.script.is_some() { "yes (approved by the operator)" } else { "no" })];
-    write_artifact(ctx, &target, html.as_bytes(), "write_html", &inputs)
+    inputs.insert(0, format!("title: {}", built.title.chars().take(120).collect::<String>()));
+    inputs.insert(1, format!("contents: {}", built.holds));
+    if tool == "write_html" {
+        inputs.push(format!("free-form script: {}", if built.script.is_some() { "yes (approved by the operator)" } else { "no" }));
+    }
+    write_artifact(ctx, &target, built.html.as_bytes(), tool, &inputs)
 }
 
 fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
@@ -389,6 +521,8 @@ fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, svg.as_bytes(), "write_chart", &inputs)
 }
 
+const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read), {type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
+
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
         def: ToolDef {
@@ -403,12 +537,12 @@ pub fn specs() -> Vec<ToolSpec> {
     ToolSpec {
         def: ToolDef {
             name: "write_html".into(),
-            description: "Write a self-contained web page (one .html file) that opens in any browser with no network. Describe it as data and the tool writes the markup: `title`, then `blocks` (or `body_md` for a single markdown block). Block types: {type:\"markdown\", text} (headings, lists, tables, emphasis, code; raw HTML is shown as text; only #anchor links are clickable and other links print their address); {type:\"table\", columns:[…], rows:[[…]], caption?, sortable?, filter?} (up to 2000 rows × 40 columns; sortable and filter add click-to-sort and a search box); {type:\"tabs\", tabs:[{title, blocks:[…]}]}; {type:\"code\", text, copy?}; {type:\"callout\", kind:\"note\"|\"warning\"|\"tip\", text}; {type:\"stats\", items:[{label, value, delta?}]}. `theme` is auto, light or dark. Pages are responsive, follow the reader's light/dark setting and print cleanly. `path` is a plain name like `report.html` (goes in the mission's folder) or `@worktree/…`. Prefer no script: sorting, filtering, tabs and copy buttons are built in. An optional `script` (light DOM scripting only) is allowed but is shown to the operator in full and approved every time; it may not use the network, build code at run time, navigate, or rewrite markup, and the tool refuses it if it tries. A provenance record is written beside the page, and the page is as trusted as the least trusted input you read.".into(),
+            description: "Write a self-contained web page (one .html file) that opens in any browser with no network. Describe it as data and the tool writes the markup: `title`, then `blocks` (or `body_md` for a single markdown block). Block types: {type:\"markdown\", text} (headings, lists, tables, emphasis, code; raw HTML is shown as text; only #anchor links are clickable and other links print their address); {type:\"table\", columns:[…], rows:[[…]], caption?, sortable?, filter?} (up to 2000 rows × 40 columns; sortable and filter add click-to-sort and a search box); {type:\"tabs\", tabs:[{title, blocks:[…]}]}; {type:\"code\", text, copy?}; {type:\"callout\", kind:\"note\"|\"warning\"|\"tip\", text}; {type:\"stats\", items:[{label, value, delta?}]}; {type:\"chart\", chart:{…as write_chart…}, caption?}; {type:\"grid\", columns:2|3, blocks:[…]}. `theme` is auto, light or dark. Pages are responsive, follow the reader's light/dark setting and print cleanly. `path` is a plain name like `report.html` (goes in the mission's folder) or `@worktree/…`. Prefer no script: sorting, filtering, tabs and copy buttons are built in. An optional `script` (light DOM scripting only) is allowed but is shown to the operator in full and approved every time; it may not use the network, build code at run time, navigate, or rewrite markup, and the tool refuses it if it tries. A provenance record is written beside the page, and the page is as trusted as the least trusted input you read.".into(),
             input_schema: json!({"type": "object", "required": ["path", "title"], "properties": {
                 "path": {"type": "string"},
                 "title": {"type": "string"},
                 "body_md": {"type": "string", "description": "markdown for a single block; use blocks for anything richer"},
-                "blocks": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["type"], "properties": {"type": {"type": "string", "enum": ["markdown", "table", "tabs", "code", "callout", "stats"]}}}},
+                "blocks": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["type"], "properties": {"type": {"type": "string", "enum": ["markdown", "table", "tabs", "code", "callout", "stats", "chart", "grid"]}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]},
                 "script": {"type": "string", "description": "optional; shown to the operator in full and approved every time"}
             }}),
@@ -443,7 +577,43 @@ pub fn specs() -> Vec<ToolSpec> {
         requires_write_scope: true,
         classify: |tool, args| classify(tool, args),
         exec: ToolExec::Local(write_chart),
-    }]
+    },
+    ToolSpec {
+        def: ToolDef {
+            name: "write_report".into(),
+            description: format!("Write a report as one self-contained .html file that reads well on a screen and prints cleanly (\"Save as PDF\" gives clean pages). `title`, `subtitle?`, `summary?` (markdown shown first), then `sections`: [{{heading, body_md?, blocks?, chart?}}]; a contents list is added for three or more sections (`toc` forces it on or off). A section's `chart` is a shorthand for a chart block. Block types are those of write_html: markdown, table, tabs, code, callout, stats, and {}. Markdown headings inside a section sit under its heading. `theme` is auto, light or dark. There is no script option: for that, use write_html. `path` is a plain name like `q3-review.html` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the report is as trusted as the least trusted input you read.", CHART_BLOCK),
+            input_schema: json!({"type": "object", "required": ["path", "title", "sections"], "properties": {
+                "path": {"type": "string"},
+                "title": {"type": "string"},
+                "subtitle": {"type": "string"},
+                "summary": {"type": "string"},
+                "toc": {"type": "boolean"},
+                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}}}},
+                "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
+            }}),
+        },
+        requires_write_scope: true,
+        classify: |tool, args| classify(tool, args),
+        exec: ToolExec::Local(write_report),
+    },
+    ToolSpec {
+        def: ToolDef {
+            name: "write_deck".into(),
+            description: format!("Write a slide deck as one self-contained .html file (no network) that opens in any browser. `title`, `subtitle?`, `author?`, then `slides`: [{{title, body_md?, blocks?, chart?, notes?}}]; a title slide is made for you from the title, so start `slides` with the first real slide. Keep each slide to one point: a short title that states it, a few bullets or one chart or table, and the detail in `notes`. A slide's `chart` is a shorthand for a chart block; block types are those of write_html: markdown, table, code, callout, stats, and {}. In the browser a deck shows one slide at a time: arrow keys, Page Up/Down, space and swipe move, Home/End jump, `n` shows the speaker notes, `i` the slide index, and there are buttons for the same. Printing gives one slide per page with the notes beneath it. `theme` is auto, light or dark. There is no script option. `path` is a plain name like `roadmap.html` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the deck is as trusted as the least trusted input you read.", CHART_BLOCK),
+            input_schema: json!({"type": "object", "required": ["path", "title", "slides"], "properties": {
+                "path": {"type": "string"},
+                "title": {"type": "string"},
+                "subtitle": {"type": "string"},
+                "author": {"type": "string"},
+                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
+                "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
+            }}),
+        },
+        requires_write_scope: true,
+        classify: |tool, args| classify(tool, args),
+        exec: ToolExec::Local(write_deck),
+    },
+]
 }
 
 #[cfg(test)]
@@ -912,5 +1082,84 @@ mod tests {
         let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/evidence.zip", "member": "project/app/src/lib.rs"}));
         assert!(!back.is_error && back.content.contains("fn a() {}"), "{}", back.content);
+    }
+    fn chart_block(from: Option<&str>) -> Value {
+        let data = match from {
+            Some(f) => json!({"from": f}),
+            None => json!({"columns": ["release", "p50", "p95"], "rows": [["0.2.1", 120, 340], ["0.2.2", 118, 310], ["0.2.3", 104, 255]]}),
+        };
+        json!({"type": "line", "title": "Latency fell", "x_order": "ordered", "data": data})
+    }
+
+    fn deck_args(from: Option<&str>) -> Value {
+        json!({"path": "roadmap", "title": "Roadmap", "slides": [{"title": "Where we are", "body_md": "- fast", "notes": "Say hello."}, {"title": "Latency", "chart": chart_block(from)}]})
+    }
+
+    fn report_args(from: Option<&str>) -> Value {
+        json!({"path": "q3", "title": "Q3", "sections": [{"heading": "Latency", "blocks": [{"type": "chart", "chart": chart_block(from), "caption": "p50 and p95"}]}]})
+    }
+
+    #[test]
+    fn a_deck_and_a_report_are_written_checked_stamped_and_read_back() {
+        let mut f = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f, "write_deck", deck_args(None));
+        assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/roadmap.html (") && stamps.len() == 2, "{}", r.content);
+        let html = fs::read_to_string(f.root.join("local/missions/m1/artifacts/roadmap.html")).unwrap();
+        assert!(html.contains("with write_deck at 2026-10-25T12:00:00.000Z; trust L3") && html.contains("data-deck") && html.contains("<figure class=\"chart\">") && delphi_docs::htmllint::lint(&html).is_empty());
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/roadmap.html.provenance.md")).unwrap();
+        assert!(side.contains("produced_by: write_deck") && side.contains("- contents: 3 slides") && !side.contains("free-form script"), "{}", side);
+        let (r, _) = run_tool(&mut f, "write_report", report_args(None));
+        assert!(!r.is_error, "{}", r.content);
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/q3.html"}));
+        assert!(back.content.contains("# Q3") && back.content.contains("Latency"), "{}", back.content);
+    }
+
+    #[test]
+    fn decks_and_reports_are_as_green_as_any_mission_artifact_and_never_take_a_script() {
+        let reg = Registry::builtin();
+        for (tool, args) in [("write_deck", deck_args(None)), ("write_report", report_args(None))] {
+            let c = reg.classify(tool, &args).unwrap();
+            assert_eq!((c.tier, c.kind), (ToolTier::Green, ActionKind::MissionArtifact), "{}", tool);
+            let mut wt = args.clone();
+            wt["path"] = json!("@worktree/docs/out.html");
+            assert_eq!(reg.classify(tool, &wt).unwrap().kind, ActionKind::WorktreeEdit);
+            let mut scripted = args.clone();
+            scripted["script"] = json!("document.title = 'x';");
+            let e = reg.classify(tool, &scripted).unwrap_err();
+            assert!(e.0.contains("takes no `script`"), "{}", e);
+            let mut f = fx(&["missions/**"]);
+            let (r, stamps) = run_tool(&mut f, tool, scripted);
+            assert!(r.is_error && stamps.is_empty() && !f.root.join("local/missions/m1/artifacts").exists(), "{}", r.content);
+        }
+        // a bad chart inside a slide is refused with the chart's reason before anyone is asked
+        let mut bad = deck_args(None);
+        bad["slides"][1]["chart"]["type"] = json!("pie");
+        assert!(reg.classify("write_deck", &bad).unwrap_err().0.contains("chart block"));
+        // a page may hold a chart too
+        let page = json!({"path": "p", "title": "P", "blocks": [{"type": "grid", "columns": 2, "blocks": [{"type": "chart", "chart": chart_block(None)}, {"type": "markdown", "text": "x"}]}]});
+        assert_eq!(reg.classify("write_html", &page).unwrap().kind, ActionKind::MissionArtifact);
+    }
+
+    #[test]
+    fn charts_in_a_deck_that_read_a_file_carry_its_trust_and_taint_the_span() {
+        let mut f = fx(&["missions/**"]);
+        fs::write(f.root.join("proj/src/latency.csv"), "release,p50,p95\n0.2.1,120,340\n0.2.2,118,310\n0.2.3,104,255\n").unwrap();
+        fs::write(f.root.join("proj/vendor/lib/latency.csv"), "release,p50,p95\n0.2.1,1,2\n0.2.2,3,4\n").unwrap();
+        // classification does not open files, and a missing one is refused by the precheck, before anything is written
+        assert!(Registry::builtin().classify("write_deck", &deck_args(Some("@project/app/src/latency.csv"))).is_ok());
+        let (r, stamps) = run_tool(&mut f, "write_deck", deck_args(Some("@project/app/src/missing.csv")));
+        assert!(r.is_error && r.content.contains("not found") && stamps.is_empty());
+        let (r, _) = run_tool(&mut f, "write_deck", deck_args(Some("@project/app/src/latency.csv")));
+        assert!(!r.is_error, "{}", r.content);
+        let html = fs::read_to_string(f.root.join("local/missions/m1/artifacts/roadmap.html")).unwrap();
+        assert!(html.contains("Source: data: @project/app/src/latency.csv (trust L4 internal_empirical)"), "{}", html.len());
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/roadmap.html.provenance.md")).unwrap();
+        assert!(side.contains("@project/app/src/latency.csv (") && side.contains("blake3"), "{}", side);
+        // untrusted data makes the whole report untrusted, and it says so
+        let (r, stamps) = run_tool(&mut f, "write_report", report_args(Some("@project/app/vendor/lib/latency.csv")));
+        assert!(!r.is_error && r.content.contains("tier L0") && stamps.iter().all(|s| s.tier == Tier::L0), "{}", r.content);
+        let html = fs::read_to_string(f.root.join("local/missions/m1/artifacts/q3.html")).unwrap();
+        assert!(html.contains("trust L0 external_untrusted") && html.contains("Source: data: @project/app/vendor/lib/latency.csv (trust L0"), "the document and the chart both say so");
     }
 }

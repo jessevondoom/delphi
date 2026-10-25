@@ -50,7 +50,8 @@ fn vars(light: bool) -> String {
     )
 }
 
-fn style() -> String {
+/// The chart stylesheet. A standalone SVG carries it; a page that embeds charts includes it once.
+pub fn css() -> String {
     let mut s = String::new();
     s.push_str(&format!(".viz-root{{{}font-family:{};}}\n", vars(true), FONT));
     s.push_str(&format!("@media (prefers-color-scheme: dark){{.viz-root:where(:root:not([data-theme=\"light\"])){{{d}}}:root:where(:not([data-theme=\"light\"])) .viz-root:where(:not([data-theme=\"light\"])){{{d}}}}}\n", d = vars(false)));
@@ -267,6 +268,16 @@ fn table(out: &mut String, rows: &[Vec<String>], y: f64, width: f64, spec: &Char
 
 /// The chart as an SVG document. `comment` is the in-file provenance note (sanitised by the caller).
 pub fn render_svg(spec: &ChartSpec, comment: Option<&str>) -> String {
+    draw(spec, comment, None)
+}
+
+/// The chart as an `<svg>` element to place inside a page: no XML prolog, no stylesheet (the page includes
+/// [`css`] once), and element ids prefixed with `id` so several charts can share a page.
+pub fn inline_svg(spec: &ChartSpec, id: &str) -> String {
+    draw(spec, None, Some(id))
+}
+
+fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String {
     let fmt = Fmt(spec);
     let (w, base_h) = match spec.size {
         Size::Wide => (720.0, 400.0),
@@ -584,22 +595,30 @@ pub fn render_svg(spec: &ChartSpec, comment: Option<&str>) -> String {
 
     // --- assemble
     let mut svg = String::with_capacity(body.len() + 4096);
-    svg.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    if let Some(c) = comment {
-        svg.push_str(&format!("<!-- {} -->\n", c));
+    let idp = inline.map(|i| format!("{}-", i)).unwrap_or_default();
+    if inline.is_none() {
+        svg.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        if let Some(c) = comment {
+            svg.push_str(&format!("<!-- {} -->\n", c));
+        }
     }
     let desc = describe(spec, &fmt);
     svg.push_str(&format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"viz-root\"{} viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" role=\"img\" aria-labelledby=\"chart-title chart-desc\">\n",
+        "<svg{} class=\"viz-root\"{} viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" role=\"img\" aria-labelledby=\"{p}chart-title {p}chart-desc\">\n",
+        if inline.is_none() { " xmlns=\"http://www.w3.org/2000/svg\"" } else { "" },
         match spec.theme {
             Theme::Auto => "",
             Theme::Light => " data-theme=\"light\"",
             Theme::Dark => " data-theme=\"dark\"",
         },
         w = f(w),
-        h = f(h)
+        h = f(h),
+        p = idp
     ));
-    svg.push_str(&format!("<title id=\"chart-title\">{}</title>\n<desc id=\"chart-desc\">{}</desc>\n<style>\n{}</style>\n", escape(&spec.title), escape(&desc), style()));
+    svg.push_str(&format!("<title id=\"{p}chart-title\">{}</title>\n<desc id=\"{p}chart-desc\">{}</desc>\n", escape(&spec.title), escape(&desc), p = idp));
+    if inline.is_none() {
+        svg.push_str(&format!("<style>\n{}</style>\n", css()));
+    }
     svg.push_str(&format!("<rect class=\"surface\" width=\"{}\" height=\"{}\"/>\n", f(w), f(h)));
     svg.push_str(&head);
     svg.push_str(&body);

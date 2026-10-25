@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::DocError;
 
-pub use render::render_svg;
+pub use render::{css, inline_svg, render_svg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
