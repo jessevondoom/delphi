@@ -52,6 +52,8 @@ Then: `delphi doctor` (check 10 shows `claude` signed in), `delphi endpoints tes
 
 ## 2. Gemini API through Google sign-in (one-time setup)
 
+The full client setup (scopes, consent screen, test-mode limits, commands) is in [`google-oauth-client.md`](google-oauth-client.md); in short:
+
 1. In the Google Cloud console, create or pick a project, and enable the **Generative Language API**.
 2. Configure the OAuth consent screen (user type External, add yourself as a test user) and create an **OAuth client ID** of type **Desktop app**. Copy the client ID and secret.
 3. Store the secret in your keychain under Delphi's service (it never goes in a file): `security add-generic-password -s delphi -a google-client-secret -w` (it prompts).

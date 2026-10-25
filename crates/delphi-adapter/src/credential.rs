@@ -251,6 +251,7 @@ pub struct Resolver {
     now: Arc<NowFn>,
     timeout: Duration,
     oauth: Option<Arc<dyn crate::oauth2::OauthSource>>,
+    gcloud_expiry: Option<Arc<dyn ExpiryProbe>>,
 }
 
 fn unix_now() -> i64 {
@@ -275,12 +276,25 @@ struct AwsExport {
     expiration: Option<String>,
 }
 
-/// A gcloud ADC access token lives about an hour; refresh well before.
-const GCLOUD_TOKEN_LIFETIME_SECS: i64 = 50 * 60;
+/// What to assume about a gcloud token when its real lifetime cannot be learned. `gcloud` does not print
+/// one, and a token is usually good for an hour, but a short guess only costs another `gcloud` call while
+/// a long one gets an expired token sent to the provider.
+const GCLOUD_UNKNOWN_LIFETIME_SECS: i64 = 5 * 60;
+
+/// Learns how many seconds an access token has left, from the issuer.
+pub trait ExpiryProbe: Send + Sync {
+    fn seconds_left(&self, access_token: &str) -> Option<i64>;
+}
 
 impl Resolver {
     pub fn new(runner: Arc<dyn Runner>, env: Arc<EnvFn>, register: Arc<RegisterFn>, now: Arc<NowFn>) -> Resolver {
-        Resolver { runner, env, register, now, timeout: Duration::from_secs(20), oauth: None }
+        Resolver { runner, env, register, now, timeout: Duration::from_secs(20), oauth: None, gcloud_expiry: None }
+    }
+
+    /// Ask this probe how long a `gcloud-adc` token lives, instead of guessing.
+    pub fn with_gcloud_expiry(mut self, probe: Arc<dyn ExpiryProbe>) -> Resolver {
+        self.gcloud_expiry = Some(probe);
+        self
     }
 
     /// Serve `oauth2:<name>` credentials from this source.
@@ -368,7 +382,8 @@ impl Resolver {
                 if token.is_empty() {
                     return Err(CredentialError::Failed("gcloud returned an empty access token".into()));
                 }
-                Ok(self.secret(token, Some(self.now() + GCLOUD_TOKEN_LIFETIME_SECS)))
+                let left = self.gcloud_expiry.as_ref().and_then(|p| p.seconds_left(&token)).filter(|s| *s > 0).unwrap_or(GCLOUD_UNKNOWN_LIFETIME_SECS);
+                Ok(self.secret(token, Some(self.now() + left)))
             }
             CredentialRef::GcloudSa(_) => Err(CredentialError::Unsupported("`gcloud-sa:` service-account keys (JWT signing) are not implemented yet; use `gcloud-adc` with GOOGLE_APPLICATION_CREDENTIALS or workload identity".into())),
             CredentialRef::Oauth2(name) => {
@@ -385,24 +400,36 @@ impl Resolver {
 pub struct CredentialStore {
     resolver: Resolver,
     cache: Mutex<HashMap<String, Resolved>>,
+    /// One renewal per credential at a time: two spans that find a token expired must not both mint one.
+    flights: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Refresh this many seconds before expiry.
     skew: i64,
 }
 
 impl CredentialStore {
     pub fn new(resolver: Resolver) -> CredentialStore {
-        CredentialStore { resolver, cache: Mutex::new(HashMap::new()), skew: 60 }
+        CredentialStore { resolver, cache: Mutex::new(HashMap::new()), flights: Mutex::new(HashMap::new()), skew: 60 }
+    }
+
+    fn fresh(&self, key: &str) -> (Option<Resolved>, Option<Resolved>) {
+        let now = self.resolver.now();
+        let cached = self.cache.lock().unwrap().get(key).cloned();
+        let usable = cached.clone().filter(|c| c.expires_at().map(|e| e - self.skew > now).unwrap_or(false));
+        (usable, cached)
     }
 
     pub fn get(&self, endpoint_id: &str, credential: &str) -> Result<Resolved, CredentialError> {
         let parsed = CredentialRef::parse(credential).map_err(CredentialError::Failed)?;
         let key = format!("{}|{}", endpoint_id, credential);
-        let now = self.resolver.now();
-        let cached = self.cache.lock().unwrap().get(&key).cloned();
-        if let Some(c) = &cached {
-            if c.expires_at().map(|e| e - self.skew > now).unwrap_or(false) {
-                return Ok(c.clone());
-            }
+        if let (Some(c), _) = self.fresh(&key) {
+            return Ok(c);
+        }
+        let flight = self.flights.lock().unwrap().entry(key.clone()).or_default().clone();
+        let _one = flight.lock().unwrap();
+        // Another caller may have renewed it while we waited.
+        let (usable, cached) = self.fresh(&key);
+        if let Some(c) = usable {
+            return Ok(c);
         }
         match self.resolver.resolve(&parsed) {
             Ok(fresh) => {
@@ -415,7 +442,10 @@ impl CredentialStore {
                 self.cache.lock().unwrap().remove(&key);
                 Err(CredentialError::NeedsReauth { endpoint: endpoint_id.to_string() })
             }
-            // We held an expiring credential and can't renew it: the operator must sign in again.
+            // The renewal failed, but what we hold has not lapsed (we only renew early, by the skew): keep
+            // using it, so a blip in `gcloud`, the network or the provider does not cost a working sign-in.
+            Err(CredentialError::Failed(_)) | Err(CredentialError::NotFound(_)) if cached.as_ref().is_some_and(|c| c.expires_at().is_some_and(|e| e > self.resolver.now())) => Ok(cached.unwrap()),
+            // We held an expiring credential that has lapsed and can't renew it: the operator must sign in again.
             Err(CredentialError::Failed(_)) | Err(CredentialError::NotFound(_)) if cached.is_some() => {
                 self.cache.lock().unwrap().remove(&key);
                 Err(CredentialError::NeedsReauth { endpoint: endpoint_id.to_string() })
@@ -547,13 +577,75 @@ mod tests {
         let f = Fake::new(vec![ok("ya29.token-value-12345\n")]);
         let (r, _) = resolver(f.clone(), vec![], Arc::new(AtomicI64::new(1_000)));
         match r.resolve(&CredentialRef::GcloudAdc).unwrap() {
-            Resolved::Token(s) => assert_eq!((s.expose(), s.expires_at), ("ya29.token-value-12345", Some(1_000 + GCLOUD_TOKEN_LIFETIME_SECS))),
+            Resolved::Token(s) => assert_eq!((s.expose(), s.expires_at), ("ya29.token-value-12345", Some(1_000 + GCLOUD_UNKNOWN_LIFETIME_SECS)), "with no way to ask, assume a short life"),
             other => panic!("{:?}", other),
         }
         assert_eq!(f.calls.lock().unwrap()[0], ["gcloud", "auth", "application-default", "print-access-token"]);
         assert!(matches!(r.resolve(&CredentialRef::Oauth2("x".into())), Err(CredentialError::Unsupported(_))));
         assert!(matches!(r.resolve(&CredentialRef::GcloudSa("x".into())), Err(CredentialError::Unsupported(_))));
         assert!(matches!(r.resolve(&CredentialRef::HarnessLogin), Ok(Resolved::None)));
+    }
+
+    struct Probe(Option<i64>);
+
+    impl ExpiryProbe for Probe {
+        fn seconds_left(&self, token: &str) -> Option<i64> {
+            assert_eq!(token, "ya29.token-value-12345");
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_gcloud_token_expires_when_the_issuer_says_not_when_we_guess() {
+        let now = Arc::new(AtomicI64::new(1_000));
+        for (reported, want) in [(Some(3_599), 1_000 + 3_599), (Some(1_200), 1_000 + 1_200), (None, 1_000 + GCLOUD_UNKNOWN_LIFETIME_SECS), (Some(0), 1_000 + GCLOUD_UNKNOWN_LIFETIME_SECS)] {
+            let f = Fake::new(vec![ok("ya29.token-value-12345\n")]);
+            let (r, _) = resolver(f, vec![], now.clone());
+            let r = r.with_gcloud_expiry(Arc::new(Probe(reported)));
+            match r.resolve(&CredentialRef::GcloudAdc).unwrap() {
+                Resolved::Token(s) => assert_eq!(s.expires_at, Some(want), "{:?}", reported),
+                other => panic!("{:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_renewal_keeps_a_token_that_has_not_lapsed_and_only_a_lapsed_one_needs_reauth() {
+        let now = Arc::new(AtomicI64::new(0));
+        let fail = || Ok(RunOutput { status: 1, stdout: String::new(), stderr_len: 5 });
+        let f = Fake::new(vec![ok(r#"{"token":"short-lived-token-1234","expires_at":"1970-01-01T00:10:00Z"}"#), fail(), fail()]);
+        let (r, _) = resolver(f.clone(), vec![], now.clone());
+        let store = CredentialStore::new(r);
+        let cred = r#"command:["h"]"#;
+        store.get("gw", cred).unwrap();
+        now.store(580, Ordering::SeqCst); // inside the refresh skew, 20 s before the token really lapses
+        match store.get("gw", cred).unwrap() {
+            Resolved::Token(s) => assert_eq!(s.expose(), "short-lived-token-1234"),
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(f.calls.lock().unwrap().len(), 2, "renewal was attempted");
+        // The token is still held: a later success replaces it, and a failure after the real expiry is a reauth.
+        now.store(601, Ordering::SeqCst);
+        assert_eq!(store.get("gw", cred).unwrap_err(), CredentialError::NeedsReauth { endpoint: "gw".into() });
+    }
+
+    #[test]
+    fn concurrent_callers_share_one_renewal() {
+        let now = Arc::new(AtomicI64::new(10_000));
+        let tok = ok(&format!(r#"{{"token":"one-aaaaaaaaaaaaaaaa","expires_at":"{}"}}"#, delphi_core::time::format_unix_millis(10_000 + 3_600, 0)));
+        let f = Fake::new(vec![tok]);
+        let (r, _) = resolver(f.clone(), vec![], now);
+        let store = Arc::new(CredentialStore::new(r));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let s = store.clone();
+                std::thread::spawn(move || s.get("gw", r#"command:["h"]"#).map(|r| matches!(r, Resolved::Token(_))))
+            })
+            .collect();
+        for t in threads {
+            assert_eq!(t.join().unwrap(), Ok(true));
+        }
+        assert_eq!(f.calls.lock().unwrap().len(), 1, "one helper run, not eight");
     }
 
     #[test]
