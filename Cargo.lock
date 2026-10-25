@@ -826,6 +826,9 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "flate2",
+ "serde_json",
+ "serde_yaml_ng",
+ "toml",
 ]
 
 [[package]]

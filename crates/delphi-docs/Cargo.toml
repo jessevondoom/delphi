@@ -12,6 +12,10 @@ publish = false
 # PDF streams; CRC-32 to catch a corrupt zip member.
 flate2 = "1"
 crc32fast = "1.5"
+# Parsers the workspace already uses, for the JSON, YAML and TOML outline view.
+serde_json = "1.0"
+serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
+toml = "1.1"
 
 [features]
 # Test-only: archive builders for other crates' tests. The real writers arrive with slice C0.

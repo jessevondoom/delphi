@@ -22,16 +22,24 @@ pub struct Rel {
 }
 
 /// Which office format a zip is, from the parts it contains.
-pub fn kind_of(zip: &Zip) -> Option<Format> {
+pub fn kind_of(zip: &Zip, limits: &Limits) -> Option<Format> {
     let has = |n: &str| zip.items().iter().any(|i| i.name == n);
     if has("word/document.xml") {
-        Some(Format::Docx)
+        return Some(Format::Docx);
     } else if has("xl/workbook.xml") {
-        Some(Format::Xlsx)
+        return Some(Format::Xlsx);
     } else if has("ppt/presentation.xml") {
-        Some(Format::Pptx)
-    } else {
-        None
+        return Some(Format::Pptx);
+    }
+    // OpenDocument and EPUB name themselves in a `mimetype` member.
+    let i = zip.items().iter().position(|i| i.name == "mimetype")?;
+    let mime = zip.read(i, limits).ok()?;
+    match String::from_utf8_lossy(&mime).trim() {
+        "application/vnd.oasis.opendocument.text" => Some(Format::Odt),
+        "application/vnd.oasis.opendocument.spreadsheet" => Some(Format::Ods),
+        "application/vnd.oasis.opendocument.presentation" => Some(Format::Odp),
+        "application/epub+zip" => Some(Format::Epub),
+        _ => None,
     }
 }
 

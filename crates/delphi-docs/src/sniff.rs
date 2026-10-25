@@ -10,6 +10,10 @@ pub enum Format {
     Docx,
     Xlsx,
     Pptx,
+    Odt,
+    Ods,
+    Odp,
+    Epub,
     Tar,
     Gzip,
     Sqlite,
@@ -29,6 +33,7 @@ pub enum Format {
     Tsv,
     Notebook,
     Email,
+    Mbox,
     Calendar,
     Markdown,
     /// UTF-8 text with no more specific format.
@@ -45,6 +50,10 @@ impl Format {
             Format::Docx => "Word document (docx)",
             Format::Xlsx => "Excel workbook (xlsx)",
             Format::Pptx => "PowerPoint deck (pptx)",
+            Format::Odt => "OpenDocument text (odt)",
+            Format::Ods => "OpenDocument spreadsheet (ods)",
+            Format::Odp => "OpenDocument presentation (odp)",
+            Format::Epub => "EPUB book",
             Format::Tar => "tar archive",
             Format::Gzip => "gzip",
             Format::Sqlite => "SQLite database",
@@ -63,6 +72,7 @@ impl Format {
             Format::Tsv => "TSV",
             Format::Notebook => "Jupyter notebook",
             Format::Email => "email",
+            Format::Mbox => "mbox mailbox",
             Format::Calendar => "iCalendar",
             Format::Markdown => "Markdown",
             Format::Text => "text",
@@ -74,7 +84,7 @@ impl Format {
 impl Format {
     /// Text that `read_file` shows line by line.
     pub fn is_text(self) -> bool {
-        matches!(self, Format::Rtf | Format::Html | Format::Xml | Format::Json | Format::Yaml | Format::Toml | Format::Csv | Format::Tsv | Format::Notebook | Format::Email | Format::Calendar | Format::Markdown | Format::Text)
+        matches!(self, Format::Rtf | Format::Html | Format::Xml | Format::Json | Format::Yaml | Format::Toml | Format::Csv | Format::Tsv | Format::Notebook | Format::Email | Format::Mbox | Format::Calendar | Format::Markdown | Format::Text)
     }
 }
 
@@ -94,6 +104,14 @@ fn looks_like_text(head: &[u8]) -> bool {
         Err(e) => e.error_len().is_none() && e.valid_up_to() + 4 > head.len(),
     };
     valid && !head.iter().any(|&b| b == 0 || (b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r' | 0x0c | 0x1b)))
+}
+
+/// `From sender@host Sat Oct 24 10:00:00 2026`: a sender, then a date with a clock time (digit, colon, digit).
+fn envelope_line(body: &[u8]) -> bool {
+    let line: &[u8] = body.split(|&c| c == b'\n').next().unwrap_or(&[]);
+    let rest = &line[5.min(line.len())..];
+    let mut words = rest.split(|&c| c == b' ').filter(|w| !w.is_empty());
+    words.next().is_some() && rest.windows(3).any(|w| w[0].is_ascii_digit() && w[1] == b':' && w[2].is_ascii_digit())
 }
 
 fn starts_with_ci(hay: &[u8], needle: &[u8]) -> bool {
@@ -153,6 +171,7 @@ pub fn detect(bytes: &[u8], name: &str) -> Format {
         "toml" => return Format::Toml,
         "md" | "markdown" => return Format::Markdown,
         "eml" => return Format::Email,
+        "mbox" | "mbx" => return Format::Mbox,
         "ics" => return Format::Calendar,
         "html" | "htm" | "xhtml" => return Format::Html,
         "xml" | "svg" => return Format::Xml,
@@ -163,6 +182,10 @@ pub fn detect(bytes: &[u8], name: &str) -> Format {
     }
     if trimmed.starts_with(b"<?xml") {
         return Format::Xml;
+    }
+    // an mbox starts with an envelope line: "From sender@host Sat Oct 24 10:00:00 2026"
+    if body.starts_with(b"From ") && envelope_line(body) {
+        return Format::Mbox;
     }
     Format::Text
 }
@@ -209,6 +232,14 @@ mod tests {
         assert_eq!(detect(b"{\\rtf1\\ansi hi}", "f"), Format::Rtf);
         assert_eq!(detect("\u{feff}a,b".as_bytes(), "x.csv"), Format::Csv);
         assert_eq!(detect(b"plain", ".gitignore"), Format::Text);
+    }
+
+    #[test]
+    fn an_mbox_is_told_from_prose_that_starts_with_from() {
+        assert_eq!(detect(b"From a@x.com Sat Oct 24 10:00:00 2026\nFrom: A\n", "inbox"), Format::Mbox);
+        assert_eq!(detect(b"From the desk of: the director\nmore", "note"), Format::Text);
+        assert_eq!(detect(b"From here on, things changed.\n", "story"), Format::Text);
+        assert_eq!(detect(b"x", "archive.mbox"), Format::Mbox);
     }
 
     #[test]
