@@ -3,22 +3,22 @@ delphi v0.5 · epic
 
  ▼ needs you   council t_2 needs a decision
 
- t_1 build · Implement the deck router
-  ● athena       running       1200 tok
-    ✔ hephaestus   done          8000 tok
-
-
-
-
-
-── Narrative ───────────────────────────────────────────
- t_1 started
- builder finished
+ ▶ athena       running   1:06
+ ✔ hephaestus   done      1:00
 
 
 
 
 
 
+
+
+
+
+
+
+
+
+                                           pace  ▁▃▇▄█▂
 ────────────────────────────────────────────────────────
 1 running  ·  3500 tokens                    ○ ● ○ ○ ○ ○
