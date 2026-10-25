@@ -1,6 +1,7 @@
 // Markdown to ANSI lines: the part of the UI where a library (marked) does the parsing and we only style.
 import { Lexer, type Token, type Tokens } from 'marked';
 import chalk from 'chalk';
+import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { highlightLine } from './highlight.ts';
 import wrapAnsi from 'wrap-ansi';
@@ -10,8 +11,8 @@ const inline = (toks: Token[] | undefined): string =>
     switch (t.type) {
       case 'strong': return chalk.bold(inline((t as Tokens.Strong).tokens));
       case 'em': return chalk.italic(inline((t as Tokens.Em).tokens));
-      case 'codespan': return chalk.hex('#38bdf8')((t as Tokens.Codespan).text);
-      case 'link': return chalk.underline.hex('#60a5fa')((t as Tokens.Link).text) + chalk.dim(` <${(t as Tokens.Link).href}>`);
+      case 'codespan': return T.accent((t as Tokens.Codespan).text);
+      case 'link': return T.link((t as Tokens.Link).text) + chalk.dim(` <${(t as Tokens.Link).href}>`);
       case 'br': return '\n';
       case 'text': return (t as Tokens.Text).tokens ? inline((t as Tokens.Text).tokens) : (t as Tokens.Text).text;
       default: return (t as any).raw ?? '';
@@ -20,7 +21,7 @@ const inline = (toks: Token[] | undefined): string =>
 
 function block(t: Token, indent = ''): string[] {
   switch (t.type) {
-    case 'heading': return ['', chalk.bold.hex('#facc15')(inline((t as Tokens.Heading).tokens)), ''];
+    case 'heading': return ['', T.heading(inline((t as Tokens.Heading).tokens)), ''];
     case 'paragraph': return inline((t as Tokens.Paragraph).tokens).split('\n').concat('');
     case 'code': {
       const c = t as Tokens.Code;

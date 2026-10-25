@@ -267,7 +267,7 @@ function activityView(m: Model, w: number, h: number): string[] {
   const back = Math.min(m.back, maxBack);
   const body = lines.slice(Math.max(0, lines.length - h - back), lines.length - back);
   while (body.length < h) body.unshift('');
-  if (back > 0) body[h - 1] = T.spread('', chalk.hex('#facc15')(`↓ ${back} lines below · pgdn`), w);
+  if (back > 0) body[h - 1] = T.spread('', T.warn(`↓ ${back} lines below · pgdn`), w);
   return body;
 }
 
@@ -321,7 +321,7 @@ export function frame(m: Model, w: number, h: number): string[] {
     body = top ? windowOf(ps, 0, bodyH) : windowOf(ps, Math.max(0, total - bodyH - back), total - back);
     if (top) while (body.length < bodyH) body.push('');
     while (body.length < bodyH) body.unshift('');
-    if (back > 0) body[bodyH - 1] = T.spread('', chalk.hex('#facc15')(`↓ ${back} lines below · pgdn · new output waits here`), w);
+    if (back > 0) body[bodyH - 1] = T.spread('', T.warn(`↓ ${back} lines below · pgdn · new output waits here`), w);
     if (m.menu) {
       const MAX = 5, items = m.menu.items, sel = Math.min(m.menu.sel, items.length - 1);
       const start = Math.max(0, Math.min(sel - MAX + 1, items.length - MAX));

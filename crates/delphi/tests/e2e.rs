@@ -940,6 +940,77 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
+/// Every SGR sequence in `bytes` that sets a colour (foreground, background, bright or extended).
+fn colour_codes(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut out = Vec::new();
+    for part in text.split("\x1b[").skip(1) {
+        let Some(end) = part.find(|c: char| !(c.is_ascii_digit() || c == ';')) else { continue };
+        if part.as_bytes()[end] != b'm' {
+            continue;
+        }
+        let colour = part[..end].split(';').filter_map(|p| p.parse::<u32>().ok()).any(|p| matches!(p, 30..=38 | 40..=48 | 90..=97 | 100..=107));
+        if colour {
+            out.push(format!("\\x1b[{}m", &part[..end]));
+        }
+    }
+    out
+}
+
+/// `specs/005e` §5: with `NO_COLOR` set, no console writes a colour code, and each still reads (structure by glyph).
+fn no_colour_session(full_screen: bool) {
+    let m = mock(vec![reply_text("Plain words, no colour.")]);
+    let e = setup(m.port);
+    let wrapper = if full_screen { ui_launcher(e._t.path()) } else { None };
+    if full_screen && wrapper.is_none() {
+        return;
+    }
+    let mut envs = vec![("NO_COLOR", "1")];
+    if let Some(w) = &wrapper {
+        envs.push(("DELPHI_UI", w.to_str().unwrap()));
+    }
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    if full_screen {
+        c.wait_for("← / ? →");
+    } else {
+        c.wait_for("/help for commands");
+    }
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Say something");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Plain words, no colour.");
+    let screen = c.everything();
+    assert!(screen.contains("⟦"), "the badges are still there:\n{}", screen);
+    let found = colour_codes(&c.bytes.lock().unwrap());
+    assert!(found.is_empty(), "NO_COLOR=1 but the console wrote colour codes: {:?}", &found[..found.len().min(8)]);
+    c.type_keys(if full_screen { "\x03" } else { "/quit\r" });
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn the_colour_detector_sees_colour_and_ignores_attributes() {
+    assert_eq!(colour_codes(b"a\x1b[38;2;1;2;3mb\x1b[39m\x1b[48;5;240mc"), vec!["\\x1b[38;2;1;2;3m", "\\x1b[48;5;240m"]);
+    assert_eq!(colour_codes(b"\x1b[36mx\x1b[91my\x1b[104mz").len(), 3);
+    assert!(colour_codes(b"\x1b[1mbold\x1b[22m\x1b[2mdim\x1b[0m\x1b[7m\x1b[2J\x1b[10;5H").is_empty());
+}
+
+#[test]
+fn the_full_screen_console_writes_no_colour_code_under_no_color() {
+    no_colour_session(true);
+}
+
+#[test]
+fn the_inline_console_writes_no_colour_code_under_no_color() {
+    no_colour_session(false);
+}
+
 #[test]
 fn a_console_of_another_release_hands_over_to_the_inline_console() {
     let m = mock(vec![]);
