@@ -81,6 +81,9 @@ impl Route {
         let mut parts: Vec<String> = blocked.iter().map(|b| format!("{}/{} {}{}", b.key.endpoint_id, b.key.model_id, b.why, b.back_at.map(|t| format!(", back in {}", crate::pool::fmt_secs(t - now))).unwrap_or_default())).collect();
         parts.extend(ineligible.iter().map(|(k, why)| format!("{}/{} cannot serve this: {}", k.endpoint_id, k.model_id, why)));
         let soonest = back_at.map(|t| format!("; the soonest returns in {}", crate::pool::fmt_secs(t - now))).unwrap_or_default();
+        if parts.is_empty() {
+            return "no configured model can serve this request (check [[endpoints]], [access] and the role's family with `delphi models`)".to_string();
+        }
         format!("{}{}", parts.join("; "), soonest)
     }
 
@@ -528,6 +531,8 @@ order = { claude = ["direct", "bedrock"] }
         // A target nobody serves is ignored rather than fatal here (config validation rejects it earlier).
         let r = resolve_route(&c, &[], NOW, &RouteRequest { target: Some("nope".into()), ..req("red-team", "workhorse") });
         assert!(matches!(r, Route::NoModel { target: None, .. }), "{:?}", r);
+        // And the explanation is never an empty string: it says that nothing is configured for the request.
+        assert!(r.explain(NOW).contains("no configured model can serve this request"), "{}", r.explain(NOW));
     }
 
     #[test]
