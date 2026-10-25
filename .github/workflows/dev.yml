@@ -92,6 +92,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      actions: read # to see whether a newer dev run is waiting
       contents: write
       id-token: write
       attestations: write
