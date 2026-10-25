@@ -6,13 +6,21 @@
 
 pub mod archive;
 mod csv;
+mod data;
 mod docx;
+mod epub;
+mod html;
+mod image;
 pub mod limits;
+mod mail;
+mod notebook;
+mod odf;
 mod ooxml;
 mod pdf;
 mod pdffont;
 mod pdftext;
 mod pptx;
+mod rtf;
 pub mod sniff;
 pub mod table;
 pub mod tarfile;
@@ -87,7 +95,7 @@ pub fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, DocError>) -> Result
 
 /// Readers that exist. Grows slice by slice (`specs/014` §10); anything else answers "not built yet".
 pub fn is_supported(format: Format) -> bool {
-    matches!(format, Format::Pdf | Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Tar | Format::Gzip) || format.is_text()
+    matches!(format, Format::Pdf | Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Odt | Format::Ods | Format::Odp | Format::Epub | Format::Tar | Format::Gzip | Format::Png | Format::Jpeg | Format::Gif | Format::Webp) || format.is_text()
 }
 
 /// Extract text from `bytes`. `name` is the file name (a hint only).
@@ -101,7 +109,7 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
     }
     let format = detect(bytes, name);
     guarded(format.name(), || {
-        if req.member.is_some() && !matches!(format, Format::Zip | Format::Tar | Format::Gzip) {
+        if req.member.is_some() && !matches!(format, Format::Zip | Format::Tar | Format::Gzip | Format::Json | Format::Yaml | Format::Toml | Format::Mbox) {
             return Err(DocError(format!("this {} has no members; read it without `member`", format.name())));
         }
         match format {
@@ -109,13 +117,17 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
                 let z = zipfile::Zip::parse(bytes, limits)?;
                 // Naming a member asks for the package's raw parts; otherwise an office file reads as a document.
                 // `member: "."` lists the parts.
-                match ooxml::kind_of(&z).filter(|_| req.member.is_none()) {
+                match ooxml::kind_of(&z, limits).filter(|_| req.member.is_none()) {
                     Some(kind) => {
                         let pkg = ooxml::Pkg { zip: &z, limits };
                         let mut e = match kind {
                             Format::Docx => docx::extract(&pkg)?,
                             Format::Xlsx => xlsx::extract(&pkg, req)?,
-                            _ => pptx::extract(&pkg, req)?,
+                            Format::Pptx => pptx::extract(&pkg, req)?,
+                            Format::Odt => odf::odt(&pkg)?,
+                            Format::Ods => odf::ods(&pkg, req)?,
+                            Format::Odp => odf::odp(&pkg, req)?,
+                            _ => epub::extract(&pkg, req)?,
                         };
                         cap_output(&mut e, limits);
                         Ok(e)
@@ -139,10 +151,28 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
                 cap_output(&mut e, limits);
                 Ok(e)
             }
+            Format::Html | Format::Json | Format::Yaml | Format::Toml | Format::Notebook | Format::Email | Format::Mbox | Format::Calendar | Format::Rtf => {
+                let mut e = match format {
+                    Format::Html => html::extract(bytes, limits)?,
+                    Format::Json | Format::Yaml | Format::Toml => data::extract(bytes, format, req, limits)?,
+                    Format::Notebook => notebook::extract(bytes, limits)?,
+                    Format::Email => mail::eml(bytes, limits)?,
+                    Format::Mbox => mail::mbox(bytes, req, limits)?,
+                    Format::Calendar => mail::ics(bytes, limits)?,
+                    _ => rtf::extract(bytes, limits)?,
+                };
+                cap_output(&mut e, limits);
+                Ok(e)
+            }
+            Format::Png | Format::Jpeg | Format::Gif | Format::Webp => image::extract(bytes, format),
             f if f.is_text() => Ok(text_extract(bytes, f, limits)),
             _ => Ok(Extract {
                 format,
-                text: format!("{} ({} bytes): reading this format is not built yet.", format.name(), bytes.len()),
+                text: if format == Format::LegacyOffice {
+                    format!("{} ({} bytes): the old binary Office formats are not supported; ask for the file to be saved as .docx, .xlsx or .pptx.", format.name(), bytes.len())
+                } else {
+                    format!("{} ({} bytes): reading this format is not built yet.", format.name(), bytes.len())
+                },
                 unit: Unit::Line,
                 total_units: None,
                 truncated: false,
@@ -225,6 +255,8 @@ mod corpus_tests;
 mod office_tests;
 #[cfg(test)]
 mod pdf_tests;
+#[cfg(test)]
+mod r4_tests;
 
 #[cfg(test)]
 mod tests {
@@ -245,10 +277,12 @@ mod tests {
 
     #[test]
     fn an_unbuilt_format_is_named_and_flagged_not_hidden() {
-        let e = extract(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR", "a.png", &Request::default(), &Limits::default()).unwrap();
-        assert_eq!(e.format, Format::Png);
+        let e = extract(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0], "a.xls", &Request::default(), &Limits::default()).unwrap();
+        assert_eq!(e.format, Format::LegacyOffice);
         assert!(!e.supported);
-        assert!(e.text.contains("PNG") && e.text.contains("not built yet"));
+        assert!(e.text.contains("legacy Office") && e.text.contains("saved as .docx"));
+        let s = extract(b"SQLite format 3\0\0\0", "a.db", &Request::default(), &Limits::default()).unwrap();
+        assert!(!s.supported && s.text.contains("not built yet"), "{}", s.text);
         assert_eq!(e.loss.len(), 1);
     }
 
@@ -333,7 +367,7 @@ mod tests {
         let z = make_zip(&[("old.xls", &[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0], 0), ("img.png", b"\x89PNG\r\n\x1a\n\0\0", 0)]);
         assert!(ex(&z, "a.zip", Some("old.xls")).unwrap().text.contains("legacy Office"));
         let e = ex(&z, "a.zip", Some("img.png")).unwrap();
-        assert!(e.text.contains("PNG image") && !e.supported);
+        assert!(e.text.contains("PNG image"), "{}", e.text);
     }
 
     #[test]
