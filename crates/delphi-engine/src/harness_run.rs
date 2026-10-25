@@ -342,6 +342,9 @@ impl Engine {
         if opts.api_key.is_some() && opts.max_budget_usd.is_none() {
             opts.max_budget_usd = Some(DEFAULT_KEYED_SPAN_BUDGET_USD);
         }
+        if opts.json_schema.is_none() {
+            opts.json_schema = sc.output_schema.clone();
+        }
         let keyed = opts.api_key.is_some();
         let streamed = opts.partial_messages && cli == Cli::Claude;
         let persist = opts.session != SessionMode::Ephemeral;
@@ -948,6 +951,30 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
         assert_eq!(events_of(&f, "harness.session")[0].payload["session_id"], "s1");
         let u = &events_of(&f, "agent.usage")[0].payload;
         assert_eq!((u["cost_model"].as_str(), u["cost_usd"].as_f64()), (Some("subscription"), Some(0.0)));
+    }
+
+    #[tokio::test]
+    async fn a_handoffs_schema_reaches_the_cli_and_the_validated_answer_is_what_the_span_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!(
+            "{}\necho \"$*\" > {}\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"\",\"structured_output\":{{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}},\"total_cost_usd\":0,\"usage\":{{\"input_tokens\":1,\"output_tokens\":2}}}}'",
+            INIT,
+            dump.display()
+        );
+        let (f, _s) = fixture(&body, |_| {});
+        let tid = f.m.next_task_id();
+        f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), crate::council::critique_schema());
+        let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Critique the plan").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.contains("--json-schema {\"") && seen.contains("recommendation"), "{}", seen);
+        let c = crate::council::parse_critique(&out.text).expect("the answer is a readable critique");
+        assert_eq!(c.recommendation, crate::council::Rec::Proceed);
+        // A task with no schema gets no flag.
+        fs::remove_file(&dump).unwrap();
+        f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(!fs::read_to_string(&dump).unwrap().contains("--json-schema"));
     }
 
     // Independent review (Gemini, 2026-10-25): a harness cannot resume a span, so it must not take over after turns have run.
