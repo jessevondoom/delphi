@@ -12,7 +12,7 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
  narrator window ──┘        │  ├── Gemini driver ─┴─ Adapter IPR compiler (dialects, signatures)
  (live narration)        │  ├── isolated worktrees (sandbox optional, D-24)
                          │  ├── events.jsonl   ← single source of truth (agents can't read it)
-                         │  └── state.db       ← derived index: FTS5 search, cost ledger (D-01)
+                         │  └── state.db       ← derived index: FTS5 + vector search, cost ledger (D-01)
  $DELPHI_HOME/workspaces/<name>/  ← all Delphi state; project repos stay clean (D-03)
 ```
 - **One runtime owns everything.** `delphi-core` is the only writer of the event log and index. It runs the task DAG and the Council, and it enforces every security invariant in code ([enforcement map](context/invariant-enforcement.md)). It is a small local daemon from Step 2, so the operator and Narrator can both attach and Narrator streams live (D-05).

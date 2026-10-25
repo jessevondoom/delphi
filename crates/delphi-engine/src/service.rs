@@ -353,13 +353,21 @@ impl EngineService {
         if query.trim().is_empty() || query.chars().count() > 500 {
             return Err(err(code::INVALID_PARAMS, "`query` must be 1 to 500 characters"));
         }
-        let (ws, role) = (self.engine.ws.dir.clone(), p["role"].as_str().map(String::from));
+        let (ws, home, role) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone(), p["role"].as_str().map(String::from));
         let hits = tokio::task::spawn_blocking(move || -> Result<Vec<crate::kb::Hit>, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+            // A search never waits for the model to read the corpus: an empty index is filled with words now, and
+            // the vectors are made in the background and used from the next search on.
             if kb.counts()?.0 == 0 {
-                kb.sync(&crate::kb::sources(&ws), "")?;
+                kb.sync_lexical(&crate::kb::sources(&ws), "")?;
             }
-            let hits = kb.search(&query, &crate::kb::SearchOpts { role: role.clone(), limit: 10, include_untrusted: false })?;
+            if crate::kb::attach_default(&home, &mut kb)? {
+                let (vectors, chunks) = kb.vector_counts()?;
+                if vectors < chunks {
+                    crate::kb::embed_in_background(&home, &ws);
+                }
+            }
+            let hits = kb.search(&query, &crate::kb::SearchOpts { role: role.clone(), ..Default::default() })?;
             crate::kb::log_search(&ws, &query, role.as_deref(), hits.len());
             Ok(hits)
         })
@@ -371,8 +379,16 @@ impl EngineService {
 
     async fn kb_index(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
-        let ws = self.engine.ws.dir.clone();
-        let rep = tokio::task::spawn_blocking(move || -> Result<crate::kb::IndexReport, crate::kb::KbError> { crate::kb::Kb::open(&ws.join("local/state.db"))?.sync(&crate::kb::sources(&ws), "") })
+        let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let rep = tokio::task::spawn_blocking(move || -> Result<crate::kb::IndexReport, crate::kb::KbError> {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+            let rep = kb.sync_lexical(&crate::kb::sources(&ws), "")?;
+            // The words are searchable now; the vectors follow in the background.
+            if crate::kb::attach_default(&home, &mut kb)? {
+                crate::kb::embed_in_background(&home, &ws);
+            }
+            Ok(rep)
+        })
             .await
             .map_err(|e| err(-32000, e.to_string()))?
             .map_err(|e| err(-32000, e.to_string()))?;

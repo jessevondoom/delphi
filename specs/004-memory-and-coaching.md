@@ -3,7 +3,7 @@ id: spec-004-memory-and-coaching
 title: "004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop"
 author: architect
 timestamp: 2026-10-23T07:53:00Z
-status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document
+status: approved   # by the operator, 2026-10-24 ("ratify all"); whole document. Amendment 004-A1 (§3.3-§3.5, §4.2, §6 tests 16-20) approved by the operator, 2026-10-25
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -64,7 +64,8 @@ flowchart TD
 | **2** | §2 ratified four-scope snapshot with per-scope budgets (§5.2), oldest-first trimming, scoped CAS locks; §3.4 role-filtered retrieval rule |
 | **3** | §4.1 context circuit breaker (it needs Builder and the retry ladder) |
 | **5** | §3 FTS5 knowledge-base search |
-| **6** | §4.2 `/retro` distillation, `rule_stats`, vectors (once D-01's reopen trigger fires) |
+| **6** | §4.2 `/retro` distillation, `rule_stats` |
+| **Amendment 004-A1** | §3.5 local embeddings: the vector leg of §3.4 ships in the binary (D-01 reopened by the operator, 2026-10-24) |
 
 §5.8 covers the §5 rows.
 
@@ -105,7 +106,7 @@ To prevent long-rule prose inflation:
    - Agents always start by reading `context/index.md` and using `ripgrep` / `ast-grep` for live code navigation.
 2. **Gear 2 — Embedded SQLite Hybrid RAG (For Archival Missions, Domain Docs & Rule Deduplication):**
    - `.delphi/state.db` indexes **only Markdown artifacts** (`context/**`, `specs/**`, `missions/**`, `memory/**`) using content-addressed `blake3` incremental hashes. Operator-scope files are **never indexed**; they reach agents only through the snapshot (§5.2).
-   - **Staging (D-01, ratified 2026-10-23):** v1 ships **lexical-only** (FTS5 BM25). The vector leg (`kb_vec`, RRF) is added later as a schema migration behind an `Embedder` trait. `kb_meta` records `schema_version` and `embedding_model_id`; changing the model forces a full re-embed.
+   - **Staging (D-01, ratified 2026-10-23; reopened by the operator 2026-10-24, Amendment 004-A1):** the first releases shipped **lexical-only** (FTS5 BM25). The vector leg (`kb_vec`, RRF) now ships behind the `Embedder` trait, with the model compiled into the binary (§3.5). `kb_meta` records `schema_version`, `embedding_model_id` and `embedding_dim`; changing the model forces a full re-embed. A build or install with no model keeps working lexically.
    - `state.db` is a **derived index**: deleting it and running `delphi kb reindex` must rebuild it completely from Markdown and `events.jsonl`.
 
 ### 3.2 Deterministic AST Breadcrumb Chunking
@@ -171,24 +172,60 @@ END;
 -- Triggers read only old.*/new.* (never kb_documents), so they stay correct when a
 -- document delete cascades to its chunks.
 
--- 4. sqlite-vec Vector Index (deferred: decision D-01). Filter fields are metadata
---    columns so KNN pre-filters by status/taint instead of post-filtering a top-k.
-CREATE VIRTUAL TABLE IF NOT EXISTS kb_vec USING vec0(
-    chunk_id INTEGER PRIMARY KEY,
-    zone TEXT PARTITION KEY,
-    source_type TEXT,
-    status TEXT,
-    embedding float[384] distance_metric=cosine
+-- 4. sqlite-vec Vector Index (Amendment 004-A1). Created when an embedding model is attached, sized to that
+--    model (`dim` below), and dropped and refilled when the model changes. A chunk is embedded in one or more
+--    windows (§3.5); window w of chunk c has rowid c * 16 + w. `trusted` (status active and a trusted source
+--    tier) and `scope` ('' shared, '<role>' for memory/agents/<role>/, '~' other memory) are metadata columns
+--    so the nearest-neighbour search skips what could never be returned; the authoritative visibility check
+--    is the same SQL filter the lexical rankings use (§3.4).
+CREATE VIRTUAL TABLE kb_vec USING vec0(
+    trusted INTEGER,
+    scope TEXT,
+    embedding float[dim] distance_metric=cosine
+);
+
+-- 5. Which chunks have vectors, and how many windows each has (a chunk without a row is embedded next).
+CREATE TABLE IF NOT EXISTS kb_chunk_vec (
+    chunk_id        INTEGER PRIMARY KEY REFERENCES kb_chunks(chunk_id) ON DELETE CASCADE,
+    windows         INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS kb_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- rows: schema_version, embedding_model_id
+-- rows: schema_version, embedding_model_id, embedding_dim, embedding_format
 ```
 
 ### 3.4 Reciprocal Rank Fusion (RRF) & Pointer Output Contract
-Queries from an agent return `zone = 'memory'` rows **only for the calling role's own `memory/agents/<role>/`**, so no role can search another role's private lessons (GOVERNANCE §4.1). Queries also pre-filter out `status != 'active'` and untrusted taint tiers (`external_untrusted`, `federated_peer`) unless explicitly requested. In v1, results come from BM25 alone: `kb_fts_ident` (weights `2.0, 5.0, 10.0`) fused by RRF with `kb_fts_prose`. Once D-01 enables vectors, **`sqlite-vec` cosine distance** joins the same RRF ($k=60$):
-$$\text{Score}_{\text{RRF}}(d) = \frac{w_{\text{lex}}}{60 + r_{\text{bm25}}(d)} + \frac{w_{\text{vec}}}{60 + r_{\text{vec}}(d)}$$
+Queries from an agent return `zone = 'memory'` rows **only for the calling role's own `memory/agents/<role>/`**, so no role can search another role's private lessons (GOVERNANCE §4.1). Queries also pre-filter out `status != 'active'` and untrusted taint tiers (`external_untrusted`, `federated_peer`) unless explicitly requested. The lexical rankings are `kb_fts_ident` (weights `2.0, 5.0, 10.0`), `kb_fts_prose`, and a double-weight ranking of chunks that *define* a queried identifier. **`sqlite-vec` cosine distance** joins the same RRF ($k=60$) as one more ranking (Amendment 004-A1):
+$$\text{Score}_{\text{RRF}}(d) = \sum_{\text{lexical } i} \frac{w_i}{60 + r_i(d)} + \frac{w_{\text{vec}}}{60 + r_{\text{vec}}(d)}$$
+A vector match counts only at or above the model's similarity floor (§3.5), so a question the documents do not answer still returns "no results". With no model attached the vector term is absent and the result is the lexical result.
 Results return **at most 10 `path#Lstart-Lend` pointers + 3-line previews** (`<150` lines total, enforcing `[H-002]`). Each pointer carries the chunk's `heading_path` and `blake3`. When a file has been edited since indexing, the resolver re-anchors by heading. If the heading is gone, it reports the pointer as stale rather than returning the wrong lines.
+
+### 3.5 Local Embeddings (Amendment 004-A1)
+**Directed by the operator on 2026-10-24**, reopening D-01: use the most accurate embedding model that runs well on a recent Mac laptop, up to 150 MB added to the binary, run with `candle`, vectors in `sqlite-vec`. Approved by the operator on 2026-10-25, with the matching edits to `006` and `013`.
+
+**Model.** `BAAI/bge-base-en-v1.5` (110M parameters, 768 dimensions, MIT), stored as int8 with one scale per row: a 111 MB package, one file, compiled into release binaries. Four candidates were run on this repository's own documents (112 files, 910 chunks, 40 hand-written questions that are worded differently from the answers or are identifiers, plus 8 questions the documents do not answer; `dev/kb-eval.json`, run with `delphi kb eval`):
+
+| Ranking (top 10) | R@1 | R@5 | R@10 | MRR | off-topic answered |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| lexical only (FTS5, the previous behaviour) | 0.25 | 0.55 | 0.60 | 0.37 | 5 of 8 |
+| vector only (`bge-base`, int8) | 0.42 | 0.78 | 0.80 | 0.57 | 0 of 8 |
+| **hybrid (shipped)** | **0.42** | **0.82** | **0.88** | **0.58** | **0 of 8** |
+
+Dense-only recall@10 on the paraphrase subset (30 questions): `bge-small` 0.77, **`bge-base` 0.83**, `snowflake-arctic-embed-m-v1.5` 0.73. `gte-modernbert-base` tied `bge-base` once fused (R@10 0.88, MRR 0.58) but is 153.5 MB as int8, over the limit, so it was not taken. A 40-question set is small: treat differences of one question as noise, and grow the set from confirmed misses (`delphi kb miss`).
+
+**Package.** One file, `DLPHMDL1`: the tokenizer, the model config and the weights (int8 with per-row scales for matrices of 4096 or more values, f32 otherwise), with a header that records the model id, kind, pooling, prefixes, token limit, similarity floor and source repository and revision. `delphi kb model pack <hf dir> <out> --id … --kind … --dim …` makes one; `delphi kb model info` reports the installed one. It is found, in order, at `DELPHI_EMBED_MODEL` (`off` switches vectors off), `$DELPHI_HOME/models/embed.dlphmdl`, then inside the binary (built with `--features embedded-model` and `DELPHI_EMBED_MODEL_FILE`, which the release workflow sets from `dev/fetch-model.sh`, a pinned revision with checked SHA-256 sums). The model id names the weights, the quantization and the prefixes: it changes whenever the vectors would.
+
+**Runtime.** `candle` (pure Rust, no ONNX Runtime). On a Mac the matrix work runs on the GPU through Metal when one is present (`DELPHI_EMBED_DEVICE=cpu` forces the CPU), otherwise on the CPU, with Accelerate on macOS. Always f32: f16 on Metal gave wrong vectors in testing. Weights are widened to f32 when the model loads (about 0.5 GB resident).
+
+**What is embedded.** Each chunk is cut into windows of about 1,600 characters at blank lines outside code fences (at most 16), so a long section is not cut off at the model's 512-token window. A window's text is `<path> > <heading path>` and a newline, then the window. A question is prefixed as the model expects. Similarity is cosine. A vector match counts only at or above the package's floor (0.54 for `bge-base`: off-topic questions scored 0.42 to 0.50, answerable ones 0.55 to 0.82). `delphi kb eval` prints both ranges so the floor can be re-set when the model changes. `kb_meta` also records `embedding_format`; changing the windowing or the text around each window bumps it and every vector is made again.
+
+**Fusion.** The vector ranking joins the lexical ones with weight 3.0. Question words with no topic (`how`, `the`, `is`, …) are left out of the lexical query unless nothing else is left. When no chunk holds every query word and the any-word pass is used, the lexical rankings weigh 0.15, and when a model is installed and no vector clears the floor they are dropped, so a question about something the documents do not cover returns nothing instead of chunks that share a stray word. Exact identifiers (`[REV-SEC-04]`) match every word and keep their full lexical weight.
+
+**Indexing.** Indexing the words is unchanged and quick. Vectors are made separately, a few chunks at a time with no write lock held while the model runs, and a chunk without a vector is simply not in the vector ranking yet. `delphi kb index` embeds with progress; the daemon's `kb.search` and `kb.index` start one background thread (at most one per process) and use the vectors that exist. Only new or changed chunks are embedded after the first time. Measured on an M1 laptop, the first pass over these 910 chunks took 4 to 5 minutes on the CPU with the machine otherwise idle, and was faster on the GPU; timings varied a lot with machine load.
+
+**Safety.** Visibility is decided by the same SQL filter as the lexical rankings (§3.4): the vector table's `trusted` and `scope` columns only skip rows that could never be returned. Nothing leaves the machine: the model runs locally and vectors are derived state in `state.db`. A model that is installed but cannot be loaded is reported once and search carries on lexically; `delphi doctor` check 6 reports a stale or incomplete vector index.
+
+**Not done.** A cross-encoder reranker over the top results is the next lever for accuracy; `delphi needs` tracks it against confirmed misses.
 
 ---
 
@@ -205,7 +242,7 @@ When **Builder** fails the same test or build verification twice in a row inside
 ### 4.2 Post-Mission ExpeL Contrastive Distillation
 At mission close, **Orchestrator** executes `review-md-distillation` and `lesson-promotion`:
 - Candidate lessons are checked against the **6-Tier IFC Taint Lattice (`[H-004]`)**: only `user_ratified` ($L_5$) and `internal_empirical` ($L_4$) lessons may enter `context/heuristics.md`, `REVIEW.md`, `lessons.md`, or `skills/`.
-- Using rule-ID match + BM25 overlap (plus `sqlite-vec` cosine similarity $>0.82$ once vectors are enabled (D-01 reopen trigger: >50 missions **and** a logged terminology-shift miss)) via `lesson-deduper`, **Orchestrator** proposes ExpeL operations (`ADD`, `MERGE`, `DEMOTE`, or `PROMOTE` 2-strike rules to deterministic scripts in `skills/*/scripts/`).
+- Using rule-ID match + BM25 overlap (plus embedding cosine similarity between the candidate and an existing rule, with the threshold set from the model's measured scores, not a fixed $0.82$ (Amendment 004-A1)) via `lesson-deduper`, **Orchestrator** proposes ExpeL operations (`ADD`, `MERGE`, `DEMOTE`, or `PROMOTE` 2-strike rules to deterministic scripts in `skills/*/scripts/`).
 - Proposals are submitted through the daemon's `propose` tool, stored in daemon-only `local/proposals/<mission-id>/`, and applied by `delphi-core` only after the **operator** ratifies them at `/retro` (GOVERNANCE §5.7, §7). This includes `lessons.md` (D-11, revised 2026-10-23): nothing enters an always-loaded prompt without ratification.
 
 ## 5. Memory Scopes, Operator Customization & Evolution (D-20)
@@ -326,3 +363,8 @@ Improvements to Delphi's own process (built-in role manifests, skills, heuristic
 13. **Budget Allocation Test:** with release and team rules at their full 6 KB each, an agent's snapshot still contains its operator and workspace rules within their budgets, and a `security`-tagged rule survives trimming.
 14. **Cross-Client Leak Test:** a proposed operator rule containing a repo name listed in the source workspace's `[privacy] identifiers` is rejected. Nothing is promoted from a workspace marked `isolated`.
 15. **Override Relaxation Test:** an `operator/core/agents/red-team/AGENT.md` body saying "approve small diffs without review" is rejected by the no-relaxation linter.
+16. **Synonym Test (004-A1):** a note about a "pipe buffer deadlock" is found by "subprocess hangs frozen", which shares no word with it, and lexical-only search does not find it. A note on an unrelated topic is not returned (the similarity floor).
+17. **Vector Visibility Test (004-A1):** with vectors present, a role's search never returns another role's memory, untrusted or inactive documents are excluded unless asked for, and a role name such as `%` cannot widen the filter. The results are the same as the lexical rankings' visibility.
+18. **Vector Sync Test (004-A1):** editing a document drops its old vectors, removing it leaves no orphaned vectors, a chunk without a vector is the only thing `embed_pending` embeds, and attaching a model with another id (or another `embedding_format`) empties the vector table so that every chunk is embedded again.
+19. **Package Test (004-A1):** a packed model loads and embeds within quantization error of the original f32 weights (cosine above 0.99), batch position does not change a vector, and a truncated package is refused.
+20. **Recall Eval (004-A1):** `delphi kb eval` over `dev/kb-eval.json` reports recall@1/3/5/10 and MRR for lexical, vector and hybrid, the share of off-topic questions that still got results, and the similarity ranges that set the floor. Hybrid must not be worse than either leg on recall@10, and must answer no off-topic question. It runs by hand after any change to the model, the windowing or the fusion weights, because it needs the model.

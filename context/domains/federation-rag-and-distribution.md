@@ -40,7 +40,7 @@ Pure dense embeddings compress exact identifiers (`[H-004]`, `REV-SEC-04`, `Part
 - **Gear 2 (Archival Missions & Domain Docs):** `.delphi/state.db` indexes Markdown files (`context/`, `specs/`, `missions/`, `memory/`) using:
   1. **Deterministic AST Breadcrumb Chunking:** Splits on `# H1`/`## H2`/`### H3` while keeping code blocks and tables intact, recording exact `start_line`..`end_line` numbers and prepending `[File | Lines | Heading Path | Source | Status]`.
   2. **SQLite FTS5 (BM25):** Configured with `tokenize="unicode61 tokenchars '_-.:/@#'"` so technical IDs (`H-004`, `REV-SEC-04`) are tokenized intact.
-  3. **`sqlite-vec` SIMD Vector Search:** Embedded 384-dim local vector search inside the same SQLite ACID file.
+  3. **`sqlite-vec` Vector Search:** local nearest-neighbour search inside the same SQLite ACID file, over vectors from a BERT-family model that runs in the binary on `candle` (the dimension follows the model; `specs/004` §3.5 names it). Built in Amendment 004-A1; before that this document described it as planned.
   4. **Reciprocal Rank Fusion (RRF, $k=60$):** Pre-filtered by `status = 'active'` and taint tier, returning at most 10 `file:///path#Lstart-Lend` pointers (`<150` lines total).
 
 ---
