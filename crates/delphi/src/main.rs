@@ -41,7 +41,7 @@ const USAGE: &str = "usage:
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
   delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>] [--workspace <name>] [--home <dir>]   (review an optimistic build's provisional decisions)
   delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>] [--mission <id>] [--workspace <name>] [--home <dir>]   (the wakes the daemon is keeping for roles)
-  delphi relay [check] [--workspace <name>] [--home <dir>]   (send approval cards to your email and take your replies; run it in a terminal or tmux pane)
+  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]   (send approval cards to your email or Telegram and take your replies; run it in a terminal or tmux pane)
   delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>] [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]   (no terminal needed; exit 0 ok · 1 gates · 2 card denied · 3 budget · 4 infrastructure)
   delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
@@ -53,47 +53,135 @@ const USAGE: &str = "usage:
   delphi observe [council|epic|forge|agents|spend|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi xenia whoami [--home <dir>]
+  delphi help [<command>]   (also: <command> --help)
   delphi --version";
+
+/// Flags that take a value, so the word after one is not the command (`delphi --home X doctor`).
+const VALUE_FLAGS: &[&str] = &["--home", "--workspace"];
+
+/// The first word that is not a flag or a flag's value: the command, wherever the flags put it.
+fn command_index(args: &[String]) -> Option<usize> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if VALUE_FLAGS.contains(&a) {
+            i += 2;
+        } else if a.starts_with('-') && a != "-" {
+            i += 1;
+        } else {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// The usage lines of one command (`delphi <cmd> …`), from the one table above.
+fn usage_of(cmd: &str) -> Option<String> {
+    let prefix = format!("  delphi {}", cmd);
+    let lines: Vec<&str> = USAGE.lines().filter(|l| l.starts_with(&prefix) && l[prefix.len()..].chars().next().is_none_or(|c| c == ' ')).collect();
+    if lines.is_empty() { None } else { Some(format!("usage:\n{}", lines.join("\n"))) }
+}
+
+const COMMANDS: &[&str] = &[
+    "lint", "check", "setup", "update", "init", "doctor", "chat", "run", "relay", "decisions", "timers", "daemon", "kb", "needs", "xenia", "connectors", "narrator", "observe", "auth",
+    "endpoints", "models", "version", "help",
+];
+
+/// Help is answered before anything runs: it never creates a workspace, starts a daemon or asks a question.
+/// Returns the exit code when `args` asked for help.
+fn help_requested(args: &[String]) -> Option<i32> {
+    let ci = command_index(args);
+    if let Some(i) = ci.filter(|&i| args[i] == "help") {
+        return Some(print_help(args.get(i + 1).filter(|s| !s.starts_with('-')).map(|s| s.as_str())));
+    }
+    // Only words before the command's own arguments count, so `delphi run "fix -h"` still runs.
+    let before = &args[..ci.unwrap_or(args.len())];
+    let after = &args[ci.map_or(args.len(), |i| i + 1)..];
+    let asked = |a: &String| a == "--help" || a == "-h";
+    let free_text = ci.is_some_and(|i| args[i] == "run");
+    if before.iter().any(asked) || after.iter().filter(|a| !free_text || a.starts_with('-')).any(asked) {
+        return Some(print_help(ci.map(|i| args[i].as_str())));
+    }
+    None
+}
+
+fn print_help(cmd: Option<&str>) -> i32 {
+    match cmd {
+        None => {
+            println!("{}", USAGE);
+            0
+        }
+        Some(c) => match usage_of(c) {
+            Some(u) => {
+                println!("{}", u);
+                0
+            }
+            None if c == "narrator" => print_help(Some("observe")),
+            None if c == "version" => print_help(None),
+            None => {
+                eprintln!("delphi: no command `{}`; `delphi --help` lists them", c);
+                2
+            }
+        },
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match args.first().map(|s| s.as_str()) {
+    if args.first().map(|s| s.as_str()) != Some("__core") {
+        if let Some(code) = help_requested(&args) {
+            exit(code);
+        }
+    }
+    // Flags may come before the command; the command's own handler reads them from anywhere.
+    let ci = command_index(&args);
+    let cmd = ci.map(|i| args[i].clone());
+    let rest: Vec<String> = match ci {
+        Some(i) => args.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, a)| a.clone()).collect(),
+        None => args.clone(),
+    };
+    let args = rest;
+    let code = match cmd.as_deref() {
+        None if args.iter().any(|a| a == "--version") => {
+            println!("delphi {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         None => cmd_start(&args),
-        Some(a) if a.starts_with("--") && a != "--version" => cmd_start(&args),
         // The daemon and its maintenance commands run from this same executable.
-        Some("__core") => {
+        Some("__core") if ci == Some(0) => {
             // The daemon reports the release of this program, not of the library crate it is built from, so a client
             // can tell a daemon left over from an older release.
             // SAFETY: set before any thread exists.
             unsafe { std::env::set_var("DELPHI_RELEASE_VERSION", env!("CARGO_PKG_VERSION")) };
-            delphi_engine::core_main::run(args[1..].to_vec())
+            delphi_engine::core_main::run(args.clone())
         }
-        Some("lint") => cmd_lint(&args[1..]),
-        Some("check") => cmd_check(&args[1..]),
-        Some("setup") => cmd_setup(&args[1..]),
-        Some("update") => cmd_update(&args[1..]),
-        Some("init") => cmd_init(&args[1..]),
-        Some("doctor") => cmd_doctor(&args[1..]),
-        Some("chat") => cmd_chat(&args[1..]),
-        Some("run") => cmd_run(&args[1..]),
-        Some("relay") => cmd_relay(&args[1..]),
-        Some("decisions") => cmd_decisions(&args[1..]),
-        Some("timers") => cmd_timers(&args[1..]),
-        Some("daemon") => cmd_daemon(&args[1..]),
-        Some("kb") => cmd_kb(&args[1..]),
-        Some("needs") => cmd_needs(&args[1..]),
-        Some("xenia") => xenia_cmd::run(&args[1..]),
-        Some("connectors") => cmd_core("connectors", &args[1..]),
-        Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
-        Some("auth") => cmd_core("auth", &args[1..]),
-        Some("endpoints") => cmd_core("endpoints", &args[1..]),
-        Some("models") => cmd_core("models", &args[1..]),
-        Some("--version") | Some("version") => {
+        Some("lint") => cmd_lint(&args),
+        Some("check") => cmd_check(&args),
+        Some("setup") => cmd_setup(&args),
+        Some("update") => cmd_update(&args),
+        Some("init") => cmd_init(&args),
+        Some("doctor") => cmd_doctor(&args),
+        Some("chat") => cmd_chat(&args),
+        Some("run") => cmd_run(&args),
+        Some("relay") => cmd_relay(&args),
+        Some("decisions") => cmd_decisions(&args),
+        Some("timers") => cmd_timers(&args),
+        Some("daemon") => cmd_daemon(&args),
+        Some("kb") => cmd_kb(&args),
+        Some("needs") => cmd_needs(&args),
+        Some("xenia") => xenia_cmd::run(&args),
+        Some("connectors") => cmd_core("connectors", &args),
+        Some("narrator") | Some("observe") => cmd_narrator(&args),
+        Some("auth") => cmd_core("auth", &args),
+        Some("endpoints") => cmd_core("endpoints", &args),
+        Some("models") => cmd_core("models", &args),
+        Some("version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
         }
-        _ => {
-            eprintln!("{}", USAGE);
+        Some(other) => {
+            eprintln!("delphi: unknown command `{}`; `delphi --help` lists them", other);
+            eprintln!("commands: {}", COMMANDS.join(" "));
             2
         }
     };
@@ -128,7 +216,12 @@ fn cmd_check(args: &[String]) -> i32 {
 fn cmd_lint(args: &[String]) -> i32 {
     let root = match flag(args, "--repo") {
         Some(p) => PathBuf::from(p),
-        None if args.iter().any(|a| a == "--repo") || args.is_empty() => PathBuf::from("."),
+        None if args.is_empty() && std::env::current_dir().ok().and_then(|d| home::git_root(&d)).is_some() => PathBuf::from("."),
+        None if args.is_empty() => {
+            eprintln!("delphi lint: not in a git repository; pass --repo <path>");
+            return 2;
+        }
+        None if args.iter().any(|a| a == "--repo") => PathBuf::from("."),
         None => {
             eprintln!("{}", USAGE);
             return 2;
@@ -272,7 +365,7 @@ fn cmd_init(args: &[String]) -> i32 {
             for p in &projects {
                 println!("  project: {} (unchanged; Delphi writes nothing into projects)", p.display());
             }
-            println!("  next: configure model access (specs/009), then run `delphi`");
+            println!("  next: run `delphi setup` to connect a model, then `delphi`");
             0
         }
         Err(e) => {
@@ -386,7 +479,7 @@ fn cmd_timers(args: &[String]) -> i32 {
     timers_cmd::cli(&home, &ws.dir, flag(args, "--mission"), &rest)
 }
 
-/// `delphi relay [check]`: the email relay for approval cards (`relay/`, `specs/014`).
+/// `delphi relay [check|totp-enroll|totp-check]`: the relay for approval cards (`relay/`, `specs/014`).
 fn cmd_relay(args: &[String]) -> i32 {
     let (home, ws) = match resolve_ws("relay", args) {
         Ok(v) => v,

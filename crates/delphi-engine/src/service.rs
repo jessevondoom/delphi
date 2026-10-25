@@ -43,6 +43,17 @@ struct PlanState {
     resumed: std::collections::HashSet<String>,
 }
 
+/// The TOTP secret behind a credential reference: base32, as an authenticator shows it.
+pub fn totp_secret(credential: &str) -> Result<Vec<u8>, String> {
+    use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
+    let r = CredentialRef::parse(credential)?;
+    match Resolver::system(Arc::new(|_: &str| {})).resolve(&r) {
+        Ok(Resolved::Token(s)) => delphi_core::totp::base32_decode(s.expose().trim()).filter(|b| b.len() >= 10).ok_or_else(|| "the stored secret is not base32 (or is too short)".to_string()),
+        Ok(_) => Err("the credential did not give a secret".into()),
+        Err(e) => Err(format!("could not read the secret: {}", e)),
+    }
+}
+
 fn err(code: i64, message: impl Into<String>) -> RpcError {
     RpcError { code, message: message.into(), data: None }
 }
@@ -459,12 +470,23 @@ impl EngineService {
             Some("deny") => false,
             _ => return Err(err(code::INVALID_PARAMS, "`decision` must be allow or deny")),
         };
+        // A Red card can be denied by anyone the relay vouches for. Approving one also needs the operator's authenticator
+        // code, which the daemon checks itself: a stolen mailbox or chat account does not have it.
+        let mut stepped_up = false;
         if allow && self.engine.broker.get(id).is_some_and(|r| r.tier == crate::approval::Tier::Red) {
-            return Err(err(code::FORBIDDEN, "a Red action is answered at the console, not through a relay (it can still be denied here)"));
+            let Some(cred) = self.engine.settings.relay_totp_credential.clone() else {
+                return Err(err(code::FORBIDDEN, "a Red action is answered at the console, not through a relay (it can still be denied here); step-up is not set up"));
+            };
+            let Some(code_text) = p["totp"].as_str() else {
+                return Err(err(code::FORBIDDEN, "this Red action also needs your authenticator code with the answer"));
+            };
+            let secret = totp_secret(&cred).map_err(|e| err(code::FORBIDDEN, format!("step-up is not usable: {}", e)))?;
+            self.engine.totp.check(&secret, code_text.trim(), (self.engine.clock_unix)().max(0) as u64).map_err(|e| err(code::FORBIDDEN, e.to_string()))?;
+            stepped_up = true;
         }
         // Who answered, for the log: the channel and the sender it vouches for, printable and short.
         let clean = |v: &Value, max: usize| -> String { v.as_str().unwrap_or("").chars().take(max).map(|c| if c.is_ascii_alphanumeric() || "@._:+-".contains(c) { c } else { '_' }).collect() };
-        let by = format!("relay:{}:{}", clean(&p["channel"], 24), clean(&p["sender"], 80));
+        let by = format!("relay:{}:{}{}", clean(&p["channel"], 24), clean(&p["sender"], 80), if stepped_up { "+totp" } else { "" });
         let answer = if allow { Answer::Allow } else { Answer::Deny { reason: p["reason"].as_str().unwrap_or("").chars().take(500).collect() } };
         match self.engine.broker.resolve(id, hash, answer, &by) {
             Ok(r) => Ok(r.event_payload(id, &by)),
@@ -1130,6 +1152,135 @@ mod tests {
         let reviewed = events_of(&f, "decision.reviewed");
         assert_eq!(reviewed.len(), 1);
         assert!(reviewed[0].payload["by"].as_str().unwrap().starts_with("console-") && reviewed[0].task_id.as_deref() == Some("t_0001"));
+    }
+
+    // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──
+
+    /// base32 of the RFC 6238 test secret "12345678901234567890".
+    const TEST_SECRET_B32: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    fn with_stepup(secret_cmd: &str) -> Fx {
+        let cred = format!(r#"command:["/bin/echo","{{\"token\":\"{}\"}}"]"#, secret_cmd);
+        setup(vec![Step::text("x")], 5.0, move |s| s.relay_totp_credential = Some(cred))
+    }
+
+    fn red_card(f: &Fx, tool: &str) -> (crate::approval::Waiting, String, String) {
+        use crate::approval::{Request, Tier};
+        let w = f.engine.broker.request(Request { approval_id: String::new(), task_id: "t_0001".into(), span_id: "sp1".into(), role: "architect".into(), tier: Tier::Red, tool: tool.into(), pattern: tool.into(), worktree: None, summary: "s".into(), payload: json!({"tool": tool}), payload_blake3: String::new(), timeout: Duration::from_secs(60) });
+        let id = w.approval_id.clone();
+        let hash = f.engine.broker.get(&id).unwrap().payload_blake3;
+        (w, id, hash)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_relay_can_approve_a_red_card_only_with_a_valid_authenticator_code_that_works_once() {
+        let f = with_stepup(TEST_SECRET_B32);
+        let s = serve(&f).await;
+        let (w1, id1, h1) = red_card(&f, "merge");
+        let (w2, id2, h2) = red_card(&f, "pull_request");
+        let now = (f.engine.clock_unix)() as u64;
+        let good = delphi_core::totp::code_at(b"12345678901234567890", now);
+        let wrong = if good == "000000" { "000001".to_string() } else { "000000".to_string() };
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        let good2 = good.clone();
+        blocking(move || {
+            let mut r = Client::connect(&sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&tok).unwrap();
+            let ask = |r: &mut Client, id: &str, hash: &str, decision: &str, totp: Option<&str>| {
+                let mut p = json!({"approval_id": id, "payload_blake3": hash, "decision": decision, "channel": "email", "sender": "me@example.com"});
+                if let Some(t) = totp {
+                    p["totp"] = json!(t);
+                }
+                r.call("approval.relay_resolve", p)
+            };
+            let msg = |e: Result<Value, ClientError>| match e {
+                Err(ClientError::Rpc { code: c, message, .. }) => (c, message),
+                other => panic!("expected a refusal, got {:?}", other),
+            };
+            let (c, m) = msg(ask(&mut r, &id1, &h1, "allow", None));
+            assert_eq!(c, code::FORBIDDEN);
+            assert!(m.contains("authenticator code"), "{}", m);
+            let (c, m) = msg(ask(&mut r, &id1, &h1, "allow", Some(&wrong)));
+            assert!(c == code::FORBIDDEN && m.contains("wrong"), "{}", m);
+            // The right code approves, and the log says it was stepped up.
+            let ok = ask(&mut r, &id1, &h1, "allow", Some(&good2)).unwrap();
+            assert_eq!(ok["resolution"], "approved");
+            assert_eq!(ok["by"], "relay:email:me@example.com+totp");
+            // The same code again, for another card, is a replay.
+            let (c, m) = msg(ask(&mut r, &id2, &h2, "allow", Some(&good2)));
+            assert!(c == code::FORBIDDEN && m.contains("already used"), "{}", m);
+            // Denying never needs a code.
+            assert!(ask(&mut r, &id2, &h2, "deny", None).is_ok());
+        })
+        .await;
+        assert!(matches!(w1.wait().await, crate::approval::Resolution::Approved { .. }));
+        assert!(matches!(w2.wait().await, crate::approval::Resolution::Denied { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wrong_codes_lock_step_up_out_even_for_the_right_one() {
+        let f = with_stepup(TEST_SECRET_B32);
+        let s = serve(&f).await;
+        let (_w, id, hash) = red_card(&f, "merge");
+        let now = (f.engine.clock_unix)() as u64;
+        let good = delphi_core::totp::code_at(b"12345678901234567890", now);
+        let wrong = if good == "000000" { "000001" } else { "000000" };
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut r = Client::connect(&sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&tok).unwrap();
+            for _ in 0..delphi_core::totp::MAX_FAILURES {
+                let e = r.call("approval.relay_resolve", json!({"approval_id": id, "payload_blake3": hash, "decision": "allow", "channel": "email", "sender": "me@example.com", "totp": wrong}));
+                assert_eq!(rpc_code(e), Some(code::FORBIDDEN));
+            }
+            let e = r.call("approval.relay_resolve", json!({"approval_id": id, "payload_blake3": hash, "decision": "allow", "channel": "email", "sender": "me@example.com", "totp": good}));
+            match e {
+                Err(ClientError::Rpc { message, .. }) => assert!(message.contains("locked"), "{}", message),
+                other => panic!("{:?}", other),
+            }
+        })
+        .await;
+        assert!(f.engine.broker.get(&_w.approval_id).is_some(), "the card is still waiting; the console can still answer it");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn step_up_that_is_not_set_up_or_whose_secret_is_unusable_approves_nothing() {
+        // Not configured at all: a Red approval is refused whatever code comes with it.
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (_w, id, hash) = red_card(&f, "merge");
+        let good = delphi_core::totp::code_at(b"12345678901234567890", (f.engine.clock_unix)() as u64);
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        let (i2, h2, g2) = (id.clone(), hash.clone(), good.clone());
+        blocking(move || {
+            let mut r = Client::connect(&sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&tok).unwrap();
+            let e = r.call("approval.relay_resolve", json!({"approval_id": i2, "payload_blake3": h2, "decision": "allow", "channel": "email", "sender": "me@example.com", "totp": g2}));
+            match e {
+                Err(ClientError::Rpc { message, .. }) => assert!(message.contains("step-up is not set up"), "{}", message),
+                other => panic!("{:?}", other),
+            }
+        })
+        .await;
+        // Configured, but the secret is not base32.
+        let f = with_stepup("not base32 at all!");
+        let s = serve(&f).await;
+        let (_w, id, hash) = red_card(&f, "merge");
+        let (sock, tok) = (s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut r = Client::connect(&sock).unwrap();
+            r.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            r.hello(&tok).unwrap();
+            let e = r.call("approval.relay_resolve", json!({"approval_id": id, "payload_blake3": hash, "decision": "allow", "channel": "email", "sender": "me@example.com", "totp": "123456"}));
+            match e {
+                Err(ClientError::Rpc { message, .. }) => assert!(message.contains("not usable"), "{}", message),
+                other => panic!("{:?}", other),
+            }
+        })
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -5,7 +5,7 @@ import { blockWidths, hugWidth, tintBlock } from './blocks.ts';
 import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { classify } from './attention.ts';
-import { speakerOf, type Block, type State } from './fold.ts';
+import { speakerOf, type Block, type Done, type Span, type State } from './fold.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import * as T from './theme.ts';
 import * as I from './inbox.ts';
@@ -324,34 +324,60 @@ function deckBody(m: Model, w: number, h: number): string[] {
   return pad([]);
 }
 
-/** The whole screen: exactly `h` lines. */
-/** The left deck: what the agents are thinking and calling, newest at the bottom. Only ever on screen; PgUp scrolls. */
-export function activityLines(m: Model, w: number): string[] {
-  const out: string[] = [];
-  let last = '';
-  for (const a of m.state.activity) {
-    const who = a.role + ':' + a.span;
-    if (who !== last && (a.kind === 'thinking' || a.kind === 'text')) {
-      last = who;
-      out.push('', '  ' + T.badge(a.role, 'running', m.info, m.pal) + ' ' + T.roleColor(a.role, m.info).bold(T.roleName(a.role, m.info)) + T.dim(` · ${a.role}`));
-    }
-    if (a.kind === 'thinking') out.push(...a.text.split('\n').flatMap((l) => wrap(l, w - 6)).map((l) => '    ' + chalk.italic(T.dim(l))));
-    else if (a.kind === 'text') out.push(...a.text.split('\n').flatMap((l) => wrap(l, w - 6)).map((l) => '    ' + T.text(m.pal)(l)));
-    else if (a.kind === 'tool') out.push('  ' + T.dim('→ ') + T.link(a.text));
-    else out.push('    ' + T.crimson(a.text));
-  }
-  return out;
+/** `4s`, `12s`, `1m 05s`: how long a finished span took. */
+const took = (ms: number) => { const s = Math.round(ms / 1000); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; };
+/** `00:12`: how long a running span has been at it. */
+const mmss = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+
+/** One line of history: the chip, who, what it did, how long (`005e` §8.2). The chip is the only place this appears. */
+function entryRow(d: Done, m: Model): string {
+  const chip = d.ok ? T.chipOk('✔ finished') : T.chipStopped('✖ stopped');
+  return '  ' + chip + '  ' + T.badge(d.role, d.ok ? 'idle' : 'escalated', m.info, m.pal) + ' ' + T.roleColor(d.role, m.info).bold(T.roleName(d.role, m.info)) + T.dim(` · ${d.what} · ${took(d.elapsed)}`);
 }
 
+/** A span at work: a title row, then the last six lines of what it is thinking or writing, wrapped to the window (never a narrow measure). */
+function runningRows(r: Span, m: Model, w: number): string[] {
+  const f = faceOf(m.state.agents[r.role], r.role, m.now, m.still ?? false);
+  const who = T.badge(r.role, f.state === 'idle' ? 'running' : f.state, m.info, m.pal, f.state === 'idle' ? 'working' : f.frame) + ' ' + T.roleColor(r.role, m.info).bold(T.roleName(r.role, m.info));
+  if (r.tool) return ['  ' + who + T.dim(` · → ${r.tool} …`)];
+  const writing = r.last === 'text' && !r.blind;
+  const title = '  ' + who + T.dim(` · ${writing ? 'writing' : 'thinking'} · ${mmss(m.now - r.since)}`);
+  if (r.error) return [title, '    ' + T.alert(T.clip('✖ ' + r.error, w - 6))];
+  if (r.blind) return [title]; // a council's first round stays blind: no text until every seat has answered
+  const src = writing ? r.text : r.thinking;
+  const lines = src.split('\n').flatMap((l) => wrap(l, w - 6)).slice(-6);
+  return [title, ...lines.map((l) => '    ' + (writing ? T.text(m.pal)(l) : chalk.italic(T.dim(l))))];
+}
+
+/** The deck's lines, and where each history entry starts: history above, running spans below, a blank row between. */
+export function activityRows(m: Model, w: number): { rows: string[]; starts: number[] } {
+  const { running, history } = m.state.activity;
+  const rows: string[] = [], starts: number[] = [];
+  history.forEach((d, i) => { if (i) rows.push(''); starts.push(rows.length); rows.push(entryRow(d, m)); });
+  if (history.length && running.length) rows.push('');
+  running.forEach((r, i) => { if (i) rows.push(''); rows.push(...runningRows(r, m, w)); });
+  return { rows, starts };
+}
+
+/**
+ * The activity deck (`005e` §8): a ticker. What fits is read from the top; what does not follows the end, where the
+ * running spans are, with `↑ N earlier · pgup` above it and, when scrolled, `↓ N lines below · pgdn` under it.
+ */
 function activityView(m: Model, w: number, h: number): string[] {
-  const lines = activityLines(m, w);
-  if (!lines.length) return ['', '  ' + chalk.bold(T.text(m.pal)('Activity and thinking stream')), '', '  ' + T.dim('nothing running'), '', '  ' + T.dim('Reasoning, replies and tool calls appear here as they happen.'), '  ' + T.dim('They live only in this window: nothing is saved.')];
-  const maxBack = Math.max(0, lines.length - h);
-  const back = Math.min(m.activityBack ?? 0, maxBack);
-  const body = lines.slice(Math.max(0, lines.length - h - back), lines.length - back);
-  while (body.length < h) body.unshift('');
-  if (back > 0) body[h - 1] = T.spread('', T.warn(`↓ ${back} lines below · pgdn`), w);
-  return body;
+  const { rows, starts } = activityRows(m, w);
+  if (!rows.length) return ['', '  ' + chalk.bold(T.text(m.pal)('Activity and thinking stream')), '', '  ' + T.dim('nothing running'), '', '  ' + T.dim('Reasoning, replies and tool calls appear here as they happen.'), '  ' + T.dim('They live only in this window: nothing is saved.')];
+  if (rows.length + 1 <= h) return ['', ...rows, ...Array(h - rows.length - 1).fill('')];
+  const avail = Math.max(1, h - 2); // the first two rows are the marker and a blank
+  const back = Math.min(m.activityBack ?? 0, Math.max(0, rows.length - avail));
+  let start = rows.length - avail - back;
+  while (start < rows.length - back && rows[start] === '') start++; // the blank row under the marker is already there
+  const window = rows.slice(start, rows.length - back);
+  const hidden = starts.filter((i) => i < start).length;
+  const above = start > 0 ? T.dim(hidden ? `  ↑ ${hidden} earlier · pgup` : `  ↑ ${start} earlier lines · pgup`) : '';
+  const out = [above, '', ...window];
+  if (back > 0) out[out.length - 1] = T.spread('', T.warn(`↓ ${back} lines below · pgdn`), w);
+  while (out.length < h) out.push('');
+  return out;
 }
 
 export const MIN_W = 28, MIN_H = 9;
@@ -375,7 +401,7 @@ function statusRow(m: Model, w: number): string {
   if (!n) return '';
   const since = Math.min(...Object.values(m.state.running).map((r) => r.since));
   const secs = Math.max(0, Math.round((m.now - since) / 1000));
-  if (m.state.live) { // a reply is being written: say who and what
+  if (m.state.live && m.deck === 1) { // in the chat, a reply is being written: say who and what
     const pending = [...m.state.blocks].reverse().find((b) => b.kind === 'tool' && b.status === 'pending');
     const what = pending ? ` ${pending.text}` : '';
     return T.spread(T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);

@@ -504,8 +504,13 @@ pub fn daemon_exe() -> Option<PathBuf> {
     std::env::current_exe().ok()
 }
 
-fn rpc_error(e: &ClientError) -> String {
+/// A daemon error as one sentence for the operator. The daemon hands out tokens only to a process with a terminal;
+/// when this one has none, say what to do instead of showing the protocol message.
+pub(crate) fn rpc_error(e: &ClientError) -> String {
     match e {
+        ClientError::Rpc { code: c, .. } if *c == delphi_core::proto::code::TTY_REQUIRED => {
+            "a daemon for this workspace is already running and only talks to a process attached to a terminal: run this from a terminal, or `delphi daemon stop` first so it can start its own".to_string()
+        }
         ClientError::Rpc { message, .. } => message.clone(),
         other => other.to_string(),
     }

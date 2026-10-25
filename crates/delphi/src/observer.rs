@@ -764,10 +764,7 @@ fn attach(sock: &Path) -> Result<Client, ClientError> {
 }
 
 fn rpc_error(e: &ClientError) -> String {
-    match e {
-        ClientError::Rpc { message, .. } => message.clone(),
-        other => other.to_string(),
-    }
+    crate::chat::rpc_error(e)
 }
 
 /// Load the daemon's snapshot into `app`.
