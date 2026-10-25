@@ -1,5 +1,7 @@
 //! Bare `delphi`: it creates what is missing and opens the console, with nothing to type first.
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -43,6 +45,7 @@ fn stop_daemon(home: &Path, ws: &str) {
 fn outside_a_repository_it_uses_a_default_workspace_with_only_the_built_in_context() {
     let t = tempfile::tempdir().unwrap();
     let (home, cwd) = (t.path().join("home"), t.path().join("scratch"));
+    let _reap = common::DaemonReaper::new(&home);
     std::fs::create_dir_all(&cwd).unwrap();
     let (code, out) = run_bare(&home, &cwd, &[]);
     stop_daemon(&home, "default");
@@ -56,6 +59,7 @@ fn outside_a_repository_it_uses_a_default_workspace_with_only_the_built_in_conte
 fn in_a_new_project_it_creates_the_workspace_and_writes_nothing_into_the_project() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
+    let _reap = common::DaemonReaper::new(&home);
     let proj = t.path().join("app");
     std::fs::create_dir_all(proj.join(".git")).unwrap();
     let (code, out) = run_bare(&home, &proj, &[]);
@@ -75,6 +79,7 @@ fn in_a_new_project_it_creates_the_workspace_and_writes_nothing_into_the_project
 fn an_unknown_workspace_is_an_error_and_creates_nothing() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
+    let _reap = common::DaemonReaper::new(&home);
     let (code, out) = run_bare(&home, t.path(), &["--workspace", "nope"]);
     assert_eq!(code, 2, "{}", out);
     assert!(out.contains("no workspace named `nope`"), "{}", out);
