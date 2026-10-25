@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz-root" data-theme="light" viewBox="0 0 720 505" width="720" height="505" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Tests are the largest share of build time</title>
+<desc id="chart-desc">Stacked bar chart. compile: minimum 4.9 at Q4, maximum 6.1 at Q1. test: minimum 7.1 at Q4, maximum 9.4 at Q1. link: minimum 1.0 at Q3, maximum 1.2 at Q1. Values: Q1 6.1 / 9.4 / 1.2; Q2 5.8 / 8.9 / 1.1; Q3 5.2 / 7.7 / 1.0; Q4 4.9 / 7.1 / 1.0.</desc>
+<style>
+.viz-root{color-scheme:light;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;}
+@media (prefers-color-scheme: dark){.viz-root:where(:root:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}:root:where(:not([data-theme="light"])) .viz-root:where(:not([data-theme="light"])){color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}}
+.viz-root[data-theme="dark"],:root[data-theme="dark"] .viz-root{color-scheme:dark;--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;}
+.surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}
+.t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}
+.f1{fill:var(--s1)}.k1{stroke:var(--s1);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a1{fill:var(--s1);fill-opacity:.1}.d1{fill:var(--s1);stroke:var(--surface);stroke-width:2}
+.f2{fill:var(--s2)}.k2{stroke:var(--s2);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a2{fill:var(--s2);fill-opacity:.1}.d2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.f3{fill:var(--s3)}.k3{stroke:var(--s3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a3{fill:var(--s3);fill-opacity:.1}.d3{fill:var(--s3);stroke:var(--surface);stroke-width:2}
+.f4{fill:var(--s4)}.k4{stroke:var(--s4);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.a4{fill:var(--s4);fill-opacity:.1}.d4{fill:var(--s4);stroke:var(--surface);stroke-width:2}
+@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}
+</style>
+<rect class="surface" width="720" height="505"/>
+<text x="16" y="32" class="t1 b" font-size="18" text-anchor="start">Tests are the largest share of build time</text>
+<text x="16" y="52" class="t2" font-size="13" text-anchor="start">minutes per build</text>
+<rect class="f1" x="16" y="65" width="10" height="10" rx="2"/>
+<text x="32" y="74" class="t2" font-size="12" text-anchor="start">compile</text>
+<rect class="f2" x="86.4" y="65" width="10" height="10" rx="2"/>
+<text x="102.4" y="74" class="t2" font-size="12" text-anchor="start">test</text>
+<rect class="f3" x="135.92" y="65" width="10" height="10" rx="2"/>
+<text x="151.92" y="74" class="t2" font-size="12" text-anchor="start">link</text>
+<line class="g" x1="49.54" y1="360" x2="704" y2="360"/>
+<text x="41.54" y="364" class="t3" font-size="11" text-anchor="end">0.0</text>
+<line class="g" x1="49.54" y1="294" x2="704" y2="294"/>
+<text x="41.54" y="298" class="t3" font-size="11" text-anchor="end">5.0</text>
+<line class="g" x1="49.54" y1="228" x2="704" y2="228"/>
+<text x="41.54" y="232" class="t3" font-size="11" text-anchor="end">10.0</text>
+<line class="g" x1="49.54" y1="162" x2="704" y2="162"/>
+<text x="41.54" y="166" class="t3" font-size="11" text-anchor="end">15.0</text>
+<line class="g" x1="49.54" y1="96" x2="704" y2="96"/>
+<text x="41.54" y="100" class="t3" font-size="11" text-anchor="end">20.0</text>
+<line class="ax" x1="49.54" y1="360" x2="704" y2="360"/>
+<rect class="f1" x="119.35" y="279.48" width="24" height="80.52"/>
+<rect class="f2" x="119.35" y="155.4" width="24" height="122.08"/>
+<path class="f3" d="M119.35,153.4 L119.35,143.56 Q119.35,139.56 123.35,139.56 L139.35,139.56 Q143.35,139.56 143.35,143.56 L143.35,153.4 Z"/>
+<text x="131.35" y="133.56" class="t2" font-size="11" text-anchor="middle">16.7</text>
+<text x="131.35" y="376" class="t3" font-size="11" text-anchor="middle">Q1</text>
+<rect class="f1" x="282.96" y="283.44" width="24" height="76.56"/>
+<rect class="f2" x="282.96" y="165.96" width="24" height="115.48"/>
+<path class="f3" d="M282.96,163.96 L282.96,155.44 Q282.96,151.44 286.96,151.44 L302.96,151.44 Q306.96,151.44 306.96,155.44 L306.96,163.96 Z"/>
+<text x="294.96" y="145.44" class="t2" font-size="11" text-anchor="middle">15.8</text>
+<text x="294.96" y="376" class="t3" font-size="11" text-anchor="middle">Q2</text>
+<rect class="f1" x="446.58" y="291.36" width="24" height="68.64"/>
+<rect class="f2" x="446.58" y="189.72" width="24" height="99.64"/>
+<path class="f3" d="M446.58,187.72 L446.58,180.52 Q446.58,176.52 450.58,176.52 L466.58,176.52 Q470.58,176.52 470.58,180.52 L470.58,187.72 Z"/>
+<text x="458.58" y="170.52" class="t2" font-size="11" text-anchor="middle">13.9</text>
+<text x="458.58" y="376" class="t3" font-size="11" text-anchor="middle">Q3</text>
+<rect class="f1" x="610.19" y="295.32" width="24" height="64.68"/>
+<rect class="f2" x="610.19" y="201.6" width="24" height="91.72"/>
+<path class="f3" d="M610.19,199.6 L610.19,192.4 Q610.19,188.4 614.19,188.4 L630.19,188.4 Q634.19,188.4 634.19,192.4 L634.19,199.6 Z"/>
+<text x="622.19" y="182.4" class="t2" font-size="11" text-anchor="middle">13.0</text>
+<text x="622.19" y="376" class="t3" font-size="11" text-anchor="middle">Q4</text>
+<g transform="translate(0,408)">
+<line class="g" x1="16" y1="5" x2="358.72" y2="5"/>
+<text x="16" y="0" class="t3" font-size="11" text-anchor="start">quarter</text>
+<rect class="f1" x="106.02" y="-8" width="8" height="8" rx="2"/>
+<text x="158.72" y="0" class="t3" font-size="11" text-anchor="end">compile</text>
+<rect class="f2" x="221.16" y="-8" width="8" height="8" rx="2"/>
+<text x="254.72" y="0" class="t3" font-size="11" text-anchor="end">test</text>
+<rect class="f3" x="317.16" y="-8" width="8" height="8" rx="2"/>
+<text x="350.72" y="0" class="t3" font-size="11" text-anchor="end">link</text>
+<text x="16" y="17" class="t2" font-size="11" text-anchor="start">Q1</text>
+<text x="158.72" y="17" class="t2" font-size="11" text-anchor="end">6.1</text>
+<text x="254.72" y="17" class="t2" font-size="11" text-anchor="end">9.4</text>
+<text x="350.72" y="17" class="t2" font-size="11" text-anchor="end">1.2</text>
+<text x="16" y="34" class="t2" font-size="11" text-anchor="start">Q2</text>
+<text x="158.72" y="34" class="t2" font-size="11" text-anchor="end">5.8</text>
+<text x="254.72" y="34" class="t2" font-size="11" text-anchor="end">8.9</text>
+<text x="350.72" y="34" class="t2" font-size="11" text-anchor="end">1.1</text>
+<text x="16" y="51" class="t2" font-size="11" text-anchor="start">Q3</text>
+<text x="158.72" y="51" class="t2" font-size="11" text-anchor="end">5.2</text>
+<text x="254.72" y="51" class="t2" font-size="11" text-anchor="end">7.7</text>
+<text x="350.72" y="51" class="t2" font-size="11" text-anchor="end">1.0</text>
+<text x="16" y="68" class="t2" font-size="11" text-anchor="start">Q4</text>
+<text x="158.72" y="68" class="t2" font-size="11" text-anchor="end">4.9</text>
+<text x="254.72" y="68" class="t2" font-size="11" text-anchor="end">7.1</text>
+<text x="350.72" y="68" class="t2" font-size="11" text-anchor="end">1.0</text>
+</g>
+</svg>
