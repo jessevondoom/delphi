@@ -209,3 +209,26 @@ test('replay does not bring the deck back, and the empty deck says what it is fo
   assert.deepEqual(replay(world(), []).activity, { running: [], history: [] });
   assert.match(lines(model(initial(0)), 100, 24).join('\n'), /nothing running/);
 });
+
+test('a streaming frame that arrives after its task is over does not bring the reply back as a live one', () => {
+  let s = initial(0);
+  s = step(s, ev('task.created', { prompt: 'hi' }), 0);
+  s = step(s, ev('dag.node.added', { node_id: 'sp_architect_1', role: 'architect', depth: 0 }), 0);
+  s = step(s, delta('sp_architect_1', { text: 'Understood.' }), 1);
+  assert.equal(s.live, 'Understood.');
+  s = step(s, ev('task.output', { status: 'done', text: 'Understood.' }), 2);
+  assert.equal(s.live, '');
+  const late = step(s, delta('sp_architect_1', { text: 'Understood.' }), 3); // the frame crossed the event on the way
+  assert.equal(late.live, '', 'no live block');
+  assert.equal(late.tokens, s.tokens, 'and no tokens counted twice');
+  assert.ok(!lines(model(late, { deck: 1 }), 100, 24).join('\n').includes('writing'));
+  // the same when the span's own end event comes first
+  let t = step(initial(0), ev('dag.node.added', { node_id: 'sp_b_1', role: 'builder', depth: 1 }), 0);
+  t = step(t, ev('dag.node.state', { node_id: 'sp_b_1', state: 'done' }), 1);
+  assert.equal(step(t, delta('sp_b_1', { text: 'late' }), 2).live, '');
+  // another span of the same task is unaffected
+  let u = step(initial(0), ev('dag.node.added', { node_id: 'sp_a_1', role: 'architect', depth: 0 }, 't_1'), 0);
+  u = step(u, ev('dag.node.added', { node_id: 'sp_a_2', role: 'architect', depth: 0 }, 't_2'), 0);
+  u = step(u, ev('task.output', { status: 'done', text: 'x' }, 't_1'), 1);
+  assert.equal(step(u, delta('sp_a_2', { text: 'still going' }), 2).live, 'still going');
+});

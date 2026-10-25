@@ -155,26 +155,53 @@ fn parse_council(args: &str) -> Input {
     Input::Council { proposition: rest.join(" "), seats, author }
 }
 
-pub const HELP: &str = "\
-Type a request and press Enter. Reference files with @project/<name>/path or @specs/…; route to a role with `@architect …`.
-  /usage [mission|role|task|model]   token and cost totals
-  /models                            the model pool: which models are usable, out of quota, or cooling down
-  /agents                            every agent running now and the model it is on
-  /budget [dollars]                  show or change this mission's cost ceiling
-  /permissions [default|accept-edits|mission-auto|optimistic]
-  /ratify                            pending proposals (config, manifests, specs)
-  /mission                           the current mission
-  /build [--optimistic] <request>    a Builder task: worktree, tests, audit, then your approval to merge. --optimistic decides
-                                     its worktree edits itself, records each, and blocks the merge until you have reviewed them all
-  /timer <when> <note>               wake the orchestrator later (/timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>)
-  /decisions [show|ratify|reject]    review the provisional decisions of an optimistic build (/decisions ratify all-routine)
-  /merge <task>                      run the gates and the merge card again for a kept branch, after review
-  /narrator [council|epic|forge|agents|spend|archives|tile]   the read-only live window (a tmux split, or the command to run in a second terminal)
-  /council <proposition>             a blind three-round Council (architect, strategist, red-team); you decide if it deadlocks
-  /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
-  /more                              the rest of the last reply, when it was shortened
-  /y /a /n /d                        answer an approval card: yes · allow similar · no · view the full payload
-  /quit";
+/// The commands of every console, one list (`ui/src/commands.json`, which the full-screen console reads too), so the two
+/// cannot drift (`specs/005e` finding 7). A command is on this console when its entry has `"rust": true`.
+const COMMANDS_JSON: &str = include_str!("../../../ui/src/commands.json");
+
+/// `[(name, aliases, on this console)]` from the shared list.
+#[cfg(test)]
+pub fn command_names() -> Vec<(String, Vec<String>, bool)> {
+    let list: Vec<Value> = serde_json::from_str(COMMANDS_JSON).expect("ui/src/commands.json is valid JSON");
+    list.iter()
+        .map(|c| (c["name"].as_str().unwrap_or("").to_string(), c["aliases"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(), c["rust"].as_bool().unwrap_or(false)))
+        .collect()
+}
+
+/// The help text for the commands with `"rust": true`: the name and its arguments, then what it does, wrapped.
+fn help_text(list: &[Value]) -> String {
+    const LABEL: usize = 36; // columns taken by `  /name args` before the description
+    const WIDTH: usize = 100;
+    let mut out = String::from("Type a request and press Enter. Reference files with @project/<name>/path or @specs/…; route to a role with `@architect …`.\n");
+    for c in list.iter().filter(|c| c["rust"].as_bool().unwrap_or(false)) {
+        let label = format!("  {}{}", c["name"].as_str().unwrap_or(""), c["args"].as_str().map(|a| format!(" {}", a)).unwrap_or_default());
+        let mut lines: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for w in c["desc"].as_str().unwrap_or("").split_whitespace() {
+            if !cur.is_empty() && cur.chars().count() + 1 + w.chars().count() > WIDTH - LABEL {
+                lines.push(std::mem::take(&mut cur));
+            }
+            if !cur.is_empty() {
+                cur.push(' ');
+            }
+            cur.push_str(w);
+        }
+        lines.push(cur);
+        let (first, rest): (String, &[String]) = if label.chars().count() < LABEL - 1 { (format!("{:<width$}{}", label, lines[0], width = LABEL), &lines[1..]) } else { out.push_str(&label); out.push('\n'); (format!("{}{}", " ".repeat(LABEL), lines[0]), &lines[1..]) };
+        out.push_str(&first);
+        out.push('\n');
+        for l in rest {
+            out.push_str(&format!("{}{}\n", " ".repeat(LABEL), l));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// The help every Rust console prints for `/help` and `?`.
+pub fn help() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| help_text(&serde_json::from_str::<Vec<Value>>(COMMANDS_JSON).expect("ui/src/commands.json is valid JSON")))
+}
 
 /// A pending approval card as the console tracks it.
 #[derive(Debug, Clone)]
@@ -354,6 +381,7 @@ impl Renderer {
             "model.exhausted" => Some(format!("\n  ! {} is out of quota ({}){}; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"), p["reason"].as_str().unwrap_or("?"), p["reset_at"].as_i64().map(|t| format!(", back at {}", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
             "endpoint.reauth_required" => Some(format!("\n  ! re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
             "turn.interrupted" => Some("\n  ! the stream was interrupted; retrying the turn\n".to_string()),
+            "task.cancelled" => Some("\n■ stopped\n".to_string()),
             "task.failed" => Some(format!("\n! {} needs you\n{}\n", e["task_id"].as_str().unwrap_or("task"), indent(&crate::escalation::classify(p["error"].as_str().unwrap_or("")).body()))),
             "task.output" => {
                 let root_streamed = self.streamed.iter().any(|s| self.spans.get(s).map(|(_, d)| *d == 0).unwrap_or(false));
@@ -564,7 +592,7 @@ fn handle_event(shared: &Shared, e: &Value) {
                 *c = None;
             }
         }
-        "task.output" | "task.failed" | "build.merge_finished" => {
+        "task.output" | "task.failed" | "build.merge_finished" | "task.cancelled" => {
             let escalated = p["status"] == "escalated" || kind == "task.failed" || (kind == "build.merge_finished" && !matches!(p["outcome"].as_str(), Some("merged" | "pr_opened" | "declined")));
             if escalated {
                 shared.failures.fetch_add(1, Ordering::SeqCst);
@@ -678,12 +706,25 @@ impl Session {
         &self.ws_dir
     }
 
+    /// Is something running that leaving would abandon (the daemon keeps it, but the operator no longer sees it)?
+    pub(crate) fn busy(&self) -> bool {
+        self.shared.running.load(Ordering::SeqCst) > 0
+    }
+
+    /// `Esc` with an empty prompt: stop what is running (`task.cancel`), and say if there was nothing to stop.
+    pub(crate) fn cancel(&mut self) {
+        match self.cmd.call("task.cancel", json!({"mission_id": self.mission_id})) {
+            Ok(v) => say(&if v["cancelled"].as_array().map(|a| a.is_empty()).unwrap_or(true) { "nothing was running\n".to_string() } else { "stopping…\n".to_string() }),
+            Err(e) => say(&format!("{}\n", rpc_error(&e))),
+        }
+    }
+
     /// Run one parsed input. `false` means the operator asked to quit.
     pub(crate) fn handle(&mut self, input: Input) -> bool {
         match input {
             Input::Empty => {}
             Input::Quit => return false,
-            Input::Help => say(&format!("{}\n", HELP)),
+            Input::Help => say(&format!("{}\n", help())),
             Input::Unknown(m) => say(&format!("{}\n", m)),
             Input::Mission => say(&format!("mission {}\n", self.mission_id)),
             Input::More => {
@@ -1131,6 +1172,44 @@ mod tests {
         assert_eq!(v["roles"]["orchestrator"]["chassis"], "#a855f7");
         assert_eq!(v["roles"]["builder"]["name"], "builder", "an unthemed role keeps its id");
         assert!(!v.to_string().to_lowercase().contains("token"), "nothing secret goes to the UI");
+    }
+
+    #[test]
+    fn every_command_of_the_shared_list_is_understood_by_this_console_and_in_its_help() {
+        let all = command_names();
+        assert!(all.len() > 20, "the shared list was found");
+        for (name, aliases, rust) in all.iter().filter(|c| c.2) {
+            let _ = rust;
+            for typed in std::iter::once(name).chain(aliases.iter()) {
+                if let Input::Unknown(m) = parse_input(typed) {
+                    assert!(!m.starts_with("unknown command"), "{} is in the shared list for this console but not understood: {}", typed, m);
+                }
+            }
+            assert!(help().contains(name.as_str()), "{} is missing from the help", name);
+        }
+        assert!(all.iter().any(|(n, _, r)| n == "/more" && *r), "/more is this console's own");
+        assert!(all.iter().filter(|c| !c.2).all(|c| !help().contains(&format!("\n  {} ", c.0)) && !help().contains(&format!("\n  {}\n", c.0))), "commands of the other console are not advertised here");
+    }
+
+    #[test]
+    fn the_help_aligns_what_fits_and_wraps_the_rest_under_the_description_column() {
+        let h = help_text(&serde_json::from_str::<Vec<Value>>(r#"[
+            {"name": "/a", "desc": "short", "rust": true},
+            {"name": "/b", "args": "[x|y]", "desc": "the quick brown fox jumps over the lazy dog and keeps running well past the width of one line, so it wraps", "rust": true},
+            {"name": "/long", "args": "[one|two|three|four|five|six|seven|eight]", "desc": "own line", "rust": true},
+            {"name": "/hidden", "desc": "not here", "rust": false}]"#).unwrap());
+        let lines: Vec<&str> = h.lines().collect();
+        assert!(lines[1].starts_with("  /a") && lines[1].ends_with("short") && lines[1].find("short") == Some(36), "{:?}", lines[1]);
+        assert!(lines[2].starts_with("  /b [x|y]") && lines[3].starts_with(&" ".repeat(36)), "a long description continues under the first");
+        assert!(lines.iter().any(|l| l.trim() == "/long [one|two|three|four|five|six|seven|eight]"), "a long label has the line to itself");
+        assert!(lines.iter().skip(1).all(|l| l.chars().count() <= 100), "wrapped to the width (the intro sentence aside)");
+        assert!(!h.contains("hidden"));
+    }
+
+    #[test]
+    fn a_stopped_task_is_said_to_be_stopped() {
+        let mut r = Renderer::new(names());
+        assert_eq!(r.event(&json!({"type": "task.cancelled", "task_id": "t_0001", "payload": {}})).unwrap(), "\n■ stopped\n");
     }
 
     #[test]

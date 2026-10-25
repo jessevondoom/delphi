@@ -12,6 +12,7 @@ mod frontmatter {
     pub use delphi_engine::frontmatter::*;
 }
 mod home;
+mod hooks_cmd;
 mod lint;
 mod needs;
 mod xenia_cmd;
@@ -23,6 +24,7 @@ mod run;
 mod seed;
 mod selfupdate;
 mod setup;
+mod skills_cmd;
 mod start;
 mod theme;
 mod timers_cmd;
@@ -39,6 +41,8 @@ const USAGE: &str = "usage:
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
+  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role> [--description \"…\"] [--workspace <name>] [--home <dir>]   (agentskills.io skills in and out; an import is a pending proposal until you /ratify it)
+  delphi hooks [--workspace <name>] [--home <dir>]   (run your observe hooks on events; run it in a terminal or tmux pane; the hooks are in the ratified [hooks] config)
   delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>] [--workspace <name>] [--home <dir>]   (review an optimistic build's provisional decisions)
   delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>] [--mission <id>] [--workspace <name>] [--home <dir>]   (the wakes the daemon is keeping for roles)
   delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]   (send approval cards to your email or Telegram and take your replies; run it in a terminal or tmux pane)
@@ -165,6 +169,8 @@ fn main() {
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
         Some("decisions") => cmd_decisions(&args),
+        Some("skills") => cmd_skills(&args),
+        Some("hooks") => cmd_hooks(&args),
         Some("timers") => cmd_timers(&args),
         Some("daemon") => cmd_daemon(&args),
         Some("kb") => cmd_kb(&args),
@@ -448,6 +454,39 @@ fn cmd_chat(args: &[String]) -> i32 {
     } else {
         chat::run(&home, &ws.dir, flag(args, "--mission"), names)
     }
+}
+
+/// `delphi hooks`: run the observe hooks (`hooks_cmd.rs`, `specs/018`).
+fn cmd_hooks(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("hooks", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    hooks_cmd::run(&home, &ws.dir)
+}
+
+/// `delphi skills check|export|import` (`skills_cmd.rs`). `check` reads one directory and needs no workspace.
+fn cmd_skills(args: &[String]) -> i32 {
+    if args.first().map(|a| a.as_str()) == Some("check") {
+        return skills_cmd::cli(std::path::Path::new("."), args);
+    }
+    let (_home, ws) = match resolve_ws("skills", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let rest: Vec<String> = {
+        let mut out = Vec::new();
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            if matches!(a.as_str(), "--workspace" | "--home") {
+                it.next();
+            } else {
+                out.push(a.clone());
+            }
+        }
+        out
+    };
+    skills_cmd::cli(&ws.dir, &rest)
 }
 
 /// `delphi decisions …`: review an optimistic build's provisional decisions from a shell (`decisions.rs`).
