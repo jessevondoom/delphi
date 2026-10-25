@@ -69,11 +69,11 @@ Hours are focused build time including tests (the unit `specs/005c` uses). The *
 
 | Effort | Item | Gate | Basis |
 | ---: | :--- | :--- | :--- |
-| ~150 h | Xenia Phase 1 (`specs/011`, `012`), milestones X0 to X11, 110–200 h | D-29: starts when the operator says the core is finished; the 011/012 banners are reconciled first (plan §0); the dogfood gate needs 3 humans | plan |
+| ~150 h | Xenia Phase 1 (`specs/011`, `012`), milestones X0 to X11, 110–200 h | D-29 item 4 lifted by the operator 2026-10-25, building has started; the dogfood gate needs 3 humans | plan |
 | 50+ h | Federation planes 1–2 (`specs/007`), less the identity work Xenia builds first | Deferred; needs a second operator or machine | rough |
 | ~30 h | First live connector run and what it shows, formatters, promotion card, harness bridge (`specs/010`) | Needs the operator's Google OAuth client | rough |
 | ~30 h each | Step 6: watches, `/rewind` | Each starts only when `delphi needs` says so | rough |
-| ~15–30 h | Step 6: `delphi sync` (007 Plane 3); about half if amendment 007-A2 narrows it to rule proposals (proposed in the Xenia plan §5.2, not applied) | `delphi needs sync`: a team repo with a remote | rough |
+| ~15–30 h | Step 6: `delphi sync` (007 Plane 3); about half if amendment 007-A2 narrows it to rule proposals (ratified 2026-10-25) | `delphi needs sync`: a team repo with a remote | rough |
 | ~15 h | Console half of `specs/005b` (decks, inbox, header states) | After the Narrator trial | stated (`005c`) |
 | ~14 h each | Slack connector, Zoom connector | Need admin steps from the operator | rough |
 | ~14 h | Open red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`) | None | rough |
