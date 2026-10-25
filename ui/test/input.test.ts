@@ -42,8 +42,8 @@ test('an escape sequence split across reads is completed, not dropped', () => {
 });
 
 test('the background colour reply says dark or light', () => {
-  assert.deepEqual(keys('\x1b]11;rgb:1a1a/1f1f/2929\x07'), [{ t: 'bg', dark: true }]);
-  assert.deepEqual(keys('\x1b]11;rgb:ffff/ffff/ffff\x1b\\'), [{ t: 'bg', dark: false }]);
+  assert.deepEqual(keys('\x1b]11;rgb:1a1a/1f1f/2929\x07'), [{ t: 'bg', dark: true, rgb: [26, 31, 41] }]);
+  assert.deepEqual(keys('\x1b]11;rgb:ffff/ffff/ffff\x1b\\'), [{ t: 'bg', dark: false, rgb: [255, 255, 255] }]);
 });
 
 test('escape then a control key in one read is two keypresses', () => {

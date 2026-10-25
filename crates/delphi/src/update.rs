@@ -1,4 +1,4 @@
-//! `delphi update` and `delphi rollback`: refresh the built-in agents, skills, themes and constitution in a
+//! The workspace step of `delphi update` (and of `update --rollback`): refresh the built-in agents, skills, themes and constitution in a
 //! workspace after the binary changed (`specs/006` §4, the v1 `.upstream` mode, D-06).
 //!
 //! Only Zone 1 (`base/`) is touched. A file the operator customized is never overwritten and never gets
@@ -222,7 +222,7 @@ fn workspaces(home: &Path, only: Option<&str>) -> Vec<(String, PathBuf)> {
     v
 }
 
-/// `delphi update [--check] [--allow-downgrade] [--workspace <name>]` and `delphi rollback`.
+/// `delphi update --workspaces-only [--check] [--allow-downgrade] [--rollback] [--workspace <name>]`.
 pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, rollback_instead: bool) -> i32 {
     let list = workspaces(home, only);
     if list.is_empty() {

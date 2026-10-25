@@ -1,12 +1,12 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi · chat
+      audit
+    /council Should we …?
+      three seats argue it out blind
 
-delphi v0.5 · /proj · chat
-
-
-  Ask anything about /proj, or hand out…
-
+  / lists commands · ? shows the keys ·…
 
 ────────────────────────────────────────
 ❯
 ────────────────────────────────────────
-0 tokens                           ○ ● ○
+0 tokens  ·  default               ○ ● ○

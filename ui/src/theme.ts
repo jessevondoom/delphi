@@ -32,7 +32,8 @@ export type Info = {
   avatar?: AvatarSpec;
 };
 
-export type Pal = { dark: boolean };
+/** Dark or light, and the terminal's background colour when it answered the query (`null`/absent: unknown, so no tint). */
+export type Pal = { dark: boolean; bg?: Rgb | null };
 
 /**
  * What the terminal can show (`005e` §5). `NO_COLOR` (set to anything) and `TERM=dumb` mean no colour at all;
@@ -82,6 +83,14 @@ export const syntax = {
   kw: by((s) => chalk.magenta(s)), str: by((s) => chalk.green(s)), num: by((s) => chalk.yellow(s)), com: muted, ty: by((s) => chalk.cyan(s)),
   add: ok, del: by((s) => chalk.red(s)), hunk: by((s) => chalk.cyan(s)),
 };
+
+/**
+ * The chip of a finished span (`005e` §8.2): green, its text in the terminal's own background colour (reverse video of
+ * the green), padded by a space each side. Without colour it is `[✔ finished]`, in bold.
+ */
+export const chipOk = (label: string): string => (caps.color === 'none' ? chalk.bold(`[${label}]`) : chalk.green.inverse.bold(` ${label} `));
+/** The same chip for a span that stopped and needs the operator: the alert colour. */
+export const chipStopped = (label: string): string => (caps.color === 'none' ? chalk.bold(`[${label}]`) : chalk.red.inverse.bold(` ${label} `));
 
 // The older names the screens use; same functions.
 export const text = (_p: Pal): Style => body;
@@ -137,9 +146,15 @@ export type AgentState = 'idle' | 'running' | 'waiting on you' | 'escalated';
 export const ACTIVITY: Record<AgentState, string> = { idle: 'idle', running: 'working', 'waiting on you': 'waiting_approval', escalated: 'escalated' };
 
 /** The three cells and the mouth's index: from the library's data, or the built-in faces for an older `delphi`. */
-function badgeCells(role: string, state: AgentState, info: Info): { cells: string[]; mouth: number | null } {
-  const spec = info.avatar?.roles[role]?.badge[ACTIVITY[state]];
+function badgeCells(role: string, state: AgentState, info: Info, frame?: string): { cells: string[]; mouth: number | null } {
+  const spec = info.avatar?.roles[role]?.badge[frame ?? ACTIVITY[state]];
   if (spec) return { cells: [...spec.cells], mouth: spec.mouth };
+  // Older `delphi`: the animation frames of `005a` §4, built in.
+  const scout = role === 'scout';
+  const animated: Record<string, string> = scout
+    ? { blink: '---', thinking_left: '…  ', thinking_right: '  …', success: '^^^' }
+    : { blink: '-_-', thinking_left: '•• ', thinking_right: ' ••', success: '^─^' };
+  if (frame && animated[frame]) return { cells: [...animated[frame]!], mouth: scout || frame.startsWith('thinking') ? null : 1 };
   const cells = state === 'waiting on you' ? 'x?x' : state === 'escalated' ? 'x_x' : state === 'running' ? (role === 'scout' ? '···' : '•─•') : (info.roles[role]?.face ?? '•_•');
   return { cells: [...cells], mouth: role === 'scout' || state === 'waiting on you' ? null : 1 };
 }
@@ -155,13 +170,14 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
 /**
  * `⟦•─•⟧`: brackets and mouth in the role's colour, eyes bright on a dark terminal and deep slate on a light one.
  * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
+ * `frame` is the library's activity name when the badge animates (`motion.ts`); without it, the state's own frame.
  */
-export function badge(role: string, state: AgentState, info: Info, p: Pal): string {
+export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string): string {
   const chassis = roleColor(role, info);
   // The library's eye colours need true colour; below it the eyes are the terminal's own foreground, bold (`005e` §12).
   const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
-  const { cells, mouth } = badgeCells(role, state, info);
+  const { cells, mouth } = badgeCells(role, state, info, frame);
   return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : eye(c))).join('') + chassis('⟧');
 }
 

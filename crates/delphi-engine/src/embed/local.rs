@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
+mod rerank;
+pub use rerank::{open as open_reranker, open_bytes as open_reranker_bytes, CandleReranker};
+
 const MAGIC: &[u8; 8] = b"DLPHMDL1";
 /// Tensors with fewer elements than this stay f32 (biases, norms, small tables).
 const QUANTIZE_FROM: usize = 4096;
@@ -146,16 +149,41 @@ pub struct CandleEmbedder {
     dtype: DType,
 }
 
+/// Where the models run, for `delphi kb model info`.
+pub fn device_name() -> &'static str {
+    if pick_device().0.is_cpu() {
+        "the CPU"
+    } else {
+        "the GPU (Metal)"
+    }
+}
+
 /// The GPU on a Mac that has one, otherwise the CPU; `DELPHI_EMBED_DEVICE=cpu` forces the CPU. Always f32: on
 /// Metal, f16 was measured to give wrong vectors (recall 0) and to be slower, so it is not offered.
 fn pick_device() -> (Device, DType) {
     if std::env::var("DELPHI_EMBED_DEVICE").is_ok_and(|v| v == "cpu") {
         return (Device::Cpu, DType::F32);
     }
-    match Device::new_metal(0) {
-        Ok(gpu) => (gpu, DType::F32),
-        Err(_) => (Device::Cpu, DType::F32),
+    match metal_device() {
+        Some(gpu) => (gpu, DType::F32),
+        None => (Device::Cpu, DType::F32),
     }
+}
+
+/// The Metal device, made once, or `None` where there is none. Candle's Metal backend does not only return an
+/// error when it cannot start: on a macOS that lacks a system class it asks for (the macOS 14 runner of the release
+/// workflow: "class MTLResidencySetDescriptor could not be found") it panics, which would end the process on any
+/// search. That is caught here, and a machine with no GPU (a virtual machine) or an old macOS uses the CPU.
+pub(crate) fn metal_device() -> Option<Device> {
+    static GPU: std::sync::OnceLock<Option<Device>> = std::sync::OnceLock::new();
+    GPU.get_or_init(|| {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let made = std::panic::catch_unwind(|| Device::new_metal(0).ok());
+        std::panic::set_hook(hook);
+        made.ok().flatten()
+    })
+    .clone()
 }
 
 /// The package's metadata without loading the weights.
@@ -188,6 +216,28 @@ fn split(bytes: &[u8]) -> Result<(Header, &[u8]), String> {
     Ok((header, &bytes[16 + n..]))
 }
 
+/// The package's weights as f32 tensors on `dev` (int8 matrices are widened with their row scales).
+fn tensors(header: &Header, blob: &[u8], dev: &Device) -> Result<HashMap<String, Tensor>, String> {
+    let slice = |off: u64, len: u64| blob.get(off as usize..(off + len) as usize).ok_or_else(|| "truncated model package".to_string());
+    let mut out: HashMap<String, Tensor> = HashMap::new();
+    for e in &header.tensors {
+        let raw = slice(e.off, e.len)?;
+        let n: usize = e.shape.iter().product();
+        let data: Vec<f32> = match e.enc.as_str() {
+            "f32" => raw.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect(),
+            "q8" => {
+                let (vals, scales) = raw.split_at(n);
+                let cols = e.shape[1];
+                let scales: Vec<f32> = scales.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+                vals.iter().enumerate().map(|(i, q)| (*q as i8) as f32 * scales[i / cols]).collect()
+            }
+            other => return Err(format!("unknown tensor encoding {}", other)),
+        };
+        out.insert(e.name.clone(), Tensor::from_vec(data, e.shape.clone(), dev).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 impl CandleEmbedder {
     pub fn load(bytes: &[u8]) -> Result<CandleEmbedder, String> {
         let (header, blob) = split(bytes)?;
@@ -197,23 +247,7 @@ impl CandleEmbedder {
             slice(*o, *l)
         };
         let (dev, dtype) = pick_device();
-        let mut tensors: HashMap<String, Tensor> = HashMap::new();
-        for e in &header.tensors {
-            let raw = slice(e.off, e.len)?;
-            let n: usize = e.shape.iter().product();
-            let data: Vec<f32> = match e.enc.as_str() {
-                "f32" => raw.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect(),
-                "q8" => {
-                    let (vals, scales) = raw.split_at(n);
-                    let cols = e.shape[1];
-                    let scales: Vec<f32> = scales.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
-                    vals.iter().enumerate().map(|(i, q)| (*q as i8) as f32 * scales[i / cols]).collect()
-                }
-                other => return Err(format!("unknown tensor encoding {}", other)),
-            };
-            tensors.insert(e.name.clone(), Tensor::from_vec(data, e.shape.clone(), &dev).map_err(|e| e.to_string())?);
-        }
-        let vb = VarBuilder::from_tensors(tensors, dtype, &dev);
+        let vb = VarBuilder::from_tensors(tensors(&header, blob, &dev)?, dtype, &dev);
         let cfg = std::str::from_utf8(file("config.json")?).map_err(|e| e.to_string())?;
         let net = match header.meta.kind.as_str() {
             "bert" => {
@@ -402,6 +436,15 @@ mod tests {
         // Different texts are not the same vector.
         assert!(cos(&vs[0], &vs[1]) < 0.999);
         assert_eq!(packed.embed_query("retry").unwrap().len(), 64);
+    }
+
+    #[test]
+    fn looking_for_the_gpu_never_ends_the_process_and_gives_one_answer() {
+        // Candle's Metal backend panics, rather than failing, on a macOS without a class it needs; that is caught.
+        let first = metal_device().is_some();
+        assert_eq!(first, metal_device().is_some(), "the answer is made once");
+        assert_eq!(pick_device().0.is_cpu(), !first || std::env::var("DELPHI_EMBED_DEVICE").is_ok_and(|v| v == "cpu"));
+        assert!(["the CPU", "the GPU (Metal)"].contains(&device_name()));
     }
 
     #[test]

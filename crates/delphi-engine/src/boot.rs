@@ -61,6 +61,11 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("optimistic").and_then(|b| b.get("review_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.decision_review_wait = Duration::from_secs(v as u64);
     }
+    if let Some(r) = root.get("relay") {
+        if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
+            s.relay_totp_credential = r.get("totp_credential").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(String::from);
+        }
+    }
     if let Some(o) = root.get("optimistic") {
         if let Some(a) = o.get("approver").and_then(|v| v.as_str()).and_then(crate::provisional::ApproverKind::parse) {
             s.approver = a;
@@ -301,6 +306,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         inventory: Arc::new(crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json"))),
         toolless: Default::default(),
         approver_calls: Default::default(),
+        totp: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

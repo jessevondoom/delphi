@@ -33,9 +33,7 @@ use std::process::exit;
 
 const USAGE: &str = "usage:
   delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]   (set up whatever is missing, then open the console)
-  delphi update [--check] [--allow-downgrade] [--workspace <name>] [--home <dir>]
-  delphi rollback [--workspace <name>] [--home <dir>]
-  delphi self-update [--check] [--version vX.Y.Z | --dev] [--rollback]   (--dev: the latest build of main)
+  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--no-restart] [--allow-downgrade] [--workspace <name>] [--home <dir>]   (the program, then the workspaces' built-in files, then running daemons; --dev: the latest build of main; --rollback undoes all three)
   delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
@@ -43,7 +41,7 @@ const USAGE: &str = "usage:
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
   delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>] [--workspace <name>] [--home <dir>]   (review an optimistic build's provisional decisions)
   delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>] [--mission <id>] [--workspace <name>] [--home <dir>]   (the wakes the daemon is keeping for roles)
-  delphi relay [check] [--workspace <name>] [--home <dir>]   (send approval cards to your email and take your replies; run it in a terminal or tmux pane)
+  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]   (send approval cards to your email or Telegram and take your replies; run it in a terminal or tmux pane)
   delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>] [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]   (no terminal needed; exit 0 ok · 1 gates · 2 card denied · 3 budget · 4 infrastructure)
   delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
@@ -55,51 +53,137 @@ const USAGE: &str = "usage:
   delphi observe [council|epic|forge|agents|spend|archives|thinking] [--once] [--workspace <name>] [--home <dir>]   (also: delphi narrator)
   delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]
   delphi xenia whoami [--home <dir>]
+  delphi help [<command>]   (also: <command> --help)
   delphi --version";
+
+/// Flags that take a value, so the word after one is not the command (`delphi --home X doctor`).
+const VALUE_FLAGS: &[&str] = &["--home", "--workspace"];
+
+/// The first word that is not a flag or a flag's value: the command, wherever the flags put it.
+fn command_index(args: &[String]) -> Option<usize> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if VALUE_FLAGS.contains(&a) {
+            i += 2;
+        } else if a.starts_with('-') && a != "-" {
+            i += 1;
+        } else {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// The usage lines of one command (`delphi <cmd> …`), from the one table above.
+fn usage_of(cmd: &str) -> Option<String> {
+    let prefix = format!("  delphi {}", cmd);
+    let lines: Vec<&str> = USAGE.lines().filter(|l| l.starts_with(&prefix) && l[prefix.len()..].chars().next().is_none_or(|c| c == ' ')).collect();
+    if lines.is_empty() { None } else { Some(format!("usage:\n{}", lines.join("\n"))) }
+}
+
+const COMMANDS: &[&str] = &[
+    "lint", "check", "setup", "update", "init", "doctor", "chat", "run", "relay", "decisions", "timers", "daemon", "kb", "needs", "xenia", "connectors", "narrator", "observe", "auth",
+    "endpoints", "models", "version", "help",
+];
+
+/// Help is answered before anything runs: it never creates a workspace, starts a daemon or asks a question.
+/// Returns the exit code when `args` asked for help.
+fn help_requested(args: &[String]) -> Option<i32> {
+    let ci = command_index(args);
+    if let Some(i) = ci.filter(|&i| args[i] == "help") {
+        return Some(print_help(args.get(i + 1).filter(|s| !s.starts_with('-')).map(|s| s.as_str())));
+    }
+    // Only words before the command's own arguments count, so `delphi run "fix -h"` still runs.
+    let before = &args[..ci.unwrap_or(args.len())];
+    let after = &args[ci.map_or(args.len(), |i| i + 1)..];
+    let asked = |a: &String| a == "--help" || a == "-h";
+    let free_text = ci.is_some_and(|i| args[i] == "run");
+    if before.iter().any(asked) || after.iter().filter(|a| !free_text || a.starts_with('-')).any(asked) {
+        return Some(print_help(ci.map(|i| args[i].as_str())));
+    }
+    None
+}
+
+fn print_help(cmd: Option<&str>) -> i32 {
+    match cmd {
+        None => {
+            println!("{}", USAGE);
+            0
+        }
+        Some(c) => match usage_of(c) {
+            Some(u) => {
+                println!("{}", u);
+                0
+            }
+            None if c == "narrator" => print_help(Some("observe")),
+            None if c == "version" => print_help(None),
+            None => {
+                eprintln!("delphi: no command `{}`; `delphi --help` lists them", c);
+                2
+            }
+        },
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match args.first().map(|s| s.as_str()) {
+    if args.first().map(|s| s.as_str()) != Some("__core") {
+        if let Some(code) = help_requested(&args) {
+            exit(code);
+        }
+    }
+    // Flags may come before the command; the command's own handler reads them from anywhere.
+    let ci = command_index(&args);
+    let cmd = ci.map(|i| args[i].clone());
+    let rest: Vec<String> = match ci {
+        Some(i) => args.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, a)| a.clone()).collect(),
+        None => args.clone(),
+    };
+    let args = rest;
+    let code = match cmd.as_deref() {
+        None if args.iter().any(|a| a == "--version") => {
+            println!("delphi {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         None => cmd_start(&args),
-        Some(a) if a.starts_with("--") && a != "--version" => cmd_start(&args),
         // The daemon and its maintenance commands run from this same executable.
-        Some("__core") => {
+        Some("__core") if ci == Some(0) => {
             // The daemon reports the release of this program, not of the library crate it is built from, so a client
             // can tell a daemon left over from an older release.
             // SAFETY: set before any thread exists.
             unsafe { std::env::set_var("DELPHI_RELEASE_VERSION", env!("CARGO_PKG_VERSION")) };
-            delphi_engine::core_main::run(args[1..].to_vec())
+            delphi_engine::core_main::run(args.clone())
         }
         // The tool bridge's relay, started by a subscription CLI as its MCP server (`delphi_engine::bridge`).
-        Some("__mcp-bridge") => delphi_engine::bridge::run_relay(&args[1..]),
-        Some("lint") => cmd_lint(&args[1..]),
-        Some("check") => cmd_check(&args[1..]),
-        Some("setup") => cmd_setup(&args[1..]),
-        Some("self-update") => cmd_self_update(&args[1..]),
-        Some("update") => cmd_update(&args[1..], false),
-        Some("rollback") => cmd_update(&args[1..], true),
-        Some("init") => cmd_init(&args[1..]),
-        Some("doctor") => cmd_doctor(&args[1..]),
-        Some("chat") => cmd_chat(&args[1..]),
-        Some("run") => cmd_run(&args[1..]),
-        Some("relay") => cmd_relay(&args[1..]),
-        Some("decisions") => cmd_decisions(&args[1..]),
-        Some("timers") => cmd_timers(&args[1..]),
-        Some("daemon") => cmd_daemon(&args[1..]),
-        Some("kb") => cmd_kb(&args[1..]),
-        Some("needs") => cmd_needs(&args[1..]),
-        Some("xenia") => xenia_cmd::run(&args[1..]),
-        Some("connectors") => cmd_core("connectors", &args[1..]),
-        Some("narrator") | Some("observe") => cmd_narrator(&args[1..]),
-        Some("auth") => cmd_core("auth", &args[1..]),
-        Some("endpoints") => cmd_core("endpoints", &args[1..]),
-        Some("models") => cmd_core("models", &args[1..]),
-        Some("--version") | Some("version") => {
+        Some("__mcp-bridge") if ci == Some(0) => delphi_engine::bridge::run_relay(&args),
+        Some("lint") => cmd_lint(&args),
+        Some("check") => cmd_check(&args),
+        Some("setup") => cmd_setup(&args),
+        Some("update") => cmd_update(&args),
+        Some("init") => cmd_init(&args),
+        Some("doctor") => cmd_doctor(&args),
+        Some("chat") => cmd_chat(&args),
+        Some("run") => cmd_run(&args),
+        Some("relay") => cmd_relay(&args),
+        Some("decisions") => cmd_decisions(&args),
+        Some("timers") => cmd_timers(&args),
+        Some("daemon") => cmd_daemon(&args),
+        Some("kb") => cmd_kb(&args),
+        Some("needs") => cmd_needs(&args),
+        Some("xenia") => xenia_cmd::run(&args),
+        Some("connectors") => cmd_core("connectors", &args),
+        Some("narrator") | Some("observe") => cmd_narrator(&args),
+        Some("auth") => cmd_core("auth", &args),
+        Some("endpoints") => cmd_core("endpoints", &args),
+        Some("models") => cmd_core("models", &args),
+        Some("version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
         }
-        _ => {
-            eprintln!("{}", USAGE);
+        Some(other) => {
+            eprintln!("delphi: unknown command `{}`; `delphi --help` lists them", other);
+            eprintln!("commands: {}", COMMANDS.join(" "));
             2
         }
     };
@@ -134,7 +218,12 @@ fn cmd_check(args: &[String]) -> i32 {
 fn cmd_lint(args: &[String]) -> i32 {
     let root = match flag(args, "--repo") {
         Some(p) => PathBuf::from(p),
-        None if args.iter().any(|a| a == "--repo") || args.is_empty() => PathBuf::from("."),
+        None if args.is_empty() && std::env::current_dir().ok().and_then(|d| home::git_root(&d)).is_some() => PathBuf::from("."),
+        None if args.is_empty() => {
+            eprintln!("delphi lint: not in a git repository; pass --repo <path>");
+            return 2;
+        }
+        None if args.iter().any(|a| a == "--repo") => PathBuf::from("."),
         None => {
             eprintln!("{}", USAGE);
             return 2;
@@ -173,21 +262,63 @@ fn prompt(question: &str, default: &str) -> String {
     if v.is_empty() { default.to_string() } else { v.to_string() }
 }
 
-/// `delphi self-update`: replace this executable with the latest release (see `selfupdate.rs`).
-fn cmd_self_update(args: &[String]) -> i32 {
+/// `delphi update`: bring everything to the newest release, in one command. The program is replaced first (see
+/// `selfupdate.rs`); then the freshly installed program refreshes the built-in agents, skills and themes in the
+/// workspaces (they are compiled into it, so the old program would write the old files) and restarts any running
+/// daemon on itself. If the program is already the newest, only the workspace files are refreshed.
+/// `--rollback` puts the previous program and the previous workspace files back. `--workspaces-only` is the
+/// workspace step alone, which is how the new program is asked to do it.
+fn cmd_update(args: &[String]) -> i32 {
+    let has = |n: &str| args.iter().any(|a| a == n);
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    let only = flag(args, "--workspace");
+    if has("--workspaces-only") {
+        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"));
+    }
     let Ok(dest) = std::env::current_exe().and_then(std::fs::canonicalize) else {
-        eprintln!("delphi self-update: cannot locate this executable");
+        eprintln!("delphi update: cannot locate this executable");
         return 1;
     };
     let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
-    selfupdate::run(args, &selfupdate::RealNet, &dest, &api)
+    let mut workspace_code = 0;
+    let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |event| {
+        if event == selfupdate::Event::UpToDate {
+            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false);
+            return;
+        }
+        let mut step = vec!["update".to_string(), "--workspaces-only".into(), "--home".into(), home.to_string_lossy().to_string()];
+        step.extend(only.iter().flat_map(|w| ["--workspace".to_string(), w.clone()]));
+        step.extend(["--allow-downgrade"].iter().filter(|f| has(f)).map(|f| f.to_string()));
+        if event == selfupdate::Event::RolledBack {
+            step.push("--rollback".into());
+        }
+        workspace_code = std::process::Command::new(&dest).args(&step).stdin(std::process::Stdio::null()).status().ok().and_then(|s| s.code()).unwrap_or(1);
+        if !has("--no-restart") {
+            restart_daemons(&dest, &home, only.as_deref());
+        }
+    });
+    // No workspace yet is not a failure of the update, and neither is a rollback with nothing to restore there.
+    if code != 0 || workspace_code == 2 || has("--rollback") { code } else { workspace_code }
 }
 
-/// `delphi update` / `delphi rollback`: refresh (or restore) the built-in Zone 1 files of the workspaces.
-fn cmd_update(args: &[String], rollback: bool) -> i32 {
-    let home = home::delphi_home(flag(args, "--home").as_deref());
-    let only = flag(args, "--workspace");
-    update::run(&home, only.as_deref(), args.iter().any(|a| a == "--check"), args.iter().any(|a| a == "--allow-downgrade"), rollback)
+/// Restart every (or the named) workspace's running daemon with the freshly installed `exe`, so none keeps running the
+/// old release. Each is restarted by that program itself (`daemon restart`).
+fn restart_daemons(exe: &std::path::Path, home: &std::path::Path, only: Option<&str>) {
+    let Ok(rd) = std::fs::read_dir(home.join("workspaces")) else { return };
+    let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|d| d.join("config.toml").exists()).collect();
+    dirs.sort();
+    for dir in dirs {
+        let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let running = only.is_none_or(|o| o == name) && delphi_core::spawn::layout(home, &dir).is_ok_and(|l| delphi_core::client::Client::connect(&l.sock).is_ok());
+        if !running {
+            continue;
+        }
+        println!("Restarting the daemon of workspace `{}`…", name);
+        let ok = std::process::Command::new(exe).args(["daemon", "restart", "--workspace", &name, "--home"]).arg(home).stdin(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("delphi update: could not restart it; run `delphi daemon restart --workspace {}`", name);
+        }
+    }
 }
 
 /// `delphi setup`: detect, ask, write, ratify, prove (see `setup.rs`).
@@ -236,7 +367,7 @@ fn cmd_init(args: &[String]) -> i32 {
             for p in &projects {
                 println!("  project: {} (unchanged; Delphi writes nothing into projects)", p.display());
             }
-            println!("  next: configure model access (specs/009), then run `delphi`");
+            println!("  next: run `delphi setup` to connect a model, then `delphi`");
             0
         }
         Err(e) => {
@@ -350,7 +481,7 @@ fn cmd_timers(args: &[String]) -> i32 {
     timers_cmd::cli(&home, &ws.dir, flag(args, "--mission"), &rest)
 }
 
-/// `delphi relay [check]`: the email relay for approval cards (`relay/`, `specs/014`).
+/// `delphi relay [check|totp-enroll|totp-check]`: the relay for approval cards (`relay/`, `specs/014`).
 fn cmd_relay(args: &[String]) -> i32 {
     let (home, ws) = match resolve_ws("relay", args) {
         Ok(v) => v,

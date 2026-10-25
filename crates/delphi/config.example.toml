@@ -95,7 +95,8 @@ sandbox = "off"
 # check_command = ["cargo", "clippy"] # merge gate 2
 
 [rag]
-engine = "sqlite-hybrid"             # FTS5 + sqlite-vec + RRF (spec 004-A1). Lexical only when the build or install has no embedding model; DELPHI_EMBED_MODEL=off forces that
+engine = "sqlite-hybrid"             # informational: FTS5 + sqlite-vec + RRF + reranker (spec 004). What runs depends on the models installed;
+                                     # DELPHI_EMBED_MODEL=off / DELPHI_RERANK_MODEL=off / DELPHI_SEED_VECTORS=off switch each part off
 max_pointer_results = 10
 exclude_untrusted_by_default = true
 

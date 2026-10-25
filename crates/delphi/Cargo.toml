@@ -34,9 +34,11 @@ unicode-width = "0.2"
 mail-parser = "1"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "rustls-tls"] }
 imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking", "json"] }
 
 [features]
-# Compile the embedding model named by DELPHI_EMBED_MODEL_FILE into the executable (the release build; specs/004 §3.5).
+# Compile the models and preloaded vectors named by DELPHI_EMBED_MODEL_FILE, DELPHI_RERANK_MODEL_FILE and
+# DELPHI_SEED_VECTORS_FILE into the executable (the release build; specs/004 §3.5 to §3.7).
 embedded-model = ["delphi-engine/embedded-model"]
 
 [dev-dependencies]

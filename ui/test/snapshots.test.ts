@@ -13,8 +13,8 @@ import { info, observerWorld, snapshot, stateWorld } from './helpers.ts';
 
 const state = stateWorld();
 const base: Model = {
-  info, pal: { dark: true }, state, now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
-  queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false,
+  info, pal: { dark: true, bg: [15, 23, 42] }, state, now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
+  queue: [], inbox: newInbox(0), mode: 'default', panel: null, help: false, still: true,
 };
 const check = (name: string, m: Model, w: number, h: number) => {
   const r = snapshot(name, frame(m, w, h));
