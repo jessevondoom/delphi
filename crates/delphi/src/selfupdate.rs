@@ -403,8 +403,13 @@ mod tests {
 
     /// A release server with one version whose binary is a script that prints `version`.
     fn server(tag: &str, version_printed: &str, sum_override: Option<&str>) -> (Fake, String) {
+        server_for(T, tag, version_printed, sum_override)
+    }
+
+    /// The same, with the build named for `target` (the machine's own, for tests that go through `run_with`).
+    fn server_for(target: &str, tag: &str, version_printed: &str, sum_override: Option<&str>) -> (Fake, String) {
         let tgz = tarball(&format!("#!/bin/sh\necho 'delphi {}'\n", version_printed));
-        let name = format!("delphi-{}-{}.tar.gz", tag, T);
+        let name = format!("delphi-{}-{}.tar.gz", tag, target);
         let sum = sum_override.map(String::from).unwrap_or_else(|| sha256_hex(&tgz));
         let mut m = BTreeMap::new();
         m.insert(format!("https://dl/{}", name), tgz);
@@ -613,7 +618,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let (net, api) = server("v99.0.0", "99.0.0", None);
+        let (net, api) = server_for(target().unwrap(), "v99.0.0", "99.0.0", None);
         let mut seen: Vec<Event> = Vec::new();
         assert_eq!(run_with(&["--check".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
         assert!(seen.is_empty(), "--check that finds an update changes nothing and follows up on nothing");
@@ -621,7 +626,7 @@ mod tests {
         assert_eq!(seen, vec![Event::Installed]);
         assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
         assert_eq!(seen, vec![Event::Installed, Event::RolledBack]);
-        let (net, api) = server("v0.1.0", "0.1.0", None);
+        let (net, api) = server_for(target().unwrap(), "v0.1.0", "0.1.0", None);
         assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
         assert_eq!(seen.last(), Some(&Event::UpToDate), "nothing newer: the workspaces are still refreshed against this program");
     }
