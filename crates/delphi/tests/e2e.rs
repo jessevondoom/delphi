@@ -1372,7 +1372,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.wait_for("opus-t"); // the model the orchestrator is on
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
-    assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
+    assert!(roster.contains("← →  ·  ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
     // Only the arrows change the view: Right to archives, Left twice back to epic; digits, Tab and q do nothing.
     o.type_keys("\x1b[C");
     o.wait_for("from the console: ctrl+k");
@@ -1381,12 +1381,12 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.type_keys("q");
     std::thread::sleep(Duration::from_millis(300));
     o.expect_visible("· archives"); // digits, Tab and q are not bound
-    for _ in 0..3 {
+    for _ in 0..2 {
         o.type_keys("\x1b[D");
         std::thread::sleep(Duration::from_millis(120));
     }
     o.wait_for("· epic");
-    o.wait_for("nothing queued"); // the rail view: one row per task, then now, next and path
+    o.wait_for("settled"); // the threads view: the finished task is one settled line
     for _ in 0..6 {
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));
