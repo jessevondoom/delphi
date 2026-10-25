@@ -46,6 +46,8 @@ Nothing here is ratified or committed work. Competitor details came from seconda
 - Each answer carries `approval_id` plus the payload hash prefix shown on the card, so a stale or forged tap approves nothing.
 - Any other inbound text is dropped and logged. It never reaches an agent.
 
+**Channel adapters are thin.** The relay core owns tokens, payload binding, policy, rate limits and redaction. An adapter only moves bytes: `send(card message)` and `receive() -> (claimed sender, authentication evidence, text)`. Everything above is enforced once, in the core, so adding a channel can't weaken it. The first adapter is **email** (§1.2), because every operator has it. Chat adapters (Slack Socket Mode, Telegram long-poll) follow the same interface.
+
 **Tier policy for remote answers** (`[away]` config, operator-ratified, default in bold):
 - Amber: answerable remotely.
 - Red: **console only**, or `step-up`. With `step-up`, the card shows a one-time 4-character code that the operator has to type back, so a blind tap can't approve a Red action. Red is never covered by "allow similar" and is never auto-approved. Both are unchanged.
@@ -59,8 +61,56 @@ Nothing here is ratified or committed work. Competitor details came from seconda
 
 **Starting work from the phone is out of scope.** Command ingress from a chat channel is prompt injection waiting to happen. Phase 1 is approvals and notifications only. If it is ever added, it comes with the allowlist, a fixed command grammar and a confirmation card.
 
-### 1.2 Tests
-Written before the code, using a fake channel adapter:
+### 1.2 The email channel
+
+Email is the platform-agnostic option: no app to install, no vendor API, and it works through any provider that offers SMTP and IMAP (or an equivalent). It is also the **weakest authenticated channel** here, because the `From` header is trivially forged and a compromised mailbox compromises the channel. The design assumes that and puts the secret elsewhere.
+
+**Transport (outbound-only, no inbound port):**
+- Cards go out by SMTP submission (or a configured send command) from a dedicated Delphi mailbox to the operator's address.
+- Replies arrive in a **dedicated inbox the relay polls over IMAP**. This is a separate address from the operator's own mailbox, so the relay never reads the operator's mail.
+- Credentials use the existing sources (`keychain`, `env`, `command`, or `oauth2` where the provider requires it). Some providers restrict password logins; that is an adapter detail and unverified here.
+
+**Message format:**
+- Plain text only. No HTML, no remote images, no tracking links.
+- Subject `[delphi:<approval_id>] <one-line summary>`; the body shows the card (summary by default, full with `detail = "full"`), the payload hash prefix, and the expiry.
+- Two `mailto:` links, **Approve** and **Deny**, pre-fill a reply to the relay inbox with the verb and a single-use token. One tap and send; no web endpoint is needed.
+
+**How a reply is authenticated (all must hold):**
+1. It was delivered to the relay inbox and its `In-Reply-To` or subject matches an outstanding card.
+2. The sender address is on the operator allowlist **and** the receiving provider's own `Authentication-Results` header shows SPF, DKIM or DMARC passing for that sender. Only the relay inbox provider's header is trusted; headers inside the message body are ignored. If the provider adds no such header, the channel refuses Amber answers and says so in `doctor`.
+3. The reply carries the **single-use token** issued with that card: 128 bits of randomness, bound to `approval_id` and the payload hash prefix, expiring with the card. The token is the secret, not the sender address.
+4. The first line of the reply, before any quoted text, is exactly the verb and token. Quoted earlier messages, forwarded copies and signatures are ignored.
+5. Messages with `Auto-Submitted` or `Precedence: bulk` headers (out-of-office, mail loops) are dropped.
+
+**Tier policy for email:**
+- **Amber:** answerable by email.
+- **Red:** not by email by default. With `step-up = "totp"`, a Red answer also needs a six-digit TOTP code from an authenticator the operator enrolled at setup. The code is independent of the mailbox, so a stolen mailbox alone can't approve a Red action. Merge approval and the high-risk decisions in the optimistic workflow use the same rule.
+
+**Email-specific risks and handling:**
+| Risk | Handling |
+| :-- | :-- |
+| Forged `From` | The token is the secret; the provider's authentication result is an extra check, not the only one. |
+| Forwarded or leaked card email | Tokens are single-use, bound to the payload hash and expire; Red still needs TOTP. |
+| Mailbox compromise | Amber-only by default. This is the channel's honest ceiling; `doctor` states it. |
+| Content leaking to the mail provider | `detail = "summary"` by default; secrets go through the redactor; TLS required, no end-to-end encryption. Say so in the setup text. |
+| Injection through inbound mail | Only the verb and token are parsed. Body text is never passed to an agent and nothing in it is treated as a command. |
+| Mail flood or loops | Cap outstanding cards and messages per hour; ignore auto-generated mail. |
+| Delivery delay | Email can lag minutes. An email card carries a longer timeout, and parking (§1.1) covers the rest. |
+
+**Email tests:**
+1. A forged `From` with no token is ignored. A correct token with a failing or missing authentication result is refused.
+2. A wrong, reused or expired token fails; a token for another card fails.
+3. A forwarded copy from a non-allowlisted address fails.
+4. A reply whose quoted section contains an old token does not count; only the first line is read.
+5. An out-of-office auto-reply quoting the card does nothing.
+6. An HTML-only reply or one with attachments is handled safely and counts only if the first-line verb and token parse.
+7. The same message delivered twice (IMAP resync) is processed once, by `Message-ID`.
+8. Red by email without TOTP is refused; with a wrong TOTP code, refused.
+9. Mail from a non-operator tries `/budget`-style text; nothing happens and it is logged.
+10. A secret in a payload is absent from the outgoing message.
+
+### 1.3 Tests
+Written before the code, using a fake channel adapter (the email tests above run against a fake IMAP and SMTP server):
 1. A forged sender, a non-allowlisted user and a shared-channel message are all ignored.
 2. A changed payload hash, a replayed answer, and a double answer from two channels (first wins) are all rejected.
 3. A late answer after timeout does not resurrect the request. It re-raises a new card, and only when parked.
@@ -70,11 +120,11 @@ Written before the code, using a fake channel adapter:
 7. An injection string inside card content, relayed to the channel, never becomes an instruction to any agent.
 8. Redaction: a secret in a payload never appears in the outbound message.
 
-### 1.3 Phases
-- **R0:** spec 014 draft, with the `relay` scope and the parking amendment. Operator ratifies.
+### 1.4 Phases
+- **R0:** spec 014 draft, with the `relay` scope, the channel-adapter interface and the parking amendment. Operator ratifies.
 - **R1:** the scope, the park/re-raise logic, and a fake-channel test harness. No network yet.
-- **R2:** one real channel, then live trial for a week of real builds.
-- **R3:** the second channel, and `step-up` for Red if R2 shows a need.
+- **R2:** the email adapter (Amber only), a fake IMAP and SMTP server for tests, then a week's live trial on real builds.
+- **R3:** TOTP step-up for Red and for the optimistic workflow's high-risk reviews; then a chat adapter (Slack or Telegram) if email proves too slow.
 
 ## 2. Gap 3: API-key readiness
 
@@ -144,6 +194,7 @@ delphi run --task "<text>" [--workspace W] [--project P]
 | **P2** | API readiness items 2 to 5 (§2.1); the open harness findings | M | P0 | |
 | **P3** | Benchmark runner and the pilot (evaluation plan) | M | P1, P2 for metered cost | operator supplies API keys and a spend cap |
 | **P4** | Relay R0 to R2, in parallel with P3 | M | P1 | operator ratifies spec 014 and the parking amendment |
+| **P4b** | Optimistic workflow O0 to O2 ([exploration](optimistic-workflow-exploration-2026-10-25.md)): ledger, gate 6, `delphi decisions`, the approver | M–L | P1, P4 (relay digest) | operator ratifies the charter amendments |
 | **P5** | Full study; decide which roles to cut or keep | L | P3 | |
 | **P6** | Skills import/export; observe hooks; remote recipe | M | P4 | |
 
@@ -152,10 +203,11 @@ I'd start with P0 and P1, because P3 and P4 both depend on `delphi run`.
 ## 6. Decisions needed from the operator
 1. **Parking amendment:** timeout denies the request but parks the task, with a new card on resume (§1.1). Yes or no.
 2. **Remote Red policy:** `console-only` (recommended) or `step-up`.
-3. **First relay channel:** Slack Socket Mode or Telegram long-poll. Both are outbound-only. Telegram has a simpler trust surface; Slack matches where the work happens.
+3. **First relay channel:** I now recommend **email**, because it is platform-agnostic and every operator has it. It also forces the trust design to be right: if the model is safe for the weakest channel, it is safe for chat. Cost: Amber-only until TOTP step-up exists, and slower delivery. Which mailbox provider you would use affects the adapter (password versus OAuth).
 4. **API keys and a spend cap** for the nightly live job and the pilot, and whether CI may hold the secrets.
 5. **Pre-registered thresholds** in the evaluation plan (§6 there).
 6. **Headless PR authorisation:** my recommendation is no standing authorisation for now.
+7. **Optimistic workflow:** accept the "provisional decision is not an approval" framing and its charter edits? The open questions are listed in the exploration's §8.
 
 ## 7. What this plan does not do
 - It does not add computer or browser control, auto-curated user memory, or IDE integration. The comparison found them in other harnesses; the reasons for leaving them out (taint model, D-09 and D-11, terminal-first) still hold.

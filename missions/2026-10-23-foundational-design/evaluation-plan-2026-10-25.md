@@ -36,6 +36,7 @@ This document is meant to be **frozen before the first measured run** (§6). It 
 | **A2** | A0 with one reviewer subagent configured in Claude Code | What a Claude Code power user would actually build |
 | **A3** | Delphi, full pipeline, API endpoints, two families | The system under test |
 | **A3s** | Delphi, full pipeline, one family only | Separates "the pipeline" from "family diversity" |
+| **A3o** | A3 in optimistic mode, with the operator proxy ratifying decisions afterwards | Measures what deferring approvals costs and saves: completion without stalls, rejection rate, discarded spend. See the [exploration](optimistic-workflow-exploration-2026-10-25.md) §6. |
 | **A4a** | A3 without the audit step | Ablation: what the audit contributes |
 | **A4b** | A3 without the Council | Ablation: what the Council contributes |
 | **A4c** | A3 without the spec gate | Ablation: what *No Spec, No Build* contributes |
