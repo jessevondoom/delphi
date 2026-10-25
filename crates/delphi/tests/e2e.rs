@@ -706,6 +706,17 @@ impl PtyConsole {
         }
     }
 
+    /// Wait until no reply is streaming. The reply's own words and its "Athena · " label also appear in the streaming copy, so
+    /// seeing them does not mean the task is over; a daemon stopped now takes the unwritten reply with it (an agent's words
+    /// stay in daemon memory until its task ends) and the reply is missing when the console reloads the log.
+    fn wait_until_not_writing(&self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.visible().contains("· writing") {
+            assert!(Instant::now() < deadline, "the reply never finished:\n{}", self.visible());
+            std::thread::sleep(Duration::from_millis(60));
+        }
+    }
+
     /// Leave with Ctrl+C the way a person does: when the console says "press Ctrl+C again to quit" (text typed, or a
     /// task still finishing: the text a test waited for can be the streaming copy), press it again. The exit code.
     fn ctrl_c_out(mut self) -> i32 {
@@ -1647,6 +1658,7 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     c.type_keys("\r");
     c.wait_for("First answer.");
     c.wait_for("Athena · ");
+    c.wait_until_not_writing(); // the finished reply is in the log; the streaming copy is not
     // The daemon is stopped and started again behind the console's back.
     // (the CLI asks for a terminal, as the console does, so it runs in one)
     let restart = PtyConsole::start_env(&e.home, &["daemon", "restart", "--workspace", "e2e"], 10, 80, &[]);

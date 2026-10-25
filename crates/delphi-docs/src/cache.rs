@@ -72,31 +72,42 @@ pub fn stats() -> (u64, u64, usize) {
 mod tests {
     use super::*;
 
+    /// Is exactly this request stored? The cache and its counters are process-wide and every test in the crate that reads a
+    /// large document goes through them, in parallel, so a test may only trust what it can observe about its own key.
+    fn cached(bytes: &[u8], name: &str, req: &Request) -> bool {
+        let k = key(bytes, name, req, &Limits::default());
+        cache().lock().unwrap_or_else(|e| e.into_inner()).map.contains_key(&k)
+    }
+
     #[test]
     fn a_repeat_read_is_a_hit_and_a_different_request_or_content_is_not() {
-        let big = format!("{}\n", "a line of text that makes the file big enough to cache. ".repeat(400));
-        let (h0, m0, _) = stats();
-        let a = extract_cached(big.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
-        let b = extract_cached(big.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
+        let big = format!("{}\nthis-test-only\n", "a line of text that makes the file big enough to cache. ".repeat(400));
+        let req = Request::default();
+        assert!(!cached(big.as_bytes(), "unique-one.txt", &req), "nothing else stores this content");
+        let (h0, _, _) = stats();
+        let a = extract_cached(big.as_bytes(), "unique-one.txt", &req, &Limits::default()).unwrap();
+        assert!(cached(big.as_bytes(), "unique-one.txt", &req), "the first read is stored");
+        let b = extract_cached(big.as_bytes(), "unique-one.txt", &req, &Limits::default()).unwrap();
         assert_eq!(a, b);
-        let (h1, m1, n1) = stats();
-        assert!(h1 > h0 && m1 > m0 && n1 >= 1,"{:?} -> {:?}", (h0, m0), (h1, m1, n1));
-        let hits_before = stats().0;
+        // Other tests can only add hits, so "more than before" is safe where "exactly" would not be.
+        assert!(stats().0 > h0, "the repeat was a hit");
+        // Changed bytes and a changed request are separate entries.
         let other = format!("{}x", big);
-        let _ = extract_cached(other.as_bytes(), "unique-one.txt", &Request::default(), &Limits::default()).unwrap();
-        let _ = extract_cached(big.as_bytes(), "unique-one.txt", &Request { start: Some(2), ..Request::default() }, &Limits::default());
-        assert_eq!(stats().0, hits_before, "changed bytes and a changed request are separate entries");
+        let _ = extract_cached(other.as_bytes(), "unique-one.txt", &req, &Limits::default()).unwrap();
+        assert!(cached(other.as_bytes(), "unique-one.txt", &req) && cached(big.as_bytes(), "unique-one.txt", &req));
+        let ranged = Request { start: Some(2), ..Request::default() };
+        assert_ne!(key(big.as_bytes(), "unique-one.txt", &req, &Limits::default()), key(big.as_bytes(), "unique-one.txt", &ranged, &Limits::default()));
     }
 
     #[test]
     fn small_inputs_and_errors_bypass_the_cache() {
-        let (_, m0, _) = stats();
         let _ = extract_cached(b"tiny", "t.txt", &Request::default(), &Limits::default()).unwrap();
-        assert_eq!(stats().1, m0, "small files are not looked up");
+        assert!(!cached(b"tiny", "t.txt", &Request::default()), "small files are never stored");
         let mut bad = b"PK\x03\x04".to_vec();
         bad.resize(20_000, b'x');
         let r1 = extract_cached(&bad, "unique-two.zip", &Request::default(), &Limits::default());
         let r2 = extract_cached(&bad, "unique-two.zip", &Request::default(), &Limits::default());
         assert!(r1.is_err() && r2.is_err());
+        assert!(!cached(&bad, "unique-two.zip", &Request::default()), "errors are never stored");
     }
 }
