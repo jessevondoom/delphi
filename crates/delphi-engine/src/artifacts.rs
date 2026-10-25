@@ -12,7 +12,7 @@
 
 use crate::tools::{denied, observe, str_arg, with_provenance_header, zone_of, ActionKind, Classified, Stamp, ToolCtx, ToolError, ToolExec, ToolResult, ToolSpec, ToolTier};
 use delphi_adapter::claude::ToolDef;
-use delphi_docs::{chart, htmlkinds, htmlpage, sheetwriter};
+use delphi_docs::{chart, diagram, htmlkinds, htmlpage, sheetwriter};
 use delphi_core::pathguard::{Access, Guard};
 use delphi_core::provenance::{gate_write, OutputCheck, Tier};
 use serde_json::{json, Value};
@@ -27,7 +27,7 @@ const OTHER_ROOTS: [&str; 6] = ["specs", "context", "memory", "skills", "agents"
 /// Mission folders tried, in order, for a plain path; the first one the role may write wins.
 const MISSION_FOLDERS: [&str; 7] = ["artifacts", "reports", "research", "specs", "comms", "councils", "threat-models"];
 
-const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet"];
+const TOOLS: &[&str] = &["write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"];
 
 pub fn is_artifact_tool(name: &str) -> bool {
     TOOLS.contains(&name)
@@ -37,7 +37,7 @@ fn extensions(tool: &str) -> &'static [&'static str] {
     match tool {
         "write_archive" => &["zip"],
         "write_html" | "write_report" | "write_deck" => &["html", "htm"],
-        "write_chart" => &["svg", "png"],
+        "write_chart" | "write_diagram" => &["svg", "png"],
         "write_sheet" => &["xlsx", "csv"],
         _ => &[],
     }
@@ -117,6 +117,9 @@ fn classify(tool: &str, args: &Value) -> Result<Classified, ToolError> {
     let path = str_arg(args, "path")?;
     if tool == "write_sheet" {
         return classify_sheet(path, args);
+    }
+    if tool == "write_diagram" {
+        return classify_diagram(args);
     }
     let members = if tool == "write_archive" { Some(members_of(args)?) } else { None };
     let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, tool).map_err(ToolError)?;
@@ -308,6 +311,26 @@ fn chart_normalize(args: &Value) -> Result<Value, String> {
     Ok(a)
 }
 
+/// A diagram reads no files and holds no script, so it is checked now and is Green in the mission and Amber in a
+/// worktree, like a chart.
+fn classify_diagram(args: &Value) -> Result<Classified, ToolError> {
+    let args = &chart_normalize(args).map_err(ToolError)?;
+    let path = str_arg(args, "path")?;
+    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_diagram").map_err(ToolError)?;
+    let spec = diagram::from_json(args).map_err(|e| ToolError(e.0))?;
+    let (tier, kind) = if resolved.starts_with("@worktree/") { (ToolTier::Amber, ActionKind::WorktreeEdit) } else { (ToolTier::Green, ActionKind::MissionArtifact) };
+    let dir = resolved.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let args_hash = blake3::hash(serde_json::to_string(args).unwrap_or_default().as_bytes()).to_hex().to_string();
+    Ok(Classified {
+        tool: "write_diagram".into(),
+        tier,
+        kind,
+        summary: format!("write {} (a {} diagram)", path, spec.kind.name()),
+        payload: json!({"tool": "write_diagram", "path": path, "type": spec.kind.name(), "title": spec.title, "args_blake3": args_hash}),
+        pattern: format!("write_diagram {}/*", dir),
+    })
+}
+
 /// A chart. Charts hold no script, so one is Green in the mission and Amber in a worktree like any worktree edit.
 /// Data read from a file is not opened at classification (it needs the role's read access); the rest is checked now.
 fn classify_chart(args: &Value) -> Result<Classified, ToolError> {
@@ -369,7 +392,7 @@ pub struct Target {
 /// access to each input.
 pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args: &Value) -> Result<Target, ToolResult> {
     let normalized;
-    let args = if tool == "write_chart" {
+    let args = if tool == "write_chart" || tool == "write_diagram" {
         normalized = chart_normalize(args).map_err(ToolResult::err)?;
         &normalized
     } else {
@@ -394,6 +417,9 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
     }
     if tool == "write_sheet" {
         build_sheet(&resolved, args).map_err(ToolResult::err)?;
+    }
+    if tool == "write_diagram" {
+        diagram::from_json(args).map_err(|e| ToolResult::err(e.0))?;
     }
     if tool == "write_chart" {
         let (a, _) = chart_args(guard, args)?;
@@ -556,6 +582,47 @@ fn write_sheet(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, &bytes, "write_sheet", &inputs)
 }
 
+fn write_diagram(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_diagram", args) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    let args = &match chart_normalize(args) {
+        Ok(a) => a,
+        Err(e) => return ToolResult::err(e),
+    };
+    let spec = match diagram::from_json(args) {
+        Ok(s) => s,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let tier = ctx.span.output_tier(OutputCheck::Unverified);
+    let comment = htmlpage::comment_text(&format!(
+        "delphi artifact: written by role {} in mission {} with write_diagram at {}; trust {} {}{}",
+        ctx.role,
+        ctx.mission_id,
+        ctx.now_rfc3339,
+        tier,
+        tier.name(),
+        target.sidecar.as_ref().map(|s| format!("; provenance record: {}", s.rsplit('/').next().unwrap_or(s))).unwrap_or_default()
+    ));
+    let inputs = vec![format!("{} diagram, title: {}", spec.kind.name(), spec.title.chars().take(100).collect::<String>())];
+    if target.path.to_lowercase().ends_with(".png") {
+        if let Err(e) = diagram::png_fit(&spec) {
+            return ToolResult::err(e.0);
+        }
+        let svg = diagram::render_svg(&spec, None);
+        let bytes = match delphi_docs::raster::svg_to_png(&svg, spec.theme == chart::Theme::Dark, 2, &[("Title", &spec.title), ("Comment", &comment), ("Software", "delphi write_diagram")]) {
+            Ok(b) => b,
+            Err(e) => return ToolResult::err(e.0),
+        };
+        if bytes.len() > MAX_PNG_BYTES {
+            return ToolResult::err(format!("the PNG is {} bytes; the limit is {} (2 MB). Write the diagram as .svg", bytes.len(), MAX_PNG_BYTES));
+        }
+        return write_artifact(ctx, &target, &bytes, "write_diagram", &inputs);
+    }
+    write_artifact(ctx, &target, diagram::render_svg(&spec, Some(&comment)).as_bytes(), "write_diagram", &inputs)
+}
+
 fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_chart", args) {
         Ok(t) => t,
@@ -616,7 +683,7 @@ fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, svg.as_bytes(), "write_chart", &inputs)
 }
 
-const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read; the reader can point at marks for their values, click legend items to hide a series and drag to zoom),{type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
+const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read; the reader can point at marks for their values, click legend items to hide a series and drag to zoom),{type:\"diagram\", diagram:{…as write_diagram…}, caption?} draws a flow, tree or sequence diagram (charts and diagrams share the 12), {type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
@@ -729,6 +796,30 @@ pub fn specs() -> Vec<ToolSpec> {
         requires_write_scope: true,
         classify: |tool, args| classify(tool, args),
         exec: ToolExec::Local(write_sheet),
+    },
+    ToolSpec {
+        def: ToolDef {
+            name: "write_diagram".into(),
+            description: "Draw a diagram as a self-contained .svg (light and dark, accessible, no script), or a .png (end `path` in .png, or set `format: \"png\"`; for messages and slides). Describe it, do not draw it: the layout is computed. `type` is flow (steps and decisions joined by arrows: `nodes` [{id, label?, kind?: step|start|end|decision, group?}] and `edges` [{from, to, label?}]; `direction` down or right; a loop back to an earlier step is drawn pointing back; `group` colours up to 4 groups and adds a legend), tree (`root` {label, children:[…]} up to 80 nodes and 8 levels; `direction` down or right) or sequence (`participants` [{id, label?}], 2 to 8, left to right, and `messages` [{from, to, label, kind?: call|reply}] in time order; from = to is a message to itself). `title` says what the diagram shows, ideally the point (\"A failed smoke test rolls the release back\"); `subtitle`, `source`, `theme` (auto, light, dark). Refused with a reason when an id is unknown, a name repeats, or the diagram is too big to read (60 nodes, 120 edges); a PNG is also refused when it would exceed 1800 x 2400, with SVG as the way out. A diagram in a page or deck is a `diagram` block. `path` is a plain name like `release.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it.".into(),
+            input_schema: json!({"type": "object", "required": ["path", "type", "title"], "properties": {
+                "path": {"type": "string"},
+                "type": {"type": "string", "enum": ["flow", "tree", "sequence"]},
+                "title": {"type": "string"},
+                "subtitle": {"type": "string"},
+                "source": {"type": "string"},
+                "format": {"type": "string", "enum": ["svg", "png"]},
+                "direction": {"type": "string", "enum": ["down", "right"]},
+                "nodes": {"type": "array", "maxItems": 60, "items": {"type": "object", "required": ["id"]}},
+                "edges": {"type": "array", "maxItems": 120, "items": {"type": "object", "required": ["from", "to"]}},
+                "root": {"type": "object", "description": "a tree's root: {label, children: [...]}"},
+                "participants": {"type": "array", "minItems": 2, "maxItems": 8, "items": {"type": "object", "required": ["id"]}},
+                "messages": {"type": "array", "maxItems": 60, "items": {"type": "object", "required": ["from", "to", "label"]}},
+                "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
+            }}),
+        },
+        requires_write_scope: true,
+        classify: |tool, args| classify(tool, args),
+        exec: ToolExec::Local(write_diagram),
     },
 ]
 }
@@ -1367,5 +1458,47 @@ mod tests {
         let long = json!({"path": "long.png", "type": "hbar", "title": "T", "x": "k", "y": "v", "data": {"columns": ["k", "v"], "rows": [["a label that is much too long to fit", 1], ["b", 2]]}});
         let (r, _) = run_tool(&mut f, "write_chart", long);
         assert!(r.is_error && r.content.contains("shorten"), "{}", r.content);
+    }
+    fn diagram_args() -> Value {
+        json!({"path": "release", "type": "flow", "title": "A failed smoke test rolls back", "nodes": [{"id": "a", "label": "Deploy"}, {"id": "b", "label": "Healthy?", "kind": "decision"}, {"id": "c", "label": "Roll back"}], "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c", "label": "no"}]})
+    }
+
+    #[test]
+    fn a_diagram_is_written_as_svg_or_png_with_its_provenance_and_refused_when_it_cannot_be_drawn() {
+        let mut f = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f, "write_diagram", diagram_args());
+        assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/release.svg (") && stamps.len() == 2, "{}", r.content);
+        let svg = fs::read_to_string(f.root.join("local/missions/m1/artifacts/release.svg")).unwrap();
+        assert!(svg.contains("with write_diagram at 2026-10-25T12:00:00.000Z; trust L3") && svg.contains(">Healthy?</text>") && !svg.contains("<script"), "{}", &svg[..300]);
+        let mut p = diagram_args();
+        p["path"] = json!("release.png");
+        p["theme"] = json!("dark");
+        let (r, _) = run_tool(&mut f, "write_diagram", p);
+        assert!(!r.is_error, "{}", r.content);
+        let img = delphi_docs::png::decode(&fs::read(f.root.join("local/missions/m1/artifacts/release.png")).unwrap()).unwrap();
+        assert_eq!(img.pixel(1, 1)[..3], [0x1a, 0x1a, 0x19]);
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/release.svg.provenance.md")).unwrap();
+        assert!(side.contains("produced_by: write_diagram") && side.contains("flow diagram, title: A failed smoke test"), "{}", side);
+        // classified like a chart, and refused before anyone is asked when it is wrong
+        let reg = Registry::builtin();
+        assert_eq!(reg.classify("write_diagram", &diagram_args()).unwrap().kind, ActionKind::MissionArtifact);
+        let mut wt = diagram_args();
+        wt["path"] = json!("@worktree/docs/release.svg");
+        assert_eq!(reg.classify("write_diagram", &wt).unwrap().kind, ActionKind::WorktreeEdit);
+        let mut bad = diagram_args();
+        bad["edges"] = json!([{"from": "a", "to": "zz"}]);
+        assert!(reg.classify("write_diagram", &bad).unwrap_err().0.contains("`zz`, which is not a node"));
+        let mut f2 = fx(&["missions/**"]);
+        let (r, stamps) = run_tool(&mut f2, "write_diagram", bad);
+        assert!(r.is_error && stamps.is_empty() && !f2.root.join("local/missions/m1/artifacts").exists(), "{}", r.content);
+        // a diagram too big for a PNG is pointed at SVG
+        let nodes: Vec<Value> = (0..40).map(|i| json!({"id": format!("n{}", i), "label": format!("Step number {} of the process", i)})).collect();
+        let edges: Vec<Value> = (1..40).map(|i| json!({"from": format!("n{}", (i - 1) / 2), "to": format!("n{}", i)})).collect();
+        let big = json!({"path": "big.png", "type": "flow", "title": "T", "nodes": nodes, "edges": edges});
+        let (r, _) = run_tool(&mut f, "write_diagram", big.clone());
+        assert!(r.is_error && r.content.contains(".svg"), "{}", r.content);
+        let mut big_svg = big;
+        big_svg["path"] = json!("big.svg");
+        assert!(!run_tool(&mut f, "write_diagram", big_svg).0.is_error);
     }
 }

@@ -10,15 +10,15 @@ use super::{ChartSpec, Kind, Series, Size, Theme, XAxis};
 use crate::markdown::escape;
 
 const FONT: &str = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-pub(super) const PAD: f64 = 16.0;
+pub(crate) const PAD: f64 = 16.0;
 
 /// Estimated width of `s` in `px`-sized system type. Deliberately a little wide: a label that is judged to fit
 /// then fits with room to spare.
-pub(super) fn tw(s: &str, px: f64) -> f64 {
+pub(crate) fn tw(s: &str, px: f64) -> f64 {
     s.chars().map(|c| if c.is_ascii_digit() { 0.58 } else if c.is_uppercase() { 0.68 } else if matches!(c, 'i' | 'l' | 'I' | '.' | ',' | ':' | ';' | '\'' | '|' | '!' | ' ' | 'j' | 't' | 'f' | 'r') { 0.40 } else if c.is_ascii() { 0.58 } else { 1.0 }).sum::<f64>() * px
 }
 
-pub(super) fn trunc(s: &str, max_w: f64, px: f64) -> String {
+pub(crate) fn trunc(s: &str, max_w: f64, px: f64) -> String {
     if tw(s, px) <= max_w {
         return s.to_string();
     }
@@ -32,7 +32,7 @@ pub(super) fn trunc(s: &str, max_w: f64, px: f64) -> String {
     format!("{}…", out.trim_end())
 }
 
-fn vars(light: bool, heat: bool) -> String {
+fn vars(light: bool, extra: &str) -> String {
     let (surface, ink, series, grid, axis) = if light { (SURFACE_LIGHT, INK_LIGHT, SERIES_LIGHT, GRID_LIGHT, AXIS_LIGHT) } else { (SURFACE_DARK, INK_DARK, SERIES_DARK, GRID_DARK, AXIS_DARK) };
     format!(
         "color-scheme:{};--surface:{};--ink:{};--ink2:{};--muted:{};--grid:{};--axis:{};--s1:{};--s2:{};--s3:{};--s4:{};{}",
@@ -47,7 +47,7 @@ fn vars(light: bool, heat: bool) -> String {
         series[1],
         series[2],
         series[3],
-        if heat { super::more::mode_vars(light) } else { String::new() }
+        extra
     )
 }
 
@@ -60,32 +60,41 @@ pub fn css() -> String {
 fn css_for(kind: Option<Kind>) -> String {
     let wants = |k: Kind| kind.is_none_or(|x| x == k);
     let heat = wants(Kind::Heatmap);
+    let mut rules = String::new();
+    if wants(Kind::Donut) {
+        rules.push_str(".sl{stroke:var(--surface);stroke-width:2}\n");
+    }
+    if kind.is_none() {
+        // pointer behaviour for charts in a page: targets, hidden series, the zoom selection
+        rules.push_str(".hit{fill:transparent}[data-t]{cursor:pointer}[data-t].off{opacity:.45}[data-t]:focus-visible{outline:2px solid var(--ink2);outline-offset:2px}.hid{display:none}.brush{fill:var(--s1);fill-opacity:.12;stroke:var(--s1);stroke-width:1}[data-zoom]{cursor:crosshair}\n");
+    }
+    if wants(Kind::Box) {
+        rules.push_str(".bx{fill:var(--s1);fill-opacity:.18;stroke:var(--s1);stroke-width:2}.wh{stroke:var(--s1);stroke-width:1.5;fill:none}\n@media (forced-colors: active){.wh{stroke:GrayText}.bx{fill:Canvas;stroke:CanvasText}}\n");
+    }
+    if heat {
+        for i in 0..5 {
+            rules.push_str(&format!(".h{i}{{fill:var(--h{i})}}.ht{i}{{fill:var(--ht{i})}}", i = i));
+        }
+        rules.push_str("\n@media (forced-colors: active){.ht0,.ht1,.ht2,.ht3,.ht4{fill:CanvasText}.h4{fill:CanvasText}.h0,.h1,.h2,.h3{fill:Canvas;stroke:CanvasText}}\n");
+    }
+    css_custom(&|light| if heat { super::more::mode_vars(light) } else { String::new() }, &rules)
+}
+
+/// The shared stylesheet (palette variables for light, dark and forced colours; ink and series classes) plus extra
+/// variables per mode and extra rules, which is how diagrams add their own marks to the same look.
+pub(crate) fn css_custom(extra_vars: &dyn Fn(bool) -> String, rules: &str) -> String {
+    let (light_extra, dark_extra) = (extra_vars(true), extra_vars(false));
     let mut s = String::new();
-    s.push_str(&format!(".viz-root{{{}font-family:{};}}\n", vars(true, heat), FONT));
-    s.push_str(&format!("@media (prefers-color-scheme: dark){{.viz-root:where(:root:not([data-theme=\"light\"])){{{d}}}:root:where(:not([data-theme=\"light\"])) .viz-root:where(:not([data-theme=\"light\"])){{{d}}}}}\n", d = vars(false, heat)));
-    s.push_str(&format!(".viz-root[data-theme=\"dark\"],:root[data-theme=\"dark\"] .viz-root{{{}}}\n", vars(false, heat)));
+    s.push_str(&format!(".viz-root{{{}font-family:{};}}\n", vars(true, &light_extra), FONT));
+    s.push_str(&format!("@media (prefers-color-scheme: dark){{.viz-root:where(:root:not([data-theme=\"light\"])){{{d}}}:root:where(:not([data-theme=\"light\"])) .viz-root:where(:not([data-theme=\"light\"])){{{d}}}}}\n", d = vars(false, &dark_extra)));
+    s.push_str(&format!(".viz-root[data-theme=\"dark\"],:root[data-theme=\"dark\"] .viz-root{{{}}}\n", vars(false, &dark_extra)));
     s.push_str(".surface{fill:var(--surface)}.g{stroke:var(--grid);stroke-width:1;fill:none}.ax{stroke:var(--axis);stroke-width:1;fill:none}.ref{stroke:var(--muted);stroke-width:1;fill:none}\n");
     s.push_str(".t1{fill:var(--ink)}.t2{fill:var(--ink2)}.t3{fill:var(--muted)}.b{font-weight:600}\n");
     for i in 1..=4 {
         s.push_str(&format!(".f{i}{{fill:var(--s{i})}}.k{i}{{stroke:var(--s{i});fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}}.a{i}{{fill:var(--s{i});fill-opacity:.1}}.d{i}{{fill:var(--s{i});stroke:var(--surface);stroke-width:2}}\n", i = i));
     }
     s.push_str("@media (forced-colors: active){.surface{fill:Canvas}.t1,.t2,.t3{fill:CanvasText}.g,.ax,.ref{stroke:GrayText}.f1,.f2,.f3,.f4,.d1,.d2,.d3,.d4{fill:CanvasText}.k1,.k2,.k3,.k4{stroke:CanvasText}}\n");
-    if wants(Kind::Donut) {
-        s.push_str(".sl{stroke:var(--surface);stroke-width:2}\n");
-    }
-    if kind.is_none() {
-        // pointer behaviour for charts in a page: targets, hidden series, the zoom selection
-        s.push_str(".hit{fill:transparent}[data-t]{cursor:pointer}[data-t].off{opacity:.45}[data-t]:focus-visible{outline:2px solid var(--ink2);outline-offset:2px}.hid{display:none}.brush{fill:var(--s1);fill-opacity:.12;stroke:var(--s1);stroke-width:1}[data-zoom]{cursor:crosshair}\n");
-    }
-    if wants(Kind::Box) {
-        s.push_str(".bx{fill:var(--s1);fill-opacity:.18;stroke:var(--s1);stroke-width:2}.wh{stroke:var(--s1);stroke-width:1.5;fill:none}\n@media (forced-colors: active){.wh{stroke:GrayText}.bx{fill:Canvas;stroke:CanvasText}}\n");
-    }
-    if heat {
-        for i in 0..5 {
-            s.push_str(&format!(".h{i}{{fill:var(--h{i})}}.ht{i}{{fill:var(--ht{i})}}", i = i));
-        }
-        s.push_str("\n@media (forced-colors: active){.ht0,.ht1,.ht2,.ht3,.ht4{fill:CanvasText}.h4{fill:CanvasText}.h0,.h1,.h2,.h3{fill:Canvas;stroke:CanvasText}}\n");
-    }
+    s.push_str(rules);
     s
 }
 
@@ -113,11 +122,11 @@ impl Fmt<'_> {
     }
 }
 
-pub(super) fn text(out: &mut String, x: f64, y: f64, class: &str, size: f64, anchor: &str, s: &str) {
+pub(crate) fn text(out: &mut String, x: f64, y: f64, class: &str, size: f64, anchor: &str, s: &str) {
     out.push_str(&format!("<text x=\"{}\" y=\"{}\" class=\"{}\" font-size=\"{}\" text-anchor=\"{}\">{}</text>\n", f(x), f(y), class, f(size), anchor, escape(s)));
 }
 
-pub(super) fn line(out: &mut String, class: &str, x1: f64, y1: f64, x2: f64, y2: f64) {
+pub(crate) fn line(out: &mut String, class: &str, x1: f64, y1: f64, x2: f64, y2: f64) {
     out.push_str(&format!("<line class=\"{}\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\n", class, f(x1), f(y1), f(x2), f(y2)));
 }
 
