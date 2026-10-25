@@ -6,6 +6,10 @@ pub enum Format {
     Pdf,
     /// zip, and the zip-based formats (docx, xlsx, pptx, odf, epub, jar) until the listing says which.
     Zip,
+    /// Zip-based office formats, told apart by the parts they contain, never by magic bytes.
+    Docx,
+    Xlsx,
+    Pptx,
     Tar,
     Gzip,
     Sqlite,
@@ -38,6 +42,9 @@ impl Format {
         match self {
             Format::Pdf => "PDF",
             Format::Zip => "zip archive",
+            Format::Docx => "Word document (docx)",
+            Format::Xlsx => "Excel workbook (xlsx)",
+            Format::Pptx => "PowerPoint deck (pptx)",
             Format::Tar => "tar archive",
             Format::Gzip => "gzip",
             Format::Sqlite => "SQLite database",
