@@ -24,7 +24,7 @@ The narrator's `archives` view (the fifth, `ui/src/observe-screen.ts` `archives`
 | D-2 | **Offline by default.** Online is an explicit choice, because it sends the query text to a third party. The knowledge base is an **explorer of stored knowledge and context** using the vector search, more than a web search box. |
 | D-3 | It lives in the existing **`archives` pane**, not a new view or window. |
 
-Still open (§9): which search API, how a result opens, and whether online results can be saved.
+Still open (§9): which web search API, and whether online results can be saved. How a result opens is `specs/029`: inline, through links.
 
 ## 3. Resting state: a search box, and the shape of the store beneath it
 
@@ -95,6 +95,23 @@ this window                                         ← →  ·  ○ ○ ○ ○
 - Results are `external_untrusted` until the scout verifies them. Nothing from the web enters the index by being searched.
 - The query text leaves the machine only on an explicit online or both search. The window never fires an online search while typing.
 
+### 6a. The self-hosted API (built, 2026-10-25)
+`delphi kb serve` serves the workspace's knowledge base over HTTP as a small, **read-only** JSON API, using the same hybrid search as the console (keyword + vector + reranker, `specs/004` §3) and no model call, so a request costs no tokens. It is for the window, the scout, and anything else on the operator's side that wants to search stored knowledge. It searches **Delphi's own documents**; it does not reach the web, so online search (the `[search]` client above) is still separate.
+
+| Endpoint | Returns |
+| :-- | :-- |
+| `GET /v1/search?q=&limit=&collection=&rerank=0` | ranked results: `pointer`, `path`, `collection`, `trust`, `heading`, `preview`, `start_line`, `end_line`, `blake3`, `score`; and `mode` (`hybrid` or `lexical` when no model is installed) |
+| `GET /v1/doc?path=` | the document's text, its `links` (each resolved to a logical path, or marked `missing`, `anchor`, `external`, `other`) and whether it changed since it was indexed |
+| `GET /v1/collections` | each collection with its document count and newest change |
+| `GET /v1/documents?collection=&limit=&offset=` | documents, newest first |
+| `GET /v1/health` | counts, the model in use, whether a reranker is installed |
+
+- **Read-only:** only `GET` and `HEAD`; nothing is written to the workspace. A document is served only if the index lists it as visible, by logical path, so `..` and absolute paths find nothing.
+- **What it serves:** trusted, active documents; never `memory/agents/` and never anything untrusted. There is no parameter to widen this.
+- **Access:** a bearer token is always required (made on first use, 32 random bytes, kept in `local/kb-serve.token`, mode 0600). On a loopback address the `Host` header must name it, so a web page cannot reach the API through the operator's browser. No CORS headers.
+- **Bind:** `127.0.0.1:7878` by default. Another address needs `--allow-remote`, and the API is plain HTTP: put TLS in front of it.
+- Not yet in the API: `more like this` (the vector search seeded from a passage), which slice (b) of §9 needs.
+
 ## 7. Keys
 `/` or any letter focuses the box · `enter` search / open · `↑ ↓` move · `m` more like this · `tab` offline/online/both · `esc` clear the box, then back one level on the trail · `← →` switch view, as in every narrator view.
 
@@ -106,6 +123,6 @@ this window                                         ← →  ·  ○ ○ ○ ○
 
 ## 9. Open questions
 1. **Which search API?** The client of §6 is provider-neutral, but one has to be first. Recommended: **Brave Search API** (a plain JSON API, a free tier, no model involved), with a self-hosted SearXNG as the keyless alternative for operators who want nothing leaving to a vendor.
-2. **Opening a result:** read it in the window, or hand it to `$EDITOR`/the pager? Recommended: read in the window, with a key to open it externally.
+2. ~~Opening a result~~ Settled by the operator: inline, navigated like hyperlinks (`specs/029`).
 3. **Saving:** can an online result be saved into the knowledge base from the window, through the scout's verification? Recommended: read-only in the first version.
 4. **Build order:** recommended slices: (a) the box, offline results and the §3 shelf, using the existing search RPC; (b) browse a collection and `m` more-like-this, which needs the RPC to accept a passage as the query; (c) the `[search]` client and online mode; (d) the scout's skill and tool.
