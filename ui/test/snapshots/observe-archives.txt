@@ -3,9 +3,9 @@ delphi v0.5 · archives
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
-── Knowledge base ──────────────────────────────────────────────────────────────────────────────────
- Search specs, context, REVIEW.md and lessons from the console: ctrl+k
-
+── knowledge base ──────────────────────────────────────────────────────────────────────────────────
+ search specs, context, REVIEW.md and lessons from the console: ctrl+k
+ the files an agent read, and the documents it cited, are listed there too: ctrl+s
 
 
 

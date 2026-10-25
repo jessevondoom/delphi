@@ -3,15 +3,15 @@ delphi v0.5 · forge
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
- Build 1/1 · t_1 · branch delphi/t_1 · commit abc1234 · in progress
+ build 1/1  t_1  delphi/t_1 · abc1234 · in progress
    attempt 1: red
    ✔ tests      12 passed
    ✖ audit      1 finding
    audit P1 unchecked unwrap
    a test failed once and passed on a rerun (flaky)
 
-── Diff against the base commit ────────────────────────────────────────────────────────────────────
-  no live worktree for this build (it finished, or has not started). r refreshes.
+── diff ────────────────────────────────────────────────────────────────────────────────────────────
+  no live worktree for this build: it has finished, or has not started
 
 
 

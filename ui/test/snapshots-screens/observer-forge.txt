@@ -4,9 +4,9 @@ delphi v0.5 · forge
  ✔ nothing needs you
 
 
-  No builds yet.
+  no builds yet
 
-  Start one in the console:  /build <request>
+  start one in the console: /build <request>
 
 
 
