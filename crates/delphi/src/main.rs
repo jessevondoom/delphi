@@ -5,7 +5,10 @@ mod check;
 mod chat;
 mod console;
 mod doctor;
-mod frontmatter;
+// Moved to the engine so the daemon's `check` tool and the CLI share one implementation.
+mod frontmatter {
+    pub use delphi_engine::frontmatter::*;
+}
 mod home;
 mod lint;
 mod needs;

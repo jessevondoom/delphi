@@ -43,6 +43,8 @@ An agent never receives a transcript. It receives a short envelope that points a
 5. Start from `templates/handoff-envelope.yaml`, save under `missions/<mission>/handoffs/`.
 6. Run `delphi check handoff <envelope>`. It enforces the required fields, the anchors, and the size cap (about 2,000 tokens).
 
+No shell? Call the `check` tool with `kind: handoff` and the envelope's path; it returns the same verdict.
+
 ## Done when
 The check passes and a reader who has not seen this conversation could do the task from the envelope and the files it points at.
 

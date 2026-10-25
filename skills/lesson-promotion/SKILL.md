@@ -39,6 +39,8 @@ A lesson earns a place by changing behaviour, and the file has room for 25.
 5. Run `delphi check rules <file>`; it enforces the 25-rule cap, the size cap, the T/D/F lines, and the `active_rules` count.
 6. Submit as a proposal; lessons change only through ratification.
 
+No shell? Call the `check` tool with `kind: rules` and the file's path; it returns the same verdict.
+
 ## Done when
 The check passes and the proposal explains which evidence justified the lesson and which rule made room.
 

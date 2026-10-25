@@ -27,6 +27,8 @@ Built-in skills ship no scripts (D-02). A rule worth enforcing is compiled into 
 `delphi lint` verifies that every `templates/…` file a `SKILL.md` names exists and that every `delphi check <kind>` it names is a real kind.
 
 ### 1.1 Checks (`delphi check <kind> <path>`)
+The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, `review-md`, `spec`) are also the engine's read-only `check` tool, so a role with no shell calls them directly; the path guard and trust-tier tracking apply as for `read_file`. `kb`, `tui` and `skill` need a directory and run from the command line.
+
 | Kind | Enforces | Used by |
 | :--- | :--- | :--- |
 | `delphi check dag` | Task or milestone graph: unique ids, known dependencies, no cycle, valid tier, spec links; prints parallel waves and the critical path. | `task-decomposition`, `roadmap-sequencing` |
