@@ -9,6 +9,9 @@ mod csv;
 mod docx;
 pub mod limits;
 mod ooxml;
+mod pdf;
+mod pdffont;
+mod pdftext;
 mod pptx;
 pub mod sniff;
 pub mod table;
@@ -84,7 +87,7 @@ pub fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, DocError>) -> Result
 
 /// Readers that exist. Grows slice by slice (`specs/014` §10); anything else answers "not built yet".
 pub fn is_supported(format: Format) -> bool {
-    matches!(format, Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Tar | Format::Gzip) || format.is_text()
+    matches!(format, Format::Pdf | Format::Zip | Format::Docx | Format::Xlsx | Format::Pptx | Format::Tar | Format::Gzip) || format.is_text()
 }
 
 /// Extract text from `bytes`. `name` is the file name (a hint only).
@@ -126,6 +129,11 @@ fn extract_at(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth: u
                 archive_extract(&t, format, req, limits, depth)
             }
             Format::Gzip => gzip_extract(bytes, name, req, limits, depth),
+            Format::Pdf => {
+                let mut e = pdftext::extract(bytes, req, limits)?;
+                cap_output(&mut e, limits);
+                Ok(e)
+            }
             Format::Csv | Format::Tsv => {
                 let mut e = csv::extract(bytes, format, req)?;
                 cap_output(&mut e, limits);
@@ -212,7 +220,11 @@ fn gzip_extract(bytes: &[u8], name: &str, req: &Request, limits: &Limits, depth:
 }
 
 #[cfg(test)]
+mod corpus_tests;
+#[cfg(test)]
 mod office_tests;
+#[cfg(test)]
+mod pdf_tests;
 
 #[cfg(test)]
 mod tests {
@@ -233,10 +245,10 @@ mod tests {
 
     #[test]
     fn an_unbuilt_format_is_named_and_flagged_not_hidden() {
-        let e = extract(b"%PDF-1.4 ...", "a.pdf", &Request::default(), &Limits::default()).unwrap();
-        assert_eq!(e.format, Format::Pdf);
+        let e = extract(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR", "a.png", &Request::default(), &Limits::default()).unwrap();
+        assert_eq!(e.format, Format::Png);
         assert!(!e.supported);
-        assert!(e.text.contains("PDF") && e.text.contains("not built yet"));
+        assert!(e.text.contains("PNG") && e.text.contains("not built yet"));
         assert_eq!(e.loss.len(), 1);
     }
 
@@ -318,8 +330,8 @@ mod tests {
 
     #[test]
     fn a_binary_member_reports_its_format_instead_of_dumping_bytes() {
-        let z = make_zip(&[("doc.pdf", b"%PDF-1.4\n\x00\x01", 0), ("img.png", b"\x89PNG\r\n\x1a\n\0\0", 0)]);
-        assert!(ex(&z, "a.zip", Some("doc.pdf")).unwrap().text.contains("PDF"));
+        let z = make_zip(&[("old.xls", &[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0], 0), ("img.png", b"\x89PNG\r\n\x1a\n\0\0", 0)]);
+        assert!(ex(&z, "a.zip", Some("old.xls")).unwrap().text.contains("legacy Office"));
         let e = ex(&z, "a.zip", Some("img.png")).unwrap();
         assert!(e.text.contains("PNG image") && !e.supported);
     }
