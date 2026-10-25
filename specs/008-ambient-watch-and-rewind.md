@@ -89,7 +89,7 @@ To prevent the "Wiped Out by 11 AM" approval-blindness syndrome documented in pa
 
 **Provisional eligibility (`specs/015`).** In a build started with `--optimistic`, an approver may decide a card instead of waiting for the operator, only if the card is **Amber** and its action is an edit to a file inside the task's own worktree. Nothing else in any tier is eligible: not a command on the host, a write outside the worktree, a spec, a dependency install, an outbound action, a dispatch, a Red card or the merge. A provisional decision is logged, has no authority outside the branch, and the merge is blocked until the operator has reviewed and ratified every decision that allowed something (merge gate 6, `specs/003` §3). Timeout still denies in every tier.
 
-**Remote answers (`specs/014`).** A relay may carry a card to the operator and bring an answer back. It may approve an Amber card and deny any card, never approve a Red one.
+**Remote answers (`specs/014`).** A relay may carry a card to the operator and bring an answer back. It may approve an Amber card and deny any card. It may approve a Red one only with a second factor the daemon verifies itself (TOTP step-up, `specs/014` §7).
 
 **Worktree hardening (all tiers):**
 - **When the sandbox is on, no sandboxed process can write any `.git`.** When it is off (default), the files that decide what git runs (`.git/hooks`, `.git/config`, `info/attributes`, for the project and the worktree) are snapshotted around every command and restored if the command changed them, with a warning to the model and the operator.

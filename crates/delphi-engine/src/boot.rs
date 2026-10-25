@@ -62,6 +62,11 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         s.decision_review_wait = Duration::from_secs(v as u64);
     }
     s.hooks = crate::hooks::parse(root).0;
+    if let Some(r) = root.get("relay") {
+        if r.get("step_up").and_then(|v| v.as_str()) == Some("totp") {
+            s.relay_totp_credential = r.get("totp_credential").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(String::from);
+        }
+    }
     if let Some(o) = root.get("optimistic") {
         if let Some(a) = o.get("approver").and_then(|v| v.as_str()).and_then(crate::provisional::ApproverKind::parse) {
             s.approver = a;
@@ -300,6 +305,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         timers: Arc::new(timers),
         toolless: Default::default(),
         approver_calls: Default::default(),
+        totp: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);

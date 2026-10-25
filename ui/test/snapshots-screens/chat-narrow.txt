@@ -1,18 +1,18 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧
 delphi v0.5 · /proj · chat
 
-    rust
-    fn claim(id: u64) -> Result<(), Error> {
-        // lock the row
-        Ok(())
-    }
+ Error> {
+       // lock the row
+       Ok(())
+   }
 
-  See
-  specs/003-collaboration-and-council.md#ladder.
+ See specs/003-collaboration-and-counci
+ l.md#ladder.
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
   → read_file(specs/003.md) ✔
 
-  ■ stopped
+    ■ stopped
 
 ──────────────────────────────────────────────────
 ❯

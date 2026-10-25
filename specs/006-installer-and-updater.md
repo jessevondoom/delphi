@@ -179,7 +179,7 @@ $DELPHI_HOME/                     # default ~/.delphi (override with DELPHI_HOME
      - **v1 (D-06):** if both changed, it writes `<file>.upstream-vX.Y` beside the local file and prompts the operator (`[A]ccept upstream / [K]eep local / [M]erge in $EDITOR`). There is no automatic diff3. The full merge below is the post-v1 design.
      - If both changed (post-v1) → in-memory 3-way merge. Clean merges are staged for ratification; overlapping conflicts stage `.upstream-vX.Y` and prompt the operator.
 5. **Atomic Binary Replacement (`POSIX rename()`):** copies the current binary to `$DELPHI_HOME/bin/delphi-prev`, writes `.delphi-update.tmp` in the target directory, and renames it into place atomically.
-6. **SQLite Schema Migration & Re-Index:** Copies `state.db` to `state.db.bak-<version>` first, then runs migrations in a single transaction and incrementally re-indexes modified Markdown files. Because `state.db` is derived (`specs/004` §3.1), a failed migration falls back to a full `delphi kb reindex`.
+6. **SQLite Schema Migration & Re-Index:** Copies `state.db` to `state.db.bak-<version>` first, then runs migrations in a single transaction and incrementally re-indexes modified Markdown files. Because `state.db` is derived (`specs/004` §3.1), a failed migration falls back to a full `delphi kb reindex`. A new embedding model, embedding format or chunker version is handled inside the index, not by a migration: the vectors are made again, or every document is read once (`specs/004` §3.3, §3.5, §3.7).
 7. **Rollback (`delphi rollback`, Step 5):** restores `delphi-prev`, `state.db.bak-<version>`, and the previous `base/` and `local/ratified/` snapshots. It refuses if `events.jsonl` has gained events in a newer schema since the update.
 
 ---

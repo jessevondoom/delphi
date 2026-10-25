@@ -1,4 +1,5 @@
-//! The knowledge base: lexical archival search over a workspace's Markdown (`specs/004` §3).
+//! The knowledge base: hybrid archival search (keywords, meaning and a reranking pass) over a workspace's Markdown
+//! (`specs/004` §3).
 //!
 //! `local/state.db` holds a *derived* index: delete it and `delphi kb reindex` rebuilds it from the files.
 //! Documents are chunked along `#`/`##`/`###` headings (fenced code stays whole), each chunk records its
@@ -10,13 +11,17 @@
 //! Visibility is decided by the query, not the caller's good manners: an agent sees `memory/agents/<role>/`
 //! only for its own role, and nothing from untrusted or inactive documents unless asked.
 
-use crate::embed::{self, Embedder};
+use crate::embed::{self, Embedder, Reranker};
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const SCHEMA_VERSION: &str = "1";
+/// Version of how documents are cut into chunks. An index made with another version is read again, once, because a
+/// file that has not changed would otherwise keep the chunks the old rules made. (2: frontmatter summaries of
+/// agents and skills.)
+const CHUNKER_VERSION: &str = "2";
 /// Reciprocal-rank constant (`specs/004` §3.4).
 const RRF_K: f64 = 60.0;
 /// A chunk longer than this is split at blank lines outside code fences.
@@ -36,8 +41,17 @@ const EMBED_BATCH: usize = 16;
 const VEC_CANDIDATES: usize = 120;
 /// Default weight of the vector ranking in the fusion (`specs/004` §3.4); each lexical ranking weighs 1.0, definitions 2.0.
 const VEC_WEIGHT: f64 = 3.0;
+/// Default factor on the keyword rankings when the query is a sentence (`is_natural_question`).
+const NATURAL_LEX_WEIGHT: f64 = 0.1;
 /// Default factor on the lexical rankings when only the any-word pass found something.
 const LOOSE_WEIGHT: f64 = 0.15;
+/// Default weight of the reranker's ranking when it is added to the fusion, and how many of the best fused results
+/// it reads (`specs/004` §3.7).
+const RERANK_WEIGHT: f64 = 6.0;
+const RERANK_TOP: usize = 10;
+/// A passage is shown to the reranker in at most this many windows of about `RERANK_CHARS`; its best window counts.
+const RERANK_WINDOWS: usize = 1;
+const RERANK_CHARS: usize = 600;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS kb_documents (
@@ -50,7 +64,9 @@ CREATE TABLE IF NOT EXISTS kb_documents (
                     CHECK (source_type IN ('user_ratified', 'internal_empirical', 'internal_generated', 'federated_verified', 'federated_peer', 'external_untrusted')),
     confidence      TEXT NOT NULL DEFAULT 'low',
     status          TEXT NOT NULL DEFAULT 'active',
-    updated_at      TEXT NOT NULL
+    updated_at      TEXT NOT NULL,
+    mtime_ns        INTEGER NOT NULL DEFAULT 0,
+    size            INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS kb_chunks (
     chunk_id        INTEGER PRIMARY KEY,
@@ -210,6 +226,45 @@ pub fn chunk_markdown(text: &str) -> Vec<Chunk> {
     chunks
 }
 
+/// Heading of the chunk built from an agent's or skill's frontmatter.
+const SUMMARY_HEADING: &str = "Summary (frontmatter)";
+
+/// What a shipped agent or skill says about itself in its frontmatter, as one chunk that points at those lines. The
+/// frontmatter is not chunked like the body, but the fields a person or an agent looks things up by (the role, the
+/// description, the skills and agents it is tied to) live there.
+fn frontmatter_summary(text: &str) -> Option<Chunk> {
+    let (fm, _) = crate::workspace::split_frontmatter(text);
+    let fm = fm?;
+    let lines: Vec<&str> = text.lines().collect();
+    let end = body_start(&lines);
+    if end == 0 {
+        return None;
+    }
+    let mut rows: Vec<String> = Vec::new();
+    for (key, label) in [("title", "Title"), ("role", "Role"), ("name", "Name"), ("description", "Description")] {
+        if let Some(v) = fm.get(key).and_then(|v| v.as_str()) {
+            rows.push(format!("{}: {}", label, v));
+        }
+    }
+    for (key, label) in [("authorized_skills", "Authorized skills"), ("authorized_agents", "Authorized agents")] {
+        let names: Vec<&str> = fm.get(key).and_then(|v| v.as_sequence()).map(|seq| seq.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+        if !names.is_empty() {
+            rows.push(format!("{}: {}", label, names.join(", ")));
+        }
+    }
+    (!rows.is_empty()).then(|| Chunk { start_line: 1, end_line: end, heading_path: SUMMARY_HEADING.into(), raw: rows.join("\n") })
+}
+
+/// The chunks a document is indexed as: its sections and, for agents and skills, first the frontmatter summary.
+pub fn chunks_for(zone: &str, text: &str) -> Vec<Chunk> {
+    let mut out: Vec<Chunk> = Vec::new();
+    if matches!(zone, "agents" | "skills") {
+        out.extend(frontmatter_summary(text));
+    }
+    out.extend(chunk_markdown(text));
+    out
+}
+
 /// Identifier-like tokens, and a `def:<token>` marker for each one a line *opens with* (a definition such as
 /// `**[REV-SEC-04]** …`), so that a chunk defining an identifier can outrank the many that only mention it.
 pub fn identifiers(text: &str) -> String {
@@ -318,6 +373,8 @@ pub struct Kb {
     seed: Option<Arc<embed::vectors::VecCache>>,
     /// How many chunks the last `embed_pending` took from `seed` instead of running the model.
     seeded: usize,
+    /// Reads a question with each of the best results and reorders them (`specs/004` §3.7).
+    reranker: Option<Arc<dyn Reranker>>,
 }
 
 fn frontmatter_field(text: &str, key: &str) -> Option<String> {
@@ -346,8 +403,21 @@ impl Kb {
 
     fn init(conn: Connection) -> Result<Kb, KbError> {
         conn.execute_batch(SCHEMA)?;
+        // An index made before files were compared by modification time gains the columns; 0 means "read it once".
+        let columns: Vec<String> = conn.prepare("PRAGMA table_info(kb_documents)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().collect();
+        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0")] {
+            if !columns.iter().any(|c| c == name) {
+                conn.execute(ddl, [])?;
+            }
+        }
         conn.execute("INSERT OR IGNORE INTO kb_meta(key, value) VALUES ('schema_version', ?1)", [SCHEMA_VERSION])?;
-        Ok(Kb { conn, embedder: None, floor: None, seed: None, seeded: 0 })
+        let chunker: Option<String> = conn.query_row("SELECT value FROM kb_meta WHERE key = 'chunker_version'", [], |r| r.get(0)).ok();
+        if chunker.as_deref() != Some(CHUNKER_VERSION) {
+            // Forget what each document looked like, so that the next sync reads and chunks all of them afresh.
+            conn.execute("UPDATE kb_documents SET content_blake3 = '', mtime_ns = 0", [])?;
+            conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('chunker_version', ?1)", [CHUNKER_VERSION])?;
+        }
+        Ok(Kb { conn, embedder: None, floor: None, seed: None, seeded: 0, reranker: None })
     }
 
     /// Index one document, replacing any earlier version. Returns whether it changed anything.
@@ -371,7 +441,7 @@ impl Kb {
         }
         tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![rel_path, zone, hash, author, source_type, confidence, status, now])?;
         let doc_id = tx.last_insert_rowid();
-        for (i, c) in chunk_markdown(text).into_iter().enumerate() {
+        for (i, c) in chunks_for(zone, text).into_iter().enumerate() {
             let ids = identifiers(&c.raw);
             let ctx = format!("[File: {} | Lines: {}-{} | Section: {} | Source: {} | Status: {}]\n{}", rel_path, c.start_line, c.end_line, if c.heading_path.is_empty() { "(top)" } else { &c.heading_path }, source_type, status, c.raw);
             tx.execute(
@@ -400,19 +470,41 @@ impl Kb {
         Ok(rep)
     }
 
+    /// Everything a search needs to see the current files: the words are brought up to date (unchanged files are
+    /// found by their modification time and size, not read), and vectors the release shipped are applied. No model
+    /// is run; chunks that still lack a vector are embedded by `embed_pending`, which callers start in the background.
+    pub fn refresh(&mut self, ws: &Path, now: &str) -> Result<IndexReport, KbError> {
+        let rep = self.sync_lexical(&sources(ws), now)?;
+        if self.embedder.is_some() {
+            self.apply_seed_vectors()?;
+        }
+        Ok(rep)
+    }
+
     /// New and changed documents indexed, vanished ones dropped. Fast: no model is run.
     pub fn sync_lexical(&mut self, files: &[SourceFile], now: &str) -> Result<IndexReport, KbError> {
         let mut rep = IndexReport::default();
-        let known: HashMap<String, ()> = {
-            let mut st = self.conn.prepare("SELECT rel_path FROM kb_documents")?;
-            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
-            rows.flatten().map(|p| (p, ())).collect()
+        let known: HashMap<String, (i64, i64)> = {
+            let mut st = self.conn.prepare("SELECT rel_path, mtime_ns, size FROM kb_documents")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))))?;
+            rows.flatten().collect()
         };
         let mut seen: HashMap<&str, ()> = HashMap::new();
         for f in files {
-            let Ok(bytes) = std::fs::read(&f.path) else { continue };
-            let text = String::from_utf8_lossy(&bytes);
+            let Ok(meta) = std::fs::metadata(&f.path) else { continue };
+            let stamp = (meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos() as i64).unwrap_or(0), meta.len() as i64);
             seen.insert(&f.rel_path, ());
+            // A file with the modification time and size it had when it was indexed is not read again: this is
+            // what lets every search check the whole tree. `kb reindex` reads everything regardless.
+            if stamp.0 != 0 && known.get(&f.rel_path) == Some(&stamp) {
+                rep.unchanged += 1;
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&f.path) else {
+                seen.remove(f.rel_path.as_str());
+                continue;
+            };
+            let text = String::from_utf8_lossy(&bytes);
             let existed = known.contains_key(&f.rel_path);
             if self.upsert_from(&f.rel_path, f.zone, f.default_source, &text, now)? {
                 if existed {
@@ -423,6 +515,7 @@ impl Kb {
             } else {
                 rep.unchanged += 1;
             }
+            self.conn.execute("UPDATE kb_documents SET mtime_ns = ?2, size = ?3 WHERE rel_path = ?1", params![f.rel_path, stamp.0, stamp.1])?;
         }
         for p in known.keys().filter(|p| !seen.contains_key(p.as_str())) {
             self.remove(p)?;
@@ -536,6 +629,14 @@ impl Kb {
         self.seed = embed::vectors::load_seed(e.model_id(), e.dim(), EMBED_FORMAT);
         self.embedder = Some(e);
         Ok(())
+    }
+
+    pub fn attach_reranker(&mut self, r: Option<Arc<dyn Reranker>>) {
+        self.reranker = r;
+    }
+
+    pub fn reranker(&self) -> Option<&Arc<dyn Reranker>> {
+        self.reranker.as_ref()
     }
 
     /// Use these preloaded vectors (tests; `attach_embedder` loads the shipped ones itself).
@@ -729,8 +830,20 @@ pub struct SearchOpts {
     pub legs: Legs,
     /// Weight of the vector ranking in the fusion (lexical rankings weigh 1.0; definitions 2.0).
     pub vec_weight: f64,
+    /// Factor on the keyword rankings when the query is a sentence rather than keywords or an identifier.
+    pub natural_lex_weight: f64,
     /// Factor applied to the lexical rankings when no chunk had every query word and the any-word pass was used.
     pub loose_weight: f64,
+    /// Weight of the reranker's ranking in the fusion; 0 leaves the reranker out.
+    pub rerank_weight: f64,
+    /// How many of the best fused results the reranker reads.
+    pub rerank_top: usize,
+    /// How many windows of a result the reranker reads, of about `rerank_chars` characters each; its best counts.
+    pub rerank_windows: usize,
+    pub rerank_chars: usize,
+    /// If the best reranker score is below this, nothing is returned: the reranker has read the best the search
+    /// found and none of it answers the question. `None` uses the floor the reranker's package carries.
+    pub rerank_floor: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -742,7 +855,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, loose_weight: LOOSE_WEIGHT }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None }
     }
 }
 
@@ -764,6 +877,25 @@ const STOPWORDS: &[&str] = &[
     "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "could", "do", "does", "did", "for", "from", "had", "has", "have", "how", "if", "in", "into", "is", "it", "its", "may", "of", "on", "or", "our", "should", "so", "than",
     "that", "the", "their", "them", "then", "there", "these", "they", "this", "to", "was", "we", "were", "what", "when", "where", "which", "who", "whom", "why", "will", "with", "would", "you", "your", "about", "not", "any",
 ];
+
+/// Does this word look like an identifier (`H-004`, `resolve_model_route`, `specs/004`, `thoughtSignature`,
+/// `core-manifest.json`) rather than a word of prose?
+fn identifier_like(tok: &str) -> bool {
+    let t = tok.trim_matches(|c: char| !c.is_alphanumeric());
+    t.chars().any(|c| c.is_ascii_digit() || matches!(c, '_' | '.' | '/' | ':' | '@' | '#')) || t.chars().skip(1).any(|c| c.is_uppercase())
+}
+
+/// A question asked in sentences ("who splits a big task and hands the parts out") rather than a keyword query
+/// (`frozen boot snapshot`) or an identifier (`[REV-SEC-04]`). For a sentence the keyword rankings mostly match
+/// filler and common words, so their weight is lowered (`specs/004` §3.7); for the others they decide.
+pub fn is_natural_question(q: &str) -> bool {
+    let toks: Vec<&str> = q.split_whitespace().collect();
+    if toks.iter().any(|t| identifier_like(t)) {
+        return false;
+    }
+    let fillers = toks.iter().filter(|t| STOPWORDS.contains(&t.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase().as_str())).count();
+    toks.len() >= 5 || (toks.len() >= 3 && fillers >= 1)
+}
 
 /// Query words as FTS5 phrases: quoted so punctuation cannot be read as query syntax.
 fn match_terms(q: &str) -> Vec<String> {
@@ -796,9 +928,14 @@ impl Kb {
 
     /// At most `limit` pointers with three-line previews, best first (`specs/004` §3.4).
     pub fn search(&self, query: &str, opts: &SearchOpts) -> Result<Vec<Hit>, KbError> {
+        Ok(self.search_scored(query, opts)?.0)
+    }
+
+    /// `search`, and the best score the reranker gave any result it read (`None` when it did not run).
+    pub fn search_scored(&self, query: &str, opts: &SearchOpts) -> Result<(Vec<Hit>, Option<f32>), KbError> {
         let terms = match_terms(query);
         if terms.is_empty() {
-            return Ok(vec![]);
+            return Ok((vec![], None));
         }
         let mut allowed = String::from("1=1");
         if !opts.include_untrusted {
@@ -819,7 +956,7 @@ impl Kb {
             // Precise first (every term), then any term, so a long question still finds something.
             let mut ident = Vec::new();
             let mut prose = Vec::new();
-            let (mut factor, mut loose) = (1.0, false);
+            let (mut factor, mut loose) = (if is_natural_question(query) { opts.natural_lex_weight } else { 1.0 }, false);
             for joiner in [" AND ", " OR "] {
                 let expr = terms.join(joiner);
                 ident = self.ranked("kb_fts_ident", ", 2.0, 5.0, 10.0", &expr, &allowed)?;
@@ -828,7 +965,7 @@ impl Kb {
                     break;
                 }
                 // Nothing held every word: the any-word pass that follows is a weaker signal than a full match.
-                (factor, loose) = if terms.len() > 1 { (opts.loose_weight, true) } else { (1.0, false) };
+                (factor, loose) = if terms.len() > 1 { (factor.min(opts.loose_weight), true) } else { (factor, false) };
             }
             // With a model installed, a question that no vector is near and that only some of whose words appear
             // somewhere is not answered by those words alone: that is how off-topic questions get "results".
@@ -854,6 +991,16 @@ impl Kb {
         }
         let mut order: Vec<(i64, f64)> = score.into_iter().collect();
         order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        let mut best_rerank = None;
+        if opts.legs == Legs::Hybrid && opts.rerank_weight > 0.0 {
+            best_rerank = self.rerank(query, &mut order, opts)?;
+            // The reranker read the best the search found and none of it answers the question.
+            if let (Some(best), Some(floor)) = (best_rerank, opts.rerank_floor.or_else(|| self.reranker.as_ref().and_then(|r| r.min_score()))) {
+                if best < floor {
+                    order.clear();
+                }
+            }
+        }
         let mut hits = Vec::new();
         for (id, s) in order.into_iter().take(opts.limit.min(10)) {
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)));
@@ -861,7 +1008,49 @@ impl Kb {
             let preview = raw.lines().filter(|l| !l.trim().is_empty()).take(3).map(|l| l.chars().take(160).collect::<String>()).collect::<Vec<_>>().join("\n");
             hits.push(Hit { pointer: format!("{}#L{}-L{}", rel_path, a, b), rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s });
         }
-        Ok(hits)
+        Ok((hits, best_rerank))
+    }
+}
+
+impl Kb {
+    /// Let the reranker read the question with each of the best fused results, and add its ranking to theirs. The
+    /// reranker only reorders what the search already found and is allowed to see; if it fails the order stands.
+    fn rerank(&self, query: &str, order: &mut [(i64, f64)], opts: &SearchOpts) -> Result<Option<f32>, KbError> {
+        let Some(rr) = &self.reranker else { return Ok(None) };
+        let top = opts.rerank_top.min(order.len());
+        if top < 1 {
+            return Ok(None);
+        }
+        let mut texts: Vec<String> = Vec::new();
+        let mut owner: Vec<usize> = Vec::new();
+        for (i, (id, _)) in order[..top].iter().enumerate() {
+            let (heading, raw): (String, String) = self.conn.query_row("SELECT heading_path, raw_content FROM kb_chunks WHERE chunk_id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            for w in embed::windows(&raw, opts.rerank_chars.max(200), opts.rerank_windows.max(1)) {
+                texts.push(if heading.is_empty() { w } else { format!("{}\n{}", heading, w) });
+                owner.push(i);
+            }
+        }
+        let scores = match rr.score(query, &texts) {
+            Ok(s) => s,
+            Err(e) => {
+                // Search carries on with the order it has, but a reranker that never works must not go unnoticed.
+                static REPORTED: std::sync::Once = std::sync::Once::new();
+                REPORTED.call_once(|| eprintln!("delphi kb: the reranker failed and is being skipped: {}", e));
+                return Ok(None);
+            }
+        };
+        let mut best = vec![f32::NEG_INFINITY; top];
+        for (o, s) in owner.iter().zip(scores) {
+            best[*o] = best[*o].max(s);
+        }
+        let mut by_score: Vec<usize> = (0..top).collect();
+        by_score.sort_by(|a, b| best[*b].partial_cmp(&best[*a]).unwrap_or(std::cmp::Ordering::Equal));
+        let top_score = best.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        for (rank, i) in by_score.into_iter().enumerate() {
+            order[i].1 += opts.rerank_weight / (RRF_K + rank as f64 + 1.0);
+        }
+        order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        Ok(Some(top_score))
     }
 }
 
@@ -873,7 +1062,7 @@ pub fn resolve(ws: &Path, hit: &Hit) -> Result<(usize, usize), String> {
     if blake3::hash(text.as_bytes()).to_hex().as_str() == hit.blake3 {
         return Ok((hit.start_line, hit.end_line));
     }
-    chunk_markdown(&text).into_iter().find(|c| c.heading_path == hit.heading_path).map(|c| (c.start_line, c.end_line)).ok_or_else(|| format!("stale: the section `{}` of {} no longer exists", hit.heading_path, hit.rel_path))
+    chunks_for(src.zone, &text).into_iter().find(|c| c.heading_path == hit.heading_path).map(|c| (c.start_line, c.end_line)).ok_or_else(|| format!("stale: the section `{}` of {} no longer exists", hit.heading_path, hit.rel_path))
 }
 
 /// What `delphi doctor` reports about the index.
@@ -886,6 +1075,8 @@ pub struct Health {
     /// The model that made the vectors in the index, and the one that is installed now.
     pub indexed_model: Option<String>,
     pub installed_model: Option<String>,
+    /// The installed reranking model, if any (it has no state in the index).
+    pub reranker: Option<String>,
 }
 
 pub fn health(home: &Path, ws: &Path) -> Result<Health, KbError> {
@@ -894,7 +1085,7 @@ pub fn health(home: &Path, ws: &Path) -> Result<Health, KbError> {
     let (documents, chunks) = kb.counts()?;
     let indexed_model: Option<String> = kb.conn.query_row("SELECT value FROM kb_meta WHERE key = 'embedding_model_id'", [], |r| r.get(0)).ok();
     let vectors = if has_vec(&kb.conn) { kb.vector_counts()?.0 } else { 0 };
-    Ok(Health { documents, chunks, vectors, indexed_model, installed_model: embed::installed_model_id(Some(home)) })
+    Ok(Health { documents, chunks, vectors, indexed_model, installed_model: embed::installed_model_id(Some(home)), reranker: embed::installed_reranker_id(Some(home)) })
 }
 
 // ── recorded needs (Step 6 evidence) ────────────────────────────────────────
@@ -947,6 +1138,10 @@ fn now() -> String {
 /// Open the installed embedding model for `kb`, if there is one. A model that is installed but cannot be used is
 /// reported once and search carries on without it.
 pub fn attach_default(home: &Path, kb: &mut Kb) -> Result<bool, KbError> {
+    match embed::open_default_reranker(Some(home)) {
+        Ok(r) => kb.attach_reranker(r),
+        Err(e) => eprintln!("delphi kb: the reranking model is not used: {}", e),
+    }
     match embed::open_default(Some(home)) {
         Ok(Some(e)) => {
             kb.attach_embedder(e)?;
@@ -1008,6 +1203,8 @@ pub struct Recall {
     pub at5: f64,
     pub at10: f64,
     pub mrr: f64,
+    /// Mean milliseconds per question.
+    pub ms: f64,
 }
 
 /// One question and where its answer is. `none` marks a question the documents do not answer.
@@ -1032,6 +1229,9 @@ pub struct EvalReport {
     /// Best vector similarity for each answerable question, and for each off-topic one (sorted, ascending).
     pub answerable_sims: Vec<f32>,
     pub off_topic_sims: Vec<f32>,
+    /// The best reranker score for each answerable and each off-topic question (sorted, ascending).
+    pub answerable_rerank: Vec<f32>,
+    pub off_topic_rerank: Vec<f32>,
 }
 
 /// Recall of each ranking on `cases`. A result is right when it is in the expected file (if one is named) under a
@@ -1041,10 +1241,19 @@ pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalRe
     let positives: Vec<&EvalCase> = cases.iter().filter(|c| !c.none).collect();
     let negatives: Vec<&EvalCase> = cases.iter().filter(|c| c.none).collect();
     rep.cases = positives.len();
-    let modes: Vec<(&'static str, Legs)> = if kb.embedder.is_some() { vec![("lexical", Legs::LexicalOnly), ("vector", Legs::VectorOnly), ("hybrid", Legs::Hybrid)] } else { vec![("lexical", Legs::LexicalOnly)] };
-    for (name, legs) in modes {
-        let opts = SearchOpts { legs, include_untrusted: true, ..base.clone() };
+    let mut modes: Vec<(&'static str, Legs, f64)> = vec![("lexical", Legs::LexicalOnly, 0.0)];
+    if kb.embedder.is_some() {
+        modes.push(("vector", Legs::VectorOnly, 0.0));
+        modes.push(("hybrid", Legs::Hybrid, 0.0));
+        if kb.reranker.is_some() {
+            modes.push(("+rerank", Legs::Hybrid, base.rerank_weight));
+        }
+    }
+    let last = modes.len() - 1;
+    for (m, (name, legs, rerank_weight)) in modes.into_iter().enumerate() {
+        let opts = SearchOpts { legs, include_untrusted: true, rerank_weight, ..base.clone() };
         let mut r = Recall::default();
+        let started = std::time::Instant::now();
         for c in &positives {
             let hits = kb.search(&c.q, &opts)?;
             let rank = hits.iter().position(|h| (c.path.is_empty() || h.rel_path == c.path) && h.heading_path.to_lowercase().contains(&c.heading.to_lowercase()));
@@ -1054,12 +1263,12 @@ pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalRe
                 r.at3 += (i < 3) as u8 as f64;
                 r.at5 += (i < 5) as u8 as f64;
                 r.at10 += 1.0;
-            } else if name == "hybrid" || legs == Legs::LexicalOnly && kb.embedder.is_none() {
+            } else if m == last {
                 rep.misses.push(c.q.clone());
             }
         }
         let n = positives.len().max(1) as f64;
-        rep.per_mode.push((name, Recall { at1: r.at1 / n, at3: r.at3 / n, at5: r.at5 / n, at10: r.at10 / n, mrr: r.mrr / n }));
+        rep.per_mode.push((name, Recall { at1: r.at1 / n, at3: r.at3 / n, at5: r.at5 / n, at10: r.at10 / n, mrr: r.mrr / n, ms: started.elapsed().as_secs_f64() * 1000.0 / n }));
         if !negatives.is_empty() {
             let answered = negatives.iter().filter(|c| kb.search(&c.q, &opts).map(|h| !h.is_empty()).unwrap_or(false)).count();
             rep.off_topic.push((name, answered, negatives.len()));
@@ -1072,14 +1281,24 @@ pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalRe
     };
     rep.answerable_sims = sims(&positives);
     rep.off_topic_sims = sims(&negatives);
+    if kb.reranker.is_some() {
+        let rr = |cs: &[&EvalCase]| {
+            let opts = SearchOpts { include_untrusted: true, rerank_floor: None, ..base.clone() };
+            let mut v: Vec<f32> = cs.iter().filter_map(|c| kb.search_scored(&c.q, &opts).ok().and_then(|(_, b)| b)).collect();
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v
+        };
+        rep.answerable_rerank = rr(&positives);
+        rep.off_topic_rerank = rr(&negatives);
+    }
     Ok(rep)
 }
 
 fn print_eval(rep: &EvalReport) {
     println!("recall over {} question(s), top 10:", rep.cases);
-    println!("  {:<8} {:>6} {:>6} {:>6} {:>6} {:>6}", "ranking", "@1", "@3", "@5", "@10", "MRR");
+    println!("  {:<8} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}", "ranking", "@1", "@3", "@5", "@10", "MRR", "ms/q");
     for (name, r) in &rep.per_mode {
-        println!("  {:<8} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6.3}", name, r.at1, r.at3, r.at5, r.at10, r.mrr);
+        println!("  {:<8} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6.3} {:>8.0}", name, r.at1, r.at3, r.at5, r.at10, r.mrr, r.ms);
     }
     for (name, answered, of) in &rep.off_topic {
         println!("  {:<8} answered {} of {} off-topic question(s) (fewer is better)", name, answered, of);
@@ -1090,6 +1309,12 @@ fn print_eval(rep: &EvalReport) {
         let top_off = rep.off_topic_sims.last().copied().unwrap_or(0.0);
         let low_ans = rep.answerable_sims.get(rep.answerable_sims.len() / 10).copied().unwrap_or(1.0);
         println!("  a floor between {:.2} (highest off-topic) and {:.2} (10th percentile of answerable) separates them", top_off, low_ans);
+    }
+    if !rep.answerable_rerank.is_empty() {
+        println!("  best reranker score: answerable {}; off-topic {}", show(&rep.answerable_rerank), show(&rep.off_topic_rerank));
+        let top_off = rep.off_topic_rerank.last().copied().unwrap_or(f32::NEG_INFINITY);
+        let low_ans = rep.answerable_rerank.get(rep.answerable_rerank.len() / 10).copied().unwrap_or(f32::INFINITY);
+        println!("  a reranker floor between {:.2} (highest off-topic) and {:.2} (10th percentile of answerable) separates them", top_off, low_ans);
     }
     for q in &rep.misses {
         println!("  not in the top 10: {}", q);
@@ -1103,29 +1328,70 @@ fn flag_value(args: &[String], name: &str) -> Option<String> {
 fn model_cmd(home: &Path, args: &[String]) -> Result<i32, KbError> {
     match args.first().map(String::as_str) {
         Some("info") | None => {
-            match embed::locate(Some(home)) {
-                embed::ModelSource::Disabled => println!("embedding model: switched off (DELPHI_EMBED_MODEL=off)"),
-                embed::ModelSource::Absent => println!("embedding model: none installed; search is lexical only (install one with `delphi kb model pack` or a release build)"),
-                src => {
-                    #[cfg(feature = "local-embeddings")]
-                    {
-                        let bytes = match &src {
-                            embed::ModelSource::File(p) => std::fs::read(p).map_err(|e| KbError::Io(format!("{}: {}", p.display(), e)))?,
-                            _ => Vec::new(),
-                        };
-                        let origin = match &src {
-                            embed::ModelSource::File(p) => p.display().to_string(),
-                            _ => "compiled into this binary".into(),
-                        };
-                        match embed::open_default(Some(home)) {
-                            Ok(Some(e)) => println!("embedding model: {} ({} dimensions, {}){}", e.model_id(), e.dim(), origin, embed::local::peek(&bytes).map(|m| format!(", from {}", m.source)).unwrap_or_default()),
-                            Ok(None) => println!("embedding model: none"),
-                            Err(e) => println!("embedding model: installed at {} but not usable: {}", origin, e),
+            // delphi kb model info [--check]: what is installed and where; --check also loads each model.
+            let check = args.iter().any(|a| a == "--check");
+            let mut broken = false;
+            for (label, src, off, absent) in [
+                ("embedding model", embed::locate(Some(home)), "switched off (DELPHI_EMBED_MODEL=off)", "none installed; search is lexical only (a release build has one, or install one with `delphi kb model pack`)"),
+                ("reranking model", embed::locate_reranker(Some(home)), "switched off (DELPHI_RERANK_MODEL=off)", "none installed; results are not reranked"),
+            ] {
+                match src {
+                    embed::ModelSource::Disabled => println!("{}: {}", label, off),
+                    embed::ModelSource::Absent => println!("{}: {}", label, absent),
+                    src => {
+                        #[cfg(feature = "local-embeddings")]
+                        {
+                            let origin = match &src {
+                                embed::ModelSource::File(p) => p.display().to_string(),
+                                _ => "compiled into this binary".into(),
+                            };
+                            let meta = match &src {
+                                embed::ModelSource::File(p) => embed::local::peek_file(p),
+                                _ => (if label == "embedding model" { embed::embedded_bytes() } else { embed::embedded_reranker_bytes() }).ok_or_else(|| "no model is compiled in".to_string()).and_then(embed::local::peek),
+                            };
+                            match meta {
+                                Ok(m) => println!("{}: {} ({}){}", label, m.id, origin, if m.source.is_empty() { String::new() } else { format!(", from {}", m.source) }),
+                                Err(e) => {
+                                    broken = true;
+                                    println!("{}: installed at {} but unreadable: {}", label, origin, e);
+                                }
+                            }
+                            if check {
+                                let loaded = if label == "embedding model" { embed::open_default(Some(home)).map(|_| ()) } else { embed::open_default_reranker(Some(home)).map(|_| ()) };
+                                match loaded {
+                                    Ok(()) => println!("{}: loads and runs on {}", label, embed::local::device_name()),
+                                    Err(e) => {
+                                        broken = true;
+                                        println!("{}: does not load: {}", label, e);
+                                    }
+                                }
+                            }
                         }
+                        #[cfg(not(feature = "local-embeddings"))]
+                        println!("{}: {:?} (this build has no embedding runtime)", label, src);
                     }
-                    #[cfg(not(feature = "local-embeddings"))]
-                    println!("embedding model: {:?} (this build has no embedding runtime)", src);
                 }
+            }
+            #[cfg(feature = "local-embeddings")]
+            if let Ok(Some(e)) = embed::open_default(Some(home)).map(|o| o.filter(|_| check)) {
+                match embed::vectors::load_seed(e.model_id(), e.dim(), EMBED_FORMAT) {
+                    Some(c) => println!("preloaded vectors: {} chunk(s) for {}", c.len(), e.model_id()),
+                    None => println!("preloaded vectors: none for {}", e.model_id()),
+                }
+            }
+            Ok(if broken { 1 } else { 0 })
+        }
+        #[cfg(feature = "local-embeddings")]
+        Some("score") => {
+            // delphi kb model score <reranker package> <question> <passage>...: the raw scores, for checking a reranker.
+            let (Some(pkg), Some(q)) = (args.get(1), args.get(2)) else {
+                eprintln!("usage: delphi kb model score <reranker package> <question> <passage>...");
+                return Ok(2);
+            };
+            let rr = embed::local::open_reranker(Path::new(pkg)).map_err(KbError::Io)?;
+            let docs: Vec<String> = args[3..].to_vec();
+            for (d, s) in docs.iter().zip(rr.score(q, &docs).map_err(KbError::Io)?) {
+                println!("{:>9.3}  {}", s, d.chars().take(80).collect::<String>());
             }
             Ok(0)
         }
@@ -1193,7 +1459,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     return Ok(2);
                 }
                 confirm_miss(ws, &query.join(" "), &note.join(" "));
-                println!("recorded. (`delphi needs` weighs confirmed misses when it considers a better embedding model.)");
+                println!("recorded. (Confirmed misses are the questions to add to `dev/kb-eval.json`, so that `delphi kb eval` can measure the fix.)");
                 Ok(0)
             }
             "stats" => {
@@ -1215,24 +1481,25 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let role = args.iter().position(|a| a == "--role").and_then(|i| args.get(i + 1)).cloned();
                 let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank]");
                     return Ok(2);
                 }
                 let mut kb = open()?;
                 let model = attach_default(home, &mut kb)?;
-                // An index that has never been built is built now (words only, which is quick); `kb index` adds vectors.
-                if kb.counts()?.0 == 0 {
-                    kb.sync_lexical(&sources(ws), &now())?;
-                }
+                // The index is brought up to date first (words, and the release's preloaded vectors); the model is not
+                // run here, so `kb index` is what makes vectors for anything else.
+                kb.refresh(ws, &now())?;
                 if model {
-                    kb.apply_seed_vectors()?;
                     let (v, c) = kb.vector_counts()?;
                     if v < c {
                         eprintln!("note: {} of {} chunk(s) have no vector yet; run `delphi kb index` for the best results", c - v, c);
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, ..Default::default() };
+                if args.iter().any(|a| a == "--no-rerank") {
+                    opts.rerank_weight = 0.0;
+                }
                 let hits = kb.search(&query.join(" "), &opts)?;
                 log_search(ws, &query.join(" "), opts.role.as_deref(), hits.len());
                 if hits.is_empty() {
@@ -1264,6 +1531,12 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let mut base = SearchOpts::default();
                 base.vec_weight = num("--vec-weight").unwrap_or(base.vec_weight);
                 base.loose_weight = num("--loose-weight").unwrap_or(base.loose_weight);
+                base.natural_lex_weight = num("--nl-weight").unwrap_or(base.natural_lex_weight);
+                base.rerank_weight = num("--rerank-weight").unwrap_or(base.rerank_weight);
+                base.rerank_top = num("--rerank-top").map(|n| n as usize).unwrap_or(base.rerank_top);
+                base.rerank_windows = num("--rerank-windows").map(|n| n as usize).unwrap_or(base.rerank_windows);
+                base.rerank_chars = num("--rerank-chars").map(|n| n as usize).unwrap_or(base.rerank_chars);
+                base.rerank_floor = num("--rerank-floor").map(|f| f as f32).or(base.rerank_floor);
                 let started = std::time::Instant::now();
                 kb.sync_lexical(&eval_sources(&docs), &now())?;
                 let (d, c) = kb.counts()?;
@@ -1296,7 +1569,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
             }
             "model" => model_cmd(home, &args[1..]),
             _ => {
-                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] | miss | eval | model | seed-export <out>");
+                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] | miss | eval | model | seed-export <out>");
                 Ok(2)
             }
         }
@@ -1571,6 +1844,16 @@ mod tests {
     }
 
     #[test]
+    fn a_sentence_is_told_from_keywords_and_from_an_identifier() {
+        for q in ["who splits a big task and hands the parts out", "what is the builder's job title", "which agent may use the tdd-execution skill", "how are keyword and similarity results combined"] {
+            assert!(is_natural_question(q), "{}", q);
+        }
+        for q in ["frozen boot snapshot", "delphi update state machine", "Sandwich Prompting", "[REV-SEC-04]", "resolve_model_route", "Rule of 25", "ExpeL contrastive distillation", "how does specs/004 work in practice", "embedded core seed core-manifest.json", "unicode61 tokenchars", "what is H-004"] {
+            assert!(!is_natural_question(q), "{}", q);
+        }
+    }
+
+    #[test]
     fn filler_words_are_left_out_of_a_question_unless_nothing_else_is_left() {
         assert_eq!(match_terms("how are untrusted results kept out?"), vec!["\"untrusted\"", "\"results\"", "\"kept\"", "\"out\""]);
         assert_eq!(match_terms("what is the"), vec!["\"what\"", "\"is\"", "\"the\""], "a query made only of filler is used as it is");
@@ -1688,6 +1971,156 @@ mod tests {
         assert_eq!(kb.seeded(), 1);
     }
 
+    /// A reranker that likes passages containing "gold", or one that always fails.
+    struct Gold {
+        broken: bool,
+        read: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Reranker for Gold {
+        fn model_id(&self) -> &str {
+            "test-gold"
+        }
+        fn score(&self, _q: &str, docs: &[String]) -> Result<Vec<f32>, String> {
+            self.read.fetch_add(docs.len(), std::sync::atomic::Ordering::SeqCst);
+            if self.broken {
+                return Err("the model is not there".into());
+            }
+            Ok(docs.iter().map(|d| if d.contains("gold") { 8.0 } else { -8.0 }).collect())
+        }
+    }
+
+    fn zebra_docs() -> Kb {
+        // Lexically the first document is the best match for "zebra"; the one with the gold is not.
+        kb_with(&[
+            ("context/a.md", "context", &ok_doc("zebra zebra zebra zebra zebra")),
+            ("context/b.md", "context", &ok_doc("zebra and the gold")),
+            ("context/c.md", "context", &ok_doc("zebra zebra stripes")),
+        ])
+    }
+
+    #[test]
+    fn the_reranker_reorders_the_best_results_and_can_be_left_out() {
+        let mut kb = zebra_docs();
+        let first = |kb: &Kb, o: &SearchOpts| kb.search("zebra", o).unwrap()[0].rel_path.clone();
+        assert_eq!(first(&kb, &SearchOpts::default()), "context/a.md", "without a reranker the lexical order stands");
+        let gold = Arc::new(Gold { broken: false, read: Default::default() });
+        kb.attach_reranker(Some(gold.clone()));
+        let strong = SearchOpts { rerank_weight: 30.0, ..Default::default() };
+        assert_eq!(first(&kb, &strong), "context/b.md", "the reranker moved the passage it prefers to the top");
+        assert!(gold.read.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+        let off = SearchOpts { rerank_weight: 0.0, ..Default::default() };
+        let before = gold.read.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(first(&kb, &off), "context/a.md", "weight 0 leaves the reranker out");
+        assert_eq!(gold.read.load(std::sync::atomic::Ordering::SeqCst), before, "and it is not even asked");
+        // It reads only as many results as it is allowed to.
+        let before = gold.read.load(std::sync::atomic::Ordering::SeqCst);
+        kb.search("zebra", &SearchOpts { rerank_top: 2, rerank_weight: 30.0, ..Default::default() }).unwrap();
+        assert_eq!(gold.read.load(std::sync::atomic::Ordering::SeqCst) - before, 2);
+        // Only the hybrid search is reranked; asking for words alone is not.
+        assert_eq!(kb.search("zebra", &SearchOpts { legs: Legs::LexicalOnly, ..strong.clone() }).unwrap()[0].rel_path, "context/a.md");
+    }
+
+    #[test]
+    fn a_reranker_score_floor_returns_nothing_when_no_passage_answers() {
+        let mut kb = kb_with(&[("context/a.md", "context", &ok_doc("zebra zebra zebra")), ("context/b.md", "context", &ok_doc("zebra stripes"))]);
+        kb.attach_reranker(Some(Arc::new(Gold { broken: false, read: Default::default() })));
+        // Neither passage has the gold, so the best score is -8.
+        let (hits, best) = kb.search_scored("zebra", &SearchOpts::default()).unwrap();
+        assert_eq!((hits.len(), best), (2, Some(-8.0)));
+        assert!(kb.search("zebra", &SearchOpts { rerank_floor: Some(-5.0), ..Default::default() }).unwrap().is_empty());
+        assert_eq!(kb.search("zebra", &SearchOpts { rerank_floor: Some(-9.0), ..Default::default() }).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_failing_reranker_is_skipped_and_search_still_answers() {
+        let mut kb = zebra_docs();
+        kb.attach_reranker(Some(Arc::new(Gold { broken: true, read: Default::default() })));
+        let hits = kb.search("zebra", &SearchOpts { rerank_weight: 30.0, ..Default::default() }).unwrap();
+        assert_eq!(hits[0].rel_path, "context/a.md", "the order the search had stands");
+        assert_eq!(hits.len(), 3);
+    }
+
+    #[test]
+    fn a_search_that_found_nothing_is_a_candidate_miss_and_the_operator_can_confirm_one() {
+        let d = tempfile::tempdir().unwrap();
+        log_search(d.path(), "pipe buffer deadlock", None, 0);
+        assert_eq!(miss_counts(d.path()), (1, 0), "an empty search alone is only a candidate");
+        confirm_miss(d.path(), "subprocess hang", "it was filed as pipe buffer deadlock");
+        // Searches that found something are not recorded at all.
+        log_search(d.path(), "found it", None, 3);
+        assert_eq!(miss_counts(d.path()), (1, 1));
+    }
+
+    #[test]
+    fn a_search_sees_files_that_changed_without_reading_those_that_did_not() {
+        let ok = |b: &str| format!("---\nsource_type: user_ratified\n---\n# T\n\n{}\n", b);
+        let d = tree(&[("team/context/a.md", &ok("alpha words")), ("team/context/b.md", &ok("beta words")), ("local/.keep", "")]);
+        let mut kb = Kb::open(&d.path().join("local/state.db")).unwrap();
+        let first = kb.refresh(d.path(), "t").unwrap();
+        assert_eq!((first.added, first.unchanged), (2, 0));
+        let again = kb.refresh(d.path(), "t").unwrap();
+        assert_eq!((again.added, again.updated, again.unchanged), (0, 0, 2), "nothing changed, nothing read");
+        // A file the index has stamped is not read: replace its text but keep its size and modification time,
+        // and the index (by design) still holds the old text until `reindex`.
+        let a = d.path().join("team/context/a.md");
+        let stamp = std::fs::metadata(&a).unwrap().modified().unwrap();
+        std::fs::write(&a, ok("omega words")).unwrap();
+        std::fs::File::options().write(true).open(&a).unwrap().set_modified(stamp).unwrap();
+        kb.refresh(d.path(), "t").unwrap();
+        assert_eq!(kb.search("alpha", &SearchOpts::default()).unwrap().len(), 1, "the fast path trusts an unchanged stamp");
+        kb.rebuild(&sources(d.path()), "t").unwrap();
+        assert_eq!(kb.search("omega", &SearchOpts::default()).unwrap().len(), 1, "a reindex reads everything");
+        // A real edit (new text, new size and time) is picked up by the next search; so are new and removed files.
+        std::fs::write(&a, ok("gamma words and more")).unwrap();
+        std::fs::write(d.path().join("team/context/c.md"), ok("delta words")).unwrap();
+        std::fs::remove_file(d.path().join("team/context/b.md")).unwrap();
+        let rep = kb.refresh(d.path(), "t").unwrap();
+        assert_eq!((rep.added, rep.updated, rep.removed), (1, 1, 1));
+        assert_eq!(kb.search("gamma", &SearchOpts::default()).unwrap().len(), 1);
+        assert_eq!(kb.search("delta", &SearchOpts::default()).unwrap().len(), 1);
+        assert!(kb.search("beta", &SearchOpts::default()).unwrap().is_empty());
+        kb.integrity_check().unwrap();
+    }
+
+    #[test]
+    fn an_index_made_with_older_chunking_rules_is_chunked_again_once() {
+        let manifest = "---\nid: builder\nrole: \"Lead Engineer\"\n---\n# Builder\n\nWrites code.\n";
+        let d = tree(&[("base/agents/builder/AGENT.md", manifest), ("local/.keep", "")]);
+        let db = d.path().join("local/state.db");
+        {
+            let mut kb = Kb::open(&db).unwrap();
+            kb.refresh(d.path(), "t").unwrap();
+            // Make it look like an index from before summaries: no summary chunk, and the old version recorded.
+            kb.conn.execute("DELETE FROM kb_chunks WHERE heading_path = ?1", [SUMMARY_HEADING]).unwrap();
+            kb.conn.execute("UPDATE kb_meta SET value = '1' WHERE key = 'chunker_version'", []).unwrap();
+        }
+        let mut kb = Kb::open(&db).unwrap();
+        let rep = kb.refresh(d.path(), "t").unwrap();
+        assert_eq!(rep.updated, 1, "the unchanged file was read again");
+        assert_eq!(kb.search("Lead Engineer", &SearchOpts::default()).unwrap()[0].heading_path, SUMMARY_HEADING);
+        assert_eq!(kb.refresh(d.path(), "t").unwrap().unchanged, 1, "and only once");
+        kb.integrity_check().unwrap();
+    }
+
+    #[test]
+    fn an_index_made_before_files_were_stamped_gains_the_columns_and_is_read_once() {
+        let ok = "---\nsource_type: user_ratified\n---\n# T\n\nalpha words\n";
+        let d = tree(&[("team/context/a.md", ok), ("local/.keep", "")]);
+        let db = d.path().join("local/state.db");
+        {
+            let mut kb = Kb::open(&db).unwrap();
+            kb.refresh(d.path(), "t").unwrap();
+            kb.conn.execute_batch("ALTER TABLE kb_documents DROP COLUMN mtime_ns; ALTER TABLE kb_documents DROP COLUMN size;").unwrap();
+        }
+        let mut kb = Kb::open(&db).unwrap();
+        let rep = kb.refresh(d.path(), "t").unwrap();
+        assert_eq!((rep.added, rep.updated, rep.unchanged), (0, 0, 1), "read once to learn its stamp, and found unchanged");
+        assert_eq!(kb.refresh(d.path(), "t").unwrap().unchanged, 1);
+        let stamped: i64 = kb.conn.query_row("SELECT COUNT(*) FROM kb_documents WHERE mtime_ns != 0", [], |r| r.get(0)).unwrap();
+        assert_eq!(stamped, 1);
+    }
+
     #[test]
     fn agents_and_skills_are_indexed_trusted_unless_a_file_says_otherwise() {
         let manifest = |role: &str| format!("---\nid: {}\nrole: \"Lead Engineer\"\n---\n# {}\n\nWrites zebra code.\n", role, role);
@@ -1707,6 +2140,10 @@ mod tests {
         found.sort();
         assert_eq!(found, vec!["agents/builder/AGENT.md", "skills/tdd/SKILL.md"], "shipped and team files are trusted by default; a file that says it is untrusted is not");
         assert_eq!(paths(&SearchOpts { include_untrusted: true, ..Default::default() }).len(), 3);
+        // What a manifest says about itself in its frontmatter can be looked up, and points at those lines.
+        let by_role = kb.search("Lead Engineer", &SearchOpts::default()).unwrap();
+        assert_eq!((by_role[0].heading_path.as_str(), by_role[0].pointer.as_str()), (SUMMARY_HEADING, "agents/builder/AGENT.md#L1-L4"));
+        assert_eq!(resolve(d.path(), &by_role[0]), Ok((1, 4)), "the summary's pointer stays valid");
         let doc_tier: String = kb.conn.query_row("SELECT source_type FROM kb_documents WHERE rel_path = 'agents/builder/AGENT.md'", [], |r| r.get(0)).unwrap();
         assert_eq!(doc_tier, "internal_generated", "the team copy replaced the shipped one and carries the team's tier");
         let shipped: String = kb.conn.query_row("SELECT source_type FROM kb_documents WHERE rel_path = 'skills/tdd/SKILL.md'", [], |r| r.get(0)).unwrap();

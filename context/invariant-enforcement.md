@@ -86,7 +86,7 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Optimistic mode refuses to start without the OS sandbox | GOV §5.9, §5.5 | `Engine::mark_optimistic` | Daemon | ✅ |
 | A review is bound to the decision's payload hash and made at the console only | spec 015 §6 | `decisions.review` (console scope) | Daemon | ✅ |
 | A relay sees only the listed event kinds and calls only the listed methods | GOV §5.10, spec 014 §2 | `RELAY_EVENTS`, `RELAY_METHODS`; pinned by tests | Daemon | ✅ |
-| A relay can never approve a Red card, or "allow similar" | GOV §5.10, spec 014 §3 | `approval.relay_resolve` | Daemon | ✅ |
+| A relay can approve a Red card only with an authenticator code the daemon verifies (single use, rationed); never "allow similar" | GOV §5.10, spec 014 §3, §7 | `approval.relay_resolve`, `totp::Verifier` | Daemon | ✅ |
 | Relay settings (who may answer) are read only from the ratified copy | GOV §5.10, spec 014 §4 | `lock::ACCESS_KEYS` includes `relay` | Daemon | ✅ |
 | A relay reply counts only with its single-use code, from an authenticated allowlisted sender, on the first line | GOV §5.10, spec 014 §5 | `relay/mod.rs`, `relay/email.rs` (the relay process) | Relay process | ✅ |
 | A deny hook can only refuse: exit 0 changes nothing; any failure to run is a refusal | GOV §5.11, spec 018 §4 | `Engine::hook_denial` | Daemon | ✅ |

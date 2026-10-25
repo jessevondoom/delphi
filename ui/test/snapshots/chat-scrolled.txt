@@ -1,18 +1,18 @@
 ⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
-    rust
-    fn enqueue(job: Job) -> Result<()> { Ok(()) }
+ → read_file(specs/002-adapter-and-routing.md) ✔
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
-  See specs/002-adapter-and-routing.md#4 for the ladder.
-
-
-❯ Now write it
+                                                                                      you · 00:00:03
+                                                                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                                                       Now write it
+                                                                                      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 ── approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
     + fn enqueue()
-                                                      ↓ 6 lines below · pgdn · new output waits here
+                                             ↓ 6 more lines · pgdn or space · enter jumps to the end
 ◐ working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯

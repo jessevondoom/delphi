@@ -85,7 +85,7 @@ flowchart TB
     subgraph Core ["delphi-core (per-workspace daemon)"]
         Runtime["Agent state machine & worktree supervisor"]
         JSONL["Append-only event log\n(`missions/<id>/events.jsonl`)"]
-        SQLite["SQLite WAL + FTS5\n(`.delphi/state.db`: cost ledger & knowledge search)"]
+        SQLite["SQLite WAL + FTS5 + sqlite-vec\n(`.delphi/state.db`: cost ledger & knowledge search)"]
     end
 
     ConsoleWin <==> Bus
@@ -102,7 +102,7 @@ flowchart TB
 ### 4.2 Window 2: Narrator (`delphi narrator`)
 - Its label also comes from the theme.
 - Runs in any second terminal, or opens via `delphi --dual` / `Ctrl+W` (`tmux` in v1), with an inline `Tab` toggle for single-screen sessions.
-- Four live views: **[1: Task DAG]**, **[2: Council Chamber]** (Round 1 streams, then Round 2 Red-Team/Strategist cross-examination), **[3: Forge]** (Builder's worktree diffs and test output), **[4: Archives]** (FTS5 knowledge base browser).
+- Four live views: **[1: Task DAG]**, **[2: Council Chamber]** (Round 1 streams, then Round 2 Red-Team/Strategist cross-examination), **[3: Forge]** (Builder's worktree diffs and test output), **[4: Archives]** (knowledge base search: keywords, meaning and reranking).
 
 ---
 
@@ -136,7 +136,7 @@ The modular subsystem specifications in `specs/`:
 - [x] **[`specs/001-governance-and-manifests.md`](specs/001-governance-and-manifests.md):** Schemas for `AGENT.md`, progressive-disclosure `SKILL.md` packages, `HandoffEnvelope`, and 6-tier YAML provenance/taint frontmatter.
 - [x] **[`specs/002-adapter-and-routing.md`](specs/002-adapter-and-routing.md):** The **Adapter** Intermediate Prompt Representation (IPR), provider dialect passes, `ContentBlock` signature preservation, **Orchestrator's** dynamic Claude/Gemini model scaler, and CLI harness JSONL drivers.
 - [x] **[`specs/003-collaboration-and-council.md`](specs/003-collaboration-and-council.md):** Complexity escalation ladder, Orchestrator DAG execution, 3-round sparse Council state machine, Heterogeneous Model Routing, and Minority Report synthesis.
-- [x] **[`specs/004-memory-and-coaching.md`](specs/004-memory-and-coaching.md):** Dual-tier memory engine, Frozen Boot-Snapshot cache hygiene, Two-Gear Zero-Server Hybrid RAG (`.delphi/state.db` AST breadcrumb chunking + FTS5 BM25 + `sqlite-vec` + RRF), Two-Strike Context Circuit Breaker, and ExpeL Rule-of-25 coaching loop.
+- [x] **[`specs/004-memory-and-coaching.md`](specs/004-memory-and-coaching.md):** Dual-tier memory engine, Frozen Boot-Snapshot cache hygiene, Two-Gear Zero-Server Hybrid RAG (`.delphi/state.db` AST breadcrumb chunking + FTS5 BM25 + `sqlite-vec` local embeddings + RRF + a cross-encoder reranker, with preloaded vectors for the shipped documents; Amendments 004-A1 to A3), Two-Strike Context Circuit Breaker, and ExpeL Rule-of-25 coaching loop.
 - [x] **[`specs/005-console-and-narrator-tui.md`](specs/005-console-and-narrator-tui.md):** `delphi-core` UDS daemon protocol, 60Hz event bus, `Console` operator deck, `Narrator` 4-view live narrator/telemetry window, and multiplexer auto-spawning.
 - [x] **[`specs/006-installer-and-updater.md`](specs/006-installer-and-updater.md):** Single-binary embedded-seed packaging, `delphi init` wizard, Three-Zone `delphi update` (`diff3` merge) & `delphi sync` engine, and 8-point `delphi doctor`.
 - [x] **[`specs/007-federated-mesh-and-sync.md`](specs/007-federated-mesh-and-sync.md):** Multi-instance peer federation via **Integrator** (A2A task delegation, `delphi://` Ed25519 UCAN/Biscuit capability pointers, Tailscale/SSH/mDNS transport, and transitive taint lattice firewall).

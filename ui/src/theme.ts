@@ -32,7 +32,8 @@ export type Info = {
   avatar?: AvatarSpec;
 };
 
-export type Pal = { dark: boolean };
+/** Dark or light, and the terminal's background colour when it answered the query (`null`/absent: unknown, so no tint). */
+export type Pal = { dark: boolean; bg?: Rgb | null };
 
 /**
  * What the terminal can show (`005e` §5). `NO_COLOR` (set to anything) and `TERM=dumb` mean no colour at all;
@@ -82,6 +83,14 @@ export const syntax = {
   kw: by((s) => chalk.magenta(s)), str: by((s) => chalk.green(s)), num: by((s) => chalk.yellow(s)), com: muted, ty: by((s) => chalk.cyan(s)),
   add: ok, del: by((s) => chalk.red(s)), hunk: by((s) => chalk.cyan(s)),
 };
+
+/**
+ * The chip of a finished span (`005e` §8.2): green, its text in the terminal's own background colour (reverse video of
+ * the green), padded by a space each side. Without colour it is `[✔ finished]`, in bold.
+ */
+export const chipOk = (label: string): string => (caps.color === 'none' ? chalk.bold(`[${label}]`) : chalk.green.inverse.bold(` ${label} `));
+/** The same chip for a span that stopped and needs the operator: the alert colour. */
+export const chipStopped = (label: string): string => (caps.color === 'none' ? chalk.bold(`[${label}]`) : chalk.red.inverse.bold(` ${label} `));
 
 // The older names the screens use; same functions.
 export const text = (_p: Pal): Style => body;

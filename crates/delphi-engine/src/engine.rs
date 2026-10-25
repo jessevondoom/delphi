@@ -97,6 +97,10 @@ pub struct Settings {
     /// `[hooks]` (ratified): deny hooks the daemon runs before an approval (`hooks.rs`). Observe hooks are run by
     /// `delphi hooks`, not here.
     pub hooks: crate::hooks::Hooks,
+    /// `[relay] step_up = "totp"` with `totp_credential`: the reference to the secret behind the operator's
+    /// authenticator (`keychain:…`, `env:…`, `command:[…]`). With it, a relay may approve a Red card when the answer
+    /// carries a valid code; without it a relay can only deny Red (`specs/014` §3).
+    pub relay_totp_credential: Option<String>,
 }
 
 impl Default for Settings {
@@ -127,6 +131,7 @@ impl Default for Settings {
             max_decisions: 200,
             max_approver_calls: 100,
             hooks: Default::default(),
+            relay_totp_credential: None,
         }
     }
 }
@@ -217,6 +222,8 @@ pub struct Engine {
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
+    /// Single-use and rate-limit state for step-up codes.
+    pub(crate) totp: delphi_core::totp::Verifier,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.

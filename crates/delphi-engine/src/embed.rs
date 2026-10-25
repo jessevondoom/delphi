@@ -74,6 +74,16 @@ pub fn installed_model_id(home: Option<&Path>) -> Option<String> {
     }
 }
 
+/// The bytes of the model package compiled into this binary, if any.
+pub fn embedded_bytes() -> Option<&'static [u8]> {
+    EMBEDDED
+}
+
+/// The bytes of the reranker package compiled into this binary, if any.
+pub fn embedded_reranker_bytes() -> Option<&'static [u8]> {
+    EMBEDDED_RERANK
+}
+
 /// The installed model, loaded once per process. `Err` says why a model that is installed could not be used.
 pub fn open_default(home: Option<&Path>) -> Result<Option<Arc<dyn Embedder>>, String> {
     static LOADED: OnceLock<Result<Option<Arc<dyn Embedder>>, String>> = OnceLock::new();
@@ -88,6 +98,77 @@ pub fn open_default(home: Option<&Path>) -> Result<Option<Arc<dyn Embedder>>, St
             _ => Err("this build has no embedding runtime".to_string()),
         })
         .clone()
+}
+
+/// Scores how well passages answer a question, reading both together. Slower than an embedder, so it is applied to
+/// the few best results of a search, not to the corpus.
+pub trait Reranker: Send + Sync {
+    /// Names the model and its quantization.
+    fn model_id(&self) -> &str;
+    /// A relevance score for each passage, in the order of `docs`. Higher is better; scores are comparable only
+    /// within one call.
+    fn score(&self, query: &str, docs: &[String]) -> Result<Vec<f32>, String>;
+    /// The score below which the best passage no more answers a question than an unrelated one does, measured with
+    /// `delphi kb eval`. `None` when the model has not been calibrated.
+    fn min_score(&self) -> Option<f32> {
+        None
+    }
+}
+
+/// The reranker package compiled into this binary, if the build asked for one (`DELPHI_RERANK_MODEL_FILE`).
+#[cfg(feature = "embedded-model")]
+static EMBEDDED_RERANK: Option<&[u8]> = Some(include_bytes!(env!("DELPHI_RERANK_MODEL_FILE")));
+#[cfg(not(feature = "embedded-model"))]
+static EMBEDDED_RERANK: Option<&[u8]> = None;
+
+pub const HOME_RERANK_MODEL: &str = "models/rerank.dlphmdl";
+
+/// Where the reranker comes from, in order: `DELPHI_RERANK_MODEL` (`off` switches it off), then
+/// `$DELPHI_HOME/models/rerank.dlphmdl`, then the one in the binary.
+pub fn locate_reranker(home: Option<&Path>) -> ModelSource {
+    if let Ok(v) = std::env::var("DELPHI_RERANK_MODEL") {
+        return if v == "off" { ModelSource::Disabled } else { ModelSource::File(PathBuf::from(v)) };
+    }
+    if let Some(p) = home.map(|h| h.join(HOME_RERANK_MODEL)).filter(|p| p.is_file()) {
+        return ModelSource::File(p);
+    }
+    if EMBEDDED_RERANK.is_some() {
+        return ModelSource::Embedded;
+    }
+    ModelSource::Absent
+}
+
+/// The installed reranker, loaded once per process. `Err` says why one that is installed could not be used.
+pub fn open_default_reranker(home: Option<&Path>) -> Result<Option<Arc<dyn Reranker>>, String> {
+    static LOADED: OnceLock<Result<Option<Arc<dyn Reranker>>, String>> = OnceLock::new();
+    LOADED
+        .get_or_init(|| match locate_reranker(home) {
+            ModelSource::Disabled | ModelSource::Absent => Ok(None),
+            #[cfg(feature = "local-embeddings")]
+            ModelSource::File(p) => local::open_reranker(&p).map(Some),
+            #[cfg(feature = "local-embeddings")]
+            ModelSource::Embedded => local::open_reranker_bytes(EMBEDDED_RERANK.unwrap_or_default()).map(Some),
+            #[cfg(not(feature = "local-embeddings"))]
+            _ => Err("this build has no embedding runtime".to_string()),
+        })
+        .clone()
+}
+
+/// The id of the installed reranker, read from the package header without loading its weights.
+pub fn installed_reranker_id(home: Option<&Path>) -> Option<String> {
+    #[cfg(feature = "local-embeddings")]
+    {
+        match locate_reranker(home) {
+            ModelSource::File(p) => local::peek_file(&p).ok().map(|m| m.id),
+            ModelSource::Embedded => EMBEDDED_RERANK.and_then(|b| local::peek(b).ok()).map(|m| m.id),
+            _ => None,
+        }
+    }
+    #[cfg(not(feature = "local-embeddings"))]
+    {
+        let _ = home;
+        None
+    }
 }
 
 /// Pieces of `text` of roughly `max_chars`, split at blank lines outside code fences, so that a section longer
