@@ -14,6 +14,13 @@
 //! The socket directory is mode 0700 and the first line on every connection must carry the span's 256-bit token
 //! (passed to the relay in its environment, never on a command line). A call for a tool the span was not offered
 //! is refused here as well as in `exec_tool`.
+//!
+//! The Antigravity CLI (`agy`) gets the same bridge through a workspace-local `.agents/` directory instead of a flag
+//! ([`Bridge::write_agy_workspace`], `specs/020` §8): a plugin that starts the relay, and a `PreToolUse` hook
+//! (`delphi __agy-hook`, [`run_agy_hook`]) that asks this server, over the same socket, whether each tool call may
+//! run. The answer comes from a [`HookPolicy`]: Delphi's own tools and the few CLI tools a profile names are allowed,
+//! everything else is denied. A hook that cannot reach the server denies, and so does one that fails, which `agy`
+//! also treats as a denial.
 
 use crate::tools::ToolResult;
 use delphi_adapter::claude::ToolDef;
@@ -45,12 +52,88 @@ pub struct BridgeCall {
     pub reply: oneshot::Sender<ToolResult>,
 }
 
+/// The tool-name prefix of Delphi's tools as the Antigravity CLI shows them: `mcp_<plugin>_<server>_<tool>`.
+pub const AGY_TOOL_PREFIX: &str = "mcp_delphi_delphi_";
+
+/// What a `PreToolUse` hook may let through (`specs/020` §8.3).
+#[derive(Debug, Clone, Default)]
+pub struct HookPolicy {
+    /// A tool whose name starts with one of these is Delphi's own.
+    pub allow_prefixes: Vec<String>,
+    /// Exact names of the CLI's own tools a profile allows (`search_web`, `read_url_content`).
+    pub allow_names: Vec<String>,
+}
+
+impl HookPolicy {
+    /// Allow or deny a tool by name, with the reason the model is told when it is denied.
+    pub fn decide(&self, tool: &str) -> (bool, String) {
+        if !tool.is_empty() && (self.allow_prefixes.iter().any(|p| tool.starts_with(p)) || self.allow_names.iter().any(|n| n == tool)) {
+            return (true, String::new());
+        }
+        let own = self.allow_prefixes.first().map(String::as_str).unwrap_or(AGY_TOOL_PREFIX);
+        let web = if self.allow_names.is_empty() { String::new() } else { format!(" and {}", self.allow_names.join(", ")) };
+        let why = match tool {
+            "call_mcp_tool" => format!("call the Delphi tools directly by their names (they start with `{}`)", own),
+            "" => "the tool call named no tool".to_string(),
+            t => format!("`{}` is not available in this task; the Delphi tools (names starting `{}`){} are", t, own, web),
+        };
+        (false, format!("denied by Delphi: {}", why))
+    }
+}
+
+/// The Antigravity CLI's names for the CLI tools a `[harness.agy]` profile lists. The profile uses the Claude CLI's names
+/// for the web tools (`WebSearch`, `WebFetch`); an entry that is already an `agy` tool name (lower case, underscores) is
+/// kept; any other Claude-only name (`Read`, `Bash`, ...) means nothing to `agy` and is dropped, so it cannot widen the
+/// gate by accident. No duplicates.
+pub fn agy_native_tools(names: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in names {
+        let mapped = match n.as_str() {
+            "WebSearch" => Some("search_web".to_string()),
+            "WebFetch" => Some("read_url_content".to_string()),
+            x if !x.is_empty() && x.chars().all(|c| c.is_ascii_lowercase() || c == '_') => Some(x.to_string()),
+            _ => None,
+        };
+        if let Some(m) = mapped.filter(|m| !out.contains(m)) {
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// One decision the gate made, for the span's log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookNote {
+    pub tool: String,
+    pub allowed: bool,
+    /// The first useful argument (a path, a command, a query), shortened, for the log. Never a secret the model was not already given.
+    pub summary: String,
+}
+
+/// A short, printable stand-in for a tool call's arguments.
+fn summarize_args(args: &Value) -> String {
+    let pick = ["CommandLine", "Path", "path", "query", "Query", "Url", "url", "TargetFile", "Prompt"].iter().find_map(|k| args[*k].as_str());
+    pick.unwrap_or("").chars().take(200).collect()
+}
+
 /// A running bridge. Dropping it stops the server and removes its directory.
 pub struct Bridge {
     dir: PathBuf,
     config_path: PathBuf,
     token: String,
     accept: tokio::task::JoinHandle<()>,
+    program: PathBuf,
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    f.write_all(bytes)
+}
+
+/// `s` as one word for `sh -c`.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 pub fn random_hex(bytes: usize) -> std::io::Result<String> {
@@ -59,18 +142,47 @@ pub fn random_hex(bytes: usize) -> std::io::Result<String> {
     Ok(b.iter().map(|x| format!("{:02x}", x)).collect())
 }
 
+/// Gemini's function-calling validation rejects the whole request, and so the whole span, if any array in any tool's
+/// schema has no `items` key; `items: {}` is accepted and claims nothing about the elements. Claude does not mind either way, so
+/// this is applied only to the server an `agy` span gets (a remote connector's schema is not Delphi's to correct at the source).
+fn with_array_items(schema: &mut Value) {
+    match schema {
+        Value::Object(map) => {
+            if map.get("type").is_some_and(|t| t == "array" || t.as_array().is_some_and(|a| a.iter().any(|x| x == "array"))) && !map.contains_key("items") {
+                map.insert("items".into(), json!({}));
+            }
+            for v in map.values_mut() {
+                with_array_items(v);
+            }
+        }
+        Value::Array(list) => list.iter_mut().for_each(with_array_items),
+        _ => {}
+    }
+}
+
 /// Map a Delphi tool to MCP's shape.
-fn mcp_tool(d: &ToolDef) -> Value {
+fn mcp_tool(d: &ToolDef, gemini: bool) -> Value {
+    let mut schema = d.input_schema.clone();
+    if gemini {
+        with_array_items(&mut schema);
+    }
     // `antigravity/alwaysLoad`: the Antigravity CLI loads a server's tools on demand, behind its generic `call_mcp_tool`,
     // unless the server marks them. Delphi's tools are the point of the seat, so they are offered directly by their own
     // names (which also lets a gate see which tool is being called). Other clients ignore the key.
-    json!({"name": d.name, "description": d.description, "inputSchema": d.input_schema, "_meta": {"antigravity/alwaysLoad": true}})
+    json!({"name": d.name, "description": d.description, "inputSchema": schema, "_meta": {"antigravity/alwaysLoad": true}})
 }
 
 impl Bridge {
     /// Listen for one span. `tools` are the only names `tools/call` will accept; `instructions` is shown to the model
     /// by the CLI as the server's own usage notes. `program` is what the CLI runs as the relay (the `delphi` executable).
     pub async fn start(tools: Vec<ToolDef>, instructions: String, program: &Path) -> std::io::Result<(Bridge, mpsc::Receiver<BridgeCall>)> {
+        let (b, rx, _) = Bridge::start_gated(tools, instructions, program, None).await?;
+        Ok((b, rx))
+    }
+
+    /// [`Bridge::start`], and with a [`HookPolicy`] the server also answers the `agy` gate hook and sends a [`HookNote`]
+    /// for every decision.
+    pub async fn start_gated(tools: Vec<ToolDef>, instructions: String, program: &Path, hook: Option<HookPolicy>) -> std::io::Result<(Bridge, mpsc::Receiver<BridgeCall>, mpsc::UnboundedReceiver<HookNote>)> {
         // A unix socket path must fit in about 100 bytes, so the directory is short and sits in the temp dir.
         let mut base = std::env::temp_dir();
         if base.as_os_str().len() > 60 {
@@ -92,14 +204,33 @@ impl Bridge {
             f.write_all(config.to_string().as_bytes())?;
         }
         let (tx, rx) = mpsc::channel::<BridgeCall>(16);
-        let shared = Arc::new(Shared { tools: tools.iter().map(mcp_tool).collect(), names: tools.iter().map(|t| t.name.clone()).collect(), instructions, token: token.clone(), tx });
+        let (notes, notes_rx) = mpsc::unbounded_channel::<HookNote>();
+        let shared = Arc::new(Shared { tools: tools.iter().map(|t| mcp_tool(t, hook.is_some())).collect(), names: tools.iter().map(|t| t.name.clone()).collect(), instructions, token: token.clone(), tx, hook, notes });
         let accept = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let shared = shared.clone();
                 tokio::spawn(async move { serve(stream, shared).await });
             }
         });
-        Ok((Bridge { dir, config_path, token, accept }, rx))
+        Ok((Bridge { dir, config_path, token, accept, program: program.to_path_buf() }, rx, notes_rx))
+    }
+
+    /// For the Antigravity CLI: write this span's `.agents/` into `dir`, a directory Delphi made for the span and the CLI
+    /// will use as its working directory. `.agents/plugins/delphi/` is a plugin whose MCP server is this bridge's relay
+    /// (the same config the Claude CLI is given), and `.agents/hooks.json` has one `PreToolUse` hook, for every tool, that
+    /// runs `delphi __agy-hook`. Nothing outside `dir` is touched, and an earlier span's `.agents/` (a dead socket and
+    /// token) is replaced. Files are mode 0600 in directories of mode 0700, because they hold the span's token.
+    pub fn write_agy_workspace(&self, dir: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        let agents = dir.join(".agents");
+        let _ = std::fs::remove_dir_all(&agents);
+        let plugin = agents.join("plugins").join("delphi");
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&plugin)?;
+        write_private(&plugin.join("plugin.json"), br#"{"name":"delphi"}"#)?;
+        write_private(&plugin.join("mcp_config.json"), std::fs::read(&self.config_path)?.as_slice())?;
+        let command = format!("DELPHI_BRIDGE_SOCKET={} DELPHI_BRIDGE_TOKEN={} {} __agy-hook", sh_quote(&self.socket().display().to_string()), sh_quote(&self.token), sh_quote(&self.program.display().to_string()));
+        let hooks = json!({"delphi-gate": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": command, "timeout": 15}]}]}});
+        write_private(&agents.join("hooks.json"), hooks.to_string().as_bytes())
     }
 
     /// The MCP config file to hand the CLI (`--mcp-config`).
@@ -130,6 +261,8 @@ struct Shared {
     instructions: String,
     token: String,
     tx: mpsc::Sender<BridgeCall>,
+    hook: Option<HookPolicy>,
+    notes: mpsc::UnboundedSender<HookNote>,
 }
 
 fn same_token(a: &str, b: &str) -> bool {
@@ -204,6 +337,17 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
             }
             json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": text}], "isError": content.is_error}})
         }
+        // The Antigravity CLI's `PreToolUse` gate asks whether a tool call may run (`run_agy_hook`).
+        "delphi/hook" => match &shared.hook {
+            Some(policy) => {
+                let call = &req["params"]["toolCall"];
+                let tool = call["name"].as_str().unwrap_or("");
+                let (allowed, reason) = policy.decide(tool);
+                let _ = shared.notes.send(HookNote { tool: tool.to_string(), allowed, summary: summarize_args(&call["args"]) });
+                json!({"jsonrpc": "2.0", "id": id, "result": {"decision": if allowed { "allow" } else { "deny" }, "reason": reason}})
+            }
+            None => error(&id, -32601, "this task has no gate"),
+        },
         // The CLI probes with methods of newer protocol revisions (`server/discover`); the right answer is "no such method".
         _ => error(&id, -32601, "method not found"),
     })
@@ -252,6 +396,43 @@ pub fn run_relay(args: &[String]) -> i32 {
                 }
             }
         }
+    }
+}
+
+/// `delphi __agy-hook`: the `PreToolUse` hook the Antigravity CLI runs before every tool call. It reads the call (JSON on
+/// stdin), asks the span's server over its socket (`DELPHI_BRIDGE_SOCKET`, `DELPHI_BRIDGE_TOKEN`) and prints the decision
+/// as the CLI expects it. It holds no policy of its own, and anything that goes wrong is a denial: the CLI treats a hook that
+/// exits non-zero, prints nothing or prints garbage as a denial as well (verified), but a plain "deny" says why.
+pub fn run_agy_hook() -> i32 {
+    fn say(decision: &str, reason: &str) -> i32 {
+        println!("{}", json!({"decision": decision, "reason": reason}));
+        0
+    }
+    let deny = |why: &str| say("deny", &format!("denied by Delphi: {}", why));
+    let mut payload = String::new();
+    if std::io::stdin().take(1 << 20).read_to_string(&mut payload).is_err() {
+        return deny("the tool call could not be read");
+    }
+    let Ok(params) = serde_json::from_str::<Value>(&payload) else { return deny("the tool call was not valid JSON") };
+    let (Some(socket), token) = (std::env::var("DELPHI_BRIDGE_SOCKET").ok().filter(|s| !s.is_empty()), std::env::var("DELPHI_BRIDGE_TOKEN").unwrap_or_default()) else {
+        return deny("this task's gate is not configured");
+    };
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket) else { return deny("the gate could not be reached") };
+    let wait = Some(std::time::Duration::from_secs(10));
+    let _ = stream.set_read_timeout(wait);
+    let _ = stream.set_write_timeout(wait);
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": params});
+    if stream.write_all(format!("{}\n{}\n", json!({"token": token}), request).as_bytes()).is_err() {
+        return deny("the gate could not be reached");
+    }
+    let mut line = String::new();
+    if std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line).is_err() {
+        return deny("the gate did not answer");
+    }
+    match serde_json::from_str::<Value>(&line) {
+        Ok(v) if v["result"]["decision"] == "allow" => say("allow", ""),
+        Ok(v) => deny(v["result"]["reason"].as_str().map(|r| r.trim_start_matches("denied by Delphi: ")).filter(|r| !r.is_empty()).unwrap_or("the gate refused it")),
+        Err(_) => deny("the gate's answer was not understood"),
     }
 }
 
@@ -349,5 +530,113 @@ mod tests {
         let (mut r, mut w) = client(&b, b.token()).await;
         let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer", "arguments": {}}})).await;
         assert_eq!(resp["result"]["isError"], true);
+    }
+
+    fn agy_policy() -> HookPolicy {
+        HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec!["search_web".into(), "read_url_content".into()] }
+    }
+
+    #[tokio::test]
+    async fn a_gated_bridge_gives_every_array_an_items_key_because_gemini_rejects_the_whole_request_without_one() {
+        let sloppy = ToolDef { name: "t".into(), description: "d".into(), input_schema: json!({"type": "object", "properties": {
+            "bare": {"type": "array"},
+            "typed": {"type": "array", "items": {"type": "string"}},
+            "nested": {"type": "array", "items": {"type": "object", "properties": {"inner": {"type": "array"}}}},
+            "either": {"type": ["array", "null"]},
+            "choice": {"anyOf": [{"type": "array"}, {"type": "string"}]}}}) };
+        let ask_tools = |hook: Option<HookPolicy>| {
+            let tool = sloppy.clone();
+            async move {
+                let (b, _calls, _notes) = Bridge::start_gated(vec![tool], String::new(), Path::new("/x/delphi"), hook).await.unwrap();
+                let (mut r, mut w) = client(&b, b.token()).await;
+                ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).await["result"]["tools"][0]["inputSchema"]["properties"].clone()
+            }
+        };
+        let g = ask_tools(Some(agy_policy())).await;
+        assert_eq!(g["bare"]["items"], json!({}));
+        assert_eq!(g["typed"]["items"], json!({"type": "string"}), "an items that is there is left alone");
+        assert_eq!(g["nested"]["items"]["properties"]["inner"]["items"], json!({}));
+        assert_eq!(g["either"]["items"], json!({}));
+        assert_eq!(g["choice"]["anyOf"][0]["items"], json!({}));
+        // The Claude CLI's bridge offers the schema exactly as Delphi defined it.
+        let c = ask_tools(None).await;
+        assert!(c["bare"].get("items").is_none() && c["nested"]["items"]["properties"]["inner"].get("items").is_none());
+    }
+
+    #[test]
+    fn the_gate_lets_delphis_tools_and_the_listed_web_tools_through_and_tells_the_model_why_the_rest_is_denied() {
+        let g = agy_policy();
+        for ok in ["mcp_delphi_delphi_timer", "mcp_delphi_delphi_dispatch_agent", "search_web", "read_url_content"] {
+            assert_eq!(g.decide(ok), (true, String::new()), "{}", ok);
+        }
+        for bad in ["run_command", "view_file", "write_to_file", "browser_subagent", "invoke_subagent", "define_subagent", "schedule", "generate_image", "send_command_input"] {
+            let (allowed, why) = g.decide(bad);
+            assert!(!allowed, "{}", bad);
+            assert!(why.starts_with("denied by Delphi:") && why.contains(bad) && why.contains("mcp_delphi_delphi_") && why.contains("search_web"), "the model is told what to use instead: {}", why);
+        }
+        // The generic MCP caller would reach the same tools by another name, so the model is sent to the direct names.
+        assert!(g.decide("call_mcp_tool").1.contains("directly by their names"));
+        // A lookalike is not Delphi's, and a call that names no tool is denied.
+        assert!(!g.decide("mcp_delphi_other_timer").0 && !g.decide("xmcp_delphi_delphi_timer").0 && !g.decide("").0);
+        // No web tools listed: none allowed, and the reason does not mention them.
+        let none = HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec![] };
+        assert!(!none.decide("search_web").0 && !none.decide("run_command").1.contains("search_web"));
+    }
+
+    #[tokio::test]
+    async fn the_hook_asks_the_span_over_the_socket_and_every_decision_is_noted_for_the_log() {
+        let (b, _calls, mut notes) = Bridge::start_gated(defs(), String::new(), Path::new("/x/delphi"), Some(agy_policy())).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let hook = |name: &str, args: Value| json!({"jsonrpc": "2.0", "id": 5, "method": "delphi/hook", "params": {"toolCall": {"name": name, "args": args}, "conversationId": "c"}});
+        let allow = ask(&mut r, &mut w, hook("mcp_delphi_delphi_timer", json!({"note": "x"}))).await;
+        assert_eq!((allow["result"]["decision"].as_str(), allow["result"]["reason"].as_str()), (Some("allow"), Some("")));
+        let deny = ask(&mut r, &mut w, hook("run_command", json!({"CommandLine": "echo leaked > proof.txt"}))).await;
+        assert_eq!(deny["result"]["decision"], "deny");
+        assert!(deny["result"]["reason"].as_str().unwrap().contains("run_command"));
+        let nameless = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 6, "method": "delphi/hook", "params": {}})).await;
+        assert_eq!(nameless["result"]["decision"], "deny", "a payload without a tool is refused, not waved through");
+        let seen: Vec<HookNote> = std::iter::from_fn(|| notes.try_recv().ok()).collect();
+        assert_eq!(seen[0], HookNote { tool: "mcp_delphi_delphi_timer".into(), allowed: true, summary: String::new() });
+        assert_eq!((seen[1].tool.as_str(), seen[1].allowed, seen[1].summary.as_str()), ("run_command", false, "echo leaked > proof.txt"));
+        assert_eq!(seen.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_bridge_without_a_gate_does_not_answer_the_hook() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {"toolCall": {"name": "run_command"}}})).await;
+        assert_eq!(resp["error"]["code"], -32601, "no policy means no allow");
+        assert!(resp.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_agy_workspace_holds_the_plugin_and_the_gate_privately_and_replaces_an_earlier_span() {
+        use std::os::unix::fs::PermissionsExt;
+        let (b, _calls, _notes) = Bridge::start_gated(defs(), "notes".into(), Path::new("/opt/it's here/delphi"), Some(agy_policy())).await.unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        // An earlier span's leftovers, and a file that is not Delphi's, in the same directory.
+        std::fs::create_dir_all(ws.path().join(".agents/plugins/delphi")).unwrap();
+        std::fs::write(ws.path().join(".agents/plugins/delphi/stale.json"), "old").unwrap();
+        std::fs::write(ws.path().join("keep.txt"), "mine").unwrap();
+        b.write_agy_workspace(ws.path()).unwrap();
+        let plugin = ws.path().join(".agents/plugins/delphi");
+        assert!(!plugin.join("stale.json").exists() && ws.path().join("keep.txt").exists());
+        assert_eq!(std::fs::read_to_string(plugin.join("plugin.json")).unwrap(), r#"{"name":"delphi"}"#);
+        // The plugin's MCP server is the same relay config the Claude CLI is given.
+        assert_eq!(std::fs::read_to_string(plugin.join("mcp_config.json")).unwrap(), std::fs::read_to_string(b.config_path()).unwrap());
+        // The gate: one PreToolUse hook for every tool, running `delphi __agy-hook` with this span's socket and token.
+        let hooks: Value = serde_json::from_str(&std::fs::read_to_string(ws.path().join(".agents/hooks.json")).unwrap()).unwrap();
+        let h = &hooks["delphi-gate"]["PreToolUse"][0];
+        assert_eq!(h["matcher"], ".*");
+        let cmd = h["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains(&format!("DELPHI_BRIDGE_SOCKET='{}'", b.socket().display())) && cmd.contains(&format!("DELPHI_BRIDGE_TOKEN='{}'", b.token())), "{}", cmd);
+        assert!(cmd.ends_with("'/opt/it'\\''s here/delphi' __agy-hook"), "a quote in the path is escaped, not trusted: {}", cmd);
+        assert_eq!((h["hooks"][0]["type"].as_str(), h["hooks"][0]["timeout"].as_u64()), (Some("command"), Some(15)));
+        // Private: the files hold the span's token.
+        for f in [plugin.join("mcp_config.json"), ws.path().join(".agents/hooks.json")] {
+            assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600, "{}", f.display());
+        }
+        assert_eq!(std::fs::metadata(ws.path().join(".agents")).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }

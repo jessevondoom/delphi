@@ -351,7 +351,8 @@ fn first_turn(l: &Launch) -> String {
         // its tools off either, so a role that should have none is told so (a request, not an enforcement: the
         // engine treats every agy span as untrusted and checks the projects afterwards).
         Cli::Agy => {
-            let no_tools = if l.tools == Tools::None { "Do not call any tools. Answer in text only.\n\n" } else { "" };
+            // With the Delphi bridge there is something to call (a gate denies the rest), so the sentence would be false.
+            let no_tools = if l.tools == Tools::None && l.profile.mcp_config.is_none() { "Do not call any tools. Answer in text only.\n\n" } else { "" };
             json!({"event": "user", "message": {"content": format!("{}\n\n{}{}", l.system_prompt, no_tools, l.user_prompt)}})
         }
     }

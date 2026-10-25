@@ -19,6 +19,8 @@ use serde_json::{json, Value};
 
 /// Output cap for an artifact; plain-text `write_file` stays at 256 KB.
 pub const MAX_ARTIFACT_BYTES: usize = 4 << 20;
+/// A PNG is capped lower: it is for messages and slides, not archives.
+pub const MAX_PNG_BYTES: usize = 2 << 20;
 const MAX_MEMBERS: usize = 200;
 /// Directories an agent could mistake for a place to put a deliverable.
 const OTHER_ROOTS: [&str; 6] = ["specs", "context", "memory", "skills", "agents", "themes"];
@@ -35,7 +37,7 @@ fn extensions(tool: &str) -> &'static [&'static str] {
     match tool {
         "write_archive" => &["zip"],
         "write_html" | "write_report" | "write_deck" => &["html", "htm"],
-        "write_chart" => &["svg"],
+        "write_chart" => &["svg", "png"],
         "write_sheet" => &["xlsx", "csv"],
         _ => &[],
     }
@@ -286,14 +288,32 @@ fn classify_sheet(path: &str, args: &Value) -> Result<Classified, ToolError> {
     })
 }
 
+/// The chart arguments with the output file settled. A `.png` path means PNG, and so does `format: "png"` (a string:
+/// the same argument as an object holds number formats), which also gives a path with no extension its `.png`.
+fn chart_normalize(args: &Value) -> Result<Value, String> {
+    let mut a = args.clone();
+    let Some(path) = a.get("path").and_then(|p| p.as_str()).map(String::from) else { return Ok(a) };
+    let fmt = a.get("format").and_then(|f| f.as_str()).map(str::to_lowercase);
+    if let Some(f) = fmt.as_deref().filter(|f| !matches!(*f, "svg" | "png")) {
+        return Err(format!("`format` is svg or png, not `{}`", f));
+    }
+    let file = path.rsplit('/').next().unwrap_or("");
+    let ext = file.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map(|(_, e)| e.to_lowercase());
+    match (fmt.as_deref(), ext.as_deref()) {
+        (Some("png"), None) => a["path"] = json!(format!("{}.png", path)),
+        (Some("png"), Some(e)) if e != "png" => return Err(format!("`format` is png but the path ends in .{}; give it a .png name", e)),
+        (Some("svg"), Some("png")) => return Err("`format` is svg but the path ends in .png".into()),
+        _ => {}
+    }
+    Ok(a)
+}
+
 /// A chart. Charts hold no script, so one is Green in the mission and Amber in a worktree like any worktree edit.
 /// Data read from a file is not opened at classification (it needs the role's read access); the rest is checked now.
 fn classify_chart(args: &Value) -> Result<Classified, ToolError> {
+    let args = &chart_normalize(args).map_err(ToolError)?;
     let path = str_arg(args, "path")?;
-    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_chart").map_err(|e| if path.to_lowercase().ends_with(".png") { ToolError("write_chart writes .svg files; PNG output is not available yet (an SVG opens in any browser)".into()) } else { ToolError(e) })?;
-    if args.get("format").and_then(|f| f.as_str()).is_some_and(|f| f != "svg") {
-        return Err(ToolError("`format` is svg for now; PNG output is not available yet".into()));
-    }
+    let resolved = resolve_path(Some("missions/<mission>/artifacts"), path, "write_chart").map_err(ToolError)?;
     let from = args.pointer("/data/from").and_then(|f| f.as_str());
     let (series, rows) = match from {
         Some(_) => (None, None),
@@ -348,6 +368,13 @@ pub struct Target {
 /// the path, the role's write scope (for the file and its provenance record), the provenance gate, and read
 /// access to each input.
 pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args: &Value) -> Result<Target, ToolResult> {
+    let normalized;
+    let args = if tool == "write_chart" {
+        normalized = chart_normalize(args).map_err(ToolResult::err)?;
+        &normalized
+    } else {
+        args
+    };
     let path = str_arg(args, "path").map_err(|e| ToolResult::err(e.0))?;
     let base = default_dir(guard, mission_id);
     let resolved = resolve_path(base.as_deref(), path, tool).map_err(ToolResult::err)?;
@@ -534,6 +561,10 @@ fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         Ok(t) => t,
         Err(e) => return e,
     };
+    let args = &match chart_normalize(args) {
+        Ok(a) => a,
+        Err(e) => return ToolResult::err(e),
+    };
     let (a, read) = match chart_args(ctx.guard, args) {
         Ok(r) => r,
         Err(e) => return e,
@@ -565,12 +596,27 @@ fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         tier.name(),
         target.sidecar.as_ref().map(|s| format!("; provenance record: {}", s.rsplit('/').next().unwrap_or(s))).unwrap_or_default()
     ));
+    if target.path.to_lowercase().ends_with(".png") {
+        if let Err(e) = chart::png_fit(&spec) {
+            return ToolResult::err(e.0);
+        }
+        let svg = chart::render_svg(&spec, None);
+        let bytes = match delphi_docs::raster::svg_to_png(&svg, spec.theme == chart::Theme::Dark, 2, &[("Title", &spec.title), ("Comment", &comment), ("Software", "delphi write_chart")]) {
+            Ok(b) => b,
+            Err(e) => return ToolResult::err(e.0),
+        };
+        if bytes.len() > MAX_PNG_BYTES {
+            return ToolResult::err(format!("the PNG is {} bytes; the limit is {} (2 MB). Write the chart as .svg", bytes.len(), MAX_PNG_BYTES));
+        }
+        inputs.push(format!("{} chart (PNG, 2x): {} series, {} points, title: {}", spec_args.get("type").and_then(|t| t.as_str()).unwrap_or("?"), spec.series.len(), spec.x.len(), spec.title.chars().take(100).collect::<String>()));
+        return write_artifact(ctx, &target, &bytes, "write_chart", &inputs);
+    }
     let svg = chart::render_svg(&spec, Some(&comment));
     inputs.push(format!("{} chart: {} series, {} points, title: {}", spec_args.get("type").and_then(|t| t.as_str()).unwrap_or("?"), spec.series.len(), spec.x.len(), spec.title.chars().take(100).collect::<String>()));
     write_artifact(ctx, &target, svg.as_bytes(), "write_chart", &inputs)
 }
 
-const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read), {type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
+const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read; the reader can point at marks for their values, click legend items to hide a series and drag to zoom),{type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
@@ -603,7 +649,7 @@ pub fn specs() -> Vec<ToolSpec> {
     ToolSpec {
         def: ToolDef {
             name: "write_chart".into(),
-            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), stacked-bar (parts of a total per category: one column per part in `y`, parts are zero or more), line, area (one series), scatter (at most 2 series), hist (a distribution of one column), box (spread within groups: `x` names the group column and `y` the value column, one row per measurement, at least 5 per group, 2 to 12 groups), heatmap (a grid: `x` names the column categories and each `y` column is a row, up to 24 rows and 40 columns, values shaded and printed), donut (2 to 4 parts of a whole: one value column in `y`, one row per part, with the total in the middle and each part's value and share listed) or sparkline (a small line with no axes for a trend, at least 3 points); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
+            description: "Draw a chart as a self-contained .svg (light and dark, accessible, no script). Describe it, do not draw it: `type` is bar (columns), hbar (rows, for many or long labels), stacked-bar (parts of a total per category: one column per part in `y`, parts are zero or more), line, area (one series), scatter (at most 2 series), hist (a distribution of one column), box (spread within groups: `x` names the group column and `y` the value column, one row per measurement, at least 5 per group, 2 to 12 groups), heatmap (a grid: `x` names the column categories and each `y` column is a row, up to 24 rows and 40 columns, values shaded and printed), donut (2 to 4 parts of a whole: one value column in `y`, one row per part, with the total in the middle and each part's value and share listed) or sparkline (a small line with no axes for a trend, at least 3 points); `title` states the point (\"Median latency fell 12% in 0.2.3\"); `data` is {columns:[names], rows:[[...]]} or {from: \"<a .csv/.tsv you can read>\"}; `x` and `y` name columns (`y` can list several series; or `series_by` names a column that splits one `y` into series); `x_order: \"ordered\"` lets a line use ordered names such as versions; `format: {y: \"0,0 ms\"}` writes numbers; `scale: {y: \"log\"}` or `{y_zero: false}` (bars normally start at zero and the chart says when they do not); `annotations: [{x, label}]` marks a moment; `subtitle`, `source`, `size` (wide|square|tall), `theme`. The tool checks the form fits the data and refuses with a better one: a one-number chart is a stats block, a line needs numbers or dates on x, more than 4 series (2 for scatter) should be folded into Other or shown as several charts, and two quantities on very different scales should not share an axis. `path` is a plain name like `latency.svg` (goes in the mission's folder) or `@worktree/…`; end it in `.png` (or set `format: \"png\"`) for a PNG at twice the size, for messages and slides: its text is plain, so a PNG is refused for more than 12 categories or labels over 24 characters, and SVG is the better file whenever it will be opened in a browser or document. A provenance record is written beside it and the chart is as trusted as the data it draws; data read from a file has its trust printed under the chart.".into(),
             input_schema: json!({"type": "object", "required": ["path", "type", "title", "data"], "properties": {
                 "path": {"type": "string"},
                 "type": {"type": "string", "enum": ["bar", "hbar", "stacked-bar", "line", "area", "scatter", "hist", "box", "heatmap", "donut", "sparkline"]},
@@ -615,7 +661,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "series_by": {"type": "string"},
                 "x_order": {"type": "string", "enum": ["ordered"]},
                 "scale": {"type": "object"},
-                "format": {"type": "object", "description": "number formats, for example {y: \"0,0 ms\"}"},
+                "format": {"type": ["object", "string"], "description": "number formats as an object, for example {y: \"0,0 ms\"}; or the string \"png\" (or \"svg\") to pick the file type"},
                 "annotations": {"type": "array", "maxItems": 5, "items": {"type": "object"}},
                 "bins": {"type": "integer", "minimum": 2, "maximum": 60},
                 "source": {"type": "string"},
@@ -637,7 +683,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "subtitle": {"type": "string"},
                 "summary": {"type": "string"},
                 "toc": {"type": "boolean"},
-                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}}}},
+                "sections": {"type": "array", "minItems": 1, "maxItems": 40, "items": {"type": "object", "required": ["heading"], "properties": {"heading": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array", "items": {"type": "object"}}, "chart": {"type": "object"}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },
@@ -654,7 +700,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "author": {"type": "string"},
-                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array"}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
+                "slides": {"type": "array", "minItems": 1, "maxItems": 60, "items": {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}, "body_md": {"type": "string"}, "blocks": {"type": "array", "items": {"type": "object"}}, "chart": {"type": "object"}, "notes": {"type": "string"}}}},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },
@@ -671,13 +717,13 @@ pub fn specs() -> Vec<ToolSpec> {
                 "sheets": {"type": "array", "minItems": 1, "maxItems": sheetwriter::MAX_SHEETS, "items": {"type": "object", "required": ["columns", "rows"], "properties": {
                     "name": {"type": "string", "description": "up to 31 characters, without [ ] : * ? / or backslash"},
                     "columns": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array"}},
+                    "rows": {"type": "array", "items": {"type": "array", "items": {}}},
                     "formulas": {"type": "array", "items": {"type": "object", "required": ["cell", "f"], "properties": {"cell": {"type": "string"}, "f": {"type": "string"}}}},
                     "widths": {"type": "array", "items": {"type": "number"}},
                     "formats": {"type": "array", "items": {"type": "string"}}
                 }}},
                 "columns": {"type": "array", "items": {"type": "string"}, "description": "a single sheet's header, instead of `sheets`"},
-                "rows": {"type": "array", "items": {"type": "array"}, "description": "a single sheet's rows, instead of `sheets`"}
+                "rows": {"type": "array", "items": {"type": "array", "items": {}}, "description": "a single sheet's rows, instead of `sheets`"}
             }}),
         },
         requires_write_scope: true,
@@ -1068,12 +1114,16 @@ mod tests {
         one["x"] = json!("k");
         one["y"] = json!("v");
         assert!(reg.classify("write_chart", &one).unwrap_err().0.contains("just a number"));
+        // a PNG is a chart too: the same checks apply, and only the file differs
         let mut png = chart_args();
         png["path"] = json!("latency.png");
-        assert!(reg.classify("write_chart", &png).unwrap_err().0.contains("PNG output is not available yet"));
-        let mut fmt = chart_args();
-        fmt["format"] = json!("png");
-        assert!(reg.classify("write_chart", &fmt).unwrap_err().0.contains("PNG"));
+        assert_eq!(reg.classify("write_chart", &png).unwrap().kind, ActionKind::MissionArtifact);
+        for (fmt, path, expect) in [("gif", "latency", "svg or png"), ("png", "latency.svg", "ends in .svg"), ("svg", "latency.png", "ends in .png")] {
+            let mut a = chart_args();
+            a["format"] = json!(fmt);
+            a["path"] = json!(path);
+            assert!(reg.classify("write_chart", &a).unwrap_err().0.contains(expect), "{} {}", fmt, path);
+        }
         // classification: Green in the mission, Amber in a worktree, with the arguments bound
         let c = reg.classify("write_chart", &chart_args()).unwrap();
         assert_eq!((c.tier, c.kind), (ToolTier::Green, ActionKind::MissionArtifact));
@@ -1278,5 +1328,44 @@ mod tests {
             let (r, stamps) = run_tool(&mut f, "write_sheet", a);
             assert!(r.is_error && stamps.is_empty() && !f.root.join("local/missions/m1/artifacts").exists(), "{}", r.content);
         }
+    }
+    #[test]
+    fn a_chart_can_be_written_as_a_png_with_its_provenance_inside_and_read_back() {
+        let mut f = fx(&["missions/**"]);
+        let mut a = chart_args();
+        a["path"] = json!("latency.png");
+        a["theme"] = json!("dark");
+        let (r, stamps) = run_tool(&mut f, "write_chart", a.clone());
+        assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/latency.png (") && stamps.len() == 2, "{}", r.content);
+        let bytes = fs::read(f.root.join("local/missions/m1/artifacts/latency.png")).unwrap();
+        let img = delphi_docs::png::decode(&bytes).unwrap();
+        assert_eq!((img.width, img.height), (1440, 800));
+        assert_eq!(img.pixel(1, 1)[..3], [0x1a, 0x1a, 0x19], "dark surface");
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/latency.png"}));
+        assert!(back.content.contains("1440×800") && back.content.contains("Title: Median latency fell") && back.content.contains("Comment: delphi artifact: written by role architect in mission m1 with write_chart") && back.content.contains("trust L3"), "{}", back.content);
+        let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.png.provenance.md")).unwrap();
+        assert!(side.contains("produced_by: write_chart") && side.contains("(PNG, 2x)"), "{}", side);
+        // `format: "png"` on a plain name adds the extension, and number formats still work beside it
+        let mut b = chart_args();
+        b["path"] = json!("other");
+        b["format"] = json!("png");
+        let (r, _) = run_tool(&mut f, "write_chart", b);
+        assert!(!r.is_error && r.content.contains("other.png"), "{}", r.content);
+    }
+
+    #[test]
+    fn a_chart_that_would_not_be_readable_as_a_png_is_refused_with_a_pointer_to_svg() {
+        let mut f = fx(&["missions/**"]);
+        let rows: Vec<Value> = (0..14).map(|i| json!([format!("item {}", i), i + 1])).collect();
+        let many = json!({"path": "many.png", "type": "hbar", "title": "T", "x": "k", "y": "v", "data": {"columns": ["k", "v"], "rows": rows}});
+        let (r, stamps) = run_tool(&mut f, "write_chart", many.clone());
+        assert!(r.is_error && r.content.contains("at most 12") && r.content.contains(".svg") && stamps.is_empty(), "{}", r.content);
+        let mut svg = many.clone();
+        svg["path"] = json!("many.svg");
+        assert!(!run_tool(&mut f, "write_chart", svg).0.is_error, "the same chart is fine as an SVG");
+        let long = json!({"path": "long.png", "type": "hbar", "title": "T", "x": "k", "y": "v", "data": {"columns": ["k", "v"], "rows": [["a label that is much too long to fit", 1], ["b", 2]]}});
+        let (r, _) = run_tool(&mut f, "write_chart", long);
+        assert!(r.is_error && r.content.contains("shorten"), "{}", r.content);
     }
 }

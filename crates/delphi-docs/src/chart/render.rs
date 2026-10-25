@@ -73,6 +73,10 @@ fn css_for(kind: Option<Kind>) -> String {
     if wants(Kind::Donut) {
         s.push_str(".sl{stroke:var(--surface);stroke-width:2}\n");
     }
+    if kind.is_none() {
+        // pointer behaviour for charts in a page: targets, hidden series, the zoom selection
+        s.push_str(".hit{fill:transparent}[data-t]{cursor:pointer}[data-t].off{opacity:.45}[data-t]:focus-visible{outline:2px solid var(--ink2);outline-offset:2px}.hid{display:none}.brush{fill:var(--s1);fill-opacity:.12;stroke:var(--s1);stroke-width:1}[data-zoom]{cursor:crosshair}\n");
+    }
     if wants(Kind::Box) {
         s.push_str(".bx{fill:var(--s1);fill-opacity:.18;stroke:var(--s1);stroke-width:2}.wh{stroke:var(--s1);stroke-width:1.5;fill:none}\n@media (forced-colors: active){.wh{stroke:GrayText}.bx{fill:Canvas;stroke:CanvasText}}\n");
     }
@@ -83,6 +87,16 @@ fn css_for(kind: Option<Kind>) -> String {
         s.push_str("\n@media (forced-colors: active){.ht0,.ht1,.ht2,.ht3,.ht4{fill:CanvasText}.h4{fill:CanvasText}.h0,.h1,.h2,.h3{fill:Canvas;stroke:CanvasText}}\n");
     }
     s
+}
+
+/// Attributes that let a mark answer the pointer in a page (`runtime.js`): the series it belongs to, so the legend
+/// can hide it, and what to say when it is pointed at. Standalone files carry none of this.
+pub(super) fn tip(ix: bool, series: usize, what: &str) -> String {
+    if ix {
+        format!(" data-s=\"{}\" data-v=\"{}\"", series, escape(what))
+    } else {
+        String::new()
+    }
 }
 
 pub(super) struct Fmt<'a>(&'a ChartSpec);
@@ -167,9 +181,12 @@ struct Legend {
     rows: usize,
 }
 
-fn legend(out: &mut String, spec: &ChartSpec, y: f64, width: f64, line_key: bool, dots: bool) -> Legend {
+fn legend(out: &mut String, spec: &ChartSpec, y: f64, width: f64, line_key: bool, dots: bool, ix: bool) -> Legend {
     let (mut x, mut row) = (PAD, 0usize);
     for (i, s) in spec.series.iter().enumerate() {
+        if ix {
+            out.push_str(&format!("<g data-t=\"{}\" tabindex=\"0\" role=\"button\" aria-pressed=\"true\" aria-label=\"Show or hide {}\">\n", i, escape(&s.name)));
+        }
         let w = tw(&s.name, 12.0) + 26.0;
         if x + w > width - PAD && x > PAD {
             x = PAD;
@@ -188,6 +205,9 @@ fn legend(out: &mut String, spec: &ChartSpec, y: f64, width: f64, line_key: bool
             out.push_str(&format!("<rect class=\"f{}\" x=\"{}\" y=\"{}\" width=\"10\" height=\"10\" rx=\"2\"/>\n", i + 1, f(x), f(cy - 9.0)));
             text(out, x + 16.0, cy, "t2", 12.0, "start", &s.name);
             x += w;
+        }
+        if ix {
+            out.push_str("</g>\n");
         }
     }
     Legend { rows: row + 1 }
@@ -314,6 +334,7 @@ pub fn inline_svg(spec: &ChartSpec, id: &str) -> String {
 }
 
 fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String {
+    let ix = inline.is_some();
     let fmt = Fmt(spec);
     let (w, base_h) = match spec.size {
         _ if spec.kind == Kind::Sparkline => (360.0, 88.0),
@@ -347,7 +368,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
         y += 20.0;
     }
     if multi && matches!(spec.kind, Kind::Bar | Kind::HBar | Kind::Line | Kind::Area | Kind::Scatter | Kind::Stacked) {
-        let l = legend(&mut head, spec, y + 14.0, w, spec.kind == Kind::Line, spec.kind == Kind::Scatter);
+        let l = legend(&mut head, spec, y + 14.0, w, spec.kind == Kind::Line, spec.kind == Kind::Scatter, ix);
         y += 8.0 + l.rows as f64 * 18.0;
     }
     let plot_top = y + 10.0;
@@ -383,7 +404,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     };
 
     if super::more::handles(spec.kind) {
-        let o = super::more::draw(spec, &fmt, w, plot_top, plot_bottom, needs_relief);
+        let o = super::more::draw(spec, &fmt, w, plot_top, plot_bottom, needs_relief, ix);
         body = o.body;
         want_table = o.table;
         content_end = o.end;
@@ -413,7 +434,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
                 let by = cy + j as f64 * (thick + 2.0);
                 let end = ax.at(v);
                 if (end - zero).abs() > 0.5 {
-                    body.push_str(&format!("<path class=\"f{}\" d=\"{}\"/>\n", j + 1, row_path(zero, end, by, thick)));
+                    body.push_str(&format!("<path class=\"f{}\"{} d=\"{}\"/>\n", j + 1, tip(ix, j, &bar_tip(c, &s.name, k > 1, &fmt.val(v))), row_path(zero, end, by, thick)));
                 }
                 let lbl = fmt.val(v);
                 let room = if v >= 0.0 { x1 + 36.0 - end - 6.0 } else { end - x0 };
@@ -462,7 +483,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
                 for (j, v) in vals.iter().enumerate() {
                     let Some(v) = v else { continue };
                     if *v > 0.0 {
-                        body.push_str(&format!("<path class=\"f1\" d=\"{}\"/>\n", column_path(gx + j as f64, thick, zero, ax.at(*v))));
+                        body.push_str(&format!("<path class=\"f1\"{} d=\"{}\"/>\n", tip(ix, 0, &format!("{} to {}: {} values", fmt.xnum(edges[i]), fmt.xnum(edges[i + 1]), v)), column_path(gx + j as f64, thick, zero, ax.at(*v))));
                     }
                 }
                 if i % 2 == 0 || n <= 12 {
@@ -474,7 +495,7 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
                     let bx = gx + j as f64 * (thick + 2.0);
                     let end = ax.at(v);
                     if (end - zero).abs() > 0.5 {
-                        body.push_str(&format!("<path class=\"f{}\" d=\"{}\"/>\n", j + 1, column_path(bx, thick, zero, end)));
+                        body.push_str(&format!("<path class=\"f{}\"{} d=\"{}\"/>\n", j + 1, tip(ix, j, &bar_tip(&cats[i], &s.name, k > 1, &fmt.val(v))), column_path(bx, thick, zero, end)));
                     }
                     let lbl = fmt.val(v);
                     let fits = tw(&lbl, 11.0) <= if k == 1 { band - 2.0 } else { thick + 4.0 };
@@ -564,11 +585,18 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
         // marks
         for (si, s) in spec.series.iter().enumerate() {
             let cls = si + 1;
+            if ix {
+                body.push_str(&format!("<g data-s=\"{}\">\n", si));
+            }
             if spec.kind == Kind::Scatter {
                 for (i, v) in s.values.iter().enumerate() {
                     if let Some(v) = v {
-                        body.push_str(&format!("<circle class=\"d{}\" cx=\"{}\" cy=\"{}\" r=\"4\"/>\n", cls, f(xp(xs[i])), f(ax.at(*v))));
+                        let what = format!("{}{}, {}", if k > 1 { format!("{}: ", s.name) } else { String::new() }, x_label(spec, &fmt, i), fmt.val(*v));
+                        body.push_str(&format!("<circle class=\"d{}\"{} cx=\"{}\" cy=\"{}\" r=\"4\"/>\n", cls, if ix { format!(" data-v=\"{}\"", escape(&what)) } else { String::new() }, f(xp(xs[i])), f(ax.at(*v))));
                     }
+                }
+                if ix {
+                    body.push_str("</g>\n");
                 }
                 continue;
             }
@@ -612,21 +640,39 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
             if let Some(p) = segs.iter().rev().find_map(|sg| sg.last()) {
                 body.push_str(&format!("<circle class=\"d{}\" cx=\"{}\" cy=\"{}\" r=\"4\"/>\n", cls, f(p.0), f(p.1)));
             }
+            if ix {
+                body.push_str("</g>\n");
+            }
+        }
+        // pointer targets: one band per x position (thinned on long series) says every series' value there
+        if ix && spec.kind != Kind::Scatter {
+            let stride = n.div_ceil(300).max(1);
+            let bands = n.div_ceil(stride);
+            let bw = (x1 - x0) / bands as f64;
+            for i in (0..n).step_by(stride) {
+                let what = format!("{} — {}", x_label(spec, &fmt, i), spec.series.iter().filter_map(|s| s.values[i].map(|v| if k > 1 { format!("{} {}", s.name, fmt.val(v)) } else { fmt.val(v) })).collect::<Vec<_>>().join(", "));
+                body.push_str(&format!("<rect class=\"hit\" data-v=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>\n", escape(&what), f((xp(xs[i]) - bw / 2.0).clamp(x0, x1 - bw)), f(plot_top), f(bw), f(plot_bottom - plot_top)));
+            }
         }
         // direct labels at the line ends, only if none would touch another
-        let mut placed: Vec<(f64, String)> = vec![];
+        let mut placed: Vec<(f64, String, usize)> = vec![];
         if direct {
             for (si, v, label) in &last_labels {
-                let _ = si;
-                placed.push((ax.at(*v), label.clone()));
+                placed.push((ax.at(*v), label.clone(), *si));
             }
             placed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         }
         let collide = placed.windows(2).any(|w| w[1].0 - w[0].0 < 15.0);
         let labelled = direct && !collide;
         if labelled {
-            for (py, label) in &placed {
+            for (py, label, si) in &placed {
+                if ix {
+                    body.push_str(&format!("<g data-s=\"{}\">\n", si));
+                }
                 text(&mut body, x1 + 10.0, py + 4.0, "t2", 11.0, "start", label);
+                if ix {
+                    body.push_str("</g>\n");
+                }
             }
         }
         want_table = needs_relief && spec.kind != Kind::Scatter && !labelled;
@@ -652,14 +698,19 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
         }
     }
     let desc = describe(spec, &fmt);
-    svg.push_str(&format!(
-        "<svg{} class=\"viz-root\"{} viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" role=\"img\" aria-labelledby=\"{p}chart-title {p}chart-desc\">\n",
-        if inline.is_none() { " xmlns=\"http://www.w3.org/2000/svg\"" } else { "" },
+    let attrs = format!(
+        "{}{}",
         match spec.theme {
             Theme::Auto => "",
             Theme::Light => " data-theme=\"light\"",
             Theme::Dark => " data-theme=\"dark\"",
         },
+        if ix && zoomable(spec.kind) { " data-zoom" } else { "" }
+    );
+    svg.push_str(&format!(
+        "<svg{} class=\"viz-root\"{} viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\" role=\"img\" aria-labelledby=\"{p}chart-title {p}chart-desc\">\n",
+        if inline.is_none() { " xmlns=\"http://www.w3.org/2000/svg\"" } else { "" },
+        attrs,
         w = f(w),
         h = f(h),
         p = idp
@@ -671,6 +722,10 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     svg.push_str(&format!("<rect class=\"surface\" width=\"{}\" height=\"{}\"/>\n", f(w), f(h)));
     svg.push_str(&head);
     svg.push_str(&body);
+    if ix && zoomable(spec.kind) {
+        // the selection rectangle the runtime sizes while the reader drags out a region to look at closely
+        svg.push_str("<rect class=\"brush\" x=\"0\" y=\"0\" width=\"0\" height=\"0\" hidden/>\n");
+    }
     if want_table {
         svg.push_str(&format!("<g transform=\"translate(0,{})\">\n{}</g>\n", f(plot_bottom + x_axis_h + 24.0), tbl));
     }
@@ -681,6 +736,29 @@ fn draw(spec: &ChartSpec, comment: Option<&str>, inline: Option<&str>) -> String
     }
     svg.push_str("</svg>\n");
     svg
+}
+
+/// Forms where a region can be magnified: those with a plotted x range.
+fn zoomable(k: Kind) -> bool {
+    matches!(k, Kind::Line | Kind::Area | Kind::Scatter | Kind::Hist | Kind::Bar | Kind::HBar | Kind::Stacked | Kind::Box)
+}
+
+/// "Q3 — p95: 255 ms" for a bar; the series name only when there are several.
+pub(super) fn bar_tip(cat: &str, series: &str, multi: bool, value: &str) -> String {
+    if multi {
+        format!("{} — {}: {}", cat, series, value)
+    } else {
+        format!("{}: {}", cat, value)
+    }
+}
+
+/// The x value at index `i` as the chart prints it.
+pub(super) fn x_label(spec: &ChartSpec, fmt: &Fmt, i: usize) -> String {
+    match &spec.x {
+        XAxis::Categories(c) => c[i].clone(),
+        XAxis::Numbers(n) => fmt.xnum(n[i]),
+        XAxis::Dates(n) => date_label(n[i]),
+    }
 }
 
 /// Equal-width bins over the values: (counts, edges).

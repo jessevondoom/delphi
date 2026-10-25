@@ -531,6 +531,22 @@ pub fn from_json(v: &Value) -> Result<ChartSpec, DocError> {
     Ok(ChartSpec { kind, title: title.to_string(), subtitle, x, x_name, series, log_y, truncated: y_zero_off && matches!(kind, Kind::Bar | Kind::HBar | Kind::Area | Kind::Hist), annotations, y_fmt, size, theme, source, bins, notes, groups: boxes })
 }
 
+/// Whether the chart can be a readable PNG. The bitmap font is plain and fixed in size, so a chart that leans on many
+/// or long category labels is refused for PNG with a pointer to SVG, which is the full-quality output.
+pub fn png_fit(spec: &ChartSpec) -> Result<(), DocError> {
+    let XAxis::Categories(c) = &spec.x else { return Ok(()) };
+    if matches!(spec.kind, Kind::Hist | Kind::Sparkline) {
+        return Ok(());
+    }
+    if c.len() > 12 {
+        return Err(bad(format!("this chart has {} categories and a PNG carries at most 12 legibly in its plain bitmap font. Write it as .svg (the full-quality form), or keep the 12 that matter and fold the rest into \"Other\"", c.len())));
+    }
+    if let Some(long) = c.iter().find(|l| l.chars().count() > 24) {
+        return Err(bad(format!("the label `{}…` is {} characters and will not fit in a PNG. Write the chart as .svg, or shorten the labels to 24 characters", long.chars().take(20).collect::<String>(), long.chars().count())));
+    }
+    Ok(())
+}
+
 /// Most series (or heatmap rows) a chart of this kind carries.
 fn series_cap(kind: Kind) -> usize {
     match kind {
