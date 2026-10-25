@@ -36,6 +36,8 @@ Keep what a future agent needs to continue or avoid repeating the work; drop the
 5. Run `delphi check provenance <summary>` and fix what it reports.
 6. Leave the originals in place; compaction adds a summary, it does not delete history.
 
+No shell? Call the `check` tool with `kind: provenance` and the summary's path; it returns the same verdict.
+
 ## Done when
 The check passes and the summary is a fraction of the source size while still answering "what was decided and why".
 

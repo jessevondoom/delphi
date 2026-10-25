@@ -25,7 +25,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 005b Decks, inbox, chromeless viewer | yes (+005b-A1) | mostly, via 005d (decks, inbox, arrows) | no | header badge state machine, chromeless viewer |
 | 005c Inline console | yes | yes | tests | none; interim step, superseded by 005d |
 | 005d Full-screen console (Ink, D-28) | yes | yes, phases 0 to 6; v0.2.3 released | CI pty tests only | Terminal.app, iTerm2, Ghostty, tmux, ssh by a person; `Shift+Enter`; release workflow end to end; `/models` view and target-versus-actual strip |
-| 006 Installer and updater | yes | yes (init, doctor, update, rollback, self-update) | installer and self-update checked on a real release | `brew install` not run; Ed25519 release signing replaced by SHA-256 plus attestation (deviation); `install.sh` skips attestation without `gh`; diff3 update (Step 6) |
+| 006 Installer and updater | yes | yes (init, doctor, update, rollback, self-update) | installer and self-update checked on a real release | `brew install` not run; Ed25519 release signing replaced by SHA-256 plus attestation (deviation); `install.sh` now stops without a signed-in `gh` unless `DELPHI_SKIP_ATTESTATION=1`; diff3 update (Step 6) |
 | 007 Federated mesh and sync | yes | no | no | Plane 3 `sync` (Step 6, gated); Planes 1 and 2 deferred (needs a second operator or machine) |
 | 008 Ambient watch and rewind | yes | no (HITL tiers only) | n/a | watches and `/rewind` (Step 6, gated) |
 | 009 Model access and auth | yes | yes (keychain, env, command, aws, gcloud-adc, oauth2, probing) | **live Gemini OAuth unverified** | operator's Google OAuth client; `oauth2.rs` device-code and refresh fixes |
@@ -39,11 +39,11 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | Step | State |
 | :-- | :-- |
 | 1 Foundation, 2 Single agent loop, 3 Builder and access, 4 Council, 5 Observe and recall, 3c Model pool | built |
-| Step 2 go/no-go (three real tasks by the operator on a real project) | **not done; the operator's** |
+| Step 2 go/no-go (three real tasks by the operator on a real project) | **go** (operator, 2026-10-25) |
 | 6 Usage-gated (vectors, coaching, diff3, sync, watches, rewind) | deliberately not built; `delphi needs` reports every rule "not yet" |
 | 7 Deferred (federation 1 to 2, OpenAI driver) | not scheduled |
 
 ## Open items that are not specs
 
-- Operator: Step 2 go/no-go; try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
+- Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
 - Builder: red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`).
