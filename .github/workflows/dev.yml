@@ -92,7 +92,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      actions: read # to see whether a newer dev run is waiting
       contents: write
       id-token: write
       attestations: write
@@ -111,11 +110,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}  # this job has no checkout, so gh cannot find the repository from git
         run: |
-          # An older run that finishes late must not replace a newer build: stand down when a newer run is waiting
-          # or building. (Not "is this still the head of main": the release workflow's own Homebrew commit moves
-          # main without starting a run, and that would skip every build that came before it.)
-          newer="$(gh run list --workflow dev.yml --branch main --limit 30 --json databaseId,status --jq "[.[] | select(.databaseId > $GITHUB_RUN_ID and .status != \"completed\")] | length")"
-          [ "$newer" = 0 ] || { echo "a newer dev build is on its way; not publishing $GITHUB_SHA"; exit 0; }
+          # Never replace a newer build with an older one: publish unless the published build is ahead of this commit.
+          # (Not "is this still the head of main" and not "is a newer run waiting": merges arrive faster than a build
+          # runs, and the release workflow's Homebrew commit moves main without starting a run, so either rule can
+          # leave the channel empty. The published commit is in the release notes.)
+          have="$(gh release view dev --json body --jq .body 2>/dev/null | grep -oE '[0-9a-f]{40}' | head -n 1 || true)"
+          if [ -n "$have" ]; then
+            state="$(gh api "repos/$GITHUB_REPOSITORY/compare/$have...$GITHUB_SHA" --jq .status || echo unknown)"
+            case "$state" in ahead|identical) ;; *) echo "dev is at $have ($state of $GITHUB_SHA); not replacing it"; exit 0 ;; esac
+          fi
           gh release delete dev --cleanup-tag --yes 2>/dev/null || true
           gh release create dev dist/* --prerelease --target "$GITHUB_SHA" --title "dev (main@${GITHUB_SHA::7})" \
             --notes "Rolling build of main at $GITHUB_SHA, for \`delphi self-update --dev\`. Not a release: it is replaced on every push to main."
