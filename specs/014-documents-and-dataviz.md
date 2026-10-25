@@ -3,7 +3,7 @@ id: spec-014-documents-and-dataviz
 title: "014: Document Reading, Document Creation & Data Visualization (dependency-free)"
 author: architect
 timestamp: 2026-10-25T12:00:00Z
-status: draft   # awaiting operator ratification; nothing here is built
+status: approved   # by the operator, 2026-10-25 ("your plan sounds solid. go"); whole document, the five decisions in §10 as recommended
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -252,7 +252,7 @@ Each slice is one PR, ends green on `cargo test` + `delphi lint`, and states in 
 | **C4** | `write_sheet` (xlsx + csv), the rest of the chart types (box, heatmap, donut, stacked, sparkline), chart interactivity | xlsx opens in Excel and LibreOffice (**operator-gated**); runtime tooltips and zoom |
 | **C5** | PNG rasterizer + bitmap font; `write_diagram` | PNG decode tests; diagram layout determinism |
 
-### Decisions to ratify before R0
+### Decisions ratified before R0 (operator, 2026-10-25)
 1. **Crate and tool names**: `delphi-docs`, `read_doc`, `write_html` / `write_deck` / `write_chart` / `write_sheet` / `write_report` / `write_archive` / `write_diagram`. Alternative: a single `write_artifact { kind: … }`. This spec prefers separate tools because each has its own schema, card and classification.
 2. **Artifact write path** (§7.1): sidecar provenance and a 4 MB artifact cap. This amends `specs/003` §1.2 (the tool set) and the write-tool description in `specs/001` §5.
 3. **Document read cap** (§5.1): 64 MB input, 256 KB output. This amends the current 256 KB read limit for non-text formats only.
