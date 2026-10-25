@@ -105,7 +105,8 @@ test('/observe opens a new window on every call, with the view', async () => {
 test('windowCommand: Terminal.app by default, iTerm when that is the terminal', async () => {
   const { windowCommand } = await import('../src/window.ts');
   assert.ok(windowCommand(['a b', "c'd"], 'darwin', {})!.join('\n').includes('tell application "Terminal"'));
-  assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with default profile'));
+  assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with profile'));
+  assert.ok(windowCommand(['x'], 'darwin', {})!.join('\n').includes('set current settings of t to prof'), 'the window keeps the console profile');
   assert.equal(windowCommand(['x'], 'win32', {}), null);
 });
 
