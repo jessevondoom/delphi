@@ -79,4 +79,4 @@ Hours are focused build time including tests (the unit `specs/005c` uses). The *
 | ~8 h | Direct OpenAI API driver | Deferred; needs a key to test | stated (review: "roughly a day") |
 | not sized | Harness session resumption (deferred); Gemini Builder (blocked on `gemini --acp`) | Deferred / blocked outside Delphi | n/a |
 
-**Step 3c (the model pool, D-26) is built** (M1 to M8, 2026-10-24, about 72 h of planned work): see [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) for what each milestone did and what is left. What remains of it: ratify spec 005 amendment 005-A6, `/models` in the full-screen console (`ui/`), the Narrator's target-versus-actual strip, and live samples for the Anthropic API, the Gemini API and Bedrock exhaustion signals.
+**Step 3c (the model pool, D-26) is built** (M1 to M8, 2026-10-24, about 72 h of planned work): see [`step-3c-model-pool-plan.md`](step-3c-model-pool-plan.md) for what each milestone did and what is left. What remains of it: `/models` in the full-screen console (`ui/`), the Narrator's target-versus-actual strip, and live samples for the Anthropic API, the Gemini API and Bedrock exhaustion signals.
