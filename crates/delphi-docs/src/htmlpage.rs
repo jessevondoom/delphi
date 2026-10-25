@@ -5,6 +5,7 @@
 //! generator cannot produce an unsafe page.
 
 use crate::chart::{self, ChartSpec};
+use crate::diagram::{self, DiagramSpec};
 use crate::htmllint::{lint, lint_user_script, RUNTIME_JS};
 use crate::markdown::{escape, to_html_shift};
 use crate::DocError;
@@ -58,6 +59,8 @@ pub enum Block {
     Stats(Vec<Stat>),
     /// A chart drawn into the page as an inline SVG, with an optional caption.
     Chart { spec: Box<ChartSpec>, caption: Option<String> },
+    /// A flow, tree or sequence diagram drawn into the page as an inline SVG.
+    Diagram { spec: Box<DiagramSpec>, caption: Option<String> },
     /// Blocks side by side (2 or 3 columns; one column on a narrow screen).
     Grid { cols: usize, blocks: Vec<Block> },
 }
@@ -112,7 +115,7 @@ pub(crate) fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Blo
     if b.blocks > MAX_BLOCKS {
         return Err(DocError(format!("a page has at most {} blocks", MAX_BLOCKS)));
     }
-    let kind = str_field(v, "type").ok_or_else(|| DocError("every block needs a `type`: markdown, table, tabs, code, callout, stats, chart or grid".into()))?;
+    let kind = str_field(v, "type").ok_or_else(|| DocError("every block needs a `type`: markdown, table, tabs, code, callout, stats, chart, diagram or grid".into()))?;
     let need = |key: &str| str_field(v, key).ok_or_else(|| DocError(format!("a `{}` block needs a `{}` string", kind, key)));
     Ok(match kind {
         "markdown" => {
@@ -177,6 +180,20 @@ pub(crate) fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Blo
             }
             Block::Chart { spec: Box::new(spec), caption }
         }
+        "diagram" => {
+            b.charts += 1;
+            if b.charts > MAX_CHARTS {
+                return Err(DocError(format!("a page has at most {} charts and diagrams together", MAX_CHARTS)));
+            }
+            let spec = v.get("diagram").ok_or_else(|| DocError("a `diagram` block needs a `diagram` object: the same description write_diagram takes (type, title, nodes, ...)".into()))?;
+            let spec = diagram::from_json(spec).map_err(|e| DocError(format!("diagram block: {}", e)))?;
+            b.text += spec.title.len() + 400;
+            if b.text > MAX_TEXT {
+                return Err(DocError(format!("the page's content is over {} bytes", MAX_TEXT)));
+            }
+            let caption = str_field(v, "caption").map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+            Block::Diagram { spec: Box::new(spec), caption }
+        }
         "grid" => {
             if depth >= 1 {
                 return Err(DocError("a grid cannot sit inside tabs or another grid".into()));
@@ -223,7 +240,7 @@ pub(crate) fn parse_block(v: &Value, depth: usize, b: &mut Budget) -> Result<Blo
             }
             Block::Stats(out)
         }
-        other => return Err(DocError(format!("unknown block type `{}`; use markdown, table, tabs, code, callout, stats, chart or grid", other))),
+        other => return Err(DocError(format!("unknown block type `{}`; use markdown, table, tabs, code, callout, stats, chart, diagram or grid", other))),
     })
 }
 
@@ -270,13 +287,14 @@ pub(crate) struct Cx {
     pub(crate) ids: usize,
     pub(crate) runtime: bool,
     pub(crate) charts: bool,
+    pub(crate) diagrams: bool,
     /// How far markdown headings are pushed down: 1 on a page (the title is the h1), 2 under a section or slide title.
     pub(crate) shift: usize,
 }
 
 impl Cx {
     pub(crate) fn new(shift: usize) -> Cx {
-        Cx { ids: 0, runtime: false, charts: false, shift }
+        Cx { ids: 0, runtime: false, charts: false, diagrams: false, shift }
     }
 }
 
@@ -303,6 +321,14 @@ pub(crate) fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
             cx.charts = true;
             cx.runtime = true;
             out.push_str(&format!("<figure class=\"chart\">{}", chart::inline_svg(spec, &format!("c{}", n))));
+            if let Some(c) = caption {
+                out.push_str(&format!("<figcaption>{}</figcaption>", escape(c)));
+            }
+            out.push_str("</figure>\n");
+        }
+        Block::Diagram { spec, caption } => {
+            cx.diagrams = true;
+            out.push_str(&format!("<figure class=\"diagram\">{}", diagram::inline_svg(spec, &format!("c{}", n))));
             if let Some(c) = caption {
                 out.push_str(&format!("<figcaption>{}</figcaption>", escape(c)));
             }
@@ -381,6 +407,7 @@ pub(crate) struct Shell<'a> {
     pub theme: Theme,
     pub comment: Option<&'a str>,
     pub charts: bool,
+    pub diagrams: bool,
     pub runtime: bool,
     pub script: Option<&'a str>,
     /// Markup between `<body>` and the content, and after it.
@@ -400,7 +427,7 @@ pub(crate) fn assemble(sh: &Shell) -> Result<String, DocError> {
     if let Some(c) = sh.comment {
         html.push_str(&format!("<!-- {} -->\n", comment_text(c)));
     }
-    let chart_css = if sh.charts { chart::css() } else { String::new() };
+    let chart_css = format!("{}{}", if sh.charts { chart::css() } else { String::new() }, if sh.diagrams { diagram::css() } else { String::new() });
     html.push_str(&format!(
         "<html lang=\"en\"{}>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{}\">\n<title>{}</title>\n<style>\n{}{}</style>\n</head>\n<body>\n{}",
         theme,
@@ -444,6 +471,7 @@ pub fn render(spec: &PageSpec) -> Result<String, DocError> {
         theme: spec.theme,
         comment: spec.comment.as_deref(),
         charts: cx.charts,
+        diagrams: cx.diagrams,
         runtime: cx.runtime,
         script: spec.script.as_deref(),
         open: &format!("<main>\n<h1>{}</h1>\n", escape(&spec.title)),

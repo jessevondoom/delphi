@@ -22,6 +22,7 @@ use serde_json::Value;
 use crate::DocError;
 
 pub use render::{css, inline_svg, render_svg};
+pub(crate) use render::{css_custom, text, trunc, tw, PAD};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

@@ -80,8 +80,8 @@ table[data-sortable] thead th[aria-sort="descending"]::after { content: " ▼"; 
 }
 
 /* charts and grids */
-figure.chart { margin: 0 0 1rem; }
-figure.chart svg { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+figure.chart, figure.diagram { margin: 0 0 1rem; }
+figure.chart svg, figure.diagram svg { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 figcaption { color: var(--muted); font-size: .9rem; margin-top: .4rem; }
 .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin: 0 0 1rem; }
 .grid > * { margin-bottom: 0; min-width: 0; }
