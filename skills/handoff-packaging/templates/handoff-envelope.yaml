@@ -1,0 +1,31 @@
+# Handoff envelope (specs/001 §4). Check with: delphi check handoff <this file>
+# Keep it under about 2,000 tokens. Point at files; never paste them.
+handoff_id: "ho_YYYYMMDD_0001"
+mission_id: "YYYY-MM-DD-short-name"
+parent_span_id: "sp_orchestrator_01"
+caller_agent: "orchestrator"
+target_agent: "builder"
+
+# What is wanted, and why, in a few sentences.
+objective: "Produce <artifact> so that <reason>."
+implements_spec: "specs/NNN-name.md"
+
+# Smallest line ranges that answer the need. blake3 is the hash of that slice.
+context_pointers:
+  - uri: "specs/NNN-name.md#L10-L40"
+    heading: "2.1 The relevant section"
+    blake3: "<slice hash>"
+    reason: "The invariant this task must preserve."
+
+constraints:
+  - "Rules that cannot be violated (cite the spec section or REVIEW.md rule)."
+
+expected_output:
+  artifact_type: "git-branch-and-test-report"
+  required_fields: ["worktree_branch", "commit_sha", "test_summary", "spec_drift_detected"]
+
+# Class is fast | workhorse | frontier. Never write model IDs or endpoints here.
+routing_directive:
+  model_tier: "workhorse"
+  attempt_number: 1
+  scaling_rationale: "Why this class: the signal that decided it."

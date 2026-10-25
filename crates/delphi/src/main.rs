@@ -1,6 +1,7 @@
 //! `delphi`: roadmap Step 1 commands (`specs/001`, `specs/006`).
 
 mod avatar;
+mod check;
 mod chat;
 mod console;
 mod doctor;
@@ -30,6 +31,7 @@ const USAGE: &str = "usage:
   delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
+  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
   delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi models [--probe] [--workspace <name>] [--home <dir>]
@@ -55,6 +57,7 @@ fn main() {
             delphi_engine::core_main::run(args[1..].to_vec())
         }
         Some("lint") => cmd_lint(&args[1..]),
+        Some("check") => cmd_check(&args[1..]),
         Some("setup") => cmd_setup(&args[1..]),
         Some("self-update") => cmd_self_update(&args[1..]),
         Some("update") => cmd_update(&args[1..], false),
@@ -85,6 +88,26 @@ fn main() {
 /// Value of `--flag <value>` in `args`.
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// `delphi check <kind> <path>`: the deterministic helpers behind the built-in skills (see `check.rs`). Reads files only.
+fn cmd_check(args: &[String]) -> i32 {
+    let positional: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[*i - 1] != "--repo")).map(|(_, a)| a).collect();
+    let [kind, target] = positional[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    let repo = flag(args, "--repo").map(PathBuf::from);
+    match check::run(kind, std::path::Path::new(target), repo.as_deref()) {
+        Ok(report) => {
+            report.print();
+            report.exit_code()
+        }
+        Err(e) => {
+            eprintln!("delphi check: {}", e);
+            2
+        }
+    }
 }
 
 fn cmd_lint(args: &[String]) -> i32 {

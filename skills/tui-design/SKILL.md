@@ -142,6 +142,8 @@ Observer windows provide dedicated full-window perspectives:
 
 ## 5. Verification Checklist for TUI Implementations
 
+Run `delphi check tui <file or directory>` first. It mechanically flags emoji, vertical half-blocks, enclosing box borders, and literal badges that are not exactly 5 cells wide. Test fixtures that assert a glyph is absent will trip it; judge those by hand. The rest of the list needs eyes.
+
 Before finalizing any Ratatui widget or TUI layout in Delphi, verify:
 - [ ] No emojis are used in any status text or headers.
 - [ ] No whole-window enclosing box borders (`┌─┐`, `└─┘`).
