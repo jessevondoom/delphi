@@ -67,3 +67,30 @@ test('/decisions reject carries the reason; /merge needs a task id and asks the 
   await runSlash('/merge t_1', m.c);
   assert.deepEqual(m.calls[0], ['build.merge', { mission_id: 'm1', task_id: 't_1' }]);
 });
+
+test('the slash menu lists commands alphabetically', () => {
+  const names = COMMANDS.map((c) => c.name);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+});
+
+test('/observe opens a new window on every call, with the view', async () => {
+  const opened: string[][] = [];
+  const { c, out } = ctx(() => ({}));
+  const full = { ...c, info: { roles: {}, delphi_exe: '/bin/delphi', workspace_name: 'w', home: '/h' } as unknown as Info, open: async (a: string[]) => { opened.push(a); return null; } };
+  await runSlash('/observe council', full);
+  await runSlash('/observe council', full);
+  assert.equal(opened.length, 2);
+  assert.deepEqual(opened[0], ['/bin/delphi', 'observe', 'council', '--workspace', 'w', '--home', '/h']);
+  assert.match(out[0]!, /new window/);
+  await runSlash('/observe nonsense', full);
+  assert.equal(opened.length, 2);
+  await runSlash('/observe', { ...full, open: async () => 'no terminal' });
+  assert.match(out.at(-1)!, /could not open a window \(no terminal\)/);
+});
+
+test('windowCommand: Terminal.app by default, iTerm when that is the terminal', async () => {
+  const { windowCommand } = await import('../src/window.ts');
+  assert.ok(windowCommand(['a b', "c'd"], 'darwin', {})!.join('\n').includes('tell application "Terminal"'));
+  assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with default profile'));
+  assert.equal(windowCommand(['x'], 'win32', {}), null);
+});

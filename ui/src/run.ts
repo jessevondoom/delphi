@@ -4,12 +4,16 @@ import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
 import type { Approval, State } from './fold.ts';
 import type { Info } from './theme.ts';
+import { parseView, VIEWS } from './observe-screen.ts';
+import { openWindow } from './window.ts';
 
 export type Ctx = {
   cmd: Rpc; mission: string; info: Info; state: () => State;
   post: (text: string, tone?: 'info' | 'error' | 'ok') => void;
   /** Called after a call that starts work, so the UI can show it as running. */
   started?: () => void;
+  /** Opens a command in a new terminal window; null when it opened, else why not. Defaults to the real thing. */
+  open?: (argv: string[]) => Promise<string | null>;
 };
 
 const errText = (e: any): string => (e && typeof e === 'object' && 'message' in e ? String(e.message) : String(JSON.stringify(e)));
@@ -166,7 +170,12 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
     }
     case 'observe': case 'narrator': case 'visualize': {
       const view = rest[0] ?? '';
-      ctx.post(`The Observer only watches. Run this in another terminal (or a tmux split):\n  delphi observe ${view}`.trimEnd()); return;
+      if (view && !parseView(view)) { ctx.post(`/observe takes ${VIEWS.join(', ')}, not \`${view}\``, 'error'); return; }
+      const argv = [ctx.info.delphi_exe ?? 'delphi', 'observe', ...(view ? [view] : []), '--workspace', ctx.info.workspace_name ?? '', '--home', ctx.info.home ?? ''];
+      const why = await (ctx.open ?? openWindow)(argv);
+      if (why === null) ctx.post(`(Observer opened in a new window${view ? `: ${view}` : ''})`, 'ok');
+      else ctx.post(`could not open a window (${why}). The Observer only watches; run this in another terminal:\n  delphi observe ${view}`.trimEnd(), 'error');
+      return;
     }
     case 'y': case 'yes': case 'a': case 'always': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
       const key = name === 'approve' ? rest[0] : name;
