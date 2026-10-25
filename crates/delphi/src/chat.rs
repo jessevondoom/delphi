@@ -564,13 +564,16 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
         eprintln!("delphi chat: cannot locate this program to start the daemon");
         return Err(1);
     };
-    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
+    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: None }) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("delphi chat: {}", rpc_error(&e));
             return Err(1);
         }
     };
+    if let Some(n) = daemon_note(&attached) {
+        say(&format!("{}\n", n));
+    }
     let opened = match attached.client.call("mission.open", json!({"mission_id": mission})) {
         Ok(v) => v,
         Err(e) => {
@@ -807,6 +810,14 @@ pub fn run(home: &Path, ws_dir: &Path, mission: Option<String>, names: HashMap<S
     }
 }
 
+/// What to tell the operator when the daemon was replaced, or could not be, because it is another release.
+fn daemon_note(a: &delphi_core::spawn::Attached) -> Option<String> {
+    if let Some(old) = &a.replaced {
+        return Some(format!("(restarted the daemon: it was running {}, this is {})", old, env!("CARGO_PKG_VERSION")));
+    }
+    a.stale.then(|| format!("(the daemon is running {} but this is {}, and it is busy with a task or an approval; run `delphi daemon restart` when it is idle)", a.daemon_version, env!("CARGO_PKG_VERSION")))
+}
+
 /// Start (or join) the daemon, then run the full-screen UI as a child of this process. The UI gets what it needs to
 /// connect (socket paths, mission, role names and colours) as one JSON argument: no token, no secret. It asks the
 /// daemon for its own token through the socket, which checks that it was started from a terminal.
@@ -815,9 +826,16 @@ pub fn launch_ui(ui: &Path, home: &Path, ws_dir: &Path, mission: Option<String>,
         eprintln!("delphi chat: cannot locate this program to start the daemon");
         return 1;
     };
-    if let Err(e) = connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
-        eprintln!("delphi chat: {}", rpc_error(&e));
-        return 1;
+    match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: None }) {
+        Ok(a) => {
+            if let Some(n) = daemon_note(&a) {
+                eprintln!("{}", n);
+            }
+        }
+        Err(e) => {
+            eprintln!("delphi chat: {}", rpc_error(&e));
+            return 1;
+        }
     }
     let l = match layout(home, ws_dir) {
         Ok(l) => l,
@@ -938,7 +956,7 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
                     eprintln!("cannot locate this program to start the daemon");
                     return 1;
                 };
-                return match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()] }) {
+                return match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: None }) {
                     Ok(a) => {
                         println!("daemon started (pid {})", a.daemon_pid);
                         0

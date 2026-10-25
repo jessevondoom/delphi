@@ -8,6 +8,7 @@
 
 use crate::client::{Client, ClientError};
 use crate::proto::Scope;
+use serde_json::json;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -57,6 +58,12 @@ pub struct Attached {
     /// Set when this call started the daemon.
     pub spawned: bool,
     pub daemon_pid: u64,
+    /// The release the daemon is running (from its `hello`).
+    pub daemon_version: String,
+    /// Set when this call found a daemon of another release, idle, and replaced it: the old version.
+    pub replaced: Option<String>,
+    /// Set when the daemon is another release but busy (a task or approval is waiting), so it was left running.
+    pub stale: bool,
     /// The capability token, for opening further connections as the same console.
     pub token: String,
     pub sock: PathBuf,
@@ -71,6 +78,8 @@ pub struct SpawnOptions<'a> {
     pub extra_args: Vec<String>,
     /// Arguments before `--daemon` (`delphi` runs the daemon as `delphi __core --daemon …`).
     pub prefix_args: Vec<String>,
+    /// The release to compare the daemon against (tests only; `None` means this build's version).
+    pub own_version: Option<&'a str>,
 }
 
 fn flock(file: &File, op: libc::c_int) -> io::Result<()> {
@@ -122,8 +131,37 @@ fn tail(path: &Path) -> String {
     t.lines().rev().take(15).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
-/// Attach as the console, starting the daemon if none is running.
+/// Attach as the console, starting the daemon if none is running. A daemon left over from another release (an
+/// upgrade does not stop it) would run old code under a new client: when it is idle it is stopped and started again;
+/// when it is busy it is left alone and `stale` says so.
 pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
+    let mut a = connect_or_spawn_once(opts)?;
+    let own = opts.own_version.unwrap_or(env!("CARGO_PKG_VERSION"));
+    if a.spawned || a.daemon_version == own {
+        return Ok(a);
+    }
+    let old = a.daemon_version.clone();
+    let idle = match a.client.call("session.snapshot", json!({})) {
+        Ok(v) => v["running_tasks"].as_array().is_none_or(|t| t.is_empty()) && v["pending_approvals"].as_array().is_none_or(|t| t.is_empty()),
+        Err(_) => false,
+    };
+    if !idle {
+        a.stale = true;
+        return Ok(a);
+    }
+    let _ = a.client.call("daemon.shutdown", json!({}));
+    let l = layout(opts.home, opts.workspace)?;
+    let until = Instant::now() + Duration::from_secs(10);
+    while Client::connect(&l.sock).is_ok() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(a);
+    let mut fresh = connect_or_spawn_once(opts)?;
+    fresh.replaced = Some(if old.is_empty() { "an older release".to_string() } else { old });
+    Ok(fresh)
+}
+
+fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     let l = layout(opts.home, opts.workspace)?;
     ensure_run_dir(&l.run_dir)?;
 
@@ -211,7 +249,7 @@ pub fn connect_or_spawn(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     let token = reply.trim().to_string();
     let mut client = Client::connect(&l.sock)?;
     let hello = client.hello(&token)?;
-    Ok(Attached { client, scope: Scope::Console, spawned: true, daemon_pid: hello["pid"].as_u64().unwrap_or(0), token, sock: l.sock.clone() })
+    Ok(Attached { client, scope: Scope::Console, spawned: true, daemon_pid: hello["pid"].as_u64().unwrap_or(0), daemon_version: hello["binary_version"].as_str().unwrap_or("").to_string(), replaced: None, stale: false, token, sock: l.sock.clone() })
 }
 
 /// Connect to a running daemon and obtain a console token through the TTY challenge.
@@ -222,5 +260,5 @@ fn try_attach(l: &Layout) -> Result<Option<Attached>, ClientError> {
     };
     let token = client.issue_token(Scope::Console)?;
     let hello = client.hello(&token)?;
-    Ok(Some(Attached { client, scope: Scope::Console, spawned: false, daemon_pid: hello["pid"].as_u64().unwrap_or(0), token, sock: l.sock.clone() }))
+    Ok(Some(Attached { client, scope: Scope::Console, spawned: false, daemon_pid: hello["pid"].as_u64().unwrap_or(0), daemon_version: hello["binary_version"].as_str().unwrap_or("").to_string(), replaced: None, stale: false, token, sock: l.sock.clone() }))
 }
