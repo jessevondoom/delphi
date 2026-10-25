@@ -74,6 +74,8 @@ stateDiagram-v2
 4. No open `P0`/`P1` findings from the base-branch `REVIEW.md` audit.
 5. The **operator** approves the merge (Red gate).
 
+**Gate 6 (optimistic tasks; `specs/015`):** a build started with `--optimistic` decides some of its approval cards provisionally. Gate 6 is green only when every provisional decision that allowed something has been reviewed and ratified by the operator, and red if any was rejected. A task that made no provisional decisions is green. The merge card (gate 5) is not shown while gate 6 is red, and gate 6 is evaluated again when the merge card is answered, together with gates 1–4: a decision made in the meantime refuses the merge.
+
 **Bound to a commit:** gates 1–5 are evaluated against one exact worktree `commit_sha`. A new commit re-runs them. The Red-Team audit for gate 4 is recorded as an event naming that SHA, and gate 5 shows the same SHA.
 
 **Merge-back:** **Builder** never merges. Approving gate 5 either opens a PR (GitHub mode), or merges the worktree branch into the operator's current branch (local mode). If the operator's working tree has uncommitted changes that touch the same files, the daemon refuses the merge and shows the conflict.

@@ -3,7 +3,7 @@ id: spec-015-provisional-decisions
 title: "015: Provisional Decisions (the optimistic workflow)"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: draft   # awaiting the operator's ratification, including the charter amendments in §8
+status: approved   # by the operator, 2026-10-25, with the charter amendments in §8 (applied the same day)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

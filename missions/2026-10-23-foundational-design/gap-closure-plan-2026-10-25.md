@@ -27,6 +27,8 @@ Nothing here is ratified or committed work. Competitor details came from seconda
 | Skills import/export, observe hooks, remote recipe (P6) | Not started | §3 |
 | Benchmark runner and pilot (P3) | Not started | [`evaluation-plan`](evaluation-plan-2026-10-25.md) |
 
+**Decisions taken 2026-10-25 (D-30):** specs 014 to 016 and the charter amendments approved and applied; the Strategist is the approver; the second seat is optional with `park` as the default for unseconded decisions; email first, on a dedicated Gmail account; no standing PR authorisation for headless runs; evaluation thresholds frozen. A live Gmail trial is a future project task in the roadmap.
+
 ## 0. Ground truth in the code today
 
 | Fact | Where | Why it matters here |
