@@ -28,6 +28,8 @@ pub enum CredentialRef {
     Oauth2(String),
     Command(Vec<String>),
     HarnessLogin,
+    /// No credential at all: a local server (Ollama) on a loopback address. Config validation refuses it anywhere else.
+    NoAuth,
 }
 
 impl CredentialRef {
@@ -39,6 +41,9 @@ impl CredentialRef {
         if s == "harness-login" {
             return Ok(CredentialRef::HarnessLogin);
         }
+        if s == "none" {
+            return Ok(CredentialRef::NoAuth);
+        }
         match s.split_once(':') {
             Some(("keychain", v)) => Ok(CredentialRef::Keychain(nonempty(v, "name")?)),
             Some(("env", v)) => Ok(CredentialRef::Env(nonempty(v, "variable name")?)),
@@ -49,7 +54,7 @@ impl CredentialRef {
                 let argv = parse_argv(v).map_err(|e| format!("credential `command:` {}", e))?;
                 Ok(CredentialRef::Command(argv))
             }
-            _ => Err("unknown credential source (expected keychain:, env:, aws:, gcloud-adc, gcloud-sa:, oauth2:, command: or harness-login); the value is not shown in case it is a pasted secret".to_string()),
+            _ => Err("unknown credential source (expected keychain:, env:, aws:, gcloud-adc, gcloud-sa:, oauth2:, command:, harness-login or none); the value is not shown in case it is a pasted secret".to_string()),
         }
     }
 }
@@ -332,7 +337,7 @@ impl Resolver {
 
     pub fn resolve(&self, r: &CredentialRef) -> Result<Resolved, CredentialError> {
         match r {
-            CredentialRef::HarnessLogin => Ok(Resolved::None),
+            CredentialRef::HarnessLogin | CredentialRef::NoAuth => Ok(Resolved::None),
             CredentialRef::Env(var) => match (self.env)(var) {
                 Some(v) if !v.is_empty() => Ok(self.secret(v, None)),
                 _ => Err(CredentialError::NotFound(format!("environment variable {} is not set", var))),
