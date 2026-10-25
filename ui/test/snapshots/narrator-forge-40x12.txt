@@ -1,0 +1,12 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi · forge
+
+ ✔ nothing needs you
+
+ build 1/1  t_1  delphi/t_1 · abc1234 ·…
+   attempt 1: tests red, fixed
+   ✔ tests      12 passed
+── diff ────────────────────────────────
+ crates/queue.rs | 12 +++++-----
+────────────────────────────────────────
+1 running  ·  14.2k tokens   ○ ○ ● ○ ○ ○

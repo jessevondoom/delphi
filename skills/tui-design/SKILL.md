@@ -108,40 +108,31 @@ The operator console organizes context into 3 horizontal decks swiped via `Shift
 └─────────────────────────┘ └─────────────────────────┘ └─────────────────────────┘
 ```
 
-### 3.2 Two-Line Stacked Header
-_Amended 2026-10-25 (005b-A3):_ line 1 is always the strip of 1-line badges, nothing else (no names, no status or alert text); a badge's state shows as its animation (`005a` A1) and an agent that needs the operator shows `⟦x?x⟧`. Line 2 sits **directly under line 1 with no blank row** and a blank row follows it. The older text below is superseded where it differs.
-The header provides maximum telemetry flexibility without clutter:
-- **Line 1 (Top Priority):**
-  - *Active Turn:* Single active agent status:
-    `⟦•─•⟧ orchestrator: decomposing architecture into 3 tasks`
-  - *Decision Alert:* Prioritizes blocker in crimson:
-    `⟦x?x⟧ red-team: decision needed · 09:42 remaining`
-  - *Idle / Steady State (30s timeout):* Compact strip of 1-line badges:
-    `⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧`
-- **Line 2 (Sub-Header),** after one blank row: tool branding, working directory and the pane (`activity`, `chat` or `decisions`):
-  `delphi v0.5 · ~/projects/work/delphi · chat`
+### 3.2 The Header: a Badge Strip and a Title Row
+As built (`005e` §10.2, `005b-A3`):
+- **Row 1** is always the strip of 1-line badges, one per role in a fixed order, separated by single spaces, and nothing else: no names, no status or alert text. A badge's state is its animation (`005a-A1`): idle blinks for 150 ms about every 5 s (each role out of step), a thinking agent pans every 600 ms, working is static, an agent that needs the operator shows `⟦x?x⟧`, success is held for 3 s, an escalation for 10 s. `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin every badge to a static frame. One 150 ms timer repaints only when a frame changed.
+  `⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧`
+- **Row 2** is directly under row 1 (no blank row): `delphi v0.5 · ~/projects/app · chat`, dim. The path gives way from the left (`…`) and the pane name never does; below 48 columns it is `delphi · chat`. One blank row follows (none under 16 rows).
+- A pending decision is not drawn in the header: it is the `⟦x?x⟧` badge, the footer's `N waiting` and the approval card.
 
-### 3.3 Minimal Console Footer
-To avoid developer anxiety and clutter, cost and budget telemetry is removed from the console footer (isolated in `delphi observe spend`):
-- **Left-Aligned:** Session token usage, then the autonomy mode only when it is not the default:
-  `42.1k tokens`
-- **Right-Aligned:** Navigation hint and unbracketed navigation dots:
-  `← / ? →  ·  ○ ● ○`
-- **Amended 2026-10-25 (005b-A3):** the left side is `<tokens>  ·  <mode>` with the mode always shown (`auto` in the warning-red colour); separators are two spaces, a middle dot, two spaces. The narrator window's footer has no commands and reads `← →  ·  ○ ● ○ ○ ○ ○`.
-- **Unbracketed dots rule:** Bare dots `○ ● ○` ensure the indicator is never visually confused with robot avatar brackets (`⟦...⟧`).
+### 3.3 The Console Footer
+Cost and budget telemetry stay out of the console footer (there is no money in the narrator either).
+- **Left:** `<tokens>  ·  <mode>`, then `no model` and `N waiting` when they apply. The mode is always shown: `default` dim, `accept edits` plain, `auto` and `auto · optimistic` in the warning colour, bold, never reverse video.
+- **Right:** `← / ? →  ·  ○ ● ○` (the hint is dropped under 64 columns). Separators are two spaces, a middle dot, two spaces.
+- **Unbracketed dots rule:** bare dots `○ ● ○` ensure the indicator is never visually confused with robot avatar brackets (`⟦...⟧`).
+- `?` on an empty prompt opens the key list as a centred card; `Esc` or `?` closes it.
 
 ---
 
-## 4. Observer Views (`delphi observe`)
+## 4. The Narrator Window (`delphi observe`)
 
-_Amended 2026-10-25 (005b-A3, `005e` §9): the Observer is the narrator window with six views (`spend` is removed and no money is shown), plain-arrow navigation only, no `/` or `?` in its footer, an `epic` rail and a live `council` layout. The list below is the older description._
-
-Observer windows provide dedicated full-window perspectives:
-1. **Council Chamber (`delphi observe council`):** Live coliseum view of multi-agent debate across rounds, showing stances, cross-examinations, consensus verdicts, and minority reports.
-2. **Epic DAG (`delphi observe epic`):** Topological task dependency graph with real-time status indicators and cost breakdown.
-3. **Forge Diffs (`delphi observe forge`):** Unified worktree diff stream with syntax highlighting and verification gates.
-4. **Mascot Roster (`delphi observe agents`):** 3-line ASCII solid mascots paired with 3 grouped lines of metadata (name/role, model/tokens, runtime) and expanded step status.
-5. **Spend Telemetry (`delphi observe spend`):** Sparkline graphs tracking token spend over time, prompt cache efficiency, and role allocations.
+The Observer is the **narrator**: one read-only Ink window, six views in this order: `council`, `epic`, `forge`, `agents`, `archives`, `thinking` (there is no `spend` view and no money anywhere). Chrome on every view: the badge strip, `delphi v0.5 · <view>`, a blank row, the **attention slot** (`✔ nothing needs you`, or an amber band `▼ needs you   <what>` with `answer in the console`), the body, a hairline and a footer `<N> running  ·  <tokens> tokens` / `← →  ·  ● ○ ○ ○ ○ ○`. `←` `→` change view and stop at the ends; `↑ ↓ PgUp PgDn` scroll; `Ctrl+C` leaves; nothing else is bound, and the footer shows no `/` or `?`. `delphi observe --once` prints one frame of the same renderer without a terminal. The classic Rust Observer is gone.
+1. **council (the Weave):** the question, a track `● blind ╌╌ ○ debate ╌╌ ○ verdict`, one tinted card per seat and a verdict card. **The blind round is sealed**: cards say only `sealed` and whether the seat has answered; no stance text is on screen until every seat has. Debate reveals positions and the live tail of the seat answering; the verdict shows agreement and the minority.
+2. **epic (the Rail):** one row per task on a time axis with a `┆` waterline for now, done / running / queued bars, dependency elbows, the critical path in the warning colour, `now` / `next` / `path` lines and the pace sparkline on the last body row.
+3. **forge:** worktree diffs and verification gates.
+4. **agents:** the roster: role, state in words, task, model and tokens (the strip carries none of it).
+5. **archives:** the knowledge base; searching stays in the console (`Ctrl+K`).
+6. **thinking:** each running agent's reasoning, in memory only.
 
 ---
 

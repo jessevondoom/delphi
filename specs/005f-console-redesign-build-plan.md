@@ -178,7 +178,7 @@ _(The handoff note for the implementing model follows in §13.)_
 
 ## 13. Handoff
 
-**State at handoff (2026-10-25).** Design and mockups are approved and the amendments ratified (`005e` §12, recorded as `005a-A1`, `005b-A3`, `005d-A1` and the `skills/tui-design` update). No product code has been changed yet. The design branch is `worktree-agent-a42560a2ca3e1fc4b` (a draft pull request carries it); start implementation from `main` after it merges, or branch from it if it has not.
+**State at handoff (2026-10-25).** Design and mockups are approved and the amendments ratified (`005e` §12, recorded as `005a-A1`, `005b-A3`, `005d-A1` and the `skills/tui-design` update). **Built (2026-10-25):** slices 1 to 9 are merged (the console in #104, #108, #113, #118, #122, #124, #126; the narrator data in #127, the narrator chrome in #131, the epic rail in #141, the council weave in #143), with release v0.2.6 carrying 1-7. Slice 10 is in progress and slice 11 is a person's. Where the product differs from the mockups, `005e` §16.1 lists why.
 
 **Order.** Slices 1, 2 and 3 first (they are independent of each other and remove every P0), then 4, 5, 6; slice 7 (daemon data) must precede 8 and 9; 10 follows 8; 11 is a person's.
 

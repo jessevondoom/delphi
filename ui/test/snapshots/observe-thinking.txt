@@ -4,10 +4,10 @@ delphi v0.5 · thinking
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
 
-  Nothing is thinking right now.
+  nothing is thinking right now
 
-  Reasoning of running agents appears here as it streams. It lives only in this window:
-  it is never saved, and a window opened later starts empty.
+  the reasoning of running agents appears here as it streams
+  it lives only in this window: never saved, and a window opened later starts empty
 
 
 

@@ -559,7 +559,8 @@ impl PtyConsole {
         if let Some(d) = cwd {
             cmd.current_dir(d);
         }
-        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env_remove("TMUX").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
+        // A console on a pty counts as interactive: without DELPHI_NO_WINDOWS a test that reached `/observe` would open a real Terminal window.
+        cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env("DELPHI_NO_WINDOWS", "1").env_remove("TMUX").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
@@ -1346,7 +1347,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
     let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
     o.wait_for("· agents");
-    o.wait_for("1 call(s)");
+    o.wait_for("opus-t"); // the model the orchestrator is on
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("▀▀▀▀▀▀▀"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
@@ -1369,7 +1370,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
         std::thread::sleep(Duration::from_millis(120));
     }
     o.wait_for("· thinking");
-    o.wait_for("Nothing is thinking right now");
+    o.wait_for("nothing is thinking right now");
     assert_eq!(o.ctrl_c_out(), 0);
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();

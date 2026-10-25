@@ -2,6 +2,7 @@
 // `delphi chat --inline`, ported so the full-screen console depends on nothing but the socket.
 import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
+import { listMissions, renderMissions } from './missions.ts';
 import { openNarrator } from './narrator.ts';
 import type { Approval, State } from './fold.ts';
 import { roleName, type Info } from './theme.ts';
@@ -120,6 +121,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
   };
   switch (name) {
     case 'mission': ctx.post(`mission ${ctx.mission}`); return;
+    case 'missions': ctx.post(renderMissions(listMissions(ctx.info.workspace), Date.now())); return;
     case 'usage': { const v = await call('usage.get', { group: rest[0] ?? 'role' }); if (v) ctx.post(renderUsage(v)); return; }
     case 'budget': {
       if (!rest[0]) { const b = await call('budget.get'); if (b) ctx.post(`ceiling ${usd(b.cap_usd, 2)} · spent ${usd(b.spent_usd, 4)} · reserved ${usd(b.reserved_usd, 4)} · available ${usd(b.available_usd, 4)}`); return; }
