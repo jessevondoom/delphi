@@ -119,7 +119,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     ev.on('notification', onNote);
     const onClosed = () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed; trying to reconnect…', at: Date.now() }));
     const onBack = () => { // what happened meanwhile is in the log: rebuild from it, keep what is only on screen
-      cmd.whenReady().then(() => loadHistory(cmd, mission)).then((h) => setState((s) => addBlock({ ...h, activity: s.activity, sources: { ...h.sources, ...s.sources } }, { kind: 'note', text: 'reconnected to the daemon', at: Date.now() })));
+      cmd.whenReady().then(() => loadHistory(cmd, mission)).then((h) => setState((s) => addBlock({ ...h, activity: s.activity, ended: s.ended, sources: { ...h.sources, ...s.sources } }, { kind: 'note', text: 'reconnected to the daemon', at: Date.now() })));
     };
     ev.on('closed', onClosed);
     ev.on('reconnected', onBack);
