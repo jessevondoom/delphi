@@ -152,4 +152,93 @@
     deck.classList.add('enhanced');
     show(0);
   });
+  // Charts in a page: a tooltip for whatever is pointed at, legend items that hide and show their series, and a
+  // dragged region that is magnified (double-click to go back). Without this script the charts are still complete.
+  doc.querySelectorAll('figure.chart').forEach(function (fig) {
+    var svg = fig.querySelector('svg');
+    if (!svg) { return; }
+    var tip = doc.createElement('div');
+    tip.className = 'tip';
+    tip.hidden = true;
+    fig.appendChild(tip);
+    var from = null;
+    function say(e) {
+      var t = e.target && e.target.closest ? e.target.closest('[data-v]') : null;
+      if (from || !t || e.target.closest('[data-t]')) { tip.hidden = true; return; }
+      tip.textContent = t.getAttribute('data-v');
+      tip.hidden = false;
+      var r = fig.getBoundingClientRect();
+      var x = e.clientX - r.left + 14;
+      if (x + tip.offsetWidth > r.width) { x = e.clientX - r.left - tip.offsetWidth - 14; }
+      tip.style.left = Math.max(0, x) + 'px';
+      tip.style.top = Math.max(0, e.clientY - r.top - tip.offsetHeight - 10) + 'px';
+    }
+    svg.addEventListener('pointermove', say);
+    svg.addEventListener('pointerleave', function () { tip.hidden = true; });
+
+    var off = {};
+    svg.querySelectorAll('[data-t]').forEach(function (item) {
+      function flip() {
+        var j = item.getAttribute('data-t');
+        off[j] = !off[j];
+        item.setAttribute('aria-pressed', off[j] ? 'false' : 'true');
+        item.classList.toggle('off', !!off[j]);
+        svg.querySelectorAll('[data-s="' + j + '"]').forEach(function (m) { m.classList.toggle('hid', !!off[j]); });
+        tip.hidden = true;
+      }
+      item.addEventListener('click', flip);
+      item.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); }
+      });
+    });
+
+    var brush = svg.querySelector('.brush');
+    var base = svg.getAttribute('viewBox');
+    if (!brush || !base) { return; }
+    var box = base.split(' ').map(Number);
+    function at(e) {
+      var m = svg.getScreenCTM();
+      if (!m) { return null; }
+      var p = svg.createSVGPoint();
+      p.x = e.clientX;
+      p.y = e.clientY;
+      var q = p.matrixTransform(m.inverse());
+      return [q.x, q.y];
+    }
+    svg.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || e.target.closest('[data-t]')) { return; }
+      from = at(e);
+    });
+    svg.addEventListener('pointermove', function (e) {
+      if (!from) { return; }
+      var to = at(e);
+      if (!to) { return; }
+      brush.setAttribute('x', Math.min(from[0], to[0]));
+      brush.setAttribute('y', Math.min(from[1], to[1]));
+      brush.setAttribute('width', Math.abs(to[0] - from[0]));
+      brush.setAttribute('height', Math.abs(to[1] - from[1]));
+      brush.removeAttribute('hidden');
+    });
+    svg.addEventListener('pointerup', function (e) {
+      if (!from) { return; }
+      var a = from;
+      var to = at(e);
+      from = null;
+      brush.setAttribute('hidden', '');
+      if (!to) { return; }
+      var w = Math.abs(to[0] - a[0]);
+      var h = Math.abs(to[1] - a[1]);
+      if (w < 24 || h < 24) { return; }
+      var cx = (a[0] + to[0]) / 2;
+      var cy = (a[1] + to[1]) / 2;
+      var ratio = box[2] / box[3];
+      if (w / h > ratio) { h = w / ratio; } else { w = h * ratio; }
+      svg.setAttribute('viewBox', (cx - w / 2) + ' ' + (cy - h / 2) + ' ' + w + ' ' + h);
+      fig.classList.add('zoomed');
+    });
+    svg.addEventListener('dblclick', function () {
+      svg.setAttribute('viewBox', base);
+      fig.classList.remove('zoomed');
+    });
+  });
 })();

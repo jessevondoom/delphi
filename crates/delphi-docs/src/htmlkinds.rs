@@ -333,6 +333,63 @@ mod tests {
         std::fs::write(format!("{}/report-dark.html", dir), render_report(&report_from_json(&dark).unwrap()).unwrap()).unwrap();
     }
 
+    /// The same page of every chart form, plain and with a test driver appended (not something the generator can
+    /// produce) that points at marks, clicks legend items and drags out a zoom, reporting what happened in `<title>`.
+    #[test]
+    #[ignore = "writes files for a browser to check"]
+    fn write_chart_page_samples() {
+        let Ok(dir) = std::env::var("DELPHI_DOCS_HTML_OUT") else { return };
+        let blocks: Vec<Value> = crate::chart::samples::all().into_iter().map(|(_, c)| json!({"type": "chart", "chart": c})).collect();
+        let page = crate::htmlpage::from_json(&json!({"title": "Every chart", "blocks": blocks})).unwrap();
+        let html = crate::htmlpage::render(&page).unwrap();
+        let driver = r#"<script>
+(function () {
+  var out = [];
+  function fire(el, type, x, y) { el.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, pointerId: 1 })); }
+  function click(el) { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+  var figs = document.querySelectorAll('figure.chart');
+  out.push('charts:' + figs.length + ' tips:' + document.querySelectorAll('.tip').length);
+  var line = figs[5];
+  var svg = line.querySelector('svg');
+  var hit = svg.querySelector('.hit');
+  var r = hit.getBoundingClientRect();
+  fire(hit, 'pointermove', r.left + r.width / 2, r.top + 30);
+  var tip = line.querySelector('.tip');
+  out.push('line tip:' + (!tip.hidden) + ' "' + tip.textContent + '"');
+  fire(svg, 'pointerleave', 0, 0);
+  out.push('left:' + tip.hidden);
+  var item = svg.querySelector('[data-t="1"]');
+  click(item);
+  out.push('hid:' + svg.querySelectorAll('.hid').length + ' pressed:' + item.getAttribute('aria-pressed'));
+  click(item);
+  out.push('shown:' + svg.querySelectorAll('.hid').length + ' pressed:' + item.getAttribute('aria-pressed'));
+  var b = svg.getBoundingClientRect();
+  var vb0 = svg.getAttribute('viewBox');
+  fire(svg, 'pointerdown', b.left + 100, b.top + 120);
+  fire(svg, 'pointermove', b.left + 320, b.top + 260);
+  out.push('brush:' + !svg.querySelector('.brush').hasAttribute('hidden'));
+  fire(svg, 'pointerup', b.left + 320, b.top + 260);
+  out.push('zoomed:' + line.classList.contains('zoomed') + ' vb:' + vb0 + ' -> ' + svg.getAttribute('viewBox'));
+  svg.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  out.push('reset:' + (svg.getAttribute('viewBox') === vb0) + ' zoomed:' + line.classList.contains('zoomed'));
+  var say = [];
+  figs.forEach(function (f) {
+    var m = f.querySelector('[data-v]');
+    if (!m) { say.push('none'); return; }
+    var q = m.getBoundingClientRect();
+    fire(m, 'pointermove', q.left + q.width / 2, q.top + q.height / 2);
+    var t = f.querySelector('.tip');
+    say.push(t.hidden ? 'HIDDEN' : t.textContent);
+  });
+  out.push('tips: ' + say.join(' // '));
+  document.title = out.join(' | ');
+})();
+</script>
+</body>"#;
+        std::fs::write(format!("{}/charts.html", dir), &html).unwrap();
+        std::fs::write(format!("{}/charts-driven.html", dir), html.replace("</body>", driver)).unwrap();
+    }
+
     #[test]
     fn output_is_deterministic() {
         let d = deck_from_json(&deck()).unwrap();
