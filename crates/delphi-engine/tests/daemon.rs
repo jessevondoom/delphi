@@ -326,11 +326,12 @@ fn race_child() {
     let Ok(out) = std::env::var("DELPHI_RACE_OUT") else { return };
     let home = PathBuf::from(std::env::var("DELPHI_RACE_HOME").unwrap());
     let ws = PathBuf::from(std::env::var("DELPHI_RACE_WS").unwrap());
-    let res = connect_or_spawn(&SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![], prefix_args: vec![] });
+    let pretend = std::env::var("DELPHI_RACE_VERSION").ok();
+    let res = connect_or_spawn(&SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![], prefix_args: vec![], own_version: pretend.as_deref() });
     let line = match res {
         Ok(mut a) => {
             let pong = a.client.call("session.ping", json!({})).map(|v| v == json!("pong")).unwrap_or(false);
-            json!({"ok": pong, "spawned": a.spawned, "pid": a.daemon_pid}).to_string()
+            json!({"ok": pong, "spawned": a.spawned, "pid": a.daemon_pid, "replaced": a.replaced, "stale": a.stale, "version": a.daemon_version}).to_string()
         }
         Err(e) => json!({"ok": false, "error": e.to_string()}).to_string(),
     };
@@ -338,13 +339,52 @@ fn race_child() {
 }
 
 fn launch_race_child(home: &Path, ws: &Path, out: &Path) -> (std::process::Child, std::fs::File) {
+    launch_race_child_as(home, ws, out, None)
+}
+
+fn launch_race_child_as(home: &Path, ws: &Path, out: &Path, version: Option<&str>) -> (std::process::Child, std::fs::File) {
     let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
     cmd.args(["--exact", "race_child", "--nocapture", "--test-threads=1"])
         .env("DELPHI_RACE_OUT", out)
         .env("DELPHI_RACE_HOME", home)
         .env("DELPHI_RACE_WS", ws);
+    if let Some(v) = version {
+        cmd.env("DELPHI_RACE_VERSION", v);
+    }
     let master = with_pty(&mut cmd);
     (cmd.spawn().unwrap(), master)
+}
+
+// An upgrade does not stop the daemon, so an idle one from another release is replaced when a client attaches
+// (the operator would otherwise test new code through an old daemon).
+#[test]
+fn an_idle_daemon_of_another_release_is_replaced_when_a_client_attaches() {
+    let dir = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
+    let (home, ws) = (dir.path().join("h"), dir.path().join("w"));
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("config.toml"), "").unwrap();
+    let run = |name: &str, version: Option<&str>| -> Value {
+        let out = dir.path().join(name);
+        let (mut child, _master) = launch_race_child_as(&home, &ws, &out, version);
+        assert!(child.wait().unwrap().success());
+        serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap()
+    };
+    let first = run("a.json", None);
+    assert_eq!((first["ok"] == true, first["spawned"] == true, first["replaced"].is_null()), (true, true, true), "{}", first);
+    let same = run("b.json", None);
+    assert_eq!((same["pid"] == first["pid"], same["spawned"] == false, same["replaced"].is_null()), (true, true, true), "the same release keeps its daemon: {}", same);
+    // The client pretends to be another release: the idle daemon is stopped and a fresh one started.
+    let other = run("c.json", Some("999.0.0"));
+    assert_eq!((other["ok"] == true, other["spawned"] == true), (true, true), "{}", other);
+    assert_eq!(other["replaced"].as_str(), first["version"].as_str(), "it says which release it replaced: {}", other);
+    assert_ne!(other["pid"], first["pid"], "a new process");
+    let old_pid = first["pid"].as_u64().unwrap() as i32;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(old_pid, 0) } == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_ne!(unsafe { libc::kill(old_pid, 0) }, 0, "the old daemon is gone");
+    unsafe { libc::kill(other["pid"].as_u64().unwrap() as i32, libc::SIGKILL) };
 }
 
 // specs/005 §6 test 3, plus crash recovery of a stale socket and the on-disk permission invariants.
