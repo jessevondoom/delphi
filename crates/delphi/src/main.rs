@@ -12,6 +12,7 @@ mod needs;
 mod observer;
 mod ratify_console;
 mod report;
+mod run;
 mod seed;
 mod selfupdate;
 mod setup;
@@ -32,6 +33,7 @@ const USAGE: &str = "usage:
   delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]
   delphi lint --repo <path>
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
+  delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>] [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]   (no terminal needed; exit 0 ok · 1 gates · 2 card denied · 3 budget · 4 infrastructure)
   delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]
   delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
   delphi models [--probe] [--workspace <name>] [--home <dir>]
@@ -65,6 +67,7 @@ fn main() {
         Some("init") => cmd_init(&args[1..]),
         Some("doctor") => cmd_doctor(&args[1..]),
         Some("chat") => cmd_chat(&args[1..]),
+        Some("run") => cmd_run(&args[1..]),
         Some("daemon") => cmd_daemon(&args[1..]),
         Some("kb") => cmd_kb(&args[1..]),
         Some("needs") => cmd_needs(&args[1..]),
@@ -298,6 +301,22 @@ fn cmd_chat(args: &[String]) -> i32 {
     } else {
         chat::run(&home, &ws.dir, flag(args, "--mission"), names)
     }
+}
+
+/// `delphi run "<task>"`: one task with no terminal, ending in a summary and an exit code (`run.rs`).
+fn cmd_run(args: &[String]) -> i32 {
+    let opts = match run::parse_args(args) {
+        Ok(o) => o,
+        Err(m) => {
+            eprintln!("delphi run: {}", m);
+            return 4;
+        }
+    };
+    let (home, ws) = match resolve_ws("run", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    run::run(&home, &ws.dir, opts)
 }
 
 fn cmd_daemon(args: &[String]) -> i32 {

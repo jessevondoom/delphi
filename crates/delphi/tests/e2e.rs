@@ -1231,3 +1231,90 @@ fn the_daemon_reports_the_release_of_the_program_that_started_it() {
     let stop = PtyConsole::start_env(&e.home, &["daemon", "stop", "--workspace", "e2e"], 10, 80, &[]);
     assert_eq!(stop.wait_exit(), 0);
 }
+
+// ── delphi run: no terminal, a summary and an exit code ─────────────────────
+
+/// Ratify the endpoints through a short console session, then stop that daemon so `delphi run` starts its own
+/// (a script has no terminal, so it can only use a daemon it spawned).
+fn ratify_and_stop(e: &Env) {
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/ratify");
+    s.wait_for("pending proposal");
+    s.send("/ratify apply 1");
+    s.wait_for("ratified ws:config.toml#access");
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    kill_daemon(pid_in(&out));
+}
+
+/// Run `delphi run` with no stdin and no terminal; returns (exit code, stdout, stderr).
+fn delphi_run(e: &Env, args: &[&str]) -> (i32, String, String) {
+    let o = Command::new(DELPHI).arg("run").args(args).args(["--workspace", "e2e", "--home", e.home.to_str().unwrap()]).env("DELPHI_E2E_KEY", KEY).stdin(Stdio::null()).output().unwrap();
+    (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string())
+}
+
+fn summary_of(stdout: &str) -> Value {
+    let line = stdout.lines().rev().find(|l| l.contains("\"run.summary\"")).unwrap_or_else(|| panic!("no summary in:\n{}", stdout));
+    serde_json::from_str(line).unwrap()
+}
+
+#[test]
+fn delphi_run_answers_a_task_with_no_terminal_and_reports_a_summary() {
+    let m = mock(vec![reply_tool("toolu_1", "read_file", json!({"path": "@project/proj/src/lib.rs"})), reply_text("The file defines `needle`, which returns 42.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let (code, out, err) = delphi_run(&e, &["What does @project/proj/src/lib.rs define?", "--json", "--timeout", "90s"]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["outcome"].as_str(), s["exit_code"].as_i64()), (Some("completed"), Some(0)));
+    assert!(s["text"].as_str().unwrap().contains("needle"), "{}", s);
+    assert_eq!(s["cards"]["total"], 0);
+    assert!(s["usage"]["rows"].as_array().map(|r| !r.is_empty()).unwrap_or(false), "the cost is in the summary: {}", s["usage"]);
+    assert!(!out.contains(KEY) && !err.contains(KEY), "the credential never reaches the output");
+    assert_eq!(m.seen.lock().unwrap().len(), 2);
+    let (code2, ..) = delphi_run(&e, &["--task", "", "--json"]);
+    assert_eq!(code2, 4, "an empty task is refused before any daemon is touched");
+}
+
+#[test]
+fn delphi_run_denies_a_card_by_default_and_reports_it_and_a_policy_can_allow_amber() {
+    let write = || reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"}));
+    // Run 1: --on-card deny (the default). The model is told no; nothing is written.
+    let m = mock(vec![write(), reply_text("I could not write the spec.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let (code, out, err) = delphi_run(&e, &["@architect Draft a spec called 009-e2e", "--json", "--timeout", "90s"]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["cards"]["total"].as_u64(), s["cards"]["denied"].as_u64()), (Some(1), Some(1)), "{}", s);
+    assert_eq!(s["cards"]["list"][0]["tool"], "write_file");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "a denied card writes nothing");
+}
+
+#[test]
+fn delphi_run_with_a_policy_allows_exactly_the_amber_tool_it_names() {
+    let write = || reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"}));
+    let m = mock(vec![write(), reply_text("Drafted specs/009-e2e.md.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let policy = e._t.path().join("policy.toml");
+    std::fs::write(&policy, "[[allow]]\ntool = \"write_file\"\npattern = \"write_file specs/*\"\n").unwrap();
+    let (code, out, err) = delphi_run(&e, &["@architect Draft a spec called 009-e2e", "--json", "--timeout", "90s", "--on-card", &format!("policy:{}", policy.display())]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["cards"]["allowed"].as_u64(), s["cards"]["denied"].as_u64()), (Some(1), Some(0)), "{}", s);
+    assert!(e.ws.join("team/specs/009-e2e.md").exists(), "the allowed card ran");
+}
+
+#[test]
+fn delphi_run_refuses_a_policy_that_tries_to_allow_a_merge_before_touching_anything() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let policy = e._t.path().join("bad.toml");
+    std::fs::write(&policy, "[[allow]]\ntool = \"merge\"\n").unwrap();
+    let (code, out, err) = delphi_run(&e, &["anything", "--on-card", &format!("policy:{}", policy.display())]);
+    assert_eq!(code, 4, "{}{}", out, err);
+    assert!(err.contains("no policy can allow it"), "{}", err);
+    assert_eq!(m.seen.lock().unwrap().len(), 0);
+}
