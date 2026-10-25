@@ -68,6 +68,54 @@ pub struct Launch {
     pub cwd: PathBuf,
     pub tools: Tools,
     pub env: BTreeMap<String, String>,
+    pub opts: Opts,
+}
+
+/// How the CLI keeps its own conversation transcript.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SessionMode {
+    /// Nothing is saved (`--no-session-persistence`). The default: a span starts cold and leaves nothing behind.
+    #[default]
+    Ephemeral,
+    /// Saved under the CLI's own configuration directory, so a later span can resume it by the id in [`Event::Init`].
+    Persist,
+    /// Continue a saved session. `fork` starts a new session id from it (Claude only; `agy` cannot fork).
+    Resume { id: String, fork: bool },
+}
+
+/// The CLI features Delphi can switch on for a span, beyond a model and a prompt. All of them come from the
+/// ratified `[harness.<name>]` block or from the engine, never from the model's own output. The defaults reproduce
+/// the plain launch exactly.
+#[derive(Debug, Clone, Default)]
+pub struct Opts {
+    /// Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max` (both CLIs).
+    pub effort: Option<String>,
+    /// Stop after this many agentic turns (Claude).
+    pub max_turns: Option<u32>,
+    /// Stop once the CLI's own spend estimate reaches this (Claude; only meaningful on an API key, where it is real money).
+    pub max_budget_usd: Option<f64>,
+    /// A JSON Schema, as JSON text. The CLI validates its final answer against it and returns it as `structured`
+    /// in the result (both CLIs).
+    pub json_schema: Option<String>,
+    /// Models the CLI falls back to, in order, when the primary is overloaded or gone (Claude).
+    pub fallback_models: Vec<String>,
+    /// Token-level streaming (Claude). `agy` always streams.
+    pub partial_messages: bool,
+    pub session: SessionMode,
+    /// Extra directories the CLI may read and edit. Applied only to a span that has tools.
+    pub add_dirs: Vec<PathBuf>,
+    /// Subagents, as the JSON the CLI's `--agents` takes (Claude). Applied only to a span that has tools.
+    pub agents_json: Option<String>,
+    /// Inline settings JSON layered over the (blank) settings sources, for example `{"hooks": {...}}` (Claude).
+    pub settings_json: Option<String>,
+    /// `agy --mode`: `plan`, `accept-edits` or `auto`.
+    pub mode: Option<String>,
+    /// `agy --sandbox`: terminal commands run with restrictions.
+    pub sandbox: bool,
+    /// `agy --print-timeout`, in seconds.
+    pub print_timeout_secs: Option<u64>,
+    /// An API key for the Claude CLI (`ANTHROPIC_API_KEY`), in place of the subscription login. Never shown by `Debug`.
+    pub api_key: Option<delphi_adapter::credential::Secret>,
 }
 
 /// A tool call the CLI wants to make.
@@ -112,6 +160,9 @@ impl Tokens {
 pub enum Event {
     Init { session_id: String },
     Text(String),
+    /// A fragment of the answer as it is written (Claude with `partial_messages`). The finished text still arrives as
+    /// [`Event::Text`], so a consumer that shows deltas must not show that too.
+    Delta(String),
     /// The CLI's own tool use, for the log.
     ToolUse { id: String, name: String, input: Value },
     ToolResult { id: String, is_error: bool },
@@ -121,7 +172,9 @@ pub enum Event {
     /// Share of the subscription's window used, 0 to 1.
     /// `status` is `allowed`, `allowed_warning` or `rejected` (empty when the CLI does not say); `resets_at` is Unix seconds or milliseconds, as the CLI sent it.
     RateLimit { utilization: f64, window: String, status: String, resets_at: Option<i64> },
-    Result { text: String, is_error: bool, stop_reason: Option<String>, total_cost_usd: f64, usage: Tokens },
+    /// `subtype` is the CLI's own ending (`success`, `error_max_turns`, `error_max_budget_usd`, ...); `structured` is the
+    /// schema-validated answer when a `json_schema` was given.
+    Result { text: String, is_error: bool, stop_reason: Option<String>, total_cost_usd: f64, usage: Tokens, subtype: String, structured: Option<Value> },
     /// The process ended; no more events follow.
     Exit { code: Option<i32> },
 }
@@ -151,6 +204,12 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 }
             }
         }
+        // Only the top-level agent's text; a subagent's deltas carry a parent and are not the answer.
+        Some("stream_event") if m["parent_tool_use_id"].is_null() && m["event"]["delta"]["type"] == "text_delta" => {
+            if let Some(t) = m["event"]["delta"]["text"].as_str().filter(|t| !t.is_empty()) {
+                out.push(Event::Delta(t.into()));
+            }
+        }
         Some("rate_limit_event") => {
             let i = &m["rate_limit_info"];
             let status = i["status"].as_str().unwrap_or("");
@@ -176,6 +235,8 @@ pub fn parse_line(line: &str) -> Vec<Event> {
             stop_reason: m["stop_reason"].as_str().map(String::from),
             total_cost_usd: m["total_cost_usd"].as_f64().unwrap_or(0.0),
             usage: Tokens::of(&m["usage"]),
+            subtype: m["subtype"].as_str().unwrap_or("").into(),
+            structured: Some(m["structured_output"].clone()).filter(|v| !v.is_null()),
         }),
         _ => {}
     }
@@ -188,7 +249,7 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
     let usage_of = |u: &Value| Tokens { input: u["input_tokens"].as_u64().unwrap_or(0), cache_read: u["cache_read_tokens"].as_u64().unwrap_or(0), cache_write: 0, output: u["output_tokens"].as_u64().unwrap_or(0) + u["thinking_tokens"].as_u64().unwrap_or(0) };
     let mut out = Vec::new();
     match m["event"].as_str() {
-        Some("init") => out.push(Event::Init { session_id: String::new() }),
+        Some("init") => out.push(Event::Init { session_id: m["conversation_id"].as_str().unwrap_or("").into() }),
         Some("step_update") => {
             let s = &m["step_update"];
             let id = s["step_index"].as_u64().unwrap_or(0).to_string();
@@ -222,6 +283,8 @@ pub fn parse_agy_line(line: &str) -> Vec<Event> {
                 stop_reason: (denied > 0).then(|| format!("{} action(s) denied by the CLI", denied)),
                 total_cost_usd: 0.0,
                 usage: usage_of(&r["usage"]),
+                subtype: r["status"].as_str().unwrap_or("").to_lowercase(),
+                structured: Some(r["structured_output"].clone()).filter(|v| !v.is_null()),
             });
         }
         _ => {}
@@ -287,15 +350,69 @@ async fn read_capped_line<R: tokio::io::AsyncBufRead + Unpin>(r: &mut R, cap: us
     }
 }
 
+/// Append `name value` when there is a value.
+fn push_flag(a: &mut Vec<String>, name: &str, value: Option<String>) {
+    if let Some(v) = value {
+        a.push(name.into());
+        a.push(v);
+    }
+}
+
 fn args(l: &Launch) -> Vec<String> {
+    let o = &l.opts;
+    let strings = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+    // Directories and subagents widen what a span can reach, so only a span that has tools gets them.
+    let tooled = l.tools == Tools::Standard;
     if l.cli == Cli::Agy {
         // `--print=` takes the prompt as its value; with stream input the prompt arrives on stdin instead.
-        return ["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--model", l.model.as_str()].iter().map(|s| s.to_string()).collect();
+        // `--disable-slash-commands` keeps a prompt that starts with `/` from expanding a skill or command.
+        let mut a = strings(&["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--disable-slash-commands", "--model", l.model.as_str()]);
+        push_flag(&mut a, "--mode", o.mode.clone());
+        push_flag(&mut a, "--effort", o.effort.clone());
+        push_flag(&mut a, "--json-schema", o.json_schema.clone());
+        push_flag(&mut a, "--print-timeout", o.print_timeout_secs.map(|s| format!("{}s", s)));
+        if let SessionMode::Resume { id, .. } = &o.session {
+            push_flag(&mut a, "--conversation", Some(id.clone()));
+        }
+        if tooled {
+            for d in &o.add_dirs {
+                push_flag(&mut a, "--add-dir", Some(d.display().to_string()));
+            }
+        }
+        if o.sandbox {
+            a.push("--sandbox".into());
+        }
+        return a;
     }
-    let mut a: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", "manual", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config"].iter().map(|s| s.to_string()).collect();
+    let mut a = strings(&["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-prompt-tool", "stdio", "--permission-mode", "manual", "--setting-sources", "", "--strict-mcp-config"]);
+    match &o.session {
+        SessionMode::Ephemeral => a.push("--no-session-persistence".into()),
+        SessionMode::Persist => {}
+        SessionMode::Resume { id, fork } => {
+            push_flag(&mut a, "--resume", Some(id.clone()));
+            if *fork {
+                a.push("--fork-session".into());
+            }
+        }
+    }
     a.extend(["--model".into(), l.model.clone(), "--append-system-prompt".into(), l.system_prompt.clone()]);
     if l.tools == Tools::None {
         a.extend(["--tools".into(), String::new()]);
+    }
+    push_flag(&mut a, "--effort", o.effort.clone());
+    push_flag(&mut a, "--max-turns", o.max_turns.map(|n| n.to_string()));
+    push_flag(&mut a, "--max-budget-usd", o.max_budget_usd.map(|x| x.to_string()));
+    push_flag(&mut a, "--json-schema", o.json_schema.clone());
+    push_flag(&mut a, "--fallback-model", Some(o.fallback_models.join(",")).filter(|m| !m.is_empty()));
+    push_flag(&mut a, "--settings", o.settings_json.clone());
+    if o.partial_messages {
+        a.push("--include-partial-messages".into());
+    }
+    if tooled {
+        push_flag(&mut a, "--agents", o.agents_json.clone());
+        for d in &o.add_dirs {
+            push_flag(&mut a, "--add-dir", Some(d.display().to_string()));
+        }
     }
     a
 }
@@ -312,7 +429,12 @@ pub struct Session {
 impl Session {
     /// Start the CLI and send the first user turn.
     pub async fn start(l: &Launch) -> Result<Session, String> {
-        let std_cmd = plain_command(Limits { cpu_secs: None, max_file_bytes: None, max_open_files: Some(4096) }, &l.env, &l.program, args(l));
+        // The key goes into this child's environment only, never into `Launch.env` (which is logged in tests) or an argument.
+        let mut env = l.env.clone();
+        if let (Cli::Claude, Some(k)) = (l.cli, &l.opts.api_key) {
+            env.insert("ANTHROPIC_API_KEY".into(), k.expose().to_string());
+        }
+        let std_cmd = plain_command(Limits { cpu_secs: None, max_file_bytes: None, max_open_files: Some(4096) }, &env, &l.program, args(l));
         let mut cmd = tokio::process::Command::from(std_cmd);
         cmd.current_dir(&l.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start `{}`: {}", l.program, e))?;
@@ -464,9 +586,9 @@ pub(crate) mod tests {
         assert!(matches!(&res[0], Event::Result { text, is_error: false, stop_reason: Some(r), .. } if text == "pong\n" && r.contains("denied")), "{:?}", res);
         let bad = parse_agy_line(r#"{"event":"result","result":{"status":"ERROR","error":"x"}}"#);
         assert!(matches!(&bad[0], Event::Result { is_error: true, .. }));
-        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new() };
+        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), opts: Opts::default() };
         let a = args(&l);
-        assert_eq!(a, ["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--model", "gemini-3.8-flash-low"]);
+        assert_eq!(a, ["--input-format", "stream-json", "--output-format", "stream-json", "--print=", "--disable-slash-commands", "--model", "gemini-3.8-flash-low"]);
         assert!(!a.iter().any(|x| x.contains("dangerously")), "never the bypass flag");
     }
 
@@ -484,7 +606,7 @@ pub(crate) mod tests {
 
     #[test]
     fn agy_with_no_tools_is_told_so_in_its_first_turn() {
-        let mk = |tools| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new() };
+        let mk = |tools| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), opts: Opts::default() };
         assert!(first_turn(&mk(Tools::None)).contains("Do not call any tools"));
         assert!(!first_turn(&mk(Tools::Standard)).contains("Do not call any tools"));
     }
@@ -549,7 +671,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_launch_arguments_isolate_the_cli_and_turn_the_bridge_on() {
-        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new() };
+        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools: Tools::None, env: BTreeMap::new(), opts: Opts::default() };
         let a = args(&l);
         let pos = |f: &str| a.iter().position(|x| x == f).unwrap();
         assert_eq!(a[pos("--permission-prompt-tool") + 1], "stdio");
@@ -560,6 +682,124 @@ pub(crate) mod tests {
         assert!(!a.contains(&"--dangerously-skip-permissions".to_string()) && !a.contains(&"--bare".to_string()));
         let std = Launch { tools: Tools::Standard, ..l };
         assert!(!args(&std).contains(&"--tools".to_string()));
+    }
+
+    fn full_opts() -> Opts {
+        Opts {
+            effort: Some("high".into()),
+            max_turns: Some(7),
+            max_budget_usd: Some(1.5),
+            json_schema: Some(r#"{"type":"object"}"#.into()),
+            fallback_models: vec!["sonnet".into(), "haiku".into()],
+            partial_messages: true,
+            add_dirs: vec![PathBuf::from("/srv/a"), PathBuf::from("/srv/b")],
+            agents_json: Some(r#"{"r":{"description":"d","prompt":"p"}}"#.into()),
+            settings_json: Some(r#"{"hooks":{}}"#.into()),
+            ..Opts::default()
+        }
+    }
+
+    fn claude_launch(tools: Tools, opts: Opts) -> Launch {
+        Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), opts }
+    }
+
+    #[test]
+    fn claude_options_become_flags_and_reach_only_a_span_with_tools() {
+        let value = |a: &[String], f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+        let a = args(&claude_launch(Tools::Standard, full_opts()));
+        assert_eq!(value(&a, "--effort").as_deref(), Some("high"));
+        assert_eq!(value(&a, "--max-turns").as_deref(), Some("7"));
+        assert_eq!(value(&a, "--max-budget-usd").as_deref(), Some("1.5"));
+        assert_eq!(value(&a, "--json-schema").as_deref(), Some(r#"{"type":"object"}"#));
+        assert_eq!(value(&a, "--fallback-model").as_deref(), Some("sonnet,haiku"));
+        assert_eq!(value(&a, "--settings").as_deref(), Some(r#"{"hooks":{}}"#));
+        assert_eq!(value(&a, "--agents").as_deref(), Some(r#"{"r":{"description":"d","prompt":"p"}}"#));
+        assert_eq!(a.iter().filter(|x| *x == "--add-dir").count(), 2);
+        assert!(a.contains(&"--include-partial-messages".to_string()));
+        // A span without tools gets the answer-shaping options but no subagents and no extra directories.
+        let a = args(&claude_launch(Tools::None, full_opts()));
+        assert!(value(&a, "--effort").is_some() && value(&a, "--json-schema").is_some());
+        assert!(!a.contains(&"--agents".to_string()) && !a.contains(&"--add-dir".to_string()), "{:?}", a);
+        // The defaults add nothing to the plain launch.
+        let plain = args(&claude_launch(Tools::None, Opts::default()));
+        for f in ["--effort", "--max-turns", "--max-budget-usd", "--json-schema", "--fallback-model", "--settings", "--include-partial-messages", "--agents", "--add-dir", "--resume", "--fork-session"] {
+            assert!(!plain.contains(&f.to_string()), "{} in {:?}", f, plain);
+        }
+    }
+
+    #[test]
+    fn a_session_is_ephemeral_unless_the_profile_keeps_or_resumes_it() {
+        let has = |m: SessionMode, f: &str| args(&claude_launch(Tools::None, Opts { session: m, ..Opts::default() })).contains(&f.to_string());
+        assert!(has(SessionMode::Ephemeral, "--no-session-persistence"));
+        assert!(!has(SessionMode::Persist, "--no-session-persistence") && !has(SessionMode::Persist, "--resume"));
+        let a = args(&claude_launch(Tools::None, Opts { session: SessionMode::Resume { id: "abc".into(), fork: true }, ..Opts::default() }));
+        assert!(!a.contains(&"--no-session-persistence".to_string()));
+        assert_eq!(a[a.iter().position(|x| x == "--resume").unwrap() + 1], "abc");
+        assert!(a.contains(&"--fork-session".to_string()));
+    }
+
+    #[test]
+    fn agy_options_become_its_flags_and_a_resume_names_the_conversation() {
+        let mk = |tools, opts| Launch { cli: Cli::Agy, program: "agy".into(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("."), tools, env: BTreeMap::new(), opts };
+        let o = Opts { mode: Some("plan".into()), effort: Some("low".into()), json_schema: Some("{}".into()), print_timeout_secs: Some(90), sandbox: true, add_dirs: vec![PathBuf::from("/srv/a")], session: SessionMode::Resume { id: "c1".into(), fork: true }, ..Opts::default() };
+        let a = args(&mk(Tools::Standard, o.clone()));
+        let value = |f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+        assert_eq!((value("--mode").as_deref(), value("--effort").as_deref(), value("--json-schema").as_deref(), value("--print-timeout").as_deref(), value("--conversation").as_deref(), value("--add-dir").as_deref()), (Some("plan"), Some("low"), Some("{}"), Some("90s"), Some("c1"), Some("/srv/a")));
+        assert!(a.contains(&"--sandbox".to_string()) && !a.contains(&"--fork-session".to_string()), "agy cannot fork");
+        assert!(!args(&mk(Tools::None, o)).contains(&"--add-dir".to_string()));
+    }
+
+    #[test]
+    fn partial_text_structured_answers_and_session_ids_are_parsed() {
+        let delta = |extra: &str| parse_line(&format!(r#"{{"type":"stream_event","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"hel"}}}},"parent_tool_use_id":{}}}"#, extra));
+        assert_eq!(delta("null"), vec![Event::Delta("hel".into())]);
+        assert!(delta(r#""toolu_1""#).is_empty(), "a subagent's text is not the answer");
+        assert!(parse_line(r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}},"parent_tool_use_id":null}"#).is_empty());
+        let res = parse_line(r#"{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"name":"ok","n":3},"total_cost_usd":0.001,"usage":{"input_tokens":2,"output_tokens":73}}"#);
+        assert!(matches!(&res[0], Event::Result { structured: Some(v), subtype, .. } if v["n"] == 3 && subtype == "success"), "{:?}", res);
+        let res = parse_line(r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}"#);
+        assert!(matches!(&res[0], Event::Result { subtype, structured: None, is_error: true, .. } if subtype == "error_max_turns"));
+        assert_eq!(parse_agy_line(r#"{"event":"init","conversation_id":"c-9","init":{"model":"m"}}"#), vec![Event::Init { session_id: "c-9".into() }]);
+        let res = parse_agy_line(r#"{"event":"result","result":{"status":"SUCCESS","response":"x","structured_output":{"n":3},"usage":{"input_tokens":1,"output_tokens":1}}}"#);
+        assert!(matches!(&res[0], Event::Result { structured: Some(v), .. } if v["n"] == 3), "{:?}", res);
+    }
+
+    #[tokio::test]
+    async fn an_api_key_reaches_the_cli_environment_only_and_never_its_arguments() {
+        let d = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            d.path(),
+            r#"echo "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"key=$ANTHROPIC_API_KEY args=$*\"}]}}"
+echo '{"type":"result","subtype":"success","result":"fin","usage":{"input_tokens":1,"output_tokens":1}}'"#,
+        );
+        let mut l = launch(prog, d.path());
+        l.opts.api_key = Some(delphi_adapter::credential::Secret::new("sk-test-123".into(), None));
+        assert!(!format!("{:?}", l).contains("sk-test-123"), "Debug must not show the key");
+        assert!(!args(&l).iter().any(|a| a.contains("sk-test-123")));
+        let mut s = Session::start(&l).await.unwrap();
+        let mut text = String::new();
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            match ev {
+                Event::Text(t) => text.push_str(&t),
+                Event::Result { .. } => s.close_input(),
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(text.starts_with("key=sk-test-123 "), "{}", text);
+        assert!(!text.split("args=").nth(1).unwrap().contains("sk-test-123"));
+        // Without a key the variable is not set, even when this process has one.
+        let l = launch(fake_cli(d.path(), r#"echo "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"key=[$ANTHROPIC_API_KEY]\"}]}}""#), d.path());
+        let mut s = Session::start(&l).await.unwrap();
+        let mut text = String::new();
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            match ev {
+                Event::Text(t) => text.push_str(&t),
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(text, "key=[]");
     }
 
     #[test]
@@ -584,7 +824,7 @@ pub(crate) mod tests {
     }
 
     fn launch(program: String, dir: &std::path::Path) -> Launch {
-        Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env() }
+        Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env(), opts: Opts::default() }
     }
 
     #[tokio::test]
@@ -643,7 +883,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     async fn live_claude_round_trip_with_the_approval_bridge() {
         let d = tempfile::tempdir().unwrap();
         let dir = std::fs::canonicalize(d.path()).unwrap();
-        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Use the Bash tool to run exactly: touch live.txt   Then reply with the single word done.".into(), cwd: dir.clone(), tools: Tools::Standard, env: cli_env() };
+        let l = Launch { cli: Cli::Claude, program: "claude".into(), model: "sonnet".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Use the Bash tool to run exactly: touch live.txt   Then reply with the single word done.".into(), cwd: dir.clone(), tools: Tools::Standard, env: cli_env(), opts: Opts::default() };
         let mut s = Session::start(&l).await.unwrap();
         let (mut asked, mut text, mut result, mut metered) = (0, String::new(), false, 0);
         while let Some(ev) = s.next(Duration::from_secs(90)).await {
@@ -673,7 +913,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     #[ignore]
     async fn live_agy_round_trip() {
         let d = tempfile::tempdir().unwrap();
-        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Reply with the single word pong.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env() };
+        let l = Launch { cli: Cli::Agy, program: "agy".into(), model: "gemini-3.8-flash-low".into(), system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Reply with the single word pong.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env(), opts: Opts::default() };
         let mut s = Session::start(&l).await.unwrap();
         let (mut text, mut result, mut metered) = (String::new(), false, 0);
         while let Some(ev) = s.next(Duration::from_secs(60)).await {

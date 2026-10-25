@@ -19,6 +19,7 @@ pub mod frontmatter;
 pub mod gates;
 pub mod handoff;
 pub mod harness;
+pub mod harness_opts;
 pub mod harness_run;
 pub mod embed;
 pub mod kb;

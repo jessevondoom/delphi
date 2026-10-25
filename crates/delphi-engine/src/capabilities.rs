@@ -226,7 +226,7 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
         cap.auth = "failed: no scratch directory".into();
         return cap;
     }
-    let l = Launch { cli, program: program.into(), model, system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: cli_env() };
+    let l = Launch { cli, program: program.into(), model, system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: "Reply with exactly the word OK.".into(), cwd: dir.clone(), tools: Tools::None, env: cli_env(), opts: Default::default() };
     match Session::start(&l).await {
         Err(e) => cap.auth = format!("failed: {}", e),
         Ok(mut s) => {

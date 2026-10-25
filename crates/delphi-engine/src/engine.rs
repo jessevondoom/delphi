@@ -68,6 +68,9 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/020`).
+    pub harness_claude: crate::harness::Opts,
+    pub harness_agy: crate::harness::Opts,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
     pub council_budget_usd: f64,
     /// A Council seat that has not answered by then abstains.
@@ -116,6 +119,8 @@ impl Default for Settings {
             agy_program: "agy".into(),
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            harness_claude: Default::default(),
+            harness_agy: Default::default(),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
             park_poll: Duration::from_secs(5),

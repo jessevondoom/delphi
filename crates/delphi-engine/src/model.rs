@@ -49,7 +49,15 @@ impl std::error::Error for ModelError {}
 
 pub trait ModelClient: Send + Sync {
     fn call<'a>(&'a self, endpoint: &'a Endpoint, model_id: &'a str, compiled: &'a Compiled, on_event: OnEvent<'a>) -> CallFuture<'a>;
+
+    /// The API key a harness endpoint authenticates its CLI with, when its `credential` is a key source (`keychain:`,
+    /// `env:`, `command:`) rather than `harness-login`. `None` leaves the CLI on its own login (`specs/020` §4).
+    fn harness_key<'a>(&'a self, _endpoint: &'a Endpoint) -> KeyFuture<'a> {
+        Box::pin(async { Ok(None) })
+    }
 }
+
+pub type KeyFuture<'a> = Pin<Box<dyn Future<Output = Result<Option<delphi_adapter::credential::Secret>, ModelError>> + Send + 'a>>;
 
 /// The real client.
 pub struct HttpModelClient {
@@ -65,6 +73,23 @@ pub struct HttpModelClient {
 }
 
 impl ModelClient for HttpModelClient {
+    fn harness_key<'a>(&'a self, endpoint: &'a Endpoint) -> KeyFuture<'a> {
+        Box::pin(async move {
+            if endpoint.credential == "harness-login" {
+                return Ok(None);
+            }
+            // Credential commands are blocking subprocesses.
+            let (creds, id, cred) = (self.creds.clone(), endpoint.id.clone(), endpoint.credential.clone());
+            let resolved = tokio::task::spawn_blocking(move || creds.get(&id, &cred)).await.map_err(|e| ModelError::Failed(e.to_string()))?;
+            match resolved {
+                Ok(delphi_adapter::credential::Resolved::Token(t)) => Ok(Some(t)),
+                Ok(_) => Err(ModelError::Failed(format!("endpoint `{}`: a harness API key must come from `keychain:`, `env:` or `command:`", endpoint.id))),
+                Err(CredentialError::NeedsReauth { endpoint }) => Err(ModelError::NeedsReauth { endpoint }),
+                Err(other) => Err(ModelError::Failed((self.redact)(&other.to_string()))),
+            }
+        })
+    }
+
     fn call<'a>(&'a self, endpoint: &'a Endpoint, model_id: &'a str, compiled: &'a Compiled, on_event: OnEvent<'a>) -> CallFuture<'a> {
         Box::pin(async move {
             // Credential commands are blocking subprocesses.
@@ -150,11 +175,13 @@ pub struct ScriptedModel {
     /// (for tests where several spans run at once and the order of calls is not fixed).
     responder: Mutex<Option<Responder>>,
     pub seen: Mutex<Vec<Seen>>,
+    /// The API key a harness endpoint resolves to in tests.
+    pub harness_key: Mutex<Option<String>>,
 }
 
 impl ScriptedModel {
     pub fn new(steps: Vec<Step>) -> Arc<ScriptedModel> {
-        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]) })
+        Arc::new(ScriptedModel { script: Mutex::new(steps.into()), responder: Mutex::new(None), seen: Mutex::new(vec![]), harness_key: Mutex::new(None) })
     }
 
     pub fn respond_with(&self, f: impl Fn(&Value) -> Step + Send + Sync + 'static) {
@@ -171,6 +198,10 @@ impl ScriptedModel {
 }
 
 impl ModelClient for ScriptedModel {
+    fn harness_key<'a>(&'a self, endpoint: &'a Endpoint) -> KeyFuture<'a> {
+        Box::pin(async move { Ok(if endpoint.credential == "harness-login" { None } else { self.harness_key.lock().unwrap().clone().map(|k| delphi_adapter::credential::Secret::new(k, None)) }) })
+    }
+
     fn call<'a>(&'a self, endpoint: &'a Endpoint, model_id: &'a str, compiled: &'a Compiled, on_event: OnEvent<'a>) -> CallFuture<'a> {
         Box::pin(async move {
             self.seen.lock().unwrap().push(Seen { endpoint_id: endpoint.id.clone(), model_id: model_id.into(), body: compiled.body.clone(), betas: compiled.betas.clone(), thinking_disabled_reason: compiled.thinking_disabled_reason.clone() });

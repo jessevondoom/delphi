@@ -9,7 +9,7 @@
 use crate::approval::{Need, Tier as ApprovalTier};
 use crate::engine::{Engine, SpanCtx};
 use crate::exec::{self, GitGuard, Verdict};
-use crate::harness::{cli_env, Cli, Decision, Event, Launch, Permission, Session, Tools};
+use crate::harness::{cli_env, Cli, Decision, Event, Launch, Permission, Session, SessionMode, Tools};
 use crate::mission::{EngineError, LiveRedactor};
 use crate::tools::{ActionKind, Classified, ToolTier};
 use crate::worktree::Worktree;
@@ -20,6 +20,9 @@ use delphi_core::provenance::{gate, Action, Gate, OutputCheck, Tier, Zone};
 use delphi_core::usage::UsagePayload;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
+
+/// The spend limit for one harness span run on an API key when `[harness.claude] max_budget_usd` is not set.
+const DEFAULT_KEYED_SPAN_BUDGET_USD: f64 = 2.0;
 
 /// `p` (absolute, or relative to `root`) resolved lexically and through symlinks, if it stays inside
 /// `root` and passes through no `.git` segment. New files resolve through their nearest existing parent.
@@ -183,7 +186,8 @@ impl Engine {
                     }
                 }
             },
-            "TodoWrite" | "TodoRead" => Ok(Decision::Allow),
+            // `StructuredOutput` is the CLI's own tool for returning an answer that matches a `json_schema`; it touches nothing.
+            "TodoWrite" | "TodoRead" | "StructuredOutput" => Ok(Decision::Allow),
             other => {
                 let summary = format!("the Claude CLI wants to use `{}`", other);
                 match self.ask(sc, ApprovalTier::Amber, "harness_tool", &format!("harness_tool {}", other), &summary, &json!({"tool": other, "input": p.input})).await? {
@@ -232,7 +236,27 @@ impl Engine {
             }
         };
         let program = if cli == Cli::Agy { self.settings.agy_program.clone() } else { self.settings.harness_program.clone() };
-        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", ipr.system_sections().join("\n\n"), harness_note(builder)), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env() };
+        // An endpoint whose credential is a key source runs the CLI on that key instead of the operator's login.
+        let mut opts = if cli == Cli::Agy { self.settings.harness_agy.clone() } else { self.settings.harness_claude.clone() };
+        if ep.credential != "harness-login" {
+            if cli == Cli::Agy {
+                return Ok(Err(HarnessErr::retry(format!("endpoint `{}`: the agy harness has no API-key mode; use a `path = \"api\"` Gemini endpoint for a key", ep.id))));
+            }
+            match self.model.harness_key(ep).await {
+                Ok(Some(k)) => opts.api_key = Some(k),
+                // Never fall back to the login: the operator chose a key for this endpoint, and the bill goes with it.
+                Ok(None) => return Ok(Err(HarnessErr::retry(format!("endpoint `{}`: its credential `{}` gave no API key", ep.id, ep.credential)))),
+                Err(e) => return Ok(Err(HarnessErr::retry(format!("endpoint `{}`: {}", ep.id, e)))),
+            }
+        }
+        // On a key the spend is real money, so a span always has a ceiling: the profile's, else the default.
+        if opts.api_key.is_some() && opts.max_budget_usd.is_none() {
+            opts.max_budget_usd = Some(DEFAULT_KEYED_SPAN_BUDGET_USD);
+        }
+        let keyed = opts.api_key.is_some();
+        let streamed = opts.partial_messages && cli == Cli::Claude;
+        let persist = opts.session != SessionMode::Ephemeral;
+        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", ipr.system_sections().join("\n\n"), harness_note(builder)), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env(), opts };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": if builder { "standard" } else { "none" }, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
@@ -249,14 +273,23 @@ impl Engine {
         let mut live = LiveRedactor::new(sc.m.secrets());
         while let Some(ev) = session.next(self.settings.harness_idle).await {
             match ev {
-                Event::Init { .. } => {}
+                Event::Init { session_id } => {
+                    // A saved session can be resumed by a later span; the log is where its id is kept.
+                    if persist && !session_id.is_empty() {
+                        sc.m.append(sc.agent_ev("harness.session", json!({"cli": launch.program, "session_id": session_id}), ep, &launch.model)).await?;
+                    }
+                }
+                Event::Delta(t) => hub.push_delta(&span_id, DeltaKind::Text, &live.push(&t)),
                 Event::RateLimit { ref status, resets_at, ref window, .. } => {
                     if let Some(x) = delphi_adapter::exhaust::classify_rate_limit_event(status, resets_at, window) {
                         exhaustion.get_or_insert(x);
                     }
                 }
                 Event::Text(t) => {
-                    hub.push_delta(&span_id, DeltaKind::Text, &live.push(&t));
+                    // With token streaming on, the deltas already showed this text.
+                    if !streamed {
+                        hub.push_delta(&span_id, DeltaKind::Text, &live.push(&t));
+                    }
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
@@ -291,7 +324,7 @@ impl Engine {
                         break;
                     }
                 }
-                Event::Result { ref text, is_error, ref usage, .. } => {
+                Event::Result { ref text, is_error, ref usage, ref subtype, ref structured, .. } => {
                     if is_error {
                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
                         if let Some(x) = delphi_adapter::exhaust::classify_cli_error(text, now) {
@@ -299,14 +332,15 @@ impl Engine {
                         }
                         failure = Some((match &exhaustion {
                             Some(x) => format!("the CLI is out of quota: {}", self.secrets.redact(&x.to_string())),
-                            None => format!("the CLI reported an error: {}", text.chars().take(200).collect::<String>()),
+                            None => format!("the CLI reported an error: {}", Some(text.as_str()).filter(|t| !t.is_empty()).unwrap_or(subtype.as_str()).chars().take(200).collect::<String>()),
                         }, !used_tools));
                     }
                     metered = metered.max(usage.metered());
                     if metered > self.settings.harness_token_cap && failure.is_none() {
                         failure = Some((format!("the CLI used {} tokens, over the {} cap for a span", metered, self.settings.harness_token_cap), false));
                     }
-                    final_text = Some(text.clone());
+                    // A schema-validated answer is the span's text, as compact JSON.
+                    final_text = Some(structured.as_ref().map(|v| v.to_string()).unwrap_or_else(|| text.clone()));
                     result = Some(ev.clone());
                     session.close_input();
                 }
@@ -351,10 +385,11 @@ impl Engine {
             cache_write_tokens: usage.cache_write,
             output_tokens: usage.output,
             thinking_tokens: 0,
-            cost_usd: 0.0,
+            // On a key the CLI's own figure is what the provider bills; on a login it is only an equivalent.
+            cost_usd: if keyed { cost } else { 0.0 },
             reserved_usd: 0.0,
             usage_source: if result.is_some() { "reported" } else { "estimated" }.into(),
-            cost_model: "subscription".into(),
+            cost_model: if keyed { "metered" } else { "subscription" }.into(),
             outcome: if failure.is_some() { "error" } else { "ok" }.into(),
             reservation_id: None,
         };
@@ -661,6 +696,86 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.
         assert_eq!((b.status.clone(), b.text.as_str()), (Status::Done, "Built on the API."), "{}", b.text);
         assert_eq!(events_of(&f, "harness.started").len(), 1, "agy ran for the architect only");
         assert_eq!(f.model.requests().last().unwrap().endpoint_id, "direct", "the Builder went to an API endpoint");
+    }
+
+    /// One Claude harness endpoint whose credential is a key source instead of the CLI's own login.
+    fn use_keyed_harness(f: &Fx, cli: &str) {
+        let (family, id) = if cli == "agy" { ("gemini", "agy-sub") } else { ("claude", "claude-sub") };
+        let text = crate::testkit::CONFIG
+            .replace("[access]", &format!("[[endpoints]]\nid = \"{id}\"\nfamily = \"{family}\"\npath = \"harness\"\nharness = \"{cli}\"\ncredential = \"env:HARNESS_KEY\"\n[access]\nrole_family = {{ architect = \"{family}\" }}"))
+            .replace("order = { claude = [\"direct\", \"backup\"] }", &format!("order = {{ {family} = [\"{id}\"] }}"))
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", &format!("allowed_endpoints = [\"{id}\"]"));
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_harness_endpoint_with_a_key_source_runs_the_cli_on_that_key_under_a_spend_ceiling_and_is_billed() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!("{}\necho \"$ANTHROPIC_API_KEY|$*\" > {}\n{}", INIT, dump.display(), FINISH);
+        let (f, _s) = fixture(&body, |_| {});
+        use_keyed_harness(&f, "claude");
+        *f.model.harness_key.lock().unwrap() = Some("sk-eng-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.starts_with("sk-eng-1|"), "the key is in the CLI's environment: {}", seen);
+        assert!(!seen.split('|').nth(1).unwrap().contains("sk-eng-1"), "and not in its arguments");
+        assert!(seen.contains("--max-budget-usd 2"), "a keyed span always has a spend ceiling: {}", seen);
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!((u["cost_model"].as_str(), u["cost_usd"].as_f64(), u["usage_source"].as_str()), (Some("metered"), Some(0.03), Some("reported")), "{}", u);
+        let all = f.m.replay().unwrap();
+        assert!(!all.is_empty() && !format!("{:?}", all).contains("sk-eng-1"), "the key never reaches the log");
+    }
+
+    #[tokio::test]
+    async fn a_keyed_endpoint_that_yields_no_key_does_not_fall_back_to_the_login() {
+        let (f, _s) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        use_keyed_harness(&f, "claude");
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(events_of(&f, "harness.started").is_empty(), "the CLI never started");
+    }
+
+    #[tokio::test]
+    async fn agy_has_no_key_mode_so_a_keyed_agy_endpoint_is_refused() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "echo '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"x\"}}'");
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "agy");
+        *f.model.harness_key.lock().unwrap() = Some("k".into());
+        let out = f.engine.run_task(&f.m, "architect", "Review").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(events_of(&f, "harness.started").is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_options_reach_the_cli_a_schema_answer_is_the_text_and_a_kept_session_is_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!(
+            "{}\necho \"$*\" > {}\necho '{{\"type\":\"stream_event\",\"event\":{{\"type\":\"content_block_delta\",\"delta\":{{\"type\":\"text_delta\",\"text\":\"hi\"}}}},\"parent_tool_use_id\":null}}'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"\",\"structured_output\":{{\"n\":3}},\"total_cost_usd\":0,\"usage\":{{\"input_tokens\":1,\"output_tokens\":2}}}}'",
+            INIT,
+            dump.display()
+        );
+        let (f, _s) = fixture(&body, |s| {
+            s.harness_claude.effort = Some("low".into());
+            s.harness_claude.max_turns = Some(4);
+            s.harness_claude.partial_messages = true;
+            s.harness_claude.json_schema = Some(r#"{"type":"object"}"#.into());
+            s.harness_claude.session = SessionMode::Persist;
+        });
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, r#"{"n":3}"#), "the validated answer is the span's text");
+        let seen = fs::read_to_string(&dump).unwrap();
+        for want in ["--effort low", "--max-turns 4", "--include-partial-messages", "--json-schema {\"type\":\"object\"}"] {
+            assert!(seen.contains(want), "{} missing from {}", want, seen);
+        }
+        assert!(!seen.contains("--no-session-persistence"), "{}", seen);
+        assert!(!seen.contains("--max-budget-usd"), "no ceiling is invented for a login: {}", seen);
+        assert_eq!(events_of(&f, "harness.session")[0].payload["session_id"], "s1");
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!((u["cost_model"].as_str(), u["cost_usd"].as_f64()), (Some("subscription"), Some(0.0)));
     }
 
     // Independent review (Gemini, 2026-10-25): a harness cannot resume a span, so it must not take over after turns have run.
