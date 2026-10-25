@@ -1,30 +1,30 @@
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+⟦•─•⟧ ⟦^─^⟧ ⟦•─•⟧ ⟦^─^⟧ ⟦^─^⟧ ⟦•••⟧
 delphi v0.5 · council
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
- Council 1/1 · t_2 · verdict
- Table or file?
+ question  Table or file?
+ round   ✔ blind ━━━━━━━━━ ✔ debate ━━━━━━━━━ ● verdict                                   needs you
 
-daedalus (a)                      ares (b)                          odysseus (c)
-────────────────────────────────  ────────────────────────────────  ────────────────────────────────
-Round 1 (blind)                   abstained: no answer              writing… (blind)
-Use a table.
-It indexes.
+  │ ⟦^─^⟧ daedalus          │ ⟦^─^⟧ ares              │ ⟦^─^⟧ odysseus
+  │ revise                  │ no position             │ no position
+  │ holds its position      │ holds its position      │ holds its position
+  │ It indexes.             │                         │
 
-Round 2 → revise · does not
-concur
-P1 lost updates
+  │ verdict    needs you
+  │ options    table (architect) · file (strategist)
 
 
 
 
-── Verdict ─────────────────────────────────────────────────────────────────────────────────────────
- Escalated to you: seats deadlocked
-   option: table — architect
-   option: file — strategist
- Minority report:
-   [P0] red-team: the race
- saved: missions/m/councils/008.md
+
+
+
+
+
+
+
+
+
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 3 agents  ·  3500 tokens                                                         ← →  ·  ● ○ ○ ○ ○ ○
