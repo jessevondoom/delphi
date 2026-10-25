@@ -371,3 +371,35 @@ fn every_form_embeds_in_a_page_that_passes_the_safety_check_and_renders_determin
         assert!(!s.contains("NaN") && !s.contains("inf") && !s.contains("undefined"), "{}", name);
     }
 }
+
+#[test]
+fn only_charts_inside_a_page_answer_the_pointer_and_their_targets_are_bounded() {
+    for (name, spec) in samples::all() {
+        let c = chart(spec).unwrap();
+        let alone = render_svg(&c, None);
+        for attr in ["data-v=", "data-s=", "data-t=", "data-zoom", "class=\"hit\"", "class=\"brush\""] {
+            assert!(!alone.contains(attr), "{}: a standalone file carries {}", name, attr);
+        }
+        assert!(!alone.contains("<script"));
+        let page = inline_svg(&c, "c1");
+        if name != "sparkline-trend" {
+            assert!(page.contains("data-v=\""), "{}: nothing to point at", name);
+        }
+        // one legend item per series, each a focusable button that says whether it is shown
+        if c.series.len() > 1 && !matches!(c.kind, Kind::Heatmap | Kind::Donut) {
+            assert_eq!(page.matches("data-t=\"").count(), c.series.len(), "{}", name);
+            assert_eq!(page.matches("role=\"button\" aria-pressed=\"true\"").count(), c.series.len(), "{}", name);
+        }
+        assert_eq!(page.contains("data-zoom"), page.contains("class=\"brush\""), "{}: a zoomable chart has its selection rectangle", name);
+        assert!(page.matches("class=\"hit\"").count() <= 301, "{}: too many pointer targets", name);
+    }
+    // a long line is thinned to at most 300 bands rather than one per point
+    let rows: Vec<Value> = (0..1800).map(|i| json!([i, (i as f64 * 0.05).sin() * 10.0 + 50.0])).collect();
+    let long = chart(json!({"type": "line", "title": "T", "data": {"columns": ["x", "v"], "rows": rows}})).unwrap();
+    let n = inline_svg(&long, "c1").matches("class=\"hit\"").count();
+    assert!((100..=301).contains(&n), "{}", n);
+    // text from the data cannot break out of the attribute that says it
+    let evil = chart(json!({"type": "bar", "title": "T", "data": {"columns": ["k", "v"], "rows": [["\"><script>alert(1)</script>", 1], ["b", 2]]}})).unwrap();
+    let s = inline_svg(&evil, "c1");
+    assert!(!s.contains("<script") && s.contains("&quot;&gt;&lt;script&gt;"), "{}", s);
+}

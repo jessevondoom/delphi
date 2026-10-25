@@ -570,7 +570,7 @@ fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     write_artifact(ctx, &target, svg.as_bytes(), "write_chart", &inputs)
 }
 
-const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read), {type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
+const CHART_BLOCK: &str = "{type:\"chart\", chart:{…the same description write_chart takes, with its own data…}, caption?} draws a chart into the document (at most 12; `data.from` may name a .csv/.tsv you can read; the reader can point at marks for their values, click legend items to hide a series and drag to zoom),{type:\"grid\", columns:2|3, blocks:[…]} puts blocks side by side";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {

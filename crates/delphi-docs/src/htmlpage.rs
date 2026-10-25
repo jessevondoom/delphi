@@ -301,6 +301,7 @@ pub(crate) fn render_block(b: &Block, cx: &mut Cx, out: &mut String) {
         Block::Callout { kind, text } => out.push_str(&format!("<aside class=\"callout {}\" role=\"note\">{}</aside>\n", kind, to_html_shift(text, cx.shift))),
         Block::Chart { spec, caption } => {
             cx.charts = true;
+            cx.runtime = true;
             out.push_str(&format!("<figure class=\"chart\">{}", chart::inline_svg(spec, &format!("c{}", n))));
             if let Some(c) = caption {
                 out.push_str(&format!("<figcaption>{}</figcaption>", escape(c)));

@@ -2,7 +2,7 @@
 //! (a grid shaded in one hue), box plot (the spread within groups) and sparkline (the shape of a trend). They
 //! share the header, footer, palette and mark rules of the main renderer and draw only their own plot area.
 
-use super::render::{column_path, line, text, trunc, tw, Fmt, PAD};
+use super::render::{column_path, line, text, tip, trunc, tw, Fmt, PAD};
 use super::scale::{f, linear_ticks};
 use super::{ChartSpec, Kind, XAxis};
 
@@ -36,17 +36,17 @@ fn cats(spec: &ChartSpec) -> &[String] {
 }
 
 /// Plot area `top..bottom`; `relief` is true when a series needs its values shown (light-mode low-contrast slots).
-pub(super) fn draw(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, relief: bool) -> Out {
+pub(super) fn draw(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, relief: bool, ix: bool) -> Out {
     match spec.kind {
-        Kind::Stacked => stacked(spec, fmt, w, top, bottom, relief),
-        Kind::Donut => donut(spec, fmt, w, top, bottom),
-        Kind::Heatmap => heatmap(spec, fmt, w, top, bottom),
-        Kind::Box => boxes(spec, fmt, w, top, bottom),
+        Kind::Stacked => stacked(spec, fmt, w, top, bottom, relief, ix),
+        Kind::Donut => donut(spec, fmt, w, top, bottom, ix),
+        Kind::Heatmap => heatmap(spec, fmt, w, top, bottom, ix),
+        Kind::Box => boxes(spec, fmt, w, top, bottom, ix),
         _ => sparkline(spec, fmt, w),
     }
 }
 
-fn stacked(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, relief: bool) -> Out {
+fn stacked(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, relief: bool, ix: bool) -> Out {
     let cats = cats(spec);
     let n = cats.len();
     let totals: Vec<f64> = (0..n).map(|i| spec.series.iter().map(|s| s.values[i].unwrap_or(0.0).max(0.0)).sum()).collect();
@@ -77,10 +77,11 @@ fn stacked(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, relief: b
             if y_from - y_to < 1.0 {
                 continue;
             }
+            let what = tip(ix, *j, &format!("{} — {}: {} (of {})", cat, spec.series[*j].name, fmt.val(v), fmt.val(totals[i])));
             if pos + 1 == present.len() {
-                body.push_str(&format!("<path class=\"f{}\" d=\"{}\"/>\n", j + 1, column_path(bx, thick, y_from, y_to)));
+                body.push_str(&format!("<path class=\"f{}\"{} d=\"{}\"/>\n", j + 1, what, column_path(bx, thick, y_from, y_to)));
             } else {
-                body.push_str(&format!("<rect class=\"f{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>\n", j + 1, f(bx), f(y_to), f(thick), f(y_from - y_to)));
+                body.push_str(&format!("<rect class=\"f{}\"{} x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>\n", j + 1, what, f(bx), f(y_to), f(thick), f(y_from - y_to)));
             }
         }
         let label = fmt.val(totals[i]);
@@ -98,7 +99,7 @@ fn point(cx: f64, cy: f64, r: f64, a: f64) -> (f64, f64) {
     (cx + r * a.cos(), cy + r * a.sin())
 }
 
-fn donut(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
+fn donut(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, ix: bool) -> Out {
     let labels = cats(spec);
     let vals: Vec<f64> = spec.series[0].values.iter().map(|v| v.unwrap_or(0.0).max(0.0)).collect();
     let total: f64 = vals.iter().sum();
@@ -123,7 +124,7 @@ fn donut(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
             let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
             format!("M{},{} A{r},{r} 0 {l} 1 {},{} L{},{} A{q},{q} 0 {l} 0 {},{} Z", f(o0.0), f(o0.1), f(o1.0), f(o1.1), f(i1.0), f(i1.1), f(i0.0), f(i0.1), r = f(r_out), q = f(r_in), l = large)
         };
-        body.push_str(&format!("<path class=\"f{} sl\" fill-rule=\"evenodd\" d=\"{}\"/>\n", j + 1, d));
+        body.push_str(&format!("<path class=\"f{} sl\" fill-rule=\"evenodd\"{} d=\"{}\"/>\n", j + 1, tip(ix, j, &format!("{}: {} ({:.0}%)", labels[j], fmt.val(*v), v / total * 100.0)), d));
         a0 += sweep;
     }
     text(&mut body, cx, cy + 4.0, "t1 b", 20.0, "middle", &trunc(&fmt.val(total), r_in * 1.7, 20.0));
@@ -143,7 +144,7 @@ fn donut(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
     Out { body, table: false, end: None }
 }
 
-fn heatmap(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
+fn heatmap(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, ix: bool) -> Out {
     let cols = cats(spec);
     let (n, k) = (cols.len(), spec.series.len());
     let all: Vec<f64> = spec.series.iter().flat_map(|s| s.values.iter().flatten().copied()).collect();
@@ -165,7 +166,8 @@ fn heatmap(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
             };
             let t = if hi > lo { (v - lo) / (hi - lo) } else { 0.5 };
             let step = ((t * 5.0).floor() as usize).min(4);
-            body.push_str(&format!("<rect class=\"h{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"2\"/>\n", step, f(x + 0.5), f(y + 0.5), f(cell_w - 1.0), f(cell_h - 1.0)));
+            let what = if ix { format!(" data-v=\"{}\"", crate::markdown::escape(&format!("{} · {}: {}", s.name, cols[c], fmt.val(*v)))) } else { String::new() };
+            body.push_str(&format!("<rect class=\"h{}\"{} x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"2\"/>\n", step, what, f(x + 0.5), f(y + 0.5), f(cell_w - 1.0), f(cell_h - 1.0)));
             let label = fmt.val(*v);
             if cell_h >= 16.0 && tw(&label, 11.0) + 6.0 <= cell_w {
                 text(&mut body, x + cell_w / 2.0, y + cell_h / 2.0 + 4.0, &format!("ht{}", step), 11.0, "middle", &label);
@@ -189,7 +191,7 @@ fn heatmap(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
     Out { body, table: false, end: Some(sy + 14.0) }
 }
 
-fn boxes(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
+fn boxes(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64, ix: bool) -> Out {
     let cats = cats(spec);
     let n = cats.len();
     let all: Vec<f64> = spec.groups.iter().flatten().copied().collect();
@@ -216,6 +218,11 @@ fn boxes(spec: &ChartSpec, fmt: &Fmt, w: f64, top: f64, bottom: f64) -> Out {
         let cx = x0 + band * (i as f64 + 0.5);
         let bx = cx - bw / 2.0;
         body.push_str(&format!("<path class=\"wh\" d=\"M{c},{a} L{c},{b} M{c},{d} L{c},{e} M{l},{b} L{r},{b} M{l},{e} L{r},{e}\"/>\n", c = f(cx), a = f(py(q3)), b = f(py(whisker_hi)), d = f(py(q1)), e = f(py(whisker_lo)), l = f(cx - bw / 4.0), r = f(cx + bw / 4.0)));
+        let what = tip(ix, 0, &format!("{}: median {}, middle half {} to {}, range {} to {} ({} values)", cats[i], fmt.val(med), fmt.val(q1), fmt.val(q3), fmt.val(g[0]), fmt.val(g[g.len() - 1]), g.len()));
+        if ix {
+            // the whole column of the group answers the pointer, not just the thin box
+            body.push_str(&format!("<rect class=\"hit\"{} x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>\n", what, f(cx - band / 2.0), f(top), f(band), f(bottom - top)));
+        }
         body.push_str(&format!("<rect class=\"bx\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"2\"/>\n", f(bx), f(py(q3)), f(bw), f((py(q1) - py(q3)).max(1.0))));
         body.push_str(&format!("<path class=\"k1\" d=\"M{},{} L{},{}\"/>\n", f(bx), f(py(med)), f(bx + bw), f(py(med))));
         for v in g.iter().filter(|v| **v < fence_lo || **v > fence_hi).take(40) {
