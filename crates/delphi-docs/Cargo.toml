@@ -1,0 +1,12 @@
+[package]
+name = "delphi-docs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Dependency-free document readers and writers for Delphi agents (specs/014)"
+license = "MIT"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
