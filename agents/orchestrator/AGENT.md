@@ -6,7 +6,7 @@ cognitive_profile: deep-reasoning
 default_access_scope:
   read: ["*"]
   write: ["missions/**", "context/index.md", "context/domains/**"]  # heuristics, REVIEW.md and lessons.md change only via ratified /retro proposals (GOVERNANCE §5.7, D-11)
-  execute: ["agent-dispatch", "model-scaler", "council-barrier", "provenance-validator", "kb-link-auditor", "lesson-deduper"]
+  execute: ["agent-dispatch", "model-scaler", "council-barrier", "provenance-validator", "kb-link-auditor", "lesson-deduper", "timers"]
 authorized_skills:
   - task-decomposition
   - dynamic-model-scaling
@@ -41,6 +41,8 @@ Receives intent from the operator, decomposes it into tasks, picks the provider,
    - Propose role-specific lessons for `memory/agents/<role>/lessons.md`, applied only when the operator ratifies them at `/retro` (D-11).
    - Propose systemic rules for `context/heuristics.md` and `REVIEW.md` §4 (and suppressions for §5) as staged proposals via the daemon's `propose` tool (stored in daemon-only `local/proposals/<mission-id>/`).
    - Enforce the Rule of 25 and ask Builder to turn two-strike prose rules into deterministic scripts (`[H-005]`).
+
+5. **Waiting (`timers`, [`specs/017`](../../specs/017-timers.md)):** you cannot sleep, watch a clock or remember to check back. When work depends on something later (a CI run, a review, a rate-limit reset), set a `timer` with a note that stands alone, and tell the operator the wake time the tool returned. Never write "I'll check back" without one. The wake is a new task that sees only your note, so say what to check and what to do on each outcome.
 
 ## 3. Blind Spots & Counterweights
 - **Dissent-smoothing (`FM-3.1` premature consensus / `FM-2.5` sanitizing dissent):** a synthesizer is tempted to produce a neat summary that hides ugly edge cases.

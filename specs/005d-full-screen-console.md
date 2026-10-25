@@ -3,7 +3,7 @@ id: spec-005d-full-screen-console
 title: "005d: The Full-Screen Console (an Ink client of the daemon)"
 author: architect
 timestamp: 2026-10-24T18:00:00Z
-status: approved   # footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25
+status: approved   # footer wording follows Amendment 005b-A2; §3 and §7 amended by 005d-A1 (005e), approved by the operator, 2026-10-25
 approved_by: operator (2026-10-24)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -25,7 +25,7 @@ The interface is the product's face and the part that changes most. A TypeScript
 
 - **A client, not a layer.** `delphi-ui` (the `ui/` directory) is one executable (Bun-compiled, the JS runtime inside). It connects to the daemon's console socket (`delphi chat`) or narrator socket (`delphi observe`) and asks for its own token over the socket, which checks that the caller is on an interactive terminal (spec 005 §2.1). No token is passed in an argument or the environment.
 - **Launch.** `delphi chat` starts `delphi-ui` (next to `delphi`, or `$DELPHI_UI`) with one JSON `--info` argument: socket paths, mission, workspace, role names and colours, version. If the executable is absent, the terminal is not interactive, or `--inline`/`--plain` is given, the Rust consoles run instead. `delphi observe [view]` does the same with `--observe`; `--classic` and `--once` keep the Rust Observer.
-- **Version handshake.** The release version is baked into `delphi-ui`. A console that is not the same release as `delphi` exits with code 3 and `delphi` falls back to the inline console. `install.sh`, `delphi self-update`/`rollback` and Homebrew install and restore both files together.
+- **Version handshake.** The release version is baked into `delphi-ui`. A console that is not the same release as `delphi` exits with code 3 and `delphi` falls back to the inline console. `install.sh`, `delphi update`/`rollback` and Homebrew install and restore both files together.
 - **Supply chain.** Pinned exact versions, a committed lockfile, `npm ci --ignore-scripts`, a production-dependency allowlist, hash and no-install-script checks (`npm run check-deps`), all in CI.
 - **State.** The screen is a pure function of the console's model (`frame(model, w, h)` returns exactly `h` lines of at most `w` columns). Daemon notifications fold into state (`fold.ts`); history is rebuilt from the mission's events when a mission is opened or the daemon comes back.
 
@@ -84,3 +84,6 @@ Unit tests (`ui/test`): input parsing (paste, wheel, split sequences, modifyOthe
 ## 11. Open
 
 Looking at it on real terminals; Windows (not supported); an in-app Markdown/image viewer window (the egui idea of 005c §4 stays later work); the cost of 90 MB per platform and about 45 production packages, accepted in D-28.
+
+## 12. Amendment 005d-A1: Screen and Narrator Per 005e (approved by the operator 2026-10-25)
+§3 (header, transcript, footer) is superseded by [`005e`](005e-console-ux-review-and-redesign.md) §§5, 7, 8 and 10, and §7 (the Observer window and its keys) by 005e §9, with Amendment 005b-A3: the header is the animated badge strip and the title row directly beneath it; the transcript is tinted square blocks with a label row; the left deck is a ticker with finished history; the Observer is the narrator window with six views, plain arrow keys, no money and no classic fallback. Everything else in this spec stands. The ordered build plan is [`005f`](005f-console-redesign-build-plan.md).

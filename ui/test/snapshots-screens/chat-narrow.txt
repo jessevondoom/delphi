@@ -1,7 +1,7 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧
-
 delphi v0.5 · /proj · chat
 
+    rust
     fn claim(id: u64) -> Result<(), Error> {
         // lock the row
         Ok(())
@@ -17,4 +17,4 @@ delphi v0.5 · /proj · chat
 ──────────────────────────────────────────────────
 ❯
 ──────────────────────────────────────────────────
-0 tokens                                     ○ ● ○
+0 tokens  ·  default                         ○ ● ○

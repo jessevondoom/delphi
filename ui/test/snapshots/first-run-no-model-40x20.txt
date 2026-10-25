@@ -1,0 +1,20 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi · chat
+
+  delphi · no model configured
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+   Welcome. This workspace has no
+   model access yet, so nothing can
+   answer.
+
+     delphi setup
+       connect Claude Code, agy or
+       an API key (guided)
+     delphi models
+       what is configured, and what
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+0 tokens  ·  default  ·  no model  ○ ● ○

@@ -1,6 +1,6 @@
 ---
 name: tui-design
-description: "Principles and protocols for designing and building calm, high-focus, borderless terminal user interfaces in Delphi."
+description: "Design calm, borderless terminal interfaces: decks, headers, badges and character-cell rules. Use when adding or changing any TUI view, widget or layout in Ratatui."
 authorized_agents:
   - architect
   - builder
@@ -52,6 +52,7 @@ Terminal user interfaces for AI developer tools must solve for **developer cogni
 ### 1.2 "Not Everything is in a Box"
 - **Ban full-screen border cages:** Avoid wrapping windows, decks, and whole screens in thick ASCII frames (`┌───┐`, `│   │`, `└───┘`). Caged layouts feel claustrophobic and waste precious terminal columns.
 - **Use whitespace and hairlines:** Establish structural hierarchy using open margins, 2-space indentation, and subtle horizontal hairline rules (`─`).
+- **Messages are tinted blocks, not frames (amendment of 2026-10-25):** a message is a square block with a subtle background tint (derived from the terminal's own colours), one column of padding each side, half-block caps (`▄` above, `▀` below, full width including the end cells) and a label row above it carrying the speaker and the time. Where the terminal cannot show a tint (`NO_COLOR`, `TERM=dumb`, 16 colours that do not differ) use a dim `│` at the left of each row instead. Frames around messages are still not used.
 - **Unboxed floating surfaces:** Slash menus, autocomplete popovers, and prompt cards float cleanly above the prompt bar with single hairline borders and soft contrast.
 
 ### 1.3 Zero Emojis
@@ -108,6 +109,7 @@ The operator console organizes context into 3 horizontal decks swiped via `Shift
 ```
 
 ### 3.2 Two-Line Stacked Header
+_Amended 2026-10-25 (005b-A3):_ line 1 is always the strip of 1-line badges, nothing else (no names, no status or alert text); a badge's state shows as its animation (`005a` A1) and an agent that needs the operator shows `⟦x?x⟧`. Line 2 sits **directly under line 1 with no blank row** and a blank row follows it. The older text below is superseded where it differs.
 The header provides maximum telemetry flexibility without clutter:
 - **Line 1 (Top Priority):**
   - *Active Turn:* Single active agent status:
@@ -124,12 +126,15 @@ To avoid developer anxiety and clutter, cost and budget telemetry is removed fro
 - **Left-Aligned:** Session token usage, then the autonomy mode only when it is not the default:
   `42.1k tokens`
 - **Right-Aligned:** Navigation hint and unbracketed navigation dots:
-  `← / ? → · ○ ● ○`
+  `← / ? →  ·  ○ ● ○`
+- **Amended 2026-10-25 (005b-A3):** the left side is `<tokens>  ·  <mode>` with the mode always shown (`auto` in the warning-red colour); separators are two spaces, a middle dot, two spaces. The narrator window's footer has no commands and reads `← →  ·  ○ ● ○ ○ ○ ○`.
 - **Unbracketed dots rule:** Bare dots `○ ● ○` ensure the indicator is never visually confused with robot avatar brackets (`⟦...⟧`).
 
 ---
 
 ## 4. Observer Views (`delphi observe`)
+
+_Amended 2026-10-25 (005b-A3, `005e` §9): the Observer is the narrator window with six views (`spend` is removed and no money is shown), plain-arrow navigation only, no `/` or `?` in its footer, an `epic` rail and a live `council` layout. The list below is the older description._
 
 Observer windows provide dedicated full-window perspectives:
 1. **Council Chamber (`delphi observe council`):** Live coliseum view of multi-agent debate across rounds, showing stances, cross-examinations, consensus verdicts, and minority reports.
@@ -142,9 +147,12 @@ Observer windows provide dedicated full-window perspectives:
 
 ## 5. Verification Checklist for TUI Implementations
 
+Run `delphi check tui <file or directory>` first. It mechanically flags emoji, vertical half-blocks, enclosing box borders, and literal badges that are not exactly 5 cells wide. Test fixtures that assert a glyph is absent will trip it; judge those by hand. The rest of the list needs eyes.
+
 Before finalizing any Ratatui widget or TUI layout in Delphi, verify:
 - [ ] No emojis are used in any status text or headers.
-- [ ] No whole-window enclosing box borders (`┌─┐`, `└─┘`).
+- [ ] No whole-window enclosing box borders (`┌─┐`, `└─┘`); messages are tinted square blocks with a label row, not frames.
+- [ ] The header strip is badges only, with the title row directly beneath it; the narrator footer has no `/` or `?`.
 - [ ] Viewport uses `less`-style scroll stabilization during assistant streaming.
 - [ ] Console footer contains zero dollar/cost figures; dots are unbracketed (`○ ● ○`).
 - [ ] 1-line badges measure exactly 5 display characters with high-contrast eyes.

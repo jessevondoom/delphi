@@ -15,7 +15,11 @@ import * as P from './panel.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
 import { frame, transcriptCount, type Model } from './screen.ts';
+import { helpKey } from './help.ts';
+import { modeNote, nextMode } from './mode.ts';
+import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
 import type { Ev } from './input.ts';
+import { useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
@@ -57,6 +61,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   const [inbox, setInbox] = useState(() => I.newInbox(Date.now()));
   const [mode, setMode] = useState('default');
   const [panel, setPanel] = useState<P.Panel | null>(null);
+  const [noModel, setNoModel] = useState(false);
   const [search, setSearch] = useState<{ q: string; at: number; match: string | null } | null>(null);
 
   // Several keys can arrive in one read, so the key handler works on refs it updates itself, not on the last render.
@@ -83,16 +88,27 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   }, [stdout]);
 
   const running = Object.keys(state.running).length;
-  useEffect(() => { // a slow tick when idle (clock, countdown), a quick one while the spinner turns
-    const t = setInterval(() => setNow(Date.now()), running ? 250 : 1000);
+  const still = useMemo(() => stillMotion(), []);
+  // One timer for everything that moves with time (badge frames, the clock, the spinner). It looks every 150 ms and
+  // asks for a repaint only when something on screen would differ, so an idle window does not redraw.
+  useEffect(() => {
+    let last = '';
+    const t = setInterval(() => {
+      const n = Date.now(), s = stateRef.current;
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0);
+      if (key !== last) { last = key; setNow(n); }
+    }, TICK_MS);
     return () => clearInterval(t);
-  }, [running]);
+  }, [info, still]);
 
   useEffect(() => {
     // Frames arrive many times a second; fold them in batches so a stream costs one repaint per 33 ms, not one per frame.
     let queued: any[] = [], timer: ReturnType<typeof setTimeout> | null = null;
     const flush = () => { timer = null; const q = queued; queued = []; setState((s) => q.reduce((a, n) => fold(a, n, Date.now()), s)); };
-    const onNote = (n: any) => { queued.push(n); timer ??= setTimeout(flush, 33); };
+    const onNote = (n: any) => {
+      queued.push(n); timer ??= setTimeout(flush, 33);
+      if (n?.method === 'event' && n.params?.type === 'model.recovered') checkModels();
+    };
     ev.on('notification', onNote);
     const onClosed = () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed; trying to reconnect…', at: Date.now() }));
     const onBack = () => { // what happened meanwhile is in the log: rebuild from it, keep what is only on screen
@@ -105,6 +121,11 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
 
   useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => v?.mode && setMode(String(v.mode))).catch(() => {}); }, []);
 
+  // Does the workspace have any model at all? Asked on attach, when something is sent and when a model comes back
+  // (`005e` §6.2). A daemon that does not say (older) is taken to have one.
+  function checkModels() { cmd.call('models.get', {}).then((v: any) => setNoModel(v?.configured === false)).catch(() => {}); }
+  useEffect(checkModels, []);
+
   const note = (text: string) => setState((s) => addBlock(s, { kind: 'note', text, at: Date.now() }));
 
   const send = (text: string) => {
@@ -116,6 +137,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       if (target) prompt = m[2]!;
     }
     setBack(0);
+    checkModels();
     cmd.call('task.submit', { mission_id: mission, prompt, ...(target ? { target } : {}) }).catch((e) => note('could not send: ' + (e?.message ?? JSON.stringify(e))));
   };
 
@@ -154,7 +176,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       return;
     }
     if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }
-    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls the transcript' : 'mouse off: select and copy text with the terminal; scroll with PgUp/PgDn'); return; }
+    if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls; drag to select and copy (double-click a word, triple-click a line)' : 'mouse off: select and copy with the terminal itself; scroll with PgUp/PgDn'); return; }
     if (name === '/sources') { openPanel(P.openSources()); return; }
     if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
     if (name === '/pin') {
@@ -171,7 +193,8 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
       execFile(info.delphi_exe, ['connectors', 'status', '--workspace', info.workspace_name ?? '', '--home', info.home ?? ''], { timeout: 15000 }, (err, out, errOut) => note((out || errOut || String(err?.message ?? 'no output')).trimEnd()));
       return;
     }
-    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note });
+    // A command may have changed what the workspace can run on (`/ratify apply`), so ask again afterwards.
+    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note }).then(checkModels);
   };
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
@@ -209,11 +232,19 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         return;
       }
 
+      // The help overlay (chat deck): `?`, Esc close it; paging does nothing; any other key closes it and is then handled.
+      const hk = helpKey(help, e, comp.current.chars.length === 0, deckRef.current === 1);
+      if (hk === 'open') { setHelp(true); return; }
+      if (hk === 'close') { setHelp(false); return; }
+      if (hk === 'ignore') return;
+      if (hk === 'close-and-pass') setHelp(false);
+
       // Shift+Tab cycles the approval mode from anywhere.
       if (e.t === 'key' && e.k === 'shift-tab') {
-        const order = ['default', 'accept-edits', 'mission-auto'];
-        const next = order[(order.indexOf(modeRef.current) + 1) % order.length]!;
-        cmd.call('permissions.set', { mode: next }).then((v: any) => { setMode(String(v?.mode ?? next)); }).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
+        const next = nextMode(modeRef.current);
+        const set = (m: string) => cmd.call('permissions.set', { mode: m }).then((v: any) => { const got = String(v?.mode ?? m); setMode(got); note(modeNote(got)); });
+        // Optimistic needs the OS sandbox; without one the cycle skips it and wraps to default.
+        set(next).catch((er) => (next === 'optimistic' ? set('default') : Promise.reject(er))).catch((er) => note('could not change the approval mode: ' + (er?.message ?? JSON.stringify(er))));
         return;
       }
 
@@ -249,7 +280,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
         case 'bg': if (!themeForced) setPal({ dark: e.dark }); return;
         case 'wheel': setBack((b) => Math.max(0, b + (e.dir === 'up' ? 3 : -3))); return;
         case 'paste': upd((c) => C.insert(c, e.s)); return;
-        case 'text': setHelp(false); upd((c) => C.insert(c, e.s)); return;
+        case 'text': upd((c) => C.insert(c, e.s)); return;
         case 'ctrl':
           if (e.c === 'c') { exit(); return; }
           if (e.c === 'j') { upd((c) => C.insert(c, '\n')); return; }
@@ -320,7 +351,7 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
 
   // Scrolled up, new output must not move what is being read: grow the offset by what was added below.
   const total = useRef(0);
-  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel };
+  const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel, noModel };
   const lineCount = useMemo(() => transcriptCount(base, size.w), [state.blocks, state.live, size.w, pal, expandTools, queue]);
   useEffect(() => {
     const added = lineCount - total.current;
@@ -329,11 +360,12 @@ export function App({ cmd, ev, term, info, mission, dark, themeForced, history }
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel]);
+  const model: Model = { ...base, still, now, back, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
-      <Text>{lines.join('\n')}</Text>
+      <Text>{shown.join('\n')}</Text>
     </Box>
   );
 }

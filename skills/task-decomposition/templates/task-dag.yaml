@@ -1,0 +1,24 @@
+# Task DAG. Check with: delphi check dag <this file> --repo .
+# tier: deep-reasoning | code-craft | high-context-discovery | fast-triage
+# weight: relative effort, 1 (small) to 5 (large). depends_on: ids that must finish first.
+tasks:
+  - id: design-interface
+    summary: "Draft the interface and its error cases."
+    tier: deep-reasoning
+    spec: specs/001-governance-and-manifests.md
+    weight: 2
+  - id: implement-core
+    summary: "Implement the interface against the acceptance criteria."
+    tier: code-craft
+    spec: specs/001-governance-and-manifests.md
+    depends_on: [design-interface]
+    weight: 4
+  - id: survey-callers
+    summary: "Map the callers that the change touches."
+    tier: high-context-discovery
+    weight: 1
+  - id: update-docs
+    summary: "Update the user-facing docs for the new behaviour."
+    tier: fast-triage
+    depends_on: [implement-core, survey-callers]
+    weight: 1

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
-import { ACTIVITY, badge, eyeColor, type AgentState, type AvatarSpec, type Info } from '../src/theme.ts';
+import { ACTIVITY, badge, currentCapabilities, eyeColor, useCapabilities, type AgentState, type AvatarSpec, type Info } from '../src/theme.ts';
 import { mascot } from '../src/observe-screen.ts';
 
 const spec: AvatarSpec = JSON.parse(readFileSync(new URL('./fixtures/avatar-spec.json', import.meta.url), 'utf8'));
@@ -19,7 +19,11 @@ const info: Info = {
 const STATES: AgentState[] = ['idle', 'running', 'waiting on you', 'escalated'];
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const rgb = (hex: string) => { const n = parseInt(hex.slice(1), 16); return `\x1b[38;2;${n >> 16};${(n >> 8) & 255};${n & 255}m`; };
-const withColour = <T>(f: () => T): T => { const l = chalk.level; chalk.level = 3; try { return f(); } finally { chalk.level = l; } };
+const withColour = <T>(f: () => T): T => {
+  const l = chalk.level, c = currentCapabilities();
+  useCapabilities({ color: 'truecolor', attributes: true });
+  try { return f(); } finally { useCapabilities(c); chalk.level = l; }
+};
 
 test('the fixture covers the library: every role, and every activity a state maps to', () => {
   assert.ok(roles.length >= 6 && roles.includes('red-team') && roles.includes('scout'), roles.join());

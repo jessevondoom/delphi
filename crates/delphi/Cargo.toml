@@ -1,6 +1,6 @@
 [package]
 name = "delphi"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 rust-version = "1.85"
 description = "Delphi: terminal-first multi-agent working environment (roadmap Step 1: init, doctor, lint)"
@@ -12,6 +12,7 @@ delphi-core = { path = "../delphi-core" }
 delphi-sandbox = { path = "../delphi-sandbox" }
 delphi-engine = { path = "../delphi-engine" }
 delphi-adapter = { path = "../delphi-adapter" }
+delphi-xenia = { path = "../delphi-xenia" }
 toml_edit = "0.25"
 flate2 = "1"
 tar = "0.4"
@@ -30,6 +31,9 @@ include_dir = "0.7"
 anyhow = "1.0"
 ratatui = "0.29"
 unicode-width = "0.2"
+mail-parser = "1"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "rustls-tls"] }
+imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 
 [features]
 # Compile the models and preloaded vectors named by DELPHI_EMBED_MODEL_FILE, DELPHI_RERANK_MODEL_FILE and

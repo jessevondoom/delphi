@@ -42,6 +42,8 @@ pub enum AgentActivity {
 pub struct RoleTheme {
     pub role_id: &'static str,
     pub chassis_rgb: (u8, u8, u8),
+    /// The ANSI colour (0-15) a 16-colour terminal gets for the chassis (`specs/005e` §5): the nearest bright colour, chosen by hand.
+    pub chassis_ansi: u8,
     pub crown_rgb: (u8, u8, u8),
     /// Strictly bottom-half block `▄` (7 display columns)
     pub crown_slice: &'static str,
@@ -55,6 +57,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "orchestrator",
         chassis_rgb: (168, 85, 247), // Violet #A855F7
+        chassis_ansi: 13,
         crown_rgb: (250, 204, 21),   // Gold #FACC15
         crown_slice: "  ▄▄▄  ",
         default_face: "•─•",
@@ -65,6 +68,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "builder",
         chassis_rgb: (245, 158, 11), // Amber #F59E0B
+        chassis_ansi: 11,
         crown_rgb: (244, 63, 94),    // Rose corners #F43F5E
         crown_slice: "▄▄▄▄▄▄▄",       // Rose ends + White center in render
         default_face: "•───•",
@@ -75,6 +79,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "architect",
         chassis_rgb: (56, 189, 248), // Cyan #38BDF8
+        chassis_ansi: 14,
         crown_rgb: (255, 255, 255),  // White marble #FFFFFF
         crown_slice: "▄▄▄▄▄▄▄",
         default_face: "•_•",
@@ -85,6 +90,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "red-team",
         chassis_rgb: (239, 68, 68),  // Crimson #EF4444
+        chassis_ansi: 9,
         crown_rgb: (250, 204, 21),   // Bronze Gold #FACC15
         crown_slice: "▄     ▄",
         default_face: "-_-",         // Sneaky squint default
@@ -95,6 +101,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "strategist",
         chassis_rgb: (20, 184, 166), // Teal #14B8A6
+        chassis_ansi: 10,
         crown_rgb: (249, 168, 212),  // Light Pink #F9A8D4
         crown_slice: "▄▄ ▄ ▄▄",
         default_face: "•_•",
@@ -105,6 +112,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "scout",
         chassis_rgb: (255, 255, 0), // Bright Yellow #FFFF00
+        chassis_ansi: 3,
         crown_rgb: (65, 105, 225),  // Royal Blue #4169E1
         crown_slice: "   ▄   ",
         default_face: "• • •",       // 3 all-seeing eyes, NO mouth
@@ -115,6 +123,7 @@ pub const ROLES: [RoleTheme; 7] = [
     RoleTheme {
         role_id: "operator",
         chassis_rgb: (148, 163, 184), // Slate #94A3B8
+        chassis_ansi: 7,
         crown_rgb: (203, 213, 225),
         crown_slice: "▄▄▄▄▄▄▄",
         default_face: "•_•",
@@ -261,6 +270,7 @@ pub fn ui_spec() -> serde_json::Value {
         let mascot: Map<String, Value> = ACTIVITIES.iter().map(|(name, a)| ((*name).to_string(), json!(mascot_row(role, *a)))).collect();
         let mut r = json!({
             "chassis": hex_rgb(t.chassis_rgb),
+            "ansi": t.chassis_ansi,
             "crown": t.crown_slice,
             "crown_rgb": hex_rgb(t.crown_rgb),
             "mascot_face": t.default_face,
@@ -523,6 +533,18 @@ mod tests {
             std::fs::write(&path, &want).unwrap();
         }
         assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), want, "ui/test/fixtures/avatar-spec.json is stale: run `DELPHI_WRITE_UI_SPEC=1 cargo test -p delphi ui_spec`");
+    }
+
+    /// `specs/005e` §5 names the 16-colour fallback of each role; the console reads it from `ui_spec`.
+    #[test]
+    fn every_role_has_a_sixteen_colour_fallback_and_the_table_of_005e_holds() {
+        let want = [("orchestrator", 13), ("architect", 14), ("builder", 11), ("red-team", 9), ("strategist", 10), ("scout", 3)];
+        for (role, ansi) in want {
+            let t = ROLES.iter().find(|t| t.role_id == role).unwrap();
+            assert_eq!(t.chassis_ansi, ansi, "{}", role);
+            assert_eq!(ui_spec()["roles"][role]["ansi"], ansi, "{}", role);
+        }
+        assert!(ROLES.iter().all(|t| t.chassis_ansi < 16));
     }
 
     #[test]

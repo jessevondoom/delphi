@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · /proj · chat
+
+  delphi · no model configured
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+   Welcome. This workspace has no model access yet, so nothing can answer.
+
+     delphi setup      connect Claude Code, agy or an API key (guided)
+     delphi models     what is configured, and what is usable right now
+
+   When a model is connected: type a request below, @architect … sends it
+   to one role, / lists commands and ? shows the keys.
+
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+0 tokens  ·  default  ·  no model                              ← / ? →  ·  ○ ● ○

@@ -14,9 +14,9 @@ tags: [spec, xenia, schema, post-v1]
 
 # Spec 012: Xenia Record Schema (v2)
 
-> **Ratification record (D-29, 2026-10-24).** The operator ratified the design basis shared with [`specs/011`](011-xenia-trust-model.md) (see its ratification record). This exact text is **not** approved: it stays `draft`, the v2.1 fixes are not yet re-reviewed, a two-family confirming read must pass before implementation, and **no implementation starts until the core editor and harness are finished.**
+> **Ratification record (D-29, 2026-10-24; superseded in part 2026-10-25).** Approved by the operator as written on 2026-10-24 together with [`specs/011`](011-xenia-trust-model.md) (see its ratification record). On 2026-10-25 the operator confirmed the direction and directed that implementation start; the wait for the core editor and harness is lifted.
 >
-> **Status: draft v2.1, post-v1.** Depends on [`specs/011`](011-xenia-trust-model.md); every field exists to support a rule there. Phase 1 kinds (`memory`, `endorsement`, `tombstone`) are normative; the other kinds are in §11 as provisional and are re-reviewed when their phase starts.
+> **Status: v2.1, approved, Phase 1 in build.** Depends on [`specs/011`](011-xenia-trust-model.md); every field exists to support a rule there. Phase 1 kinds (`memory`, `endorsement`, `tombstone`) are normative; the other kinds are in §11 as provisional and are re-reviewed when their phase starts.
 
 ## 1. Scope & Objectives
 Defines the on-disk shape of everything Phase 1 shares:

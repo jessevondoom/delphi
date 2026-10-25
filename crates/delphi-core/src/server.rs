@@ -28,6 +28,10 @@ use tokio::sync::{mpsc, Notify};
 /// The only methods the narrator socket answers (besides the `hello` handshake). Read-only, by name.
 pub const NARRATOR_METHODS: [&str; 12] = ["session.ping", "events.subscribe", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "kb.search", "usage.get", "budget.get", "approval.list", "permissions.get", "ratify.list"];
 
+/// The only methods the relay socket answers (besides the `hello` handshake): read the outstanding cards and the
+/// budget, answer a card through the relay's own narrower method, and listen. Everything else is refused by name.
+pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "approval.list", "approval.relay_resolve", "budget.get"];
+
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
 
@@ -84,6 +88,7 @@ pub struct Daemon {
     pub hub: Hub,
     console_token: String,
     narrator_token: String,
+    relay_token: String,
     /// True while an unsandboxed (Amber) command runs: no new tokens without console confirmation.
     pub amber_active: AtomicBool,
     uid: u32,
@@ -143,6 +148,7 @@ impl Daemon {
             hub,
             console_token: random_token()?,
             narrator_token: random_token()?,
+            relay_token: random_token()?,
             amber_active: AtomicBool::new(false),
             uid: unsafe { libc::geteuid() },
             shutdown: Notify::new(),
@@ -165,6 +171,10 @@ impl Daemon {
         &self.narrator_token
     }
 
+    pub fn relay_token(&self) -> &str {
+        &self.relay_token
+    }
+
     pub fn request_shutdown(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.shutdown.notify_waiters();
@@ -175,10 +185,13 @@ impl Daemon {
         // Compare against both so timing doesn't reveal which scope a near-miss was for.
         let c = ct_eq(token, &self.console_token);
         let n = ct_eq(token, &self.narrator_token);
+        let r = ct_eq(token, &self.relay_token);
         if c {
             Some(Scope::Console)
         } else if n {
             Some(Scope::Narrator)
+        } else if r {
+            Some(Scope::Relay)
         } else {
             None
         }
@@ -193,10 +206,20 @@ impl Daemon {
     /// scope, whatever it says in `hello`: a narrator token is refused on the console socket and the other way
     /// round, and the narrator socket's dispatcher offers read-only methods and nothing else.
     pub async fn serve_sockets(self: Arc<Self>, console: UnixListener, narrator: Option<UnixListener>) {
+        self.serve_all(console, narrator, None).await
+    }
+
+    /// As [`Daemon::serve_sockets`], with the relay socket (`specs/014`): a relay token is refused on the other
+    /// sockets and theirs on this one, and its dispatcher offers [`RELAY_METHODS`] and nothing else.
+    pub async fn serve_all(self: Arc<Self>, console: UnixListener, narrator: Option<UnixListener>, relay: Option<UnixListener>) {
         tokio::spawn(self.hub.clone().run_coalescer());
         if let Some(l) = narrator {
             let me = self.clone();
             tokio::spawn(async move { me.accept_loop(l, Scope::Narrator).await });
+        }
+        if let Some(l) = relay {
+            let me = self.clone();
+            tokio::spawn(async move { me.accept_loop(l, Scope::Relay).await });
         }
         self.accept_loop(console, Scope::Console).await
     }
@@ -299,7 +322,8 @@ impl Daemon {
         let scope = match req.params["scope"].as_str() {
             Some("console") => Scope::Console,
             Some("narrator") => Scope::Narrator,
-            _ => return Response::err(req.id.clone(), code::INVALID_PARAMS, "scope must be `console` or `narrator`"),
+            Some("relay") => Scope::Relay,
+            _ => return Response::err(req.id.clone(), code::INVALID_PARAMS, "scope must be `console`, `narrator` or `relay`"),
         };
         if scope != socket_scope {
             return Response::err(req.id.clone(), code::FORBIDDEN, &format!("this socket issues {} tokens only", socket_scope.as_str()));
@@ -320,6 +344,7 @@ impl Daemon {
         let token = match scope {
             Scope::Console => &self.console_token,
             Scope::Narrator => &self.narrator_token,
+            Scope::Relay => &self.relay_token,
         };
         Response::ok(req.id.clone(), json!({"token": token, "scope": scope.as_str()}))
     }
@@ -330,6 +355,9 @@ impl Daemon {
         // someone adds it here on purpose, so nothing mutating can get through by being left off a deny list.
         if scope == Scope::Narrator && !NARRATOR_METHODS.contains(&req.method.as_str()) {
             return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the read-only narrator socket", req.method));
+        }
+        if scope == Scope::Relay && !RELAY_METHODS.contains(&req.method.as_str()) {
+            return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the relay socket", req.method));
         }
         // The server's own methods first; everything else may belong to the engine.
         if matches!(req.method.as_str(), "session.ping" | "events.subscribe" | "daemon.shutdown") {
@@ -357,7 +385,7 @@ impl Daemon {
             }
             "session.snapshot" => Response::ok(
                 id,
-                json!({"clients": {"console": self.hub.client_count(Some(Scope::Console)), "narrator": self.hub.client_count(Some(Scope::Narrator))}, "missions": []}),
+                json!({"clients": {"console": self.hub.client_count(Some(Scope::Console)), "narrator": self.hub.client_count(Some(Scope::Narrator)), "relay": self.hub.client_count(Some(Scope::Relay))}, "missions": []}),
             ),
             // Privileged: console scope only.
             "approval.resolve" | "budget.set" | "permissions.set" | "ratify.apply" | "mission.rewind" | "daemon.shutdown" => {

@@ -14,9 +14,9 @@ test('bracketed paste keeps its newlines and can span reads', () => {
   assert.deepEqual(p.feed('line two\x1b[201~x'), [{ t: 'paste', s: 'line one\nline two' }, { t: 'text', s: 'x' }]);
 });
 
-test('mouse wheel, several in one read; clicks are ignored', () => {
+test('mouse wheel, several in one read; a left press is a mouse event (selection), not a key', () => {
   assert.deepEqual(keys('\x1b[<64;10;10M\x1b[<64;10;10M\x1b[<65;1;1M\x1b[<0;5;5M'), [
-    { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'down' },
+    { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'up' }, { t: 'wheel', dir: 'down' }, { t: 'mouse', k: 'down', x: 4, y: 4 },
   ]);
 });
 

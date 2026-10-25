@@ -1,9 +1,22 @@
 // The event fold: daemon notifications in, the console's state out. Pure, so it is tested without a terminal.
 import { citations, noteSources, type Source } from './research.ts';
+import { classify, stripWrapper, type Cause } from './attention.ts';
 import { sanitize, type AgentState } from './theme.ts';
 
-export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string };
-export type Agent = { state: AgentState; doing: string };
+/**
+ * An `attention` block is a task that stopped and needs the operator (an escalation or a failure): `text` is the
+ * headline, `reason` the engine's reason without its wrapper, `cause` which stop it is (`attention.ts`).
+ */
+export type Block = { id: number; kind: 'user' | 'reply' | 'note' | 'card' | 'tool' | 'attention'; role?: string; text: string; at: number; status?: string; ref?: string; detail?: string; reason?: string; cause?: Cause };
+export type Agent = {
+  state: AgentState; doing: string;
+  /** When it entered `escalated`, so the strip can let go of the face (`005e` §6.2). */
+  since?: number;
+  /** When its last reasoning delta arrived: a running agent with one in the last 1.5 s is thinking (`005e` §10.2). */
+  thinkingAt?: number;
+  /** When its task last finished: the badge shows success for 3 s. */
+  successAt?: number;
+};
 export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 export type Act = { id: number; span: string; role: string; kind: 'thinking' | 'text' | 'tool' | 'result'; text: string };
 export type State = {
@@ -23,16 +36,18 @@ export type State = {
   activity: Act[];
   /** Tasks the daemon is working on, by task id. */
   running: Record<string, { since: number }>;
+  /** The operator has said something in this mission: the welcome text never comes back (`/clear` does not bring it back). */
+  started: boolean;
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: [], sources: {},
+  blocks: [], live: '', spans: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: [], sources: {}, started: false,
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
 
 export function addBlock(s: State, b: Omit<Block, 'id'>): State {
-  return { ...s, blocks: [...s.blocks, { ...b, id: s.nextId }], nextId: s.nextId + 1 };
+  return { ...s, blocks: [...s.blocks, { ...b, id: s.nextId }], nextId: s.nextId + 1, started: s.started || b.kind === 'user' };
 }
 
 /** Add to the stream: reasoning and text of one span run together; anything else is a line of its own. */
@@ -63,6 +78,13 @@ export function replay(s: State, events: any[]): State {
   return { ...done, running: {}, agents: {} }; // what is running now comes from the daemon's snapshot, not from old events
 }
 
+/** The block for a task that stopped: the reason without the engine's wrapper, and the console's own words for it. */
+function attention(role: string, text: string, at: number): Omit<Block, 'id'> {
+  const reason = stripWrapper(text);
+  const a = classify(reason);
+  return { kind: 'attention', role, text: a.headline, reason, cause: a.cause, at, status: 'escalated' };
+}
+
 const setAgent = (s: State, role: string, a: Agent): State => ({ ...s, agents: { ...s.agents, [role]: a } });
 const spanNum = (k: string) => Number(k.split('_').pop()) || 0;
 
@@ -72,7 +94,11 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string }>;
     let add = '';
     let activity = s.activity;
+    let agents = s.agents;
     for (const k of Object.keys(spans).sort()) {
+      const who = s.spans[k]?.role;
+      // Reasoning is only noted as "thinking", never shown, so even a blind council round pans its badges.
+      if (who && spans[k]?.thinking && agents[who]) agents = { ...agents, [who]: { ...agents[who]!, thinkingAt: now } };
       if (s.council && s.spans[k]) continue; // a council's round one stays blind
       const role = s.spans[k]?.role ?? '?';
       for (const [kind, t] of [['thinking', spans[k]?.thinking], ['text', spans[k]?.text]] as const) {
@@ -81,8 +107,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       }
       add += spans[k]?.text ?? '';
     }
-    if (!add && activity === s.activity) return s;
-    return { ...s, activity, live: (s.live + sanitize(add)).slice(-8000), tokens: s.tokens + Math.ceil(add.length / 4), lastActivity: now };
+    if (!add && activity === s.activity && agents === s.agents) return s;
+    return { ...s, agents, activity, live: (s.live + sanitize(add)).slice(-8000), tokens: s.tokens + Math.ceil(add.length / 4), lastActivity: now };
   }
   if (n.method !== 'event') return s;
   const e = p, pl = e.payload ?? {};
@@ -94,8 +120,10 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     }
     case 'task.created': {
       const run = e.task_id ? { ...s.running, [e.task_id]: { since: now } } : s.running;
-      if (pl.flow === 'build' && !pl.prompt) return { ...s, running: run };
-      return addBlock({ ...s, running: run, lastActivity: now }, { kind: 'user', text: sanitize(String(pl.prompt ?? '')), at: stamp(e, now) });
+      // A new task starts clean: the face of an earlier escalation does not linger in the strip.
+      const agents = Object.fromEntries(Object.entries(s.agents).map(([r, a]) => [r, a.state === 'escalated' ? { state: 'idle' as const, doing: '' } : a]));
+      if (pl.flow === 'build' && !pl.prompt) return { ...s, running: run, agents };
+      return addBlock({ ...s, running: run, agents, lastActivity: now }, { kind: 'user', text: sanitize(String(pl.prompt ?? '')), at: stamp(e, now) });
     }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
@@ -106,10 +134,10 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       for (const [r, a] of Object.entries(s.agents)) idle[r] = a.state === 'waiting on you' ? a : { state: 'idle', doing: '' };
       const escalated = pl.status === 'escalated';
       const said = sanitize(String(pl.text ?? ''));
-      const next = addBlock({ ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), sources: noteSources(s.sources, citations(said), 'cited', role, stamp(e, now)), lastActivity: now }, {
-        kind: 'reply', role, text: sanitize(String(pl.text ?? '')), at: stamp(e, now), status: escalated ? 'escalated' : 'done',
-      });
-      return escalated ? setAgent(next, role, { state: 'escalated', doing: '' }) : next;
+      const base = { ...s, live: '', council: false, agents: idle, running: without(s.running, e.task_id), lastActivity: now };
+      if (escalated) return setAgent(addBlock(base, attention(role, said, stamp(e, now))), role, { state: 'escalated', doing: '', since: now });
+      const done = addBlock({ ...base, sources: noteSources(s.sources, citations(said), 'cited', role, stamp(e, now)) }, { kind: 'reply', role, text: said, at: stamp(e, now), status: 'done' });
+      return setAgent(done, role, { state: 'idle', doing: '', successAt: now });
     }
     case 'task.cancelled': {
       const idle: Record<string, Agent> = {};
@@ -130,7 +158,10 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const act = pl.is_error ? pushAct(s.activity, String(e.span_id ?? ''), String(e.agent ?? '?'), 'result', '✖ ' + detail.split('\n')[0], s.nextId + s.activity.length) : s.activity;
       return { ...s, activity: act, blocks: s.blocks.map((x) => (x.kind === 'tool' && x.ref === ref ? { ...x, status: pl.is_error ? 'error' : 'ok', detail } : x)) };
     }
-    case 'task.failed': return addBlock({ ...s, live: '', running: without(s.running, e.task_id), lastActivity: now }, { kind: 'note', text: '✖ task failed: ' + sanitize(String(pl.error ?? '')), at: now });
+    case 'task.failed': {
+      const tops = Object.entries(s.spans).filter(([, v]) => v.depth === 0).sort((a, b) => spanNum(b[0]) - spanNum(a[0]));
+      return addBlock({ ...s, live: '', running: without(s.running, e.task_id), lastActivity: now }, attention(tops[0]?.[1].role ?? 'orchestrator', sanitize(String(pl.error ?? '')), now));
+    }
     case 'approval.requested': {
       const id = String(pl.approval_id ?? '');
       const role = String(pl.role ?? 'orchestrator');
@@ -150,20 +181,4 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     }
     default: return s;
   }
-}
-
-/** What line one of the header shows. */
-export type Status =
-  | { kind: 'alert'; role: string; secs: number }
-  | { kind: 'active'; role: string; doing: string }
-  | { kind: 'strip' };
-
-export function status(s: State, now: number): Status {
-  if (s.alert) return { kind: 'alert', role: s.alert.role, secs: Math.max(0, Math.round((s.alert.until - now) / 1000)) };
-  const running = Object.entries(s.agents).filter(([, a]) => a.state === 'running');
-  if (running.length && now - s.lastActivity < 30_000) {
-    const [role, a] = running.sort((x, y) => ROLES.indexOf(x[0]) - ROLES.indexOf(y[0]))[running.length > 1 ? running.length - 1 : 0]!;
-    return { kind: 'active', role, doing: a.doing };
-  }
-  return { kind: 'strip' };
 }

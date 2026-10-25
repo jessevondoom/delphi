@@ -134,7 +134,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     if endpoints == 0 && opts.require_providers {
         r.fail("7 model-access", "", "no endpoints configured and --require-providers was given (specs/009)");
     } else if endpoints == 0 {
-        r.warn("7 model-access", "", "no endpoints configured (`delphi endpoints add`, specs/009)");
+        r.warn("7 model-access", "", "no endpoints configured: no model is configured for this workspace — run delphi setup (or `delphi endpoints add`, specs/009)");
     } else {
         r.push(Level::Ok, "7 model-access", "", format!("{} endpoint(s) configured; `delphi endpoints test --probe` tests them", endpoints));
         // Cached probe results (specs/009 §6): read offline, never refreshed here.

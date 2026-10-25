@@ -4,6 +4,8 @@
 //! the console, run a tool-using task, answer an approval card, read usage, and check that an unratified
 //! edit to the endpoint config never redirects traffic.
 
+mod common;
+
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -187,6 +189,8 @@ impl Session {
 // ── the workspace ───────────────────────────────────────────────────────────
 
 struct Env {
+    /// First, so it drops first: it stops the daemons while the directory is still there.
+    _reap: common::DaemonReaper,
     _t: tempfile::TempDir,
     home: PathBuf,
     ws: PathBuf,
@@ -261,7 +265,7 @@ fn setup(port: u16) -> Env {
     run(&["init", "--non-interactive", "--home", home.to_str().unwrap(), "--workspace", "e2e", "--project", proj.to_str().unwrap()]);
     let ws = home.join("workspaces/e2e");
     std::fs::write(ws.join("config.toml"), config_for(&proj, port)).unwrap();
-    Env { _t: t, home, ws }
+    Env { _reap: common::DaemonReaper::new(&home), _t: t, home, ws }
 }
 
 /// The daemon's pid, from the console banner (`daemon pid 1234`).
@@ -514,6 +518,11 @@ impl PtyConsole {
     }
 
     fn start_env(home: &Path, args: &[&str], rows: u16, cols: u16, envs: &[(&str, &str)]) -> PtyConsole {
+        PtyConsole::start_in(None, home, args, rows, cols, envs)
+    }
+
+    /// `start_env`, run from `cwd` (bare `delphi` picks its workspace from the directory it is in).
+    fn start_in(cwd: Option<&Path>, home: &Path, args: &[&str], rows: u16, cols: u16, envs: &[(&str, &str)]) -> PtyConsole {
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
         let (mut master, mut slave) = (0, 0);
@@ -523,6 +532,9 @@ impl PtyConsole {
         }
         let dup = |fd| unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(fd))) };
         let mut cmd = Command::new(DELPHI);
+        if let Some(d) = cwd {
+            cmd.current_dir(d);
+        }
         cmd.args(args).arg("--home").arg(home).env("DELPHI_E2E_KEY", KEY).env("TERM", "xterm-256color").env_remove("TMUX").envs(envs.iter().copied()).stdin(dup(slave)).stdout(dup(slave)).stderr(dup(slave));
         unsafe {
             cmd.pre_exec(|| {
@@ -613,9 +625,35 @@ impl PtyConsole {
         p.screen().scrollback()
     }
 
+    /// How many times `needle` was written in all, including text the full-screen console's alternate screen has since hidden.
+    fn written(&self, needle: &str) -> usize {
+        String::from_utf8_lossy(&self.bytes.lock().unwrap()).matches(needle).count()
+    }
+
     fn visible(&self) -> String {
         let p = self.replay(5000);
         p.screen().contents()
+    }
+
+    /// From `auto`, one Shift+Tab: optimistic needs the OS sandbox, so it is either `auto · optimistic` (then one more
+    /// press wraps to default) or refused and default at once. Either way the note for default must follow.
+    fn cycle_back_to_default(&mut self) {
+        self.type_keys("\x1b[Z");
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            let seen = self.everything();
+            if seen.contains("· approval mode: auto · optimistic") {
+                self.wait_for("tokens  ·  auto · optimistic");
+                self.type_keys("\x1b[Z");
+                break;
+            }
+            if seen.contains("· approval mode: default") {
+                return;
+            }
+            assert!(Instant::now() < deadline, "no mode note after Shift+Tab from auto:\n{}", seen);
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        self.wait_for("· approval mode: default");
     }
 
     fn wait_for(&self, needle: &str) {
@@ -687,10 +725,24 @@ fn the_inline_console_pins_a_block_prints_into_scrollback_and_never_takes_over_t
     for _ in 0..3 {
         c.type_keys("/help\r");
     }
+    // Wait for what this means, not for a line of help text (which scrolls out of the visible history as help grows):
+    // lines have scrolled into the terminal's history, and then the screen has stopped changing.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while c.everything().matches("/usage [mission|role|task|model]").count() < 2 {
+    while c.lines_in_scrollback() < 10 {
         assert!(Instant::now() < deadline, "{}", c.everything());
         std::thread::sleep(Duration::from_millis(60));
+    }
+    let (mut last, mut stable) = (c.visible(), 0);
+    while stable < 6 {
+        assert!(Instant::now() < deadline, "the screen never settled:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+        let now = c.visible();
+        if now == last {
+            stable += 1;
+        } else {
+            stable = 0;
+            last = now;
+        }
     }
     assert!(c.lines_in_scrollback() >= 10, "output scrolled into the terminal's scrollback ({} lines), it was not redrawn over:\n{}", c.lines_in_scrollback(), c.everything());
     let tail = c.visible();
@@ -818,7 +870,7 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c.wait_for("• one");
     let screen = c.visible();
     assert!(screen.contains("❯ Tell me something") && screen.contains("• one") && screen.contains("orchestrator ·"), "{}", screen);
-    assert!(screen.lines().nth(2).unwrap().contains("· chat"), "header: {}", screen);
+    assert!(screen.lines().nth(1).unwrap().contains("· chat"), "the title row is directly under the strip: {}", screen);
     assert!(!screen.contains("$"), "no money on the main screen: {}", screen);
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
@@ -828,6 +880,78 @@ fn the_full_screen_console_attaches_to_the_real_daemon_sends_a_task_and_replays_
     c2.wait_for("Hello from the daemon.");
     assert!(c2.visible().contains("❯ Tell me something"), "{}", c2.visible());
     drop(c2);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// `specs/005e` §6.7: a first run with no model. Declining the guided setup asks once, the console says plainly that
+/// nothing can answer, and a prompt is met by an attention card that names the problem and the fix: never
+/// "throttled", never the engine's bracketed wrapper.
+#[test]
+fn declining_setup_asks_once_and_a_prompt_with_no_model_says_so_plainly() {
+    let t = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
+    let (home, proj) = (t.path().join("h"), t.path().join("app"));
+    let _reap = common::DaemonReaper::new(&home);
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    let Some(wrapper) = ui_launcher(t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_in(Some(&proj), &home, &[], 30, 100, &envs);
+    c.wait_for("Run the guided setup now?");
+    c.type_keys("n\r");
+    // Whatever else the doctor offers is declined too; the console opens once the questions stop.
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut answered = 1; // the setup question, answered above
+    while !c.visible().contains("delphi v") {
+        assert!(Instant::now() < deadline, "the console did not open:\n{}", c.everything());
+        let asks = c.written("[Y/n]");
+        if asks > answered {
+            answered = asks;
+            c.type_keys("n\r");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(c.written("Run the guided setup now?"), 1, "the setup is offered once:\n{}", c.everything());
+    c.wait_for("delphi · no model configured");
+    c.wait_for("0 tokens  ·  default  ·  no model");
+    c.type_keys("hello");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Stopped: no model is configured for this workspace.");
+    c.wait_for("needs you");
+    let screen = c.visible();
+    assert!(!screen.contains("throttled") && !screen.contains("[escalated"), "{}", screen);
+    assert!(screen.contains("delphi setup") && screen.contains("/models"), "{}", screen);
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "app", "--home"]).arg(&home).output();
+}
+
+/// `specs/005e` §10.1: the footer promises `?`, so `?` must do something. On an empty prompt it opens the key list;
+/// inside text it is a character; Esc closes the list.
+#[test]
+fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let Some(wrapper) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", wrapper.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    c.wait_for("← / ? →");
+    c.type_keys("?");
+    c.wait_for("keys · esc closes");
+    let open = c.visible();
+    assert!(open.contains("shift+tab  approval mode") && !open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
+    c.type_keys("\x1b");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while c.visible().contains("keys · esc closes") {
+        assert!(Instant::now() < deadline, "Esc did not close the key list:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    c.type_keys("why");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("?");
+    c.wait_for("❯ why?");
+    assert!(!c.visible().contains("keys · esc closes"), "a ? inside text is a character:\n{}", c.visible());
+    c.type_keys("\x03");
+    assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
@@ -848,7 +972,7 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("decision needed");
+    c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     c.wait_for("approval needed [amber]");
     c.wait_for("esc to stop");
     // A message sent while the task waits is queued, not sent.
@@ -870,6 +994,77 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     c.type_keys("\x03");
     assert_eq!(c.wait_exit(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// Every SGR sequence in `bytes` that sets a colour (foreground, background, bright or extended).
+fn colour_codes(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut out = Vec::new();
+    for part in text.split("\x1b[").skip(1) {
+        let Some(end) = part.find(|c: char| !(c.is_ascii_digit() || c == ';')) else { continue };
+        if part.as_bytes()[end] != b'm' {
+            continue;
+        }
+        let colour = part[..end].split(';').filter_map(|p| p.parse::<u32>().ok()).any(|p| matches!(p, 30..=38 | 40..=48 | 90..=97 | 100..=107));
+        if colour {
+            out.push(format!("\\x1b[{}m", &part[..end]));
+        }
+    }
+    out
+}
+
+/// `specs/005e` §5: with `NO_COLOR` set, no console writes a colour code, and each still reads (structure by glyph).
+fn no_colour_session(full_screen: bool) {
+    let m = mock(vec![reply_text("Plain words, no colour.")]);
+    let e = setup(m.port);
+    let wrapper = if full_screen { ui_launcher(e._t.path()) } else { None };
+    if full_screen && wrapper.is_none() {
+        return;
+    }
+    let mut envs = vec![("NO_COLOR", "1")];
+    if let Some(w) = &wrapper {
+        envs.push(("DELPHI_UI", w.to_str().unwrap()));
+    }
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
+    if full_screen {
+        c.wait_for("← / ? →");
+    } else {
+        c.wait_for("/help for commands");
+    }
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Say something");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("Plain words, no colour.");
+    let screen = c.everything();
+    assert!(screen.contains("⟦"), "the badges are still there:\n{}", screen);
+    let found = colour_codes(&c.bytes.lock().unwrap());
+    assert!(found.is_empty(), "NO_COLOR=1 but the console wrote colour codes: {:?}", &found[..found.len().min(8)]);
+    c.type_keys(if full_screen { "\x03" } else { "/quit\r" });
+    assert_eq!(c.wait_exit(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+#[test]
+fn the_colour_detector_sees_colour_and_ignores_attributes() {
+    assert_eq!(colour_codes(b"a\x1b[38;2;1;2;3mb\x1b[39m\x1b[48;5;240mc"), vec!["\\x1b[38;2;1;2;3m", "\\x1b[48;5;240m"]);
+    assert_eq!(colour_codes(b"\x1b[36mx\x1b[91my\x1b[104mz").len(), 3);
+    assert!(colour_codes(b"\x1b[1mbold\x1b[22m\x1b[2mdim\x1b[0m\x1b[7m\x1b[2J\x1b[10;5H").is_empty());
+}
+
+#[test]
+fn the_full_screen_console_writes_no_colour_code_under_no_color() {
+    no_colour_session(true);
+}
+
+#[test]
+fn the_inline_console_writes_no_colour_code_under_no_color() {
+    no_colour_session(false);
 }
 
 #[test]
@@ -906,15 +1101,17 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     }
     // Shift+Tab cycles the approval mode, shown in the footer, and the daemon agrees.
     c.type_keys("\x1b[Z");
-    c.wait_for("accept edits");
+    c.wait_for("· approval mode: accept edits — file edits run without asking");
+    c.wait_for("tokens  ·  accept edits");
     c.type_keys("\x1b[Z");
-    c.wait_for("· auto");
-    c.type_keys("\x1b[Z");
-    c.wait_for("tokens  "); // default mode: the footer names no mode
+    c.wait_for("· approval mode: auto — Amber actions run without asking this mission");
+    c.wait_for("tokens  ·  auto");
+    c.cycle_back_to_default(); // through `auto · optimistic` where the OS sandbox exists, straight to default where it does not
+    c.wait_for("tokens  ·  default"); // default mode is named too
     c.type_keys("@architect Draft a spec called 009-e2e");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("decision needed");
+    c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
     c.type_keys("\x1b[1;2C");
     c.wait_for("Pending decisions (1)");
@@ -1094,19 +1291,19 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.type_keys("\x1b[D"); // Left, with text: the cursor moves, the deck stays
     std::thread::sleep(Duration::from_millis(300));
     let kept = c.visible();
-    assert!(kept.contains("❯ abc") && kept.contains("← / ? → · ○ ● ○"), "{}", kept);
+    assert!(kept.contains("❯ abc") && kept.contains("← / ? →  ·  ○ ● ○"), "{}", kept);
     c.type_keys("\x1b[1;2D"); // Shift+Left: the left deck, the draft waits
-    c.wait_for("← / ? → · ● ○ ○");
+    c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[1;2C");
     c.wait_for("❯ abc");
     c.type_keys("\x05\x15"); // End, then delete to the start: an empty prompt
     std::thread::sleep(Duration::from_millis(300));
     assert!(!c.visible().contains("❯ abc"), "{}", c.visible());
     c.type_keys("\x1b[D"); // Left, now empty: the left deck
-    c.wait_for("← / ? → · ● ○ ○");
+    c.wait_for("← / ? →  ·  ● ○ ○");
     c.type_keys("\x1b[C"); // and back to the chat
     std::thread::sleep(Duration::from_millis(300));
-    assert!(c.visible().contains("← / ? → · ○ ● ○"), "{}", c.visible());
+    assert!(c.visible().contains("← / ? →  ·  ○ ● ○"), "{}", c.visible());
 
     // Keep the reply, save the conversation.
     line(&mut c, "/pin");
@@ -1117,10 +1314,12 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     c.wait_for("exported to local/missions/");
 
     // Shift+Tab goes round the approval modes and ends where it started.
-    for footer in ["tokens · accept edits", "tokens · auto", "tokens  "] {
+    for footer in ["tokens  ·  accept edits", "tokens  ·  auto"] {
         c.type_keys("\x1b[Z");
         c.wait_for(footer);
     }
+    c.cycle_back_to_default();
+    c.wait_for("tokens  ·  default");
 
     // The window shrinks and grows: the screen is always exactly the window, never wider, footer on the last row.
     c.resize(24, 70);
@@ -1230,4 +1429,309 @@ fn the_daemon_reports_the_release_of_the_program_that_started_it() {
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
     let stop = PtyConsole::start_env(&e.home, &["daemon", "stop", "--workspace", "e2e"], 10, 80, &[]);
     assert_eq!(stop.wait_exit(), 0);
+}
+
+// ── delphi run: no terminal, a summary and an exit code ─────────────────────
+
+/// Ratify the endpoints through a short console session, then stop that daemon so `delphi run` starts its own
+/// (a script has no terminal, so it can only use a daemon it spawned).
+fn ratify_and_stop(e: &Env) {
+    let mut s = Session::start(&e.home, &["chat", "--workspace", "e2e"]);
+    s.wait_for("/help for commands");
+    s.send("/ratify");
+    s.wait_for("pending proposal");
+    s.send("/ratify apply 1");
+    s.wait_for("ratified ws:config.toml#access");
+    let (code, out) = s.finish();
+    assert_eq!(code, 0, "{}", out);
+    kill_daemon(pid_in(&out));
+}
+
+/// Run `delphi run` with no stdin and no terminal; returns (exit code, stdout, stderr).
+fn delphi_run(e: &Env, args: &[&str]) -> (i32, String, String) {
+    let o = Command::new(DELPHI).arg("run").args(args).args(["--workspace", "e2e", "--home", e.home.to_str().unwrap()]).env("DELPHI_E2E_KEY", KEY).stdin(Stdio::null()).output().unwrap();
+    (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string())
+}
+
+fn summary_of(stdout: &str) -> Value {
+    let line = stdout.lines().rev().find(|l| l.contains("\"run.summary\"")).unwrap_or_else(|| panic!("no summary in:\n{}", stdout));
+    serde_json::from_str(line).unwrap()
+}
+
+#[test]
+fn delphi_run_answers_a_task_with_no_terminal_and_reports_a_summary() {
+    let m = mock(vec![reply_tool("toolu_1", "read_file", json!({"path": "@project/proj/src/lib.rs"})), reply_text("The file defines `needle`, which returns 42.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let (code, out, err) = delphi_run(&e, &["What does @project/proj/src/lib.rs define?", "--json", "--timeout", "90s"]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["outcome"].as_str(), s["exit_code"].as_i64()), (Some("completed"), Some(0)));
+    assert!(s["text"].as_str().unwrap().contains("needle"), "{}", s);
+    assert_eq!(s["cards"]["total"], 0);
+    assert!(s["usage"]["rows"].as_array().map(|r| !r.is_empty()).unwrap_or(false), "the cost is in the summary: {}", s["usage"]);
+    assert!(!out.contains(KEY) && !err.contains(KEY), "the credential never reaches the output");
+    assert_eq!(m.seen.lock().unwrap().len(), 2);
+    let (code2, ..) = delphi_run(&e, &["--task", "", "--json"]);
+    assert_eq!(code2, 4, "an empty task is refused before any daemon is touched");
+}
+
+#[test]
+fn delphi_run_denies_a_card_by_default_and_reports_it_and_a_policy_can_allow_amber() {
+    let write = || reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"}));
+    // Run 1: --on-card deny (the default). The model is told no; nothing is written.
+    let m = mock(vec![write(), reply_text("I could not write the spec.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let (code, out, err) = delphi_run(&e, &["@architect Draft a spec called 009-e2e", "--json", "--timeout", "90s"]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["cards"]["total"].as_u64(), s["cards"]["denied"].as_u64()), (Some(1), Some(1)), "{}", s);
+    assert_eq!(s["cards"]["list"][0]["tool"], "write_file");
+    assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "a denied card writes nothing");
+}
+
+#[test]
+fn delphi_run_with_a_policy_allows_exactly_the_amber_tool_it_names() {
+    let write = || reply_tool("w1", "write_file", json!({"path": "specs/009-e2e.md", "content": "# E2E spec\nbody"}));
+    let m = mock(vec![write(), reply_text("Drafted specs/009-e2e.md.")]);
+    let e = setup(m.port);
+    ratify_and_stop(&e);
+    let policy = e._t.path().join("policy.toml");
+    std::fs::write(&policy, "[[allow]]\ntool = \"write_file\"\npattern = \"write_file specs/*\"\n").unwrap();
+    let (code, out, err) = delphi_run(&e, &["@architect Draft a spec called 009-e2e", "--json", "--timeout", "90s", "--on-card", &format!("policy:{}", policy.display())]);
+    assert_eq!(code, 0, "stdout:\n{}\nstderr:\n{}", out, err);
+    let s = summary_of(&out);
+    assert_eq!((s["cards"]["allowed"].as_u64(), s["cards"]["denied"].as_u64()), (Some(1), Some(0)), "{}", s);
+    assert!(e.ws.join("team/specs/009-e2e.md").exists(), "the allowed card ran");
+}
+
+#[test]
+fn delphi_run_refuses_a_policy_that_tries_to_allow_a_merge_before_touching_anything() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let policy = e._t.path().join("bad.toml");
+    std::fs::write(&policy, "[[allow]]\ntool = \"merge\"\n").unwrap();
+    let (code, out, err) = delphi_run(&e, &["anything", "--on-card", &format!("policy:{}", policy.display())]);
+    assert_eq!(code, 4, "{}{}", out, err);
+    assert!(err.contains("no policy can allow it"), "{}", err);
+    assert_eq!(m.seen.lock().unwrap().len(), 0);
+}
+
+// ── delphi relay: a card by email and an approval by reply ──────────────────
+
+/// A just-enough SMTP server that records every message it is given.
+fn fake_smtp(received: Arc<Mutex<Vec<String>>>) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let received = received.clone();
+            std::thread::spawn(move || {
+                let mut w = s.try_clone().unwrap();
+                let mut r = BufReader::new(s);
+                let _ = w.write_all(b"220 fake ESMTP\r\n");
+                let (mut line, mut data, mut in_data) = (String::new(), String::new(), false);
+                while {
+                    line.clear();
+                    r.read_line(&mut line).unwrap_or(0) > 0
+                } {
+                    if in_data {
+                        if line == ".\r\n" {
+                            in_data = false;
+                            received.lock().unwrap().push(std::mem::take(&mut data));
+                            let _ = w.write_all(b"250 queued\r\n");
+                        } else {
+                            data.push_str(&line);
+                        }
+                        continue;
+                    }
+                    let up = line.to_uppercase();
+                    let reply: &[u8] = if up.starts_with("EHLO") || up.starts_with("HELO") {
+                        b"250-fake\r\n250 AUTH PLAIN LOGIN\r\n"
+                    } else if up.starts_with("AUTH") {
+                        b"235 ok\r\n"
+                    } else if up.starts_with("DATA") {
+                        in_data = true;
+                        b"354 go\r\n"
+                    } else if up.starts_with("QUIT") {
+                        let _ = w.write_all(b"221 bye\r\n");
+                        return;
+                    } else {
+                        b"250 ok\r\n"
+                    };
+                    let _ = w.write_all(reply);
+                }
+            });
+        }
+    });
+    port
+}
+
+/// A just-enough IMAP server over a shared inbox of `(raw message, seen)`.
+type Inbox = Arc<Mutex<Vec<(Vec<u8>, bool)>>>;
+
+fn fake_imap(inbox: Inbox) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let inbox = inbox.clone();
+            std::thread::spawn(move || {
+                let mut w = s.try_clone().unwrap();
+                let mut r = BufReader::new(s);
+                let _ = w.write_all(b"* OK fake IMAP ready\r\n");
+                let mut line = String::new();
+                while {
+                    line.clear();
+                    r.read_line(&mut line).unwrap_or(0) > 0
+                } {
+                    let mut parts = line.trim_end().splitn(3, ' ');
+                    let (tag, cmd, rest) = (parts.next().unwrap_or(""), parts.next().unwrap_or("").to_uppercase(), parts.next().unwrap_or(""));
+                    let ids = |set: &str| -> Vec<usize> { set.split(',').filter_map(|x| x.trim().parse().ok()).collect() };
+                    match cmd.as_str() {
+                        "LOGIN" => {
+                            let _ = w.write_all(format!("{} OK logged in\r\n", tag).as_bytes());
+                        }
+                        "SELECT" => {
+                            let n = inbox.lock().unwrap().len();
+                            let _ = w.write_all(format!("* {} EXISTS\r\n* 0 RECENT\r\n* FLAGS (\\Seen)\r\n{} OK [READ-WRITE] done\r\n", n, tag).as_bytes());
+                        }
+                        "SEARCH" => {
+                            let list = inbox.lock().unwrap().iter().enumerate().filter(|(_, (_, seen))| !seen).map(|(i, _)| (i + 1).to_string()).collect::<Vec<_>>().join(" ");
+                            let _ = w.write_all(format!("* SEARCH {}\r\n{} OK done\r\n", list, tag).as_bytes());
+                        }
+                        "FETCH" => {
+                            let (set, what) = rest.split_once(' ').unwrap_or((rest, ""));
+                            for i in ids(set) {
+                                let m = inbox.lock().unwrap()[i - 1].0.clone();
+                                if what.contains("RFC822.SIZE") {
+                                    let _ = w.write_all(format!("* {} FETCH (RFC822.SIZE {})\r\n", i, m.len()).as_bytes());
+                                } else {
+                                    let _ = w.write_all(format!("* {} FETCH (BODY[] {{{}}}\r\n", i, m.len()).as_bytes());
+                                    let _ = w.write_all(&m);
+                                    let _ = w.write_all(b")\r\n");
+                                }
+                            }
+                            let _ = w.write_all(format!("{} OK done\r\n", tag).as_bytes());
+                        }
+                        "STORE" => {
+                            let (set, _) = rest.split_once(' ').unwrap_or((rest, ""));
+                            for i in ids(set) {
+                                inbox.lock().unwrap()[i - 1].1 = true;
+                            }
+                            let _ = w.write_all(format!("{} OK stored\r\n", tag).as_bytes());
+                        }
+                        "LOGOUT" => {
+                            let _ = w.write_all(format!("* BYE\r\n{} OK bye\r\n", tag).as_bytes());
+                            return;
+                        }
+                        _ => {
+                            let _ = w.write_all(format!("{} BAD unknown\r\n", tag).as_bytes());
+                        }
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+fn relay_block(smtp: u16, imap: u16) -> String {
+    format!(
+        r#"
+[relay]
+channel = "email"
+poll_secs = 5
+[relay.email]
+mailbox = "delphi.relay@example.net"
+operator = "me@example.com"
+imap_host = "127.0.0.1"
+imap_port = {imap}
+smtp_host = "127.0.0.1"
+smtp_port = {smtp}
+tls = "none"
+credential = "env:DELPHI_E2E_MAIL_PW"
+authserv_id = "mx.example.net"
+"#
+    )
+}
+
+fn reply_mail(token: &str, id: &str, auth: &str) -> Vec<u8> {
+    format!("From: Me <me@example.com>\r\nTo: delphi.relay@example.net\r\nSubject: Re: card\r\nMessage-ID: <{}@example.com>\r\nAuthentication-Results: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nAPPROVE {}\r\n\r\nOn Mon, Delphi wrote:\r\n> stuff\r\n", id, auth, token).into_bytes()
+}
+
+#[test]
+fn a_card_goes_out_by_email_a_forged_reply_is_ignored_and_the_real_one_approves_it() {
+    let sent = Arc::new(Mutex::new(Vec::<String>::new()));
+    let inbox: Inbox = Arc::new(Mutex::new(Vec::new()));
+    let (smtp, imap) = (fake_smtp(sent.clone()), fake_imap(inbox.clone()));
+    let m = mock(vec![reply_tool("w1", "write_file", json!({"path": "specs/009-relay.md", "content": "# Relay\nbody"})), reply_text("Drafted specs/009-relay.md.")]);
+    let e = setup(m.port);
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, relay_block(smtp, imap))).unwrap();
+    ratify_and_stop(&e);
+
+    // A headless run raises the card and leaves it for the operator.
+    let run = Command::new(DELPHI)
+        .args(["run", "@architect Draft a spec called 009-relay", "--on-card", "relay", "--json", "--timeout", "120s", "--workspace", "e2e", "--home", e.home.to_str().unwrap()])
+        .env("DELPHI_E2E_KEY", KEY)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // The relay runs in a terminal, as it must (the daemon gives a relay token only to a peer with one).
+    let mut relay = PtyConsole::start_env(&e.home, &["relay", "--workspace", "e2e"], 24, 120, &[("DELPHI_E2E_MAIL_PW", "app-password")]);
+    relay.wait_for("delphi relay: ready");
+
+    // The card arrives by email, with a token and no secret payload.
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let card_mail = loop {
+        if let Some(m) = sent.lock().unwrap().iter().find(|m| m.contains("[delphi:ap_")).cloned() {
+            break m;
+        }
+        assert!(Instant::now() < deadline, "no card email arrived; relay shows:\n{}", relay.everything());
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(card_mail.contains("To: me@example.com") && card_mail.contains("write specs/009-relay.md") && card_mail.contains("Auto-Submitted: auto-generated"), "{}", card_mail);
+    assert!(!card_mail.contains("# Relay"), "the file's content stays home by default");
+    let token = card_mail.split("APPROVE ").nth(1).unwrap().chars().take(32).collect::<String>();
+    assert_eq!(token.len(), 32);
+
+    // A forgery: the right address, the right token, but the provider says the sender did not authenticate.
+    inbox.lock().unwrap().push((reply_mail(&token, "forged", "mx.example.net; dmarc=fail; spf=fail"), false));
+    // The operator's real reply.
+    inbox.lock().unwrap().push((reply_mail(&token, "real", "mx.example.net; dkim=pass header.d=example.com; dmarc=pass"), false));
+
+    let out = run.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(0), "stdout:\n{}\nstderr:\n{}\nrelay:\n{}", stdout, String::from_utf8_lossy(&out.stderr), relay.everything());
+    let s = summary_of(&stdout);
+    assert_eq!((s["cards"]["allowed"].as_u64(), s["cards"]["left"].as_u64()), (Some(1), Some(0)), "{}", s);
+    assert!(s["cards"]["list"][0]["reason"].as_str().unwrap().contains("relay:email:me@example.com"), "the log names the channel and sender: {}", s);
+    assert!(e.ws.join("team/specs/009-relay.md").exists(), "the emailed approval ran the write");
+
+    // The forgery was ignored (the operator was told once that a message claiming to be them failed authentication),
+    // and the real reply used the code; both were marked read. Had the forgery been accepted, the real reply would
+    // have found a used code and the notice would not exist.
+    assert!(inbox.lock().unwrap().iter().all(|(_, seen)| *seen));
+    let sent_now = sent.lock().unwrap().clone();
+    assert_eq!(sent_now.iter().filter(|m| m.contains("failed authentication")).count(), 1, "{:#?}", sent_now);
+    assert!(!sent_now.iter().any(|m| m.contains("that code is not valid")), "the real reply found its code unused: the forgery did not take it");
+    let _ = relay.child.kill();
+}
+
+#[test]
+fn an_unratified_relay_block_is_ignored_so_a_local_edit_cannot_add_an_approver() {
+    let m = mock(vec![]);
+    let e = setup(m.port);
+    let cfg = std::fs::read_to_string(e.ws.join("config.toml")).unwrap();
+    std::fs::write(e.ws.join("config.toml"), format!("{}{}", cfg, relay_block(1, 1))).unwrap();
+    // Nothing is ratified: the relay must refuse to start rather than trust the edited file.
+    let o = Command::new(DELPHI).args(["relay", "check", "--workspace", "e2e", "--home", e.home.to_str().unwrap()]).env("DELPHI_E2E_MAIL_PW", "x").stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(err.contains("no [relay] table in the ratified config"), "{}", err);
 }

@@ -1,0 +1,6 @@
+# The Amber cards a headless benchmark arm may allow (delphi run --on-card policy:<this file>).
+# Red cards and merges can never be allowed by a policy; the run stops at "ready to merge".
+
+# Test and check commands for the merge gates, when the OS sandbox is off.
+[[allow]]
+tool = "gate_command"

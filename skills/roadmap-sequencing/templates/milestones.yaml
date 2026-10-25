@@ -1,0 +1,20 @@
+# Milestone plan. Check with: delphi check dag <this file> --repo .
+# A milestone ships something usable. weight: relative effort. depends_on: ids that must ship first.
+# `ships` says what is true when the milestone is done; the checker ignores it.
+milestones:
+  - id: m1-walking-skeleton
+    ships: "The smallest end-to-end path works and is tested."
+    weight: 2
+  - id: m2-riskiest-unknown
+    ships: "The least understood part is proven or the plan is revised."
+    depends_on: [m1-walking-skeleton]
+    weight: 3
+  - id: m3-full-feature
+    ships: "All acceptance criteria pass."
+    spec: specs/002-adapter-and-routing.md
+    depends_on: [m2-riskiest-unknown]
+    weight: 4
+  - id: m4-docs-and-release
+    ships: "Docs match behaviour and the release is cut."
+    depends_on: [m3-full-feature]
+    weight: 1

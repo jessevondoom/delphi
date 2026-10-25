@@ -5,6 +5,7 @@
   },
   "roles": {
     "architect": {
+      "ansi": 14,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -65,6 +66,7 @@
       "mascot_face": "•_•"
     },
     "builder": {
+      "ansi": 11,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -125,6 +127,7 @@
       "mascot_face": "•───•"
     },
     "operator": {
+      "ansi": 7,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -185,6 +188,7 @@
       "mascot_face": "•_•"
     },
     "orchestrator": {
+      "ansi": 13,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -249,6 +253,7 @@
         "dark": "#facc15",
         "light": "#a16207"
       },
+      "ansi": 9,
       "badge": {
         "alarm": {
           "cells": "●_!",
@@ -309,6 +314,7 @@
       "mascot_face": "-_-"
     },
     "scout": {
+      "ansi": 3,
       "badge": {
         "alarm": {
           "cells": "•••",
@@ -369,6 +375,7 @@
       "mascot_face": "• • •"
     },
     "strategist": {
+      "ansi": 10,
       "badge": {
         "alarm": {
           "cells": "●_!",

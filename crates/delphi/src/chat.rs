@@ -43,6 +43,12 @@ pub enum Input {
     Prompt { target: Option<String>, text: String },
     /// `/build …`: a Builder task under the retry ladder, audit and merge gates.
     Build(String),
+    /// `/decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [note]]`: provisional decisions (`specs/015`).
+    Decisions(Vec<String>),
+    /// `/timer [@role] <span> <note>` · `/timer list` · `/timer cancel <id>`: wake a role later (`specs/017`).
+    Timer(Vec<String>),
+    /// `/merge <task>`: run the gates and the merge card again for a kept branch, after review.
+    Merge(String),
     /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
     /// `/narrator [view]`: open the read-only window (a tmux split when inside tmux, else the command to run).
@@ -50,6 +56,15 @@ pub enum Input {
     /// `/more`: the rest of a reply the inline console shortened.
     More,
     Unknown(String),
+}
+
+/// `--optimistic` in front of a build request (`/build --optimistic implement …`): the request without it, and
+/// whether it was there.
+pub fn split_build_flags(text: &str) -> (bool, String) {
+    match text.trim_start().strip_prefix("--optimistic") {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => (true, rest.trim().to_string()),
+        _ => (false, text.trim().to_string()),
+    }
 }
 
 pub fn parse_input(line: &str) -> Input {
@@ -85,6 +100,12 @@ pub fn parse_input(line: &str) -> Input {
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
             "more" => Input::More,
+            "decisions" => Input::Decisions(rest.iter().map(|s| s.to_string()).collect()),
+            "timer" | "timers" => Input::Timer(rest.iter().map(|s| s.to_string()).collect()),
+            "merge" => match rest.first() {
+                Some(t) => Input::Merge(t.to_string()),
+                None => Input::Unknown("/merge needs the build's task id, for example `/merge t_0003`".into()),
+            },
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
@@ -140,10 +161,14 @@ Type a request and press Enter. Reference files with @project/<name>/path or @sp
   /models                            the model pool: which models are usable, out of quota, or cooling down
   /agents                            every agent running now and the model it is on
   /budget [dollars]                  show or change this mission's cost ceiling
-  /permissions [default|accept-edits|mission-auto]
+  /permissions [default|accept-edits|mission-auto|optimistic]
   /ratify                            pending proposals (config, manifests, specs)
   /mission                           the current mission
-  /build <request>                   a Builder task: worktree, tests, audit, then your approval to merge
+  /build [--optimistic] <request>    a Builder task: worktree, tests, audit, then your approval to merge. --optimistic decides
+                                     its worktree edits itself, records each, and blocks the merge until you have reviewed them all
+  /timer <when> <note>               wake the orchestrator later (/timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>)
+  /decisions [show|ratify|reject]    review the provisional decisions of an optimistic build (/decisions ratify all-routine)
+  /merge <task>                      run the gates and the merge card again for a kept branch, after review
   /narrator [council|epic|forge|agents|spend|archives|tile]   the read-only live window (a tmux split, or the command to run in a second terminal)
   /council <proposition>             a blind three-round Council (architect, strategist, red-team); you decide if it deadlocks
   /resume [task…]  /pause            after a restart: continue the interrupted tasks, or leave them
@@ -201,6 +226,11 @@ pub struct Renderer {
     /// Council seats answer in parallel, so their live text is not streamed; their stances are shown whole.
     council: bool,
     quiet: HashSet<String>,
+}
+
+/// Two spaces at the left of every non-empty line.
+fn indent(text: &str) -> String {
+    text.lines().map(|l| if l.is_empty() { String::new() } else { format!("  {}", l) }).collect::<Vec<_>>().join("\n")
 }
 
 fn brief(args: &Value) -> String {
@@ -261,12 +291,14 @@ impl Renderer {
         self.council = false;
         let num = |k: &str| k.rsplit('_').next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
         let role = self.spans.iter().filter(|(_, (_, d))| *d == 0).max_by_key(|(k, _)| num(k)).map(|(_, (r, _))| r.clone()).unwrap_or_else(|| "orchestrator".into());
+        let escalated = e["payload"]["status"] == "escalated";
+        let text = delphi_engine::observe::sanitize(e["payload"]["text"].as_str().unwrap_or(""));
         Reply {
             task_id: e["task_id"].as_str().unwrap_or("").to_string(),
             name: self.name(&role),
             role,
-            text: delphi_engine::observe::sanitize(e["payload"]["text"].as_str().unwrap_or("")),
-            status: if e["payload"]["status"] == "escalated" { "escalated".into() } else { "done".into() },
+            text: if escalated { crate::escalation::classify(&text).body() } else { text },
+            status: if escalated { "escalated".into() } else { "done".into() },
         }
     }
 
@@ -307,6 +339,10 @@ impl Renderer {
             }
             "agent.block.complete" if p["block"]["type"] == "tool_call" => Some(format!("\n  → {}({})", p["block"]["name"].as_str().unwrap_or("?"), brief(&p["block"]["arguments"]))),
             "tool.result" if p["is_error"] == true => Some(format!("\n    ✗ {}", p["content"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(120).collect::<String>())),
+            "decision.provisional" => Some(format!("\n  decided provisionally ({}): {}: {}\n", p["outcome"].as_str().unwrap_or("?"), p["summary"].as_str().unwrap_or("?"), p["rationale"].as_str().unwrap_or(""))),
+            "decision.deferred" => Some(format!("\n  ! the approver passed this to you ({}): {}\n", p["reason"].as_str().unwrap_or("no reason given"), p["summary"].as_str().unwrap_or("?"))),
+            "decisions.review_requested" => Some(format!("\n  ! {} provisional decision(s) await your review before anything can merge: /decisions\n", p["count"].as_u64().unwrap_or(0))),
+            "build.merge_finished" => Some(format!("\n  merge check for {}: {} — {}\n", e["task_id"].as_str().unwrap_or("?"), p["outcome"].as_str().unwrap_or("?"), p["detail"].as_str().unwrap_or(""))),
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
             "span.taint" => Some(format!("\n  ! {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
             "endpoint.throttled" => Some(format!("\n  ! {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
@@ -318,7 +354,7 @@ impl Renderer {
             "model.exhausted" => Some(format!("\n  ! {} is out of quota ({}){}; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"), p["reason"].as_str().unwrap_or("?"), p["reset_at"].as_i64().map(|t| format!(", back at {}", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
             "endpoint.reauth_required" => Some(format!("\n  ! re-authenticate {} (e.g. `aws sso login`), then run the task again\n", p["endpoint_id"].as_str().unwrap_or("?"))),
             "turn.interrupted" => Some("\n  ! the stream was interrupted; retrying the turn\n".to_string()),
-            "task.failed" => Some(format!("\n✗ task failed: {}\n", p["error"].as_str().unwrap_or(""))),
+            "task.failed" => Some(format!("\n! {} needs you\n{}\n", e["task_id"].as_str().unwrap_or("task"), indent(&crate::escalation::classify(p["error"].as_str().unwrap_or("")).body()))),
             "task.output" => {
                 let root_streamed = self.streamed.iter().any(|s| self.spans.get(s).map(|(_, d)| *d == 0).unwrap_or(false));
                 let tid = e["task_id"].as_str().unwrap_or("");
@@ -326,7 +362,7 @@ impl Renderer {
                 self.council = false;
                 let text = p["text"].as_str().unwrap_or("");
                 Some(match p["status"].as_str() {
-                    Some("escalated") => format!("\n! {} needs you: {}\n", tid, text),
+                    Some("escalated") => format!("\n! {} needs you\n{}\n", tid, indent(&crate::escalation::classify(text).body())),
                     _ if root_streamed => format!("\n✓ {} done\n", tid),
                     _ => {
                         // A reply that finished before any live frame arrived still says who is speaking.
@@ -523,8 +559,8 @@ fn handle_event(shared: &Shared, e: &Value) {
                 *c = None;
             }
         }
-        "task.output" | "task.failed" => {
-            let escalated = p["status"] == "escalated" || kind == "task.failed";
+        "task.output" | "task.failed" | "build.merge_finished" => {
+            let escalated = p["status"] == "escalated" || kind == "task.failed" || (kind == "build.merge_finished" && !matches!(p["outcome"].as_str(), Some("merged" | "pr_opened" | "declined")));
             if escalated {
                 shared.failures.fetch_add(1, Ordering::SeqCst);
             }
@@ -720,10 +756,22 @@ impl Session {
                     say(&format!("{}\n", rpc_error(&e)));
                 }
             }
-            Input::Build(text) => match self.cmd.call("build.start", json!({"mission_id": self.mission_id, "prompt": text})) {
+            Input::Build(text) => {
+                let (optimistic, text) = split_build_flags(&text);
+                match self.cmd.call("build.start", json!({"mission_id": self.mission_id, "prompt": text, "optimistic": optimistic})) {
+                    Ok(v) => {
+                        self.shared.running.fetch_add(1, Ordering::SeqCst);
+                        say(&format!("({} build started; {})\n", v["task_id"].as_str().unwrap_or("task"), if optimistic { "it decides its worktree edits itself and records each; the merge waits for your review of every one (/decisions)" } else { "you will be asked before anything is merged" }));
+                    }
+                    Err(e) => say(&format!("{}\n", rpc_error(&e))),
+                }
+            }
+            Input::Decisions(args) => say(&crate::decisions::handle(&mut self.cmd, &self.mission_id, &args)),
+            Input::Timer(args) => say(&crate::timers_cmd::handle(&mut self.cmd, &self.mission_id, &crate::timers_cmd::chat_args(&args))),
+            Input::Merge(task) => match self.cmd.call("build.merge", json!({"mission_id": self.mission_id, "task_id": task})) {
                 Ok(v) => {
                     self.shared.running.fetch_add(1, Ordering::SeqCst);
-                    say(&format!("({} build started; you will be asked before anything is merged)\n", v["task_id"].as_str().unwrap_or("task")));
+                    say(&format!("({} is being checked again; if the gates are green you will be asked to merge)\n", v["task_id"].as_str().unwrap_or("task")));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
@@ -994,6 +1042,22 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_optimistic_flag_decisions_and_merge_commands_parse() {
+        assert_eq!(split_build_flags("--optimistic implement @specs/011-x.md"), (true, "implement @specs/011-x.md".to_string()));
+        assert_eq!(split_build_flags("  --optimistic   do it "), (true, "do it".to_string()));
+        assert_eq!(split_build_flags("implement it --optimistic"), (false, "implement it --optimistic".to_string()), "only a leading flag counts");
+        assert_eq!(split_build_flags("--optimisticx foo"), (false, "--optimisticx foo".to_string()));
+        assert_eq!(split_build_flags("--optimistic"), (true, String::new()));
+        assert_eq!(parse_input("/build --optimistic do it"), Input::Build("--optimistic do it".into()));
+        assert_eq!(parse_input("/timer 20m check CI"), Input::Timer(vec!["20m".into(), "check".into(), "CI".into()]));
+        assert_eq!(parse_input("/timers"), Input::Timer(vec![]));
+        assert_eq!(parse_input("/decisions"), Input::Decisions(vec![]));
+        assert_eq!(parse_input("/decisions ratify dec_a dec_b"), Input::Decisions(vec!["ratify".into(), "dec_a".into(), "dec_b".into()]));
+        assert_eq!(parse_input("/merge t_0003"), Input::Merge("t_0003".into()));
+        assert!(matches!(parse_input("/merge"), Input::Unknown(m) if m.contains("task id")));
+    }
+
     fn names() -> HashMap<String, String> {
         [("orchestrator", "Athena"), ("architect", "Daedalus")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
     }
@@ -1075,7 +1139,11 @@ mod tests {
         let mut fresh = Renderer::new(names());
         assert!(fresh.event(&json!({"type": "task.output", "task_id": "t_0002", "payload": {"status": "done", "text": "The answer."}})).unwrap().contains("The answer."));
         let esc = fresh.event(&json!({"type": "task.output", "task_id": "t_0003", "payload": {"status": "escalated", "text": "[escalated to the operator: mission budget]"}})).unwrap();
-        assert!(esc.contains("t_0003 needs you") && esc.contains("mission budget"), "{}", esc);
+        assert!(esc.contains("t_0003 needs you") && esc.contains("Stopped: this mission's ceiling is reached.") && !esc.contains("[escalated"), "{}", esc);
+        let none = fresh.event(&json!({"type": "task.output", "task_id": "t_0004", "payload": {"status": "escalated", "text": "[escalated to the operator: no_model_configured: no model is configured for this workspace]"}})).unwrap();
+        assert!(none.contains("Stopped: no model is configured for this workspace.") && !none.contains("throttled") && !none.contains("[escalated"), "{}", none);
+        let failed = fresh.event(&json!({"type": "task.failed", "task_id": "t_0005", "payload": {"error": "disk full"}})).unwrap();
+        assert!(failed.contains("t_0005 needs you") && failed.contains("Stopped: disk full"), "{}", failed);
     }
 
     #[test]

@@ -1,0 +1,364 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Delphi Console Mockups</title>
+<!-- Mockups for specs/005e. Open in a browser to compare; render.sh turns every view into a PNG with
+     headless Chrome (?shot=<view>&theme=dark|light&size=100x34&scene=idle|stream&mode=auto&cs=blind|debate|verdict). -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#f4f4f1; --fg:#1d2026; --muted:#666b75; --card:#ffffff; --line:#dcdcd6; --accent:#0b6e80;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#101216;--fg:#e4e6ea;--muted:#8d929c;--card:#171a20;--line:#2a2e36;--accent:#62c4d6;color-scheme:dark}}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);margin:0;padding:28px 16px 56px;line-height:1.5}
+main{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:30px}
+h1{font-size:24px;margin:0;font-weight:600;letter-spacing:-.01em}
+h2{font-size:16px;margin:0;font-weight:600}
+h3{font-size:12px;margin:0;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+p{margin:0}
+.lede{color:var(--muted);max-width:68ch;margin-top:6px}
+.bar{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;position:sticky;top:0;background:var(--bg);padding:10px 0;z-index:5;border-bottom:1px solid var(--line)}
+.grp{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{font:500 13px var(--sans);text-transform:none;letter-spacing:0;background:transparent;color:var(--fg);border:0;padding:5px 11px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+.study{display:flex;flex-direction:column;gap:10px}
+.study header{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+.tag{font:700 12px var(--mono);color:var(--accent)}
+.sub{color:var(--muted);font-size:14px}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,640px),1fr));gap:14px;min-width:0}
+.pair>div{min-width:0;display:flex;flex-direction:column;gap:6px}
+.term{--t-bg:#15171c;--t-fg:#dcdfe4;--t-dim:#6d727d;--t-tint:#242830;--t-tint2:#2e3340;--t-ok:#6fcf97;--t-auto:#ff8a4c;--t-acc:#62c4d6;--t-arch:#62c4d6;--t-build:#b9a3f5;--t-strat:#e58fb8;--t-red:#ef6b6b;--t-scout:#6fd1b9;--t-warn:#e8b94e;--t-wtint:#3a3118;--t-rule:#3a3f49;
+  background:var(--t-bg);color:var(--t-fg);font:400 13px/1.32 var(--mono);border-radius:10px;padding:14px 16px;overflow-x:auto;border:1px solid var(--line);font-variant-ligatures:none}
+.term[data-t="light"]{--t-bg:#fbfaf7;--t-fg:#22252b;--t-dim:#8c919b;--t-tint:#ecebe4;--t-tint2:#e0ded5;--t-ok:#1f8a4c;--t-auto:#c2410c;--t-acc:#0b7a8c;--t-arch:#0b7a8c;--t-build:#6b4fc4;--t-strat:#b3407a;--t-red:#c0392b;--t-scout:#13806a;--t-warn:#9a6a00;--t-wtint:#f6e7c4;--t-rule:#c9c8c1}
+.term .ln{white-space:pre;height:1.32em;width:max-content;min-width:100%}
+.term .ln span{display:inline-block;height:1.32em;vertical-align:top;white-space:pre}
+/* terminals snap every glyph to one cell; glyphs a web font lacks would otherwise fall back to a narrower face */
+.term i.g{display:inline-block;width:1ch;height:1.32em;vertical-align:top;text-align:center;font-style:normal;overflow:visible}
+.term .dim{color:var(--t-dim)} .term .b{font-weight:700} .term .i{font-style:italic} .term .ok{color:var(--t-ok)}
+.term .acc{color:var(--t-acc)} .term .warn{color:var(--t-warn)} .term .auto{color:var(--t-auto);font-weight:700}
+.term .arch{color:var(--t-arch)} .term .build{color:var(--t-build)} .term .strat{color:var(--t-strat)} .term .red{color:var(--t-red)} .term .scout{color:var(--t-scout)}
+.term .tint{background:var(--t-tint)} .term .tint2{background:var(--t-tint2)} .term .wtint{background:var(--t-wtint)}
+/* square caps: a full-width half block, no corner bevel */
+.term .capt{background:linear-gradient(var(--t-tint),var(--t-tint)) 0 100%/100% calc(50% + 1px) no-repeat}
+.term .capb{background:linear-gradient(var(--t-tint),var(--t-tint)) 0 0/100% calc(50% + 1px) no-repeat}
+.term .capt2{background:linear-gradient(var(--t-tint2),var(--t-tint2)) 0 100%/100% calc(50% + 1px) no-repeat}
+.term .capb2{background:linear-gradient(var(--t-tint2),var(--t-tint2)) 0 0/100% calc(50% + 1px) no-repeat}
+.term .chip-ok{background:var(--t-ok);color:var(--t-bg);font-weight:700}
+.term .rule{color:var(--t-rule)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px 24px;font-size:14px}
+.notes b{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+hr{border:0;border-top:1px solid var(--line);margin:0;width:100%}
+/* shot mode: one terminal, edge to edge, for the PNG renderer */
+body.shot{padding:0;background:#15171c}
+body.shot .term{border:0;border-radius:0;margin:0;padding:14px 16px;overflow:hidden}
+</style>
+
+<body>
+<main id="page">
+  <div>
+    <h1>Console mockups, final round</h1>
+    <p class="lede">Chat (soft fill, square), activity ticker, and the narrator's epic and council views. The strip shows badges only and animates per state. Nothing here is built.</p>
+  </div>
+
+  <div class="bar" role="toolbar" aria-label="Preview controls">
+    <div class="grp">Terminal <span class="seg" id="c-theme"><button data-v="dark" aria-pressed="true">dark</button><button data-v="light" aria-pressed="false">light</button></span></div>
+    <div class="grp">Console size <span class="seg" id="c-size"><button data-v="80x24" aria-pressed="false">80×24</button><button data-v="100x34" aria-pressed="true">100×34</button></span></div>
+    <div class="grp">Chat <span class="seg" id="c-scene"><button data-v="idle" aria-pressed="true">idle</button><button data-v="stream" aria-pressed="false">streaming</button></span></div>
+    <div class="grp">Mode <span class="seg" id="c-mode"><button data-v="default" aria-pressed="false">default</button><button data-v="accept-edits" aria-pressed="false">accept-edits</button><button data-v="auto" aria-pressed="true">auto</button></span></div>
+    <div class="grp">Council <span class="seg" id="c-cs"><button data-v="blind" aria-pressed="false">blind round</button><button data-v="debate" aria-pressed="false">debating</button><button data-v="verdict" aria-pressed="true">verdict</button></span></div>
+  </div>
+
+  <section class="study">
+    <header><span class="tag">CHAT</span><h2>Soft fill, square</h2></header>
+    <div class="term" data-view="chat"></div>
+  </section>
+
+  <section class="study">
+    <header><span class="tag">ACTIVITY</span><h2>Ticker with finished history</h2></header>
+    <div class="term" data-view="activity"></div>
+  </section>
+
+  <hr>
+
+  <section class="study">
+    <header><span class="tag">NARRATOR</span><h2>epic and council</h2><span class="sub">80×24. Rail for epic, Weave for council.</span></header>
+    <div class="pair"><div><h3>epic</h3><div class="term" data-view="epic"></div></div><div><h3>council</h3><div class="term" data-view="council"></div></div></div>
+  </section>
+</main>
+
+<script>
+(function(){
+  var qs=new URLSearchParams(typeof location!=='undefined'?location.search:'');
+  var st={theme:qs.get('theme')||'dark',cols:100,rows:34,scene:qs.get('scene')||'idle',mode:qs.get('mode')||'auto',cs:qs.get('cs')||'verdict',tick:0};
+  if(qs.get('size')){var sp0=qs.get('size').split('x');st.cols=+sp0[0];st.rows=+sp0[1]}
+  var T=function(t,c){return {t:t,c:c||''}};
+  var len=function(l){var n=0;l.forEach(function(x){n+=x.t.length});return n};
+  var rep=function(ch,n){return n>0?new Array(Math.floor(n)+1).join(ch):''};
+  var pad=function(l,w,c){var n=w-len(l);return n>0?l.concat([T(rep(' ',n),c)]):l};
+  var cls=function(l,c){return l.map(function(x){return T(x.t,((x.c||'')+' '+c).trim())})};
+  var blank=function(){return [T('')]};
+
+  /* tiny markup: {class|text} */
+  function mk(s){var o=[],re=/\{([^|}]*)\|([^}]*)\}/g,i=0,m;
+    while((m=re.exec(s))){if(m.index>i)o.push(T(s.slice(i,m.index)));o.push(T(m[2],m[1]));i=re.lastIndex}
+    if(i<s.length)o.push(T(s.slice(i)));return o}
+
+  /* ---------- badges: faces per state (005a §4), animated by tick ---------- */
+  var COLOR={orchestrator:'',architect:'arch',builder:'build','red-team':'red',strategist:'strat',scout:'scout'};
+  var ORDER=['orchestrator','architect','builder','red-team','strategist','scout'];
+  function cells(role,state,tick){
+    var sc=role==='scout',blink=(tick%9===8);
+    if(state==='thinking')return sc?(tick%2?'  …':'…  '):(tick%2?' ••':'•• ');
+    if(state==='working')return sc?'···':'•─•';
+    if(state==='waiting')return 'x?x';
+    if(state==='success')return sc?'^^^':'^─^';
+    if(blink)return sc?'---':'-_-';
+    return sc?'•••':'•_•';
+  }
+  function badge(role,state,w){
+    var t=[T('⟦'+cells(role,state||'idle',st.tick)+'⟧',COLOR[role]),T(' '),T(role,(COLOR[role]+' b').trim())];
+    return w?pad(t,w):t;
+  }
+  var bdg=function(role){return [T('⟦'+cells(role,'idle',0)+'⟧',COLOR[role]),T(' '),T(role,(COLOR[role]+' b').trim())]};
+  function strip(states){
+    var s=[];ORDER.forEach(function(r,i){if(i)s.push(T(' '));s.push(T('⟦'+cells(r,(states||{})[r]||'idle',st.tick)+'⟧',COLOR[r]))});return s}
+
+  var SEP=function(){return T('  ·  ','dim')};
+  var DOTS=function(n,total){var s=[];for(var i=0;i<total;i++){s.push(i===n?'●':'○')}return s.join(' ')};
+  var DOT=function(){return st.tick%2?'○':'●'};
+
+  /* ---------- console chrome (chat, activity): strip, one blank row, title ---------- */
+  function consoleFrame(W,H,pane,states,body,spinner,dotsAt){
+    var out=[strip(states),[T('delphi v0.5 · ~/projects/app · '+pane,'dim')],blank()];
+    var foot=[spinner||blank(),[T(rep('─',W),'rule')],[T('❯ ','acc b')],[T(rep('─',W),'rule')]];
+    var modeSpan=st.mode==='auto'?T('auto','auto'):(st.mode==='accept-edits'?T('accept-edits',''):T('default','dim'));
+    var left=[T('12.4k tokens','dim'),SEP(),modeSpan];
+    var right=[T('← / ? →','dim'),SEP(),T(DOTS(dotsAt,3),'dim')];
+    foot.push(left.concat([T(rep(' ',W-len(left)-len(right)))],right));
+    var bodyH=H-out.length-foot.length,b=body.slice();
+    if(b.length>bodyH)b=b.slice(b.length-bodyH);else while(b.length<bodyH)b.push(blank());
+    return out.concat(b,foot);
+  }
+
+  /* ---------- chat: square soft fill, label above ---------- */
+  function wrap(text,w){var words=text.split(' '),lines=[],cur='';
+    words.forEach(function(wd){if((cur+' '+wd).trim().length>w){lines.push(cur);cur=wd}else cur=(cur+' '+wd).trim()});
+    if(cur)lines.push(cur);return lines}
+  function bubble(W,o){
+    var maxW=Math.floor(W*0.8),maxC=maxW-2,op=o.kind==='op',rows=[];
+    o.items.forEach(function(it){
+      if(typeof it==='string'){wrap(it,maxC).forEach(function(s){rows.push([T(s,op?'dim':'')])})}else rows.push(it)});
+    var label=op?[T('you','dim'),T(' · '+o.time,'dim')]:bdg(o.role).concat([T(' · '+o.time,'dim')]);
+    var inner=0;rows.forEach(function(r){inner=Math.max(inner,len(r))});
+    var cw=Math.min(maxC,Math.max(inner,len(label)-2,12)),bw=cw+2,lead=op?W-bw:0,out=[];
+    out.push([T(rep(' ',lead))].concat(label));
+    out.push([T(rep(' ',lead)),T(rep(' ',bw),'capt')]);
+    rows.forEach(function(r){out.push([T(rep(' ',lead))].concat(cls([T(' ')].concat(pad(r,cw),[T(' ')]),'tint')))});
+    out.push([T(rep(' ',lead)),T(rep(' ',bw),'capb')]);
+    return out;
+  }
+  function chat(){
+    var W=st.cols,H=st.rows,s=st.scene==='stream',L=[];
+    var add=function(a){a.forEach(function(l){L.push(l)})};
+    add(bubble(W,{kind:'op',time:'09:00:01',items:['Should the retry queue be a table or a file?']}));L.push(blank());
+    add(bubble(W,{kind:'ag',role:'architect',time:'09:00:05',items:[
+      'A table gives indexes and transactions, so a claim is atomic and the audit trail is one query away. A file needs a lock file and careful fsync ordering.',
+      [T('')],[T('• atomic claims')],[T('• easy audit')],
+      [T('→ read_file(specs/003-collaboration.md) ','dim'),T('✔','ok')]]}));L.push(blank());
+    add(bubble(W,{kind:'op',time:'09:03:38',items:['Now write it.']}));L.push(blank());
+    add(bubble(W,{kind:'ag',role:'builder',time:'09:03:40',items:[
+      'Starting in a worktree. Tests first.',
+      [T('→ write_file(crates/queue.rs) ','dim'),T(s?'…':'✔',s?'dim':'ok')],
+      s?[T('Schema and claim loop are in, running the su'),T('▊','acc')]:'Schema and claim loop are in. The suite passes: 14 of 14.']}));
+    return consoleFrame(W,H,'chat',s?{builder:'working'}:{},L,s?[T('⠹ builder · writing crates/queue.rs','dim')]:blank(),1);
+  }
+
+  /* ---------- activity ticker: messages use the full width ---------- */
+  function activity(){
+    var W=st.cols,H=st.rows,B=[],tw=W-6;
+    B.push([T('  ↑ 4 earlier · pgup','dim')]);B.push(blank());
+    var fin=function(role,what){return mk('  {chip-ok| ✔ finished }  ').concat(bdg(role),[T(' · '+what,'dim')])};
+    B.push(fin('architect','answered "table or file?" · 4s'));B.push(blank());
+    B.push(fin('builder','wrote crates/queue.rs · 12s'));B.push(blank());
+    B.push(fin('red-team','audited the schema · 21s'));
+    B.push(blank());
+    B.push([T('  ')].concat(badge('orchestrator','thinking'),[T(' · thinking · 00:12','dim')]));
+    wrap('The question is whether claims need transactional guarantees. A table gives row locks for free; a file needs a lock file and careful fsync ordering. Leaning table, but check what 003 already decided about the audit trail before committing to it.',tw).forEach(function(t){B.push([T('    '+t,'dim i')])});
+    B.push(blank());
+    B.push([T('  ')].concat(badge('architect','working'),[T(' · → read_file(specs/003-collaboration-and-council.md) …','dim')]));
+    B.push(blank());
+    B.push([T('  ')].concat(badge('builder','working'),[T(' · writing · 00:04','dim')]));
+    B.push([T('    fn claim(id: u64) -> Result<(), Error> {')]);
+    B.push([T('        let row = tx.select_for_update(id)?;'),T('▊','acc')]);
+    var spin=[T('◐ working · 12s · 3 tasks','dim')];
+    spin=spin.concat([T(rep(' ',W-len(spin)-11)),T('esc to stop','dim')]);
+    return consoleFrame(W,H,'activity',{orchestrator:'thinking',architect:'working',builder:'working'},B,spin,0);
+  }
+
+  /* ---------- narrator chrome: faces only, no spend, arrows only ---------- */
+  var NW=80,NH=24,VIEWS=6;
+  function nframe(viewName,idx,states,body,leftStatus,anchorRight){
+    var out=[strip(states),[T('delphi v0.5 · '+viewName,'dim')],blank()];
+    var foot=[[T(rep('─',NW),'rule')]];
+    var left=[T(leftStatus,'dim'),SEP(),T('14.2k tokens','dim')];
+    var right=[T('← →','dim'),SEP(),T(DOTS(idx,VIEWS),'dim')];
+    foot.push(left.concat([T(rep(' ',NW-len(left)-len(right)))],right));
+    var bodyH=NH-out.length-foot.length,b=body.slice();
+    if(b.length>bodyH){console.warn('narrator body too tall',viewName,b.length,bodyH);b=b.slice(0,bodyH)}
+    while(b.length<bodyH)b.push(blank());
+    if(anchorRight)b[bodyH-1]=[T(rep(' ',NW-len(anchorRight)-1))].concat(anchorRight,[T(' ')]);
+    return out.concat(b,foot);
+  }
+  function slotBar(left,right){
+    var l=cls(mk(left),'wtint'),r=cls(mk(right),'wtint');
+    return l.concat([T(rep(' ',NW-len(l)-len(r)),'wtint')],r);
+  }
+  var needsYou=function(){return slotBar('{warn b| ▼ needs you}{|   approve the schema change in t_0003}','{dim|answer in the console }')};
+  var calm=function(){return mk('{ok| ✔}{dim| nothing needs you}')};
+
+  /* ---------- epic (Rail) ---------- */
+  var NOW=30,R=58;
+  function railRow(glyph,gc,name,segs,hot){
+    var c=[],i;for(i=0;i<R;i++)c.push([' ','']);
+    segs.forEach(function(s){for(i=s[0];i<=s[1];i++)c[i]=[s[2],s[3]]});
+    if(c[NOW][0]===' ')c[NOW]=['┆','rule'];
+    var sp=[],cur=null;c.forEach(function(x){if(cur&&cur.c===x[1])cur.t+=x[0];else{cur=T(x[0],x[1]);sp.push(cur)}});
+    return [T(' '),T(glyph,gc),T(' '),T(name+rep(' ',19-name.length),hot?'b':'')].concat(sp);
+  }
+  function epic(){
+    var B=[needsYou(),blank()];
+    var ax=rep(' ',R).split('');
+    var put=function(s,at){for(var i=0;i<s.length;i++)ax[at+i]=s[i]};
+    put('earlier',0);put('now',NOW-1);put('later',R-5);
+    B.push([T(rep(' ',22)),T(ax.join(''),'dim')]);
+    B.push(railRow('✔','ok','schema',[[3,17,'━','dim']]));
+    B.push(railRow('✔','ok','claim loop',[[10,20,'━','dim'],[21,21,'╮','dim']]));
+    B.push(railRow('▶','acc','retry queue',[[21,21,'╰','dim'],[22,29,'━','acc'],[30,30,'●','acc'],[31,41,'═','warn'],[42,42,'╮','warn']],true));
+    B.push(railRow('○','dim','audit',[[42,42,'╰','warn'],[43,50,'═','warn'],[51,51,'╮','warn']]));
+    B.push(railRow('○','dim','merge',[[51,51,'╰','warn'],[52,56,'═','warn'],[57,57,'▸','warn']]));
+    B.push(railRow('○','dim','docs',[[31,46,'╌','dim']]));
+    B.push(blank());
+    B.push(mk(' {dim|now   }{build|'+'⟦'+cells('builder','working',0)+'⟧} builder is writing crates/queue.rs, 12 of 14 tests green'));
+    B.push(mk(' {dim|next  }{red|⟦-_-⟧} red-team audits the commit, then the merge'));
+    B.push(mk(' {warn|path  }retry queue → audit → merge  {dim|about 11 min}'));
+    return nframe('epic',1,{orchestrator:'thinking',builder:'working'},B,'2 running',mk('{dim|pace  }{acc|▁▂▃▅▆▇█▇▅▄▃▂}'));
+  }
+
+  /* ---------- council (Weave), three live states ---------- */
+  function card(w,rows,hot){
+    var a=hot?'2':'',out=[[T(rep(' ',w),'capt'+a)]];
+    rows.forEach(function(r){out.push(cls([T(' ')].concat(pad(r,w-2),[T(' ')]),'tint'+a))});
+    out.push([T(rep(' ',w),'capb'+a)]);return out;
+  }
+  var join=function(parts){var o=[];parts.forEach(function(p){o=o.concat(p)});return o};
+  function track(cs){
+    var idx={blind:0,debate:1,verdict:2}[cs],names=['blind','debate','verdict'],t=[T(' round   ','dim')];
+    names.forEach(function(n,i){
+      var done=i<idx||cs==='verdict';
+      t.push(done?T('✔ ','ok'):(i===idx?T(DOT()+' ','acc'):T('○ ','dim')));
+      t.push(T(n,i===idx&&cs!=='verdict'?'b':'dim'));
+      if(i<2)t.push(T(' '+rep(i<idx?'━':'╌',9)+' ',i<idx?'ok':'dim'));
+    });
+    var right=cs==='verdict'?[T('done 00:48 ','dim')]:[T((cs==='blind'?'00:19':'00:34')+' ','dim')];
+    return t.concat([T(rep(' ',NW-len(t)-len(right)))],right);
+  }
+  var SHUT=function(n,solid){var s='';for(var i=0;i<n;i++)s+=solid?'▓':'░▒'[i%2];return s};
+  var PEOPLE=[
+    {role:'architect',stance:'table',why:['atomic claims and a','one-query audit']},
+    {role:'strategist',stance:'table',why:['a table is already','the house pattern']},
+    {role:'scout',stance:'file',why:['a file needs no','migration']}];
+  function council(){
+    var cs=st.cs,B=[calm(),blank()];
+    B.push(mk(' {dim|question}  {b|Should the retry queue be a table or a file?}'));
+    B.push(track(cs));B.push(blank());
+    var CW=24,states={};
+    var cards=PEOPLE.map(function(p,i){
+      var rows=[badge(p.role,'idle')],hot=false;
+      if(cs==='blind'){
+        var done=i<2;
+        rows[0]=badge(p.role,done?'idle':'thinking');
+        rows.push([T('sealed','dim')]);
+        rows.push(done?[T('✔ answered '+(i?'00:11':'00:09'),'ok')]:[T(DOT()+' thinking 00:19','acc')]);
+        rows.push([T(SHUT(20,done),done?'dim':'acc')]);
+        rows.push([T(SHUT(14,done),done?'dim':'acc')]);
+        hot=!done;states[p.role]=done?'idle':'thinking';
+      }else if(cs==='debate'){
+        var speaking=p.role==='scout';
+        rows[0]=badge(p.role,speaking?'working':'idle');
+        rows.push([T(p.stance,'b')]);
+        rows.push(speaking?[T(DOT()+' answering architect','acc')]:[T(p.role==='architect'?'listening':'waiting','dim')]);
+        if(speaking){rows.push([T('migration cost is zero','dim i')]);rows.push([T('but the lock file…','dim i'),T('▊','acc')])}
+        else{rows.push([T(p.why[0],'dim')]);rows.push([T(p.why[1],'dim')])}
+        hot=speaking;if(speaking)states[p.role]='working';
+      }else{
+        rows[0]=badge(p.role,'success');
+        rows.push([T(p.stance,'b')]);
+        rows.push(p.stance==='file'?[T('✔ dissent noted','warn')]:[T('✔ agreed','ok')]);
+        rows.push([T(p.why[0],'dim')]);rows.push([T(p.why[1],'dim')]);
+        states[p.role]='success';
+      }
+      return card(CW,rows,hot);
+    });
+    for(var i=0;i<cards[0].length;i++)B.push(join([[T('  ')],pad(cards[0][i],CW),[T('  ')],pad(cards[1][i],CW),[T('  ')],pad(cards[2][i],CW)]));
+    B.push(blank());
+    var meter={blind:'▰▰▰▰▰▰▰▱▱▱',debate:'▰▰▰▰▰▰▰▰▱▱',verdict:'▰▰▰▰▰▰▰▰▰▰'}[cs];
+    var v={blind:[mk('{b|verdict}   {dim|sealed until all three answer}'),mk('{dim|2 of 3 answered}  {acc|'+meter+'}')],
+           debate:[mk('{b|verdict}   {dim|none yet · round 2 of 3}'),mk('{dim|positions}  table 2 · file 1   {dim|scout is replying}')],
+           verdict:[mk('{b|verdict}   table   {dim|2 of 3 · one round}'),mk('{dim|agreement}  {ok|'+meter+'}   {dim|minority: scout, noted}')]}[cs];
+    card(76,v).forEach(function(l){B.push([T('  ')].concat(l))});
+    var strips={blind:{architect:'idle',strategist:'idle',scout:'thinking'},debate:{scout:'working'},verdict:{architect:'success',strategist:'success',scout:'success'}}[cs];
+    return nframe('council',0,strips,B,'3 agents');
+  }
+
+  var VIEWFN={chat:chat,activity:activity,epic:epic,council:council};
+
+  function html(lines){
+    return lines.map(function(l){
+      return '<div class="ln">'+l.map(function(x){
+        var t=x.t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/[⟦⟧✔▶▰▱◐▸→←↑●○▼▎⠹░▒▓]/g,'<i class="g">$&</i>');
+        return '<span'+(x.c?' class="'+x.c+'"':'')+'>'+t+'</span>';
+      }).join('')+'</div>';
+    }).join('');
+  }
+  function draw(){
+    var els=document.querySelectorAll('.term');
+    for(var i=0;i<els.length;i++){
+      var el=els[i];el.setAttribute('data-t',st.theme);
+      el.innerHTML=html(VIEWFN[el.getAttribute('data-view')]());
+    }
+  }
+  function wire(id,fn){
+    var seg=document.getElementById(id);
+    seg.addEventListener('click',function(e){
+      var b=e.target.closest('button');if(!b)return;
+      seg.querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false')});
+      fn(b.getAttribute('data-v'));draw();
+    });
+  }
+  if(typeof document!=='undefined'){
+    var shot=qs.get('shot');
+    if(shot){
+      document.body.className='shot';
+      var page=document.getElementById('page');
+      var keep=document.querySelector('.term[data-view="'+shot+'"]');
+      document.body.appendChild(keep);page.remove();
+      document.body.style.background=st.theme==='light'?'#fbfaf7':'#15171c';
+      draw();
+    }else{
+      wire('c-theme',function(v){st.theme=v});
+      wire('c-size',function(v){var p=v.split('x');st.cols=+p[0];st.rows=+p[1]});
+      wire('c-scene',function(v){st.scene=v});
+      wire('c-mode',function(v){st.mode=v});
+      wire('c-cs',function(v){st.cs=v});
+      draw();
+      if(!window.matchMedia||!window.matchMedia('(prefers-reduced-motion: reduce)').matches)setInterval(function(){st.tick++;draw()},600);
+    }
+  }else{
+    module.exports={VIEWFN:VIEWFN,st:st,len:len};
+  }
+})();
+</script>

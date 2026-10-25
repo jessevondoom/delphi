@@ -9,8 +9,8 @@
 #   --no-setup                               do not offer to run `delphi setup` afterwards
 # Maintainers / mirrors: DELPHI_API (releases API base) and DELPHI_DOWNLOAD (asset base URL) override the defaults.
 #
-# The download is checked against its published SHA-256. Set DELPHI_VERIFY_ATTESTATION=1 (needs the `gh` CLI)
-# to also verify the build-provenance attestation.
+# The download is checked against its published SHA-256 and its build-provenance attestation (needs the `gh` CLI,
+# signed in). Without gh the install stops; DELPHI_SKIP_ATTESTATION=1 accepts the checksum alone.
 set -eu
 
 REPO="jessevondoom/delphi"
@@ -81,17 +81,18 @@ say "Checksum OK."
 
 # The checksum only proves the download is intact: it comes from the same place as the file. The real check is the
 # build-provenance attestation (made by this repo's release workflow), which `gh` can verify. If gh is installed and
-# signed in, it is verified and a failure stops the install. Otherwise you are told, plainly, what was not checked.
+# signed in, it is verified and a failure stops the install. Without gh the install stops too, because a checksum
+# alone cannot tell you who built the file; DELPHI_SKIP_ATTESTATION=1 is the explicit, noisy way past that.
 if [ "${DELPHI_INSECURE_TEST:-0}" = "1" ]; then
   say "WARNING: DELPHI_INSECURE_TEST=1, so the attestation is not checked."
 elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh attestation verify "$tmp/$name" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/release.yml" >/dev/null 2>&1 \
     || die "the build-provenance attestation did not verify; this download was not built by the release workflow. Nothing was installed."
   say "Attestation OK (built by the release workflow)."
-elif [ "${DELPHI_VERIFY_ATTESTATION:-0}" = "1" ]; then
-  die "DELPHI_VERIFY_ATTESTATION=1 needs the gh CLI, signed in (gh auth login)"
+elif [ "${DELPHI_SKIP_ATTESTATION:-0}" = "1" ]; then
+  say "WARNING: DELPHI_SKIP_ATTESTATION=1, so only the checksum was verified. It cannot tell you who built this file."
 else
-  say "Note: only the checksum was verified. Install and sign in to the gh CLI to also verify who built this."
+  die "cannot verify who built this download: the gh CLI is missing or not signed in (install it, then gh auth login). To install on the checksum alone, run again with DELPHI_SKIP_ATTESTATION=1. Nothing was installed."
 fi
 
 # Extract exactly two paths (the program and its full-screen console), and only if they are regular files.

@@ -44,6 +44,10 @@ pub const PROVIDER: &str = "anthropic";
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub approval_timeout: Duration,
+    /// `[away] approval_park_max_sec`: how long a card may stay outstanding across re-raises (`specs/014` §3).
+    /// A card that times out is still denied and its id is dead, but the task is not failed: a fresh card with a
+    /// new id is raised, and nothing is spent while it waits. Zero (the default) means a timeout ends the wait.
+    pub approval_park_max: Duration,
     /// Output budget per call, raised to leave room above the thinking budget.
     pub max_tokens: u64,
     pub max_dispatch_depth: u32,
@@ -75,12 +79,28 @@ pub struct Settings {
     /// How long a "run on a weaker model?" card waits for the operator. No answer is not a no: the task
     /// looks again (the target may be back) and asks again if not.
     pub degrade_wait: Duration,
+    /// `[optimistic] review_wait_sec`: how long a finished optimistic build waits for the operator to review its
+    /// provisional decisions before it stops and keeps its branch (`specs/015`).
+    pub decision_review_wait: Duration,
+    /// `[optimistic] approver`: who decides a provisional card (`specs/015` §3). The Strategist by default.
+    pub approver: crate::provisional::ApproverKind,
+    /// `[optimistic] second_seat`: a second reviewer for elevated edits. Never required: with one provider there
+    /// is none to give.
+    pub second_seat: crate::provisional::SecondSeat,
+    /// `[optimistic] unseconded`: what happens to an elevated edit no second reviewer looked at.
+    pub unseconded: crate::provisional::Unseconded,
+    /// `[optimistic] max_decisions`: provisional decisions one task may make. Past it, cards go to the operator.
+    pub max_decisions: u32,
+    /// `[optimistic] max_approver_calls`: model calls (Strategist and second seat) one task may spend on decisions.
+    /// Past it, cards go to the operator.
+    pub max_approver_calls: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             approval_timeout: crate::approval::DEFAULT_TIMEOUT,
+            approval_park_max: Duration::ZERO,
             max_tokens: 8192,
             max_dispatch_depth: 2,
             mission_budget_usd: 5.0,
@@ -97,6 +117,12 @@ impl Default for Settings {
             park_poll: Duration::from_secs(5),
             park_max: None,
             degrade_wait: Duration::from_secs(300),
+            decision_review_wait: Duration::from_secs(24 * 3600),
+            approver: crate::provisional::ApproverKind::Strategist,
+            second_seat: crate::provisional::SecondSeat::CrossFamily,
+            unseconded: crate::provisional::Unseconded::Park,
+            max_decisions: 200,
+            max_approver_calls: 100,
         }
     }
 }
@@ -176,6 +202,17 @@ pub struct Engine {
     pub clock_unix: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// Per task, the weaker substitutes the operator confirmed or declined (`specs/002` §4.1). A confirmation covers that task only.
     pub(crate) degraded: Mutex<HashMap<String, DegradedTask>>,
+    /// Tasks started with `--optimistic` (`specs/015`): their eligible cards are decided provisionally and the
+    /// merge waits for the operator's review of every decision.
+    pub(crate) optimistic: Mutex<HashSet<String>>,
+    /// Woken when the operator reviews a decision, so a task waiting for review looks again at once.
+    pub(crate) decisions_changed: tokio::sync::Notify,
+    /// Durable timers (`specs/017`): wakes the daemon keeps on behalf of roles and the operator.
+    pub timers: Arc<crate::timers::TimerStore>,
+    /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
+    pub(crate) toolless: Mutex<HashSet<String>>,
+    /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
+    pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
 }
 
 /// What the operator decided about weaker substitutes for one task, as `(endpoint, model)` pairs.
@@ -211,6 +248,10 @@ pub(crate) struct Asker<'a> {
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
 
+/// The reason when the workspace has no model at all (an empty pool, no harness to fall back to). Distinct from
+/// `EXHAUSTED`: waiting would never help, and the consoles show "run delphi setup", not "throttled".
+pub(crate) const NO_MODEL: &str = "no_model_configured: no model is configured for this workspace";
+
 /// Why a span stopped without finishing; becomes `Status::Escalated`.
 pub(crate) struct Escalate(pub(crate) String);
 
@@ -241,6 +282,8 @@ pub(crate) struct SpanCtx {
     /// Families this span should stay out of if it can (from the handoff), and whether it already said it could not.
     pub(crate) avoid_families: Vec<String>,
     pub(crate) said_homogeneous: Mutex<bool>,
+    /// This span is offered no tools, and refuses any it is not offered (`provisional_run.rs`).
+    pub(crate) toolless: bool,
     /// A harness was already tried for this span (and failed for a reason that is not a spent quota, so the pool does not know).
     pub(crate) harness_tried: std::sync::atomic::AtomicBool,
 }
@@ -292,6 +335,17 @@ fn dispatch_def() -> ToolDef {
     }
 }
 
+fn timer_def() -> ToolDef {
+    ToolDef {
+        name: "timer".into(),
+        description: "Ask Delphi to wake you later. You cannot wait, sleep or watch a clock yourself: if you say you will check back and have not set a timer, nothing will happen. `set` takes `note` (why you are waking: you will read it in a new task, with nothing else carried over), and either `in_secs` (seconds from now) or `at` (an RFC 3339 time, which must still be in the future), and optionally `every_secs` (at least 60) to repeat. The result gives the real current time and the exact wake time. `list` shows your pending timers; `cancel` takes the `id` of one you set. A timer wakes you, and only you.".into(),
+        input_schema: json!({"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["set", "list", "cancel"]},
+            "note": {"type": "string"}, "in_secs": {"type": "integer", "minimum": 1}, "at": {"type": "string"},
+            "every_secs": {"type": "integer", "minimum": 60}, "id": {"type": "string"}}}),
+    }
+}
+
 impl Engine {
     pub(crate) fn now(&self) -> String {
         (self.clock)()
@@ -324,10 +378,16 @@ impl Engine {
     /// As [`Engine::run_task`] for a task id the caller already allocated (so it can be reported
     /// to the console before the task finishes).
     pub async fn run_task_with_id(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
-        self.start_task(m, task_id, target, prompt, true).await
+        self.start_task(m, task_id, target, prompt, true, None).await
     }
 
-    async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool) -> Result<TaskOutcome, EngineError> {
+    /// A task started by a timer (`specs/017`): it begins at the trust ceiling of whoever set the timer, so waiting
+    /// cannot turn a note written under untrusted input into a clean instruction.
+    pub async fn run_task_woken(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, ceiling: delphi_core::provenance::Tier) -> Result<TaskOutcome, EngineError> {
+        self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("timer", ceiling))).await
+    }
+
+    async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         if target == "builder" {
             // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
@@ -343,7 +403,7 @@ impl Engine {
             m.append(created).await?;
         }
         self.reprobe_due(m).await?;
-        let outcome = self.run_span(m, &task_id, handoff, None, 0).await;
+        let outcome = self.run_span(m, &task_id, handoff, parent, 0).await;
         self.broker.end_task(&task_id);
         self.degraded.lock().unwrap().remove(&task_id);
         self.finish_task(m, task_id, outcome?).await
@@ -421,7 +481,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false) };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id) };
 
             if fresh {
                 let mut open = vec![
@@ -486,10 +546,16 @@ impl Engine {
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") {
                 defs.push(dispatch_def());
             }
+            if sc.manifest.execute.iter().any(|e| e == "timers") {
+                defs.push(timer_def());
+            }
             if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
                 defs.push(run_command_def());
             }
             defs.extend(self.connector_defs(&sc).await?);
+            if sc.toolless {
+                defs.clear();
+            }
 
             let mut turns = history.iter().filter(|t| t.role == delphi_adapter::blocks::Role::Assistant).count() as u32;
             // A family whose first allowed endpoint is a harness runs the whole span in the subscription CLI
@@ -696,7 +762,7 @@ impl Engine {
         self.reprobe_due(m).await?;
         let Some(root) = t.root_span.clone() else {
             // It never started a span: run it from the saved request.
-            return self.start_task(m, task_id.to_string(), &t.target, &t.prompt, false).await;
+            return self.start_task(m, task_id.to_string(), &t.target, &t.prompt, false, None).await;
         };
         let st = rec.spans.get(&root).ok_or_else(|| EngineError::Invalid(format!("no recorded span `{}`", root)))?;
         let outcome = match &st.status {
@@ -778,6 +844,7 @@ impl Engine {
                     }
                     (key.clone(), Some((target.clone(), format!("{}; confirmed by the operator, with {}", why, lost.join(" and ")))))
                 }
+                Route::NoModel { .. } if cfg.pool_entries().is_empty() => return Ok(Err(Escalate(NO_MODEL.to_string()))),
                 Route::NoModel { back_at, .. } => {
                     *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: route.explain(now) });
                     return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now)))));
@@ -1029,6 +1096,9 @@ impl Engine {
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
     async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
+        if sc.toolless {
+            return Ok(tool_result_error("this span answers in text only; it has no tools"));
+        }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;
         }
@@ -1038,6 +1108,13 @@ impl Engine {
                 return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
+        }
+        if name == "timer" {
+            // As with dispatch: the schema is only offered to roles that may set timers; a forged call is refused here.
+            if !sc.manifest.execute.iter().any(|e| e == "timers") {
+                return Ok(tool_result_error("this role's manifest does not authorize timers"));
+            }
+            return self.exec_timer(sc, args).await;
         }
         if let Some((connector, tool)) = self.connectors.parse_wire(name) {
             return self.exec_connector(sc, call_id, &connector, &tool, args).await;
@@ -1054,7 +1131,7 @@ impl Engine {
             }
         }
         if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
-            if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
+            if let Some(denied) = self.ask_classified(sc, tier, &c).await? {
                 return Ok(denied);
             }
         }
@@ -1203,6 +1280,34 @@ impl Engine {
         Ok(tools::ToolResult { content: text, is_error })
     }
 
+    /// As [`Engine::ask`] for a classified tool call. In an optimistic task an eligible call is decided provisionally
+    /// (`provisional.rs`) instead of raising a card; anything else, and every other task, asks as before.
+    pub(crate) async fn ask_classified(self: &Arc<Self>, sc: &SpanCtx, tier: ApprovalTier, c: &tools::Classified) -> Result<Option<tools::ToolResult>, EngineError> {
+        if self.optimistic.lock().unwrap().contains(sc.task_id.as_str()) && crate::provisional::eligible(c, tier) {
+            let id = crate::provisional::new_decision_id();
+            if let crate::provisional_run::Provisional::Decided(verdict) = self.decide_provisionally(sc, c, &id).await? {
+                sc.m.append(sc.ev("decision.provisional", crate::provisional::decision_event(&id, c, tier, &verdict, &sc.role))).await?;
+                return Ok(if verdict.allow {
+                    None
+                } else {
+                    Some(tool_result_error(format!("This action was refused ({}). Do not retry it; propose an alternative or ask.", verdict.rationale)))
+                });
+            }
+            // Not decided (no usable answer, or the reviewers disagreed): the operator is asked, as without the mode.
+        }
+        self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await
+    }
+
+    /// Mark a task optimistic. Refused unless the OS sandbox is on: everything an optimistic task does happens
+    /// before the operator's review, and a worktree is not a sandbox (GOVERNANCE).
+    pub fn mark_optimistic(&self, task_id: &str) -> Result<(), String> {
+        if self.exec.sandbox.is_none() {
+            return Err("optimistic mode needs the OS sandbox, and none is available on this machine (everything it does runs before you review it)".into());
+        }
+        self.optimistic.lock().unwrap().insert(task_id.to_string());
+        Ok(())
+    }
+
     /// Raise an approval card and wait for the answer. `None` means approved; `Some(result)` is the denial
     /// the model sees.
     pub(crate) async fn ask(&self, sc: &SpanCtx, tier: ApprovalTier, tool: &str, pattern: &str, summary: &str, payload: &Value) -> Result<Option<tools::ToolResult>, EngineError> {
@@ -1229,19 +1334,39 @@ impl Engine {
             e.agent = Some(who.role.to_string());
             e
         };
-        let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: timeout.unwrap_or(self.settings.approval_timeout) };
-        let waiting = self.broker.request(req);
-        let id = waiting.approval_id.clone();
-        if let Some(raised) = self.broker.get(&id) {
-            who.m.append(ev("approval.requested", raised.event_payload())).await?;
+        let base_timeout = timeout.unwrap_or(self.settings.approval_timeout);
+        let started = std::time::Instant::now();
+        let mut reraised_from: Option<String> = None;
+        loop {
+            let req = Request { approval_id: String::new(), task_id: who.task_id.to_string(), span_id: who.span_id.to_string(), role: who.role.to_string(), tier, tool: tool.into(), pattern: pattern.into(), worktree: None, summary: summary.into(), payload: payload.clone(), payload_blake3: payload_blake3(payload), timeout: base_timeout };
+            let waiting = self.broker.request(req);
+            let id = waiting.approval_id.clone();
+            if let Some(raised) = self.broker.get(&id) {
+                let mut p = raised.event_payload();
+                if let Some(prev) = &reraised_from {
+                    p["reraised_from"] = json!(prev);
+                }
+                who.m.append(ev("approval.requested", p)).await?;
+            }
+            let resolution = waiting.wait().await;
+            // The log says who actually answered: a console client, or a relay and the sender it vouched for.
+            let by = match &resolution {
+                Resolution::TimedOut => "timeout".to_string(),
+                _ => self.broker.resolved_by(&id).unwrap_or_else(|| "console".to_string()),
+            };
+            who.m.append(ev("approval.resolved", resolution.event_payload(&id, &by))).await?;
+            // Away mode: the timed-out card stays denied (its id is dead, so a late answer cannot revive it), but
+            // the task waits on a fresh card instead of being told no, until the park window is used up.
+            if matches!(resolution, Resolution::TimedOut) && !self.settings.approval_park_max.is_zero() {
+                let parked = started.elapsed();
+                if parked + base_timeout <= self.settings.approval_park_max {
+                    who.m.append(ev("approval.parked", json!({"approval_id": id, "parked_secs": parked.as_secs(), "park_max_secs": self.settings.approval_park_max.as_secs()}))).await?;
+                    reraised_from = Some(id);
+                    continue;
+                }
+            }
+            return Ok(resolution);
         }
-        let resolution = waiting.wait().await;
-        let by = match &resolution {
-            Resolution::TimedOut => "timeout",
-            _ => "console",
-        };
-        who.m.append(ev("approval.resolved", resolution.event_payload(&id, by))).await?;
-        Ok(resolution)
     }
 
     /// A dispatched child's report as the parent's tool result.
@@ -1251,6 +1376,53 @@ impl Engine {
             text = format!("{}\n(the {} did not finish: {})", text, role, r);
         }
         tools::ToolResult { content: text, is_error: matches!(status, NodeStatus::Escalated(_)) }
+    }
+
+    /// The `timer` tool: set, list or cancel this role's wakes (`specs/017`). Every change is logged in the span, so the
+    /// operator can see what each role has promised to come back to.
+    async fn exec_timer(self: &Arc<Self>, sc: &mut SpanCtx, args: &Value) -> Result<tools::ToolResult, EngineError> {
+        use crate::timers::{relative, NewTimer};
+        let now = (self.clock_unix)();
+        let at = |t: i64| delphi_core::time::format_unix_millis(t, 0).replace(".000Z", "Z");
+        match args["action"].as_str() {
+            Some("set") => {
+                let at_unix = match args["at"].as_str() {
+                    Some(s) => match delphi_core::time::parse_rfc3339(s) {
+                        Some(t) => Some(t),
+                        None => return Ok(tool_result_error(format!("`at` must be an RFC 3339 time such as {}; it is now {}", at(now + 600), at(now)))),
+                    },
+                    None => None,
+                };
+                let req = NewTimer { mission_id: sc.m.id.clone(), target: sc.role.clone(), note: args["note"].as_str().unwrap_or("").into(), creator: sc.role.clone(), ceiling: sc.span.ceiling().as_str().into(), in_secs: args["in_secs"].as_i64(), at_unix, every_secs: args["every_secs"].as_i64() };
+                match self.timers.set(req, now) {
+                    Ok(t) => {
+                        sc.m.append(sc.ev("timer.set", t.to_json())).await?;
+                        let every = t.every_secs.map(|e| format!(", then every {}s", e)).unwrap_or_default();
+                        Ok(tools::ToolResult { content: format!("timer {} set. It is now {}. You will be woken as `{}` at {} ({}){}. That wake is a new task: you will not be running in between, and you will see only your note: \"{}\"", t.id, at(now), t.target, at(t.due_unix), relative(t.due_unix, now), every, t.note), is_error: false })
+                    }
+                    Err(e) => Ok(tool_result_error(e.0)),
+                }
+            }
+            Some("list") => {
+                let mine: Vec<_> = self.timers.pending().into_iter().filter(|t| t.creator == sc.role).collect();
+                let mut out = format!("It is now {}. ", at(now));
+                if mine.is_empty() {
+                    out.push_str("You have no pending timers.");
+                }
+                for t in mine {
+                    out.push_str(&format!("\n{}  {} ({}){}  \"{}\"", t.id, at(t.due_unix), relative(t.due_unix, now), t.every_secs.map(|e| format!(" every {}s", e)).unwrap_or_default(), t.note));
+                }
+                Ok(tools::ToolResult { content: out, is_error: false })
+            }
+            Some("cancel") => match self.timers.cancel(args["id"].as_str().unwrap_or(""), &sc.role) {
+                Ok(t) => {
+                    sc.m.append(sc.ev("timer.cancelled", t.to_json())).await?;
+                    Ok(tools::ToolResult { content: format!("timer {} cancelled", t.id), is_error: false })
+                }
+                Err(e) => Ok(tool_result_error(e.0)),
+            },
+            _ => Ok(tool_result_error("`action` must be set, list or cancel")),
+        }
     }
 
     async fn exec_dispatch(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
@@ -1936,6 +2108,19 @@ mod tests {
         assert_eq!(events_of(&f, "task.unblocked").last().unwrap().payload["resumed"], false, "it gave up after park_max, however many times it asked");
     }
 
+    // specs/005e §6.2: an empty pool is "no model is configured", not "throttled", and waiting would never help.
+    #[tokio::test]
+    async fn an_empty_pool_escalates_as_no_model_configured_without_waiting() {
+        let f = setup(vec![Step::text("never asked")], 5.0, |s| s.park_max = Some(Duration::from_secs(60)));
+        let text = crate::testkit::CONFIG.split("[[endpoints]]").next().unwrap().to_string();
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        assert!(f.engine.cfg.get().pool_entries().is_empty());
+        let out = f.engine.run_task(&f.m, "orchestrator", "hello").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.starts_with("no_model_configured") && !r.contains("throttled")), "{:?}", out.status);
+        assert!(f.model.requests().is_empty(), "no call was made");
+        assert!(events_of(&f, "task.blocked").is_empty(), "it did not park waiting for a model that cannot arrive");
+    }
+
     // specs/002 §4.1, [H-007] and [H-008]: a critic stays out of the author's family, and says so when it cannot.
     #[tokio::test]
     async fn a_critic_span_stays_out_of_the_authors_family_and_says_so_when_it_cannot() {
@@ -2190,6 +2375,66 @@ mod tests {
         assert!(!g.root.join("workspaces/w/team/specs/009-new.md").exists(), "no console attached: the timeout denied it");
         assert!(g.model.requests()[1].body["messages"].to_string().contains("timed out"));
         assert_eq!(events_of(&g, "approval.resolved")[0].payload["resolution"], "timed_out");
+    }
+
+    /// The next pending card whose id is not `not`.
+    async fn next_card_after(f: &Fx, not: &str) -> Request {
+        for _ in 0..400 {
+            if let Some(r) = f.engine.broker.pending().into_iter().find(|r| r.approval_id != not) {
+                return r;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no second approval card appeared");
+    }
+
+    #[tokio::test]
+    async fn away_mode_re_raises_a_timed_out_card_under_a_new_id_and_the_old_id_stays_dead() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "# Parked\nbody"})), Step::text("Drafted.")], 5.0, |s| {
+            s.approval_timeout = Duration::from_millis(120);
+            s.approval_park_max = Duration::from_secs(30);
+        });
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let first = wait_for_card(&f).await;
+        // Nobody answers. The first card times out; the task is not failed, and a new card appears.
+        let second = next_card_after(&f, &first.approval_id).await;
+        assert_ne!(second.approval_id, first.approval_id);
+        assert_eq!(second.payload_blake3, first.payload_blake3, "it is the same action");
+        // A late answer to the dead card is refused, whoever sends it and whatever it says.
+        let late = f.engine.broker.resolve(&first.approval_id, &first.payload_blake3, Answer::Allow, "relay-email");
+        assert!(matches!(late, Err(crate::approval::ResolveError::Gone { resolution: Some(Resolution::TimedOut), .. })), "{:?}", late);
+        assert!(!f.root.join("workspaces/w/team/specs/009-park.md").exists(), "nothing ran while parked");
+        // Only the fresh card can approve it.
+        f.engine.broker.resolve(&second.approval_id, &second.payload_blake3, Answer::Allow, "relay-email").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        assert!(f.root.join("workspaces/w/team/specs/009-park.md").exists());
+        let req = events_of(&f, "approval.requested");
+        assert!(req.len() >= 2 && req.last().unwrap().payload["reraised_from"].is_string(), "the re-raise says what it replaces");
+        assert!(!events_of(&f, "approval.parked").is_empty());
+        assert_eq!(f.model.requests().len(), 2, "no model call was made while the card was parked");
+    }
+
+    #[tokio::test]
+    async fn away_mode_still_denies_once_the_park_window_is_used_up() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "x"})), Step::text("Understood.")], 5.0, |s| {
+            s.approval_timeout = Duration::from_millis(60);
+            s.approval_park_max = Duration::from_millis(200);
+        });
+        let out = f.engine.run_task(&f.m, "architect", "Draft a spec").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(!f.root.join("workspaces/w/team/specs/009-park.md").exists());
+        let asked = events_of(&f, "approval.requested").len();
+        assert!((2..=4).contains(&asked), "re-raised a few times and then stopped: {}", asked);
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("timed out"), "the model is finally told it was denied");
+        assert_eq!(events_of(&f, "approval.resolved").last().unwrap().payload["resolution"], "timed_out");
+    }
+
+    #[tokio::test]
+    async fn without_a_park_window_a_timeout_ends_the_wait_as_before() {
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "x"})), Step::text("Understood.")], 5.0, |s| s.approval_timeout = Duration::from_millis(60));
+        f.engine.run_task(&f.m, "architect", "Draft a spec").await.unwrap();
+        assert_eq!(events_of(&f, "approval.requested").len(), 1);
+        assert!(events_of(&f, "approval.parked").is_empty());
     }
 
     #[tokio::test]

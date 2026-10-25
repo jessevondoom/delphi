@@ -1,0 +1,20 @@
+⟦x_x⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi · chat
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+ Stopped: no model is
+ configured for this workspace.
+
+   delphi setup
+     connects one
+   /models
+     shows the pool and what is
+     usable
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+0 tokens  ·  default  ·  no model  ○ ● ○

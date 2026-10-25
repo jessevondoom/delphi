@@ -5,6 +5,7 @@
 //! and `local/` (`specs/006` §3.1).
 
 use crate::frontmatter::{self, get_str, ROLES};
+pub use delphi_engine::checks::{cap_errors, envelope_errors};
 use crate::report::{Level, Report};
 use crate::theme;
 use regex::Regex;
@@ -40,10 +41,7 @@ const UNSEEDED: [&str; 5] = ["specs/", "missions/", "OVERVIEW.md", "README.md", 
 /// Text files scanned for absolute home paths (REV-SEC-05).
 const TEXT_EXTS: [&str; 11] = [".md", ".toml", ".rs", ".sh", ".py", ".json", ".yaml", ".yml", ".txt", ".js", ".ts"];
 const COGNITIVE: [&str; 4] = ["deep-reasoning", "code-craft", "high-context-discovery", "fast-triage"];
-const BODY_LINE_CAP: usize = 500;
-const RULE_CHARS: usize = 350;
-const RULE_COUNT: usize = 25;
-const RULE_BYTES: usize = 6144;
+pub const BODY_LINE_CAP: usize = 500;
 
 impl Tree {
     pub fn from_repo(root: &Path) -> std::io::Result<Tree> {
@@ -241,6 +239,11 @@ fn skill_package(tree: &Tree, skill: &str) -> Option<String> {
         .find(|k| tree.files.contains_key(k))
 }
 
+/// Frontmatter of a document's text, when it has a parseable one.
+pub fn frontmatter_of(text: &str) -> Option<Mapping> {
+    frontmatter::parse(text).ok().and_then(|d| d.frontmatter)
+}
+
 pub fn load_fm(tree: &Tree, logical: &str) -> Option<Mapping> {
     tree.read(logical).and_then(|t| frontmatter::parse(&t).ok()).and_then(|d| d.frontmatter)
 }
@@ -306,7 +309,37 @@ fn check_skills(tree: &Tree, r: &mut Report) {
         if lines > BODY_LINE_CAP {
             r.fail("skill", path.clone(), format!("body is {} lines (cap {})", lines, BODY_LINE_CAP));
         }
+        let pkg = path.trim_end_matches("SKILL.md");
+        for e in skill_package_errors(&doc.body, &fm, &|rel| tree.files.contains_key(&format!("{}{}", pkg, rel))) {
+            r.fail("skill", path.clone(), e);
+        }
     }
+}
+
+/// What a `SKILL.md` promises about its own package: every `templates/` file and declared script it names exists, and
+/// every `delphi check <kind>` it tells an agent to run is a kind the binary has. `has` probes the package directory.
+pub fn skill_package_errors(body: &str, fm: &Mapping, has: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let mut errs = Vec::new();
+    let template = Regex::new(r"\btemplates/[A-Za-z0-9_.-]+").unwrap();
+    for m in template.find_iter(body) {
+        if !has(m.as_str()) {
+            errs.push(format!("names `{}`, which is not in the package", m.as_str()));
+        }
+    }
+    let check = Regex::new(r"delphi check ([a-z][a-z-]*)").unwrap();
+    for c in check.captures_iter(body) {
+        if !crate::check::KINDS.contains(&&c[1]) {
+            errs.push(format!("runs `delphi check {}`, which is not a check kind ({})", &c[1], crate::check::KINDS.join(", ")));
+        }
+    }
+    for sc in fm.get(Value::String("deterministic_scripts".into())).and_then(|v| v.as_sequence()).into_iter().flatten() {
+        if let Some(p) = sc.as_mapping().and_then(|m| get_str(m, "path")) {
+            if !has(p) {
+                errs.push(format!("declares script `{}`, which is not in the package", p));
+            }
+        }
+    }
+    errs
 }
 
 pub fn skill_errors(fm: &Mapping, dir: &str, custom: bool) -> Vec<String> {
@@ -381,7 +414,6 @@ pub fn skill_errors(fm: &Mapping, dir: &str, custom: bool) -> Vec<String> {
 
 // ── handoff envelopes (specs/001 §4) ────────────────────────────────────────
 
-const ENVELOPE_BYTES: usize = 8000; // 2,000 tokens at bytes / 4
 
 fn check_envelopes(tree: &Tree, r: &mut Report) {
     let files: Vec<String> = tree.files.keys().filter(|k| k.starts_with("missions/") && k.contains("/handoffs/") && (k.ends_with(".yaml") || k.ends_with(".yml"))).cloned().collect();
@@ -393,68 +425,6 @@ fn check_envelopes(tree: &Tree, r: &mut Report) {
     }
 }
 
-pub fn envelope_errors(text: &str) -> Vec<String> {
-    let mut errs = Vec::new();
-    if text.len() > ENVELOPE_BYTES {
-        errs.push(format!("envelope is {} bytes (cap {}, ~2,000 tokens)", text.len(), ENVELOPE_BYTES));
-    }
-    let m: Mapping = match serde_yaml::from_str(text) {
-        Ok(m) => m,
-        Err(e) => return vec![format!("not a YAML mapping: {}", e)],
-    };
-    for k in ["handoff_id", "mission_id", "parent_span_id", "caller_agent", "target_agent", "objective"] {
-        if get_str(&m, k).map(|v| v.trim().is_empty()).unwrap_or(true) {
-            errs.push(format!("missing `{}`", k));
-        }
-    }
-    for k in ["caller_agent", "target_agent"] {
-        if let Some(a) = get_str(&m, k) {
-            if !ROLES.contains(&a) {
-                errs.push(format!("{} `{}` is not a canonical role", k, a));
-            }
-        }
-    }
-    let anchor = Regex::new(r"^#L\d+(-L\d+)?$").unwrap();
-    match m.get(Value::String("context_pointers".into())).map(|v| v.as_sequence()) {
-        None | Some(None) => errs.push("context_pointers must be a list (pointer-based context, specs/001 §4)".into()),
-        Some(Some(ptrs)) => {
-            for p in ptrs {
-                let pm = p.as_mapping();
-                let uri = pm.and_then(|x| get_str(x, "uri")).unwrap_or("");
-                let (file, frag) = match uri.find('#') {
-                    Some(i) => (&uri[..i], &uri[i..]),
-                    None => (uri, ""),
-                };
-                if delphi_core::pathguard::canonical(file).is_err() {
-                    errs.push(format!("context pointer `{}` is not a workspace-relative logical path", uri));
-                }
-                if !anchor.is_match(frag) {
-                    errs.push(format!("context pointer `{}` needs a `#Lstart[-Lend]` line anchor", uri));
-                }
-                for k in ["heading", "blake3", "reason"] {
-                    if pm.and_then(|x| get_str(x, k)).map(|v| v.trim().is_empty()).unwrap_or(true) {
-                        errs.push(format!("context pointer `{}` lacks `{}`", uri, k));
-                    }
-                }
-            }
-        }
-    }
-    match m.get(Value::String("expected_output".into())).and_then(|v| v.as_mapping()) {
-        Some(eo) if get_str(eo, "artifact_type").is_some() => {}
-        _ => errs.push("expected_output.artifact_type is required".into()),
-    }
-    if let Some(rd) = m.get(Value::String("routing_directive".into())).and_then(|v| v.as_mapping()) {
-        if get_str(rd, "model_tier").is_none() {
-            errs.push("routing_directive.model_tier is required (tiers, never model IDs)".into());
-        }
-        for k in ["model", "model_id", "endpoint", "fallback_endpoint"] {
-            if rd.contains_key(Value::String(k.into())) {
-                errs.push(format!("routing_directive.{} is not allowed: models resolve from config tiers and failover follows ratified [access] order", k));
-            }
-        }
-    }
-    errs
-}
 
 /// Schema checks for one manifest. `dir` is `<id>` for built-ins or `custom/<id>` for overrides.
 pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
@@ -705,58 +675,12 @@ fn check_caps(tree: &Tree, r: &mut Report) {
         .collect();
     for path in files {
         let text = tree.read(&path).unwrap_or_default();
-        for (lvl, msg) in cap_errors(&text) {
-            r.push(lvl, "rule-caps", path.clone(), msg);
+        for msg in cap_errors(&text) {
+            r.fail("rule-caps", path.clone(), msg);
         }
     }
 }
 
-pub fn cap_errors(text: &str) -> Vec<(Level, String)> {
-    let mut out = Vec::new();
-    if text.len() > RULE_BYTES {
-        out.push((Level::Fail, format!("{} bytes exceeds the {}-byte cap", text.len(), RULE_BYTES)));
-    }
-    let doc = match frontmatter::parse(text) {
-        Ok(d) => d,
-        Err(e) => return vec![(Level::Fail, e)],
-    };
-    // A rule is a `### ` heading plus every non-blank line until the next `#`/`##`/`###` heading.
-    let mut rules: Vec<(String, Vec<String>)> = Vec::new();
-    let mut open = false;
-    for line in doc.body.lines() {
-        if let Some(h) = line.strip_prefix("### ") {
-            rules.push((h.to_string(), Vec::new()));
-            open = true;
-        } else if line.starts_with('#') {
-            open = false;
-        } else if open && !line.trim().is_empty() {
-            if let Some(last) = rules.last_mut() {
-                last.1.push(line.to_string());
-            }
-        }
-    }
-    if rules.len() > RULE_COUNT {
-        out.push((Level::Fail, format!("{} rules exceeds the Rule of {}", rules.len(), RULE_COUNT)));
-    }
-    match doc.frontmatter.as_ref().and_then(|fm| fm.get(Value::String("active_rules".into()))).and_then(|v| v.as_u64()) {
-        Some(n) if n as usize == rules.len() => {}
-        Some(n) => out.push((Level::Fail, format!("frontmatter active_rules is {} but the file has {} rules", n, rules.len()))),
-        None => out.push((Level::Fail, "frontmatter must declare `active_rules`".into())),
-    }
-    for (head, lines) in &rules {
-        let block = lines.join("\n");
-        let chars = block.chars().count();
-        if chars > RULE_CHARS {
-            out.push((Level::Fail, format!("rule `{}` is {} characters (cap {})", head, chars, RULE_CHARS)));
-        }
-        for tag in ["**T:**", "**D:**", "**F:**"] {
-            if !block.contains(tag) {
-                out.push((Level::Fail, format!("rule `{}` lacks a {} line", head, tag)));
-            }
-        }
-    }
-    out
-}
 
 // ── links and absolute paths (doctor check 5) ───────────────────────────────
 
@@ -920,23 +844,6 @@ mod tests {
         assert_eq!(errs.len(), 2, "{:?}", errs);
         assert!(errs.iter().any(|e| e.contains("`**`")));
         assert!(errs.iter().any(|e| e.contains("evil")));
-    }
-
-    #[test]
-    fn caps() {
-        let ok = "---\nactive_rules: 1\n---\n### `[H-1]` X\n- **T:** a\n- **D:** b\n- **F:** c\n";
-        assert!(cap_errors(ok).is_empty());
-        let long = ok.replace("- **D:** b", &format!("- **D:** {}", "x".repeat(400)));
-        assert!(!cap_errors(&long).is_empty());
-        let wrong_count = ok.replace("active_rules: 1", "active_rules: 2");
-        assert!(!cap_errors(&wrong_count).is_empty());
-        // Prose (not only `- ` bullets) counts toward the cap.
-        let prose = format!("{}{}\n", ok, "y".repeat(400));
-        assert!(!cap_errors(&prose).is_empty());
-        // Bullets under a later `## ` heading don't count toward the last rule.
-        let section = format!("{}## Notes\n- {}\n", ok, "z".repeat(400));
-        assert!(cap_errors(&section).is_empty(), "{:?}", cap_errors(&section));
-        assert!(!cap_errors(&ok.replace("active_rules: 1\n", "")).is_empty());
     }
 
     fn tree_of(files: &[(&str, &str)]) -> (tempfile::TempDir, Tree) {

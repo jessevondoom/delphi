@@ -47,7 +47,7 @@ You asked for items 1 to 3, then 5, 4, 6, and a review of 7 with a plan. This is
 | Direct OpenAI API driver | Keep deferred; build when you want a third family. | The dialect layer already speaks OpenAI-compatible chat; the missing parts are the family's capability probes and a catalog. Roughly a day, once there is a key to test with. |
 | Harness session resumption | Keep deferred. | A harness span is not resumable by design; Delphi resumes the *task*. Worth doing only if harness spans get long enough to hurt. |
 | Gemini Builder | Keep blocked on `gemini --acp`. | `agy` has no approval bridge and cannot disable tools, so a Builder on it is refused (by design, tested). |
-| Vectors, `/retro`, diff3, `sync`, watches, `/rewind` | Gated by `delphi needs`. | See §1, item 6. |
+| `/retro`, diff3, `sync`, watches, `/rewind` | Gated by `delphi needs`. Vectors are no longer on this list: built 2026-10-24 and 2026-10-25 (004-A1, 004-A2). | See §1, item 6. |
 
 ## 4. Proposed order from here
 
@@ -73,7 +73,7 @@ Each is cheap to reverse; tell me if one is wrong.
 - Council "unresolved" means every P0 or P1 a seat lists, since seats cannot yet mark an item as answered; that errs toward escalating.
 - Connector tool wire names are `<connector>__<tool>`, because some model APIs reject a dot.
 - `delphi update` surfaces refreshed release files as ordinary ratification proposals, which required `base/` to count as a source of proposals.
-- Thresholds in `delphi needs` (10 finished tasks, 3 set-aside files) are my defaults; the vector rule (50 missions and a confirmed miss) is D-01's.
+- Thresholds in `delphi needs` (10 finished tasks, 3 set-aside files) are my defaults; the vector rule (50 missions and a confirmed miss) was D-01's and is superseded: vectors are built.
 
 ## 6. Update, 2026-10-25: what changed after this review
 

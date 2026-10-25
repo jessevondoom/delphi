@@ -155,6 +155,12 @@ impl Registry {
             exec: ToolExec::Local(search),
         });
         r.register(ToolSpec {
+            def: read_def("check", "Run a deterministic check on a document you can read and get a short verdict, instead of working the rule out yourself. Kinds: `dag` (task or milestone plan: cycles, unknown dependencies, tiers; reports parallel waves and the critical path), `handoff` (handoff envelope), `provenance` (provenance frontmatter), `rules` (Rule of 25 file), `review-md` (REVIEW.md budget), `spec` (spec sections and frontmatter).", json!({"type": "object", "required": ["kind", "path"], "properties": {"kind": {"type": "string", "enum": crate::checks::TEXT_KINDS}, "path": {"type": "string"}}})),
+            requires_write_scope: false,
+            classify: classify_read,
+            exec: ToolExec::Local(check),
+        });
+        r.register(ToolSpec {
             def: read_def("write_file", "Create or replace a text file under `missions/<mission>/…` (notes, plans, reports) or `specs/…` (draft specs). A provenance header is added for you; a spec can never be marked approved by an agent.", json!({"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string"}, "content": {"type": "string"}}})),
             requires_write_scope: true,
             classify: classify_write,
@@ -354,6 +360,48 @@ pub fn run(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
     Registry::builtin().run(ctx, tool, args)
 }
 
+/// A file with a known non-text signature (PDF, zip, ...). Unrecognised bytes without a NUL keep showing as
+/// lossy text, as they always did.
+fn is_document(head: &[u8], path: &str) -> bool {
+    let f = delphi_docs::detect(head, path);
+    !f.is_text() && f != delphi_docs::Format::Unknown
+}
+
+/// A document is read whole (up to the document input cap, `specs/014` §5.1) so its tier is the tier of
+/// exactly these bytes; only the text handed back is capped. The guard's checks apply unchanged: the
+/// converters receive bytes, never a path.
+fn read_document(ctx: &mut ToolCtx, path: &str) -> ToolResult {
+    let limits = delphi_docs::Limits::default();
+    let (bytes, truncated) = match ctx.guard.read_file(path, limits.max_input) {
+        Ok(r) => r,
+        Err(d) => return denied(d),
+    };
+    let tier = observe(ctx, path, &bytes);
+    if truncated {
+        return ToolResult::err(format!("{} is larger than {} bytes; documents that large are not read", path, limits.max_input));
+    }
+    match delphi_docs::extract(&bytes, path, &delphi_docs::Request::default(), &limits) {
+        Ok(e) => {
+            let mut text = e.text;
+            let mut cut = e.truncated;
+            if text.len() > limits.max_output {
+                let mut n = limits.max_output;
+                while !text.is_char_boundary(n) {
+                    n -= 1;
+                }
+                text.truncate(n);
+                cut = true;
+            }
+            let mut out = format!("[{} · tier {} · {}{}]\n{}\n", path, tier_note(tier), e.format.name(), if cut { " · output truncated" } else { "" }, text.trim_end());
+            for l in &e.loss {
+                out.push_str(&format!("(not read: {})\n", l));
+            }
+            ToolResult::ok(out)
+        }
+        Err(e) => ToolResult::err(e.0),
+    }
+}
+
 fn read_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let path = match str_arg(args, "path") {
         Ok(p) => p,
@@ -363,8 +411,8 @@ fn read_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         Ok(r) => r,
         Err(d) => return denied(d),
     };
-    if bytes.contains(&0) {
-        return ToolResult::err("binary file; not shown");
+    if bytes.contains(&0) || is_document(&bytes, path) {
+        return read_document(ctx, path);
     }
     let tier = observe(ctx, path, &bytes);
     let text = String::from_utf8_lossy(&bytes);
@@ -396,6 +444,35 @@ fn list_dir(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             ToolResult::ok(out)
         }
         Err(d) => denied(d),
+    }
+}
+
+/// `check`: the file is read through the same guard as `read_file`, so scope, `.git` and never-readable rules hold, and its
+/// tier lowers the span's ceiling exactly as a read would. The verdict is derived text, not file content.
+fn check(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let (kind, path) = match (str_arg(args, "kind"), str_arg(args, "path")) {
+        (Ok(k), Ok(p)) => (k, p),
+        (Err(e), _) | (_, Err(e)) => return ToolResult::err(e.0),
+    };
+    if !crate::checks::TEXT_KINDS.contains(&kind) {
+        return ToolResult::err(format!("unknown check `{}` (one of: {})", kind, crate::checks::TEXT_KINDS.join(", ")));
+    }
+    let (bytes, truncated) = match ctx.guard.read_file(path, MAX_READ_BYTES) {
+        Ok(r) => r,
+        Err(d) => return denied(d),
+    };
+    if bytes.contains(&0) {
+        return ToolResult::err("binary file; not checked");
+    }
+    if truncated {
+        return ToolResult::err(format!("file is larger than {} KB; a check judges the whole file", MAX_READ_BYTES / 1024));
+    }
+    observe(ctx, path, &bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    // A linked spec counts as existing when this role can read it.
+    match crate::checks::check_text(kind, &text, &|p| ctx.guard.read_file(p, 1).is_ok()) {
+        Ok(o) => ToolResult::ok(o.render(kind, path)),
+        Err(e) => ToolResult::err(e),
     }
 }
 
@@ -561,8 +638,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "list_dir", "search"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "list_dir", "search", "write_file"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "list_dir", "search", "check"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "list_dir", "search", "check", "write_file"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -653,6 +730,37 @@ mod tests {
     }
 
     #[test]
+    fn a_document_is_named_with_its_tier_and_says_when_its_format_is_not_built() {
+        let mut f = fx(&[]);
+        fs::write(f.root.join("proj/src/spec.pdf"), b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n").unwrap();
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/src/spec.pdf"}));
+        assert!(!r.is_error, "{}", r.content);
+        assert!(r.content.contains("L4 internal_empirical") && r.content.contains("PDF") && r.content.contains("not built yet") && r.content.contains("(not read:"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L5, "a base-commit document is local input");
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/bin.dat"}));
+        assert!(r.content.contains("unrecognised binary"), "{}", r.content);
+    }
+
+    #[test]
+    fn reading_an_untrusted_document_lowers_the_ceiling_like_reading_untrusted_text() {
+        let mut f = fx(&["missions/**"]);
+        fs::write(f.root.join("proj/vendor/lib/doc.zip"), b"PK\x03\x04\x14\0\0\0").unwrap();
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/vendor/lib/doc.zip"}));
+        assert!(r.content.contains("L0 external_untrusted") && r.content.contains("untrusted data") && r.content.contains("zip archive"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L0);
+        let w = run_tool(&mut f, "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\nfrom a zip"}));
+        assert!(w.content.contains("tier L0"), "{}", w.content);
+    }
+
+    #[test]
+    fn text_files_are_unchanged_by_document_detection() {
+        let mut f = fx(&[]);
+        fs::write(f.root.join("proj/src/t.csv"), "a,b\n1,2\n").unwrap();
+        let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/src/t.csv"}));
+        assert!(r.content.contains("lines 1-2 of 2") && r.content.contains("    2  1,2"), "{}", r.content);
+    }
+
+    #[test]
     fn denials_are_explained_without_leaking_what_is_behind_them() {
         let mut f = fx(&[]);
         for (path, needle) in [
@@ -671,6 +779,34 @@ mod tests {
         assert!(run_tool(&mut f, "read_file", json!({"path": "@project/app/link"})).is_error, "symlinks are never followed");
         let r = run_tool(&mut f, "read_file", json!({"path": "@project/app/src/lib.rs", "start_line": 99}));
         assert!(r.is_error && r.content.contains("past the end"));
+    }
+
+    #[test]
+    fn check_judges_a_readable_document_and_taints_like_a_read() {
+        let mut f = fx(&[]);
+        fs::write(f.root.join("local/missions/m1/plan.yaml"), "tasks:\n  - {id: a, tier: code-craft}\n  - {id: b, tier: fast-triage, depends_on: [a], spec: specs/001-x.md}\n").unwrap();
+        let r = run_tool(&mut f, "check", json!({"kind": "dag", "path": "missions/m1/plan.yaml"}));
+        assert!(!r.is_error && r.content.starts_with("dag missions/m1/plan.yaml: FAIL") && r.content.contains("spec `specs/001-x.md` does not exist"), "{}", r.content);
+        fs::write(f.root.join("team/specs/001-x.md"), "x").unwrap();
+        let r = run_tool(&mut f, "check", json!({"kind": "dag", "path": "missions/m1/plan.yaml"}));
+        assert!(r.content.starts_with("dag missions/m1/plan.yaml: pass") && r.content.contains("critical path (weight 2): a -> b"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L5);
+        // Checking an untrusted file lowers the ceiling just as reading it would.
+        let r = run_tool(&mut f, "check", json!({"kind": "provenance", "path": "@project/app/vendor/lib/x.js"}));
+        assert!(!r.is_error && r.content.contains("FAIL"), "{}", r.content);
+        assert_eq!(f.span.ceiling(), Tier::L0);
+    }
+
+    #[test]
+    fn check_validates_its_input_and_respects_the_path_guard() {
+        let mut f = fx(&[]);
+        assert!(run_tool(&mut f, "check", json!({"kind": "tui", "path": "missions/m1/a"})).content.contains("unknown check"));
+        assert!(run_tool(&mut f, "check", json!({"path": "missions/m1/a"})).is_error);
+        for path in ["missions/m1/events.jsonl", "operator/profile.md", "@project/app/.git/config"] {
+            let r = run_tool(&mut f, "check", json!({"kind": "dag", "path": path}));
+            assert!(r.is_error && r.content.contains("denied"), "{} → {}", path, r.content);
+        }
+        assert!(run_tool(&mut f, "check", json!({"kind": "dag", "path": "@project/app/bin.dat"})).content.contains("binary"));
     }
 
     #[test]
@@ -765,7 +901,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "list_dir", "search"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "list_dir", "search", "write_file"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "list_dir", "search", "check"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "list_dir", "search", "check", "write_file"]);
     }
 }

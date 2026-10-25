@@ -14,6 +14,8 @@ pub mod endpoints_cli;
 pub mod engine;
 pub mod exec;
 pub mod finalize;
+pub mod checks;
+pub mod frontmatter;
 pub mod gates;
 pub mod handoff;
 pub mod harness;
@@ -27,14 +29,20 @@ pub mod model;
 pub mod observe;
 pub mod pool;
 pub mod probe;
+pub mod provisional;
+pub mod provisional_run;
 pub mod recovery;
 pub mod route;
 pub mod ratify;
 pub mod service;
 pub mod status;
+pub mod timers;
 pub mod tools;
 pub mod workspace;
 pub mod worktree;
 
 #[cfg(test)]
 pub(crate) mod testkit;
+
+#[cfg(test)]
+mod timer_tests;

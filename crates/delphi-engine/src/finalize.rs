@@ -54,6 +54,34 @@ pub enum BuildOutcome {
     Merged { report: Report, merge_commit: String },
     /// PR mode: the branch was pushed and a pull request opened.
     PrOpened { report: Report, url: String },
+    /// Optimistic task: the operator rejected provisional decisions (`specs/015`). Nothing was merged and the
+    /// branch is kept; the work built on a rejected decision is suspect.
+    DecisionsRejected { report: Report, ids: Vec<String> },
+    /// Optimistic task: provisional decisions were still unreviewed when the review window ended. Nothing was
+    /// merged and the branch is kept; `build.merge` resumes once they are reviewed.
+    DecisionsPending { report: Report, ids: Vec<String> },
+}
+
+impl BuildOutcome {
+    /// `(outcome, detail)` in a few words, for a merge started after the build (`build.merge`).
+    pub fn headline(&self) -> (&'static str, String) {
+        match self {
+            BuildOutcome::Blocked(r) => ("blocked", r.red().iter().map(|g| format!("gate {}: {}", g.n, g.detail)).collect::<Vec<_>>().join("; ")),
+            BuildOutcome::Declined(r) => ("declined", format!("you declined the merge of {}; the branch is kept", &r.sha[..r.sha.len().min(8)])),
+            BuildOutcome::MergeRefused { why, .. } => ("refused", why.clone()),
+            BuildOutcome::Merged { merge_commit, .. } => ("merged", format!("merge commit {}", &merge_commit[..merge_commit.len().min(8)])),
+            BuildOutcome::PrOpened { url, .. } => ("pr_opened", url.clone()),
+            BuildOutcome::DecisionsRejected { ids, .. } => ("decisions_rejected", format!("rejected: {}", ids.join(", "))),
+            BuildOutcome::DecisionsPending { ids, .. } => ("decisions_pending", format!("unreviewed: {}", ids.join(", "))),
+        }
+    }
+}
+
+/// How the wait for the operator's review of provisional decisions ended.
+enum ReviewWait {
+    Clear,
+    Rejected(Vec<String>),
+    Pending(Vec<String>),
 }
 
 fn summarize(r: &exec::CommandReport, argv: &[String]) -> RunSummary {
@@ -202,12 +230,49 @@ impl Engine {
 
         let report = Report {
             sha: sha.clone(),
-            gates: vec![gates::tests(tests), gates::checks(check, &unstamped, &diff), gates::spec(&spec_link(&self.ws.dir, spec.as_deref()), &diff, exemption), gates::audit(&sha, &audits), gates::approval(&sha, &approved)],
+            gates: vec![
+                gates::tests(tests),
+                gates::checks(check, &unstamped, &diff),
+                gates::spec(&spec_link(&self.ws.dir, spec.as_deref()), &diff, exemption),
+                gates::audit(&sha, &audits),
+                gates::approval(&sha, &approved),
+                // Gate 6 (`specs/015`): green for a task that made no provisional decisions.
+                gates::decisions(&crate::provisional::counts(&crate::provisional::ledger_of(m, task_id)?)),
+            ],
         };
         let mut ev = delphi_core::event::EventEnvelope::new(&m.id, "gates.evaluated", json!({"sha": sha, "gates": report.gates}));
         ev.task_id = Some(task_id.to_string());
         m.append(ev).await?;
         Ok(Evaluation { wt, sha, diff, report, host_exec })
+    }
+
+    /// Wait until every provisional decision of this task that allowed something is reviewed. Announces the wait
+    /// once (`decisions.review_requested`, which the console and the relay show), wakes when the operator reviews
+    /// one, and gives up after `decision_review_wait`, keeping the branch.
+    async fn await_decision_review(&self, m: &Arc<MissionState>, task_id: &str) -> Result<ReviewWait, EngineError> {
+        let started = std::time::Instant::now();
+        let mut announced = false;
+        loop {
+            let ds = crate::provisional::ledger_of(m, task_id)?;
+            let n = crate::provisional::counts(&ds);
+            if !n.rejected.is_empty() {
+                return Ok(ReviewWait::Rejected(n.rejected));
+            }
+            if n.pending.is_empty() {
+                return Ok(ReviewWait::Clear);
+            }
+            if !announced {
+                announced = true;
+                let list: Vec<Value> = ds.iter().filter(|d| n.pending.contains(&d.id)).map(|d| json!({"decision_id": d.id, "summary": d.summary, "risk": d.risk, "rationale": d.rationale})).collect();
+                let mut e = delphi_core::event::EventEnvelope::new(&m.id, crate::provisional::REVIEW_REQUESTED, json!({"task_id": task_id, "count": list.len(), "decisions": list}));
+                e.task_id = Some(task_id.to_string());
+                m.append(e).await?;
+            }
+            if started.elapsed() >= self.settings.decision_review_wait {
+                return Ok(ReviewWait::Pending(n.pending));
+            }
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.decisions_changed.notified()).await;
+        }
     }
 
     /// Commit the task's worktree, evaluate the gates, ask the operator, merge.
@@ -217,6 +282,21 @@ impl Engine {
         if report.gates[..4].iter().any(|g| g.state == State::Red) {
             return Ok(BuildOutcome::Blocked(report));
         }
+
+        // Gate 6 (`specs/015`): an optimistic task decided some cards itself; the merge card is not shown, and
+        // nothing merges, until the operator has reviewed and ratified every one of those decisions.
+        match self.await_decision_review(m, task_id).await? {
+            ReviewWait::Clear => {}
+            ReviewWait::Rejected(ids) => {
+                report.gates[5] = gates::decisions(&crate::provisional::counts(&crate::provisional::ledger_of(m, task_id)?));
+                return Ok(BuildOutcome::DecisionsRejected { report, ids });
+            }
+            ReviewWait::Pending(ids) => {
+                report.gates[5] = gates::decisions(&crate::provisional::counts(&crate::provisional::ledger_of(m, task_id)?));
+                return Ok(BuildOutcome::DecisionsPending { report, ids });
+            }
+        }
+        report.gates[5] = gates::decisions(&crate::provisional::counts(&crate::provisional::ledger_of(m, task_id)?));
 
         // Gate 5: the operator, shown the host-execution files first. It is never read from history: an earlier
         // approval of this sha that ended in a refusal or an error does not make this decision for them.
@@ -229,6 +309,7 @@ impl Engine {
         }
         let payload = json!({
             "tool": "merge", "task_id": task_id, "sha": sha, "branch": wt.branch,
+            "decisions": crate::provisional::ledger_of(m, task_id)?.iter().map(|d| json!({"decision_id": d.id, "outcome": d.outcome, "risk": d.risk, "summary": d.summary, "reviewed": d.review.as_ref().map(|r| r.resolution.clone())})).collect::<Vec<_>>(),
             "host_execution": hx, "host_execution_warning": if diff.host_exec().is_empty() { Value::Null } else { json!("these files run on your machine, outside any sandbox, once merged and opened by a shell, IDE or git") },
             "files": diff.files.iter().map(|f| json!({"path": f.path, "status": f.status.to_string(), "added": f.added, "removed": f.removed})).collect::<Vec<_>>(),
             "gates": report.gates,
@@ -248,7 +329,7 @@ impl Engine {
         let changed = if fresh.sha != sha {
             Some(format!("the worktree moved from {} to {} while the card waited", &sha[..sha.len().min(8)], &fresh.sha[..fresh.sha.len().min(8)]))
         } else {
-            fresh.report.gates[..4].iter().find(|g| g.state == State::Red).map(|g| format!("gate {} ({}) is no longer green: {}", g.n, g.name, g.detail))
+            fresh.report.gates[..4].iter().chain(fresh.report.gates.get(5)).find(|g| g.state == State::Red).map(|g| format!("gate {} ({}) is no longer green: {}", g.n, g.name, g.detail))
         };
         if let Some(why) = changed {
             return Ok(BuildOutcome::MergeRefused { report: fresh.report, why: format!("{}; nothing was merged", why) });
@@ -416,7 +497,7 @@ mod tests {
         let fin = tokio::spawn(async move { e.finalize_build(&m, &task).await });
         let c = card(&f).await;
         assert_eq!((c.tool.as_str(), c.tier), ("merge", crate::approval::Tier::Red));
-        assert!(c.payload["sha"] == head.as_str() && c.payload["gates"].as_array().unwrap().len() == 5);
+        assert!(c.payload["sha"] == head.as_str() && c.payload["gates"].as_array().unwrap().len() == 6);
         f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
         match fin.await.unwrap().unwrap() {
             BuildOutcome::Merged { report, merge_commit } => {
@@ -667,5 +748,220 @@ mod tests {
         fn model_requests_empty(&self) -> bool {
             self.model.requests().is_empty()
         }
+    }
+
+    // ── optimistic tasks and gate 6 (specs/015) ─────────────────────────────
+
+    /// A build fixture where an edit would normally ask (the default permission mode), marked optimistic.
+    /// `window` shortens how long a finished build waits for the operator's review.
+    fn optimistic_fixture_window(steps: Vec<Step>, window: Option<Duration>) -> Option<Fx> {
+        let f = crate::testkit::setup_with_exec(
+            steps,
+            5.0,
+            move |s| {
+                s.approver = crate::provisional::ApproverKind::Rules;
+                if let Some(w) = window {
+                    s.decision_review_wait = w;
+                }
+            },
+            |c| {
+                c.test_command = Some(["/bin/sh", "-c", "test -f src/new.rs"].iter().map(|s| s.to_string()).collect());
+                c.check_command = Some(vec!["/bin/sh".into(), "-c".into(), "true".into()]);
+                c.host_exec_paths = vec![];
+            },
+        );
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        f.engine.broker.set_mode(crate::approval::Mode::Default);
+        if f.engine.exec.sandbox.is_none() {
+            assert!(f.engine.mark_optimistic("t_0001").is_err(), "without the sandbox the mode refuses to start");
+            return None;
+        }
+        f.engine.mark_optimistic("t_0001").unwrap();
+        Some(f)
+    }
+
+    fn optimistic_fixture(steps: Vec<Step>) -> Option<Fx> {
+        optimistic_fixture_window(steps, None)
+    }
+
+    async fn wait_event(f: &Fx, kind: &str) -> delphi_core::event::EventEnvelope {
+        for _ in 0..400 {
+            if let Some(e) = events_of(f, kind).into_iter().next() {
+                return e;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no `{}` event", kind);
+    }
+
+    /// The operator's review, as the service writes it.
+    async fn review(f: &Fx, id: &str, resolution: &str) {
+        let mut e = delphi_core::event::EventEnvelope::new(&f.m.id, "decision.reviewed", json!({"decision_id": id, "resolution": resolution, "note": "", "by": "console-1"}));
+        e.task_id = Some("t_0001".into());
+        f.m.append(e).await.unwrap();
+        f.engine.decisions_changed.notify_one();
+    }
+
+    /// Commit the worktree and record a clean audit of exactly that commit, as the build flow would.
+    async fn audited(f: &Fx, task: &str) -> String {
+        let wt = f.engine.exec.known_worktree(task).unwrap();
+        let _ = wt.commit_all("x", "builder");
+        let head = wt.head().unwrap();
+        f.engine.record_audit(&f.m, task, &head, "red-team", &[]).await.unwrap();
+        head
+    }
+
+    #[tokio::test]
+    async fn an_optimistic_build_decides_its_edits_without_a_card_and_the_merge_waits_for_every_review() {
+        let Some(f) = optimistic_fixture(builder_steps()) else { return };
+        let out = run_build(&f).await;
+        assert_eq!(out.task_id, "t_0001");
+        assert!(events_of(&f, "approval.requested").is_empty(), "the edit was decided provisionally, so no card was raised");
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        assert_eq!(ds.len(), 1);
+        assert_eq!((ds[0].outcome.as_str(), ds[0].tool.as_str(), ds[0].risk.as_str()), ("allow", "write_file", "routine"));
+        assert_eq!(ds[0].effects[0]["path"], "@worktree/src/new.rs");
+
+        audited(&f, &out.task_id).await;
+        let (e, m, t) = (f.engine.clone(), f.m.clone(), out.task_id.clone());
+        let fin = tokio::spawn(async move { e.finalize_build(&m, &t).await });
+        // The task announces that it waits for the operator, and no merge card is shown yet.
+        let asked = wait_event(&f, "decisions.review_requested").await;
+        assert_eq!(asked.payload["count"], 1);
+        assert_eq!(asked.payload["decisions"][0]["decision_id"], ds[0].id.as_str());
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(f.engine.broker.pending().is_empty(), "no merge card while a decision is unreviewed");
+        assert!(!f.root.join("proj/src/new.rs").exists());
+
+        review(&f, &ds[0].id, "ratified").await;
+        let c = card(&f).await;
+        assert_eq!((c.tool.as_str(), c.tier), ("merge", crate::approval::Tier::Red));
+        assert_eq!(c.payload["gates"].as_array().unwrap().len(), 6);
+        assert_eq!((c.payload["gates"][5]["name"].as_str(), c.payload["gates"][5]["state"].as_str()), (Some("decisions"), Some("Green")));
+        assert_eq!(c.payload["decisions"][0]["reviewed"], "ratified", "the operator sees the decisions on the merge card too");
+        f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
+        match fin.await.unwrap().unwrap() {
+            BuildOutcome::Merged { report, .. } => assert!(report.all_green()),
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(fs::read_to_string(f.root.join("proj/src/new.rs")).unwrap(), "pub fn b() {}\n");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_decision_stops_the_merge_and_keeps_the_branch() {
+        let Some(f) = optimistic_fixture(builder_steps()) else { return };
+        let out = run_build(&f).await;
+        audited(&f, &out.task_id).await;
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        let (e, m, t) = (f.engine.clone(), f.m.clone(), out.task_id.clone());
+        let fin = tokio::spawn(async move { e.finalize_build(&m, &t).await });
+        wait_event(&f, "decisions.review_requested").await;
+        review(&f, &ds[0].id, "rejected").await;
+        match fin.await.unwrap().unwrap() {
+            BuildOutcome::DecisionsRejected { report, ids } => {
+                assert_eq!(ids, vec![ds[0].id.clone()]);
+                assert!(report.red().iter().any(|g| g.n == 6 && g.detail.contains("rejected")));
+            }
+            other => panic!("{:?}", other),
+        }
+        assert!(f.engine.broker.pending().is_empty(), "the merge card was never shown");
+        assert!(!f.root.join("proj/src/new.rs").exists(), "nothing reached the operator's checkout");
+        assert!(f.engine.exec.known_worktree(&out.task_id).is_some(), "the branch is kept");
+        assert!(events_of(&f, "merge.approved").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_run_that_stops_while_decisions_wait_keeps_the_branch_and_the_merge_resumes_after_review() {
+        let Some(f) = optimistic_fixture(builder_steps()) else { return };
+        let out = run_build(&f).await;
+        audited(&f, &out.task_id).await;
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        let (eng, m, t) = (f.engine.clone(), f.m.clone(), out.task_id.clone());
+        let fin = tokio::spawn(async move { eng.finalize_build(&m, &t).await });
+        wait_event(&f, "decisions.review_requested").await;
+        // The operator is away: stop the waiting task (as a headless run does), leaving the branch and the ledger.
+        fin.abort();
+        let _ = fin.await;
+        assert!(f.engine.exec.known_worktree(&out.task_id).is_some() && !f.root.join("proj/src/new.rs").exists());
+        // Later: the operator reviews, and build.merge-equivalent finalizes the same branch.
+        review(&f, &ds[0].id, "ratified").await;
+        let (eng, m, t) = (f.engine.clone(), f.m.clone(), out.task_id.clone());
+        let fin = tokio::spawn(async move { eng.finalize_build(&m, &t).await });
+        let c = card(&f).await;
+        assert_eq!(c.tool, "merge");
+        f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
+        assert!(matches!(fin.await.unwrap().unwrap(), BuildOutcome::Merged { .. }));
+        assert!(f.root.join("proj/src/new.rs").exists());
+    }
+
+    #[tokio::test]
+    async fn more_work_after_the_merge_card_was_shown_makes_gate_six_red_again_at_answer_time() {
+        let Some(f) = optimistic_fixture(builder_steps()) else { return };
+        let out = run_build(&f).await;
+        audited(&f, &out.task_id).await;
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        review(&f, &ds[0].id, "ratified").await;
+        let (e, m, t) = (f.engine.clone(), f.m.clone(), out.task_id.clone());
+        let fin = tokio::spawn(async move { e.finalize_build(&m, &t).await });
+        let c = card(&f).await;
+        // While the card waits, another provisional decision is made on the task.
+        let extra = crate::tools::Classified { tool: "write_file".into(), tier: crate::tools::ToolTier::Amber, kind: crate::tools::ActionKind::WorktreeEdit, summary: "write src/more.rs".into(), payload: json!({"tool": "write_file", "path": "@worktree/src/more.rs", "bytes": 1, "blake3": "00"}), pattern: "write_file @worktree/src/*".into() };
+        let v = crate::provisional::Verdict::by_rule(true, "ok".into(), crate::provisional::Risk::Routine);
+        let mut ev = delphi_core::event::EventEnvelope::new(&f.m.id, "decision.provisional", crate::provisional::decision_event("dec_late", &extra, crate::approval::Tier::Amber, &v, "builder"));
+        ev.task_id = Some("t_0001".into());
+        f.m.append(ev).await.unwrap();
+        f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
+        match fin.await.unwrap().unwrap() {
+            BuildOutcome::MergeRefused { why, .. } => assert!(why.contains("gate 6") && why.contains("nothing was merged"), "{}", why),
+            other => panic!("{:?}", other),
+        }
+        assert!(events_of(&f, "merge.approved").is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_optimistic_task_still_asks_about_anything_that_is_not_a_worktree_edit() {
+        // A spec draft outside the worktree is not eligible, so the operator is asked as always.
+        let f = crate::testkit::setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-opt.md", "content": "# Opt\nbody"})), Step::text("Done.")], 5.0, |_| {});
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        f.engine.mark_optimistic("t_0001").unwrap();
+        let (e, m) = (f.engine.clone(), f.m.clone());
+        let task = tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await });
+        let c = card(&f).await;
+        assert_eq!(c.tool, "write_file");
+        f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(events_of(&f, "decision.provisional").is_empty(), "nothing was decided provisionally");
+    }
+
+    #[tokio::test]
+    async fn the_approver_refuses_an_edit_that_would_run_on_the_operators_machine_and_the_model_is_told() {
+        let steps = vec![Step::tool("c1", "write_file", json!({"path": "@worktree/build.rs", "content": "fn main() {}\n"})), Step::text("Understood.")];
+        let Some(f) = optimistic_fixture(steps) else { return };
+        let _ = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        assert_eq!((ds[0].outcome.as_str(), ds[0].risk.as_str()), ("deny", "elevated"));
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("operator's machine"), "the Builder is told why");
+        assert!(events_of(&f, "approval.requested").is_empty() && !f.engine.exec.known_worktree("t_0001").map(|w| w.path.join("build.rs").exists()).unwrap_or(false), "nothing was written");
+        assert_eq!(crate::provisional::counts(&ds).allowed, 0, "a refusal needs no review");
+    }
+
+    #[tokio::test]
+    async fn when_the_review_window_ends_nothing_is_merged_the_branch_is_kept_and_the_ids_are_named() {
+        let Some(f) = optimistic_fixture_window(builder_steps(), Some(Duration::from_millis(400))) else { return };
+        let out = run_build(&f).await;
+        audited(&f, &out.task_id).await;
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        match f.engine.finalize_build(&f.m, &out.task_id).await.unwrap() {
+            BuildOutcome::DecisionsPending { ids, report } => {
+                assert_eq!(ids, vec![ds[0].id.clone()]);
+                assert!(report.red().iter().any(|g| g.n == 6 && g.detail.contains("await")));
+            }
+            other => panic!("{:?}", other),
+        }
+        assert!(f.engine.broker.pending().is_empty() && !f.root.join("proj/src/new.rs").exists());
+        assert!(f.engine.exec.known_worktree(&out.task_id).is_some());
     }
 }

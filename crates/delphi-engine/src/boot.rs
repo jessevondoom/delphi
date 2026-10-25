@@ -55,6 +55,29 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("hitl").and_then(|b| b.get("approval_timeout_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.approval_timeout = Duration::from_secs(v as u64);
     }
+    if let Some(v) = root.get("away").and_then(|b| b.get("approval_park_max_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+        s.approval_park_max = Duration::from_secs(v as u64);
+    }
+    if let Some(v) = root.get("optimistic").and_then(|b| b.get("review_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+        s.decision_review_wait = Duration::from_secs(v as u64);
+    }
+    if let Some(o) = root.get("optimistic") {
+        if let Some(a) = o.get("approver").and_then(|v| v.as_str()).and_then(crate::provisional::ApproverKind::parse) {
+            s.approver = a;
+        }
+        if let Some(a) = o.get("second_seat").and_then(|v| v.as_str()).and_then(crate::provisional::SecondSeat::parse) {
+            s.second_seat = a;
+        }
+        if let Some(n) = o.get("max_decisions").and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+            s.max_decisions = n as u32;
+        }
+        if let Some(n) = o.get("max_approver_calls").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+            s.max_approver_calls = n as u32;
+        }
+        if let Some(a) = o.get("unseconded").and_then(|v| v.as_str()).and_then(crate::provisional::Unseconded::parse) {
+            s.unseconded = a;
+        }
+    }
     if let Some(list) = root.get("agents").and_then(|a| a.get("enabled")).and_then(|v| v.as_array()) {
         let roles: Vec<String> = list.iter().filter_map(|x| x.as_str().map(String::from)).collect();
         if !roles.is_empty() {
@@ -224,7 +247,7 @@ pub fn build(home: &Path, ws_dir: &Path, hub: Hub) -> Result<Booted, String> {
 /// As [`build`], optionally with a model client supplied (tests).
 pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<dyn ModelClient>>) -> Result<Booted, String> {
     let live_text = std::fs::read_to_string(ws_dir.join("config.toml")).map_err(|e| format!("cannot read {}/config.toml: {}", ws_dir.display(), e))?;
-    let (text, notices) = effective_config(ws_dir, &live_text)?;
+    let (text, mut notices) = effective_config(ws_dir, &live_text)?;
     let cfg = Config::parse(&text).map_err(|errs| format!("config.toml has problems:\n  - {}", errs.join("\n  - ")))?;
     let root: toml::Value = toml::from_str(&text).map_err(|e| e.to_string())?;
     let secrets = SecretRegistry::new();
@@ -246,6 +269,8 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         }
     };
     let connectors = connector_host(cfg.clone(), secrets.clone(), ws_dir);
+    let (timers, timer_notice) = crate::timers::TimerStore::open(&ws_dir.join("local/timers.json"));
+    notices.extend(timer_notice);
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));
     let engine = Arc::new(Engine {
         ws: WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() },
@@ -267,6 +292,11 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         pool,
         clock_unix: crate::pool::system_clock(),
         degraded: Default::default(),
+        optimistic: Default::default(),
+        decisions_changed: Default::default(),
+        timers: Arc::new(timers),
+        toolless: Default::default(),
+        approver_calls: Default::default(),
     });
     let day = &now_rfc3339()[..10];
     let default_mission = format!("{}-session", day);
@@ -293,11 +323,12 @@ mod tests {
 
     #[test]
     fn the_engine_is_assembled_from_config_toml() {
-        let (t, ws) = workspace_with_config("[budget]\nmission_budget_usd = 12.5\n[hitl]\napproval_timeout_sec = 90\n[agents]\nenabled = [\"orchestrator\", \"architect\"]\n");
+        let (t, ws) = workspace_with_config("[budget]\nmission_budget_usd = 12.5\n[hitl]\napproval_timeout_sec = 90\n[away]\napproval_park_max_sec = 3600\n[agents]\nenabled = [\"orchestrator\", \"architect\"]\n");
         pin_config(&ws);
         let b = build(&ws.home, &ws.dir, Hub::new()).unwrap();
         assert_eq!(b.engine.settings.mission_budget_usd, 12.5);
         assert_eq!(b.engine.settings.approval_timeout, Duration::from_secs(90));
+        assert_eq!(b.engine.settings.approval_park_max, Duration::from_secs(3600));
         assert_eq!(b.engine.settings.enabled_agents, vec!["orchestrator", "architect"]);
         assert_eq!(b.engine.projects.len(), 1);
         assert_eq!(b.engine.projects[0].0, "proj");

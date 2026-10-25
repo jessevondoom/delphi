@@ -67,7 +67,7 @@ struct AuditTarget<'a> {
 impl Engine {
     /// Another family with an allowed endpoint that can serve a Builder or auditor (an API endpoint, or the
     /// Claude harness), if any.
-    fn other_family(&self, current: &str, builder: bool) -> Option<String> {
+    pub(crate) fn other_family(&self, current: &str, builder: bool) -> Option<String> {
         let cfg = self.cfg.get();
         let mut families: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id) && e.family != current).map(|e| e.family.clone()).collect();
         families.sort();
@@ -208,11 +208,30 @@ impl Engine {
                 continue;
             }
             // Everything the daemon can check is green: the operator decides.
-            return Ok(match self.finalize_build(m, task_id).await? {
+            let outcome = self.finalize_build(m, task_id).await?;
+            if let BuildOutcome::DecisionsRejected { ids, .. } = &outcome {
+                if attempt < self.settings.build_attempts {
+                    // The operator said no to some edits. Roll them back and let the Builder try again without them,
+                    // with what the operator said: a rejection is the most useful feedback the build can get.
+                    let notes = self.revert_rejected(m, task_id, ids).await?;
+                    let list = notes.iter().map(|(p, n)| format!("- {}{}", p, if n.is_empty() { String::new() } else { format!(" ({})", n) })).collect::<Vec<_>>().join("\n");
+                    diagnostics.push(format!("Attempt {} was reviewed by the operator, who rejected these edits; they were reverted. Do not make them again; find another way:\n{}", attempt, list));
+                    continue;
+                }
+            }
+            return Ok(match outcome {
                 BuildOutcome::Merged { report, merge_commit } => (Status::Done, format!("Merged {} into your branch (merge commit {}) after {} attempt(s). Gates: {}.", &report.sha[..report.sha.len().min(8)], &merge_commit[..merge_commit.len().min(8)], attempt, report.gates.iter().map(|g| g.name).collect::<Vec<_>>().join(", "))),
                 BuildOutcome::PrOpened { report, url } => (Status::Done, format!("Opened a pull request for {} after {} attempt(s): {}", &report.sha[..report.sha.len().min(8)], attempt, url)),
                 BuildOutcome::Declined(report) => (Status::Done, format!("You declined the merge of {}. The branch delphi/{} and its worktree are kept.", &report.sha[..report.sha.len().min(8)], task_id)),
                 BuildOutcome::MergeRefused { why, .. } => (Status::Escalated(why.clone()), format!("[approved, but the merge was refused: {}]", why)),
+                BuildOutcome::DecisionsRejected { ids, .. } => {
+                    let why = format!("you rejected provisional decision(s) {}; nothing was merged and the branch delphi/{} is kept", ids.join(", "), task_id);
+                    (Status::Escalated(why.clone()), format!("[{}]", why))
+                }
+                BuildOutcome::DecisionsPending { ids, .. } => {
+                    let why = format!("provisional decision(s) {} were not reviewed in time; nothing was merged and the branch delphi/{} is kept (review them, then /merge {})", ids.join(", "), task_id, task_id);
+                    (Status::Escalated(why.clone()), format!("[{}]", why))
+                }
                 BuildOutcome::Blocked(report) => {
                     let why = report.red().iter().map(|g| format!("gate {}: {}", g.n, g.detail)).collect::<Vec<_>>().join("; ");
                     (Status::Escalated(why.clone()), format!("[blocked at the last check: {}]", why))
@@ -255,7 +274,7 @@ mod tests {
 
     fn fixture(steps: Vec<Step>, test_script: &str) -> Fx {
         let script = test_script.to_string();
-        let f = setup_with_exec(steps, 5.0, |_| {}, move |c| {
+        let f = setup_with_exec(steps, 5.0, |s| s.approver = crate::provisional::ApproverKind::Rules, move |c| {
             c.test_command = Some(vec!["/bin/sh".into(), "-c".into(), script]);
             c.check_command = Some(vec!["/bin/sh".into(), "-c".into(), "true".into()]);
         });
@@ -320,6 +339,109 @@ mod tests {
         assert!(second.contains("failed verification") && second.contains("gate 1"), "the diagnostic reaches the next attempt: {}", second);
         let audits = events_of(&f, "audit.recorded");
         assert_eq!(audits.len(), 1, "no audit for a commit whose tests failed");
+    }
+
+    #[tokio::test]
+    async fn an_optimistic_build_runs_the_whole_ladder_then_waits_for_the_operators_review_and_merges_after_it() {
+        let f = fixture(vec![write("good\n"), Step::text("done"), Step::text("AUDIT COMPLETE")], "grep -q good src/new.rs");
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        // With edits set to ask, an ordinary build would raise a card for every write; an optimistic one decides them.
+        f.engine.broker.set_mode(crate::approval::Mode::Default);
+        f.engine.mark_optimistic("t_0001").unwrap();
+        let (e, m) = (f.engine.clone(), f.m.clone());
+        let id = m.next_task_id();
+        assert_eq!(id, "t_0001");
+        let task = tokio::spawn(async move { e.run_build(&m, id, PROMPT).await });
+
+        // The ladder reaches the review wait: tests passed, the audit is clean, and the merge card is held back.
+        let mut asked = None;
+        for _ in 0..1500 {
+            asked = events_of(&f, "decisions.review_requested").into_iter().next();
+            if asked.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let asked = asked.expect("the build asked for the operator's review");
+        assert_eq!(asked.payload["count"], 1);
+        assert_eq!(events_of(&f, "audit.recorded").len(), 1);
+        assert!(f.engine.broker.pending().is_empty(), "no card of any kind: the edit was decided and the merge card waits");
+        assert!(!f.root.join("proj/src/new.rs").exists());
+        assert!(!task.is_finished());
+
+        // The operator reviews; only then does the merge card appear.
+        let id = asked.payload["decisions"][0]["decision_id"].as_str().unwrap().to_string();
+        let mut r = delphi_core::event::EventEnvelope::new(&f.m.id, "decision.reviewed", json!({"decision_id": id, "resolution": "ratified", "note": "", "by": "console-1"}));
+        r.task_id = Some("t_0001".into());
+        f.m.append(r).await.unwrap();
+        f.engine.decisions_changed.notify_one();
+        approve_when_asked(&f).await;
+        let out = tokio::time::timeout(Duration::from_secs(60), task).await.expect("finishes").unwrap().unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        assert!(out.text.contains("Merged") && out.text.contains("decisions"), "the gate list names the decisions gate: {}", out.text);
+        assert_eq!(fs::read_to_string(f.root.join("proj/src/new.rs")).unwrap(), "good\n");
+        let kinds: Vec<String> = f.m.replay().unwrap().into_iter().map(|e| e.kind).collect();
+        let at = |k: &str| kinds.iter().position(|x| x == k).unwrap_or_else(|| panic!("missing {}", k));
+        assert!(at("decision.provisional") < at("audit.recorded") && at("decisions.review_requested") < at("decision.reviewed") && at("decision.reviewed") < at("merge.approved"), "{:?}", kinds);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_decision_is_rolled_back_and_the_builder_tries_again_with_what_the_operator_said() {
+        // Attempt 1 writes two files; the operator rejects one. Attempt 2 builds without it and is merged.
+        let steps = vec![
+            write("good\n"),
+            Step::tool("e", "write_file", json!({"path": "@worktree/src/extra.rs", "content": "pub fn extra() {}\n"})),
+            Step::text("done"),
+            Step::text("AUDIT COMPLETE"),
+            Step::text("Fixed without it."),
+            Step::text("AUDIT COMPLETE"),
+        ];
+        let f = fixture(steps, "grep -q good src/new.rs");
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        f.engine.broker.set_mode(crate::approval::Mode::Default);
+        f.engine.mark_optimistic("t_0001").unwrap();
+        let (e, m) = (f.engine.clone(), f.m.clone());
+        let id = m.next_task_id();
+        let task = tokio::spawn(async move { e.run_build(&m, id, PROMPT).await });
+
+        let mut asked = None;
+        for _ in 0..1500 {
+            asked = events_of(&f, "decisions.review_requested").into_iter().next();
+            if asked.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let asked = asked.expect("the first attempt reached the review");
+        assert_eq!(asked.payload["count"], 2);
+        let ds = crate::provisional::ledger_of(&f.m, "t_0001").unwrap();
+        let review = |id: String, resolution: &'static str, note: &'static str| {
+            let mut r = delphi_core::event::EventEnvelope::new(&f.m.id, "decision.reviewed", json!({"decision_id": id, "resolution": resolution, "note": note, "by": "console-1"}));
+            r.task_id = Some("t_0001".into());
+            r
+        };
+        let new_rs = ds.iter().find(|d| d.path().as_deref() == Some("src/new.rs")).unwrap().id.clone();
+        let extra = ds.iter().find(|d| d.path().as_deref() == Some("src/extra.rs")).unwrap().id.clone();
+        f.m.append(review(new_rs, "ratified", "")).await.unwrap();
+        f.m.append(review(extra.clone(), "rejected", "not part of the spec")).await.unwrap();
+        f.engine.decisions_changed.notify_one();
+
+        approve_when_asked(&f).await;
+        let out = tokio::time::timeout(Duration::from_secs(90), task).await.expect("finishes").unwrap().unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        assert!(out.text.contains("Merged") && out.text.contains("2 attempt"), "{}", out.text);
+        assert_eq!(fs::read_to_string(f.root.join("proj/src/new.rs")).unwrap(), "good\n");
+        assert!(!f.root.join("proj/src/extra.rs").exists(), "the rejected edit never reached the operator's checkout");
+        let reverted = events_of(&f, "decision.reverted");
+        assert_eq!((reverted.len(), reverted[0].payload["decision_id"].as_str(), reverted[0].payload["restored"].as_str()), (1, Some(extra.as_str()), Some("removed")));
+        // The second attempt was told what to avoid, and why.
+        let second = f.model.requests().iter().find(|r| r.body["messages"].to_string().contains("rejected these edits")).expect("the Builder saw the rejection").body["messages"].to_string();
+        assert!(second.contains("src/extra.rs") && second.contains("not part of the spec"), "{}", second);
+        assert_eq!(events_of(&f, "build.attempt").len(), 2);
     }
 
     #[tokio::test]

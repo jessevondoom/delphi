@@ -27,6 +27,8 @@ pub struct Layout {
     pub sock: PathBuf,
     /// The read-only socket the Narrator attaches to (`D-25`).
     pub narrator_sock: PathBuf,
+    /// The socket a relay attaches to (`specs/014`): approval cards out, answers in, nothing else.
+    pub relay_sock: PathBuf,
     pub lock: PathBuf,
     pub log: PathBuf,
 }
@@ -41,7 +43,7 @@ pub fn workspace_hash(workspace: &Path) -> io::Result<String> {
 pub fn layout(home: &Path, workspace: &Path) -> io::Result<Layout> {
     let h = workspace_hash(workspace)?;
     let run_dir = home.join("run");
-    Ok(Layout { sock: run_dir.join(format!("{}.sock", h)), narrator_sock: run_dir.join(format!("{}.narrator.sock", h)), lock: run_dir.join(format!("{}.lock", h)), log: run_dir.join(format!("{}.log", h)), run_dir })
+    Ok(Layout { sock: run_dir.join(format!("{}.sock", h)), narrator_sock: run_dir.join(format!("{}.narrator.sock", h)), relay_sock: run_dir.join(format!("{}.relay.sock", h)), lock: run_dir.join(format!("{}.lock", h)), log: run_dir.join(format!("{}.log", h)), run_dir })
 }
 
 /// Create `run/` with mode 0700 (and tighten it if it already exists).

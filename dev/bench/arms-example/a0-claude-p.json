@@ -1,0 +1,7 @@
+{
+  "name": "a0-claude-p",
+  "kind": "command",
+  "command": ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits", "--max-turns", "60"],
+  "parse": "claude-json",
+  "timeout": 1800
+}

@@ -30,10 +30,11 @@ pub fn is_protected(logical: &str) -> bool {
         || (l.starts_with("connectors/") && l.ends_with(".pins.json") && !l[11..].contains('/'))
 }
 
-/// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]`, `[connectors.*]` and `[exec]` blocks pinned by `specs/009` §5 and `specs/008` §4, re-serialized
-/// deterministically so the hash doesn't depend on formatting or comments.
-/// The `config.toml` tables the daemon trusts only from the ratified copy.
-pub const ACCESS_KEYS: [&str; 6] = ["endpoints", "access", "auth", "harness", "connectors", "exec"];
+/// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]`, `[connectors.*]`, `[exec]` and `[relay.*]` blocks pinned by `specs/009` §5,
+/// `specs/008` §4 and `specs/014` §4, re-serialized deterministically so the hash doesn't depend on formatting or comments.
+/// The `config.toml` tables the daemon trusts only from the ratified copy. `[relay]` is here because it names who may
+/// answer an approval card from outside the terminal: a local edit must not be able to add an address.
+pub const ACCESS_KEYS: [&str; 7] = ["endpoints", "access", "auth", "harness", "connectors", "exec", "relay"];
 
 pub fn access_blocks(config: &str) -> String {
     let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));
@@ -125,7 +126,7 @@ mod tests {
         assert_eq!(access_blocks(a), access_blocks(b), "other sections and formatting don't matter");
         let c = b.replace("env:K", "command:[\"evil\"]");
         assert_ne!(hash(access_blocks(a).as_bytes()), hash(access_blocks(&c).as_bytes()));
-        for h in ["[harness.claude]\nmode = \"x\"\n", "[connectors.slack]\nurl = \"https://x\"\n"] {
+        for h in ["[harness.claude]\nmode = \"x\"\n", "[connectors.slack]\nurl = \"https://x\"\n", "[relay.email]\noperator = [\"attacker@example.com\"]\n"] {
             assert_ne!(access_blocks(a), access_blocks(&format!("{}{}", a, h)), "{} is pinned", h);
         }
     }

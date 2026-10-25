@@ -42,19 +42,22 @@ test('the screen is exactly w by h, with a hairline above and below the prompt a
   }
 });
 
-test('line one: active agent, then the alert with a countdown, then the idle strip', () => {
+test('the strip is badges only, and the title row sits directly under it', () => {
   let s = fold(initial(0), { method: 'event', params: { type: 'dag.node.added', payload: { node_id: 'n_1', role: 'orchestrator', depth: 0 } } }, 500);
-  const l1 = (m: Model) => plain(header(m, 100)[0]!);
-  assert.match(l1(model({ state: s, now: 1000 })), /^⟦•─•⟧ athena: working$/);
-  assert.doesNotMatch(l1(model({ state: s, now: 60_000 })), /all agents idle/);
+  const strip = (m: Model) => plain(header(m, 100)[0]!);
+  assert.match(strip(model({ state: s, now: 1000 })), /^⟦•─•⟧ ⟦•_•⟧ ⟦-_-⟧ $|^(⟦[^⟧]{3}⟧ ){2,5}⟦[^⟧]{3}⟧$/, 'only badges and single spaces');
+  assert.match(strip(model({ state: s, now: 1000 })), /^⟦•─•⟧ /, 'the working orchestrator is first, in its working face');
   s = fold(s, { method: 'event', params: { type: 'approval.requested', payload: { approval_id: 'a', role: 'red-team', timeout_s: 600 } } }, 1000);
-  assert.match(l1(model({ state: s, now: 1000 })), /^⟦x\?x⟧ ares: decision needed · 10:00 remaining/);
-  assert.match(plain(header(model(), 100)[2]!), /^delphi v0\.5 · \/proj · chat$/);
+  assert.match(strip(model({ state: s, now: 1000 })), /⟦x\?x⟧/, 'a decision waiting shows on its badge');
+  assert.doesNotMatch(strip(model({ state: s, now: 1000 })), /[a-z]{3}/, 'no names, no state words');
+  assert.match(plain(header(model(), 100)[1]!), /^delphi v0\.5 · \/proj · chat$/);
+  const lines = frame(model(), 100, 30).map(plain);
+  assert.deepEqual([lines[1]!.startsWith('delphi v'), lines[2]], [true, ''], 'the title is the second row; one blank row follows');
 });
 
 test('footer has tokens and mode on the left, deck dots on the right, and no money', () => {
   const f = plain(footer(model({ state: { ...initial(0), tokens: 42100 } }), 100));
-  assert.match(f, /^42\.1k tokens\s+← \/ \? → · ○ ● ○$/);
+  assert.match(f, /^42\.1k tokens  ·  default\s+← \/ \? →  ·  ○ ● ○$/);
   assert.ok(!f.includes('$'));
 });
 
