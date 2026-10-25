@@ -243,9 +243,14 @@ pub struct SourceFile {
     pub rel_path: String,
     pub zone: &'static str,
     pub path: PathBuf,
+    /// The `source_type` for a file whose frontmatter has none. Documents Delphi ships (`agents/`, `skills/`) are
+    /// release-ratified, so they are trusted unless the file says otherwise; for everything else it is untrusted.
+    pub default_source: &'static str,
 }
 
-fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, out: &mut Vec<SourceFile>) {
+const UNTRUSTED: &str = "external_untrusted";
+
+fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, default_source: &'static str, out: &mut Vec<SourceFile>) {
     let Ok(rd) = std::fs::read_dir(root) else { return };
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -258,9 +263,9 @@ fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, out: &mut Vec
         }
         let rel = if logical_prefix.is_empty() { name.clone() } else { format!("{}/{}", logical_prefix, name) };
         if ft.is_dir() {
-            md_files(&e.path(), &rel, zone, out);
+            md_files(&e.path(), &rel, zone, default_source, out);
         } else if ft.is_file() && name.ends_with(".md") && e.metadata().map(|m| m.len() <= MAX_FILE_BYTES).unwrap_or(false) {
-            out.push(SourceFile { rel_path: rel, zone, path: e.path() });
+            out.push(SourceFile { rel_path: rel, zone, path: e.path(), default_source });
         }
     }
 }
@@ -269,22 +274,25 @@ fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, out: &mut Vec
 /// Operator-scope files are never listed; neither are live worktrees or source code.
 pub fn sources(ws: &Path) -> Vec<SourceFile> {
     let mut all: Vec<SourceFile> = Vec::new();
-    for base in [ws.join("base"), ws.join("team")] {
+    // The release's own agents and skills are ratified with the release; a team copy is the team's own work.
+    for (base, shipped) in [(ws.join("base"), "user_ratified"), (ws.join("team"), "internal_generated")] {
         let mut core = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&base) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
                 if e.file_type().map(|t| t.is_file()).unwrap_or(false) && n.ends_with(".md") {
-                    core.push(SourceFile { rel_path: n, zone: "core", path: e.path() });
+                    core.push(SourceFile { rel_path: n, zone: "core", path: e.path(), default_source: UNTRUSTED });
                 }
             }
         }
         all.extend(core);
-        md_files(&base.join("context"), "context", "context", &mut all);
-        md_files(&base.join("specs"), "specs", "specs", &mut all);
+        md_files(&base.join("context"), "context", "context", UNTRUSTED, &mut all);
+        md_files(&base.join("specs"), "specs", "specs", UNTRUSTED, &mut all);
+        md_files(&base.join("agents"), "agents", "agents", shipped, &mut all);
+        md_files(&base.join("skills"), "skills", "skills", shipped, &mut all);
     }
-    md_files(&ws.join("local/missions"), "missions", "missions", &mut all);
-    md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", &mut all);
+    md_files(&ws.join("local/missions"), "missions", "missions", UNTRUSTED, &mut all);
+    md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);
     // Later entries (team) override earlier ones (base) for the same logical path.
     let mut by_path: BTreeMap<String, SourceFile> = BTreeMap::new();
     for s in all {
@@ -306,6 +314,10 @@ pub struct Kb {
     embedder: Option<Arc<dyn Embedder>>,
     /// Replaces the model's similarity floor (the recall eval tries other values).
     floor: Option<f32>,
+    /// Vectors made at release time for the documents Delphi ships (`specs/004` §3.6), used before the model.
+    seed: Option<Arc<embed::vectors::VecCache>>,
+    /// How many chunks the last `embed_pending` took from `seed` instead of running the model.
+    seeded: usize,
 }
 
 fn frontmatter_field(text: &str, key: &str) -> Option<String> {
@@ -335,17 +347,22 @@ impl Kb {
     fn init(conn: Connection) -> Result<Kb, KbError> {
         conn.execute_batch(SCHEMA)?;
         conn.execute("INSERT OR IGNORE INTO kb_meta(key, value) VALUES ('schema_version', ?1)", [SCHEMA_VERSION])?;
-        Ok(Kb { conn, embedder: None, floor: None })
+        Ok(Kb { conn, embedder: None, floor: None, seed: None, seeded: 0 })
     }
 
     /// Index one document, replacing any earlier version. Returns whether it changed anything.
     pub fn upsert(&mut self, rel_path: &str, zone: &str, text: &str, now: &str) -> Result<bool, KbError> {
+        self.upsert_from(rel_path, zone, UNTRUSTED, text, now)
+    }
+
+    /// `upsert` for a file whose frontmatter may not name its `source_type`: `default_source` stands in.
+    pub fn upsert_from(&mut self, rel_path: &str, zone: &str, default_source: &str, text: &str, now: &str) -> Result<bool, KbError> {
         let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
         let existing: Option<(i64, String)> = self.conn.query_row("SELECT doc_id, content_blake3 FROM kb_documents WHERE rel_path = ?1", [rel_path], |r| Ok((r.get(0)?, r.get(1)?))).ok();
         if existing.as_ref().is_some_and(|(_, h)| *h == hash) {
             return Ok(false);
         }
-        let source_type = frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| "external_untrusted".into());
+        let source_type = frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string());
         let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), frontmatter_field(text, "status").unwrap_or_else(|| "active".into()));
         let tx = self.conn.transaction()?;
         if let Some((id, _)) = &existing {
@@ -397,7 +414,7 @@ impl Kb {
             let text = String::from_utf8_lossy(&bytes);
             seen.insert(&f.rel_path, ());
             let existed = known.contains_key(&f.rel_path);
-            if self.upsert(&f.rel_path, f.zone, &text, now)? {
+            if self.upsert_from(&f.rel_path, f.zone, f.default_source, &text, now)? {
                 if existed {
                     rep.updated += 1;
                 } else {
@@ -516,8 +533,19 @@ impl Kb {
             tx.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('embedding_model_id', ?1), ('embedding_dim', ?2), ('embedding_format', ?3)", params![id, dim, EMBED_FORMAT])?;
             tx.commit()?;
         }
+        self.seed = embed::vectors::load_seed(e.model_id(), e.dim(), EMBED_FORMAT);
         self.embedder = Some(e);
         Ok(())
+    }
+
+    /// Use these preloaded vectors (tests; `attach_embedder` loads the shipped ones itself).
+    pub fn set_seed_vectors(&mut self, seed: Option<Arc<embed::vectors::VecCache>>) {
+        self.seed = seed;
+    }
+
+    /// Chunks the last `embed_pending` filled from the preloaded vectors without running the model.
+    pub fn seeded(&self) -> usize {
+        self.seeded
     }
 
     pub fn embedder(&self) -> Option<&Arc<dyn Embedder>> {
@@ -548,9 +576,25 @@ impl Kb {
     /// Embed every chunk that has no vector yet, a few at a time so that no write lock is held while the model
     /// runs. `progress(done, total)` is called after each batch. Returns how many chunks were embedded.
     pub fn embed_pending(&mut self, progress: &mut dyn FnMut(usize, usize)) -> Result<usize, KbError> {
+        self.embed_batches(progress, true)
+    }
+
+    /// Give chunks their vectors from the preloaded cache only; the model is not run, so this is quick enough to do
+    /// before a search. Chunks the cache does not cover stay pending for `embed_pending`.
+    pub fn apply_seed_vectors(&mut self) -> Result<usize, KbError> {
+        if self.seed.is_none() {
+            return Ok(0);
+        }
+        self.embed_batches(&mut |_, _| {}, false)
+    }
+
+    fn embed_batches(&mut self, progress: &mut dyn FnMut(usize, usize), run_model: bool) -> Result<usize, KbError> {
         let Some(model) = self.embedder.clone() else { return Ok(0) };
         let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM kb_chunks c LEFT JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id WHERE m.chunk_id IS NULL", [], |r| r.get(0))?;
         let mut done = 0usize;
+        let mut seeded = 0usize;
+        // Chunks are taken in order and never revisited in one pass, so a chunk that is skipped cannot stall it.
+        let mut after = 0i64;
         loop {
             struct Pending {
                 id: i64,
@@ -560,9 +604,9 @@ impl Kb {
             }
             let batch: Vec<Pending> = {
                 let mut st = self.conn.prepare(
-                    "SELECT c.chunk_id, c.rel_path, c.heading_path, c.raw_content, d.source_type, d.status, d.zone FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id LEFT JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id WHERE m.chunk_id IS NULL ORDER BY c.chunk_id LIMIT ?1",
+                    "SELECT c.chunk_id, c.rel_path, c.heading_path, c.raw_content, d.source_type, d.status, d.zone FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id LEFT JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id WHERE m.chunk_id IS NULL AND c.chunk_id > ?2 ORDER BY c.chunk_id LIMIT ?1",
                 )?;
-                let rows = st.query_map([EMBED_BATCH as i64], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?)))?;
+                let rows = st.query_map([EMBED_BATCH as i64, after], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?)))?;
                 rows.flatten()
                     .map(|(id, path, heading, raw, src, status, zone)| Pending {
                         id,
@@ -572,14 +616,22 @@ impl Kb {
                     })
                     .collect()
             };
-            if batch.is_empty() {
-                break;
-            }
-            let texts: Vec<String> = batch.iter().flat_map(|p| p.pieces.iter().cloned()).collect();
-            let mut vecs = model.embed_documents(&texts).map_err(KbError::Io)?.into_iter();
+            let Some(last) = batch.last().map(|p| p.id) else { break };
+            after = last;
+            // Vectors made at release time for exactly this text are used as they are; the model reads the rest.
+            let have: Vec<Option<Vec<Vec<f32>>>> = batch.iter().map(|p| self.seed.as_ref().and_then(|c| c.get(&embed::vectors::key(&p.pieces))).filter(|v| v.len() == p.pieces.len()).cloned()).collect();
+            let texts: Vec<String> = if run_model { batch.iter().zip(&have).filter(|(_, h)| h.is_none()).flat_map(|(p, _)| p.pieces.iter().cloned()).collect() } else { Vec::new() };
+            let mut fresh = if texts.is_empty() { Vec::new().into_iter() } else { model.embed_documents(&texts).map_err(KbError::Io)?.into_iter() };
             let tx = self.conn.transaction()?;
-            for p in &batch {
-                let mine: Vec<Vec<f32>> = vecs.by_ref().take(p.pieces.len()).collect();
+            for (p, h) in batch.iter().zip(have) {
+                let mine: Vec<Vec<f32>> = match h {
+                    Some(v) => {
+                        seeded += 1;
+                        v
+                    }
+                    None if !run_model => continue,
+                    None => fresh.by_ref().take(p.pieces.len()).collect(),
+                };
                 // The chunk may have been replaced while the model ran; then its vectors are not wanted.
                 let claimed = tx.execute("INSERT OR IGNORE INTO kb_chunk_vec(chunk_id, windows) SELECT chunk_id, ?2 FROM kb_chunks WHERE chunk_id = ?1", params![p.id, mine.len() as i64])?;
                 if claimed == 1 {
@@ -592,7 +644,35 @@ impl Kb {
             done += batch.len();
             progress(done, total as usize);
         }
-        Ok(done)
+        self.seeded = seeded;
+        Ok(if run_model { done } else { seeded })
+    }
+
+    /// The vectors of every embedded chunk, as a preloaded-vector cache for the model in use (`specs/004` §3.6).
+    /// Keys are hashes of the text given to the model, so the cache is valid for any workspace that has the same text.
+    pub fn export_vectors(&self) -> Result<Vec<u8>, KbError> {
+        let model = self.embedder.as_ref().ok_or_else(|| KbError::Io("there is no embedding model to export vectors for".into()))?;
+        let rows: Vec<(i64, String, String, String, i64)> = {
+            let mut st = self.conn.prepare("SELECT c.chunk_id, c.rel_path, c.heading_path, c.raw_content, m.windows FROM kb_chunks c JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id ORDER BY c.chunk_id")?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+            rows.flatten().collect()
+        };
+        let mut seen = HashSet::new();
+        let mut entries: Vec<(embed::vectors::Key, Vec<Vec<f32>>)> = Vec::new();
+        for (id, path, heading, raw, windows) in rows {
+            let pieces: Vec<String> = embed::windows(&raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(&path, &heading, &p)).collect();
+            let k = embed::vectors::key(&pieces);
+            if pieces.len() as i64 != windows || !seen.insert(k) {
+                continue;
+            }
+            let mut vecs = Vec::new();
+            for w in 0..windows {
+                let bytes: Vec<u8> = self.conn.query_row("SELECT embedding FROM kb_vec WHERE rowid = ?1", [id * VEC_STRIDE + w], |r| r.get(0))?;
+                vecs.push(bytes.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect());
+            }
+            entries.push((k, vecs));
+        }
+        Ok(embed::vectors::VecCache::serialize(model.model_id(), model.dim(), EMBED_FORMAT, &entries))
     }
 
     /// Chunks nearest the query, best first, each once, with cosine similarity at or above the model's floor.
@@ -910,10 +990,13 @@ fn eval_sources(docs: &Path) -> Vec<SourceFile> {
     if let Ok(rd) = std::fs::read_dir(docs) {
         let mut top: Vec<_> = rd.flatten().filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false) && e.file_name().to_string_lossy().ends_with(".md")).collect();
         top.sort_by_key(|e| e.file_name());
-        files.extend(top.into_iter().map(|e| SourceFile { rel_path: e.file_name().to_string_lossy().to_string(), zone: "core", path: e.path() }));
+        files.extend(top.into_iter().map(|e| SourceFile { rel_path: e.file_name().to_string_lossy().to_string(), zone: "core", path: e.path(), default_source: UNTRUSTED }));
     }
     for (dir, zone) in [("context", "context"), ("specs", "specs"), ("missions", "missions"), ("memory", "memory")] {
-        md_files(&docs.join(dir), dir, zone, &mut files);
+        md_files(&docs.join(dir), dir, zone, UNTRUSTED, &mut files);
+    }
+    for dir in ["agents", "skills"] {
+        md_files(&docs.join(dir), dir, dir, "user_ratified", &mut files);
     }
     files
 }
@@ -1094,7 +1177,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     let n = kb.embed_pending(&mut |done, total| eprint!("\rembedding {}/{} chunks", done, total))?;
                     if n > 0 {
                         eprintln!();
-                        println!("kb: embedded {} chunk(s) in {:.0}s", n, started.elapsed().as_secs_f64());
+                        println!("kb: gave {} chunk(s) vectors in {:.0}s: {} from the preloaded vectors, {} by the model", n, started.elapsed().as_secs_f64(), kb.seeded(), n - kb.seeded());
                     }
                 }
                 Ok(0)
@@ -1142,6 +1225,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     kb.sync_lexical(&sources(ws), &now())?;
                 }
                 if model {
+                    kb.apply_seed_vectors()?;
                     let (v, c) = kb.vector_counts()?;
                     if v < c {
                         eprintln!("note: {} of {} chunk(s) have no vector yet; run `delphi kb index` for the best results", c - v, c);
@@ -1189,9 +1273,30 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 print_eval(&evaluate(&kb, &cases, &base)?);
                 Ok(0)
             }
+            "seed-export" => {
+                // delphi kb seed-export <out>: the vectors of this workspace's chunks, to ship as preloaded vectors.
+                let Some(out) = args.get(1) else {
+                    eprintln!("usage: delphi kb seed-export <out file>   (run `delphi kb index` first, with the model to ship)");
+                    return Ok(2);
+                };
+                let mut kb = open()?;
+                if !attach_default(home, &mut kb)? {
+                    eprintln!("delphi kb: no embedding model is installed, so there are no vectors to export");
+                    return Ok(1);
+                }
+                let (v, c) = kb.vector_counts()?;
+                if v < c {
+                    eprintln!("delphi kb: {} of {} chunk(s) have no vector; run `delphi kb index` first", c - v, c);
+                    return Ok(1);
+                }
+                let bytes = kb.export_vectors()?;
+                std::fs::write(out, &bytes).map_err(|e| KbError::Io(format!("{}: {}", out, e)))?;
+                println!("wrote {} ({:.1} KB) for {}", out, bytes.len() as f64 / 1024.0, kb.embedder().map(|e| e.model_id()).unwrap_or(""));
+                Ok(0)
+            }
             "model" => model_cmd(home, &args[1..]),
             _ => {
-                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] | miss | eval | model");
+                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] | miss | eval | model | seed-export <out>");
                 Ok(2)
             }
         }
@@ -1506,15 +1611,117 @@ mod tests {
         assert_eq!(kb.search("zebra frozen", &SearchOpts { legs: Legs::VectorOnly, ..Default::default() }).unwrap().len(), 1);
     }
 
+    /// Counts the texts the model is asked to read.
+    struct Counting {
+        inner: Arc<dyn Embedder>,
+        texts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Embedder for Counting {
+        fn model_id(&self) -> &str {
+            self.inner.model_id()
+        }
+        fn dim(&self) -> usize {
+            self.inner.dim()
+        }
+        fn min_similarity(&self) -> f32 {
+            self.inner.min_similarity()
+        }
+        fn embed_documents(&self, t: &[String]) -> Result<Vec<Vec<f32>>, String> {
+            self.texts.fetch_add(t.len(), std::sync::atomic::Ordering::SeqCst);
+            self.inner.embed_documents(t)
+        }
+        fn embed_query(&self, t: &str) -> Result<Vec<f32>, String> {
+            self.inner.embed_query(t)
+        }
+    }
+
+    fn counting() -> Arc<Counting> {
+        Arc::new(Counting { inner: concepts(), texts: Default::default() })
+    }
+
+    #[test]
+    fn preloaded_vectors_replace_the_model_for_unchanged_text_and_only_for_it() {
+        let docs = |extra: &str| vec![("context/a.md", "context", ok_doc("pipe buffer deadlock stalled the child")), ("context/b.md", "context", ok_doc(&format!("zebra stripes{}", extra)))];
+        let build = |docs: &[(&str, &str, String)], model: Arc<Counting>, seed: Option<Arc<embed::vectors::VecCache>>| {
+            let mut kb = Kb::open_in_memory().unwrap();
+            kb.attach_embedder(model).unwrap();
+            kb.set_seed_vectors(seed);
+            for (p, z, t) in docs {
+                kb.upsert(p, z, t, "t").unwrap();
+            }
+            kb.embed_pending(&mut |_, _| {}).unwrap();
+            kb
+        };
+        // The release job: embed the shipped documents and export the vectors.
+        let maker = counting();
+        let made = build(&docs(""), maker.clone(), None);
+        assert_eq!(maker.texts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let cache = Arc::new(embed::vectors::VecCache::parse(&made.export_vectors().unwrap()).unwrap());
+        assert_eq!(cache.len(), 2);
+        // A fresh workspace: nothing is read by the model, and search works at once.
+        let user = counting();
+        let kb = build(&docs(""), user.clone(), Some(cache.clone()));
+        assert_eq!(user.texts.load(std::sync::atomic::Ordering::SeqCst), 0, "the model was not run");
+        assert_eq!(kb.seeded(), 2);
+        assert_eq!(kb.vector_counts().unwrap(), (2, 2));
+        let hits = kb.search("subprocess hangs frozen", &SearchOpts::default()).unwrap();
+        assert_eq!(hits[0].rel_path, "context/a.md");
+        // Before a search the cache alone is applied, without loading or running the model, and a chunk it does not
+        // cover is left for the model rather than stalling the pass.
+        let quick = counting();
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.attach_embedder(quick.clone()).unwrap();
+        kb.set_seed_vectors(Some(cache.clone()));
+        for (p, z, t) in docs(" plus a note the cache has never seen") {
+            kb.upsert(p, z, &t, "t").unwrap();
+        }
+        assert_eq!(kb.apply_seed_vectors().unwrap(), 1, "only the unchanged document is covered");
+        assert_eq!(kb.vector_counts().unwrap(), (1, 2));
+        assert_eq!(quick.texts.load(std::sync::atomic::Ordering::SeqCst), 0, "the model was not run");
+        assert_eq!(kb.embed_pending(&mut |_, _| {}).unwrap(), 1, "the model reads what the cache lacked");
+        assert_eq!(quick.texts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The operator edits one document: that one is read by the model, the other still comes from the cache.
+        let edited = counting();
+        let kb = build(&docs(" and more words"), edited.clone(), Some(cache));
+        assert_eq!(edited.texts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(kb.seeded(), 1);
+    }
+
+    #[test]
+    fn agents_and_skills_are_indexed_trusted_unless_a_file_says_otherwise() {
+        let manifest = |role: &str| format!("---\nid: {}\nrole: \"Lead Engineer\"\n---\n# {}\n\nWrites zebra code.\n", role, role);
+        let d = tree(&[
+            ("base/agents/builder/AGENT.md", &manifest("builder")),
+            ("base/skills/tdd/SKILL.md", "---\nname: tdd\n---\n# TDD\n\nWrite the zebra test first.\n"),
+            ("team/agents/builder/AGENT.md", &manifest("builder").replace("zebra", "team zebra")),
+            ("team/skills/odd/SKILL.md", "---\nname: odd\nsource_type: external_untrusted\n---\n# Odd\n\nA zebra skill from the web.\n"),
+        ]);
+        let files = sources(d.path());
+        let names: Vec<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert_eq!(names, vec!["agents/builder/AGENT.md", "skills/odd/SKILL.md", "skills/tdd/SKILL.md"]);
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&files, "t").unwrap();
+        let paths = |o: &SearchOpts| kb.search("zebra", o).unwrap().into_iter().map(|h| h.rel_path).collect::<Vec<_>>();
+        let mut found = paths(&SearchOpts::default());
+        found.sort();
+        assert_eq!(found, vec!["agents/builder/AGENT.md", "skills/tdd/SKILL.md"], "shipped and team files are trusted by default; a file that says it is untrusted is not");
+        assert_eq!(paths(&SearchOpts { include_untrusted: true, ..Default::default() }).len(), 3);
+        let doc_tier: String = kb.conn.query_row("SELECT source_type FROM kb_documents WHERE rel_path = 'agents/builder/AGENT.md'", [], |r| r.get(0)).unwrap();
+        assert_eq!(doc_tier, "internal_generated", "the team copy replaced the shipped one and carries the team's tier");
+        let shipped: String = kb.conn.query_row("SELECT source_type FROM kb_documents WHERE rel_path = 'skills/tdd/SKILL.md'", [], |r| r.get(0)).unwrap();
+        assert_eq!(shipped, "user_ratified");
+    }
+
     #[test]
     fn the_source_repo_answers_an_identifier_query_with_the_rubric_first() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut kb = Kb::open_in_memory().unwrap();
         let mut files = Vec::new();
         for f in ["REVIEW.md", "GOVERNANCE.md", "SPEC.md"] {
-            files.push(SourceFile { rel_path: f.into(), zone: "core", path: repo.join(f) });
+            files.push(SourceFile { rel_path: f.into(), zone: "core", path: repo.join(f), default_source: UNTRUSTED });
         }
-        md_files(&repo.join("specs"), "specs", "specs", &mut files);
+        md_files(&repo.join("specs"), "specs", "specs", UNTRUSTED, &mut files);
         kb.sync(&files, "t").unwrap();
         kb.integrity_check().unwrap();
         let hits = kb.search("[REV-SEC-04]", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
