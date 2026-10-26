@@ -219,6 +219,8 @@ pub struct Engine {
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
     /// What each mission has been told about the added bundles (`bundle_events.rs`): mission id to bundle id to hash.
     pub(crate) bundle_seen: Mutex<HashMap<String, crate::bundle_events::Seen>>,
+    /// The last org-context slice and the key it was built under (`org_context.rs`).
+    pub(crate) org_cache: Mutex<Option<(String, crate::org_context::Built)>>,
     /// A JSON Schema a handoff's answer must match, by handoff id (`specs/021` §5). A CLI harness validates against it;
     /// an API endpoint ignores it, and the reader of the answer accepts either shape.
     pub(crate) schemas: Mutex<HashMap<String, String>>,
@@ -608,9 +610,14 @@ impl Engine {
                     Err(e) => slices.push(ContextSlice { label: p.uri.clone(), tier: "unavailable".into(), text: format!("(could not be read: {})", e) }),
                 }
             }
-            if let Some(extra) = self.injected.lock().unwrap().get(&handoff.handoff_id) {
-                slices.extend(extra.iter().cloned());
-            }
+            // Council seats are the spans with injected slices; their Round 1 stays blind, so they get a lens, not the slice.
+            let council_seat = {
+                let injected = self.injected.lock().unwrap();
+                if let Some(extra) = injected.get(&handoff.handoff_id) {
+                    slices.extend(extra.iter().cloned());
+                }
+                injected.contains_key(&handoff.handoff_id)
+            };
             // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });
@@ -618,6 +625,20 @@ impl Engine {
                 if !agents.is_empty() {
                     slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
                 }
+            }
+            // The organization's stated goals and perspectives, for the roles whose manifest says so (`specs/026` §3).
+            if crate::org_context::gets_slice(&sc.manifest.execute, sc.toolless, council_seat) {
+                let org = self.org_context();
+                if !org.text.is_empty() {
+                    slices.push(ContextSlice { label: "@runtime/org-context".into(), tier: "L5".into(), text: org.text.clone() });
+                    if fresh {
+                        m.append(sc.ev("org_context.built", json!({"bundles": org.bundles, "bytes": org.text.len(), "trimmed": org.trimmed, "notes": org.notes}))).await?;
+                    }
+                }
+            }
+            // Every role with tools reports finished work to the change log (`record_change`), not in its reply.
+            if !sc.toolless {
+                slices.push(ContextSlice { label: "@runtime/change-log".into(), tier: "L3".into(), text: tools::CHANGE_LOG_NOTE.into() });
             }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
@@ -1151,7 +1172,7 @@ impl Engine {
         if !cfg.harness.get("agy").cloned().unwrap_or_default().bridge {
             return vec![];
         }
-        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_gate_verified(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
+        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_builder_ready(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
     }
 
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;
@@ -2418,6 +2439,8 @@ mod tests {
         };
         let task = spawn_task(&f, "architect", "Draft a spec");
         let card = wait_for_card(&f).await;
+        // The card is pending in the broker a moment before `approval.requested` reaches the log, which is what the observer reads.
+        wait_until("the observer to show the agent waiting on the operator", || fold(&f).running_agents().first().is_some_and(|r| r.waiting == "waiting on you")).await;
         let st = fold(&f);
         let rows = st.running_agents();
         assert_eq!(rows.len(), 1, "{:?}", rows);
@@ -3028,10 +3051,46 @@ mod tests {
         let f = setup(vec![Step::tool("r1", "read_file", json!({"path": "@bundle/acme/plat/knowledge/a.md"})), Step::tool("w1", "write_file", json!({"path": "@bundle/acme/plat/knowledge/a.md", "content": "x"})), Step::text("done")], 5.0, |_| {});
         add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("knowledge/a.md", "---\nid: a\nsource_type: user_ratified\n---\n# A\n\nThe quokka procedure.\n")]);
         f.engine.run_task(&f.m, "architect", "read it").await.unwrap();
-        let result = f.model.requests()[1].body["messages"].to_string();
+        // the tool result only: the architect's prompt also carries the org-context slice, which is labelled L5
+        let result = f.model.requests()[1].body["messages"][2]["content"][0]["content"].to_string();
         assert!(result.contains("quokka procedure") && result.contains("L2"), "{}", result);
         assert!(!result.contains("L5"), "a bundle's own source_type is a display copy");
         assert!(f.model.requests()[2].body["messages"].to_string().contains("denied"), "bundles are read-only to agents");
+    }
+
+    // specs/026 AC-1..3: the roles that plan and review are told the organization's goals once, in the user channel at
+    // L5 with the daemon's own sentence on top; the builder is not, and no span's ceiling moves.
+    #[tokio::test]
+    async fn the_planning_roles_get_the_org_context_slice_once_and_the_builder_does_not() {
+        use crate::bundle_load::tests::{add_bundle, FM};
+        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c")], 5.0, |_| {});
+        let goals = format!("{}## [G-acme-01] Cut p99 checkout latency\n- **Horizon:** 2026-Q4 to 2999-Q1\n- **Measure:** p99 weekly\n- **Status:** active\n", FM);
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/goals.md", &goals), ("bundle.toml", "[bundle]\nschema = 1\n")]);
+        for (i, role) in ["orchestrator", "architect", "strategist"].into_iter().enumerate() {
+            f.engine.run_task(&f.m, role, "plan it").await.unwrap();
+            let req = f.model.requests()[i].body.to_string();
+            assert_eq!(req.matches("[G-acme-01] Cut p99 checkout latency").count(), 1, "{} sees the slice exactly once", role);
+            assert!(req.contains("do not change any approval, scope, tier or rule") && req.contains("org-context"), "{}", role);
+            let sys = f.model.requests()[i].body["system"].to_string();
+            assert!(!sys.contains("G-acme-01"), "goals are never in the system channel");
+        }
+        let built = events_of(&f, "org_context.built");
+        assert_eq!(built.len(), 3);
+        assert_eq!((built[0].payload["bundles"].as_u64(), built[0].payload["trimmed"].as_array().map(|a| a.len())), (Some(1), Some(0)));
+        assert!(events_of(&f, "span.taint").is_empty(), "L5 never lowers a ceiling");
+        // the builder gets knowledge through search and pointers, not the goals (a goal in a builder's prompt invites scope creep)
+        let f = builder_fixture(vec![Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/goals.md", &goals), ("bundle.toml", "[bundle]\nschema = 1\n")]);
+        f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert!(!f.model.requests()[0].body.to_string().contains("G-acme-01"));
+        assert!(events_of(&f, "org_context.built").is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_a_bundle_there_is_no_slice_and_no_event() {
+        let f = setup(vec![Step::text("a")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "plan it").await.unwrap();
+        assert!(!f.model.requests()[0].body.to_string().contains("org-context") && events_of(&f, "org_context.built").is_empty());
     }
 
     #[tokio::test]

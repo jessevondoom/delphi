@@ -26,7 +26,7 @@ Delphi is a spec-driven, multi-agent working environment for software engineerin
 - **A console** (just `delphi`). Ask questions, hand out work with `@architect …`, `/build …` or `/council …`, and answer approval cards. Nothing consequential happens without a card.
 - **Builds you can trust.** The Builder works in a throwaway worktree; Delphi runs your tests and checks, has a different agent audit the exact commit, and asks you before merging (or opens a pull request).
 - **Councils.** Several seats on different model families answer blind, cross-examine each other's answers, and the verdict carries a Minority Report that the runtime copies verbatim.
-- **A second, read-only window** (`delphi observe`): the live Council, work grouped into threads, the agents, the archives and knowledge window, and the reasoning. It never spends money.
+- **A second, read-only window** (`delphi observe`): the live Council, work grouped into threads, the agents, the archives and knowledge window, and a change log of what the agents finished (their own one-line reports, by session, never their reasoning). It never spends money.
 - **Knowledge search** (`delphi kb search`, `/search` in the console): keywords, meaning and a reranking pass, all run locally from models compiled into the executable.
 - **Documents without dependencies.** Agents read PDF, Office, archives, HTML, notebooks and more, and write HTML pages, reports, decks, spreadsheets, charts and diagrams, all with in-tree code.
 - **Work while you are away.** `delphi run` does one task headless by a written policy; `delphi relay` mails approval cards to you (email or Telegram) and takes your replies; timers wake a role later.
@@ -145,7 +145,7 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `/decisions`, `/merge <task>` | review an optimistic build's decisions; rerun the gates and merge card |
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
-| `/observe [council\|epic\|agents\|archives]` | open the narrator in a new tmux or terminal window |
+| `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
 | `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | after a daemon restart; the current and past missions; housekeeping |
 
 `?` on an empty prompt lists the keys. `Esc` clears the prompt, then stops the running task; `Alt+Enter` or `Ctrl+J` inserts a newline; the mouse wheel scrolls and `/mouse` hands selection back to the terminal. The console follows `NO_COLOR`, `TERM=dumb`, `DELPHI_THEME=dark|light`, `DELPHI_REDUCE_MOTION=1`, `DELPHI_NO_MOUSE=1` and `DELPHI_NO_TITLE=1`.

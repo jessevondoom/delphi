@@ -8,7 +8,7 @@ import { renderMarkdownLinks } from './markdown.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 
-export type Hit = { path: string; collection: string; trust: string; heading: string; preview: string; start_line?: number; end_line?: number };
+export type Hit = { path: string; collection: string; trust: string; status?: string; heading: string; preview: string; start_line?: number; end_line?: number };
 export type Shelf = {
   collections: { name: string; documents: number; updated: string }[];
   recent: { path: string; collection: string; updated: string }[];
@@ -33,13 +33,27 @@ export type Arch = {
   /** The reader's history and the place in it; `at` is -1 when the reader is closed. */
   trail: Entry[];
   at: number;
+  /** Search only this collection (tab cycles it); null is all of them. */
+  scope: string | null;
+  /** Hide documents whose provenance is untrusted or inactive (ctrl+t). They show, tagged, by default: this is a person reading. */
+  trustedOnly: boolean;
+  /** The queries searched in this window, oldest first, and which one up and down have recalled (null: none). */
+  history: string[];
+  hist: number | null;
 };
 
-export const emptyArch = (): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1 });
+/** How many results one search asks for. */
+export const RESULTS = 30;
+
+export const emptyArch = (): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, scope: null, trustedOnly: false, history: [], hist: null });
+
+/** What every request to the daemon adds: the trust filter. */
+export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
 
 export type Action =
   | { t: 'none' }
   | { t: 'search'; q: string }
+  | { t: 'reload' }
   | { t: 'browse'; name: string }
   | { t: 'open'; target: Extract<Target, { k: 'doc' | 'pointer' }> }
   | { t: 'browser'; url: string }
@@ -55,6 +69,30 @@ export function rows(a: Arch): Row[] {
 }
 
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+const STOP = new Set(['a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'can', 'do', 'does', 'for', 'from', 'how', 'in', 'is', 'it', 'of', 'on', 'or', 'the', 'to', 'was', 'what', 'when', 'where', 'which', 'who', 'why', 'with']);
+/** The words of a query worth marking in a result, cut back a little so `escalate` also marks `escalates` and `escalating`. */
+export function terms(q: string): string[] {
+  const stem = (t: string) => (t.length > 6 ? t.replace(/(ing|ed|es|ly|s)$/, '') : t.length > 4 ? t.replace(/s$/, '') : t);
+  return [...new Set(q.toLowerCase().split(/[^\p{L}\p{N}_-]+/u).filter((t) => t.length >= 2 && !STOP.has(t)).map(stem))];
+}
+
+/** `text` with the words of `q` in bold and the rest in `base`. */
+export function emphasize(text: string, q: string, base: (s: string) => string = (s) => s): string {
+  const ts = terms(q);
+  if (!ts.length || !text) return base(text);
+  const re = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${ts.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})[\\p{L}\\p{N}_]*`, 'giu');
+  let out = '', last = 0;
+  for (const m of text.matchAll(re)) {
+    out += (m.index! > last ? base(text.slice(last, m.index)) : '') + chalk.bold(m[0]);
+    last = m.index! + m[0].length;
+  }
+  return out + (last < text.length ? base(text.slice(last)) : '');
+}
+
+const UNTRUSTED = new Set(['external_untrusted', 'federated_peer']);
+/** What a result says about its provenance when it is not the usual: ` · untrusted`, ` · inactive`. */
+export const caveat = (h: { trust: string; status?: string }): string => [UNTRUSTED.has(h.trust) ? 'untrusted' : '', h.status && h.status !== 'active' ? 'inactive' : ''].filter(Boolean).join(' · ');
 const slug = (s: string) => s.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-');
 const day = (iso: string) => (iso || '').slice(0, 10);
 const READER_MARGIN = 4;
@@ -80,7 +118,7 @@ function startRow(e: Entry, w: number, target: Target | null): number {
 
 // ── results from the daemon ─────────────────────────────────────────────────
 
-const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), trust: String(r.trust ?? ''), heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
+const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
 
 export function gotHits(a: Arch, q: string, body: any): Arch {
   if (a.q.trim() !== q) return a; // the box has moved on
@@ -88,7 +126,7 @@ export function gotHits(a: Arch, q: string, body: any): Arch {
 }
 
 export function gotBrowse(a: Arch, name: string, docs: any[]): Arch {
-  return { ...a, searched: '', browse: name, hits: docs.map((d) => ({ path: d.rel_path, collection: d.zone, trust: d.source_type, heading: '', preview: day(d.updated_at) })), sel: 0, focus: 'list', took: null, engine: null, note: '' };
+  return { ...a, searched: '', browse: name, hits: docs.map((d) => ({ path: d.rel_path, collection: d.zone, trust: d.source_type, status: d.status, heading: '', preview: day(d.updated_at) })), sel: 0, focus: 'list', took: null, engine: null, note: '' };
 }
 
 export function gotShelf(a: Arch, collections: any[], recent: any[], health: any): Arch {
@@ -126,23 +164,41 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   if (e.t === 'text' || e.t === 'paste') {
     const s = e.t === 'paste' ? e.s.replace(/\s+/g, ' ') : e.s;
     if (/[\x00-\x1f\x7f]/.test(s)) return NOT_USED(a);
-    return used({ ...a, focus: 'box', q: (a.q + s).slice(0, 200), note: '' });
+    return used({ ...a, focus: 'box', q: (a.q + s).slice(0, 200), note: '', hist: null });
   }
-  if (e.t === 'ctrl' && e.c === 'u') return used({ ...a, q: '', focus: 'box' });
+  if (e.t === 'ctrl' && e.c === 'u') return used({ ...a, q: '', focus: 'box', hist: null });
+  if (e.t === 'ctrl' && e.c === 't') return used({ ...a, trustedOnly: !a.trustedOnly, note: a.trustedOnly ? 'showing every document, tagged by provenance' : 'trusted documents only' }, { t: 'reload' });
   if (e.t === 'wheel') return used({ ...a, sel: Math.max(0, Math.min(list.length - 1, a.sel + (e.dir === 'up' ? -1 : 1))), focus: list.length ? 'list' : 'box' });
   if (e.t !== 'key' || e.alt || e.ctrl) return NOT_USED(a);
   switch (e.k) {
-    case 'backspace': return used({ ...a, focus: 'box', q: [...a.q].slice(0, -1).join(''), note: '' });
+    case 'backspace': return used({ ...a, focus: 'box', q: [...a.q].slice(0, -1).join(''), note: '', hist: null });
     case 'enter': {
       if (a.focus === 'list' && list[a.sel]) return open(a, list[a.sel]!, used);
       const q = a.q.trim();
-      return q ? used({ ...a, note: 'searching…' }, { t: 'search', q }) : used(a);
+      const history = q && a.history[a.history.length - 1] !== q ? [...a.history, q].slice(-50) : a.history;
+      return q ? used({ ...a, note: 'searching…', history, hist: null }, { t: 'search', q }) : used(a);
     }
-    case 'down': return list.length ? used({ ...a, focus: 'list', sel: a.focus === 'list' ? Math.min(list.length - 1, a.sel + 1) : 0 }) : used(a);
-    case 'up': return a.focus === 'list' ? (a.sel > 0 ? used({ ...a, sel: a.sel - 1 }) : used({ ...a, focus: 'box' })) : used(a);
+    case 'down':
+      if (a.focus === 'box' && a.hist !== null) return used(a.hist + 1 < a.history.length ? { ...a, hist: a.hist + 1, q: a.history[a.hist + 1]! } : { ...a, hist: null, q: '' }); // newer, then the empty box again
+      return list.length ? used({ ...a, focus: 'list', sel: a.focus === 'list' ? Math.min(list.length - 1, a.sel + 1) : 0 }) : used(a);
+    case 'up':
+      if (a.focus === 'box') { // older queries, from an empty box or while recalling
+        if (!a.history.length || (a.q !== '' && a.hist === null)) return used(a);
+        const hist = a.hist === null ? a.history.length - 1 : Math.max(0, a.hist - 1);
+        return used({ ...a, hist, q: a.history[hist]! });
+      }
+      return a.sel > 0 ? used({ ...a, sel: a.sel - 1 }) : used({ ...a, focus: 'box' });
     case 'pgdn': return list.length ? used({ ...a, focus: 'list', sel: Math.min(list.length - 1, a.sel + 5) }) : used(a);
     case 'pgup': return used({ ...a, sel: Math.max(0, a.sel - 5) });
-    case 'tab': case 'shift-tab': return used({ ...a, note: 'online search is not set up: offline is the only mode for now' });
+    case 'tab': case 'shift-tab': {
+      // The scope: all collections, then each in turn. (Online search is not built; this is what tab is for until it is.)
+      const names: (string | null)[] = [null, ...(a.shelf?.collections.map((c) => c.name) ?? [])];
+      const at = Math.max(0, names.indexOf(a.scope));
+      const scope = names[(at + (e.k === 'tab' ? 1 : names.length - 1)) % names.length] ?? null;
+      const q = a.q.trim();
+      const next = { ...a, scope, note: scope ? `searching in ${scope}` : 'searching in every collection' };
+      return a.searched !== null && !a.browse && q ? used({ ...next, note: 'searching…' }, { t: 'search', q }) : used(next);
+    }
     case 'esc':
       if (a.searched !== null) return used({ ...a, searched: null, hits: [], browse: null, note: '', sel: 0, focus: 'box', took: null });
       return a.q ? used({ ...a, q: '' }) : NOT_USED(a);
@@ -216,12 +272,12 @@ function box(a: Arch, w: number): string[] {
   return [center('╭' + '─'.repeat(inner) + '╮', w), center('│' + body + fill + ' │', w), center('╰' + '─'.repeat(inner) + '╯', w)];
 }
 
-const modeLine = (w: number) => center(`${T.accent('●')} offline    ${T.dim('○ online (not set up)')}`, w);
+const modeLine = (a: Arch, w: number) => center(`${T.accent('●')} offline    ${T.dim('○ online (not set up)')}${a.scope ? `    in: ${chalk.bold(a.scope)}` : ''}${a.trustedOnly ? `    ${T.dim('trusted only')}` : ''}`, w);
 
 function mark(sel: boolean, a: Arch) { return sel && a.focus === 'list' ? T.accent('›') : ' '; }
 
 function home(a: Arch, w: number, h: number): string[] {
-  const out: string[] = ['', center(chalk.bold('knowledge'), w), ...box(a, w), modeLine(w), ''];
+  const out: string[] = ['', center(chalk.bold('knowledge'), w), ...box(a, w), modeLine(a, w), ''];
   const list = rows(a);
   if (!a.shelf) out.push(T.dim(center('reading the index…', w)));
   else if (!list.length) out.push(T.dim(center('the knowledge base is empty', w)));
@@ -238,28 +294,31 @@ function home(a: Arch, w: number, h: number): string[] {
     if (s) out.push('', T.dim(`  ${s.documents} documents · ${s.passages} passages · ${s.vectors > 0 ? 'hybrid (keyword + vector)' : 'keyword'} search`));
   }
   if (a.note) out.push('', T.dim(center(a.note, w)));
-  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · esc back · ← → views' : 'type to search · enter search · ↓ browse · ← → views'));
+  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · esc back · ← → views' : 'type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust'));
 }
 
 function results(a: Arch, w: number, h: number): string[] {
   const out: string[] = [...box(a, w).slice(w < 40 ? 0 : 1, w < 40 ? 2 : 2)];
+  const where = `${a.scope ? ` · in ${a.scope}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
   const head = a.browse
-    ? `${a.hits.length} documents in ${a.browse}, newest first`
-    : a.hits.length ? `${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(1)} s` : ''}${a.engine ? ` · ${a.engine}` : ''}` : 'nothing in the knowledge base matches';
+    ? `${a.hits.length} documents in ${a.browse}, newest first${a.trustedOnly ? ' · trusted only' : ''}`
+    : a.hits.length ? `${a.hits.length >= RESULTS ? 'top ' : ''}${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(1)} s` : ''}${a.engine ? ` · ${a.engine}` : ''}${where}` : `nothing in the knowledge base matches${where}`;
   out.push(T.dim('  ' + head), '');
   const per = 4, room = Math.max(1, Math.floor((h - out.length - 1) / per));
   const top = Math.max(0, Math.min(a.sel - room + 1, a.hits.length - room), a.sel >= room ? a.sel - room + 1 : 0);
   a.hits.slice(top, top + room).forEach((x, k) => {
     const i = top + k, on = i === a.sel && a.focus === 'list';
     const title = `${x.path}${x.heading ? ' › ' + x.heading.split(' > ').pop() : ''}`;
-    out.push(T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${on ? chalk.bold(title) : title}`, T.dim(x.collection + ' '), w));
+    const tag = [x.collection, caveat(x)].filter(Boolean).join(' · ');
+    const shown = T.clip(title, Math.max(10, w - T.width(tag) - 10));
+    out.push(T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${a.browse ? (on ? chalk.bold(shown) : shown) : emphasize(shown, a.searched ?? '', on ? chalk.bold : (z) => z)}`, T.dim(tag + ' '), w));
     // A preview opens with the section's own heading, which the title row already says.
     const prev = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean).slice(0, 2);
-    for (let n = 0; n < 2; n++) out.push(prev[n] ? T.dim('       ' + T.clip(prev[n]!, w - 9)) : '');
+    for (let n = 0; n < 2; n++) out.push(prev[n] ? '       ' + emphasize(T.clip(prev[n]!, w - 9), a.browse ? '' : a.searched ?? '', T.dim) : '');
     out.push('');
   });
   if (a.note) out.push(T.dim('  ' + a.note));
-  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · esc clear · ← → views' : 'enter search · ↓ pick · esc clear · ← → views'));
+  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · tab scope · ctrl+t trust · esc clear · ← → views' : 'enter search · ↓ pick · ↑ history · tab scope · ctrl+t trust · esc clear'));
 }
 
 function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {

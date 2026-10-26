@@ -56,15 +56,27 @@ Built in `Engine::start_task` into the handoff's `conversation` field, for opera
 
 ## 6. Console
 - `/new` and `/clear` call `session.new`; the UI empties its blocks **after** the daemon acknowledges, so the clear is durable and a reattach shows an empty buffer. If the daemon is unreachable the command fails with a note and the buffer is left alone.
-- The footer shows the session's turn count and, when the preamble hit its budget, `context: trimmed`. `/context` prints what the next task would receive (preamble size, turns kept, turns digested), so the behaviour is inspectable rather than guessed at.
-- `/export` writes the current session by default; `/export all` writes the mission.
+- **Footer.** `session 3 · 4 asks` once a session has begun (the number is the session on the screen, the asks are the operator's prompts on it). It says nothing before any `/new` or restart, so existing screens do not change. A "trimmed" flag in the footer was dropped: it would need a daemon call on every redraw, and `/context` answers it.
+- **`/context [full]`** calls `session.context` (console scope only: it carries the operator's conversation) and prints one note: the session, how many turns the next task is told, how many whole, as lines and left out, about how many tokens of the budget, how many earlier sessions it summarises, and the starting trust if an earlier reply read untrusted content. `full` appends the text itself. It reads exactly what `start_task` would build (`Engine::conversation_for`), so it cannot drift from what the team is told.
+- **`/export`** writes the session on the screen (which is the current session, since the screen is a fold of it). **`/export all`** writes the mission from the daemon's log, one `##` section per session (`began <time> (new|restart)`), with the log from before sessions under its own heading; replies are attributed to the top agent of their task; builds and councils are not conversation and are left out; model text is sanitised.
+
+### 6.5 The narrator's dashboard view
+The narrator is the operational dashboard, and its first view and default is now `dashboard` (`delphi observe dashboard`, also `now`, `ops`, `monitor`); a council in round 1 or 2 still takes the view. It uses the whole window for what an operator watching a mission needs, in this order, each section dropping out before a more important one is cut:
+1. **sessions**: a chip per session, `session 3 · 4 asks · 2 running`, the current one marked; earlier sessions appear while something of theirs runs, plus the last three.
+2. **running now**: everything running, **grouped by the session that asked for it**, current first, earlier ones labelled `(earlier, still running)`. A row is the task's top agent (and `+n` sub-agents), the task id, how long it has run, its state (`working`, or what it waits for: `waiting for a model: …`, `waiting on you`), and what it was asked. Nothing disappears when the operator starts a new session.
+3. **needs you**: every approval, council decision and proposal, not only the first.
+4. **pace**: tokens a minute with the last twelve minutes as a sparkline, total tokens, cache hit rate, retries, agents working. No money, as everywhere in the narrator.
+5. **finished lately**: the last few tasks, how each ended, the session that asked, and the first line of what it said.
+6. **recent**: the newest happenings from the narrative, filling the rows left.
+In a window under 16 rows the order is running first, then the current session as one chip, so the important part is never cut. The epic and agents views are unchanged; their tasks carry the session in the state if they want it later.
 - Running tasks are unaffected by `/new`; a message queued before it is sent into the new session (the queue is cleared by `/stop`, as now).
 
 ## 7. Still open
 1. Default budget of 6,000 tokens, and whether the digest of older turns reads well to the model (built; untried live).
 2. A model-written session summary for the central log, beside the deterministic digest.
-3. How the narrator's epic and agents views should group by session (S5); today the title row names the session and counts running work from earlier ones.
-4. The footer turn count, `/context` and `/export` scoping from §6 are not built yet.
+3. Whether the epic view should also mark which session each thread began in (the dashboard groups by session; the epic groups by what the work is about).
+4. Two columns on a wide window (sessions beside running work) once the single column has been lived with.
+5. A pty test of `/new`, `/context` and `/export all` against a real daemon, and a live run (S4).
 
 ## 8. Implementation plan
 Slices, each ending with the gates green and mergeable alone.
@@ -81,13 +93,16 @@ Total about 12 h. S1 and S2 are daemon-only and can land before any UI change; S
 **Built so far (2026-10-25):**
 - **S1, done** (as amended in §3): the event, `session.new`, the restart hook in `EngineService::mission`, the digest and central log, the console fold. No recovery change was needed: the session is derived from the log.
 - **S2, done** (as amended in §4 and §5): `session.rs`, the handoff's `conversation` field, `[session] conversation_tokens`, the starting-ceiling rule. Tests: `session.rs` units, and two daemon tests (`a_follow_up_is_told…`, `a_restart_ends_the_session_once…`).
-- **S3, partly done:** `/new` with `/clear` as its alias, the clear on `session.started`, replay showing only the current session. Not built: footer count, `/context`, `/export` scoping, wireframe text.
+- **S3, done (2026-10-26):** `/new` with `/clear` as its alias, the clear on `session.started`, replay showing only the current session, the footer count, `/context [full]` (`session.context`), `/export [all]`. Tests: `ui/test/session-report.test.ts`, `service::tests::the_context_report_…`. Not done: wireframe text.
 - **S4, not done:** no pty test of `/new`, no live run against a real seat.
-- **S5, started:** the observer state carries `sessions` and each task's session; the narrator's title row says `session N · M asks · K from before`. Not built: grouping the epic and agents views by session. This is the larger narrator work the operator has flagged.
+- **S5, done for the dashboard (2026-10-26):** the observer state carries `sessions` and each task's session; the narrator has the `dashboard` view (§6.5), its default, with goldens at 80x24, 100x34 and 40x12 busy and idle (`ui/test/dashboard.test.ts`). The Rust `View` enum, `delphi observe dashboard` and the `/observe` messages know it.
 
 ## 9. Acceptance criteria
 - **AC-1:** after `/new`, the console buffer is empty, stays empty across a detach and reattach, and `session.snapshot` returns no earlier events; the earlier events are still in the log.
 - **AC-2:** a task submitted after a reply in the same session has that exchange in its compiled request; one submitted after `/new` has none.
+- **AC-8:** `/context` reports the turns, trimming, tokens and trust the next task would get, and `full` shows the text; the narrator scope is refused it.
+- **AC-9:** `/export all` has a section per session, attributes replies to the task's top agent, and omits builds and councils.
+- **AC-10:** the dashboard lists every running task under the session that asked for it, including earlier sessions' work, and names what a stuck task waits for; in a 12-row window the running section is still shown.
 - **AC-3:** a reply that carried a taint ceiling reaches the next task's preamble at that ceiling.
 - **AC-4:** build, council and timer tasks get no preamble.
 - **AC-5:** the preamble never exceeds `conversation_tokens`, always keeps the latest exchange, and `/context` reports what was kept and digested.

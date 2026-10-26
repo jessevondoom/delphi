@@ -70,6 +70,11 @@ pub struct GateRecord {
     /// Anything that happened although the gate should have stopped it.
     pub side_effects: Vec<String>,
     pub verified: bool,
+    /// The probe saw the file tools Delphi judges for a Builder (`bridge::AGY_BUILDER_TOOLS`) fire under those names. A newer
+    /// model or CLI that names its file tools differently would have every edit denied; this says so before a Builder is
+    /// routed there. Absent in records from before it existed, so those need a new probe.
+    #[serde(default)]
+    pub builder_ready: bool,
 }
 
 /// How long a conformance record is trusted. It is tied to the CLI's version, so what ages it out is time, not an update.
@@ -458,7 +463,9 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
         let shell_seen = kinds.iter().any(|k| k == "shell");
         let verified = served && side_effects.is_empty() && shell_seen && kinds.len() >= GATE_MIN_KINDS;
         let version = agy_version.clone().unwrap_or_default();
-        gate_record = Some(GateRecord { endpoint_id: ep.id.clone(), agy_version: version.clone(), at: now, attempted: attempted.clone(), kinds: kinds.clone(), served, side_effects: side_effects.clone(), verified });
+        let missing_for_builder: Vec<&str> = crate::bridge::AGY_BUILDER_TOOLS.iter().copied().filter(|t| !attempted.iter().any(|a| a == t)).collect();
+        let builder_ready = verified && missing_for_builder.is_empty();
+        gate_record = Some(GateRecord { endpoint_id: ep.id.clone(), agy_version: version.clone(), at: now, attempted: attempted.clone(), kinds: kinds.clone(), served, side_effects: side_effects.clone(), verified, builder_ready });
         let seen = if kinds.is_empty() { "nothing".to_string() } else { format!("{} kind(s) of tool ({})", kinds.len(), kinds.join(", ")) };
         if !side_effects.is_empty() {
             cap.degraded = true;
@@ -466,6 +473,9 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
             cap.notes.push(format!("agy gate: FAILED. Something ran although the gate should have denied it ({}). Do not use this seat until it is understood; its spans stay untrusted, but nothing else is checked", side_effects.join("; ")));
         } else if verified {
             cap.notes.push(format!("agy gate: verified{}. Delphi's tool was served and the gate met and denied {}; none ran, so a span on this agy version starts untrusted only if it reads from the web", if version.is_empty() { String::new() } else { format!(" on {}", version) }, seen));
+            if !builder_ready {
+                cap.notes.push(format!("agy gate: not ready for Builders. The probe did not see {} fire under {} name(s); Delphi judges a Builder's edits by those names (the file tools it saw: {}), so Builder tasks stay on other seats. Run the probe again, or report the new tool names", missing_for_builder.join(", "), if missing_for_builder.len() == 1 { "that" } else { "those" }, attempted.iter().filter(|t| matches!(tool_kind(t), "read" | "write" | "edit")).cloned().collect::<Vec<_>>().join(", ")));
+            }
         } else if served {
             cap.notes.push(format!("agy gate: unproven. Delphi's tool was served and nothing got through, but the model reached for only {}; the gate needs a shell and {} kinds of tool denied to count as verified, so the span stays untrusted. Run the probe again", seen, GATE_MIN_KINDS));
         } else {
@@ -688,7 +698,9 @@ if {call_tool}:
         crate::harness::tests::fake_cli(dir, &format!("python3 -I '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}}}'", dir.join("client.py").display()))
     }
 
-    const EVERY_KIND: [&str; 8] = ["run_command", "read_file", "write_file", "replace_file_content", "search_web", "read_url_content", "browser_subagent", "invoke_subagent"];
+    const EVERY_KIND: [&str; 8] = ["run_command", "read_file", "write_file", "edit_file", "search_web", "read_url_content", "browser_subagent", "invoke_subagent"];
+    /// The same kinds of tool, but the CLI names its edit tool differently from what Delphi judges.
+    const RENAMED_EDIT: [&str; 8] = ["run_command", "read_file", "write_file", "replace_file_content", "search_web", "read_url_content", "browser_subagent", "invoke_subagent"];
 
     #[test]
     fn a_tool_is_classed_by_what_it_can_do_not_by_what_it_is_called_here() {
@@ -719,6 +731,12 @@ if {call_tool}:
         let g = gate.unwrap();
         assert!(g.verified && g.served && g.side_effects.is_empty() && g.agy_version == "agy 1.4.7" && g.at == 7 && g.endpoint_id == "ag", "{:?}", g);
         assert_eq!(g.kinds, ["browser", "edit", "read", "shell", "subagent", "web read", "web search", "write"]);
+        assert!(g.builder_ready && !cap.notes.iter().any(|n| n.contains("not ready for Builders")), "{:?}", cap.notes);
+        // The gate holds, but the edit tool fires under a name Delphi does not judge: fine for every role but a Builder, and it says so.
+        let (cap, _, gate) = run(&RENAMED_EDIT, true, None, false).await;
+        let g = gate.unwrap();
+        assert!(g.verified && !g.builder_ready && !cap.degraded, "{:?}", g);
+        assert!(cap.notes.iter().any(|n| n.contains("not ready for Builders") && n.contains("edit_file") && n.contains("replace_file_content")), "{:?}", cap.notes);
         // A file written although the gate was asked: the worst case, and it fails the seat.
         let (cap, _, gate) = run(&EVERY_KIND, true, Some("conf-write.txt"), false).await;
         assert!(cap.degraded && cap.auth.starts_with("failed: the agy gate did not stop") && cap.notes.iter().any(|n| n.contains("agy gate: FAILED") && n.contains("conf-write.txt was created")), "{} {:?}", cap.auth, cap.notes);
@@ -755,7 +773,7 @@ if {call_tool}:
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("local/agy-gate.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let rec = |ep: &str, v: &str, at: i64, ok: bool| GateRecord { endpoint_id: ep.into(), agy_version: v.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified: ok };
+        let rec = |ep: &str, v: &str, at: i64, ok: bool| GateRecord { endpoint_id: ep.into(), agy_version: v.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified: ok, builder_ready: ok };
         save_gate(&path, &rec("a", "1.4.7", 100, true)).unwrap();
         save_gate(&path, &rec("b", "1.4.7", 100, false)).unwrap();
         save_gate(&path, &rec("a", "1.4.8", 200, true)).unwrap();
@@ -763,6 +781,10 @@ if {call_tool}:
         assert_eq!(all.iter().map(|g| (g.endpoint_id.as_str(), g.agy_version.as_str(), g.at)).collect::<Vec<_>>(), [("a", "1.4.8", 200), ("b", "1.4.7", 100)], "a new probe replaces the endpoint's old record");
         assert!(all[0].is_fresh(200 + GATE_TTL_SECS - 1) && !all[0].is_fresh(200 + GATE_TTL_SECS));
         assert!(load_gates(&d.path().join("missing.json")).is_empty());
+        // A record from before the field existed loads, and is not ready for Builders until it is probed again.
+        std::fs::write(&path, r#"[{"endpoint_id":"a","agy_version":"1.4.7","at":1,"attempted":[],"kinds":[],"served":true,"side_effects":[],"verified":true}]"#).unwrap();
+        let old = load_gates(&path);
+        assert!(old.len() == 1 && old[0].verified && !old[0].builder_ready);
         std::fs::write(&path, "not json").unwrap();
         assert!(load_gates(&path).is_empty(), "a damaged file is no evidence");
     }

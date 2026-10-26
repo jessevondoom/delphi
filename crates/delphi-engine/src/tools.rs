@@ -20,6 +20,9 @@ const MAX_SEARCH_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SEARCH_FILE_BYTES: usize = 512 * 1024;
 const MAX_SEARCH_DEPTH: usize = 12;
 
+/// What every role with tools is told about the change log (`record_change`): results in plain sentences, never reasoning.
+pub const CHANGE_LOG_NOTE: &str = "The operator keeps a change log of what the team finishes. When you finish a piece of work (a fix, a feature, a document, a decision carried out), call `record_change` with one plain sentence about the result, for example `reworked the permission model to be less intrusive; removed ratify requirements for explicit updates`. Send your progress updates there instead of narrating them in your reply: the log is shown by session with timestamps, read back for the chat summary, and used for pull request descriptions. Record what changed and, briefly, why it matters. Do not record your reasoning, code, secrets, or things you only tried.";
+
 /// What kind of action a call is, for permission modes (`specs/005` §3.1 `/permissions`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionKind {
@@ -180,6 +183,12 @@ impl Registry {
             classify: classify_name_thread,
             exec: ToolExec::Local(name_thread),
         });
+        r.register(ToolSpec {
+            def: read_def("record_change", "Record one finished change in the operator's change log, as a plain sentence about the result and not your reasoning: `reworked the permission model to be less intrusive; removed ratify requirements for explicit updates`. Call it once per piece of work you finish (a fix, a feature, a decision carried out, a document written), right after it is done, instead of narrating it in your reply. The log is kept by session with timestamps, shown in the operator's window, and read back for the chat summary and pull request descriptions. Say what changed and, if short, why it matters. Never paste code, secrets or your reasoning.", json!({"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string", "maxLength": 300}, "files": {"type": "array", "items": {"type": "string"}, "maxItems": 20}}})),
+            requires_write_scope: false,
+            classify: classify_record_change,
+            exec: ToolExec::Local(record_change),
+        });
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
@@ -277,6 +286,28 @@ fn name_thread(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
     ctx.events.push(("thread.named".into(), json!({"thread": thread, "label": label, "tasks": tasks})));
     ToolResult::ok(format!("thread `{}` is now \"{}\" with {} task(s)", thread, label, tasks.len()))
+}
+
+/// Recording a change touches nothing but the operator's change log, so it never asks.
+fn classify_record_change(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let summary = str_arg(args, "summary")?;
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: format!("{} {}", tool, summary.chars().take(60).collect::<String>()), payload: args.clone(), pattern: tool.into() })
+}
+
+fn record_change(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let summary = match str_arg(args, "summary") {
+        Ok(s) => s.split_whitespace().collect::<Vec<_>>().join(" "),
+        Err(e) => return ToolResult::err(e.0),
+    };
+    if summary.is_empty() {
+        return ToolResult::err("`summary` must say what changed");
+    }
+    if summary.chars().count() > 300 {
+        return ToolResult::err("`summary` is over 300 characters; say what changed in one sentence");
+    }
+    let files: Vec<&str> = args.get("files").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).take(20).collect()).unwrap_or_default();
+    ctx.events.push(("change.recorded".into(), json!({"summary": summary, "role": ctx.role, "files": files})));
+    ToolResult::ok("recorded in the change log".to_string())
 }
 
 fn classify_write(tool: &str, args: &Value) -> Result<Classified, ToolError> {
@@ -703,8 +734,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -774,6 +805,20 @@ mod tests {
         assert_eq!(ctx.events, vec![("thread.named".to_string(), json!({"thread": "pricing", "label": "Pricing for the knowledge base", "tasks": ["t_1", "t_2"]}))]);
         let none = run_tool(&mut f, "name_thread", args);
         assert!(none.is_error && none.content.contains("only the orchestrator"), "{}", none.content);
+    }
+
+    #[test]
+    fn any_role_records_a_change_and_the_engine_is_asked_to_log_it() {
+        let mut f = fx(&[]);
+        let args = json!({"summary": "  reworked the permission model\n to be less intrusive ", "files": ["crates/a.rs", " "]});
+        assert!(Registry::builtin().classify("record_change", &args).unwrap().tier == ToolTier::Green, "recording a change never asks");
+        assert!(Registry::builtin().classify("record_change", &json!({})).is_err(), "a summary is required");
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "builder", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        let r = run(&mut ctx, "record_change", &args);
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(ctx.events, vec![("change.recorded".to_string(), json!({"summary": "reworked the permission model to be less intrusive", "role": "builder", "files": ["crates/a.rs"]}))]);
+        assert!(run_tool(&mut f, "record_change", json!({"summary": "   "})).is_error, "an empty summary is refused");
+        assert!(run_tool(&mut f, "record_change", json!({"summary": "x".repeat(301)})).is_error, "a paragraph is refused");
     }
 
     #[test]
@@ -1110,7 +1155,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 }

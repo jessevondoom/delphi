@@ -17,6 +17,7 @@ mod home;
 mod hooks_cmd;
 mod lint;
 mod missions;
+mod changelog;
 mod needs;
 mod xenia_cmd;
 mod observer;
@@ -66,9 +67,10 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|agents|archives|thinking] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
+    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|agents|archives|changes] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
+    Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
@@ -219,6 +221,7 @@ fn main() {
         Some("doctor") => cmd_doctor(&args),
         Some("status") => cmd_status(&args),
         Some("missions") => cmd_missions(&args),
+        Some("changelog") => cmd_changelog(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -667,13 +670,11 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     let view_arg = args.iter().find(|a| !a.starts_with("--") && Some(a.as_str()) != flag(args, "--workspace").as_deref() && Some(a.as_str()) != flag(args, "--home").as_deref());
-    // `thinking` exists only in the full-screen window: live reasoning is context, kept in that window's memory.
-    let thinking = view_arg.is_some_and(|v| matches!(v.to_lowercase().as_str(), "thinking" | "reasoning"));
-    let view = match view_arg.filter(|_| !thinking) {
+    let view = match view_arg {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (council, epic, agents, archives or thinking)", v);
+                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, archives or changes)", v);
                 return 2;
             }
         },
@@ -689,7 +690,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
         eprintln!("delphi narrator: the narrator is the delphi-ui program, which was not found next to `delphi`; run `delphi update` to get it");
         return 1;
     };
-    let code = chat::launch_ui_observer(&ui, &home, &ws.dir, if thinking { Some("thinking") } else { view.map(observer::View::name) }, &theme_names(&ws), once);
+    let code = chat::launch_ui_observer(&ui, &home, &ws.dir, view.map(observer::View::name), &theme_names(&ws), once);
     if code == 3 {
         eprintln!("delphi narrator: delphi-ui is a different release from this program; run `delphi update`");
         return 1;
@@ -789,6 +790,14 @@ fn cmd_status(args: &[String]) -> i32 {
 fn cmd_missions(args: &[String]) -> i32 {
     match resolve_ws("missions", args) {
         Ok((_home, ws)) => missions::cli(&ws.dir),
+        Err(code) => code,
+    }
+}
+
+/// `delphi changelog`: what the team recorded as finished in a mission, as Markdown for a pull request (see `changelog.rs`).
+fn cmd_changelog(args: &[String]) -> i32 {
+    match resolve_ws("changelog", args) {
+        Ok((_home, ws)) => changelog::cli(&ws.dir, &changelog::Options { mission: flag(args, "--mission"), filter: delphi_engine::changelog::Filter { session: flag(args, "--session"), since: flag(args, "--since") }, json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }

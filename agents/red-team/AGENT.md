@@ -6,7 +6,7 @@ cognitive_profile: deep-reasoning
 default_access_scope:
   read: ["*"]
   write: ["missions/**/councils/**", "missions/**/threat-models/**"]
-  execute: ["base-review-loader", "fuzz-harness-scoped", "trust-boundary-scanner"]
+  execute: ["base-review-loader", "fuzz-harness-scoped", "trust-boundary-scanner", "org-context"]
 authorized_skills:
   - review-md-audit
   - threat-modeling
