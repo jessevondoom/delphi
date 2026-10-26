@@ -10,13 +10,14 @@ const report = { session: 's_0003', budget_tokens: 6000, turns: 6, digested: 2, 
 
 test('/context says how much of the conversation the next task is told, how it was trimmed and at what trust', () => {
   const s = contextReport(report, false);
-  assert.match(s, /^session 3 · the next task is told 6 turns · 3 whole, 2 as lines, 1 left out · about 4.2k of 6.0k tokens · 2 earlier sessions in a line each/);
+  assert.match(s, /^session 3 · the next task is told 6 messages · 3 whole, 2 as lines, 1 left out · about 4.2k of 6.0k tokens · 2 earlier sessions in a line each/);
   assert.match(s, /\(\/context full shows the text\)$/);
   assert.match(contextReport(report, true), /\n\nOperator: hi\nYou: hello$/);
   assert.match(contextReport({ ...report, ceiling: 'L0' }, false), /starts below full trust \(L0\).*\/new clears it/);
   assert.equal(contextReport({ ...report, turns: 0, earlier: 0, text: '' }, false), 'session 3: nothing is carried, the next task starts clean');
   assert.match(contextReport({ ...report, budget_tokens: 0 }, false), /told nothing.*conversation_tokens is 0/);
   assert.equal(sessionName('s_0012'), 'session 12');
+  assert.equal(sessionName('s_0000'), 'this session', 'the log before any /new is not numbered');
 });
 
 test('/export all writes the whole mission with a section per session and the right speaker for each reply', () => {
