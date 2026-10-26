@@ -2642,8 +2642,11 @@ mod tests {
     #[tokio::test]
     async fn away_mode_still_denies_once_the_park_window_is_used_up() {
         let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "x"})), Step::text("Understood.")], 5.0, |s| {
-            s.approval_timeout = Duration::from_millis(60);
-            s.approval_park_max = Duration::from_millis(200);
+            // A card is re-raised only while `parked + timeout <= park_max`. The margin (350 ms before the first
+            // re-raise) must outlast a loaded CI runner's timer jitter; at 60 ms / 200 ms it was 80 ms and the test
+            // saw a single ask on Ubuntu. Nominally the cards are asked at 0, 100, 200 and 300 ms, so 4 is the cap.
+            s.approval_timeout = Duration::from_millis(100);
+            s.approval_park_max = Duration::from_millis(450);
         });
         let out = f.engine.run_task(&f.m, "architect", "Draft a spec").await.unwrap();
         assert_eq!(out.status, Status::Done);
