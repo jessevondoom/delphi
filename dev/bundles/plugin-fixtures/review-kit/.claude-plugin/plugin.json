@@ -1,0 +1,10 @@
+{
+  "name": "review-kit",
+  "version": "2.1.0",
+  "description": "Review helpers: a triage skill and a reviewer agent.",
+  "author": { "name": "Zed Corp", "email": "dev@zed.example" },
+  "license": "MIT",
+  "keywords": ["review"],
+  "hooks": "./hooks/hooks.json",
+  "userConfig": { "region": { "type": "string", "description": "Where the team sits" } }
+}
