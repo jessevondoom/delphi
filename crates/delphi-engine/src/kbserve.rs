@@ -72,9 +72,23 @@ impl Api {
         if method != "GET" && method != "HEAD" {
             return fail(405, "this API is read-only: only GET and HEAD");
         }
+        self.fresh();
+        Reader { kb: &self.kb, ws: &self.ws }.get(target)
+    }
+}
+
+/// The routes, over a knowledge base someone else keeps open and fresh. The HTTP server holds one for its lifetime;
+/// the daemon opens one per call for `kb.get`, so the console and narrator read through the same code.
+pub struct Reader<'a> {
+    pub kb: &'a Kb,
+    pub ws: &'a Path,
+}
+
+impl Reader<'_> {
+    /// `GET target` (a path and query such as `/v1/search?q=retry`). Never writes anything.
+    pub fn get(&self, target: &str) -> Reply {
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let q = parse_query(query);
-        self.fresh();
         let r = match path {
             "/v1/health" => self.health(),
             "/v1/collections" => self.collections(),
@@ -138,7 +152,7 @@ impl Api {
         let Some(path) = q.get("path").filter(|p| !p.is_empty() && !p.contains('\0')) else { return Ok(fail(400, "`path` is required")) };
         let Some(info) = self.kb.document(path, &view()).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         // The file comes from the indexer's own list, so the logical path cannot name anything else.
-        let Some(src) = kb::sources(&self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
+        let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
         if std::fs::metadata(&src.path).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_DOC_BYTES {
             return Ok(fail(413, "document too large to serve"));
         }
