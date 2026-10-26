@@ -664,6 +664,7 @@ mod tests {
             status: "active".into(),
             review_by: "2999-01-01".into(),
             title: "T".into(),
+            skill_roles: Default::default(),
             history: Vec::new(),
         };
         delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![entry.clone()] }).unwrap();

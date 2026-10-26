@@ -21,7 +21,7 @@ const PERSPECTIVE_BANNED: [&str; 8] = ["tool", "permission", "approv", "governan
 const MANIFEST_KEYS: [&str; 4] = ["default_access_scope", "authorized_skills", "execute", "write"];
 
 /// The `## [ID] title` sections of a document body, as (id, section text including the heading).
-fn sections(body: &str, id_prefix: &str) -> Vec<(String, String)> {
+pub(crate) fn sections(body: &str, id_prefix: &str) -> Vec<(String, String)> {
     let head = Regex::new(&format!(r"^## \[({}-[A-Za-z0-9-]+)\]", id_prefix)).unwrap();
     let mut out: Vec<(String, String)> = Vec::new();
     for line in body.lines() {

@@ -5,6 +5,7 @@
 //! (`local/` is on the pathguard's deny lists). Agents reach a bundle's knowledge only as `@bundle/<org>/<name>/knowledge/**`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const LOCK_FILE: &str = "local/bundles.lock";
@@ -36,6 +37,10 @@ pub struct Entry {
     pub status: String,
     pub review_by: String,
     pub title: String,
+    /// `--skill-roles <skill>=<roles>` at add: the operator narrowed the roles a skill loads for (`specs/023` §5A).
+    /// A skill with no entry loads for every role its `authorized_agents` names.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skill_roles: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub history: Vec<Past>,
 }
@@ -122,6 +127,14 @@ pub fn update<T>(ws: &Path, f: impl FnOnce(&mut Lock) -> Result<T, String>) -> R
     .map_err(|e| e.to_string())?
 }
 
+/// The active bundles of a workspace in overlay order: lowest `order` first, so that a later one wins on a tie of names
+/// (`specs/024` §5.2); equal orders go by when they were added.
+pub fn active_entries(ws: &Path) -> Vec<Entry> {
+    let mut v: Vec<Entry> = read(ws).map(|l| l.bundle).unwrap_or_default().into_iter().filter(|e| e.is_active() && plain_id(&e.org) && plain_id(&e.name)).collect();
+    v.sort_by(|a, b| a.order.cmp(&b.order).then(a.added_at.cmp(&b.added_at)));
+    v
+}
+
 /// What the pathguard and the index need: (`org/name`, the active hash's `knowledge/` directory) for every active bundle.
 /// A bundle whose id is not a plain id, or whose cache entry is missing, is left out.
 pub fn active_roots(home: &Path, ws: &Path) -> Vec<(String, PathBuf)> {
@@ -152,6 +165,7 @@ mod tests {
             status: "active".into(),
             review_by: "2027-01-31".into(),
             title: "T".into(),
+            skill_roles: BTreeMap::new(),
             history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into() }],
         }
     }

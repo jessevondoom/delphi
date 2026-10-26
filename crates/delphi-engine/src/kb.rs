@@ -2325,6 +2325,7 @@ mod tests {
                 status: "active".into(),
                 review_by: review_by.to_string(),
                 title: "T".into(),
+                skill_roles: Default::default(),
                 history: Vec::new(),
             });
         }

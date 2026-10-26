@@ -872,6 +872,7 @@ dependencies = [
  "candle-nn",
  "candle-transformers",
  "delphi-adapter",
+ "delphi-bundle",
  "delphi-core",
  "delphi-docs",
  "delphi-sandbox",
