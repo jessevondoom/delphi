@@ -16,7 +16,8 @@
 //!   `C`'s tree, because `signed_at` and `roster_epoch` are the author's and decide nothing;
 //! * old and new both verify: [`check_edge`]: the signer is the same or in the old signer's `successor` chain
 //!   (a different member overwriting an `id` is a takeover even at a higher `rev`), `rev` is not lower, an equal
-//!   `rev` has an identical hash, and an author's `withdrawn` does not become `active` again.
+//!   `rev` has an identical hash, and the author's own state only moves along `tier::author_transition_allowed`
+//!   (nothing hidden by its author becomes `active` again).
 //!
 //! The signature is verified before anything is read from a file (`read_version` goes through X2's
 //! `validate_record`, whose first three steps are the verify-before-parse ones).
@@ -91,7 +92,8 @@ pub enum EdgeBreak {
     Takeover,
     Rollback,
     Swapped,
-    /// An author's `withdrawn` came back to `active` (spec 012 test 7).
+    /// An author-hidden record (`withdrawn` or `superseded`) came back to `active`, or a `withdrawn` one changed
+    /// state at all (spec 012 test 7 and `tier::author_transition_allowed`).
     StateRegression,
 }
 
@@ -118,7 +120,7 @@ pub fn check_edge(old: &Version, new: &Version, roster: &VerifiedRoster) -> std:
     if new.rev == old.rev && new.md_hash != old.md_hash {
         return Err(EdgeBreak::Swapped);
     }
-    if old.status == AuthorStatus::Withdrawn && new.status == AuthorStatus::Active {
+    if !crate::tier::author_transition_allowed(old.status, new.status) {
         return Err(EdgeBreak::StateRegression);
     }
     Ok(())

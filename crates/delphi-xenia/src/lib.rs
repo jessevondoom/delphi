@@ -25,6 +25,7 @@ pub mod sidecar;
 pub mod sticky;
 pub mod store;
 pub mod sig;
+pub mod tier;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testkit;
 #[cfg(any(test, feature = "test-support"))]

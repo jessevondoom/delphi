@@ -1096,3 +1096,68 @@ fn a_sticky_file_written_before_the_mark_existed_still_loads() {
     let back = StickyState::from_json(&serde_json::to_vec(&v).unwrap(), "acme", "acme-main").unwrap();
     assert_eq!(back.freshness_mark, None);
 }
+
+// --- author state: nothing hidden by its author returns to active (X5 decision) ---------------------------------
+
+#[test]
+fn a_superseded_record_cannot_become_active_again_but_may_stay_hidden_or_be_withdrawn() {
+    let fx0 = Fx::standard();
+    let alice = fx0.id("alice");
+    let (fx, _) = Fx::installed(&[&rk::memory(&alice, A, 1, "active", "v")]);
+    fx.put_commit(&rk::memory(&alice, A, 2, "superseded", "replaced"), "supersede");
+    assert!(matches!(fx.sync(), VerifiedSync::Accepted { .. }));
+    // Staying hidden, or hiding harder, is fine.
+    fx.put_commit(&rk::memory(&alice, A, 3, "superseded", "still"), "still superseded");
+    assert!(matches!(fx.sync(), VerifiedSync::Accepted { .. }));
+    fx.put_commit(&rk::memory(&alice, A, 4, "withdrawn", "gone"), "withdraw");
+    assert!(matches!(fx.sync(), VerifiedSync::Accepted { .. }));
+    // A withdrawn record is terminal: not active, not superseded.
+    for (rev, status) in [(5, "active"), (5, "superseded")] {
+        let (fx, _) = Fx::installed(&[&rk::memory(&alice, A, 1, "withdrawn", "gone")]);
+        let back = rk::memory(&alice, A, rev, status, "back");
+        fx.put_commit(&back, "regress");
+        both_see(&fx, &[(&back.path, "author-state-regression")]);
+    }
+    // And superseded -> active is refused on both kinds of install.
+    let (fx, _) = Fx::installed(&[&rk::memory(&alice, A, 1, "superseded", "replaced")]);
+    let back = rk::memory(&alice, A, 2, "active", "back");
+    fx.put_commit(&back, "un-supersede");
+    both_see(&fx, &[(&back.path, "author-state-regression")]);
+}
+
+// --- X5 seam: a real synced snapshot feeds the pure tier computation ----------------------------------------
+
+#[test]
+fn a_synced_snapshot_feeds_the_tier_computation_and_a_stale_statement_withdraws_the_endorsement() {
+    use delphi_xenia::layout::RecordPath;
+    use delphi_xenia::record::validate_record;
+    use delphi_xenia::tier::{compute, Inputs, Tier, VerifiedRecord};
+    use std::collections::BTreeMap;
+    let fx0 = Fx::standard();
+    let m = rk::memory_with(&fx0.id("erin"), A, 1, "active", "v", "rust", "internal_empirical");
+    let e = rk::endorsement_with(&fx0.id("dave"), E, 1, A, 1, &m.hash(), "endorse", "rust");
+    let (fx, _) = Fx::installed(&[&m, &e]);
+    let snap = fx.store.snapshot_of(&fx.sticky().accepted_head.unwrap()).unwrap();
+    let roster = fx.org.verify().unwrap();
+    let pinned = delphi_xenia::record::Pinned { org: "acme", store: "acme-main" };
+    let records: Vec<VerifiedRecord> = snap
+        .files
+        .iter()
+        .filter(|(p, _)| RecordPath::parse(p).is_ok())
+        .map(|(p, md)| {
+            let car = snap.files.get(&p.replace(".md", ".sig.json")).expect("sidecar");
+            VerifiedRecord::from_validated(&validate_record(pinned, p, md, car, &|_| Ok(())).unwrap())
+        })
+        .collect();
+    assert_eq!(records.len(), 2);
+    let prior = BTreeMap::new();
+    let fresh = fx.store.freshness_status(&cfg()).unwrap();
+    let c = compute(&Inputs { roster: &roster, records: &records, freshness: &fresh, prior_tags: &prior });
+    assert_eq!(c.tier_of(A), Some(Tier::L2), "{c:?}");
+    // The same store read a month later: the statement has expired, no endorsement counts, nothing is deleted.
+    let later = VerifyConfig::at(now() + 30 * DAY);
+    let stale = fx.store.freshness_status(&later).unwrap();
+    assert!(!stale.endorsements_count());
+    let c = compute(&Inputs { roster: &roster, records: &records, freshness: &stale, prior_tags: &prior });
+    assert_eq!(c.tier_of(A), Some(Tier::L1));
+}
