@@ -12,6 +12,7 @@ authorized_skills:
   - clarity-synthesis
   - narrative-briefing
   - concision-audit
+  - org-bundle-authoring
 memory_scope: "memory/agents/writer/"
 max_turn_budget: 20
 ---

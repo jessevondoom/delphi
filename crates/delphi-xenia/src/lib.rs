@@ -10,12 +10,19 @@
 
 pub mod bundle_sig;
 pub mod did;
+pub mod frontmatter;
 pub mod hash;
 pub mod identity;
 pub mod layout;
+pub mod limits;
+pub mod pointer;
+pub mod record;
 pub mod pins;
+pub mod release_sig;
 pub mod roster;
 pub mod sidecar;
+pub mod sticky;
+pub mod store;
 pub mod sig;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testkit;

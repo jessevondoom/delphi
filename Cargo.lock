@@ -766,6 +766,7 @@ dependencies = [
  "delphi-bundle",
  "delphi-core",
  "delphi-engine",
+ "delphi-release",
  "delphi-sandbox",
  "delphi-xenia",
  "flate2",
@@ -838,6 +839,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "delphi-core",
+ "delphi-xenia",
  "hmac",
  "libc",
  "regex",
@@ -894,6 +896,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "delphi-release"
+version = "0.1.0"
+dependencies = [
+ "delphi-xenia",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "delphi-sandbox"
 version = "0.1.0"
 dependencies = [
@@ -915,6 +926,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "unicode-normalization",
 ]
 
 [[package]]

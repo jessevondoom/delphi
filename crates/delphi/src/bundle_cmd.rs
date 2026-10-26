@@ -3,7 +3,7 @@
 //! Both read a directory and need no workspace and no model. `validate` changes nothing. The checks that live in the
 //! engine come to `delphi-bundle` through [`Real`], so that crate stays free of the engine.
 
-use crate::{bundle_add, bundle_fetch, bundle_life, bundle_pack, frontmatter, home, seed, skills_cmd, xenia_cmd};
+use crate::{bundle_add, bundle_fetch, bundle_init, bundle_life, bundle_pack, frontmatter, home, seed, skills_cmd, xenia_cmd};
 use delphi_bundle::{Host, Options, RoleScope};
 use serde_yaml::{Mapping, Value};
 use std::path::{Path, PathBuf};
@@ -52,20 +52,66 @@ impl Host for Real {
     }
 }
 
+/// `Real` that also knows the names of one workspace (`specs/027` §6.2): its `[privacy] identifiers` and handles make
+/// step 8 warn, so the author finds them before a stranger does.
+pub(crate) struct Scoped {
+    pub identifiers: Vec<String>,
+    pub handles: Vec<String>,
+}
+
+impl Host for Scoped {
+    fn provenance(&self, text: &str) -> Vec<String> {
+        Real.provenance(text)
+    }
+
+    fn skill_errors(&self, fm: &Mapping, dir: &str) -> Vec<String> {
+        Real.skill_errors(fm, dir)
+    }
+
+    fn chunk_keys(&self, org: &str, name: &str, texts: &std::collections::BTreeMap<String, String>) -> Option<std::collections::HashSet<[u8; 32]>> {
+        Real.chunk_keys(org, name, texts)
+    }
+
+    fn role_scope(&self, role: &str) -> Option<RoleScope> {
+        Real.role_scope(role)
+    }
+
+    fn identifiers(&self) -> Vec<String> {
+        self.identifiers.clone()
+    }
+
+    fn roster_handles(&self) -> Vec<String> {
+        self.handles.clone()
+    }
+}
+
+/// The host for a command that reads a bundle directory: `Real`, with a workspace's names when one is named by
+/// `--workspace` (or `DELPHI_WORKSPACE`). A name that is not a workspace is an error, never a silent plain scan.
+fn host_for(args: &[String]) -> Result<Box<dyn Host>, String> {
+    let Some(name) = flag(args, "--workspace").or_else(|| std::env::var("DELPHI_WORKSPACE").ok()) else { return Ok(Box::new(Real)) };
+    let h = home::delphi_home(flag(args, "--home").as_deref());
+    let ws = h.join("workspaces").join(&name);
+    if !ws.join("config.toml").is_file() {
+        return Err(format!("no workspace named `{}` in {}", name, h.display()));
+    }
+    let p = delphi_engine::distill::privacy(&ws);
+    Ok(Box::new(Scoped { identifiers: p.identifiers, handles: p.handles }))
+}
+
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
 /// Flags that take a value, so the word after one is not a positional argument.
-const VALUE_FLAGS: [&str; 22] = [
-    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name",
+const VALUE_FLAGS: [&str; 24] = [
+    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name",
 ];
 
 fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>]\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc   (these take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--workspace <name>] [--home <dir>]\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -126,19 +172,52 @@ pub fn run(args: &[String]) -> i32 {
     let (Some(sub), Some(dir)) = (positional.first(), positional.get(1)) else { return usage() };
     let dir = dir.to_string();
     let dir = PathBuf::from(dir.as_str());
+    if sub.as_str() == "init" {
+        return init(&dir, args);
+    }
     if !dir.is_dir() {
         eprintln!("delphi bundle: {} is not a directory", dir.display());
         return 2;
     }
     let claude = args.iter().any(|a| a == "--claude");
+    let host = match host_for(args) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("delphi bundle: {}", e);
+            return 2;
+        }
+    };
     match sub.as_str() {
-        "validate" => validate(&dir, claude, args),
+        "validate" => validate(&dir, claude, args, &*host),
         "import" => crate::bundle_compat::import(&dir, args),
         "sign" => {
             let h = home::delphi_home(flag(args, "--home").as_deref());
-            bundle_pack::sign(&dir, &xenia_cmd::key_path(&h), flag(args, "--against").map(PathBuf::from), &Real, &bundle_pack::tty_confirm)
+            bundle_pack::sign(&dir, &xenia_cmd::key_path(&h), flag(args, "--against").map(PathBuf::from), &*host, &bundle_pack::tty_confirm)
         }
-        "package" => bundle_pack::package(&dir, flag(args, "-o").as_deref().map(Path::new), &Real),
+        "package" => {
+            if args.iter().any(|a| a == "--vectors") {
+                let h = home::delphi_home(flag(args, "--home").as_deref());
+                let model = match delphi_engine::embed::open_default(Some(&h)) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => {
+                        eprintln!("delphi bundle: --vectors needs an embedding model and none is installed (install one with `delphi kb model pack`, or package without --vectors: adopters then embed locally)");
+                        return 1;
+                    }
+                    Err(e) => {
+                        eprintln!("delphi bundle: the embedding model could not be opened: {}", e);
+                        return 1;
+                    }
+                };
+                match bundle_pack::add_vectors(&dir, &*host, &*model, &mut |done, total| eprint!("\rembedding {}/{} chunks", done, total)) {
+                    Ok(msg) => eprintln!("\n{}", msg),
+                    Err(e) => {
+                        eprintln!("\ndelphi bundle: {}", e);
+                        return 1;
+                    }
+                }
+            }
+            bundle_pack::package(&dir, flag(args, "-o").as_deref().map(Path::new), &*host)
+        }
         "manifest" => match delphi_bundle::write_manifest(&dir, claude, &Real) {
             Ok(hash) => {
                 println!("wrote .delphi-bundle/files.json{}\nbundle hash {}", if claude { " and .claude-plugin/plugin.json" } else { "" }, hash);
@@ -153,11 +232,58 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-fn validate(dir: &Path, claude: bool, args: &[String]) -> i32 {
+fn validate(dir: &Path, claude: bool, args: &[String], host: &dyn Host) -> i32 {
     let opts = Options { packaging: args.iter().any(|a| a == "--package"), claude, against: flag(args, "--against").map(PathBuf::from) };
-    let report = delphi_bundle::validate(dir, &opts, &Real);
+    // The redaction report goes outside the bundle: a report inside it would be packaged with the bundle (`specs/027` §2.4).
+    if let Some(path) = flag(args, "--report") {
+        let path = PathBuf::from(path);
+        match report_outside(dir, &path) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("delphi bundle: {}", e);
+                return 2;
+            }
+        }
+        if let Err(e) = std::fs::write(&path, delphi_bundle::redaction::render(dir, host)) {
+            eprintln!("delphi bundle: {}: {}", path.display(), e);
+            return 2;
+        }
+        eprintln!("wrote the redaction report to {}; work every finding, then a person approves it before `package`", path.display());
+    }
+    let report = delphi_bundle::validate(dir, &opts, host);
     print!("{}", report.render(&dir.display().to_string()));
     if report.passed() { 0 } else { 1 }
+}
+
+/// `path` must not be inside `dir` (it would ship), including through a symlinked parent.
+fn report_outside(dir: &Path, path: &Path) -> Result<(), String> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let (Ok(d), Ok(p)) = (dir.canonicalize(), parent.canonicalize()) else { return Err(format!("{}: the directory for the report does not exist", path.display())) };
+    if p.starts_with(&d) {
+        return Err(format!("{} is inside the bundle; a report there would be packaged with it. Write it beside the bundle", path.display()));
+    }
+    Ok(())
+}
+
+/// `delphi bundle init <dir> --org <org> --name <name>`.
+fn init(dir: &Path, args: &[String]) -> i32 {
+    let (Some(org), Some(name)) = (flag(args, "--org"), flag(args, "--name")) else {
+        eprintln!("delphi bundle init: --org and --name are required\n{}", USAGE);
+        return 2;
+    };
+    let h = home::delphi_home(flag(args, "--home").as_deref());
+    let now = format!("{}Z", &delphi_core::time::now_rfc3339()[..19]);
+    match bundle_init::init(&h, dir, &org, &name, &now) {
+        Ok(files) => {
+            println!("created {} ({} files); it validates as it stands", dir.display(), files.len());
+            println!("{}", bundle_init::NEXT);
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi bundle init: {}", e);
+            2
+        }
+    }
 }
 
 #[cfg(test)]
@@ -266,5 +392,118 @@ mod tests {
         assert_eq!(run(&args(&["validate"])), 2);
         assert_eq!(run(&args(&["frobnicate", d])), 2);
         assert_eq!(run(&args(&["validate", "/nonexistent-bundle-dir"])), 2);
+    }
+
+    /// A model that puts each text at a point set by its bytes; enough for a cache to be built, written and read back.
+    struct Words;
+    impl delphi_engine::embed::Embedder for Words {
+        fn model_id(&self) -> &str {
+            "words-test"
+        }
+        fn dim(&self) -> usize {
+            4
+        }
+        fn min_similarity(&self) -> f32 {
+            0.0
+        }
+        fn embed_documents(&self, t: &[String]) -> Result<Vec<Vec<f32>>, String> {
+            Ok(t.iter().map(|s| (0..4).map(|i| s.bytes().filter(|b| *b as usize % 4 == i).count() as f32 + 1.0).collect()).collect())
+        }
+        fn embed_query(&self, t: &str) -> Result<Vec<f32>, String> {
+            Ok(self.embed_documents(&[t.to_string()])?.remove(0))
+        }
+    }
+
+    #[test]
+    fn package_vectors_writes_a_cache_that_passes_step_12_and_declares_the_section() {
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let toml = fs::read_to_string(t.path().join("bundle.toml")).unwrap();
+        assert!(!toml.contains("vectors"), "the golden bundle ships none");
+        let msg = bundle_pack::add_vectors(t.path(), &Real, &Words, &mut |_, _| {}).unwrap();
+        assert!(msg.contains("words-test") && msg.contains("not Delphi's default embedder"), "{}", msg);
+        assert!(fs::read_to_string(t.path().join("bundle.toml")).unwrap().contains("[sections]\nvectors = true\n"));
+        let index: serde_json::Value = serde_json::from_str(&fs::read_to_string(t.path().join("vectors/index.json")).unwrap()).unwrap();
+        let file = index["caches"][0]["file"].as_str().unwrap().to_string();
+        assert!(t.path().join("vectors").join(&file).is_file());
+        // the manifest is regenerated as `package` does, then the real checks (the real chunker) accept the keys
+        delphi_bundle::write_manifest(t.path(), true, &Real).unwrap();
+        let r = delphi_bundle::validate(t.path(), &Options { claude: true, packaging: true, ..Options::default() }, &Real);
+        assert!(r.passed(), "{}", r.render("x"));
+        assert!(r.notes.iter().all(|n| !n.msg.contains("cannot chunk")), "step 12 really checked the keys");
+        // running it again replaces the same cache and keeps the index single
+        bundle_pack::add_vectors(t.path(), &Real, &Words, &mut |_, _| {}).unwrap();
+        let again: serde_json::Value = serde_json::from_str(&fs::read_to_string(t.path().join("vectors/index.json")).unwrap()).unwrap();
+        assert_eq!(again["caches"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn package_vectors_refuses_without_a_model_and_a_bundle_that_is_not_well_formed() {
+        let home = tempfile::tempdir().unwrap();
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // no model is installed under a fresh home (and none is embedded in a test build)
+        let code = run(&args(&["package", t.path().to_str().unwrap(), "--vectors", "--home", home.path().to_str().unwrap(), "-o", t.path().parent().unwrap().join("x.xbundle").to_str().unwrap()]));
+        assert_eq!(code, 1);
+        assert!(!t.path().join("vectors").exists(), "nothing was written");
+        fs::write(t.path().join("bundle.toml"), "not toml [").unwrap();
+        assert!(bundle_pack::add_vectors(t.path(), &Real, &Words, &mut |_, _| {}).unwrap_err().contains("not well-formed"));
+    }
+
+    #[test]
+    fn validate_report_writes_the_report_outside_the_bundle_and_refuses_a_path_inside_it() {
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let out = tempfile::tempdir().unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let d = t.path().to_str().unwrap();
+        let report = out.path().join("redaction.md");
+        assert_eq!(run(&args(&["validate", d, "--claude", "--report", report.to_str().unwrap()])), 0);
+        let md = fs::read_to_string(&report).unwrap();
+        assert!(md.starts_with("# Redaction report: acme/acme-platform 1.4.0") && md.contains("| – | none |"), "{}", md);
+        // inside the bundle, directly or through a subdirectory, it would be packaged
+        for inside in [t.path().join("report.md"), t.path().join("knowledge/report.md")] {
+            assert_eq!(run(&args(&["validate", d, "--report", inside.to_str().unwrap()])), 2);
+            assert!(!inside.exists());
+        }
+        // a symlinked parent that leads back into the bundle is the same place
+        let link = out.path().join("back");
+        std::os::unix::fs::symlink(t.path().join("knowledge"), &link).unwrap();
+        assert_eq!(run(&args(&["validate", d, "--report", link.join("r.md").to_str().unwrap()])), 2);
+        assert!(!t.path().join("knowledge/r.md").exists());
+    }
+
+    #[test]
+    fn a_named_workspaces_identifiers_and_handles_become_warnings_and_an_unknown_workspace_is_an_error() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("config.toml"), "[privacy]\nidentifiers = [\"project-heron\"]\nhandles = [\"jessevondoom\"]\n").unwrap();
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let p = t.path().join("knowledge/glossary.md");
+        fs::write(&p, fs::read_to_string(&p).unwrap() + "\nHeron is project-heron, kept by jessevondoom.\n").unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let a = args(&["validate", t.path().to_str().unwrap(), "--workspace", "w", "--home", home.path().to_str().unwrap()]);
+        let host = host_for(&a).unwrap();
+        let r = delphi_bundle::validate(t.path(), &Options::default(), &*host);
+        assert!(r.warns.iter().any(|w| w.step == 8 && w.msg.contains("project-heron")) && r.warns.iter().any(|w| w.step == 8 && w.msg.contains("jessevondoom")), "{}", r.render("x"));
+        let none = args(&["validate", t.path().to_str().unwrap(), "--workspace", "nope", "--home", home.path().to_str().unwrap()]);
+        assert_eq!(run(&none), 2);
+    }
+
+    #[test]
+    fn init_through_the_command_line_makes_a_bundle_that_validates_and_never_overwrites() {
+        let t = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let dir = t.path().join("kit");
+        let d = dir.to_str().unwrap();
+        let h = home.path().to_str().unwrap();
+        assert_eq!(run(&args(&["init", d, "--org", "acme", "--name", "kit", "--home", h])), 0);
+        assert_eq!(run(&args(&["validate", d])), 0);
+        assert_eq!(run(&args(&["init", d, "--org", "acme", "--name", "kit", "--home", h])), 2, "a second init refuses");
+        assert_eq!(run(&args(&["init", d, "--home", h])), 2, "--org and --name are required");
     }
 }

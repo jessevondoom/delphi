@@ -1,0 +1,15 @@
+[package]
+name = "delphi-release"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "The maintainers' release-signing tool (specs/036): make the release key, sign the manifest of a release's files, check a signature. Small on purpose, so the release workflow can build it without building Delphi."
+license = "MIT"
+publish = false
+
+[dependencies]
+delphi-xenia = { path = "../delphi-xenia" }
+walkdir = "2.4"
+
+[dev-dependencies]
+tempfile = "3.8"

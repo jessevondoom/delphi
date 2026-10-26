@@ -1,0 +1,42 @@
+# Who must review a change to the files that decide what an installation trusts and ratifies (specs/036 section 5).
+#
+# This file only *requests* a review. It binds when the branch protection rule for main has "Require review from Code Owners" on.
+# Everything not listed here follows the ordinary review of the repository.
+
+# The release trust root and its signing: who may sign a release, what is signed, how a build checks it.
+/release-keys.json                          @jessevondoom
+/crates/delphi/release.sig.json             @jessevondoom
+/crates/delphi-release/                     @jessevondoom
+/crates/delphi-xenia/                       @jessevondoom
+/crates/delphi/src/release.rs               @jessevondoom
+/crates/delphi/src/update.rs                @jessevondoom
+/crates/delphi/src/selfupdate.rs            @jessevondoom
+/crates/delphi/src/seed.rs                  @jessevondoom
+/crates/delphi/src/home.rs                  @jessevondoom
+/crates/delphi/src/doctor.rs                @jessevondoom
+/install.sh                                 @jessevondoom
+/dev/stamp-version.sh                       @jessevondoom
+/.github/                                   @jessevondoom
+
+# What every installation ratifies from a release: the constitution, the rubric, the roles, the skills, the themes, the heuristics.
+/GOVERNANCE.md                              @jessevondoom
+/REVIEW.md                                  @jessevondoom
+/SPEC.md                                    @jessevondoom
+/agents/                                    @jessevondoom
+/skills/                                    @jessevondoom
+/themes/                                    @jessevondoom
+/context/                                   @jessevondoom
+/memory/                                    @jessevondoom
+
+# The code that enforces ratification, provenance, paths, approvals, gates and execution.
+/crates/delphi-core/src/lock.rs             @jessevondoom
+/crates/delphi-core/src/pathguard.rs        @jessevondoom
+/crates/delphi-core/src/provenance.rs       @jessevondoom
+/crates/delphi-engine/src/ratify.rs         @jessevondoom
+/crates/delphi-engine/src/finalize.rs       @jessevondoom
+/crates/delphi-engine/src/gates.rs          @jessevondoom
+/crates/delphi-engine/src/approval.rs       @jessevondoom
+/crates/delphi-engine/src/policy.rs         @jessevondoom
+/crates/delphi-engine/src/exec.rs           @jessevondoom
+/crates/delphi-engine/src/bridge.rs         @jessevondoom
+/crates/delphi-sandbox/                     @jessevondoom

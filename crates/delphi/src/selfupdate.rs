@@ -21,6 +21,16 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_API: &str = "https://api.github.com/repos/jessevondoom/delphi/releases";
+/// Where the project's own release files are served from. Reading releases from the project's repository, an asset anywhere else is
+/// not one of its releases and is ignored: an installation comes from the originating repository or from a mirror the operator
+/// named (`DELPHI_RELEASES_URL`), never from a link a response happens to contain (`specs/036` section 7).
+pub const ORIGIN_DOWNLOADS: &str = "https://github.com/jessevondoom/delphi/releases/download/";
+
+/// May a release asset at `url` be used when the releases were read from `api`? From the project's own API only its own downloads;
+/// from a mirror the operator chose, whatever the mirror says (the operator named it, and `main.rs` says so every time).
+fn in_origin(api: &str, url: &str) -> bool {
+    api.trim_end_matches('/') != DEFAULT_API || url.starts_with(ORIGIN_DOWNLOADS)
+}
 const MAX_BINARY: u64 = 200 << 20;
 
 /// The release asset suffix for this machine.
@@ -71,7 +81,7 @@ impl Release {
     }
 }
 
-fn releases_from(body: &[u8]) -> Result<Vec<Release>> {
+fn releases_from(body: &[u8], api: &str) -> Result<Vec<Release>> {
     let v: serde_json::Value = serde_json::from_slice(body).context("the releases answer is not JSON")?;
     let list = if v.is_array() { v } else { serde_json::Value::Array(vec![v]) };
     Ok(list
@@ -83,7 +93,7 @@ fn releases_from(body: &[u8]) -> Result<Vec<Release>> {
             Some(Release {
                 tag: r["tag_name"].as_str()?.to_string(),
                 prerelease: r["prerelease"] == true,
-                assets: r["assets"].as_array()?.iter().filter_map(|a| Some((a["name"].as_str()?.to_string(), a["browser_download_url"].as_str()?.to_string()))).collect(),
+                assets: r["assets"].as_array()?.iter().filter_map(|a| Some((a["name"].as_str()?.to_string(), a["browser_download_url"].as_str()?.to_string()))).filter(|(_, url)| in_origin(api, url)).collect(),
             })
         })
         .collect())
@@ -96,7 +106,7 @@ pub fn find(net: &dyn Net, api: &str, current: &str, wanted: Option<&str>) -> Re
         None => api.trim_end_matches('/').to_string(),
     };
     let body = net.get(&url, 4 << 20).map_err(|e| anyhow!("could not read the release list: {}", e))?;
-    let mut rels = releases_from(&body)?;
+    let mut rels = releases_from(&body, api)?;
     if wanted.is_some() {
         return Ok(rels.pop());
     }
@@ -111,7 +121,7 @@ pub fn find(net: &dyn Net, api: &str, current: &str, wanted: Option<&str>) -> Re
 pub fn find_dev(net: &dyn Net, api: &str, current: &str, target: &str) -> Result<Option<Release>> {
     let url = format!("{}/tags/dev", api.trim_end_matches('/'));
     let body = net.get(&url, 4 << 20).map_err(|e| anyhow!("could not read the dev release: {}", e))?;
-    let rel = releases_from(&body)?.pop().ok_or_else(|| anyhow!("no dev build is published yet"))?;
+    let rel = releases_from(&body, api)?.pop().ok_or_else(|| anyhow!("no dev build is published yet"))?;
     let suffix = format!("-{}.tar.gz", target);
     let tag = rel
         .assets
@@ -375,6 +385,19 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn from_the_projects_own_api_only_the_projects_own_downloads_count_and_a_mirror_is_taken_as_named() {
+        let body = |url: &str| format!("[{{\"tag_name\":\"v9.9.9\",\"prerelease\":false,\"assets\":[{{\"name\":\"delphi-v9.9.9-x.tar.gz\",\"browser_download_url\":\"{url}\"}}]}}]").into_bytes();
+        let own = format!("{ORIGIN_DOWNLOADS}v9.9.9/delphi-v9.9.9-x.tar.gz");
+        assert_eq!(releases_from(&body(&own), DEFAULT_API).unwrap()[0].assets.len(), 1);
+        assert_eq!(releases_from(&body(&own), &format!("{DEFAULT_API}/")).unwrap()[0].assets.len(), 1, "a trailing slash is the same API");
+        for elsewhere in ["https://evil.example/v9.9.9/delphi-v9.9.9-x.tar.gz", "https://github.com/someone-else/delphi/releases/download/v9.9.9/x.tar.gz", "http://github.com/jessevondoom/delphi/releases/download/v9.9.9/x.tar.gz", "https://github.com.evil.example/jessevondoom/delphi/releases/download/x"] {
+            assert!(releases_from(&body(elsewhere), DEFAULT_API).unwrap()[0].assets.is_empty(), "{elsewhere}");
+        }
+        // A mirror the operator named is taken at its word: that is what naming it means.
+        assert_eq!(releases_from(&body("https://mirror.example/x.tar.gz"), "https://mirror.example/releases").unwrap()[0].assets.len(), 1);
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 
