@@ -3,7 +3,7 @@ id: spec-034-narrator-monitoring-panes-spike
 title: "034: Narrator monitoring panes (a spike)"
 author: architect
 timestamp: 2026-10-26T06:00:00Z
-status: draft   # a spike: three panes are built so the operator can try them and trim; the rest are sketches (§5)
+status: approved   # approved by the operator 2026-10-26; the three panes are built and merged (#195) as a spike to test and trim; the rest are sketches (§5)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
