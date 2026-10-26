@@ -127,8 +127,11 @@ fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 /// A fresh repository holding exactly the case's fixture, committed.
-fn make_repo(case: &Case, repo: &Path) -> Result<(), String> {
-    if case.dir.join("fixture").is_dir() {
+fn make_repo(case: &Case, repo: &Path, source_repo: &Path) -> Result<(), String> {
+    if let Some(h) = &case.hidden {
+        // The base commit's tree with no history and no remote: the agent cannot read the change it is asked to make.
+        crate::train_hidden::export_tree(source_repo, &h.base_sha, repo)?;
+    } else if case.dir.join("fixture").is_dir() {
         copy_tree(&case.dir.join("fixture"), repo)?;
     } else {
         // A research case has no fixture; the workspace still needs a project, so it gets an empty repository.
@@ -149,6 +152,10 @@ struct Ctx<'a> {
     /// What the task delivered: its final answer and any Markdown it wrote in the mission (`specs/037` §5.1).
     deliverable: String,
     truth: Option<&'a crate::train_truth::Truth>,
+    /// The case, for its withheld tests, and where a run may build them.
+    case: &'a Case,
+    target: PathBuf,
+    scratch: PathBuf,
 }
 
 /// The task's final `task.output` text plus every Markdown file the mission wrote (reports, notes), in that order.
@@ -222,6 +229,16 @@ fn eval_check(c: &Check, ctx: &Ctx) -> Result<(), String> {
             (_, Err(_)) => Err(format!("{} is missing after the run", p)),
             (Err(_), _) => Err(format!("{} is not in the fixture", p)),
         },
+        Check::HiddenTests => {
+            let Some(h) = ctx.case.hidden.as_ref() else { return Err("the case has no hidden tests".into()) };
+            crate::train_hidden::apply(ctx.repo, &ctx.case.dir, h)?;
+            let r = crate::train_hidden::run_in(ctx.repo, h, &ctx.target, &ctx.scratch)?;
+            if r.passed {
+                Ok(())
+            } else {
+                Err(format!("hidden tests failed ({} passed):\n{}", r.tests_passed, r.tail))
+            }
+        }
         Check::FactRecall { min } => {
             let Some(t) = ctx.truth else { return Err("no truth pack to compare against".into()) };
             let r = t.recall(&ctx.deliverable);
@@ -251,6 +268,23 @@ fn eval_check(c: &Check, ctx: &Ctx) -> Result<(), String> {
             Err(_) => Err(format!("{} is missing after the run", path)),
         },
     }
+}
+
+// ── ratifying the task's spec ───────────────────────────────────────────────────────────────────────────────────
+
+/// The name a case's spec has in a run's workspace: `train-<case id>.md`, in `specs/`.
+pub fn spec_name(case: &Case) -> String {
+    format!("train-{}.md", case.id)
+}
+
+/// Ratify a spec in the temp workspace as `/ratify` would: the file under `team/specs/` and its hash in `ratified.lock`.
+pub fn ratify_spec(ws_dir: &Path, name: &str, text: &str) -> Result<(), String> {
+    let (dir, lock_path) = (ws_dir.join("team/specs"), ws_dir.join("local/ratified.lock"));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join(name), text).map_err(|e| e.to_string())?;
+    let mut lk = lock::read(&lock_path).map_err(|e| format!("the template home has no usable ratified.lock: {}", e))?;
+    lk.files.insert(format!("specs/{}", name), lock::hash(text.as_bytes()));
+    lock::write(&lock_path, &lk).map_err(|e| e.to_string())
 }
 
 // ── one run ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -390,10 +424,16 @@ pub struct Config {
     pub kill_grace: Duration,
     /// Run a research case whose truth pack the operator has not verified (a draft).
     pub allow_unverified: bool,
+    /// Run a code case whose hidden tests were never proven to fail on the base and pass on the reference.
+    pub allow_unvalidated: bool,
+    /// The repository code cases are harvested from (their base commit is exported from it).
+    pub source_repo: PathBuf,
+    /// A card policy for headless runs (`--on-card policy:<file>`); without one every Amber card is denied.
+    pub policy: Option<PathBuf>,
 }
 
 /// Run `child` to completion or kill it at `deadline`; output goes to files so a full pipe never blocks it.
-fn run_process(cmd: &mut Command, out: &Path, err: &Path, limit: Duration) -> Result<(Option<i32>, bool), String> {
+pub(crate) fn run_process(cmd: &mut Command, out: &Path, err: &Path, limit: Duration) -> Result<(Option<i32>, bool), String> {
     let stdout = fs::File::create(out).map_err(|e| e.to_string())?;
     let stderr = fs::File::create(err).map_err(|e| e.to_string())?;
     let mut child = cmd.stdin(Stdio::null()).stdout(stdout).stderr(stderr).spawn().map_err(|e| format!("could not start {:?}: {}", cmd.get_program(), e))?;
@@ -430,6 +470,9 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     if case.kind == Kind::Scenario {
         return Err("scenario cases are not run yet (task and probe cases only)".into());
     }
+    if case.hidden.as_ref().is_some_and(|h| !crate::train_hidden::validated(&case.dir, h)) && !cfg.allow_unvalidated {
+        return Err("the hidden tests were never validated for this content (`delphi train check-hidden`); pass --allow-unvalidated to run it anyway".into());
+    }
     if case.truth.as_ref().is_some_and(|t| !t.verified()) && !cfg.allow_unverified {
         return Err("the truth pack is a draft (not verified by the operator); pass --allow-unverified to run it anyway".into());
     }
@@ -439,17 +482,25 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let ws_dir = home.join("workspaces").join(&cfg.workspace);
     let cfg_path = ws_dir.join("config.toml");
     let text = fs::read_to_string(&cfg_path).map_err(|e| format!("template home has no workspace `{}` ({})", cfg.workspace, e))?;
-    make_repo(case, &repo)?;
+    make_repo(case, &repo, &cfg.source_repo)?;
     fs::write(&cfg_path, set_projects(&text, &repo)?).map_err(|e| e.to_string())?;
     if let Some(o) = &arm.overlay {
         apply_overlay(&ws_dir, o)?;
     }
+    if let Some(sp) = &case.spec {
+        ratify_spec(&ws_dir, &spec_name(case), &fs::read_to_string(case.dir.join(sp)).map_err(|e| e.to_string())?)?;
+    }
 
     let prompt = case.prompt.clone().unwrap_or_default();
     // A builder case goes through the build flow; any other role is addressed by name, as in the console.
-    let input = if case.role == "builder" { format!("/build {}", prompt) } else { format!("@{} {}", case.role, prompt) };
+    let input = match (case.role.as_str(), &case.spec) {
+        ("builder", Some(_)) => format!("/build {} @specs/{}", prompt, spec_name(case)),
+        ("builder", None) => format!("/build {}", prompt),
+        _ => format!("@{} {}", case.role, prompt),
+    };
     let mut cmd = Command::new(&cfg.delphi_bin);
-    cmd.args(["run", &input, "--json", "--on-card", "deny", "--workspace", &cfg.workspace, "--home"]).arg(&home).args(["--budget", &format!("{:.2}", case.max_cost_usd), "--timeout", &format!("{}s", case.timeout_secs)]);
+    let on_card = cfg.policy.as_ref().map_or("deny".to_string(), |p| format!("policy:{}", p.display()));
+    cmd.args(["run", &input, "--json", "--on-card", &on_card, "--workspace", &cfg.workspace, "--home"]).arg(&home).args(["--budget", &format!("{:.2}", case.max_cost_usd), "--timeout", &format!("{}s", case.timeout_secs)]);
     cmd.current_dir(&repo).env_remove("DELPHI_HOME").env_remove("DELPHI_WORKSPACE");
     for (k, v) in &cfg.env {
         cmd.env(k, v);
@@ -480,7 +531,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     // A build stops on its own branch: check the commit it produced, as the bench does.
     let sha = summary["merge_commit"].as_str().or(summary["ready_to_merge"]["sha"].as_str());
-    if let Some(sha) = sha.filter(|s| s.chars().all(|c| c.is_ascii_hexdigit())) {
+    if let Some(sha) = sha.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit())) {
         git(&repo, &["-c", "advice.detachedHead=false", "checkout", "-q", sha])?;
     }
     let records = task_records(&events);
@@ -488,7 +539,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     row.attempts = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).map_or(0, |r| r.attempts);
     let record = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).cloned();
     let deliverable = deliverable_of(&events, task, &ws_dir.join("local/missions").join(mission));
-    let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo, deliverable, truth: case.truth.as_ref() };
+    let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo, deliverable, truth: case.truth.as_ref(), case, target: cfg.work_dir.join("target"), scratch: dir.join("hidden") };
     if let Some(t) = ctx.truth {
         let r = t.recall(&ctx.deliverable);
         row.notes.push(format!("fact recall {:.0}% ({} of {} facts{})", r.fraction * 100.0, r.stated.len(), t.facts.len(), if r.missing.is_empty() { String::new() } else { format!("; missing {}", r.missing.join(", ")) }));
@@ -637,6 +688,11 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: no cases chosen");
         return 1;
     }
+    let unvalidated: Vec<String> = cases.iter().filter(|c| c.hidden.as_ref().is_some_and(|h| !crate::train_hidden::validated(&c.dir, h))).map(|c| format!("{}/{}", c.suite, c.id)).collect();
+    if !unvalidated.is_empty() && !args.iter().any(|a| a == "--allow-unvalidated") {
+        eprintln!("delphi train run: these cases have hidden tests nobody proved fail on the base and pass on the reference: {}\n  run `delphi train check-hidden --case <suite>/<id>` or pass --allow-unvalidated", unvalidated.join(", "));
+        return 2;
+    }
     let drafts: Vec<String> = cases.iter().filter(|c| c.truth.as_ref().is_some_and(|t| !t.verified())).map(|c| format!("{}/{}", c.suite, c.id)).collect();
     if !drafts.is_empty() && !args.iter().any(|a| a == "--allow-unverified") {
         eprintln!("delphi train run: these cases have a truth pack the operator has not verified: {}\n  verify the pack (set `verified_by` and `verified_on` in its meta.toml) or pass --allow-unverified", drafts.join(", "));
@@ -647,7 +703,7 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: {}", e);
         return 2;
     }
-    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified") };
+    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from) };
     let (rows, skipped) = run_all(&cfg, cases);
     let out_path = flag(args, "--out").map(PathBuf::from).unwrap_or_else(|| work.join("rows.jsonl"));
     let lines: String = rows.iter().map(|r| r.to_json().to_string() + "\n").collect();
@@ -720,7 +776,7 @@ mod tests {
     }
 
     fn cfg(root: &Path, canned: &Path, arms: Vec<Arm>, budget: f64) -> Config {
-        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false }
+        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None }
     }
 
     fn baseline() -> Arm {
@@ -942,6 +998,112 @@ mod tests {
         let c = case(t.path(), CHECKS);
         assert_eq!(cli(&a(&base), &[&c]), 0, "no --template-home is needed when every arm has its own");
         assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--work-dir", work.to_str().unwrap(), "--dry-run"]), &[&c]), 2, "neither a template nor an arms file");
+        assert!(!work.exists());
+    }
+
+    /// A source repository with a base commit and a reference commit that fixes `f` and carries the tests.
+    fn source_repo(root: &Path) -> (PathBuf, String, String) {
+        let r = root.join("src-repo");
+        fs::create_dir_all(r.join("src")).unwrap();
+        let git = |a: &[&str]| {
+            let o = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]).args(a).current_dir(&r).output().unwrap();
+            assert!(o.status.success(), "{:?} {}", a, String::from_utf8_lossy(&o.stderr));
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        fs::write(r.join("src/lib.rs"), "pub fn f() -> u32 { 0 }\n\n#[cfg(test)]\nmod tests {\n}\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "base"]);
+        let base = git(&["rev-parse", "HEAD"]);
+        fs::write(r.join("src/lib.rs"), "pub fn f() -> u32 { 1 } // fixed\n\n#[cfg(test)]\nmod tests {\n    // HIDDEN-MARK\n}\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "the secret reference change"]);
+        let reference = git(&["rev-parse", "HEAD"]);
+        (r.clone(), base, reference)
+    }
+
+    /// A fake builder: copies the canned mission, records its arguments, and (FAKE_SOLVE=1) commits the fix in the run's repository.
+    fn fake_builder(root: &Path) -> PathBuf {
+        let p = root.join("fake-builder.sh");
+        fs::write(&p, "#!/bin/sh\necho \"$@\" > \"$PWD/../args.txt\"\nwhile [ $# -gt 0 ]; do case \"$1\" in --home) H=\"$2\";; --workspace) W=\"$2\";; esac; shift; done\n\
+                       mkdir -p \"$H/workspaces/$W/local/missions\"\ncp -R \"$FAKE_MISSION\" \"$H/workspaces/$W/local/missions/m_fake\"\n\
+                       SHA=\"\"\nif [ \"$FAKE_SOLVE\" = 1 ]; then printf 'pub fn f() -> u32 { 1 } // fixed\\n\\n#[cfg(test)]\\nmod tests {\\n    // my own tests\\n}\\n' > src/lib.rs; git add -A; git -c user.name=a -c user.email=a@a commit -q -m solve; SHA=$(git rev-parse HEAD); fi\n\
+                       echo \"{\\\"type\\\":\\\"run.summary\\\",\\\"outcome\\\":\\\"ready_to_merge\\\",\\\"exit_code\\\":0,\\\"mission_id\\\":\\\"m_fake\\\",\\\"task_id\\\":\\\"t_0001\\\",\\\"ready_to_merge\\\":{\\\"sha\\\":\\\"$SHA\\\"}}\"\n").unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    const HIDDEN_CMD: &str = "grep -q 'fixed' src/lib.rs && grep -q 'HIDDEN-MARK' src/lib.rs && echo 'test result: ok. 3 passed; 0 failed' || { echo 'test result: FAILED. 0 passed; 1 failed'; exit 1; }";
+
+    /// A harvested code case in `root/suites/s/cases/hc`, validated against the source repo.
+    fn code_case(root: &Path, validate: bool) -> (Case, PathBuf) {
+        let (repo, base, reference) = source_repo(root);
+        let dir = root.join("suites/s/cases/hc");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("spec.md"), "---\nstatus: approved\n---\n# Make f return 1\n\nIn src/lib.rs, `f` must return 1.\n").unwrap();
+        fs::write(dir.join("case.toml"), "id = \"hc\"\nsuite = \"s\"\nkind = \"task\"\nrole = \"builder\"\nsplit = \"dev\"\nmax_cost_usd = 2.0\ntimeout_secs = 30\nprompt = \"Implement\"\nspec = \"spec.md\"\n[[check]]\nkind = \"hidden_tests\"\n").unwrap();
+        crate::train_hidden::write_hidden(&dir, &crate::train_hidden::Harvest { source_repo: &repo, base: &base, reference: &reference, files: &["src/lib.rs".into()], cmd: &["sh".into(), "-c".into(), HIDDEN_CMD.into()], timeout_secs: 60, min_passed: 1 }).unwrap();
+        if validate {
+            let h = crate::train_hidden::load(&dir, "s/hc").unwrap().unwrap();
+            assert!(crate::train_hidden::validate(&dir, &h, &repo, &root.join("val"), 2).unwrap().ok());
+        }
+        (train::load_case(&dir, "s").unwrap(), repo)
+    }
+
+    #[test]
+    fn a_harvested_code_case_starts_from_the_base_tree_with_a_ratified_spec_and_is_graded_by_its_hidden_tests() {
+        let t = tempfile::tempdir().unwrap();
+        let (c, repo) = code_case(t.path(), true);
+        let canned = mission(t.path(), &[("task.completed", json!({"status": "done"}))]);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        config.source_repo = repo;
+        config.delphi_bin = fake_builder(t.path());
+        config.env.push(("FAKE_SOLVE".into(), "1".into()));
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!((rows[0].passed, rows[0].failed_checks.clone(), rows[0].error.clone()), (Some(true), vec![], None), "{:?}", rows[0]);
+        let run = config.work_dir.join("001-baseline-hc-s1");
+        let log = Command::new("git").args(["log", "--format=%s"]).current_dir(run.join("repo")).output().unwrap();
+        let log = String::from_utf8_lossy(&log.stdout).to_string();
+        assert!(log.contains("fixture") && log.contains("solve") && !log.contains("secret reference change") && !log.contains("base"), "no history of the real project: {}", log);
+        // The spec was ratified in the run's home, and the build was asked to implement it.
+        let ws = run.join("home").join("workspaces/train");
+        let spec = fs::read_to_string(ws.join("team/specs/train-hc.md")).unwrap();
+        assert!(lock::read(&ws.join("local/ratified.lock")).unwrap().files["specs/train-hc.md"] == lock::hash(spec.as_bytes()));
+        let args = fs::read_to_string(run.join("args.txt")).unwrap();
+        assert!(args.contains("/build Implement @specs/train-hc.md"), "{}", args);
+        // The agent's own tests were replaced by the withheld ones for grading, not before.
+        assert!(fs::read_to_string(run.join("repo/src/lib.rs")).unwrap().contains("HIDDEN-MARK"));
+    }
+
+    #[test]
+    fn a_build_that_does_not_solve_the_task_fails_the_hidden_tests() {
+        let t = tempfile::tempdir().unwrap();
+        let (c, repo) = code_case(t.path(), true);
+        let canned = mission(t.path(), &[("task.completed", json!({"status": "done"}))]);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        config.source_repo = repo;
+        config.delphi_bin = fake_builder(t.path());
+        config.env.push(("FAKE_SOLVE".into(), "0".into()));
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows[0].passed, Some(false));
+        assert!(rows[0].failed_checks[0].contains("hidden tests failed"), "{:?}", rows[0].failed_checks);
+    }
+
+    #[test]
+    fn a_code_case_nobody_validated_is_not_run_without_the_flag() {
+        let t = tempfile::tempdir().unwrap();
+        let (c, repo) = code_case(t.path(), false);
+        let canned = mission(t.path(), &[("task.completed", json!({"status": "done"}))]);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        config.source_repo = repo;
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert!(rows[0].error.as_deref().unwrap_or("").contains("never validated"), "{:?}", rows[0].error);
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (tpl, work) = (template(t.path()), t.path().join("fresh"));
+        assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()]), &[&c]), 2);
         assert!(!work.exists());
     }
 

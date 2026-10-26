@@ -39,6 +39,24 @@ routing is configuration) and may declare `expect_models`, the model ids or pref
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
 in and out, calls and cost per model, attempts and mid-run model swaps.
 
+## Code cases from history (`specs/037` §3, §5.2)
+
+A code case starts the agent from an earlier commit and scores it on the tests of the change that followed. It has
+`spec = "spec.md"` (the task, ratified in the run's home; it must give the names the tests use) and a `hidden/` directory
+that no run can read. Make one with:
+
+```sh
+delphi train harvest --case code/<id> --base <parent-sha> --reference <change-sha> \
+    --test-file crates/foo/src/bar.rs --cmd "cargo test -p foo --lib --locked -- bar::" --min-passed 10
+```
+
+Harvest extracts the reference's test module from each `--test-file`, then proves the case: the hidden tests must fail on
+the base commit and pass three times in a row on the reference. `delphi train check-hidden --case code/<id>` repeats the
+proof; any edit to the case invalidates it, and `delphi train run` refuses an unproven case without `--allow-unvalidated`.
+It builds the project but calls no model. A run's project is the base tree with no history; after the run the test
+module in each named file is replaced by the reference's and the command is run. `--policy <file>` is the Amber-card
+policy for headless builds.
+
 ## Research cases and truth packs (`specs/037`)
 
 A `kind = "research"` case has no `fixture/`; it has a `truth/` directory beside `case.toml` that is **never copied into a

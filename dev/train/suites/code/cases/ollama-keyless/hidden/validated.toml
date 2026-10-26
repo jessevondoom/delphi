@@ -1,0 +1,5 @@
+# Written by `delphi train check-hidden`; any edit to the case invalidates it.
+fingerprint = "a085b90cbc4ada67bc6f90e7885a22b8374040c25ffcb8f814bf877bd069e3c7"
+base_fails = true
+reference_runs = 3
+reference_tests_passed = 143

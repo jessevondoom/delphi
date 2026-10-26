@@ -1,0 +1,1223 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::approval::Answer;
+    use crate::engine::Status;
+    use crate::harness::tests::fake_cli;
+    use crate::testkit::{events_of, setup_with_exec, Fx};
+    use std::fs;
+    use std::time::Duration;
+
+    /// The testkit config with one subscription harness endpoint serving Claude.
+    fn use_harness(f: &Fx) {
+        use_harness_with(f, "[\"claude-sub\"]", "[\"claude-sub\"]")
+    }
+
+    /// The same, plus extra TOML (a `[harness.claude]` profile).
+    fn use_harness_profile(f: &Fx, extra: &str) {
+        use_harness_text(f, "[\"claude-sub\"]", "[\"claude-sub\"]", extra)
+    }
+
+    fn use_harness_with(f: &Fx, order: &str, allowed: &str) {
+        use_harness_text(f, order, allowed, "")
+    }
+
+    fn use_harness_text(f: &Fx, order: &str, allowed: &str, extra: &str) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n[access]")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", &format!("order = {{ claude = {} }}", order))
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", &format!("allowed_endpoints = {}", allowed));
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n{}", text, extra)).unwrap());
+    }
+
+    fn fixture(cli_body: &str, tweak: impl FnOnce(&mut crate::engine::Settings)) -> (Fx, tempfile::TempDir) {
+        fixture_with(cli_body, tweak, |_| {})
+    }
+
+    fn fixture_with(cli_body: &str, tweak: impl FnOnce(&mut crate::engine::Settings), exec: impl FnOnce(&mut crate::exec::ExecConfig)) -> (Fx, tempfile::TempDir) {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), cli_body);
+        let f = setup_with_exec(vec![], 5.0, |s| { s.harness_program = prog; tweak(s); }, |c| { c.sandbox = crate::exec::SandboxMode::Off; exec(c); });
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        use_harness(&f);
+        (f, scripts)
+    }
+
+    const INIT: &str = r#"echo '{"type":"system","subtype":"init","session_id":"s1"}'"#;
+    const FINISH: &str = r#"echo '{"type":"result","subtype":"success","result":"All done.","stop_reason":"end_turn","total_cost_usd":0.03,"usage":{"input_tokens":10,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000,"output_tokens":40}}'"#;
+
+    #[test]
+    fn paths_must_stay_inside_the_worktree_and_away_from_dot_git() {
+        let d = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.rs"), "x").unwrap();
+        std::os::unix::fs::symlink("/etc", root.join("link")).unwrap();
+        for ok in ["src/a.rs", "src/new.rs", "./src/../src/a.rs"] {
+            assert!(inside(&root, ok).is_some(), "{}", ok);
+        }
+        assert!(inside(&root, &format!("{}/src/a.rs", root.display())).is_some());
+        for bad in ["../x", "/etc/passwd", "src/../../x", ".git/hooks/pre-commit", "sub/.GIT/config", "link/passwd", "link", "link/../z", "link/../.git/hooks/x"] {
+            assert!(inside(&root, bad).is_none(), "{}", bad);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_non_builder_role_runs_in_the_cli_with_no_tools_and_is_metered_as_a_subscription() {
+        let (f, _s) = fixture(&format!("{}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"Plan: do X.\"}}],\"usage\":{{\"input_tokens\":10,\"output_tokens\":20}}}}}}'\n{}", INIT, FINISH), |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        assert!(f.model.requests().is_empty(), "no API call is made on a harness endpoint");
+        let started = events_of(&f, "harness.started");
+        assert_eq!((started[0].payload["tools"].as_str(), started[0].endpoint_id.as_deref()), (Some("native"), Some("claude-sub")), "the CLI's web tools by default; its file tools are not offered");
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!((usage[0].payload["cost_model"].as_str(), usage[0].payload["usage_source"].as_str(), usage[0].payload["cost_usd"].as_f64()), (Some("subscription"), Some("reported"), Some(0.0)));
+        assert_eq!((usage[0].payload["output_tokens"].as_u64(), usage[0].payload["cache_read_tokens"].as_u64()), (Some(40), Some(5000)));
+        assert_eq!(events_of(&f, "harness.cost")[0].payload["total_cost_usd_equivalent"], 0.03);
+        assert_eq!(f.m.budget.lock().unwrap().spent(), 0, "a subscription run spends no dollars");
+        assert!(!events_of(&f, "agent.turn.complete").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_builder_command_asks_the_operator_runs_and_its_files_are_stamped_and_git_internals_restored() {
+        let body = format!(
+            r#"{init}
+echo '{{"type":"control_request","request_id":"r1","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"touch made.txt"}},"tool_use_id":"tu1"}}}}'
+read answer
+case "$answer" in *'"behavior":"allow"'*)
+  touch made.txt
+  gd=$(sed 's/gitdir: //' .git)
+  printf '#!/bin/sh\ntouch /tmp/never\n' > "$gd/../../hooks/pre-commit"
+  chmod +x "$gd/../../hooks/pre-commit"
+  echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"tu1","name":"Bash","input":{{"command":"touch made.txt"}}}}]}}}}'
+  echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"tu1","is_error":false,"content":""}}]}}}}';;
+*) echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"was denied"}}]}}}}';;
+esac
+{finish}"#,
+            init = INIT,
+            finish = FINISH
+        );
+        let (f, _s) = fixture(&body, |_| {});
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await }) };
+        let mut card = None;
+        for _ in 0..400 {
+            if let Some(c) = f.engine.broker.pending().into_iter().find(|c| c.tool == "harness_bash") {
+                card = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let card = card.expect("a card for the Bash request");
+        assert!(card.summary.contains("touch made.txt") && card.summary.contains("not sandboxed"), "{}", card.summary);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
+        assert!(wt.join("made.txt").exists(), "the approved command ran");
+        assert!(!f.root.join("proj/.git/hooks/pre-commit").exists(), "the planted hook is removed");
+        assert_eq!(events_of(&f, "git.tamper_reverted").len(), 1);
+        assert!(events_of(&f, "provenance.stamp").iter().any(|e| e.payload["path"] == "made.txt"));
+        assert_eq!(events_of(&f, "harness.tool")[0].payload["tool"], "Bash");
+        assert_eq!(events_of(&f, "harness.started")[0].payload["tools"], "standard");
+    }
+
+    #[tokio::test]
+    async fn permission_requests_outside_the_rules_are_denied_without_asking() {
+        let req = |tool: &str, input: &str| format!(r#"echo '{{"type":"control_request","request_id":"r-{t}","request":{{"subtype":"can_use_tool","tool_name":"{t}","input":{i},"tool_use_id":"x"}}}}'
+read a_{t}
+echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
+        let body = format!("{init}\n{w}\n{g}\n{b}\n{e}\n{fin}", init = INIT,
+            w = req("Write", r#"{"file_path":"/etc/evil"}"#),
+            g = req("Write", r#"{"file_path":".git/hooks/pre-commit"}"#),
+            b = req("Bash", r#"{"command":"git push origin main"}"#),
+            e = req("Edit", r#"{"file_path":"../escape.txt"}"#),
+            fin = FINISH);
+        let (f, _s) = fixture_with(&body, |_| {}, |c| c.deny = vec!["git push*".into()]);
+        let out = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        assert!(f.engine.broker.pending().is_empty() && events_of(&f, "approval.requested").is_empty(), "denials need no card");
+        let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
+        let answers = fs::read_to_string(wt.join("answers.txt")).unwrap();
+        assert_eq!(answers.matches("\"behavior\":\"deny\"").count(), 4, "{}", answers);
+        assert!(answers.contains("only inside the task worktree") && answers.contains("refused by policy"), "{}", answers);
+        assert!(!answers.contains("updatedPermissions"));
+    }
+
+    #[tokio::test]
+    async fn a_run_over_its_token_cap_is_killed_and_escalated_with_its_usage_recorded() {
+        let body = format!(
+            "{init}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"working\"}}],\"usage\":{{\"input_tokens\":900,\"output_tokens\":300}}}}}}'\nsleep 30",
+            init = INIT
+        );
+        let (f, _s) = fixture(&body, |s| s.harness_token_cap = 1000);
+        let t = std::time::Instant::now();
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("over the 1000 cap"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert!(t.elapsed() < Duration::from_secs(10), "the CLI was killed, not waited for");
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!((usage[0].payload["outcome"].as_str(), usage[0].payload["cost_model"].as_str()), (Some("error"), Some("subscription")));
+    }
+
+    #[tokio::test]
+    async fn a_cli_that_exits_without_a_result_says_so_and_a_tainted_span_never_launches() {
+        let (f, _s) = fixture("exit 3", |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("without a result") && r.contains("signed in"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        let (g, _s2) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        let out = g.engine.run_task(&g.m, "architect", "Review @project/app/vendor/x.js").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("launch refused"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert!(events_of(&g, "harness.started").is_empty());
+    }
+
+    fn two_methods(f: &Fx) {
+        use_harness_with(f, "[\"claude-sub\", \"direct\"]", "[\"direct\", \"claude-sub\"]");
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_cannot_start_work_falls_back_to_the_api_endpoint_and_says_so() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "exit 3");
+        let f = setup_with_exec(vec![crate::model::Step::text("Answered by the API.")], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        two_methods(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Answered by the API."), "{}", out.text);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("claude-sub"), Some("api")));
+        assert!(fb[0].payload["reason"].as_str().unwrap().contains("without a result"));
+        assert_eq!(f.model.requests()[0].endpoint_id, "direct", "the harness endpoint is never used for an API request");
+        // The failed harness attempt is still on the books, as an error.
+        assert!(events_of(&f, "agent.usage").iter().any(|e| e.payload["cost_model"] == "subscription" && e.payload["outcome"] == "error"));
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_already_acted_is_never_retried_by_another_method() {
+        let body = format!(
+            "{init}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"Bash\",\"input\":{{\"command\":\"ls\"}}}}]}}}}'\nexit 2",
+            init = INIT
+        );
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![crate::model::Step::text("must not be used")], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        two_methods(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(f.model.requests().is_empty() && events_of(&f, "harness.fallback").is_empty());
+    }
+
+    #[tokio::test]
+    async fn when_every_api_endpoint_is_down_the_harness_takes_the_span() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &format!("{}\n{}", INIT, FINISH));
+        let f = setup_with_exec(vec![crate::model::Step::Throttle], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_harness_with(&f, "[\"direct\", \"claude-sub\"]", "[\"direct\", \"claude-sub\"]");
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("api"), Some("claude-sub")));
+        assert_eq!(events_of(&f, "endpoint.throttled").len(), 1);
+        // A harness as capable as the target takes the span; the operator is not asked about a weaker API model first.
+        assert!(events_of(&f, "model.degraded_confirm").is_empty() && events_of(&f, "task.blocked").is_empty());
+    }
+
+    /// A Gemini-family harness endpoint on `agy`, serving the `architect` and `builder` roles.
+    fn use_agy(f: &Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\", builder = \"gemini\" }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_agy_harness_runs_read_only_roles_as_untrusted_and_refuses_a_builder_it_has_no_evidence_for() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{"model":"m","tools":[]}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Findings: none."}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":900,"output_tokens":12}}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"Findings: none.","usage":{"input_tokens":900,"output_tokens":12}}}'"#,
+        );
+        let f = setup_with_exec(vec![crate::model::Step::text("Built on the API.")], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Findings: none."), "{}", out.text);
+        assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("agy")), "its output is untrusted");
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!((u["provider"].as_str(), u["cost_model"].as_str(), u["input_tokens"].as_u64()), (Some("google"), Some("subscription"), Some(900)));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["tools"].as_str(), started["gated"].clone(), started["native_tools"].clone()), (Some("native"), json!(true), json!(["search_web", "read_url_content"])), "the gate lets the web tools through by default: {}", started);
+        // A Builder is never put on `agy` (it cannot ask the operator). Its usual family is Gemini and only `agy`
+        // serves it, but the family is a preference: it is served by an eligible model instead (`specs/002` §4.1).
+        crate::testkit::ratify_spec(&f);
+        let b = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        assert_eq!((b.status.clone(), b.text.as_str()), (Status::Done, "Built on the API."), "{}", b.text);
+        assert_eq!(events_of(&f, "harness.started").len(), 1, "agy ran for the architect only");
+        assert_eq!(f.model.requests().last().unwrap().endpoint_id, "direct", "the Builder went to an API endpoint");
+    }
+
+    /// `agy` serving the roles named (Gemini family), nothing else.
+    fn use_agy_for(f: &Fx, roles: &str, extra: &str) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", &format!("[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = {{ frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }}\n[access]\nrole_family = {{ {} }}", roles.split(',').map(|r| format!("{} = \"gemini\"", r.trim())).collect::<Vec<_>>().join(", ")))
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"direct\", \"backup\"], gemini = [\"agy-sub\"] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n{}", text, extra)).unwrap());
+    }
+
+    const AGY_FINISH: &str = r#"echo '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Done."}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"Done.","usage":{"input_tokens":10,"output_tokens":3}}}'"#;
+
+    #[tokio::test]
+    async fn an_agy_span_gets_the_plugin_and_the_gate_in_its_own_directory_and_is_told_which_tools_it_has() {
+        let scripts = tempfile::tempdir().unwrap();
+        let seen = scripts.path().join("seen");
+        std::fs::create_dir_all(&seen).unwrap();
+        // The stand-in reports what it was started with: the first turn, and the `.agents/` it finds in its working directory.
+        let prog = fake_cli(
+            scripts.path(),
+            &format!(
+                "printf '%s' \"$first\" > '{seen}/first-turn.json'\ncp -R .agents '{seen}/agents' 2>/dev/null\npwd > '{seen}/cwd'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[]}}}}'\n{finish}",
+                seen = seen.display(),
+                finish = AGY_FINISH
+            ),
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Done."), "{}", out.text);
+        let first = fs::read_to_string(seen.join("first-turn.json")).unwrap();
+        assert!(first.contains("mcp_delphi_delphi_timer") && first.contains("mcp_delphi_delphi_dispatch_agent"), "the note names the tools as agy shows them: {}", first);
+        assert!(first.contains("search_web, read_url_content") && first.contains("switched off in this task"), "{}", first);
+        assert!(!first.contains("Do not call any tools"), "there are tools to call now");
+        let plugin = seen.join("agents/plugins/delphi");
+        assert_eq!(fs::read_to_string(plugin.join("plugin.json")).unwrap(), r#"{"name":"delphi"}"#);
+        let mcp: serde_json::Value = serde_json::from_str(&fs::read_to_string(plugin.join("mcp_config.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["delphi"]["args"], json!(["__mcp-bridge"]));
+        let hooks: serde_json::Value = serde_json::from_str(&fs::read_to_string(seen.join("agents/hooks.json")).unwrap()).unwrap();
+        let cmd = hooks["delphi-gate"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.ends_with(" __agy-hook") && cmd.contains("DELPHI_BRIDGE_SOCKET=") && cmd.contains("DELPHI_BRIDGE_TOKEN="), "{}", cmd);
+        assert!(fs::read_to_string(seen.join("cwd")).unwrap().trim_end().ends_with("harness-empty"), "the span's own scratch directory, not a project");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert!(started["gated"] == true && started["bridge"].as_array().unwrap().iter().any(|v| v == "timer"), "{}", started);
+        // Still untrusted from the start; the gate is a control Delphi cannot verify from outside.
+        assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("agy")));
+    }
+
+    /// A fake `agy` that reports a version, and otherwise runs `body`.
+    fn versioned_agy(dir: &std::path::Path, version: &str, body: &str) -> String {
+        fake_cli(dir, &format!("if [ \"$1\" = \"--version\" ]; then echo '{}'; exit 0; fi\n{}", version, body))
+    }
+
+    fn gate_record(dir: &std::path::Path, version: &str, at: i64, verified: bool) -> std::path::PathBuf {
+        let path = dir.join("agy-gate.json");
+        let rec = crate::capabilities::GateRecord { endpoint_id: "agy-sub".into(), agy_version: version.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified, builder_ready: verified };
+        crate::capabilities::save_gate(&path, &rec).unwrap();
+        path
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    /// The taint events an agy orchestrator span raised when the stand-in ran `body`, given a conformance record (or none).
+    async fn agy_taints(version_on_disk: &str, record: Option<(&str, i64, bool)>, body: &str) -> Vec<String> {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = versioned_agy(scripts.path(), version_on_disk, body);
+        let gate = record.map(|(v, at, ok)| gate_record(scripts.path(), v, at, ok));
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = gate.or(Some(scripts.path().join("none.json"))); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        events_of(&f, "span.taint").iter().map(|e| e.payload["cause"].as_str().unwrap().to_string()).collect()
+    }
+
+    const QUIET_AGY: &str = "echo '{\"event\":\"init\",\"init\":{\"model\":\"m\",\"tools\":[]}}'";
+
+    #[tokio::test]
+    async fn an_agy_span_starts_trusted_only_on_a_fresh_verified_record_for_the_version_installed_now() {
+        let body = format!("{}\n{}", QUIET_AGY, AGY_FINISH);
+        let now = now_secs();
+        // The evidence is there: nothing taints the span.
+        assert_eq!(agy_taints("agy 7.1", Some(("agy 7.1", now, true)), &body).await, Vec::<String>::new());
+        // Every way the evidence can fail leaves the span untrusted from the start.
+        for (why, version_on_disk, rec) in [
+            ("no record", "agy 7.1", None),
+            ("a record that did not verify", "agy 7.1", Some(("agy 7.1", now, false))),
+            ("a record for another version (agy updated since)", "agy 7.2", Some(("agy 7.1", now, true))),
+            ("a record gone stale", "agy 7.1", Some(("agy 7.1", now - crate::capabilities::GATE_TTL_SECS - 1, true))),
+            ("a record that names no version", "agy 7.1", Some(("", now, true))),
+        ] {
+            let t = agy_taints(version_on_disk, rec, &body).await;
+            assert!(t.len() == 1 && t[0].contains("hook Delphi cannot verify"), "{}: {:?}", why, t);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_trusted_agy_span_falls_to_l0_the_moment_the_gate_lets_a_web_tool_through_and_before_the_next_delphi_call() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_client.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_CLIENT).unwrap();
+        // AGY_CLIENT asks about the timer, then search_web (allowed), then the tools it is denied, then calls the timer.
+        let body = format!("python3 -I '{}' '{}'\n{}\n{}", helper.display(), out_file.display(), QUIET_AGY, AGY_FINISH);
+        let prog = versioned_agy(scripts.path(), "agy 7.1", &body);
+        let gate = gate_record(scripts.path(), "agy 7.1", now_secs(), true);
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = Some(gate); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let ev = f.m.replay().unwrap();
+        let taint = ev.iter().position(|e| e.kind == "span.taint").expect("the web tool tainted the span");
+        let call = ev.iter().position(|e| e.kind == "harness.bridge_call").expect("the timer ran");
+        assert!(taint < call, "tainted before the Delphi call ran");
+        assert_eq!(ev[taint].payload["ceiling"], "L0");
+        assert!(ev[taint].payload["cause"].as_str().unwrap().contains("read from the web"), "{}", ev[taint].payload);
+        assert_eq!(ev.iter().filter(|e| e.kind == "span.taint").count(), 1, "once");
+    }
+
+    /// A stand-in `agy` that, as the real one does, asks the hook about each call and runs the ones it is allowed.
+    /// `calls` is a JSON list of [tool, args]; `$CWD` in a path means the directory it was started in. Its answers go to `out.json`.
+    const AGY_BUILDER_CLIENT: &str = r#"import json, os, socket, sys
+cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
+cwd = os.getcwd()
+s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
+f = s.makefile("rw"); f.write(json.dumps({"token": cfg["DELPHI_BRIDGE_TOKEN"]}) + "\n"); f.flush()
+hooks = json.load(open(".agents/hooks.json"))["delphi-gate"]["PreToolUse"][0]["hooks"][0]
+out = {"hook_timeout": hooks["timeout"], "hook_wait": hooks["command"].split("DELPHI_HOOK_WAIT=")[1].split()[0], "decisions": []}
+initialized = False
+for tool, args in json.loads(sys.argv[2]):
+    args = json.loads(json.dumps(args).replace("$CWD", cwd))
+    if tool.startswith("mcp:"):
+        if not initialized:
+            f.write(json.dumps({"jsonrpc": "2.0", "id": 9, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}}) + "\n"); f.flush(); f.readline()
+            initialized = True
+        f.write(json.dumps({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": tool[4:], "arguments": args}}) + "\n"); f.flush()
+        r = json.loads(f.readline())["result"]
+        out["decisions"].append([tool, "error" if r["isError"] else "ok", r["content"][0]["text"]])
+        continue
+    f.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {"toolCall": {"name": tool, "args": args}}}) + "\n"); f.flush()
+    r = json.loads(f.readline())["result"]
+    out["decisions"].append([tool, r["decision"], r.get("reason", "")])
+    if r["decision"] == "allow" and tool == "write_file":
+        open(args["Path"], "w").write(args.get("Content", ""))
+open(sys.argv[1], "w").write(json.dumps(out))
+"#;
+
+    /// An agy Builder fixture: the project, the ratified spec, the stand-in running `calls`, and a verified gate record.
+    fn agy_builder(calls: serde_json::Value, record: Option<(&str, bool)>) -> (Fx, tempfile::TempDir, std::path::PathBuf) {
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_builder.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_BUILDER_CLIENT).unwrap();
+        let calls_file = scripts.path().join("calls.json");
+        fs::write(&calls_file, calls.to_string()).unwrap();
+        let body = format!("python3 -I '{}' '{}' \"$(cat '{}')\"\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[]}}}}'\n{}", helper.display(), out_file.display(), calls_file.display(), AGY_FINISH);
+        let prog = versioned_agy(scripts.path(), "agy 7.1", &body);
+        let gate = record.map(|(v, ok)| gate_record(scripts.path(), v, now_secs(), ok));
+        let f = setup_with_exec(vec![crate::model::Step::text("Built on the API.")], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = gate.or(Some(scripts.path().join("none.json"))); }, |c| { c.sandbox = crate::exec::SandboxMode::Off; c.deny = vec!["git push*".into()]; });
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        use_agy_for(&f, "builder", "");
+        (f, scripts, out_file)
+    }
+
+    const BUILD_TASK: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
+
+    /// Answer every card that appears with `Allow` until the task finishes; returns the summaries seen.
+    async fn approve_cards_while(f: &Fx, task: tokio::task::JoinHandle<Result<crate::engine::TaskOutcome, EngineError>>) -> (crate::engine::TaskOutcome, Vec<(String, String)>) {
+        let mut seen: Vec<(String, String)> = Vec::new();
+        let mut task = task;
+        loop {
+            for c in f.engine.broker.pending() {
+                if !seen.iter().any(|(id, _)| *id == c.approval_id) {
+                    seen.push((c.approval_id.clone(), format!("{} | {}", c.tool, c.summary)));
+                    f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
+                }
+            }
+            tokio::select! {
+                out = &mut task => return (out.unwrap().unwrap(), seen.into_iter().map(|(_, s)| { let (a, b) = s.split_once(" | ").unwrap(); (a.to_string(), b.to_string()) }).collect()),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_agy_builder_has_its_file_and_shell_calls_judged_by_the_span_and_the_gates_own_files_never_reach_the_worktree() {
+        if !have_python() {
+            return;
+        }
+        let calls = json!([
+            ["write_file", {"Path": "$CWD/new.txt", "Content": "built"}],
+            ["write_file", {"Path": "/etc/evil", "Content": "x"}],
+            ["write_file", {"Path": "$CWD/.agents/hooks.json", "Content": "{}"}],
+            ["edit_file", {"Path": "$CWD/.agents/plugins/delphi/mcp_config.json", "Target": "a", "Replacement": "b"}],
+            ["read_file", {"Path": "$CWD/.agents/hooks.json"}],
+            ["run_command", {"CommandLine": "cat .agents/hooks.json"}],
+            ["edit_file", {"Path": "../escape.txt", "Target": "a", "Replacement": "b"}],
+            ["write_file", {"Path": "$CWD/.git/hooks/pre-commit", "Content": "x"}],
+            ["run_command", {"CommandLine": "git push origin main"}],
+            ["read_file", {"Path": "$CWD/src/lib.rs"}],
+            ["invoke_subagent", {"Prompt": "hi"}],
+            ["view_file", {"Path": "$CWD/src/lib.rs"}],
+            ["write_file", {"Content": "no path"}],
+            ["mcp:run_command", {"argv": ["sh", "-c", "cat .agents/hooks.json"]}],
+            ["mcp:run_command", {"argv": ["touch", "made.txt"]}]
+        ]);
+        let (f, _scripts, out_file) = agy_builder(calls, Some(("agy 7.1", true)));
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n", crate::testkit::CONFIG.replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { builder = \"gemini\" }").replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"agy-sub\"]").replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"direct\", \"backup\"], gemini = [\"agy-sub\"] }"))).unwrap());
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_TASK).await }) };
+        let (out, cards) = approve_cards_while(&f, task).await;
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let got: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        // The hook may wait as long as a card may stay up (here 600s approval timeout + 60), not the 10 seconds a plain span gets.
+        assert!(got["hook_timeout"].as_u64().unwrap() > 60 && got["hook_wait"].as_str().unwrap().parse::<u64>().unwrap() > 60, "{}", got);
+        let d: Vec<(String, String, String)> = got["decisions"].as_array().unwrap().iter().map(|x| (x[0].as_str().unwrap().into(), x[1].as_str().unwrap().into(), x[2].as_str().unwrap().into())).collect();
+        let verdicts: Vec<&str> = d.iter().map(|x| x.1.as_str()).collect();
+        assert_eq!(verdicts, ["allow", "deny", "deny", "deny", "deny", "deny", "deny", "deny", "deny", "allow", "deny", "deny", "deny", "error", "ok"], "{:?}", d);
+        assert!(d[1].2.contains("only inside the task worktree"), "{}", d[1].2);
+        assert!(d[2].2.contains(".agents") && d[3].2.contains(".agents") && d[4].2.contains(".agents"), "{:?}", &d[2..5]);
+        // Its own shell is switched off and the denial says what to use instead; the Delphi one is the way, and it too keeps off the gate's directory.
+        assert!(d[5].2.contains("mcp_delphi_delphi_run_command") && d[8].2.contains("mcp_delphi_delphi_run_command"), "{} / {}", d[5].2, d[8].2);
+        assert!(d[13].2.contains(".agents") && d[13].2.contains("off limits"), "{}", d[13].2);
+        assert!(d[10].2.contains("`invoke_subagent` is not available") && d[11].2.contains("`view_file` is not available"), "{:?}", &d[10..12]);
+        assert!(d[12].2.contains("no path"), "{}", d[12].2);
+        // A card for the one write that was inside the rules, and what Delphi's own tool asks for `touch`; nothing else asked the operator.
+        assert!(cards[0].1.contains("new.txt") && cards.iter().all(|c| !c.1.contains("evil") && !c.1.contains("push") && !c.1.contains(".agents")), "{:?}", cards);
+        let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
+        assert_eq!(fs::read_to_string(wt.join("new.txt")).unwrap(), "built");
+        assert!(wt.join("made.txt").exists(), "Delphi's own run_command ran the command the Builder asked for");
+        assert!(!wt.join(".agents").exists(), "the gate's files are taken away when the span ends");
+        assert!(!f.root.join("etc").exists());
+        // The write is stamped like any other file a span makes; the gate files are not in the commit.
+        assert!(events_of(&f, "provenance.stamp").iter().any(|e| e.payload["path"] == "new.txt"));
+        assert!(events_of(&f, "provenance.stamp").iter().all(|e| !e.payload["path"].as_str().unwrap().starts_with(".agents")));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["gated"].clone(), started["tools"].as_str()), (json!(true), Some("standard")), "{}", started);
+        assert!(started["bridge"].as_array().unwrap().iter().any(|v| v == "run_command") && !started["bridge"].as_array().unwrap().iter().any(|v| v == "write_file" || v == "read_file"), "Delphi's file tools are not offered beside the CLI's own, but its shell is the Builder's only shell: {}", started);
+        assert!(events_of(&f, "span.taint").iter().all(|e| !e.payload["cause"].as_str().unwrap().contains("agy")), "a Builder with a verified gate starts trusted: {:?}", events_of(&f, "span.taint").iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn an_agy_builder_is_refused_without_a_verified_gate_or_with_the_bridge_off_or_over_a_foreign_agents_dir() {
+        // No record, an unverified record, a record for another version: refused, and the API serves the Builder instead.
+        for (why, record) in [("no record", None), ("unverified", Some(("agy 7.1", false))), ("another version", Some(("agy 7.0", true)))] {
+            let (f, _s, out_file) = agy_builder(json!([]), record);
+            let out = f.engine.run_task(&f.m, "builder", BUILD_TASK).await.unwrap();
+            assert!(!out_file.exists(), "{}: agy was never started", why);
+            assert_eq!(f.model.requests().last().map(|r| r.endpoint_id.clone()).as_deref(), Some("direct"), "{}: {}", why, out.text);
+        }
+        // The profile turned the bridge off: nothing would judge the calls.
+        let (f, _s, out_file) = agy_builder(json!([]), Some(("agy 7.1", true)));
+        use_agy_for(&f, "builder", "[harness.agy]\nbridge = false\n");
+        f.engine.run_task(&f.m, "builder", BUILD_TASK).await.unwrap();
+        assert!(!out_file.exists(), "bridge off: agy was never started");
+        // The project has an `.agents` of its own, which the gate would overwrite.
+        let (f, _s, out_file) = agy_builder(json!([]), Some(("agy 7.1", true)));
+        let wt_probe = f.root.join("proj");
+        fs::create_dir_all(wt_probe.join(".agents")).unwrap();
+        fs::write(wt_probe.join(".agents/hooks.json"), "{\"project\":true}").unwrap();
+        std::process::Command::new("git").args(["add", "-A"]).current_dir(&wt_probe).env("GIT_CONFIG_GLOBAL", f.root.join("git-home/.gitconfig")).status().unwrap();
+        std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "agents"]).current_dir(&wt_probe).status().unwrap();
+        f.engine.run_task(&f.m, "builder", BUILD_TASK).await.unwrap();
+        assert!(!out_file.exists(), "a foreign .agents: agy was never started");
+    }
+
+    #[tokio::test]
+    async fn an_agy_builder_whose_files_changed_with_no_call_the_gate_allowed_had_no_gate_and_is_discarded() {
+        let scripts = tempfile::tempdir().unwrap();
+        let args_file = scripts.path().join("args");
+        // The stand-in changes the worktree without ever asking the hook, as a CLI would if the hook did not load; it also notes how it was started.
+        let prog = versioned_agy(scripts.path(), "agy 7.1", &format!("echo \"$@\" > '{}'\necho bypass > sneaky.txt\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[]}}}}'\n{}", args_file.display(), AGY_FINISH));
+        let gate = gate_record(scripts.path(), "agy 7.1", now_secs(), true);
+        let f = setup_with_exec(vec![crate::model::Step::text("Built on the API.")], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = Some(gate); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        use_agy_for(&f, "builder", "");
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "builder", BUILD_TASK).await }) };
+        let (out, _) = approve_cards_while(&f, task).await;
+        assert!(out.text.contains("although the gate allowed no write or command") && out.text.contains("sneaky.txt"), "{}", out.text);
+        let args = fs::read_to_string(&args_file).unwrap();
+        assert!(args.contains("--mode accept-edits"), "the CLI's own permission layer would otherwise refuse the edits the gate allowed: {}", args);
+        assert!(!args.contains("dangerously-skip-permissions"), "{}", args);
+    }
+
+    #[tokio::test]
+    async fn a_verified_gate_whose_file_tools_were_not_seen_under_the_names_delphi_judges_does_not_get_builders() {
+        let (f, scripts, out_file) = agy_builder(json!([]), Some(("agy 7.1", true)));
+        let path = scripts.path().join("agy-gate.json");
+        let mut recs: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        recs[0]["builder_ready"] = json!(false);
+        fs::write(&path, recs.to_string()).unwrap();
+        assert!(f.engine.agy_gate_verified("agy-sub", &f.engine.settings.agy_program) && !f.engine.agy_builder_ready("agy-sub", &f.engine.settings.agy_program));
+        assert!(f.engine.mutating_harnesses().is_empty(), "routing leaves the Builder to other seats");
+        f.engine.run_task(&f.m, "builder", BUILD_TASK).await.unwrap();
+        assert!(!out_file.exists(), "agy was never started for the Builder");
+    }
+
+    #[tokio::test]
+    async fn an_agy_builder_that_edits_its_own_gate_has_its_output_discarded() {
+        if !have_python() {
+            return;
+        }
+        // The stand-in's shell is not stopped by anything but the card the operator would see; here a command rewrites the hook directly.
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = versioned_agy(scripts.path(), "agy 7.1", &format!("echo tampered > .agents/hooks.json\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[]}}}}'\n{}", AGY_FINISH));
+        let gate = gate_record(scripts.path(), "agy 7.1", now_secs(), true);
+        let f = setup_with_exec(vec![crate::model::Step::text("Built on the API.")], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = Some(gate); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        use_agy_for(&f, "builder", "");
+        let out = f.engine.run_task(&f.m, "builder", BUILD_TASK).await.unwrap();
+        assert!(events_of(&f, "harness.started").len() == 1, "agy ran: {} / {:?}", out.text, f.m.replay().unwrap().iter().map(|e| format!("{} {}", e.kind, e.payload.to_string().chars().take(200).collect::<String>())).collect::<Vec<_>>());
+        assert!(out.text.contains("changed its own gate configuration") && !out.text.contains("Done."), "the run was stopped and its answer not used: {}", out.text);
+    }
+
+    /// A stand-in `agy` client: asks the span's gate about some tool calls the way the hook does, then calls a Delphi tool
+    /// through the plugin's MCP server. Everything it learns goes to a file.
+    const AGY_CLIENT: &str = r#"import json, socket, sys
+cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
+def connect():
+    s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
+    f = s.makefile("rw"); f.write(json.dumps({"token": cfg["DELPHI_BRIDGE_TOKEN"]}) + "\n"); f.flush()
+    return f
+def rpc(f, o):
+    f.write(json.dumps(o) + "\n"); f.flush(); return json.loads(f.readline())
+f = connect()
+out = {"gate": {}}
+for name, args in [("mcp_delphi_delphi_timer", {"note": "x"}), ("search_web", {"query": "rust"}), ("run_command", {"CommandLine": "echo leaked > proof.txt"}), ("view_file", {"Path": "/etc/hosts"}), ("call_mcp_tool", {"ServerName": "delphi_delphi"})]:
+    r = rpc(f, {"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {"toolCall": {"name": name, "args": args}}})
+    out["gate"][name] = r["result"]["decision"]
+rpc(f, {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}})
+out["call"] = rpc(f, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "timer", "arguments": {"action": "set", "in_secs": 90, "note": "check CI"}}})
+open(sys.argv[1], "w").write(json.dumps(out))
+"#;
+
+    #[tokio::test]
+    async fn the_orchestrator_on_agy_sets_a_timer_through_the_plugin_while_the_gate_denies_its_shell_and_files_and_every_decision_is_logged() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_client.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_CLIENT).unwrap();
+        let prog = fake_cli(scripts.path(), &format!("python3 -I '{}' '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\n{}", helper.display(), out_file.display(), AGY_FINISH));
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Done."), "{}", out.text);
+        let got: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        // The gate: Delphi's tools and the profile's web tools pass; the shell, files and the generic MCP caller do not.
+        assert_eq!(got["gate"], json!({"mcp_delphi_delphi_timer": "allow", "search_web": "allow", "run_command": "deny", "view_file": "deny", "call_mcp_tool": "deny"}));
+        // The Delphi tool ran as an orchestrator's tool runs anywhere else: a pending timer, logged, durable.
+        assert!(got["call"]["result"]["content"][0]["text"].as_str().unwrap().starts_with("timer tm_0001 set."), "{}", got["call"]);
+        assert_eq!((f.engine.timers.pending().len(), events_of(&f, "timer.set").len()), (1, 1));
+        let call = &events_of(&f, "harness.bridge_call")[0].payload;
+        assert_eq!((call["name"].as_str(), call["is_error"].as_bool()), (Some("timer"), Some(false)));
+        // Each denial and each allowed CLI tool is in the log; Delphi's own tool is logged once, as the call.
+        let gate: Vec<(String, String)> = events_of(&f, "harness.gate").iter().map(|e| (e.payload["tool"].as_str().unwrap().to_string(), e.payload["decision"].as_str().unwrap().to_string())).collect();
+        assert_eq!(gate, [("search_web", "allow"), ("run_command", "deny"), ("view_file", "deny"), ("call_mcp_tool", "deny")].map(|(a, b)| (a.to_string(), b.to_string())).to_vec());
+        let shell = events_of(&f, "harness.gate").into_iter().find(|e| e.payload["tool"] == "run_command").unwrap();
+        assert_eq!(shell.payload["summary"], "echo leaked > proof.txt");
+        // What the span learned about its seat is kept for the orchestrator's picture.
+        let seat = f.engine.inventory.seats().into_iter().find(|r| r.endpoint_id == "agy-sub").unwrap();
+        assert!(seat.bridge && seat.harness == "agy" && seat.tools == ["run_command"]);
+    }
+
+    #[tokio::test]
+    async fn an_agy_profile_with_the_bridge_off_gets_no_workspace_and_the_old_text_only_instruction() {
+        let scripts = tempfile::tempdir().unwrap();
+        let seen = scripts.path().join("seen");
+        fs::create_dir_all(&seen).unwrap();
+        let prog = fake_cli(scripts.path(), &format!("printf '%s' \"$first\" > '{seen}/first-turn.json'\nls -a . > '{seen}/ls'\n{finish}", seen = seen.display(), finish = AGY_FINISH));
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "architect", "[harness.agy]\nbridge = false\n");
+        f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        let first = fs::read_to_string(seen.join("first-turn.json")).unwrap();
+        assert!(first.contains("Do not call any tools") && first.contains("You have no Delphi tools in this task"), "{}", first);
+        assert!(!fs::read_to_string(seen.join("ls")).unwrap().contains(".agents"), "nothing is written for the CLI to load");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["gated"].clone(), started["bridge"].clone(), started["tools"].as_str()), (json!(false), json!([]), Some("none")));
+    }
+
+    #[test]
+    fn the_profile_names_the_web_tools_the_claude_way_and_agy_gets_its_own_names_for_them() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(agy_native_tools(&v(&["WebSearch", "WebFetch"])), v(&["search_web", "read_url_content"]));
+        // An agy tool name is kept; a name only the Claude CLI knows means nothing here and is dropped, never passed through.
+        assert_eq!(agy_native_tools(&v(&["search_web", "Read", "Bash", "Edit", "", "run-command"])), v(&["search_web"]));
+        assert!(agy_native_tools(&[]).is_empty());
+    }
+
+    /// One Claude harness endpoint whose credential is a key source instead of the CLI's own login.
+    fn use_keyed_harness(f: &Fx, cli: &str) {
+        let (family, id) = if cli == "agy" { ("gemini", "agy-sub") } else { ("claude", "claude-sub") };
+        let text = crate::testkit::CONFIG
+            .replace("[access]", &format!("[[endpoints]]\nid = \"{id}\"\nfamily = \"{family}\"\npath = \"harness\"\nharness = \"{cli}\"\ncredential = \"env:HARNESS_KEY\"\n[access]\nrole_family = {{ architect = \"{family}\" }}"))
+            .replace("order = { claude = [\"direct\", \"backup\"] }", &format!("order = {{ {family} = [\"{id}\"] }}"))
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", &format!("allowed_endpoints = [\"{id}\"]"));
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_harness_endpoint_with_a_key_source_runs_the_cli_on_that_key_under_a_spend_ceiling_and_is_billed() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!("{}\necho \"$ANTHROPIC_API_KEY|$*\" > {}\n{}", INIT, dump.display(), FINISH);
+        let (f, _s) = fixture(&body, |_| {});
+        use_keyed_harness(&f, "claude");
+        *f.model.harness_key.lock().unwrap() = Some("sk-eng-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.starts_with("sk-eng-1|"), "the key is in the CLI's environment: {}", seen);
+        assert!(!seen.split('|').nth(1).unwrap().contains("sk-eng-1"), "and not in its arguments");
+        assert!(seen.contains("--max-budget-usd 2"), "a keyed span always has a spend ceiling: {}", seen);
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!((u["cost_model"].as_str(), u["cost_usd"].as_f64(), u["usage_source"].as_str()), (Some("metered"), Some(0.03), Some("reported")), "{}", u);
+        let all = f.m.replay().unwrap();
+        assert!(!all.is_empty() && !format!("{:?}", all).contains("sk-eng-1"), "the key never reaches the log");
+    }
+
+    #[tokio::test]
+    async fn a_keyed_endpoint_that_yields_no_key_does_not_fall_back_to_the_login() {
+        let (f, _s) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        use_keyed_harness(&f, "claude");
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(events_of(&f, "harness.started").is_empty(), "the CLI never started");
+    }
+
+    #[tokio::test]
+    async fn agy_has_no_key_mode_so_a_keyed_agy_endpoint_is_refused() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "echo '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"x\"}}'");
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "agy");
+        *f.model.harness_key.lock().unwrap() = Some("k".into());
+        let out = f.engine.run_task(&f.m, "architect", "Review").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(events_of(&f, "harness.started").is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_options_reach_the_cli_a_schema_answer_is_the_text_and_a_kept_session_is_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!(
+            "{}\necho \"$*\" > {}\necho '{{\"type\":\"stream_event\",\"event\":{{\"type\":\"content_block_delta\",\"delta\":{{\"type\":\"text_delta\",\"text\":\"hi\"}}}},\"parent_tool_use_id\":null}}'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"\",\"structured_output\":{{\"n\":3}},\"total_cost_usd\":0,\"usage\":{{\"input_tokens\":1,\"output_tokens\":2}}}}'",
+            INIT,
+            dump.display()
+        );
+        let (f, _s) = fixture(&body, |s| {
+            s.harness_claude.effort = Some("low".into());
+            s.harness_claude.max_turns = Some(4);
+            s.harness_claude.partial_messages = true;
+            s.harness_claude.json_schema = Some(r#"{"type":"object"}"#.into());
+            s.harness_claude.session = SessionMode::Persist;
+        });
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, r#"{"n":3}"#), "the validated answer is the span's text");
+        let seen = fs::read_to_string(&dump).unwrap();
+        for want in ["--effort low", "--max-turns 4", "--include-partial-messages", "--json-schema {\"type\":\"object\"}"] {
+            assert!(seen.contains(want), "{} missing from {}", want, seen);
+        }
+        assert!(!seen.contains("--no-session-persistence"), "{}", seen);
+        assert!(!seen.contains("--max-budget-usd"), "no ceiling is invented for a login: {}", seen);
+        assert_eq!(events_of(&f, "harness.session")[0].payload["session_id"], "s1");
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!((u["cost_model"].as_str(), u["cost_usd"].as_f64()), (Some("subscription"), Some(0.0)));
+    }
+
+    #[tokio::test]
+    async fn a_handoffs_schema_reaches_the_cli_and_the_validated_answer_is_what_the_span_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("dump");
+        let body = format!(
+            "{}\necho \"$*\" > {}\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"\",\"structured_output\":{{\"recommendation\":\"PROCEED\",\"findings\":[],\"concur\":true}},\"total_cost_usd\":0,\"usage\":{{\"input_tokens\":1,\"output_tokens\":2}}}}'",
+            INIT,
+            dump.display()
+        );
+        let (f, _s) = fixture(&body, |_| {});
+        let tid = f.m.next_task_id();
+        f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), crate::council::critique_schema());
+        let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Critique the plan").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.contains("--json-schema {\"") && seen.contains("recommendation"), "{}", seen);
+        let c = crate::council::parse_critique(&out.text).expect("the answer is a readable critique");
+        assert_eq!(c.recommendation, crate::council::Rec::Proceed);
+        // A task with no schema gets no flag.
+        fs::remove_file(&dump).unwrap();
+        f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(!fs::read_to_string(&dump).unwrap().contains("--json-schema"));
+    }
+
+    // Independent review (Gemini, 2026-10-25): a harness cannot resume a span, so it must not take over after turns have run.
+    #[tokio::test]
+    async fn the_harness_does_not_take_over_a_span_that_has_already_run_turns() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &format!("{}\n{}", INIT, FINISH));
+        let steps = vec![crate::model::Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), crate::model::Step::Throttle, crate::model::Step::Throttle];
+        let f = setup_with_exec(steps, 5.0, |s| { s.harness_program = prog; s.degrade_wait = Duration::from_millis(50); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_harness_with(&f, "[\"direct\", \"claude-sub\"]", "[\"direct\", \"claude-sub\"]");
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?} {}", out.status, out.text);
+        assert!(events_of(&f, "harness.started").is_empty() && events_of(&f, "harness.fallback").is_empty(), "the harness would have started the span over, repeating its tool call");
+        assert_eq!(f.model.requests().len(), 2, "the first turn ran and the second was throttled");
+    }
+
+    // Independent review (Gemini, 2026-10-25): a failed harness may fall back to an API model that is only weaker; the operator is asked.
+    #[tokio::test]
+    async fn a_failed_harness_falls_back_to_a_weaker_api_model_after_the_operator_confirms() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "exit 3");
+        let f = setup_with_exec(vec![crate::model::Step::text("Answered by the weaker API model.")], 5.0, |s| s.harness_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        two_methods(&f);
+        // The API's opus is out; the harness (also opus) is first in order but fails at once.
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        f.engine.pool.record_exhausted("direct", "opus-x", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let (e, m) = (f.engine.clone(), f.m.clone());
+        let task = tokio::spawn(async move { e.run_task(&m, "architect", "Plan the change").await });
+        let mut found = None;
+        for _ in 0..300 {
+            if let Some(c) = f.engine.broker.pending().into_iter().next() {
+                found = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let card = found.unwrap_or_else(|| panic!("no card appeared; events: {:?}", events_of(&f, "harness.fallback").iter().map(|e| e.payload.to_string()).collect::<Vec<_>>()));
+        assert_eq!(card.tool, "model", "the operator is asked before the weaker model runs, not escalated past");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Answered by the weaker API model."), "{}", out.text);
+        assert_eq!(f.model.requests()[0].model_id, "sonnet-x");
+        assert_eq!(events_of(&f, "harness.fallback").len(), 1);
+    }
+
+    // Independent review (Gemini, 2026-10-25): a run that finished is not exhausted, whatever a rate-limit event said on the way.
+    #[tokio::test]
+    async fn a_rejected_rate_limit_event_in_a_run_that_still_finished_does_not_mark_the_model_exhausted() {
+        let rejected = r#"echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792864800,"rateLimitType":"five_hour"}}'"#;
+        let (f, _s) = fixture(&format!("{}\n{}\n{}", INIT, rejected, FINISH), |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        assert!(events_of(&f, "model.exhausted").is_empty(), "no event for a pair that served");
+        assert!(f.engine.pool.snapshot().iter().all(|e| e.state == crate::pool::State::Available), "{:?}", f.engine.pool.snapshot());
+    }
+
+    /// A Gemini-family `agy` endpoint as the only allowed endpoint (no other family to fall back to).
+    fn use_agy_only(f: &Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    const AGY_EXHAUSTED: &str = r#"echo '{"event":"init","init":{"model":"gemini-4-argon-medium","tools":[]}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"error_message"}}'
+echo '{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 136h12m54s.","duration_seconds":0,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0}}}'
+exit 3"#;
+
+    /// The Gemini subscription is out of quota for days; the span moves to an eligible Claude API endpoint.
+    #[tokio::test]
+    async fn an_exhausted_agy_span_moves_to_another_family_and_the_pool_remembers() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), AGY_EXHAUSTED);
+        let f = setup_with_exec(vec![crate::model::Step::text("Answered by Claude.")], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Answered by Claude."), "{}", out.text);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str()), (Some("agy-sub"), Some("api")));
+        assert!(fb[0].payload["reason"].as_str().unwrap().contains("out of quota"));
+        // The next task does not launch the dead subscription at all: the pool says it is out until the reset.
+        f.model.respond_with(|_| crate::model::Step::text("Straight to the API."));
+        let again = f.engine.run_task(&f.m, "architect", "And again").await.unwrap();
+        assert_eq!(again.text, "Straight to the API.");
+        assert_eq!(events_of(&f, "harness.started").len(), 1, "agy was launched once, not again while it is exhausted");
+    }
+
+    /// The output the live `agy` printed with the Gemini quota used up (`tests/fixtures/quota/`).
+    /// The stream `claude` 2.1.310 printed with the five-hour window used up (`tests/fixtures/quota/`).
+    #[tokio::test]
+    async fn an_exhausted_claude_subscription_is_recorded_with_its_window_and_reset_and_escalates_with_the_reason() {
+        // The two lines the CLI printed (quoted with a here-document: the text has an apostrophe).
+        const RATE: &str = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792864800,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":1792864800,"status":"rejected","surpassedThreshold":1},"seven_day":{"utilization":0.62,"resetsAt":1793365200,"status":"allowed"}}},"uuid":"u","session_id":"s"}"#;
+        const RESULT: &str = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"api_error":"usage_limit_reached","result":"You've hit your session limit · resets 2pm (America/New_York)","stop_reason":"stop_sequence","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"duration_ms":268}"#;
+        let body = format!("{}\ncat <<'EOF'\n{}\n{}\nEOF\nexit 1", INIT, RATE, RESULT);
+        let (f, _s) = fixture(&body, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("out of quota") && r.contains("five_hour") && r.contains("resets at"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        let ex = events_of(&f, "model.exhausted");
+        assert_eq!(ex.len(), 1);
+        assert_eq!((ex[0].payload["endpoint_id"].as_str(), ex[0].payload["reset_at"].as_i64()), (Some("claude-sub"), Some(1_792_864_800)));
+        assert!(ex[0].payload["reason"].as_str().unwrap().contains("five_hour"));
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_agy_model_says_why_and_when_it_returns_instead_of_an_empty_error() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{"model":"gemini-4-argon-medium","tools":[]}}'
+echo '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"error_message"}}'
+echo '{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 136h12m54s.","duration_seconds":0,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0}}}'
+exit 3"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy_only(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("out of quota") && r.contains("resets at"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        let ex = events_of(&f, "model.exhausted");
+        assert_eq!(ex.len(), 1, "one event for the one failed run");
+        assert_eq!(ex[0].payload["endpoint_id"], "agy-sub");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let reset = ex[0].payload["reset_at"].as_i64().unwrap();
+        assert!((reset - now - (136 * 3600 + 12 * 60 + 54)).abs() < 60, "reset about 5.7 days out: {}", reset - now);
+        assert!(ex[0].payload["raw"].as_str().unwrap().contains("Individual quota reached"));
+    }
+
+    #[tokio::test]
+    async fn an_agy_run_that_touches_a_project_checkout_is_discarded() {
+        let scripts = tempfile::tempdir().unwrap();
+        // The run starts in <root>/workspaces/w/scratch/<task>/harness-empty; the project is <root>/proj.
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+echo scribble > "$(pwd)/../../../../../proj/injected.txt"
+echo '{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let out = f.engine.run_task(&f.m, "architect", "Review the plan").await.unwrap();
+        assert!(f.root.join("proj/injected.txt").exists(), "the stand-in did write into the project");
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("changed a project checkout"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert!(!out.text.contains("ok"), "the output is discarded");
+    }
+
+    // ---- the Delphi tool bridge (`specs/020`) ----
+
+    /// A stand-in MCP client: reads the config the engine gave the CLI, connects to the bridge's socket with the span's
+    /// token, initializes, and calls one tool with the id a real CLI would send. Its answer goes to a file.
+    const MCP_CLIENT: &str = r#"import json, socket, sys
+cfg = json.load(open(sys.argv[1]))["mcpServers"]["delphi"]
+s = socket.socket(socket.AF_UNIX)
+s.connect(cfg["env"]["DELPHI_BRIDGE_SOCKET"])
+f = s.makefile("rw")
+def rpc(o):
+    f.write(json.dumps(o) + "\n"); f.flush()
+    return json.loads(f.readline())
+f.write(json.dumps({"token": cfg["env"]["DELPHI_BRIDGE_TOKEN"]}) + "\n"); f.flush()
+rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}})
+listed = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]
+r = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": sys.argv[2], "arguments": json.loads(sys.argv[3]), "_meta": {"claudecode/toolUseId": "toolu_test"}}})
+open(sys.argv[4], "w").write(json.dumps({"listed": [t["name"] for t in listed], "response": r}))
+"#;
+
+    fn have_python() -> bool {
+        std::process::Command::new("python3").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// The fake CLI's shell body: report a start-up like the real one, find `--mcp-config` in its own arguments, record all
+    /// arguments, call one Delphi tool through the bridge, and finish.
+    fn bridge_cli(dir: &std::path::Path, tool: &str, args: &str, mcp_status: &str) -> (String, std::path::PathBuf, std::path::PathBuf) {
+        let helper = dir.join("mcp_client.py");
+        fs::write(&helper, MCP_CLIENT).unwrap();
+        let (out, argv) = (dir.join("bridge-out.json"), dir.join("argv.txt"));
+        let body = format!(
+            r#"echo '{{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__{tool}"],"mcp_servers":[{{"name":"delphi","status":"{status}"}}]}}'
+printf '%s\n' "$@" > '{argv}'
+cfg=""; prev=""
+for a in "$@"; do if [ "$prev" = "--mcp-config" ]; then cfg="$a"; fi; prev="$a"; done
+[ -n "$cfg" ] && python3 -I '{helper}' "$cfg" '{tool}' '{args}' '{out}'
+echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Requested."}}]}}}}'
+{finish}"#,
+            tool = tool,
+            status = mcp_status,
+            argv = argv.display(),
+            helper = helper.display(),
+            args = args,
+            out = out.display(),
+            finish = FINISH
+        );
+        (body, out, argv)
+    }
+
+    #[tokio::test]
+    async fn the_orchestrator_on_a_subscription_sets_a_timer_through_the_bridge_and_it_is_logged_and_durable() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, out_file, argv_file) = bridge_cli(scripts.path(), "timer", r#"{"action":"set","in_secs":90,"note":"check CI"}"#, "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        // The CLI was launched with the bridge, and the defaults: the web tools and the organization's own approval policy.
+        let argv = fs::read_to_string(&argv_file).unwrap();
+        let args: Vec<&str> = argv.lines().collect();
+        let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert!(after("--mcp-config").ends_with("mcp.json"), "{:?}", args);
+        assert_eq!((after("--tools"), after("--permission-mode")), ("WebSearch,WebFetch", "auto"), "{:?}", args);
+        // The tool ran, and the model got the real answer back.
+        let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        let listed: Vec<&str> = answer["listed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(listed.contains(&"timer") && listed.contains(&"dispatch_agent") && listed.contains(&"read_file"), "{:?}", listed);
+        let text = answer["response"]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("timer tm_0001 set. It is now ") && answer["response"]["result"]["isError"] == false, "{}", text);
+        let pending = f.engine.timers.pending();
+        assert_eq!((pending.len(), pending[0].target.as_str(), pending[0].creator.as_str()), (1, "orchestrator", "orchestrator"));
+        // The promise is in the log like any other timer, and the call is recorded with its CLI id.
+        assert_eq!(events_of(&f, "timer.set").len(), 1);
+        let call = &events_of(&f, "harness.bridge_call")[0].payload;
+        assert_eq!((call["name"].as_str(), call["tool_call_id"].as_str(), call["is_error"].as_bool()), (Some("timer"), Some("toolu_test"), Some(false)));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert!(started["bridge"].as_array().unwrap().iter().any(|v| v == "timer") && started["approvals"] == "delegate", "{}", started);
+        // What the CLI reported at start-up is kept for the orchestrator's picture of its seats.
+        let seats = f.engine.inventory.seats();
+        assert_eq!((seats.len(), seats[0].endpoint_id.as_str(), seats[0].bridge, seats[0].tools.as_slice()), (1, "claude-sub", true, &["mcp__delphi__timer".to_string()][..]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_agent_runs_a_child_through_the_bridge_and_its_report_comes_back_to_the_calling_cli() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        // The same stand-in CLI serves both roles: the orchestrator's call dispatches; the architect's own call is refused (it was not offered dispatch_agent).
+        let (body, out_file, _argv) = bridge_cli(scripts.path(), "dispatch_agent", r#"{"role":"architect","objective":"Draft the plan"}"#, "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "Get a plan drafted").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "All done."), "{}", out.text);
+        let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        let text = answer["response"]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text == "All done." && answer["response"]["result"]["isError"] == false, "the child's report is the tool result: {}", text);
+        let started = events_of(&f, "harness.started");
+        assert_eq!(started.len(), 2, "the orchestrator's span and its child's");
+        let added = events_of(&f, "dag.node.added");
+        assert!(added.iter().any(|e| e.payload["role"] == "architect" && e.payload["depth"] == 1), "{:?}", added.iter().map(|e| e.payload.clone()).collect::<Vec<_>>());
+        let call = events_of(&f, "harness.bridge_call");
+        assert!(call.iter().any(|e| e.payload["name"] == "dispatch_agent" && e.payload["content"].as_str().unwrap_or("").contains("All done.")));
+    }
+
+    #[tokio::test]
+    async fn a_role_without_the_timers_capability_is_never_offered_the_tool_and_a_forged_call_is_refused() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, out_file, _argv) = bridge_cli(scripts.path(), "timer", r#"{"action":"set","in_secs":90,"note":"x"}"#, "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        let listed: Vec<&str> = answer["listed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(!listed.contains(&"timer") && !listed.contains(&"dispatch_agent"), "{:?}", listed);
+        assert_eq!(answer["response"]["result"]["isError"], true, "{}", answer);
+        assert!(answer["response"]["result"]["content"][0]["text"].as_str().unwrap().contains("not one of the tools"));
+        assert!(f.engine.timers.pending().is_empty(), "nothing was promised");
+    }
+
+    #[tokio::test]
+    async fn a_cli_that_did_not_load_the_bridge_fails_loudly_instead_of_running_without_the_tools_it_was_promised() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _o, _a) = bridge_cli(scripts.path(), "timer", "{}", "failed");
+        let (f, _s) = fixture(&body, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        match &out.status {
+            Status::Escalated(r) => assert!(r.contains("did not load Delphi's tool bridge") && r.contains("status: failed") && r.contains("bridge = false"), "{}", r),
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(events_of(&f, "harness.bridge_unavailable").len(), 1);
+        assert!(f.engine.timers.pending().is_empty());
+    }
+
+    #[tokio::test]
+    async fn with_the_bridge_off_a_role_without_a_worktree_is_told_it_is_text_only() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _o, argv) = bridge_cli(scripts.path(), "timer", "{}", "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\n");
+        f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        let argv = fs::read_to_string(argv).unwrap();
+        assert!(!argv.contains("--mcp-config"), "{}", argv);
+        assert!(argv.contains("You have no Delphi tools in this task"), "the note matches what the seat can do:\n{}", argv);
+        assert_eq!(events_of(&f, "harness.started")[0].payload["bridge"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn with_no_profile_at_all_the_cli_gets_the_full_default_equipment_and_the_organizations_policy_answers_first() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _o, argv) = bridge_cli(scripts.path(), "timer", "{}", "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        // No `[harness.claude]` block: nothing was ratified, and nothing needs to be.
+        f.engine.run_task(&f.m, "architect", "Find the vendor's changelog").await.unwrap();
+        let argv = fs::read_to_string(argv).unwrap();
+        let args: Vec<&str> = argv.lines().collect();
+        let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!((after("--permission-mode"), after("--tools")), ("auto", "WebSearch,WebFetch"));
+        assert!(!args.contains(&"--strict-mcp-config"), "the account's own connectors load by default");
+        assert!(after("--mcp-config").ends_with("mcp.json"), "and so does Delphi's bridge");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["approvals"].as_str(), started["tools"].as_str(), started["native_tools"].clone(), started["claudeai_connectors"].clone()), (Some("delegate"), Some("native"), json!(["WebSearch", "WebFetch"]), json!(true)));
+        assert!(argv.contains("Your own built-in tools: WebSearch, WebFetch"), "{}", argv);
+    }
+
+    #[tokio::test]
+    async fn an_operator_can_narrow_the_profile_back_to_delphis_own_rules_and_a_closed_door() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _o, argv) = bridge_cli(scripts.path(), "timer", "{}", "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\napprovals = \"delphi\"\nnative_tools = []\nclaudeai_connectors = false\nenv_allow = [\"AWS_PROFILE\"]\n");
+        f.engine.run_task(&f.m, "architect", "Find the vendor's changelog").await.unwrap();
+        let argv = fs::read_to_string(argv).unwrap();
+        let args: Vec<&str> = argv.lines().collect();
+        let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!((after("--permission-mode"), after("--tools")), ("manual", ""));
+        assert!(args.contains(&"--strict-mcp-config"));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["approvals"].as_str(), started["tools"].as_str(), started["claudeai_connectors"].clone()), (Some("delphi"), Some("none"), json!(false)));
+    }
+
+    /// A fake CLI that asks permission for one tool and records Delphi's answer.
+    fn ask_cli(dir: &std::path::Path, tool: &str, input: &str, init_extra: &str) -> (String, std::path::PathBuf) {
+        let answer = dir.join("answer.txt");
+        let body = format!(
+            r#"echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[],"mcp_servers":[{init_extra}]}}'
+echo '{{"type":"control_request","request_id":"r1","request":{{"subtype":"can_use_tool","tool_name":"{tool}","input":{input},"tool_use_id":"tu1"}}}}'
+read answer
+echo "$answer" > '{answer_file}'
+{finish}"#,
+            tool = tool,
+            input = input,
+            init_extra = init_extra,
+            answer_file = answer.display(),
+            finish = FINISH
+        );
+        (body, answer)
+    }
+
+    #[tokio::test]
+    async fn an_outbound_request_is_one_ordinary_card_when_approvals_are_delegated_and_a_red_one_otherwise() {
+        for (delegated, want) in [(true, ApprovalTier::Amber), (false, ApprovalTier::Red)] {
+            let scripts = tempfile::tempdir().unwrap();
+            let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"vendor changelog"}"#, r#"{"name":"delphi","status":"connected"}"#);
+            let (f, _s) = fixture(&body, |_| {});
+            use_harness_profile(&f, &format!("[harness.claude]\nbridge = false\napprovals = \"{}\"\nnative_tools = [\"WebSearch\"]\n", if delegated { "delegate" } else { "delphi" }));
+            let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find the changelog").await }) };
+            let mut card = None;
+            for _ in 0..400 {
+                if let Some(c) = f.engine.broker.pending().into_iter().find(|c| c.tool == "harness_outbound") {
+                    card = Some(c);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let card = card.expect("a card for the web search");
+            assert_eq!(card.tier, want, "delegated={}", delegated);
+            f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+            task.await.unwrap().unwrap();
+            assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_accounts_own_connectors_are_on_by_default_a_closed_door_denies_them_and_only_listed_reads_skip_the_red_card() {
+        // Closed by the operator (the default is open): refused without a card.
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "mcp__claude_ai_Slack__slack_search", r#"{"query":"outage"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nclaudeai_connectors = false\n");
+        f.engine.run_task(&f.m, "architect", "Search Slack").await.unwrap();
+        let a = fs::read_to_string(&answer).unwrap();
+        assert!(a.contains("\"behavior\":\"deny\"") && a.contains("not enabled"), "{}", a);
+        assert!(f.engine.broker.pending().is_empty());
+        // Enabled and listed as a read: allowed with no card, and the span is tainted from then on.
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "mcp__claude_ai_Slack__slack_search", r#"{"query":"outage"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nclaudeai_connectors = true\nconnector_reads = [\"mcp__claude_ai_Slack__slack_search\"]\n");
+        f.engine.run_task(&f.m, "architect", "Search Slack").await.unwrap();
+        assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"allow\""));
+        let taint = events_of(&f, "span.taint");
+        assert!(taint.iter().any(|e| e.payload["cause"] == "mcp__claude_ai_Slack__slack_search" && e.payload["ceiling"] == "L0"), "{:?}", taint.iter().map(|e| e.payload.clone()).collect::<Vec<_>>());
+        assert_eq!(events_of(&f, "harness.started")[0].payload["claudeai_connectors"], true);
+        // Enabled but not listed: it may write, so it is a Red card.
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = ask_cli(scripts.path(), "mcp__claude_ai_Slack__slack_send_message", r#"{"text":"hi"}"#, r#"{"name":"delphi","status":"connected"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nclaudeai_connectors = true\n");
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Tell Slack").await }) };
+        let mut card = None;
+        for _ in 0..400 {
+            if let Some(c) = f.engine.broker.pending().into_iter().find(|c| c.tool == "harness_connector") {
+                card = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let card = card.expect("a Red card for the unlisted connector tool");
+        assert_eq!(card.tier, ApprovalTier::Red);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"deny\""));
+    }
+
+    #[tokio::test]
+    async fn a_builder_keeps_the_clis_own_file_tools_and_delphis_duplicates_are_not_offered_beside_them() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, _o, argv) = bridge_cli(scripts.path(), "timer", "{}", "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\napprovals = \"delegate\"\nnative_tools = [\"WebSearch\"]\nclaudeai_connectors = true\n");
+        f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        let args: Vec<String> = fs::read_to_string(argv).unwrap().lines().map(String::from).collect();
+        let after = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
+        assert_eq!(after("--permission-mode"), "manual", "a Builder is always on Delphi's rules");
+        assert!(!args.iter().any(|a| a == "--tools") && args.iter().any(|a| a == "--strict-mcp-config"), "the CLI's standard set, and no account connectors, for a Builder: {:?}", args);
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!((started["tools"].as_str(), started["approvals"].as_str()), (Some("standard"), Some("delphi")));
+        let offered: Vec<&str> = started["bridge"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(["read_file", "list_dir", "search", "write_file", "run_command"].iter().all(|d| !offered.contains(d)), "{:?}", offered);
+    }
+
+    #[tokio::test]
+    async fn the_orchestrator_is_shown_what_every_model_path_can_do_and_other_roles_are_not() {
+        let f = crate::testkit::setup(vec![crate::model::Step::text("ok"), crate::model::Step::text("ok")], 5.0, |_| {});
+        use_harness_profile(&f, "[harness.claude]\napprovals = \"delegate\"\n");
+        // An API endpoint also exists in the testkit config, so the API path is shown as well.
+        let text = crate::inventory::render(&f.engine.cfg.get(), &f.engine.inventory.seats());
+        assert!(text.contains("`claude-sub`") && text.contains("Approvals: delegated"), "{}", text);
+        let f = crate::testkit::setup(vec![crate::model::Step::text("ok"), crate::model::Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Plan the week").await.unwrap();
+        f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        let reqs = f.model.requests();
+        let body0 = reqs[0].body.to_string();
+        assert!(body0.contains("tool-inventory") && body0.contains("Tools by model path"), "the orchestrator sees the inventory: {}", &body0[body0.len().saturating_sub(1500)..]);
+        assert!(!reqs[1].body.to_string().contains("@runtime/tool-inventory"), "a role that cannot dispatch is not given it");
+    }
+}

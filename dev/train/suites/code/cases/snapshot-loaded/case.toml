@@ -1,0 +1,16 @@
+# Code case C3 (specs/037 section 3), harvested from this repository's history: PR 184, snapshot.loaded and task records.
+# The agent starts from the base commit's tree (no history) with spec.md ratified; the hidden tests are the reference
+# change's test modules, run on what it builds (hidden/hidden.toml).
+id = "snapshot-loaded"
+suite = "code"
+kind = "task"
+role = "builder"
+split = "dev"
+tags = ["code", "rust", "harder"]
+max_cost_usd = 6.0
+timeout_secs = 2700
+prompt = "Implement the spec."
+spec = "spec.md"
+
+[[check]]
+kind = "hidden_tests"
