@@ -124,7 +124,7 @@ pub fn unavailable(avail: &Json, def: &ArmDef) -> Option<String> {
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
-fn utc(ts: i64) -> String {
+pub(crate) fn utc(ts: i64) -> String {
     let (days, rem) = (ts.div_euclid(86_400), ts.rem_euclid(86_400));
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
     let z = days + 719_468;

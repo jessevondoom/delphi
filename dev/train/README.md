@@ -39,6 +39,29 @@ routing is configuration) and may declare `expect_models`, the model ids or pref
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
 in and out, calls and cost per model, attempts and mid-run model swaps.
 
+## Reviewing a truth pack (your job before any research run)
+
+Each research case has a generated **review sheet** beside its pack: open `truth/review-sheet.md` in
+`suites/research/cases/<id>/truth/` (`motogp-2027-regs`, `mycorrhizal-networks`, `phantom-paper`). It puts every fact beside
+its source link, the verbatim quote and the patterns, lists the traps, sources and rubric, and shows the judgement questions
+with room for your own view. Regenerate after any change with `delphi train truth-sheet --all`.
+
+```sh
+delphi train truth-sheet --case research/phantom-paper          # print the sheet
+delphi train truth-check --case research/phantom-paper --text-file answer.md   # what the checks make of an answer you wrote
+delphi train verify --case research/phantom-paper --by "Your Name"            # when you are satisfied
+```
+
+`verify` records your name, the date and a **fingerprint** of everything you checked (facts, traps, sources and extracts,
+rubric, insights). Any later edit makes the stamp stale and the pack a draft again.
+
+**Facts and judgement are different things to review.** Facts are checked against their sources (the pack already confirmed each
+quote appears in its extract; your part is whether the claim means what the quote says and the source is good enough).
+**Judgement calls** (`truth/insights.toml`) are strategic questions or insights where reasonable people differ: the assistant
+wrote a starting view (never shown to any judge), and **only the `operator_view` you write reaches a judge, as a view, not a
+fact**. That is how the study tests the jury on judgement and not only on recall: reward reasoning toward your view or a
+well-argued alternative, penalize unsupported certainty.
+
 ## Which models can I use right now?
 
 ```sh

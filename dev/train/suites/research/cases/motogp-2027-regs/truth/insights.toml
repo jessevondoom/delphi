@@ -1,0 +1,22 @@
+# Judgement calls for R1 (specs/037 section 4): not facts. `draft_view` is the assistant's starting point and is never shown to a
+# judge. Write your own judgement in `operator_view`; only that reaches a judge, and as a view, not a fact.
+
+[[insight]]
+id = "who-benefits"
+question = "Which kinds of teams or riders do the 2027 rules favor, and how confident can anyone be?"
+draft_view = "Assistant's draft, to be overwritten: too early to say with confidence. A reasoned lean: dropping ride-height and holeshot devices removes a manufacturer-engineering advantage and returns weight to rider start technique; a smaller engine and narrower aero reduce top speed and straight-line aero advantage, which may favor braking and corner-entry strengths. But nobody has raced under these rules, and the new tyre supplier and the concession reset to Rank B are further sources of upset that could matter more than any single technical rule."
+operator_view = ""
+considerations = [
+  "ties each beneficiary claim to a specific rule change, not to a vague 'new era'",
+  "treats the tyre supplier change and the concession reset as separate sources of change",
+  "says plainly what is unknowable before a race has been run under the rules",
+]
+acceptable = "Any lean whose reasoning follows from the rules is fine, including 'it will not change who wins'. A confident prediction with no reasoning is not."
+
+[[insight]]
+id = "weight-of-sources"
+question = "How much weight should a casual reader give a sports-news article's reading of the rules, against the published rules text?"
+draft_view = "Assistant's draft, to be overwritten: the rules text and the series' own announcements are the record; trade-press readings of what they will do are opinion and should be labelled as such."
+operator_view = ""
+considerations = ["separates what the regulations say from what commentators expect them to do"]
+acceptable = "Any answer that keeps the two apart."
