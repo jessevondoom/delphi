@@ -32,6 +32,13 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 | `file_unchanged`, `file_exists` (`path`) | the fixture file is byte-identical, or exists, after the run |
 | `file_contains` (`path`, `text`) | the fixture file contains the text |
 
+## Arms (`specs/037` §2)
+
+`delphi train run --arms-file arms.toml` runs every arm on every case and seed; each arm has its own template home (its
+routing is configuration) and may declare `expect_models`, the model ids or prefixes it may use. A run in which any
+other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
+in and out, calls and cost per model, attempts and mid-run model swaps.
+
 ## Research cases and truth packs (`specs/037`)
 
 A `kind = "research"` case has no `fixture/`; it has a `truth/` directory beside `case.toml` that is **never copied into a

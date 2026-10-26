@@ -268,13 +268,62 @@ pub struct Row {
     pub failed_checks: Vec<String>,
     /// Measurements worth reading beside the verdict, such as fact recall (`specs/037`).
     pub notes: Vec<String>,
+    /// What each model used in this run (`specs/037` §5.3), by the model id the log recorded.
+    pub usage: BTreeMap<String, ModelUse>,
+    /// `build.attempt` events of the run's task (0 for work that never builds) and models the pool swapped in mid-run.
+    pub attempts: u32,
+    pub promotions: u32,
     pub error: Option<String>,
+}
+
+/// One model's share of a run, summed from its `agent.usage` events.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelUse {
+    pub calls: u32,
+    /// Uncached input tokens.
+    pub input: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub output: u64,
+    pub thinking: u64,
+    pub cost_usd: f64,
+}
+
+/// Usage per model id over a run's events. Calls without a model id are filed under `unknown`.
+pub fn usage_by_model(events: &[EventEnvelope]) -> BTreeMap<String, ModelUse> {
+    let mut out: BTreeMap<String, ModelUse> = BTreeMap::new();
+    for e in events.iter().filter(|e| e.kind == "agent.usage") {
+        let u = out.entry(e.model_id.clone().unwrap_or_else(|| "unknown".into())).or_default();
+        let n = |k: &str| e.payload[k].as_u64().unwrap_or(0);
+        u.calls += 1;
+        u.input += n("input_tokens");
+        u.cache_read += n("cache_read_tokens");
+        u.cache_write += n("cache_write_tokens");
+        u.output += n("output_tokens");
+        u.thinking += n("thinking_tokens");
+        u.cost_usd += e.payload["cost_usd"].as_f64().unwrap_or(0.0);
+    }
+    out
+}
+
+impl ModelUse {
+    /// Tokens read in (cached or not) and tokens written out (answer and thinking): the two columns a cost question needs.
+    pub fn tokens_in(&self) -> u64 {
+        self.input + self.cache_read + self.cache_write
+    }
+
+    pub fn tokens_out(&self) -> u64 {
+        self.output + self.thinking
+    }
 }
 
 impl Row {
     pub fn to_json(&self) -> Value {
         json!({"case": self.case, "arm": self.arm, "seed": self.seed, "exit_code": self.exit_code, "wall_secs": (self.wall_secs * 10.0).round() / 10.0,
-               "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error})
+               "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error,
+               "attempts": self.attempts, "promotions": self.promotions,
+               "tokens_in": self.usage.values().map(ModelUse::tokens_in).sum::<u64>(), "tokens_out": self.usage.values().map(ModelUse::tokens_out).sum::<u64>(),
+               "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>()})
     }
 }
 
@@ -282,6 +331,48 @@ impl Row {
 pub struct Arm {
     pub name: String,
     pub overlay: Option<PathBuf>,
+    /// This arm's own template home (its routing is configuration, `specs/037` §2); `None` uses the run's default.
+    pub template_home: Option<PathBuf>,
+    /// Model ids (or prefixes) this arm may use. A run that used any other model is not graded: the arm was not staffed
+    /// as declared (a quota ran out and the pool swapped a model in, say). Empty means no check.
+    pub expect_models: Vec<String>,
+}
+
+impl Arm {
+    pub fn new(name: &str, overlay: Option<PathBuf>) -> Arm {
+        Arm { name: name.into(), overlay, template_home: None, expect_models: Vec::new() }
+    }
+}
+
+/// Read `arms.toml`: `[[arm]]` tables with `name`, `template_home` (relative paths are from the file), optional `overlay`
+/// and `expect_models`. Names are lowercase words so they can name directories and columns.
+pub fn parse_arms(file: &Path) -> Result<Vec<Arm>, String> {
+    let text = fs::read_to_string(file).map_err(|e| format!("{}: {}", file.display(), e))?;
+    let t: toml::Table = text.parse().map_err(|e: toml::de::Error| format!("{}: {}", file.display(), e.message()))?;
+    let base = file.parent().unwrap_or(Path::new("."));
+    let resolve = |p: &str| if Path::new(p).is_absolute() { PathBuf::from(p) } else { base.join(p) };
+    let mut arms: Vec<Arm> = Vec::new();
+    for (i, a) in t.get("arm").and_then(|v| v.as_array()).into_iter().flatten().enumerate() {
+        let at = format!("{}: arm #{}", file.display(), i + 1);
+        let a = a.as_table().ok_or(format!("{} is not a table", at))?;
+        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+            return Err(format!("{}: `name` must be lowercase letters, digits and `-`", at));
+        }
+        if arms.iter().any(|x| x.name == name) {
+            return Err(format!("{}: two arms are named `{}`", at, name));
+        }
+        let home = a.get("template_home").and_then(|v| v.as_str()).map(resolve).ok_or(format!("{}: `{}` needs `template_home`", at, name))?;
+        if !home.join("workspaces").is_dir() {
+            return Err(format!("{}: `{}` template_home {} is not a Delphi home (no workspaces/)", at, name, home.display()));
+        }
+        let expect_models = a.get("expect_models").and_then(|v| v.as_array()).map(|v| v.iter().filter_map(|m| m.as_str().map(String::from)).collect()).unwrap_or_default();
+        arms.push(Arm { name: name.into(), overlay: a.get("overlay").and_then(|v| v.as_str()).map(resolve), template_home: Some(home), expect_models });
+    }
+    if arms.is_empty() {
+        return Err(format!("{}: no [[arm]] tables", file.display()));
+    }
+    Ok(arms)
 }
 
 #[derive(Debug, Clone)]
@@ -327,7 +418,7 @@ fn summary_of(stdout: &str) -> Option<Value> {
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), error: None };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, error: None };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -344,7 +435,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     let dir = cfg.work_dir.join(format!("{:03}-{}-{}-s{}", index, arm.name, case.id, seed));
     let (home, repo) = (dir.join("home"), dir.join("repo"));
-    copy_tree(&cfg.template_home, &home)?;
+    copy_tree(arm.template_home.as_ref().unwrap_or(&cfg.template_home), &home)?;
     let ws_dir = home.join("workspaces").join(&cfg.workspace);
     let cfg_path = ws_dir.join("config.toml");
     let text = fs::read_to_string(&cfg_path).map_err(|e| format!("template home has no workspace `{}` ({})", cfg.workspace, e))?;
@@ -379,7 +470,14 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     let mission = summary["mission_id"].as_str().filter(|m| !m.is_empty() && !m.contains(['/', '\\', '.'])).ok_or("the summary names no mission")?;
     let events = delphi_core::log::replay(&ws_dir.join("local/missions").join(mission)).map_err(|e| format!("could not read the mission log: {}", e))?;
-    row.cost_usd = events.iter().filter(|e| e.kind == "agent.usage").map(|e| e.payload["cost_usd"].as_f64().unwrap_or(0.0)).sum();
+    row.usage = usage_by_model(&events);
+    row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
+    row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
+    // An arm is a staffing decision. If any other model did the work, the run says nothing about the arm.
+    let strangers: Vec<&String> = row.usage.keys().filter(|m| !arm.expect_models.is_empty() && !arm.expect_models.iter().any(|x| m.starts_with(x.as_str()))).collect();
+    if !strangers.is_empty() {
+        return Err(format!("arm staffing violated: used {} but `{}` expects {}", strangers.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), arm.name, arm.expect_models.join(", ")));
+    }
     // A build stops on its own branch: check the commit it produced, as the bench does.
     let sha = summary["merge_commit"].as_str().or(summary["ready_to_merge"]["sha"].as_str());
     if let Some(sha) = sha.filter(|s| s.chars().all(|c| c.is_ascii_hexdigit())) {
@@ -387,6 +485,7 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     let records = task_records(&events);
     let task = summary["task_id"].as_str();
+    row.attempts = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).map_or(0, |r| r.attempts);
     let record = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).cloned();
     let deliverable = deliverable_of(&events, task, &ws_dir.join("local/missions").join(mission));
     let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo, deliverable, truth: case.truth.as_ref() };
@@ -490,20 +589,34 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: --budget-usd <dollars> is required; a run is always capped");
         return 2;
     };
-    let (Some(template), Some(work)) = (flag(args, "--template-home"), flag(args, "--work-dir")) else {
-        eprintln!("delphi train run: --template-home <dir> (a home whose model access you ratified once) and --work-dir <new dir> are required");
+    let arms_file = flag(args, "--arms-file");
+    let (template, work) = (flag(args, "--template-home"), flag(args, "--work-dir"));
+    // The arms file gives each arm its own home; otherwise one --template-home serves the baseline and the candidate.
+    let (Some(work), true) = (work, template.is_some() || arms_file.is_some()) else {
+        eprintln!("delphi train run: --work-dir <new dir> and either --template-home <dir> (a home whose model access you ratified once) or --arms-file <arms.toml> are required");
         return 2;
     };
-    let (template, work) = (PathBuf::from(template), PathBuf::from(work));
+    let (template, work) = (PathBuf::from(template.unwrap_or_default()), PathBuf::from(work));
+    let mut arms = match &arms_file {
+        Some(f) => match parse_arms(Path::new(f)) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("delphi train run: {}", e);
+                return 2;
+            }
+        },
+        None => vec![Arm::new("baseline", None)],
+    };
     // The operator's own home is never a template or a working directory.
     let real = crate::home::delphi_home(None);
     let same = |a: &Path, b: &Path| a.canonicalize().ok().zip(b.canonicalize().ok()).is_some_and(|(x, y)| x == y);
-    if same(&template, &real) || same(&work, &real) || work.starts_with(&real) {
-        eprintln!("delphi train run: {} is your real Delphi home; copy it to a new directory and pass that as --template-home", real.display());
+    let homes: Vec<&Path> = if arms_file.is_some() { arms.iter().filter_map(|a| a.template_home.as_deref()).collect() } else { vec![template.as_path()] };
+    if homes.iter().any(|h| same(h, &real)) || same(&work, &real) || work.starts_with(&real) {
+        eprintln!("delphi train run: {} is your real Delphi home; copy it to a new directory and use that as a template home", real.display());
         return 2;
     }
-    if !template.join("workspaces").is_dir() {
-        eprintln!("delphi train run: {} is not a Delphi home (no workspaces/)", template.display());
+    if let Some(bad) = homes.iter().find(|h| !h.join("workspaces").is_dir()) {
+        eprintln!("delphi train run: {} is not a Delphi home (no workspaces/)", bad.display());
         return 2;
     }
     if let Err(e) = train::check_work_home(&work) {
@@ -511,9 +624,8 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         return 2;
     }
     let seeds: u32 = flag(args, "--seeds").and_then(|s| s.parse().ok()).filter(|s| (1..=20).contains(s)).unwrap_or(1);
-    let mut arms = vec![Arm { name: "baseline".into(), overlay: None }];
-    if let Some(o) = flag(args, "--overlay") {
-        arms.push(Arm { name: "candidate".into(), overlay: Some(PathBuf::from(o)) });
+    if let (None, Some(o)) = (&arms_file, flag(args, "--overlay")) {
+        arms.push(Arm::new("candidate", Some(PathBuf::from(o))));
     }
     let worst = train::worst_case_usd(cases, seeds) * arms.len() as f64;
     println!("{} case(s) x {} seed(s) x {} arm(s): at most ${:.2} against a budget of ${:.2}", cases.len(), seeds, arms.len(), worst, budget);
@@ -612,7 +724,7 @@ mod tests {
     }
 
     fn baseline() -> Arm {
-        Arm { name: "baseline".into(), overlay: None }
+        Arm::new("baseline", None)
     }
 
     const CHECKS: &str = "[[check]]\nkind = \"outcome\"\nis = \"escalated\"\n[[check]]\nkind = \"event_count\"\nevent = \"build.attempt\"\neq = 3\n[[check]]\nkind = \"file_unchanged\"\npath = \"keep.txt\"\n";
@@ -718,6 +830,121 @@ mod tests {
         assert!(!work.exists());
     }
 
+    /// A canned mission whose usage is spread over models: `(model, input, cache_read, output, thinking, cost)`.
+    fn usage_mission(root: &Path, usage: &[(&str, u64, u64, u64, u64, f64)]) -> PathBuf {
+        let dir = root.join("canned/m_fake");
+        let mut log = EventLog::open(&dir, LogOptions::default()).unwrap();
+        for (model, input, cache, output, thinking, cost) in usage {
+            let mut e = event("agent.usage", json!({"provider": "p", "input_tokens": input, "cache_read_tokens": cache, "output_tokens": output, "thinking_tokens": thinking, "cost_usd": cost, "reserved_usd": cost, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"}));
+            e.model_id = Some((*model).into());
+            log.append(e).unwrap();
+        }
+        for (k, p) in [("build.attempt", json!({"attempt": 1})), ("build.attempt", json!({"attempt": 2})), ("model.promoted", json!({})), ("task.completed", json!({"status": "escalated"}))] {
+            log.append(event(k, p)).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_row_records_tokens_by_model_attempts_and_promotions() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = usage_mission(t.path(), &[("haiku-x", 1000, 4000, 200, 0, 0.01), ("haiku-x", 500, 0, 100, 50, 0.01), ("fable-x", 2000, 0, 800, 600, 0.9)]);
+        let c = case(t.path(), CHECKS);
+        let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        let r = &rows[0];
+        assert_eq!((r.attempts, r.promotions), (2, 1));
+        let h = &r.usage["haiku-x"];
+        assert_eq!((h.calls, h.tokens_in(), h.tokens_out()), (2, 5500, 350));
+        assert_eq!((r.usage["fable-x"].tokens_in(), r.usage["fable-x"].tokens_out()), (2000, 1400));
+        assert!((r.cost_usd - 0.92).abs() < 1e-9, "{}", r.cost_usd);
+        let j = r.to_json();
+        assert_eq!((j["tokens_in"].as_u64(), j["tokens_out"].as_u64()), (Some(7500), Some(1750)));
+        assert_eq!(j["models"]["fable-x"]["calls"], 1);
+    }
+
+    #[test]
+    fn a_run_staffed_by_a_model_the_arm_did_not_declare_is_not_graded() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = usage_mission(t.path(), &[("haiku-x", 100, 0, 50, 0, 0.01), ("sonnet-y", 100, 0, 50, 0, 0.02)]);
+        let c = case(t.path(), CHECKS);
+        let mut arm = baseline();
+        arm.expect_models = vec!["haiku".into()];
+        let config = cfg(t.path(), &canned, vec![arm.clone()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows[0].passed, None);
+        let e = rows[0].error.as_deref().unwrap_or("");
+        assert!(e.contains("arm staffing violated") && e.contains("sonnet-y") && !e.contains("used haiku"), "{}", e);
+        assert!((rows[0].cost_usd - 0.03).abs() < 1e-9, "what was spent is still recorded");
+        // Declaring both prefixes, or none, makes the same run gradable.
+        for expect in [vec!["haiku".to_string(), "sonnet".to_string()], vec![]] {
+            let mut ok = arm.clone();
+            ok.expect_models = expect;
+            let config = cfg(t.path(), &canned, vec![ok], 10.0);
+            let _ = fs::remove_dir_all(&config.work_dir);
+            train::prepare_work_home(&config.work_dir).unwrap();
+            assert!(run_all(&config, &[&c]).0[0].passed.is_some());
+        }
+    }
+
+    #[test]
+    fn each_arm_runs_in_a_copy_of_its_own_template_home() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &ladder_log());
+        let c = case(t.path(), CHECKS);
+        let mut config = cfg(t.path(), &canned, vec![], 10.0);
+        let other = t.path().join("other-template");
+        copy_tree(&config.template_home, &other).unwrap();
+        fs::write(other.join("MARK"), "second").unwrap();
+        let mut second = Arm::new("second", None);
+        second.template_home = Some(other);
+        config.arms = vec![baseline(), second];
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows.len(), 2);
+        assert!(!config.work_dir.join("001-baseline-c1-s1/home/MARK").exists());
+        assert_eq!(fs::read_to_string(config.work_dir.join("002-second-c1-s1/home/MARK")).unwrap(), "second");
+    }
+
+    #[test]
+    fn an_arms_file_names_each_arm_its_home_and_staffing() {
+        let t = tempfile::tempdir().unwrap();
+        let home = template(t.path());
+        let f = t.path().join("arms.toml");
+        let body = format!("[[arm]]\nname = \"solo-haiku\"\ntemplate_home = \"{}\"\nexpect_models = [\"claude-haiku\"]\n\n[[arm]]\nname = \"cheap-first\"\ntemplate_home = \"template\"\noverlay = \"cand\"\n", home.display());
+        fs::write(&f, &body).unwrap();
+        let arms = parse_arms(&f).unwrap();
+        assert_eq!((arms.len(), arms[0].expect_models.clone(), arms[0].overlay.clone()), (2, vec!["claude-haiku".to_string()], None));
+        assert_eq!((arms[1].template_home.clone(), arms[1].overlay.clone()), (Some(t.path().join("template")), Some(t.path().join("cand"))), "relative paths are from the file");
+        for (bad, want) in [
+            (body.replace("solo-haiku", "Solo Haiku"), "`name` must be lowercase"),
+            (body.replace("cheap-first", "solo-haiku"), "two arms are named"),
+            (body.replace(&home.display().to_string(), "/nowhere"), "is not a Delphi home"),
+            ("[[arm]]\nname = \"x\"\n".to_string(), "needs `template_home`"),
+            ("# none\n".to_string(), "no [[arm]] tables"),
+        ] {
+            fs::write(&f, bad).unwrap();
+            assert!(parse_arms(&f).unwrap_err().contains(want), "{}", want);
+        }
+    }
+
+    #[test]
+    fn the_command_takes_arms_from_a_file_and_refuses_a_real_home_in_it() {
+        let t = tempfile::tempdir().unwrap();
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let home = template(t.path());
+        let f = t.path().join("arms.toml");
+        fs::write(&f, format!("[[arm]]\nname = \"one\"\ntemplate_home = \"{}\"\n", home.display())).unwrap();
+        let work = t.path().join("fresh");
+        let base = ["run", "--budget-usd", "9", "--work-dir", work.to_str().unwrap(), "--arms-file", f.to_str().unwrap(), "--dry-run"];
+        let c = case(t.path(), CHECKS);
+        assert_eq!(cli(&a(&base), &[&c]), 0, "no --template-home is needed when every arm has its own");
+        assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--work-dir", work.to_str().unwrap(), "--dry-run"]), &[&c]), 2, "neither a template nor an arms file");
+        assert!(!work.exists());
+    }
+
     #[test]
     fn each_check_kind_fails_in_words() {
         let t = tempfile::tempdir().unwrap();
@@ -781,7 +1008,7 @@ mod tests {
         fs::create_dir_all(overlay.join("agents/builder")).unwrap();
         let changed = format!("{}\nCandidate note: stop after two failed attempts.\n", BUILDER);
         fs::write(overlay.join("agents/builder/AGENT.md"), &changed).unwrap();
-        let arms = vec![baseline(), Arm { name: "candidate".into(), overlay: Some(overlay) }];
+        let arms = vec![baseline(), Arm::new("candidate", Some(overlay))];
         let config = cfg(t.path(), &canned, arms, 10.0);
         train::prepare_work_home(&config.work_dir).unwrap();
         let (rows, _) = run_all(&config, &[&c]);
@@ -816,7 +1043,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], error: None };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, error: None };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);

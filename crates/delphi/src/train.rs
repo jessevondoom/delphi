@@ -507,7 +507,7 @@ pub fn run(args: &[String]) -> i32 {
             crate::train_run::cli(args, &chosen)
         }
         _ => {
-            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir>] [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
+            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
             2
         }
     }
