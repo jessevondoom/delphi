@@ -1,4 +1,4 @@
-// agents, archives and thinking in the narrator's style (`005f` slice 10): lowercase section rules, a tinted
+// agents, archives and changes in the narrator's style (`005f` slice 10): lowercase section rules, a tinted
 // band for the running row, no money, no columns the operator cannot act on. Goldens at 80x24, 100x34 and 40x12.
 import test from 'node:test';
 import { emptyArch } from '../src/archives.ts';
@@ -24,15 +24,21 @@ const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel
 } as OModel);
 const SIZES = [[80, 24], [100, 34], [40, 12]] as const;
 const hits = [{ path: 'specs/003.md', collection: 'specs', trust: 'internal_generated', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' }];
-const thinkText = { n3: 'The queue needs a visibility timeout.\nA claim without one can be lost for good.' };
+const T0 = Date.UTC(2026, 9, 25, 10, 0);
+const changed = [
+  { session: 's_0001', at_ms: T0, role: 'builder', task: 't_1', summary: 'added a visibility timeout to the queue claim', files: ['crates/queue/src/claim.rs'] },
+  { session: 's_0002', at_ms: T0 + 21 * 60_000, role: 'builder', task: 't_2', summary: 'reworked the permission model to be less intrusive; removed ratify requirements for explicit updates', files: [] },
+  { session: 's_0002', at_ms: T0 + 42 * 60_000, role: 'architect', task: 't_2', summary: 'wrote the spec for the change log', files: ['specs/032-change-log.md'] },
+];
+const withChanges = (): Partial<OModel> => ({ st: { ...world(), changes: changed, sessions: [{ id: 's_0001', reason: 'new', started_ms: T0 - 60_000, turns: 1 }, { id: 's_0002', reason: 'new', started_ms: T0 + 10 * 60_000, turns: 2 }] } });
 
 const cases: [string, Partial<OModel>][] = [
   ['agents', {}],
   ['archives', { arch: { ...emptyArch(), q: 'retry', searched: 'retry', hits, took: 400, engine: 'hybrid', focus: 'list' } }],
-  ['thinking', { think: thinkText }],
+  ['changes', withChanges()],
 ];
 
-test('goldens: agents, archives and thinking at 80x24, 100x34 and 40x12', () => {
+test('goldens: agents, archives and changes at 80x24, 100x34 and 40x12', () => {
   for (const [view, over] of cases) for (const [w, h] of SIZES) {
     const r = snapshot(`narrator-${view}-${w}x${h}`, observeFrame(model(view as (typeof VIEWS)[number], over), w, h));
     assert.ok(r.ok, r.message);
@@ -57,9 +63,20 @@ test('agents leads with the roster: name, role, state in words, model, task and 
   assert.ok(!/cache \d|think \d|call\(s\)/.test(t), 'the per-kind token split is gone');
 });
 
-test('archives and thinking keep their calm empty states', () => {
+test('archives and changes keep their calm empty states', () => {
   assert.match(observeFrame(model('archives'), 100, 24).map(plain).join('\n'), /search what Delphi knows[\s\S]*● offline/);
-  const t = observeFrame(model('thinking'), 100, 24).map(plain).join('\n');
-  assert.match(t, /nothing is thinking right now/);
-  assert.match(t, /never saved/);
+  const t = observeFrame(model('changes'), 100, 24).map(plain).join('\n');
+  assert.match(t, /no changes recorded yet/);
+  assert.match(t, /chat summary and a pull request description/);
+});
+
+test('changes: grouped by session, newest first, results only; the session in progress is marked', () => {
+  const t = observeFrame(model('changes', withChanges()), 100, 34).map(plain).join('\n');
+  assert.ok(t.indexOf('session s_0002') < t.indexOf('session s_0001'), 'the newest session is on top');
+  assert.match(t, /session s_0002 · \d\d:\d\d · now · 2 changes/);
+  assert.match(t, /session s_0001 · \d\d:\d\d · 1 change\b/);
+  assert.ok(t.indexOf('wrote the spec for the change log') < t.indexOf('reworked the permission model'), 'newest first within a session');
+  assert.match(t, /reworked the permission model to be less intrusive; removed ratify requirements for\s+explicit updates/);
+  assert.match(t, /specs\/032-change-log\.md/);
+  assert.ok(!/reasoning|thinking/i.test(t), 'no reasoning anywhere');
 });

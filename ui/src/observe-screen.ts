@@ -23,16 +23,18 @@ export type OState = {
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
   /** The orchestrator's own grouping of tasks into threads, when it sends one; otherwise the window groups by what the tasks say. */
   threads?: { id: string; label: string; tasks: string[] }[];
+  /** What agents recorded as finished (`record_change`), oldest first: their own plain words, never their reasoning. */
+  changes?: { session: string; at_ms: number; role: string; task: string; summary: string; files: string[] }[];
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
-/** The views, in order (`005e` §9.2; the dashboard is `specs/030`). The narrator shows no money, so there is no spend view. */
-export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'archives', 'thinking'] as const;
+/** The views, in order (`005e` §9.2; the dashboard is `specs/030`; `changes` is `specs/032`). The narrator shows no money, so there is no spend view. */
+export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'archives', 'changes'] as const;
 export type View = (typeof VIEWS)[number];
 /** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
 export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
 export const parseView =(s: string): View | null => {
-  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', thinking: 'thinking', reasoning: 'thinking' };
+  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -41,8 +43,6 @@ export type OModel = {
   /** The knowledge window (`archives.ts`): the search box, the shelf, the results and the reader. */
   arch: A.Arch;
   live: Record<string, string>; connected: boolean;
-  /** Reasoning per running span, in memory only: never written anywhere, not in the snapshot a reopened window receives. */
-  think?: Record<string, string>;
   /** The clock for badge animation, and whether animation is off (`DELPHI_REDUCE_MOTION`, `NO_COLOR`); the strip is static without them. */
   now?: number; still?: boolean;
 };
@@ -178,25 +178,40 @@ function agents(m: OModel, w: number, _h: number): string[] {
 
 const archives = (m: OModel, w: number, h: number): string[] => A.view(m.arch, w, h, m.pal);
 
-function thinking(m: OModel, w: number, h: number): string[] {
-  const spans = Object.entries(m.think ?? {}).filter(([, t]) => t.trim());
-  if (!spans.length) return ['', dim('  nothing is thinking right now'), '', dim('  the reasoning of running agents appears here as it streams'), dim('  it lives only in this window: never saved, and a window opened later starts empty')];
+const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+/**
+ * The change log: what agents say they finished, one plain line each (`record_change`), grouped by session like the chat,
+ * newest first so the latest is on screen without scrolling. Results only: the reasoning behind them is never shown.
+ */
+function changes(m: OModel, w: number, _h: number): string[] {
+  const all = m.st.changes ?? [];
+  if (!all.length) return ['', dim('  no changes recorded yet'), '', dim('  agents add a line here when they finish a piece of work: what changed, in plain words'), dim('  it is kept with the mission, so the chat summary and a pull request description can use it')];
+  const sessions = m.st.sessions ?? [];
+  const last = sessions[sessions.length - 1]?.id ?? '';
+  const ids = [...new Set(all.map((c) => c.session))].reverse();
   const out: string[] = [];
-  for (const [id, t] of spans) {
-    const node = m.st.nodes[id];
-    const role = node?.role ?? '?';
-    const a = m.st.agents[role];
-    const title = ' ' + T.badge(role, 'running', m.info, m.pal) + ' ' + roleCol(m, role).bold(name(m, role)) + dim(`  ${a?.tier ?? ''} · ${a?.model ? clean(a.model, 28) : 'model unknown'} · ${node?.task_id ?? ''}`);
-    out.push('', band(m, title, w));
-    out.push(...sanitize(t).split('\n').flatMap((l) => wrap(l, w - 4)).slice(-Math.max(4, Math.floor(h / spans.length) - 3)).map((l) => '  ' + chalk.italic(dim(l))));
+  for (const id of ids) {
+    const rows = all.filter((c) => c.session === id);
+    const row = sessions.find((s) => s.id === id);
+    const title = `${id ? `session ${id}` : 'earlier'}${row ? ` · ${hhmm(row.started_ms)}` : ''}${id === last ? ' · now' : ''} · ${rows.length} ${rows.length === 1 ? 'change' : 'changes'}`;
+    out.push('', rule(m, w, title));
+    for (const c of rows.slice().reverse()) {
+      const who = name(m, c.role);
+      const lead = `  ${hhmm(c.at_ms)}  `;
+      const pad = ' '.repeat(lead.length);
+      const body = wrap(clean(c.summary, 300), Math.max(8, w - lead.length - 1));
+      out.push(dim(lead) + roleCol(m, c.role).bold(who) + dim(c.task ? `  ${c.task}` : ''));
+      out.push(...body.map((l) => pad + text(m)(l)));
+      if (c.files.length) out.push(pad + dim(clean(c.files.slice(0, 4).join(', ') + (c.files.length > 4 ? ` +${c.files.length - 4}` : ''), Math.max(8, w - lead.length - 1))));
+    }
   }
-  return out.slice(-h);
+  return out;
 }
 
 /** The strip: the six badges only, in the fixed order, each animated by what its agent is doing (`005e` §10.2). */
 function strip(m: OModel, w: number): string {
   const now = m.now ?? 0, still = m.still ?? true;
-  const thinkingRoles = new Set(Object.entries(m.think ?? {}).filter(([, t]) => t.trim()).map(([id]) => m.st.nodes[id]?.role));
   // The council view: seats still answering pan their badges; on a verdict every seat shows success (`005e` §9.2).
   const c = m.view === 'council' ? councilNow(m) : undefined;
   const seatsThinking = c ? seatsNow(m, c).thinking : new Set<string>();
@@ -205,7 +220,7 @@ function strip(m: OModel, w: number): string {
   return T.clip(roles.map((r) => {
     if (seatsDone.has(r)) return T.badge(r, 'idle', m.info, m.pal, 'success');
     const a = m.st.agents[r];
-    const hot = thinkingRoles.has(r) || seatsThinking.has(r);
+    const hot = seatsThinking.has(r);
     const f = faceOf(a || hot ? { state: (hot ? 'running' : a!.state) as never, doing: '', thinkingAt: hot ? now : undefined } : undefined, r, now, still);
     return T.badge(r, f.state, m.info, m.pal, f.frame);
   }).join(' '), w);
@@ -261,9 +276,9 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
-  const fn = { dashboard, council, epic, agents, archives, thinking }[m.view];
+  const fn = { dashboard, council, epic, agents, archives, changes }[m.view];
   let body = fn(m, w, inner);
-  if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'thinking' && m.view !== 'archives') body = body.slice(m.scroll);
+  if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
   body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);

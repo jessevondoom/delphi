@@ -1009,8 +1009,10 @@ fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
     c.wait_for("← / ? →");
     c.type_keys("?");
     c.wait_for("keys · esc closes");
+    // A frame arrives in pieces: look until the list's rows are drawn (see `expect_visible`), not at the instant its title was.
+    c.expect_visible("shift+tab  approval mode");
     let open = c.visible();
-    assert!(open.contains("shift+tab  approval mode") && !open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
+    assert!(!open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
     c.type_keys("\x1b");
     let deadline = Instant::now() + Duration::from_secs(5);
     while c.visible().contains("keys · esc closes") {
@@ -1398,8 +1400,8 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));
     }
-    o.wait_for("· thinking");
-    o.wait_for("nothing is thinking right now");
+    o.wait_for("· changes");
+    o.wait_for("no changes recorded yet");
     assert_eq!(o.ctrl_c_out(), 0);
     // The dashboard (`specs/030`): the operational view, with the sessions, what runs now and the pace, from the same socket.
     let d = PtyConsole::start_env(&e.home, &["observe", "dashboard", "--workspace", "e2e"], 34, 110, &envs);

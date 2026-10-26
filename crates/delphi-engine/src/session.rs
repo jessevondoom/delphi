@@ -20,6 +20,9 @@ const DIGEST_ITEMS: usize = 6;
 /// Earlier sessions of the mission offered as long-term context, and the bytes they may take together.
 const EARLIER_SESSIONS: usize = 3;
 const EARLIER_BYTES: usize = 1600;
+/// Change-log lines of the current session carried in the preamble, and the bytes they may take.
+const CHANGES_LINES: usize = 15;
+const CHANGES_BYTES: usize = 2400;
 
 /// The id of the log before any `session.started`: one implicit session, so a log from before sessions loads as today.
 pub const IMPLICIT: &str = "s_0000";
@@ -45,6 +48,12 @@ fn is_conversation(e: &EventEnvelope) -> bool {
 /// Has the operator said anything in this stretch of the log?
 pub fn has_turns(session: &[EventEnvelope]) -> bool {
     session.iter().any(is_conversation)
+}
+
+/// Is there anything worth a digest in this stretch of the log: something asked, or a change an agent recorded
+/// (work can be recorded in a session where the operator asked nothing, for example a timer's wake).
+pub fn has_content(session: &[EventEnvelope]) -> bool {
+    has_turns(session) || session.iter().any(|e| e.kind == "change.recorded")
 }
 
 fn first_line(s: &str, n: usize) -> String {
@@ -73,6 +82,22 @@ pub struct Digest {
     /// A reply read untrusted content, so what followed ran below full trust.
     pub tainted: bool,
     pub escalated: usize,
+    /// What agents recorded as finished in the session (`change.recorded`), first and last few; lines from before
+    /// the change log have none.
+    #[serde(default)]
+    pub changes: Vec<String>,
+}
+
+/// The change lines of a stretch of the log, oldest first: `HH:MM role: summary`.
+fn change_lines(session: &[EventEnvelope]) -> Vec<String> {
+    session
+        .iter()
+        .filter(|e| e.kind == "change.recorded")
+        .filter_map(|e| {
+            let said = e.payload["summary"].as_str()?.split_whitespace().collect::<Vec<_>>().join(" ");
+            (!said.is_empty()).then(|| format!("{} {}: {}", e.timestamp.get(11..16).unwrap_or(""), e.payload["role"].as_str().unwrap_or("agent"), clip_bytes(&said, 300)))
+        })
+        .collect()
 }
 
 /// The first and last few lines, with a count for the ones between.
@@ -89,7 +114,7 @@ fn keep_ends(mut v: Vec<String>) -> Vec<String> {
 
 /// The digest of a session, or `None` if nothing was asked in it.
 pub fn digest(mission: &str, workspace: &str, id: &str, ended_by: &str, session: &[EventEnvelope]) -> Option<Digest> {
-    if !has_turns(session) {
+    if !has_content(session) {
         return None;
     }
     let (mut asks, mut answers, mut escalated, mut tainted) = (Vec::new(), Vec::new(), 0, false);
@@ -119,6 +144,7 @@ pub fn digest(mission: &str, workspace: &str, id: &str, ended_by: &str, session:
         answers: keep_ends(answers),
         tainted,
         escalated,
+        changes: keep_ends(change_lines(session)),
     })
 }
 
@@ -130,7 +156,7 @@ pub fn log_path(home: &Path) -> PathBuf {
 /// Append a digest to the central log. `redact` is applied to every line first, as for any text the daemon writes.
 pub fn append_central(home: &Path, d: &Digest, redact: &dyn Fn(&str) -> String) -> std::io::Result<()> {
     let mut d = d.clone();
-    for l in d.asks.iter_mut().chain(d.answers.iter_mut()) {
+    for l in d.asks.iter_mut().chain(d.answers.iter_mut()).chain(d.changes.iter_mut()) {
         *l = redact(l);
     }
     std::fs::create_dir_all(home)?;
@@ -188,7 +214,8 @@ pub fn preamble(session: &[EventEnvelope], earlier: &[Digest], budget_tokens: us
         }
     }
     let (past, past_n) = past_sessions(earlier);
-    if turns.is_empty() && past.is_empty() {
+    let changes = change_lines(session);
+    if turns.is_empty() && past.is_empty() && changes.is_empty() {
         return None;
     }
     let budget = budget_tokens.saturating_mul(4);
@@ -228,6 +255,23 @@ pub fn preamble(session: &[EventEnvelope], earlier: &[Digest], budget_tokens: us
         text.push_str(l);
         text.push('\n');
     }
+    // The change log of the session (results the team recorded, newest within the byte cap), so a summary of the chat
+    // knows what was done and when without replaying it.
+    let mut kept: Vec<&String> = Vec::new();
+    let mut size = 0;
+    for l in changes.iter().rev().take(CHANGES_LINES) {
+        if size + l.len() > CHANGES_BYTES {
+            break;
+        }
+        size += l.len() + 1;
+        kept.push(l);
+    }
+    if !kept.is_empty() {
+        text.push_str(&format!("Changes recorded this session{}:\n", if kept.len() < changes.len() { format!(" (newest {} of {})", kept.len(), changes.len()) } else { String::new() }));
+        for l in kept.iter().rev() {
+            text.push_str(&format!("- {}\n", l));
+        }
+    }
     Some(Preamble { text: text.trim_end().to_string(), ceiling, turns: turns.len(), digested, omitted, earlier: past_n })
 }
 
@@ -237,7 +281,8 @@ fn past_sessions(earlier: &[Digest]) -> (String, usize) {
     let mut n = 0;
     for d in earlier.iter().rev().take(EARLIER_SESSIONS) {
         let asks = d.asks.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
-        let line = format!("Earlier session {} ({} turn(s), ended {}): asked {}\n", d.session_id, d.turns, d.ended.get(..10).unwrap_or(&d.ended), asks);
+        let said = if asks.is_empty() { format!("recorded {}", d.changes.iter().take(3).cloned().collect::<Vec<_>>().join("; ")) } else { format!("asked {}", asks) };
+        let line = format!("Earlier session {} ({} turn(s), ended {}): {}\n", d.session_id, d.turns, d.ended.get(..10).unwrap_or(&d.ended), said);
         if out.len() + line.len() > EARLIER_BYTES {
             break;
         }
@@ -278,6 +323,38 @@ mod tests {
     }
     fn started(seq: u64, id: &str) -> EventEnvelope {
         ev(seq, "session.started", "", json!({"session_id": id, "reason": "new"}))
+    }
+
+    #[test]
+    fn recorded_changes_reach_the_preamble_and_the_digest_and_nothing_else_of_the_work_does() {
+        let change = |seq: u64, role: &str, said: &str| ev(seq, "change.recorded", "t_1", json!({"summary": said, "role": role}));
+        let log = vec![ask(1, "t_1", "tidy the permission model"), change(2, "builder", "reworked the permission model to be less intrusive"), change(3, "writer", "removed ratify requirements for explicit updates"), say(4, "t_1", "done")];
+        let p = preamble(&log, &[], 6000).unwrap();
+        assert!(p.text.contains("Changes recorded this session:\n- 10:00 builder: reworked the permission model to be less intrusive\n- 10:00 writer: removed ratify requirements for explicit updates"), "{}", p.text);
+        // Changes alone are worth saying, even before anything was asked.
+        assert!(preamble(&log[1..3], &[], 6000).is_some());
+        assert!(preamble(&[], &[], 6000).is_none());
+        // Only the newest are carried, with a count of how many there were.
+        let many: Vec<_> = (0..40).map(|i| change(i + 1, "builder", &format!("change {}", i))).collect();
+        let t = preamble(&many, &[], 6000).unwrap().text;
+        assert!(t.contains("(newest 15 of 40)") && t.contains("change 39") && !t.contains("change 24\n") && t.contains("change 25"), "{}", t);
+        let d = digest("m", "w", "s_0001", "new", &log).unwrap();
+        assert_eq!(d.changes, vec!["10:00 builder: reworked the permission model to be less intrusive", "10:00 writer: removed ratify requirements for explicit updates"]);
+        // A digest line written before the change log existed still loads.
+        let mut old = serde_json::to_value(&d).unwrap();
+        old.as_object_mut().unwrap().remove("changes");
+        assert!(serde_json::from_value::<Digest>(old).unwrap().changes.is_empty());
+    }
+
+    #[test]
+    fn a_session_with_recorded_changes_but_no_questions_still_leaves_a_digest() {
+        let log = vec![ev(1, "change.recorded", "t_1", json!({"summary": "rotated the timer notes", "role": "builder"}))];
+        assert!(!has_turns(&log) && has_content(&log));
+        let d = digest("m", "w", "s_0001", "new", &log).expect("changes alone are worth a digest");
+        assert_eq!((d.turns, d.asks.len(), d.changes.len()), (0, 0, 1));
+        let (line, _) = past_sessions(&[d]);
+        assert!(line.contains("recorded 10:00 builder: rotated the timer notes") && !line.contains("asked"), "{}", line);
+        assert!(digest("m", "w", "s_0001", "new", &[say(1, "t_1", "hi")]).is_none(), "an answer alone is still nothing");
     }
 
     #[test]

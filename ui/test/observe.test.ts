@@ -81,11 +81,11 @@ test('the attention slot is body row 1 of every view: "nothing needs you" or the
 });
 
 test('views: six, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
-  assert.deepEqual([...VIEWS], ['dashboard', 'council', 'epic', 'agents', 'archives', 'thinking']);
+  assert.deepEqual([...VIEWS], ['dashboard', 'council', 'epic', 'agents', 'archives', 'changes']);
   for (const gone of ['spend', 'dag', 'telemetry', '1', '4', '7']) assert.equal(parseView(gone), null, gone);
   assert.equal(stepView('dashboard', -1), 'dashboard');
   assert.equal(stepView('council', -1), 'dashboard');
-  assert.equal(stepView('thinking', 1), 'thinking');
+  assert.equal(stepView('changes', 1), 'changes');
   assert.equal(stepView('epic', 1), 'agents');
   assert.equal(stepView('agents', -1), 'epic');
   assert.equal(parseView('forge'), 'epic', 'the forge view became part of the epic pane');
@@ -167,12 +167,10 @@ test('model text cannot move the cursor, and view names parse', () => {
   assert.deepEqual([parseView('Council'), parseView('roster'), parseView('kb'), parseView('nope')], ['council', 'agents', 'archives', null]);
 });
 
-test('thinking: reasoning per running agent with its badge, tier and model; empty when nothing thinks; nothing from other spans', () => {
+test('the reasoning view is gone: its old names land on the change log, and nothing of an agent\'s reasoning is drawn', () => {
+  assert.deepEqual([parseView('thinking'), parseView('reasoning'), parseView('changelog')], ['changes', 'changes', 'changes']);
   const s = sample();
   s.nodes['n_7'] = { id: 'n_7', role: 'architect', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 0, cost_usd: 0, started_ms: 0, ended_ms: null, after: [] };
-  const t = observeFrame(model('thinking', { st: s, think: { n_7: 'Weighing a table against a file.\nThe table indexes.' } }), 110, 30).map(plain).join('\n');
-  assert.match(t, /⟦•─•⟧ daedalus\s+frontier · claude-x · t_1/);
-  assert.match(t, /Weighing a table against a file\.\n\s+The table indexes\./);
-  assert.match(observeFrame(model('thinking'), 110, 30).map(plain).join('\n'), /nothing is thinking right now[\s\S]*never saved/);
-  assert.equal(parseView('reasoning'), 'thinking');
+  const t = observeFrame(model('changes', { st: s, live: { n_7: 'Weighing a table against a file.' } }), 110, 30).map(plain).join('\n');
+  assert.ok(!t.includes('Weighing'), 'live text is not shown here');
 });
