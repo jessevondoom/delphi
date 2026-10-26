@@ -1,0 +1,12 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi · dashboard
+
+ ✔ nothing needs you
+
+── running now ─────────────────────────
+ session 3 (current)
+ ► athena  t_2   2:14  waiting for a mo…
+ session 2 (earlier, still running)
+ ● daedalus  t_1  18:00  working  build
+────────────────────────────────────────
+1 running  ·  14.2k tokens   ● ○ ○ ○ ○ ○

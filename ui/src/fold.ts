@@ -63,10 +63,12 @@ export type State = {
   running: Record<string, { since: number }>;
   /** The operator has said something in this mission: the welcome text never comes back (`/new` does not bring it back). */
   started: boolean;
+  /** The number of the session on the screen (`session.started`); 0 before any (`specs/030`). */
+  session: number;
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, ended: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: emptyActivity(), prompts: {}, sources: {}, started: false,
+  blocks: [], live: '', spans: {}, ended: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: emptyActivity(), prompts: {}, sources: {}, started: false, session: 0,
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
@@ -203,7 +205,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     }
     // A new session (`specs/030`): the screen starts empty and the sources start over. What is still running, and what
     // waits on the operator, carries on; the welcome text does not come back.
-    case 'session.started': return { ...s, blocks: [], live: '', sources: {}, started: true };
+    case 'session.started': return { ...s, blocks: [], live: '', sources: {}, started: true, session: Number(String(pl.session_id ?? '').replace(/\D/g, '')) || s.session + 1 };
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {

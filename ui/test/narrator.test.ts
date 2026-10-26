@@ -16,7 +16,7 @@ test('each view is the command that opens it; no view is the window\'s first', (
 test('a path with a space is quoted, and a view that does not exist is refused with the list', () => {
   const spaced = { ...info, home: "/srv/some one/it's" } as Info;
   assert.ok(narratorCommand('epic', spaced).endsWith(`--home '/srv/some one/it'\\''s'`));
-  assert.equal(narratorCommand('nope', info), '/observe takes council, epic, agents, archives or changes, not nope');
+  assert.equal(narratorCommand('nope', info), '/observe takes dashboard, council, epic, agents, archives or changes, not nope');
   assert.match(narratorCommand('tile', info), /^\/observe takes/, 'the four-pane tile is gone');
 });
 
@@ -53,5 +53,5 @@ test('the slash command goes through it', async () => {
   const saved = process.env.TMUX; delete process.env.TMUX;
   try { await runSlash('/narrator council', { ...c, open: async () => null }); await runSlash('/observe nope', c); } finally { if (saved !== undefined) process.env.TMUX = saved; }
   assert.match(out[0]!, /^\(the narrator is open/);
-  assert.equal(out[1], '/observe takes council, epic, agents, archives or changes, not nope');
+  assert.equal(out[1], '/observe takes dashboard, council, epic, agents, archives or changes, not nope');
 });

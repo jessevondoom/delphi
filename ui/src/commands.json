@@ -1,7 +1,8 @@
 [
   { "name": "/help", "desc": "Show keys and commands", "ink": true, "rust": true, "local": true },
   { "name": "/new", "aliases": ["/clear"], "desc": "Start a new session: clear the screen and the conversation the team is told (the history stays in the mission)", "ink": true, "rust": false, "local": true },
-  { "name": "/export", "desc": "Save this conversation as a markdown document in the mission", "ink": true, "rust": false, "local": true },
+  { "name": "/export", "args": "[all]", "desc": "Save this session as a markdown document in the mission; `all` saves every session of the mission", "ink": true, "rust": false, "local": true },
+  { "name": "/context", "args": "[full]", "desc": "What the next task is told of this conversation: how much, how trimmed, at what trust (`full` shows the text)", "ink": true, "rust": false, "local": true },
   { "name": "/search", "desc": "Search the knowledge base (also ctrl+k); enter puts @path in the prompt", "ink": true, "rust": false, "local": true },
   { "name": "/sources", "desc": "Where the answers came from: files read and documents cited (also ctrl+s)", "ink": true, "rust": false, "local": true },
   { "name": "/pin", "desc": "Keep the last reply, or the text you give, in the mission notebook", "ink": true, "rust": false, "local": true },

@@ -7,14 +7,15 @@ import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 import { epicThreads } from './epic-threads.ts';
+import { dashboard, needs } from './dashboard.ts';
 import * as A from './archives.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
 export type OState = {
   agents: Record<string, AgentRow>;
-  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
-  tasks: Record<string, { id: string; flow: string; prompt: string; status: string; session?: string }>;
+  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
+  tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
   sessions?: { id: string; reason: string; started_ms: number; turns: number }[];
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
@@ -27,13 +28,13 @@ export type OState = {
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
-/** The five views, in order (`005e` §9.2). The narrator shows no money, so there is no spend view. */
-export const VIEWS = ['council', 'epic', 'agents', 'archives', 'changes'] as const;
+/** The views, in order (`005e` §9.2; the dashboard is `specs/030`; `changes` is `specs/032`). The narrator shows no money, so there is no spend view. */
+export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'archives', 'changes'] as const;
 export type View = (typeof VIEWS)[number];
 /** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
 export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
 export const parseView =(s: string): View | null => {
-  const m: Record<string, View> = { council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
+  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -48,7 +49,7 @@ export type OModel = {
 
 export const emptyState = (): OState => ({
   agents: {}, nodes: {}, tasks: {}, councils: [], builds: [], spent_usd: 0, tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0 },
-  retries: 0, narrative: [], series: [], pace: [], cache_hit_ratio: 0, default_view: 'epic', mission_id: '', budget: { cap_usd: 0 }, pending_proposals: 0,
+  retries: 0, narrative: [], series: [], pace: [], cache_hit_ratio: 0, default_view: 'dashboard', mission_id: '', budget: { cap_usd: 0 }, pending_proposals: 0,
 });
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
@@ -256,10 +257,7 @@ function footer(m: OModel, w: number): string[] {
 
 /** What needs the operator, from the daemon's own lists; the count of the rest is appended. */
 export function attention(st: OState): string | null {
-  const items: string[] = [];
-  for (const summary of Object.values(st.pending_approvals ?? {})) items.push(clean(summary, 80));
-  for (const c of st.councils) if (c.escalation && c.phase !== 'round 1' && c.phase !== 'round 2') items.push(`council ${c.task_id} needs a decision`);
-  if (st.pending_proposals > 0) items.push(`${st.pending_proposals} proposal(s) await /ratify`);
+  const items = needs(st);
   if (!items.length) return null;
   return items[0] + (items.length > 1 ? `  (+${items.length - 1} more)` : '');
 }
@@ -278,9 +276,9 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
-  const fn = { council, epic, agents, archives, changes }[m.view];
+  const fn = { dashboard, council, epic, agents, archives, changes }[m.view];
   let body = fn(m, w, inner);
-  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
+  if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
   body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);

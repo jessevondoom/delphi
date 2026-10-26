@@ -98,7 +98,7 @@ pub fn parse_input(line: &str) -> Input {
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
             "narrator" | "observe" | "visualize" => match rest.first() {
-                Some(v) if crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/observe takes council, epic, agents, archives or changes, not `{}`", v)),
+                Some(v) if crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/observe takes dashboard, council, epic, agents, archives or changes, not `{}`", v)),
                 v => Input::Narrator(v.map(|s| s.to_string())),
             },
             "more" => Input::More,

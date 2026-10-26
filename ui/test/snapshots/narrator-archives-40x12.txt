@@ -9,4 +9,4 @@ delphi · archives
  ›  1  specs/003.md › Retry lad…  specs
  ↑ ↓ pick · enter open · tab scope · ct…
 ────────────────────────────────────────
-1 running  ·  14.2k tokens     ○ ○ ○ ● ○
+1 running  ·  14.2k tokens   ○ ○ ○ ○ ● ○

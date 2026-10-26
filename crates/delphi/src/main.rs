@@ -674,7 +674,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (council, epic, agents, archives or changes)", v);
+                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, archives or changes)", v);
                 return 2;
             }
         },

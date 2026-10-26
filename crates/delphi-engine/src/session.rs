@@ -182,6 +182,8 @@ pub struct Preamble {
     pub turns: usize,
     pub digested: usize,
     pub omitted: usize,
+    /// How many earlier sessions of the mission are summarised at the top of the text.
+    pub earlier: usize,
 }
 
 struct Turn {
@@ -211,7 +213,7 @@ pub fn preamble(session: &[EventEnvelope], earlier: &[Digest], budget_tokens: us
             }
         }
     }
-    let past = past_sessions(earlier);
+    let (past, past_n) = past_sessions(earlier);
     let changes = change_lines(session);
     if turns.is_empty() && past.is_empty() && changes.is_empty() {
         return None;
@@ -270,12 +272,13 @@ pub fn preamble(session: &[EventEnvelope], earlier: &[Digest], budget_tokens: us
             text.push_str(&format!("- {}\n", l));
         }
     }
-    Some(Preamble { text: text.trim_end().to_string(), ceiling, turns: turns.len(), digested, omitted })
+    Some(Preamble { text: text.trim_end().to_string(), ceiling, turns: turns.len(), digested, omitted, earlier: past_n })
 }
 
 /// Digest lines of the mission's earlier sessions, newest last, within `EARLIER_BYTES`.
-fn past_sessions(earlier: &[Digest]) -> String {
+fn past_sessions(earlier: &[Digest]) -> (String, usize) {
     let mut out = String::new();
+    let mut n = 0;
     for d in earlier.iter().rev().take(EARLIER_SESSIONS) {
         let asks = d.asks.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
         let said = if asks.is_empty() { format!("recorded {}", d.changes.iter().take(3).cloned().collect::<Vec<_>>().join("; ")) } else { format!("asked {}", asks) };
@@ -284,8 +287,9 @@ fn past_sessions(earlier: &[Digest]) -> String {
             break;
         }
         out = line + &out;
+        n += 1;
     }
-    out.trim_end().to_string()
+    (out.trim_end().to_string(), n)
 }
 
 fn clip_bytes(s: &str, max: usize) -> String {
@@ -348,7 +352,7 @@ mod tests {
         assert!(!has_turns(&log) && has_content(&log));
         let d = digest("m", "w", "s_0001", "new", &log).expect("changes alone are worth a digest");
         assert_eq!((d.turns, d.asks.len(), d.changes.len()), (0, 0, 1));
-        let line = past_sessions(&[d]);
+        let (line, _) = past_sessions(&[d]);
         assert!(line.contains("recorded 10:00 builder: rotated the timer notes") && !line.contains("asked"), "{}", line);
         assert!(digest("m", "w", "s_0001", "new", &[say(1, "t_1", "hi")]).is_none(), "an answer alone is still nothing");
     }

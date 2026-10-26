@@ -1,0 +1,34 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · dashboard · session 3 · 3 asks · 1 from before
+
+ ✔ nothing needs you
+
+── sessions ────────────────────────────────────────────────────────────────────────────────────────
+ ○ session 1 · 4 asks   ○ session 2 · 2 asks · 1 running   ● session 3 · 3 asks · 1 running
+
+── running now ─────────────────────────────────────────────────────────────────────────────────────
+ session 3 (current)
+ ► athena  t_2   2:14  waiting for a model: claude is out of q…  Which queue should the claim loop…
+ session 2 (earlier, still running)
+ ● daedalus  t_1  18:00  working  build Add a retry queue to the claim loop
+
+── pace ────────────────────────────────────────────────────────────────────────────────────────────
+ ▁▁▂▃▄▆█▇▅▄▃▂ 900 tokens/min  ·  14.2k tokens  ·  cache 42%  ·  2 retries  ·  1 agent working
+
+── finished lately ─────────────────────────────────────────────────────────────────────────────────
+ ✔ t_4  s1  an old one
+ ✔ t_3  s3  summarise the design  →  Use a visibility timeout.
+
+── recent ──────────────────────────────────────────────────────────────────────────────────────────
+ t_2 started (orchestrator): Which queue should the claim loop use?
+ session s_0003 began (new)
+ builder: tests green, 12 passed
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+1 running  ·  14.2k tokens                                                       ← →  ·  ● ○ ○ ○ ○ ○

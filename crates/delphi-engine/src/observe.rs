@@ -720,7 +720,7 @@ impl ObserverState {
         if self.councils.iter().any(|c| c.phase == "round 1" || c.phase == "round 2") {
             "council"
         } else {
-            "epic"
+            "dashboard"
         }
     }
 }
@@ -1002,7 +1002,7 @@ mod tests {
         st.apply(&ev(5, "council.verdict", "t_2", "", json!({"path": "missions/m/councils/001-x.md", "escalated": "2 unresolved P0 finding(s)", "unresolved": [{"severity": "P0", "seat": "red-team", "title": "t"}], "options": [{"label": "PROCEED", "seats": ["architect", "red-team"]}]})));
         let c = &st.councils[0];
         assert_eq!((c.phase.as_str(), c.stances[0].text.as_str(), c.critiques[0].findings.len(), c.unresolved.len(), c.options[0].1.len()), ("escalated", "Queue.", 1, 1, 2));
-        assert_eq!(st.default_view(), "epic", "a finished council no longer pulls the view");
+        assert_eq!(st.default_view(), "dashboard", "a finished council no longer pulls the view");
     }
 
     #[test]
@@ -1014,7 +1014,7 @@ mod tests {
         st.apply(&ev(4, "build.attempt", "t_3", "", json!({"attempt": 2, "tier": "frontier", "family": "claude", "homogeneous_retry": false})));
         st.apply(&ev(5, "gates.evaluated", "t_3", "", json!({"sha": "0123456789abcdef", "gates": [{"name": "tests", "state": "green", "detail": "ok"}, {"name": "operator", "state": "red", "detail": "waiting"}]})));
         st.apply(&ev(6, "audit.recorded", "t_3", "red-team", json!({"findings": [{"severity": "P2", "title": "naming"}]})));
-        assert_eq!(st.default_view(), "epic", "a build in progress is part of the epic pane");
+        assert_eq!(st.default_view(), "dashboard", "a build in progress is on the dashboard, and in the epic pane");
         st.apply(&ev(7, "merge.approved", "t_3", "", json!({"sha": "x"})));
         st.apply(&ev(8, "action.result", "t_3", "", json!({"action_id": "merge-abc", "ok": true})));
         let b = &st.builds[0];

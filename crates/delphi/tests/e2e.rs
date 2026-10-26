@@ -1009,8 +1009,10 @@ fn question_mark_opens_the_key_list_on_an_empty_prompt_and_esc_closes_it() {
     c.wait_for("← / ? →");
     c.type_keys("?");
     c.wait_for("keys · esc closes");
+    // A frame arrives in pieces: look until the list's rows are drawn (see `expect_visible`), not at the instant its title was.
+    c.expect_visible("shift+tab  approval mode");
     let open = c.visible();
-    assert!(open.contains("shift+tab  approval mode") && !open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
+    assert!(!open.contains("❯ ?"), "the ? opened the list instead of being typed:\n{}", open);
     c.type_keys("\x1b");
     let deadline = Instant::now() + Duration::from_secs(5);
     while c.visible().contains("keys · esc closes") {
@@ -1372,7 +1374,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.wait_for("opus-t"); // the model the orchestrator is on
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
-    assert!(roster.contains("← →  ·  ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
+    assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
     // Only the arrows change the view: Right to archives, Left twice back to epic. In the other views digits, Tab and q
     // do nothing; in archives, the knowledge window, they are text for the search box.
     o.type_keys("\x1b[C");
@@ -1401,6 +1403,13 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.wait_for("· changes");
     o.wait_for("no changes recorded yet");
     assert_eq!(o.ctrl_c_out(), 0);
+    // The dashboard (`specs/030`): the operational view, with the sessions, what runs now and the pace, from the same socket.
+    let d = PtyConsole::start_env(&e.home, &["observe", "dashboard", "--workspace", "e2e"], 34, 110, &envs);
+    d.wait_for("· dashboard");
+    d.wait_for("running now");
+    d.wait_for("nothing is running: the system is idle");
+    d.wait_for("tokens/min");
+    assert_eq!(d.ctrl_c_out(), 0);
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
