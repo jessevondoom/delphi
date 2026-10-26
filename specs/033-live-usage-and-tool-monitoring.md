@@ -38,7 +38,9 @@ Two gaps in the narrator's agents pane, and one question about `specs/032`. (a) 
 | D-3 | Adoption is measured per run and per model, from the log, with no new data. |
 
 ## 5. Open (considered, not built)
-- **Missing-report prompt.** When a span that worked ends without `record_change`, log `change.missing` and, if adoption stays low for a model family, nudge or auto-record the span's final summary (the fallback in `specs/032` §7).
-- **Live API token estimate.** API seats update per turn only; the stream carries usage in `message_delta` and could feed the same live total.
-- **`delphi tools --watch`**, and a Prometheus or OpenTelemetry export of the same counters, for people who monitor outside the terminal.
-- **Per-task cost and tool view.** Group the counters by task and thread (`name_thread`) as well as by role.
+- **Missing-report prompt.** When a span that worked ends without `record_change`, log `change.missing` and, if adoption stays low for a model family, nudge or auto-record the span's final summary (the fallback in `specs/032` §7). Wait for `delphi tools --all` on real missions before deciding.
+- **`delphi tools --watch`** (the narrator already updates live).
+- **Per-task and per-thread tool view.** Group the counters by task and thread as well as by role.
+
+## 6. Added after approval (2026-10-26)
+`delphi tools --prom` (Prometheus text), `monitor.alert` events (a loop, the cap at 80 % and 95 %), and a live estimate for API seats: see `specs/034` §5. The engine now has an integration test that a scripted model calling `record_change` gets the event logged with its role, task and span, and is told to use the tool.

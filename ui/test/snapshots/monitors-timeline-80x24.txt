@@ -12,11 +12,11 @@ delphi v0.5 · timeline
 
  ▓ running  █ done  ▒ stopped  ✎ change recorded  ·  3 changes in this window
 
+ momentum     ▁▁▁▁▁▁▁▁▁▅▁█  3 in the last hour · last 2m ago · plan ends ~02:12…
 
-
-
-
-
+── files being changed ────────────────────────────────────────────────────────
+  crates/queue/src/claim.rs               hephaestus×4 daedalus×1     ⚠ two age…
+  specs/040-retry.md                      daedalus×2                  01:54
 
 
 

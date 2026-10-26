@@ -383,6 +383,7 @@ impl Engine {
     async fn bridge_call(self: &Arc<Self>, sc: &mut SpanCtx, call: BridgeCall, ep: &Endpoint, model: &str) -> Result<Option<String>, EngineError> {
         let id = if call.call_id.is_empty() { format!("bridge-{}", call.name) } else { call.call_id.clone() };
         let r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
+        self.note_tool_call(sc, &call.name, r.is_error).await?;
         let arguments = {
             let text = call.args.to_string();
             if text.chars().count() > 4000 { Value::String(text.chars().take(4000).collect()) } else { call.args.clone() }
@@ -554,6 +555,7 @@ impl Engine {
         };
         let (mut text_parts, mut final_text, mut result): (Vec<String>, Option<String>, Option<Event>) = (Vec::new(), None, None);
         let mut metered = 0u64;
+        let mut cap_alerted: Vec<u64> = Vec::new();
         let mut failure: Option<(String, bool)> = None;
         let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
@@ -678,6 +680,14 @@ impl Engine {
                     metered += t.metered();
                     // The CLI's usage is logged once, when the span ends; the window's meter moves from this meanwhile.
                     hub.push_usage(&span_id, metered);
+                    // At 80 % and again at 95 % of the cap, once each: an operator hook on `monitor.*` can carry it out of the window.
+                    let cap = self.settings.harness_token_cap.max(1);
+                    for level in [80u64, 95] {
+                        if metered * 100 / cap >= level && !cap_alerted.contains(&level) {
+                            cap_alerted.push(level);
+                            sc.m.append(sc.ev("monitor.alert", json!({"kind": "cap", "pct": level, "tokens": metered, "cap": cap}))).await?;
+                        }
+                    }
                     if metered > self.settings.harness_token_cap {
                         session.kill().await;
                         failure = Some((format!("the CLI used {} tokens, over the {} cap for a span; stopped", metered, self.settings.harness_token_cap), false));
