@@ -308,8 +308,7 @@ pub fn check_work_home(home: &Path) -> Result<(), String> {
     Err(format!("{} is not empty and was not made by training mode; training mode will not run in a home that may be yours (use a new directory)", home.display()))
 }
 
-/// Create the working home and mark it as training mode's own. The run slice (L6b) calls this; until then only tests do.
-#[allow(dead_code)]
+/// Create the working home and mark it as training mode's own (`delphi train run` calls this before anything else).
 pub fn prepare_work_home(home: &Path) -> Result<(), String> {
     check_work_home(home)?;
     fs::create_dir_all(home).map_err(|e| format!("cannot create {}: {}", home.display(), e))?;
@@ -409,8 +408,29 @@ pub fn run(args: &[String]) -> i32 {
             }
             0
         }
+        Some("run") => {
+            if !problems.is_empty() {
+                for p in &problems {
+                    eprintln!("FAIL {}", p);
+                }
+                eprintln!("delphi train: fix the cases first (`delphi train validate`)");
+                return 1;
+            }
+            let split = flag(args, "--split").unwrap_or_else(|| "dev".into());
+            let one = flag(args, "--case");
+            let chosen: Vec<&Case> = all
+                .iter()
+                .filter(|c| match split.as_str() {
+                    "holdout" => c.split == Split::Holdout,
+                    "all" => true,
+                    _ => c.split == Split::Dev,
+                })
+                .filter(|c| one.as_ref().is_none_or(|id| &c.id == id))
+                .collect();
+            crate::train_run::cli(args, &chosen)
+        }
         _ => {
-            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]");
+            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir>] [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
             2
         }
     }
