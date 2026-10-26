@@ -308,9 +308,42 @@ pub struct Access {
     pub order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub allowed_endpoints: Option<Vec<String>>,
-    /// Role → model family (`claude`, `gemini` or `local`) for roles that should not use the default, Claude.
+    /// Role → model family (`claude`, `gemini` or `local`) for roles that should not use the default (`primary`).
     #[serde(default)]
     pub role_family: BTreeMap<String, String>,
+    /// The family roles are served by unless `role_family` says otherwise (`specs/035` D-1). Unset: `claude` when an allowed
+    /// Claude endpoint exists, else the first allowed family.
+    #[serde(default)]
+    pub primary: Option<String>,
+    /// The families tried, in this order, when the primary has nothing usable (`specs/035` D-2). Unlisted ones follow in declaration order, `local` last.
+    #[serde(default)]
+    pub failover: Vec<String>,
+    /// What to do when only a weaker or reduced model is left (`specs/035` D-4).
+    #[serde(default)]
+    pub on_weaker: OnWeaker,
+    /// The order of stand-ins (`specs/035` D-9): `family` stays in the model's lineage and goes down a step at a time before it
+    /// looks elsewhere; `capability` takes an equal-tier model of any lineage before a lesser one in the family.
+    #[serde(default)]
+    pub failover_prefers: FailoverPrefers,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FailoverPrefers {
+    #[default]
+    Family,
+    Capability,
+}
+
+/// `[access] on_weaker`: `ask` puts a card to the operator; `finish` lets a task already under way carry on without one;
+/// `never` runs nothing weaker and waits for the primary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnWeaker {
+    #[default]
+    Ask,
+    Finish,
+    Never,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -334,6 +367,14 @@ pub struct CatalogEntry {
     pub cache_write_usd_per_mtok: f64,
     #[serde(default)]
     pub output_usd_per_mtok: f64,
+    /// A reduced model is never a peer of one that is not, whatever tier it is mapped to (`specs/035` D-3). Unset: reduced
+    /// when the endpoint is `cost_model = "local"`.
+    #[serde(default)]
+    pub reduced: Option<bool>,
+    /// The lineage the model belongs to when that is not its endpoint's family: a Claude model served from Gemini's own pool is
+    /// `lineage = "claude"` (`specs/035` D-10). Unset: the endpoint's family.
+    #[serde(default)]
+    pub lineage: Option<String>,
 }
 
 fn yes() -> bool {
@@ -732,6 +773,13 @@ impl Config {
                 errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
             }
         }
+        for (what, family) in self.access.primary.iter().map(|p| ("primary", p)).chain(self.access.failover.iter().map(|f| ("failover", f))) {
+            if !matches!(family.as_str(), "claude" | "gemini" | "local") {
+                errs.push(format!("[access] {} names unknown family `{}` (use `claude`, `gemini` or `local`)", what, family));
+            } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
+                errs.push(format!("[access] {} = `{}`, but no allowed endpoint serves that family", what, family));
+            }
+        }
         let t = &self.routing.tuning;
         if t.throttle_attempts == 0 || t.throttle_window_secs <= 0 || t.reprobe_first_secs <= 0 || t.reprobe_max_secs < t.reprobe_first_secs {
             errs.push("[routing.pool]: throttle_attempts, throttle_window_secs and reprobe_first_secs must be positive, and reprobe_max_secs at least reprobe_first_secs".into());
@@ -815,9 +863,47 @@ impl Config {
         out
     }
 
-    /// The model family a role is served by.
+    /// The model family a role is served by: its `role_family`, else the primary.
     pub fn family_for_role(&self, role: &str) -> &str {
-        self.access.role_family.get(role).map(String::as_str).unwrap_or("claude")
+        self.access.role_family.get(role).map(String::as_str).unwrap_or_else(|| self.primary_family())
+    }
+
+    /// The family roles are served by unless told otherwise (`specs/035` D-1). Claude stays the default where it is configured; a
+    /// workspace without it is not sent looking for it.
+    pub fn primary_family(&self) -> &str {
+        if let Some(p) = self.access.primary.as_deref() {
+            return p;
+        }
+        let allowed = self.allowed();
+        if self.endpoints.iter().any(|e| e.family == "claude" && allowed.contains(&e.id)) {
+            return "claude";
+        }
+        self.endpoints.iter().find(|e| allowed.contains(&e.id)).map(|e| e.family.as_str()).unwrap_or("claude")
+    }
+
+    /// Where a family stands in the failover order (lower is tried first): its place in `[access] failover`, then the
+    /// others in declaration order, `local` last (`specs/035` D-2).
+    pub fn failover_rank(&self, family: &str) -> usize {
+        if let Some(i) = self.access.failover.iter().position(|f| f == family) {
+            return i;
+        }
+        if family == "local" {
+            return usize::MAX;
+        }
+        self.access.failover.len() + self.endpoints.iter().position(|e| e.family == family).unwrap_or(usize::MAX / 2 - 1)
+    }
+
+    /// The lineage of a pool pair: the catalog's `lineage`, else the endpoint's family (`specs/035` D-10).
+    pub fn lineage_of(&self, key: &PoolKey) -> String {
+        self.catalog_entry(&key.model_id).and_then(|c| c.lineage.clone()).unwrap_or_else(|| key.family.clone())
+    }
+
+    /// Is this model reduced (`specs/035` D-3): marked so in the catalog, or served by a local endpoint?
+    pub fn is_reduced(&self, endpoint_id: &str, model_id: &str) -> bool {
+        match self.catalog_entry(model_id).and_then(|c| c.reduced) {
+            Some(r) => r,
+            None => self.endpoint(endpoint_id).is_some_and(|e| e.is_local()),
+        }
     }
 
     /// The compliance pin: endpoints a request may be sent to. Without `allowed_endpoints`, all of them.

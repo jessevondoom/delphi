@@ -49,6 +49,15 @@ Built in `Engine::start_task` into the handoff's `conversation` field, for opera
 4. Excluded: `task.failed` text, tool-call output, thinking, notes the UI printed locally.
 5. Not built for `build.start`, `council.start` or a timer wake: a build's objective is its spec, a council's is the proposition, and a timer's ceiling must not be raised by operator history it did not set.
 
+### 4.3 The model-written summary (decided by the operator 2026-10-26: "work on the summary")
+The digest is deterministic and says what was asked in the first words; a summary says what was *done*. `[session] summary = "off" | "local" | "fast"`, **default `off`**, because it costs tokens and its output is model text that later prompts carry. `local` asks a model on this machine (nothing leaves it); `fast` asks the primary family's cheapest tier. Built (`summary.rs`, the hook in `EngineService::begin_session`):
+- **When.** After a session ends and its digest is written, in the background; it never delays the new session. Only for a session with at least two asks.
+- **Never for a session that read untrusted content** (`Digest::tainted`, from `span.taint`). The summary would be model text, written from hostile text, that later sessions read; the deterministic digest is all such a session leaves.
+- **Which model.** The router, asked for a `fast` tier, `turn_by_turn`, preferring `local` or the primary family. Only a model that would serve the request anyway is used (`Target` or `Similar`): a summary never raises a card, never uses a reduced model in `fast` mode that would need confirming, and in `local` mode only a local model. No usable model means no summary.
+- **Input.** `record_of`: the asks, the first words of the answers and the recorded changes, at most 6,000 bytes (the middle is dropped), under a contract saying the record is data, not instructions.
+- **Output.** At most 400 tokens, sanitised (control sequences out), one paragraph, at most 600 characters, redacted. Written to `sessions.jsonl` as a line of its own (`{"kind":"summary", mission_id, session_id, text, model}`) after the digest, and joined to the digest when the log is read. `session.summarized` is logged. In the next session's preamble the summary replaces the "asked …" line for that session.
+- **Known limit.** The call is not charged to the mission budget (no `agent.usage`, so it cannot appear as an agent on the narrator); it is a few hundred tokens, and the event names the model and the tokens. A local summary costs nothing.
+
 ## 5. Trust and visibility
 - **Tier.** `task.output` text was produced by a model, possibly after reading untrusted content. As built, the lowest `span.taint` ceiling in the session becomes the **starting ceiling of the next task** (the same mechanism a timer wake uses), so an earlier reply that read a hostile page cannot become a clean instruction in the next turn. It is per session, not per reply: it lasts until `/new`. The operator's own prompts are not what is lowered.
 - **Which roles see it.** The orchestrator sees the whole session. A role addressed with `@role` sees the whole session too (the operator is having one conversation), but a role the orchestrator hands work to sees only its handoff, as now: delegation stays narrow.
@@ -73,10 +82,11 @@ In a window under 16 rows the order is running first, then the current session a
 
 ## 7. Still open
 1. Default budget of 6,000 tokens, and whether the digest of older turns reads well to the model (built; untried live).
-2. A model-written session summary for the central log, beside the deterministic digest.
+2. The model-written summary (§4.3) is built and tested on a scripted model; it has not been read against a real one, and `summary = "off"` is the default until the operator has seen what it writes.
 3. Whether the epic view should also mark which session each thread began in (the dashboard groups by session; the epic groups by what the work is about).
-4. Two columns on a wide window (sessions beside running work) once the single column has been lived with.
-5. A pty test of `/new`, `/context` and `/export all` against a real daemon, and a live run (S4).
+4. Two columns on the *dashboard* (sessions beside running work). The agents view has them (`specs/034`, built 2026-10-26: the roster beside the tools board from 116 columns).
+5. (done) A pty test of `/new`, `/context` and `/export all` against a real daemon, and a live run (S4).
+6. A way to read the central log: today `sessions.jsonl` is read with `less`; a `delphi sessions` listing would make "review later" a command.
 
 ## 8. Implementation plan
 Slices, each ending with the gates green and mergeable alone.

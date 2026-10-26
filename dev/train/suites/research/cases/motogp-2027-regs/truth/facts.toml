@@ -1,0 +1,161 @@
+# Checklist for the 2027 MotoGP regulations briefing, from the sources in sources.toml (as of the date in meta.toml).
+# A pattern is a lower bound: a correct answer worded unexpectedly is missed (specs/037 section 4).
+
+[[fact]]
+id = "engine-850"
+claim = "The premier class engine displacement falls from 1000cc to 850cc in 2027"
+source = "crash-2027-regs"
+quote = "engine displacement will reduce from 1000cc to 850cc"
+any = ['\b850\s?-?cc\b', '\b850 cubic']
+
+[[fact]]
+id = "bore-75"
+claim = "The maximum bore falls from 81mm to 75mm"
+source = "crash-2027-regs"
+quote = "maximum cylinder bore will reduce from 81mm to 75mm"
+any = ['\b75\s?mm', '75 millimet']
+number = { value = 75, tol = 0 }
+
+[[fact]]
+id = "four-cylinders"
+claim = "Engines stay four-stroke with four cylinders"
+source = "crash-2027-regs"
+quote = "Engines will remain 4-stroke only, with 4 cylinders"
+any = ['(four|4)[ -]cylinder']
+weight = 0.5
+
+[[fact]]
+id = "engines-six"
+claim = "Engines per rider per season fall from seven to six"
+source = "crash-2027-regs"
+quote = "will reduce to 6 engines per season"
+any = ['\b(six|6)\s+(engines|units)', 'from (seven|7) to (six|6)']
+
+[[fact]]
+id = "fuel-sustainable"
+claim = "Fuel is 100% sustainable (non oil-refinement origin) from 2027"
+source = "crash-2027-regs"
+quote = "MotoGP will race with 100% sustainable fuel from 2027"
+any = ['100\s?%\s+(sustainable|non[- ]oil|renewable)', 'fully sustainable fuel']
+
+[[fact]]
+id = "tank-20"
+claim = "Fuel tank capacity falls from 22 to 20 litres"
+source = "crash-2027-regs"
+quote = "Fuel tank capacity will be reduced to 20 litres"
+any = ['\b20\s?(litres?|liters?|l)\b']
+
+[[fact]]
+id = "sprint-11"
+claim = "A maximum of 11 litres may be used in the Sprint"
+source = "crash-2027-regs"
+quote = "a maximum of 11 litres will be permitted for the Sprint"
+any = ['\b11\s?(litres?|liters?|l)\b']
+weight = 0.5
+
+[[fact]]
+id = "ride-height-ban"
+claim = "Ride-height devices are banned"
+source = "crash-2027-regs"
+quote = "No ride height devices of any kind will be permitted"
+any = ['ride[- ]height.{0,80}(ban|prohibit|scrap|remov|not be permitted|eliminat)', '(ban|prohibit|scrap|remov|eliminat).{0,60}ride[- ]height']
+
+[[fact]]
+id = "holeshot-ban"
+claim = "Holeshot (start) devices are banned too"
+source = "crash-2027-regs"
+quote = "including “holeshot” devices activated solely for race starts"
+any = ['hole-?shot']
+
+[[fact]]
+id = "fairing-550"
+claim = "Front fairing aero body width falls from 600mm to 550mm"
+source = "crash-2027-regs"
+quote = "will reduce from 600mm to 550mm"
+any = ['\b550\s?mm']
+number = { value = 550, tol = 0 }
+
+[[fact]]
+id = "nose-back-50"
+claim = "The nose of the front fairing moves back 50mm"
+source = "crash-2027-regs"
+quote = "will be moved back by 50mm"
+any = ['nose.{0,80}50\s?mm', '50\s?mm.{0,80}nose', 'nose (is |will be )?(moved|pushed) back']
+weight = 0.5
+
+[[fact]]
+id = "rear-aero-1150"
+claim = "Maximum rear end height falls from 1250mm to 1150mm"
+source = "crash-2027-regs"
+quote = "maximum rear end height will reduce from 1250mm to 1150mm"
+any = ['1[,.]?150\s?mm']
+number = { value = 1150, tol = 0 }
+weight = 0.5
+
+[[fact]]
+id = "aero-homologated"
+claim = "Rear aero is homologated, with one update per season"
+source = "crash-2027-regs"
+quote = "Manufacturers will be permitted to make one update per season"
+any = ['homologat']
+
+[[fact]]
+id = "gps-shared"
+claim = "GPS data from all riders is shared with all teams after each session"
+source = "crash-2027-regs"
+quote = "GPS data from all riders will be made available to all teams at the end of each session"
+any = ['\bGPS\b']
+
+[[fact]]
+id = "rank-b"
+claim = "Manufacturers who raced in 2026 start 2027 in concession Rank B, reassessed mid-season"
+source = "crash-2027-regs"
+quote = "Manufacturers who have raced in 2026 will start the 2027 season in Rank B"
+any = ['rank b']
+
+[[fact]]
+id = "min-weight"
+claim = "Minimum bike weight is 153kg"
+source = "crash-2027-regs"
+quote = "The minimum bike weight in the MotoGP class will be 153kg"
+any = ['\b153\s?kg']
+number = { value = 153, tol = 0 }
+weight = 0.5
+
+[[fact]]
+id = "gearbox-16"
+claim = "Gearbox ratios are limited to 16 pairs per season"
+source = "crash-2027-regs"
+quote = "will reduce to 16, plus 4 different overall ratios"
+any = ['\b16\b.{0,50}(gear|ratio)', '(gear|ratio).{0,60}\b16\b']
+weight = 0.5
+
+[[fact]]
+id = "pirelli"
+claim = "Pirelli becomes the exclusive tyre supplier from 2027"
+source = "tyrepress-pirelli"
+quote = "Pirelli will be the exclusive official tyre supplier to MotoGP from 2027"
+any = ['pirelli.{0,150}(2027|replac|exclusive|sole|official|new)', '(replac|succe)\w*.{0,40}michelin']
+
+[[fact]]
+id = "pirelli-contract"
+claim = "The Pirelli contract is five years, to 2031"
+source = "tyrepress-pirelli"
+quote = "A new five-year contract until 2031 inclusive"
+any = ['2031', 'five[- ]year']
+weight = 0.5
+
+[[fact]]
+id = "michelin-until-2026"
+claim = "Michelin supplies until the end of the 2026 season"
+source = "tyrepress-pirelli"
+quote = "Michelin will remain the exclusive supplier for MotoGP and MotoE until the end of the current technical regulations, at the close of the 2026 season"
+any = ['michelin.{0,150}(2026|until the end|exit|leav|replac)']
+
+[[fact]]
+id = "announced-2024"
+claim = "The rules were announced in May 2024 after the Grand Prix Commission met in Jerez"
+source = "crash-2027-regs"
+quote = "The Grand Prix Commission finalised the 2027 technical regulations last week in Jerez"
+any = ['jerez', 'may 2024', 'grand prix commission']
+weight = 0.5

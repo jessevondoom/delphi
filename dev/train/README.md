@@ -32,6 +32,50 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 | `file_unchanged`, `file_exists` (`path`) | the fixture file is byte-identical, or exists, after the run |
 | `file_contains` (`path`, `text`) | the fixture file contains the text |
 
+## Arms (`specs/037` §2)
+
+`delphi train run --arms-file arms.toml` runs every arm on every case and seed; each arm has its own template home (its
+routing is configuration) and may declare `expect_models`, the model ids or prefixes it may use. A run in which any
+other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
+in and out, calls and cost per model, attempts and mid-run model swaps.
+
+## Code cases from history (`specs/037` §3, §5.2)
+
+A code case starts the agent from an earlier commit and scores it on the tests of the change that followed. It has
+`spec = "spec.md"` (the task, ratified in the run's home; it must give the names the tests use) and a `hidden/` directory
+that no run can read. Make one with:
+
+```sh
+delphi train harvest --case code/<id> --base <parent-sha> --reference <change-sha> \
+    --test-file crates/foo/src/bar.rs --cmd "cargo test -p foo --lib --locked -- bar::" --min-passed 10
+```
+
+Harvest extracts the reference's test module from each `--test-file`, then proves the case: the hidden tests must fail on
+the base commit and pass three times in a row on the reference. `delphi train check-hidden --case code/<id>` repeats the
+proof; any edit to the case invalidates it, and `delphi train run` refuses an unproven case without `--allow-unvalidated`.
+It builds the project but calls no model. A run's project is the base tree with no history; after the run the test
+module in each named file is replaced by the reference's and the command is run. `--policy <file>` is the Amber-card
+policy for headless builds.
+
+## Research cases and truth packs (`specs/037`)
+
+A `kind = "research"` case has no `fixture/`; it has a `truth/` directory beside `case.toml` that is **never copied into a
+run**: `meta.toml` (as-of date; `verified_by` and `verified_on`), `facts.toml`, `traps.toml`, `sources.toml` with extracts in
+`sources/`, and `rubric.md`. `delphi train validate` checks a pack against itself (every fact names a source, every quote is
+in that source's extract, every extract matches its recorded hash, every pattern compiles). After writing or editing an
+extract run `delphi train seal --case <suite>/<id>` to record its hash.
+
+| check | passes when |
+| :-- | :-- |
+| `fact_recall` (`min`) | the deliverable states at least that weighted share of `facts.toml` |
+| `no_traps` | no pattern in `traps.toml` matches |
+| `text_matches` (`pattern`, `present`) | the pattern does (or, with `present = false`, does not) appear |
+
+The deliverable is the task's final answer plus any Markdown the mission wrote. Patterns give a **lower bound** (a correct
+answer worded unexpectedly is missed), so thresholds are modest and a jury reads the rest against `rubric.md`. A pack that
+no operator has verified is a draft: it is listed by `validate` and `delphi train run` refuses it without `--allow-unverified`.
+Verifying means reading each fact against its source, then setting `verified_by` and `verified_on`.
+
 ## Status
 
 The two seed cases were written from the specs and have not been run on a live daemon (the runner itself is tested with a

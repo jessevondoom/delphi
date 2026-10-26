@@ -162,6 +162,10 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       const v = await call('council.start', { proposition: p.proposition, seats: p.seats, author_family: p.author, ...(p.lenses ? { lenses: true } : {}) });
       if (v) { ctx.post(`(${v.task_id ?? 'task'} council convened; the seats answer blind, then critique each other)`); ctx.started?.(); } return;
     }
+    case 'distill': {
+      const v = await call('bundle.distill', { from: rest });
+      if (v) { ctx.post(`(${v.task_id ?? 'task'} distill started; drafts go to a staging directory of this mission, nothing is written into a bundle)`); ctx.started?.(); } return;
+    }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
     case 'models': { const v = await call('models.get'); if (v) ctx.post(String(v.text ?? '').trimEnd() || 'no models are configured'); return; }
     case 'agents': {

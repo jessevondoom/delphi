@@ -1,0 +1,23 @@
+# Research case R1 (specs/037 section 3). The prompt is written as an ordinary request; nothing says it is a test.
+id = "motogp-2027-regs"
+suite = "research"
+kind = "research"
+role = "strategist"
+split = "dev"
+tags = ["research", "sports", "time-sensitive"]
+max_cost_usd = 4.0
+timeout_secs = 1200
+prompt = "I follow MotoGP casually and keep hearing that 2027 is a big reset for the sport. Can you write me a short briefing on what actually changes in the technical regulations, what else changes around the series beyond the bike rules (tyres, rules for manufacturers), and your view on which kinds of teams or riders the changes are likely to favor? Please be clear about which parts are established and which are your own judgement, and cite your sources."
+
+# Lower bound on the checklist: a correct answer worded unexpectedly is missed, so the threshold is modest and the jury reads the rest.
+[[check]]
+kind = "fact_recall"
+min = 0.5
+
+[[check]]
+kind = "no_traps"
+
+[[check]]
+kind = "text_matches"
+pattern = "https?://"
+present = true

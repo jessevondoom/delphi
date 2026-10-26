@@ -1,0 +1,21 @@
+# Made by `delphi train harvest`: the reference change's test modules, withheld from the agent (specs/037 section 5.2).
+[source]
+base_sha = "30133bcddb5e99d4f30b40556cc253e57fa59306"
+reference_sha = "db13873d3c2ba752c913dc77f2bfef07dfbdf923"
+
+[[hidden_test]]
+file = "crates/delphi-engine/src/learn.rs"
+module = "crates__delphi-engine__src__learn.rs.txt"
+
+[[hidden_test]]
+file = "crates/delphi-engine/src/workspace.rs"
+module = "crates__delphi-engine__src__workspace.rs.txt"
+
+[[hidden_test]]
+file = "crates/delphi-engine/src/engine.rs"
+module = "crates__delphi-engine__src__engine.rs.txt"
+
+[hidden_run]
+cmd = ["cargo", "test", "-p", "delphi-engine", "--lib", "--locked", "--", "learn::", "workspace::", "a_span_logs_which_rules"]
+timeout_secs = 2700
+min_passed = 10

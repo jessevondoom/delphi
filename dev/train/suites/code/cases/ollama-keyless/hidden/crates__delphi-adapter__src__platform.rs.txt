@@ -1,0 +1,201 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claude::tests::{ipr, loop_history, opts, target};
+    use crate::claude::{compile, INTERLEAVED_THINKING_BETA};
+    use crate::config::tests::SAMPLE;
+    use crate::credential::{AwsCredentials, Secret};
+
+    fn compiled() -> Compiled {
+        compile(&ipr(), &loop_history("direct", "m1"), &target("direct", "m1"), &opts(Some(2048))).unwrap()
+    }
+
+    /// SAMPLE with `direct` added to the pin, plus `extra` endpoints (which may add `vx`).
+    fn cfg_with(extra: &str) -> Config {
+        let allowed = if extra.contains("id = \"vx\"") { "[\"corp-gateway\", \"bedrock-us\", \"direct\", \"vx\"]" } else { "[\"corp-gateway\", \"bedrock-us\", \"direct\"]" };
+        Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", &format!("allowed_endpoints = {}", allowed)), extra)).unwrap()
+    }
+
+    const VERTEX: &str = "[[endpoints]]\nid = \"vx\"\nfamily = \"claude\"\npath = \"cloud\"\nplatform = \"vertex\"\nregion = \"us-east5\"\nproject = \"proj-1\"\ncredential = \"gcloud-adc\"\n";
+
+    fn token(v: &str) -> Resolved {
+        Resolved::Token(Secret::new(v.into(), None))
+    }
+
+    fn aws() -> Resolved {
+        Resolved::Aws(AwsCredentials::new("AKIDEXAMPLE".into(), "secret".into(), Some("sess".into()), None))
+    }
+
+    fn header<'a>(r: &'a HttpRequest, n: &str) -> Option<&'a str> {
+        r.headers.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str())
+    }
+
+    fn body(r: &HttpRequest) -> Value {
+        serde_json::from_slice(&r.body).unwrap()
+    }
+
+    fn build_for(cfg: &Config, id: &str, model: &str, creds: &Resolved) -> Result<HttpRequest, BuildError> {
+        let c = compiled();
+        build(&BuildInput { cfg, endpoint: cfg.endpoint(id).unwrap(), model_id: model, compiled: &c, creds, now_unix: 1_790_000_000, register: &|_| {} })
+    }
+
+    #[test]
+    fn direct_api_uses_the_messages_api_with_an_api_key() {
+        let cfg = cfg_with("");
+        let r = build_for(&cfg, "direct", "sonnet-x", &token("sk-key")).unwrap();
+        assert_eq!(r.url, "https://api.anthropic.com/v1/messages");
+        assert_eq!((header(&r, "x-api-key"), header(&r, "anthropic-version"), header(&r, "anthropic-beta")), (Some("sk-key"), Some("2023-06-01"), Some(INTERLEAVED_THINKING_BETA)));
+        let b = body(&r);
+        assert_eq!((b["model"].as_str(), b["stream"].as_bool()), (Some("sonnet-x"), Some(true)));
+        assert!(b["messages"].is_array() && b["system"].is_array());
+        assert_eq!(r.response, ResponseKind::Sse);
+    }
+
+    #[test]
+    fn a_native_gateway_uses_bearer_auth_and_configured_headers_that_are_registered_as_secrets() {
+        let cfg = cfg_with("");
+        let c = compiled();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let reg = |v: &str| seen.lock().unwrap().push(v.to_string());
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("corp-gateway").unwrap(), model_id: "m", compiled: &c, creds: &token("tok"), now_unix: 0, register: &reg }).unwrap();
+        assert_eq!(r.url, "https://llm-gateway.example.internal/anthropic/v1/messages");
+        assert_eq!((header(&r, "authorization"), header(&r, "x-cost-center"), header(&r, "x-api-key")), (Some("Bearer tok"), Some("eng-123"), None));
+        assert_eq!(seen.lock().unwrap().as_slice(), ["eng-123"]);
+    }
+
+    #[test]
+    fn gemini_endpoints_use_generate_content_with_the_right_auth() {
+        use crate::claude::tests::opts;
+        let extra = "[[endpoints]]\nid = \"gd\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[[endpoints]]\nid = \"gv\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"vertex\"\nregion = \"global\"\nproject = \"p1\"\ncredential = \"gcloud-adc\"\n[[endpoints]]\nid = \"gb\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"bedrock\"\nregion = \"us-east-1\"\ncredential = \"aws:p\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"gd\", \"gv\", \"gb\"]"), extra)).unwrap();
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "gd".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        let go = |id: &str, creds: &Resolved| build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint(id).unwrap(), model_id: "gemini-x", compiled: &c, creds, now_unix: 0, register: &|_| {} });
+        let r = go("gd", &token("AIza-k")).unwrap();
+        assert_eq!(r.url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-x:streamGenerateContent?alt=sse");
+        assert_eq!((header(&r, "x-goog-api-key"), header(&r, "authorization")), (Some("AIza-k"), None));
+        assert!(!r.url.contains("AIza"));
+        let v = go("gv", &token("ya29.t")).unwrap();
+        assert_eq!(v.url, "https://aiplatform.googleapis.com/v1/projects/p1/locations/global/publishers/google/models/gemini-x:streamGenerateContent?alt=sse");
+        assert_eq!(header(&v, "authorization"), Some("Bearer ya29.t"));
+        assert_eq!(body(&v), c.body, "no model or stream field in the body");
+        assert!(matches!(go("gb", &aws()), Err(BuildError::Unsupported(_))), "Bedrock does not serve Gemini");
+        assert!(matches!(go("gd", &aws()), Err(BuildError::Unsupported(_))), "an AWS credential cannot authenticate the Gemini API");
+    }
+
+    #[test]
+    fn a_gemini_endpoint_with_an_oauth_credential_sends_a_bearer_token_and_the_quota_project() {
+        use crate::claude::tests::opts;
+        let extra = "[auth.google]\nflow = \"loopback_pkce\"\nissuer = \"https://accounts.google.com\"\nclient_id = \"cid.apps.googleusercontent.com\"\nscopes = [\"https://www.googleapis.com/auth/generative-language\"]\n[[endpoints]]\nid = \"go\"\nfamily = \"gemini\"\npath = \"api\"\nproject = \"my-gcp-project\"\ncredential = \"oauth2:google\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"go\"]"), extra)).unwrap();
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "go".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("go").unwrap(), model_id: "gemini-x", compiled: &c, creds: &token("ya29.user-token"), now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!((header(&r, "authorization"), header(&r, "x-goog-api-key"), header(&r, "x-goog-user-project")), (Some("Bearer ya29.user-token"), None, Some("my-gcp-project")));
+        assert!(r.url.starts_with("https://generativelanguage.googleapis.com/v1beta/models/gemini-x:streamGenerateContent"));
+    }
+
+    #[test]
+    fn values_that_could_redirect_a_vertex_url_are_refused() {
+        use crate::claude::tests::opts;
+        let g = crate::claude::Target { provider: "google".into(), endpoint_id: "gv".into(), model_id: "m".into() };
+        let c = crate::gemini::compile(&ipr(), &[], &g, &opts(None), &crate::gemini::GeminiOptions::default()).unwrap();
+        for (region, project, model) in [("evil.com/x#", "p", "m"), ("us-east5", "p/../q", "m"), ("us-east5", "p", "m?x=1"), ("us-east5", "p", "../../x"), ("us-east5", "", "m")] {
+            let extra = format!("[[endpoints]]\nid = \"gv\"\nfamily = \"gemini\"\npath = \"cloud\"\nplatform = \"vertex\"\nregion = \"{}\"\nproject = \"{}\"\ncredential = \"gcloud-adc\"\n", region, project);
+            let Ok(cfg) = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"gv\"]"), extra)) else { continue };
+            let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("gv").unwrap(), model_id: model, compiled: &c, creds: &token("t"), now_unix: 0, register: &|_| {} });
+            assert!(matches!(r, Err(BuildError::Unsupported(_))), "{:?}", (region, project, model));
+        }
+    }
+
+    #[test]
+    fn compat_gateways_get_chat_completions_for_any_family() {
+        let extra = "[[endpoints]]\nid = \"cc\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal/openai/\"\ncredential = \"env:K\"\nheaders = { \"X-Team\" = \"t1\" }\n[[endpoints]]\nid = \"cg\"\nfamily = \"gemini\"\npath = \"gateway-compat\"\nbase_url = \"https://gw.example.internal\"\ncredential = \"env:K\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"cc\", \"cg\"]"), extra)).unwrap();
+        let c = crate::openai::compile(&ipr(), &[], &crate::claude::tests::opts(None)).unwrap();
+        for id in ["cc", "cg"] {
+            let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint(id).unwrap(), model_id: "some-model", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
+            assert_eq!(r.dialect, Dialect::OpenAi);
+            assert!(r.url.ends_with("/v1/chat/completions") && !r.url.contains("//v1"), "{}", r.url);
+            assert_eq!(header(&r, "authorization"), Some("Bearer tok"));
+            let b = body(&r);
+            assert_eq!((b["model"].as_str(), b["stream"].as_bool(), b["stream_options"]["include_usage"].as_bool()), (Some("some-model"), Some(true), Some(true)));
+        }
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("cc").unwrap(), model_id: "m", compiled: &c, creds: &token("tok"), now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!(header(&r, "x-team"), Some("t1"));
+    }
+
+    #[test]
+    fn a_local_ollama_endpoint_is_keyless() {
+        let extra = "[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\npath = \"gateway-compat\"\nbase_url = \"http://localhost:11434\"\ncredential = \"none\"\n";
+        let cfg = Config::parse(&format!("{}\n{}", SAMPLE.replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"ollama\"]"), extra)).unwrap();
+        let c = crate::openai::compile(&ipr(), &[], &crate::claude::tests::opts(None)).unwrap();
+        let r = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("ollama").unwrap(), model_id: "qwen3:8b", compiled: &c, creds: &Resolved::None, now_unix: 0, register: &|_| {} }).unwrap();
+        assert_eq!(r.url, "http://localhost:11434/v1/chat/completions");
+        assert_eq!(header(&r, "authorization"), None, "no token is invented for a local server");
+        assert_eq!(body(&r)["model"], "qwen3:8b");
+    }
+
+    #[test]
+    fn bedrock_uses_invoke_with_response_stream_never_converse() {
+        let cfg = cfg_with("");
+        let r = build_for(&cfg, "bedrock-us", "anthropic.claude-x:0", &aws()).unwrap();
+        assert_eq!(r.url, "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-x%3A0/invoke-with-response-stream");
+        assert!(!r.url.contains("converse"));
+        let b = body(&r);
+        assert_eq!(b["anthropic_version"], BEDROCK_ANTHROPIC_VERSION);
+        assert!(b.get("model").is_none() && b.get("stream").is_none(), "the model is in the URL; streaming is the operation");
+        assert_eq!(b["anthropic_beta"], json!([INTERLEAVED_THINKING_BETA]));
+        let auth = header(&r, "authorization").unwrap();
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260921/us-east-1/bedrock/aws4_request") && auth.contains("SignedHeaders=content-type;host;x-amz-date;x-amz-security-token"), "{}", auth);
+        assert_eq!(header(&r, "x-amz-security-token"), Some("sess"));
+        assert_eq!(r.response, ResponseKind::AwsEventStream);
+        assert!(r.headers.iter().all(|(_, v)| !v.contains("secret")), "the secret key itself is never sent");
+    }
+
+    #[test]
+    fn vertex_uses_stream_raw_predict_with_a_bearer_token() {
+        let cfg = cfg_with(VERTEX);
+        let r = build_for(&cfg, "vx", "claude-x@20250101", &token("ya29.t")).unwrap();
+        assert_eq!(r.url, "https://us-east5-aiplatform.googleapis.com/v1/projects/proj-1/locations/us-east5/publishers/anthropic/models/claude-x@20250101:streamRawPredict");
+        let b = body(&r);
+        assert_eq!((b["anthropic_version"].as_str(), b["stream"].as_bool()), (Some(VERTEX_ANTHROPIC_VERSION), Some(true)));
+        assert!(b.get("model").is_none());
+        assert_eq!(header(&r, "authorization"), Some("Bearer ya29.t"));
+        let global = VERTEX.replace("us-east5", "global");
+        let r = build_for(&cfg_with(&global), "vx", "m", &token("t")).unwrap();
+        assert!(r.url.starts_with("https://aiplatform.googleapis.com/v1/projects/proj-1/locations/global/"), "{}", r.url);
+    }
+
+    #[test]
+    fn the_pin_stops_a_request_before_anything_is_built() {
+        let cfg = Config::parse(SAMPLE).unwrap(); // `direct` is outside allowed_endpoints
+        assert!(matches!(build_for(&cfg, "direct", "m", &token("k")), Err(BuildError::NotAllowed(id)) if id == "direct"));
+    }
+
+    #[test]
+    fn credential_kinds_must_fit_the_platform() {
+        let cfg = cfg_with(VERTEX);
+        assert!(build_for(&cfg, "bedrock-us", "m", &token("t")).is_err());
+        assert!(build_for(&cfg, "vx", "m", &aws()).is_err());
+        assert!(build_for(&cfg, "direct", "m", &Resolved::None).is_err());
+    }
+
+    #[test]
+    fn header_injection_is_refused_and_debug_hides_values() {
+        let cfg = Config::parse(&SAMPLE.replace("eng-123", "x\\r\\nX-Evil: 1")).unwrap();
+        let c = compiled();
+        let err = build(&BuildInput { cfg: &cfg, endpoint: cfg.endpoint("corp-gateway").unwrap(), model_id: "m", compiled: &c, creds: &token("t"), now_unix: 0, register: &|_| {} });
+        assert!(matches!(err, Err(BuildError::BadHeader(_))));
+        let ok = build_for(&cfg_with(""), "direct", "m", &token("sk-super-secret")).unwrap();
+        assert!(!format!("{:?}", ok).contains("sk-super-secret"));
+    }
+
+    #[test]
+    fn cloud_endpoints_may_use_a_private_base_url() {
+        let text = SAMPLE.replace("credential = \"aws:work-sso\"", "credential = \"aws:work-sso\"\nbase_url = \"https://vpce-1.bedrock-runtime.us-east-1.vpce.amazonaws.com\"");
+        let cfg = Config::parse(&text).unwrap();
+        let r = build_for(&cfg, "bedrock-us", "m", &aws()).unwrap();
+        assert!(r.url.starts_with("https://vpce-1.bedrock-runtime.us-east-1.vpce.amazonaws.com/model/m/"), "{}", r.url);
+    }
+}

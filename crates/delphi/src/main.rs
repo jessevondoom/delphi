@@ -4,6 +4,7 @@ mod avatar;
 mod bundle_add;
 mod bundle_cmd;
 mod bundle_compat;
+mod bundle_init;
 mod bundle_fetch;
 mod bundle_life;
 mod bundle_pack;
@@ -24,12 +25,15 @@ mod missions;
 mod changelog;
 mod learn_cmd;
 mod train_run;
+mod train_hidden;
+mod train_truth;
 mod toolreport;
 mod needs;
 mod xenia_cmd;
 mod observer;
 mod ratify_console;
 mod relay;
+mod release;
 mod report;
 mod run;
 mod seed;
@@ -68,7 +72,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "relay", about: "send approval cards to your email or Telegram", synopsis: "  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]", detail: "Takes your replies too. Run it in a terminal or a tmux pane." },
     Cmd { group: "Set up", name: "skills", about: "agentskills.io skills in and out", synopsis: "  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role>\n    [--description \"…\"] [--workspace <name>] [--home <dir>]", detail: "An import is a pending proposal until you /ratify it." },
-    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]\n  delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] [--workspace <name>]\n  delphi bundle export <name>... --marketplace <dir> --repo <owner/repo|url> --sha <commit> [--ref R] [--subdir D]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n  delphi bundle package <dir> [-o <file.xbundle>]\n  delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. sign (a terminal only) signs the manifest with this install's xenia key; package writes a reproducible .xbundle archive.\nadd takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its\nknowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from\nthe recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the\ncache. No model is called to add. Vectors it ships are used only if they match this install's embedder and pass a local spot check\n(--no-vectors skips them); the rest are embedded in the background, and `list` shows how far along they are.\nimport turns a Claude Code plugin into a new bundle directory (it never adds it, and never imports hooks/ or bin/); export writes an added\nbundle as a plugin (--claude-plugin), an AGENTS.md fragment, or a marketplace.json; add --from-marketplace fetches the entry's pinned commit.\nExit codes: 0 pass · 1 failed · 2 usage." },
+    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle init <dir> --org <org> --name <name>\n  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n  delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n  delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]\n  delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] [--workspace <name>]\n  delphi bundle export <name>... --marketplace <dir> --repo <owner/repo|url> --sha <commit> [--ref R] [--subdir D]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n  delphi bundle package <dir> [-o <file.xbundle>] [--vectors]\n  delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]", detail: "init writes a skeleton that validates at once. validate reads the directory and changes nothing; --report writes the redaction report (every\nsecret, path, address and name the scan found, masked) to a file outside the bundle. distill has the writer role draft knowledge from\nallow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of the mission; it writes\nnothing into a bundle. package --vectors embeds the knowledge with the installed model into vectors/. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. sign (a terminal only) signs the manifest with this install's xenia key; package writes a reproducible .xbundle archive.\nadd takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its\nknowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from\nthe recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the\ncache. No model is called to add. Vectors it ships are used only if they match this install's embedder and pass a local spot check\n(--no-vectors skips them); the rest are embedded in the background, and `list` shows how far along they are.\nimport turns a Claude Code plugin into a new bundle directory (it never adds it, and never imports hooks/ or bin/); export writes an added\nbundle as a plugin (--claude-plugin), an AGENTS.md fragment, or a marketplace.json; add --from-marketplace fetches the entry's pinned commit.\nExit codes: 0 pass · 1 failed · 2 usage." },
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
@@ -78,6 +82,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
+    Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
@@ -86,7 +91,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
-    Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir>] [--case <id>] [--seeds <n>] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
+    Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
     Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]", detail: "" },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
@@ -231,6 +236,7 @@ fn main() {
         Some("status") => cmd_status(&args),
         Some("missions") => cmd_missions(&args),
         Some("changelog") => cmd_changelog(&args),
+        Some("release") => release::cli(None),
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("chat") => cmd_chat(&args),
@@ -347,22 +353,25 @@ fn cmd_update(args: &[String]) -> i32 {
     let home = home::delphi_home(flag(args, "--home").as_deref());
     let only = flag(args, "--workspace");
     if has("--workspaces-only") {
-        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"), has("--review"));
+        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"), has("--review"), has("--require-signed"));
     }
     let Ok(dest) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         eprintln!("delphi update: cannot locate this executable");
         return 1;
     };
     let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
+    if api != selfupdate::DEFAULT_API {
+        eprintln!("delphi update: reading releases from {api} (DELPHI_RELEASES_URL), not from the project's repository");
+    }
     let mut workspace_code = 0;
     let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |event| {
         if event == selfupdate::Event::UpToDate {
-            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false, has("--review"));
+            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false, has("--review"), has("--require-signed"));
             return;
         }
         let mut step = vec!["update".to_string(), "--workspaces-only".into(), "--home".into(), home.to_string_lossy().to_string()];
         step.extend(only.iter().flat_map(|w| ["--workspace".to_string(), w.clone()]));
-        step.extend(["--allow-downgrade", "--review"].iter().filter(|f| has(f)).map(|f| f.to_string()));
+        step.extend(["--allow-downgrade", "--review", "--require-signed"].iter().filter(|f| has(f)).map(|f| f.to_string()));
         if event == selfupdate::Event::RolledBack {
             step.push("--rollback".into());
         }
@@ -500,6 +509,10 @@ fn cmd_chat(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
+    // A signed release refreshes this workspace on its first start, and says so (specs/036). Nothing else starts this.
+    if let Some(line) = update::auto_refresh(&home, &ws.dir) {
+        eprintln!("{line}");
+    }
     let names = theme_names(&ws);
     if args.iter().any(|a| a == "--no-mouse") {
         // SAFETY: set before any thread exists; the full-screen console reads it at start.
@@ -537,6 +550,25 @@ fn cmd_hooks(args: &[String]) -> i32 {
 
 /// `delphi bundle validate|manifest` read a directory; `add|list|remove` change one workspace (`bundle_cmd.rs`).
 fn cmd_bundle(args: &[String]) -> i32 {
+    // `distill` is a task for the writer role, so it goes through the daemon like `delphi run "/distill …"` (`specs/027` §2.3).
+    if args.first().map(|a| a.as_str()) == Some("distill") {
+        let mut run_args: Vec<String> = Vec::new();
+        let mut words: Vec<String> = Vec::new();
+        let mut it = args[1..].iter();
+        while let Some(a) = it.next() {
+            if matches!(a.as_str(), "--workspace" | "--home" | "--mission" | "--timeout" | "--budget") {
+                run_args.push(a.clone());
+                run_args.extend(it.next().cloned());
+            } else if a.starts_with("--") {
+                run_args.push(a.clone());
+            } else {
+                words.push(a.clone());
+            }
+        }
+        let task = format!("/distill {}", words.join(" "));
+        run_args.extend(["--task".to_string(), task.trim().to_string()]);
+        return cmd_run(&run_args);
+    }
     if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove" | "update" | "rollback" | "gc" | "export")) {
         let (home, ws) = match resolve_ws("bundle", args) {
             Ok(v) => v,
@@ -632,6 +664,9 @@ fn cmd_run(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
+    if let Some(line) = update::auto_refresh(&home, &ws.dir) {
+        eprintln!("{line}");
+    }
     run::run(&home, &ws.dir, opts)
 }
 

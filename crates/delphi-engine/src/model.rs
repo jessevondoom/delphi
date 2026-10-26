@@ -140,6 +140,8 @@ pub enum Step {
     Throttle,
     /// The quota is used up; resets 5 days from the call (a script cannot know the real clock).
     Exhaust,
+    /// The account is out of credit: every model on the endpoint is out (`Exhaustion::is_account_wide`).
+    ExhaustBilling,
     NeedsReauth,
     Fail(&'static str),
     /// The call never returns (the daemon is killed while waiting for the provider).
@@ -225,6 +227,7 @@ impl ModelClient for ScriptedModel {
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
                     Err(ModelError::Exhausted(Exhaustion { reason: "quota reached".into(), reset_at: Some(now + 5 * 86_400), raw: "Individual quota reached. Resets in 120h0m0s.".into() }))
                 }
+                Step::ExhaustBilling => Err(ModelError::Exhausted(Exhaustion { reason: delphi_adapter::exhaust::BILLING.into(), reset_at: None, raw: "Your credit balance is too low.".into() })),
                 Step::NeedsReauth => Err(ModelError::NeedsReauth { endpoint: endpoint.id.clone() }),
                 Step::Fail(m) => Err(ModelError::Failed(m.into())),
                 Step::Hang => std::future::pending().await,

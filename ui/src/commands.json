@@ -13,6 +13,7 @@
   { "name": "/quit", "aliases": ["/exit", "/q"], "desc": "Leave the console; the daemon keeps running", "ink": true, "rust": true, "local": true },
   { "name": "/build", "args": "[--optimistic] <request>", "desc": "A Builder task: worktree, tests, audit, then your approval to merge. --optimistic decides its worktree edits itself, records each, and blocks the merge until you have reviewed them all", "ink": true, "rust": true, "local": false },
   { "name": "/council", "args": "[--lenses] <proposition>", "desc": "A blind three-round Council (architect, strategist, red-team); --lenses gives each seat one of your bundles' perspectives; you decide if it deadlocks", "ink": true, "rust": true, "local": false },
+  { "name": "/distill", "args": "[<path|missions/id> ...]", "desc": "The writer drafts knowledge files for an org bundle from allow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of this mission; nothing is written into a bundle", "ink": true, "rust": true, "local": false },
   { "name": "/timer", "aliases": ["/timers"], "args": "<when> <note>", "desc": "Wake a role later: /timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>", "ink": true, "rust": true, "local": false },
   { "name": "/models", "desc": "The model pool: which models are usable, out of quota, or cooling down", "ink": true, "rust": true, "local": false },
   { "name": "/agents", "desc": "Every agent running now and what it is doing", "ink": true, "rust": true, "local": false },

@@ -54,7 +54,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | B7 | compatibility: `plugin.json` generation, plugin `import` with the component table, agent host-role mapping, `.mcp.json` inert entries + `connectors map`, `assets/` synonym, `references/` indexing, `AGENTS.md` pointers, exports (`--claude-plugin`, `--strip-delphi`, `--agents-md`, `--marketplace`), `add --from-marketplace` | 025 §10 | B1, B2, B4, B6 | 18 h | built (PR open; 025 §10.1): `plugin.json` agreement and ignored-key notes at step 13, `.mcp.json` reader with inert declarations and credential refusal at step 8, `import` with the component table, `export` `--claude-plugin`/`--strip-delphi`/`--agents-md`/`--marketplace`, `add --from-marketplace` over a `Fetcher` seam and a locked-down fetch wrapper, `assets/` synonym; deferred: `connectors map`, `references/` indexing, the handoff `AGENTS.md` pointer, inert servers in the lock |
 | B8 | xenia kind `bundle` (supersedes provisional `skill`): publish and add through the store, endorsement as provenance, hardened tree fetch, update as new `rev` | 027 §10 | B6; xenia X7, X8; 011 §11 Phase 2 re-review | 16 h | not started |
 | B9 | alignment check (`ALIGN-REF-*` pre-pass, strategist table on the spec card, P2/P1 never P0) and opt-in Council lenses | 026 §11 | B5 | 12 h | built (pre-pass, `check_alignment`, spec-approval alignment lines, strategist table text, `--lenses`; 026 §11.3) |
-| B10 | authoring: `init`, `distill` (writer role, staging only, allow-listed inputs), `validate --report` redaction report, the `org-bundle-authoring` skill wired to the writer role, scan extensions | 027 §10 | B1, B3, B6 | 16 h | not started |
+| B10 | authoring: `init`, `distill` (writer role, staging only, allow-listed inputs), `validate --report` redaction report, the `org-bundle-authoring` skill wired to the writer role, scan extensions | 027 §10 | B1, B3, B6 | 16 h | built (PR open): `init`, `distill` (writer span narrowed to the allow-list, one tool, one staging directory in the mission, masked inputs, closing scan), `validate --report`, step 8 classes shared by validate/report/distill (+ `transcript` warning, `.distill` refusal), `package --vectors`, skill wired to the writer role; see 027 §10.2. Deferred: endorsed xenia records and previous-version inputs, roster handles (interim `[privacy] handles`), a recorded model-driven run |
 | B11 | evaluation: `kb eval --bundle` advisory gate (frozen R@10 ≥ 0.80, MRR ≥ 0.50, 0 controls), bench arm A3b / task set T8 with `--pilot`, pre-registration file format and hash pin, `bundle.cited` and `align.finding` telemetry, `bundle report` | 027 §10 | B2, B9, bench runner open items | 16 h | not started |
 | B12 | `delphi bundle serve`: read-only stdio MCP server (resources = knowledge docs; tools = `search`, `get_doc`) over added bundles | 025 §10 | B3, B4 | 10 h | not started |
 
@@ -82,6 +82,22 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 The working plan for L1 and L6b is [`learning-build-plan-2026-10-26.md`](learning-build-plan-2026-10-26.md).
 
 Total about 182 h. Operator-layer path L0 → L1 → L2 → L4; core-layer path L6 → L7 → L9 → L10; they meet in the `learning-loop` suite.
+
+## Training experiments: quality and efficiency (spec 037, draft, 2026-10-26)
+
+Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (operator review time and model dollars are separate; the dollar cap OD-T1 is open). Suite: C1-C3 from repo history, R1-R6 research and strategy with stored truth packs.
+
+| Slice | Delivers | Hours | State |
+| :-- | :-- | --: | :-- |
+| X1 | spec 037; research case format (`truth/`, `fact_recall`, `no_traps`, `text_matches`, draft-pack rule, `train seal`); truth packs R1-R3 (drafts, operator verification pending) | 15 | merged (#215) |
+| X2 | per-arm template home and staffing check (`--arms-file`); tokens per model in rows | 8 | built (PR open) |
+| X3 | `delphi train harvest` and `check-hidden`; code cases C1-C3 (validated: fail on base, pass 3x on reference) | 20 | built (PR open) |
+| X4 | blinded bundles, jury runner | 12 | not started |
+| X5 | operator review CLI, disagreement ledger | 8 | not started |
+| X6 | report: pass rate, cost per pass, frontier, judge breakdown | 6 | not started |
+| X7 | pilot supervision and debugging | 11 | not started |
+
+R4-R6 truth packs join in the first study phase.
 
 ## Roadmap steps, for cross-reference
 

@@ -164,7 +164,8 @@ pub fn merge(base: &Path, core: &Path, release: &str, seed: &Seed, apply: bool, 
     for p in removals {
         let _ = fs::remove_file(p);
     }
-    let sig = fs::read_to_string(base.join("manifest.lock")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).and_then(|v| v.get("signature").and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "unsigned-dev-build".into());
+    // `base/` now holds this release's files, so the lock carries this build's signature (or none, for a development build).
+    let sig = crate::release::lock_signature();
     write_lock(&base.join("manifest.lock"), &new_manifest, &[("release", release.to_string()), ("signature", sig)])?;
     // Customized files that had to be set aside are the evidence for (or against) building the automatic diff3 merge.
     let root = base.parent().unwrap_or(base);
@@ -241,7 +242,54 @@ fn ratify_release(home: &Path, dir: &Path, release: &BTreeMap<String, String>) -
     done
 }
 
-pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, rollback_instead: bool, review: bool) -> i32 {
+/// First start of a signed release over an older workspace (`specs/036`): do what `delphi update` does for this workspace, and
+/// say so. Only a build whose release signature verifies does it; a development or local build leaves the workspace for the operator's
+/// own `delphi update`, as before, and an invalid build never gets here. `DELPHI_NO_AUTO_UPDATE=1` turns it off. The trigger is the
+/// operator starting a console or a run; no daemon, agent, hook, relay or timer calls this.
+pub fn auto_refresh(home: &Path, ws_dir: &Path) -> Option<String> {
+    auto_refresh_with(home, ws_dir, &crate::release::status(), std::env::var_os("DELPHI_NO_AUTO_UPDATE").is_some())
+}
+
+fn auto_refresh_with(home: &Path, ws_dir: &Path, status: &delphi_xenia::release_sig::Check, disabled: bool) -> Option<String> {
+    if disabled {
+        return None;
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let was = lock_release(&ws_dir.join("base"))?;
+    let delphi_xenia::release_sig::Check::Signed { kid, .. } = status else { return None };
+    if !wants_refresh(true, current, &was) {
+        return None;
+    }
+    let name = ws_dir.file_name()?.to_string_lossy().to_string();
+    println!("delphi: release {current} is signed ({kid}); refreshing workspace `{name}` from {was}");
+    let code = run(home, Some(&name), false, false, false, false, false);
+    Some(if code == 0 { format!("delphi: workspace `{name}` is now at release {current}; its release files are ratified") } else { format!("delphi: could not refresh workspace `{name}` (see above); run `delphi update` to retry") })
+}
+
+/// Does this workspace ask for signed releases only (`[update] require_signed = true` in `config.toml`)? The live file and the ratified
+/// copy are both read and either one asking is enough: adding the line takes effect at once, and taking it out takes effect only when
+/// the removal is ratified (`/ratify`), because `[update]` is one of the ratified access blocks (`lock::ACCESS_KEYS`). So the setting
+/// can be tightened by an edit and loosened only by the operator.
+pub fn config_requires_signed(ws_dir: &Path) -> bool {
+    ["config.toml", "local/ratified/config.access.toml"].iter().any(|f| {
+        fs::read_to_string(ws_dir.join(f)).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("update")?.get("require_signed")?.as_bool()).unwrap_or(false)
+    })
+}
+
+/// Is a workspace at release `was` due a refresh by a build of release `current`? Only a signed build refreshes; not when it is
+/// already there, and not when the workspace is newer than this binary (the downgrade guard says so on `delphi update`). A
+/// development build of the release a workspace grew from is not older than it.
+fn wants_refresh(signed: bool, current: &str, was: &str) -> bool {
+    let core = |v: &str| crate::selfupdate::parse_version(v).map(|(a, b, c, _)| (a, b, c));
+    signed && was != current && core(was) <= core(current)
+}
+
+pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, rollback_instead: bool, review: bool, require_signed: bool) -> i32 {
+    // A build whose signature does not hold ratifies nothing, and neither does an unsigned one when a signed release was required.
+    if let Some(why) = crate::release::refusal(require_signed) {
+        eprintln!("delphi update: refusing: {why}");
+        return 1;
+    }
     let list = workspaces(home, only);
     if list.is_empty() {
         eprintln!("delphi update: no workspace found in {}{}", home.display(), only.map(|o| format!(" named `{}`", o)).unwrap_or_default());
@@ -274,6 +322,14 @@ pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, 
                 Err(e) => eprintln!("{}: {}", name, e),
             }
             continue;
+        }
+        // The workspace's own config can ask for signed releases only; a rollback restores a release that was already ratified, so it is not held to it.
+        if name != "operator" && config_requires_signed(dir) {
+            if let Some(why) = crate::release::refusal_of(&crate::release::status(), true) {
+                eprintln!("{}: refusing: {} (`[update] require_signed = true` in this workspace's config.toml)", name, why);
+                code = 1;
+                continue;
+            }
         }
         match merge(base, core, release, &seed, !check, allow_downgrade) {
             Ok(changes) => {
@@ -337,6 +393,66 @@ mod tests {
 
     fn snap(dir: &Path) -> BTreeMap<String, Vec<u8>> {
         walkdir::WalkDir::new(dir).into_iter().flatten().filter(|e| e.file_type().is_file()).map(|e| (e.path().strip_prefix(dir).unwrap().to_string_lossy().to_string(), fs::read(e.path()).unwrap())).collect()
+    }
+
+    #[test]
+    fn the_config_can_require_signed_releases_and_only_ratifying_can_take_it_out() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path();
+        assert!(!config_requires_signed(ws), "no config at all");
+        fs::create_dir_all(ws.join("local/ratified")).unwrap();
+        fs::write(ws.join("config.toml"), "[theme]\nname = \"greek\"\n").unwrap();
+        assert!(!config_requires_signed(ws), "a config without the table");
+        fs::write(ws.join("config.toml"), "[update]\nrequire_signed = true\n").unwrap();
+        assert!(config_requires_signed(ws), "adding the line takes effect at once");
+        fs::write(ws.join("local/ratified/config.access.toml"), "[update]\nrequire_signed = true\n").unwrap();
+        fs::write(ws.join("config.toml"), "[theme]\nname = \"greek\"\n").unwrap();
+        assert!(config_requires_signed(ws), "taking it out of the live file changes nothing while the ratified copy has it");
+        fs::write(ws.join("local/ratified/config.access.toml"), "").unwrap();
+        assert!(!config_requires_signed(ws), "ratifying the removal does");
+        fs::write(ws.join("config.toml"), "[update]\nrequire_signed = \"yes\"\n").unwrap();
+        assert!(!config_requires_signed(ws), "only the boolean true counts");
+        fs::write(ws.join("config.toml"), "not toml [[[").unwrap();
+        assert!(!config_requires_signed(ws), "a broken file does not count either way");
+    }
+
+    #[test]
+    fn a_workspace_that_requires_signed_releases_refuses_an_unsigned_build_and_changes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        fs::write(ws.dir.join("config.toml"), format!("{}\n[update]\nrequire_signed = true\n", fs::read_to_string(ws.dir.join("config.toml")).unwrap())).unwrap();
+        assert_eq!(run(&home, Some("w"), false, false, false, false, false), 1, "this checkout is unsigned");
+        assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older", "nothing was refreshed");
+        assert_eq!(lock_release(&ws.dir.join("base")).as_deref(), Some("0.0.1"));
+        assert_eq!(run(&home, Some("w"), true, false, false, false, false), 1, "--check says so too");
+    }
+
+    #[test]
+    fn a_rollback_restores_an_already_ratified_release_so_it_is_not_held_to_require_signed() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        assert_eq!(run(&home, Some("w"), false, false, false, false, false), 0, "updated before the setting existed");
+        fs::write(ws.dir.join("config.toml"), format!("{}\n[update]\nrequire_signed = true\n", fs::read_to_string(ws.dir.join("config.toml")).unwrap())).unwrap();
+        assert_eq!(run(&home, Some("w"), false, false, true, false, false), 0, "rollback");
+        assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older");
+    }
+
+    #[test]
+    fn only_a_signed_build_refreshes_and_only_forward() {
+        assert!(wants_refresh(true, "0.2.8", "0.2.7"));
+        assert!(wants_refresh(true, "0.2.8-dev.gabc1234", "0.2.8-dev.gdef5678"), "another build of the same release");
+        assert!(wants_refresh(true, "0.2.8", "0.2.8-dev.gabc1234"), "the release a development build grew into");
+        assert!(!wants_refresh(true, "0.2.8", "0.2.8"), "already there");
+        assert!(!wants_refresh(true, "0.2.7", "0.2.8"), "the workspace is newer than this binary");
+        assert!(!wants_refresh(false, "0.2.8", "0.2.7"), "an unsigned build leaves it to `delphi update`");
+    }
+
+    #[test]
+    fn an_unsigned_checkout_never_refreshes_by_itself_and_a_workspace_with_no_lock_is_left_alone() {
+        let (t, _base, _core) = setup(&[("a.md", "1")]);
+        assert_eq!(auto_refresh(t.path(), t.path()), None, "this build is unsigned");
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(auto_refresh(empty.path(), empty.path()), None, "no base/manifest.lock: not a workspace");
     }
 
     #[test]
@@ -439,7 +555,7 @@ mod tests {
         write_lock(&rl_path, &rl, &[("release", "0.0.1".into()), ("ratified_by", "release".into())]).unwrap();
         let pending_before: Vec<String> = delphi_engine::ratify::list(&home, &ws.dir).into_iter().map(|p| p.id).collect();
         assert!(!pending_before.iter().any(|p| p.contains("GOVERNANCE")), "{:?}", pending_before);
-        assert_eq!(run(&home, Some("w"), false, false, false, false), 0);
+        assert_eq!(run(&home, Some("w"), false, false, false, false, false), 0);
         assert_eq!(zone3(&ws.dir), before, "Zone 2 and 3 are byte-identical after an update");
         assert_ne!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older", "Zone 1 was refreshed");
         // Running the update ratified the constitution as shipped: no proposal, and the ratified copy is the release's.
@@ -447,7 +563,7 @@ mod tests {
         assert!(!pending.iter().any(|p| p.logical == "GOVERNANCE.md"), "{:?}", pending.iter().map(|p| &p.id).collect::<Vec<_>>());
         let shipped = fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap();
         assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), shipped);
-        assert_eq!(run(&home, Some("w"), false, false, true, false), 0, "rollback");
+        assert_eq!(run(&home, Some("w"), false, false, true, false, false), 0, "rollback");
         assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older");
     }
 
@@ -474,7 +590,7 @@ mod tests {
     fn review_ratifies_nothing_and_leaves_the_release_pending() {
         let t = tempfile::tempdir().unwrap();
         let (home, ws) = older_workspace(&t);
-        assert_eq!(run(&home, Some("w"), false, false, false, true), 0);
+        assert_eq!(run(&home, Some("w"), false, false, false, true, false), 0);
         let pending = delphi_engine::ratify::list(&home, &ws.dir);
         assert!(pending.iter().any(|p| p.logical == "GOVERNANCE.md"));
         assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older", "the ratified copy still governs");
@@ -488,7 +604,7 @@ mod tests {
         fs::write(ws.dir.join("core/GOVERNANCE.md"), "my edit").unwrap();
         fs::create_dir_all(ws.dir.join("team")).unwrap();
         fs::write(ws.dir.join("team/REVIEW.md"), "team rubric").unwrap();
-        assert_eq!(run(&home, Some("w"), false, false, false, false), 0);
+        assert_eq!(run(&home, Some("w"), false, false, false, false, false), 0);
         let pending: Vec<String> = delphi_engine::ratify::list(&home, &ws.dir).into_iter().map(|p| p.logical).collect();
         assert!(pending.contains(&"GOVERNANCE.md".to_string()), "{:?}", pending);
         assert!(pending.contains(&"REVIEW.md".to_string()), "{:?}", pending);
@@ -496,10 +612,56 @@ mod tests {
     }
 
     #[test]
+    fn a_signed_build_refreshes_an_older_workspace_on_its_first_start_ratifies_the_release_and_does_it_once() {
+        use delphi_xenia::release_sig::Check;
+        let signed = Check::Signed { kid: "did:key:zmaintainers".into(), signed_at: "2026-10-26T12:00:00Z".into() };
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        // The operator customized the constitution and wrote a file of their own: the refresh leaves both pending, as `delphi update` does.
+        fs::write(ws.dir.join("core/agents-note.md"), "mine").unwrap();
+        let said = auto_refresh_with(&home, &ws.dir, &signed, false).expect("an older workspace is refreshed");
+        assert!(said.contains("now at release") && said.contains("ratified"), "{said}");
+        let shipped = fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap();
+        assert_ne!(shipped, "older");
+        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), shipped, "the release's file is ratified without anyone being asked");
+        assert_eq!(lock_release(&ws.dir.join("base")).as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(auto_refresh_with(&home, &ws.dir, &signed, false), None, "the second start finds nothing to do");
+    }
+
+    #[test]
+    fn a_customized_file_is_still_left_for_the_operator_by_a_start_time_refresh() {
+        use delphi_xenia::release_sig::Check;
+        let signed = Check::Signed { kid: "did:key:zmaintainers".into(), signed_at: "2026-10-26T12:00:00Z".into() };
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        fs::write(ws.dir.join("core/GOVERNANCE.md"), "my edit").unwrap();
+        fs::create_dir_all(ws.dir.join("team")).unwrap();
+        fs::write(ws.dir.join("team/REVIEW.md"), "team rubric").unwrap();
+        auto_refresh_with(&home, &ws.dir, &signed, false).expect("refreshed");
+        let pending: Vec<String> = delphi_engine::ratify::list(&home, &ws.dir).into_iter().map(|p| p.logical).collect();
+        assert!(pending.contains(&"GOVERNANCE.md".to_string()) && pending.contains(&"REVIEW.md".to_string()), "{pending:?}");
+        assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older", "the customized constitution keeps its ratified copy");
+        assert_eq!(fs::read_to_string(ws.dir.join("core/GOVERNANCE.md")).unwrap(), "my edit", "and the operator's file is untouched");
+    }
+
+    #[test]
+    fn nothing_refreshes_for_an_unsigned_or_invalid_build_or_when_the_operator_turned_it_off() {
+        use delphi_xenia::release_sig::Check;
+        let signed = Check::Signed { kid: "did:key:zmaintainers".into(), signed_at: "2026-10-26T12:00:00Z".into() };
+        for (status, disabled) in [(Check::Unsigned, false), (Check::Invalid("tampered".into()), false), (signed, true)] {
+            let t = tempfile::tempdir().unwrap();
+            let (home, ws) = older_workspace(&t);
+            assert_eq!(auto_refresh_with(&home, &ws.dir, &status, disabled), None, "{status:?} {disabled}");
+            assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older", "the workspace is untouched");
+            assert_eq!(lock_release(&ws.dir.join("base")).as_deref(), Some("0.0.1"));
+        }
+    }
+
+    #[test]
     fn check_mode_ratifies_nothing() {
         let t = tempfile::tempdir().unwrap();
         let (home, ws) = older_workspace(&t);
-        assert_eq!(run(&home, Some("w"), true, false, false, false), 0);
+        assert_eq!(run(&home, Some("w"), true, false, false, false, false), 0);
         assert_eq!(fs::read_to_string(ws.dir.join("local/ratified/GOVERNANCE.md")).unwrap(), "older");
     }
 }

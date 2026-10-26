@@ -429,8 +429,9 @@ fn drive(attached: &mut delphi_core::spawn::Attached, opts: &Opts, started: Inst
         }
         Input::Prompt { target, text } => ("task.submit", chat::submit_params(&mission_id, target.as_deref(), &text)),
         Input::Council { proposition, seats, author } => ("council.start", json!({"mission_id": mission_id, "proposition": proposition, "seats": seats, "author_family": author})),
+        Input::Distill(from) => ("bundle.distill", json!({"mission_id": mission_id, "from": from})),
         _ => {
-            say_err("the task must be a prompt, `@role …`, `/build …` or `/council …`");
+            say_err("the task must be a prompt, `@role …`, `/build …`, `/council …` or `/distill …`");
             return EXIT_INFRA;
         }
     };

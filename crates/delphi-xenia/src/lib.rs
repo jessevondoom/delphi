@@ -19,6 +19,7 @@ pub mod limits;
 pub mod pointer;
 pub mod record;
 pub mod pins;
+pub mod release_sig;
 pub mod roster;
 pub mod sidecar;
 pub mod sticky;

@@ -1,0 +1,48 @@
+# The pilot's eight arms (specs/037 section 2), as an arms file for `delphi train run --arms-file`.
+#
+# Each arm has its own template home: a copy of a home whose model access you ratified once, with that arm's routing in
+# its `[access]` and tier configuration (`specs/035`). Build them once, then point the paths below at them (relative
+# paths are from this file). `expect_models` lists model ids or prefixes the arm may use: a run that used any other
+# model (a quota ran out and the pool swapped one in) is not graded, because it no longer measures the arm.
+# Replace the ids with the exact model ids your endpoints report; the ones here are placeholders.
+
+[[arm]]
+name = "solo-haiku"
+template_home = "../../../delphi-train-homes/solo-haiku"
+expect_models = ["claude-haiku"]
+
+[[arm]]
+name = "solo-sonnet"
+template_home = "../../../delphi-train-homes/solo-sonnet"
+expect_models = ["claude-sonnet"]
+
+[[arm]]
+name = "solo-fable"
+template_home = "../../../delphi-train-homes/solo-fable"
+expect_models = ["claude-fable"]
+
+[[arm]]
+name = "solo-gemini-flash"
+template_home = "../../../delphi-train-homes/solo-gemini-flash"
+expect_models = ["gemini"]
+
+[[arm]]
+name = "solo-gemini-pro"
+template_home = "../../../delphi-train-homes/solo-gemini-pro"
+expect_models = ["gemini"]
+
+[[arm]]
+name = "team-cheap-claude"
+template_home = "../../../delphi-train-homes/team-cheap-claude"
+expect_models = ["claude-haiku", "claude-sonnet"]
+
+[[arm]]
+name = "team-mixed"
+template_home = "../../../delphi-train-homes/team-mixed"
+expect_models = ["claude-fable", "claude-haiku", "claude-sonnet", "gemini"]
+
+# Cheap first: the retry ladder upscales on failure, so a frontier model may appear in a run. That is the arm.
+[[arm]]
+name = "cheap-first"
+template_home = "../../../delphi-train-homes/cheap-first"
+expect_models = ["claude-haiku", "claude-sonnet", "claude-fable"]

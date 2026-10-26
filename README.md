@@ -100,7 +100,7 @@ brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew inst
 
 macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64). The installer puts `delphi` and `delphi-ui` in `~/.local/bin` (`--dir`, `DELPHI_INSTALL_DIR`), checks the download against its SHA-256 and the release's GitHub build attestation, and therefore needs the `gh` CLI signed in; without it the install stops unless `DELPHI_SKIP_ATTESTATION=1` accepts the checksum alone. `--version vX.Y.Z` installs a specific release; `--no-setup` skips the offer to run `delphi setup`.
 
-Later, `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending), and restarts any running daemon (`--no-restart` leaves them). `--check` shows what it would do, `--rollback` undoes all three steps, `--dev` follows the rolling build of `main`.
+Later, `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending), and restarts any running daemon (`--no-restart` leaves them). `--check` shows what it would do, `--rollback` undoes all three steps, `--dev` follows the rolling build of `main`. When the build is a **signed release** (signed in CI by the maintainers' key; `delphi release` says, and `delphi doctor` check 2), the first `delphi chat` or `delphi run` after an update refreshes the workspace and ratifies the release's own files itself, so there is nothing for you to approve; your customized files and your own files are never touched, and a build whose signature does not hold ratifies nothing and is refused by `delphi update` (`specs/036`; `--require-signed`, `DELPHI_REQUIRE_SIGNED=1` or `[update] require_signed = true` in `config.toml` also refuse an unsigned build; `DELPHI_NO_AUTO_UPDATE=1` turns the refresh off).
 
 **From source** (Rust 1.85 or newer; the repo pins a toolchain in `rust-toolchain.toml`):
 
@@ -139,6 +139,7 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `@<role> <request>` | ask one role directly (by role ID or its theme name) |
 | `/build [--optimistic] <request>` | worktree, tests, audit, then your merge card |
 | `/council [--lenses] <proposition>` | a blind three-round Council; `--lenses` gives each seat one of your bundles' perspectives to argue from |
+| `/distill [<path\|missions/id> …]` | the writer drafts bundle knowledge from allow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of the mission; nothing is written into a bundle |
 | `/timer <when> <note>`, `/timer @architect 1h …` | wake a role later; `/timer list`, `/timer cancel <id>` |
 | `/y` `/a` `/n` `/d` | approve once, approve similar this task (Amber only), reject, show the card's payload |
 | `/permissions [default\|accept-edits\|mission-auto\|optimistic]` | approval mode (`Shift+Tab` cycles it) |
@@ -160,7 +161,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Group | Commands |
 | :-- | :-- |
 | Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
-| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle validate\|manifest\|sign\|package\|import\|export\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
+| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle init\|validate [--report]\|distill\|manifest\|sign\|package [--vectors]\|import\|export\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
 | Maintain | `update` · `xenia whoami` · `help` |
@@ -237,7 +238,7 @@ This is an early project built mostly by its own agents under one operator. The 
 - Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
 
 **Specified, not built**
-- `package --vectors`, `bundle serve`, team alignment (slices B8 to B12; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and the adopter side of vectors, B3, are built); the Xenia store itself (011/012) and the Librarian role (013).
+- `bundle serve`, evaluation (slices B8, B11, B12; authoring and `package --vectors`, B10, and alignment, B9, are built; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and vectors, B3, are built); the Xenia store itself (011/012) and the Librarian role (013).
 - Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
 - Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
 
@@ -255,7 +256,8 @@ delphi/
 │   ├── delphi-sandbox/    sandbox-exec (macOS) and bubblewrap (Linux), deny by default
 │   ├── delphi-docs/       dependency-free document readers and writers, charts, diagrams, PNG
 │   ├── delphi-bundle/     the org bundle standard: manifest, layout, deterministic validate
-│   └── delphi-xenia/      signed-record verification for the org memory store
+│   ├── delphi-xenia/      signed-record verification for the org memory store; the release signature
+│   └── delphi-release/    the maintainers' release-signing tool (not shipped)
 ├── ui/                    delphi-ui, the Ink console and narrator (src/, test/, dev/, README.md, TERMINALS.md)
 ├── agents/<role>/AGENT.md role manifests        skills/        skill packages and CATALOG.md
 ├── themes/greek/          default theme pack     context/       seed knowledge (index, heuristics, capability matrix)
@@ -280,7 +282,7 @@ All in [`specs/`](specs/); each file's `status` line says whether the operator h
 | 003 | [Collaboration and Council](specs/003-collaboration-and-council.md): escalation ladder, DAG, retry ladder, Council | built; one real Council |
 | 004 | [Memory, retrieval and coaching](specs/004-memory-and-coaching.md): hybrid search, ratified learning loop | search built; coaching gated |
 | 005, 005a-g | [Console and narrator](specs/005-console-and-narrator-tui.md), [avatars](specs/005a-terminal-avatar-system.md), [decks and inbox](specs/005b-deck-navigation-and-visual-interface.md), [inline console](specs/005c-inline-console.md), [full-screen console](specs/005d-full-screen-console.md), [redesign](specs/005e-console-ux-review-and-redesign.md) and [build plan](specs/005f-console-redesign-build-plan.md), [epic threads](specs/005g-epic-threads.md) | built; real-terminal pass pending |
-| 006 | [Installer, layout and updater](specs/006-installer-and-updater.md) | built (SHA-256 + attestation instead of Ed25519) |
+| 006 | [Installer, layout and updater](specs/006-installer-and-updater.md) | built (SHA-256 + attestation; the release signature of [036](specs/036-signed-releases-and-start-time-refresh.md) is built and waits for the maintainers' key) |
 | 007 | [Federation and sync](specs/007-federated-mesh-and-sync.md) | deferred |
 | 008 | [Ambient watch, rewind, HITL tiers](specs/008-ambient-watch-and-rewind.md) | tiers built; watches and rewind gated |
 | 009 | [Model access and authentication](specs/009-model-access-and-auth.md) | built; live Gemini OAuth unverified |

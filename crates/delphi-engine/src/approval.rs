@@ -208,6 +208,8 @@ struct State {
     /// Recently resolved, so a late second answer can learn who won.
     resolved: HashMap<String, (Resolution, String)>,
     similar: HashSet<(String, String, String, Option<String>)>,
+    /// Tasks running on a weaker model than the one that ran out (`specs/035` D-13): the permission mode's automatic approvals are off for them.
+    degraded: HashSet<String>,
     next_id: u64,
 }
 
@@ -270,7 +272,8 @@ impl Broker {
         }
         let st = self.state.lock().unwrap();
         let mode = mode_from(st.mode_idx);
-        let auto = matches!(
+        // A task on a weaker model gets no automatic approval from the mode: each write asks. (Red is never automatic anyway.)
+        let auto = !st.degraded.contains(task_id) && matches!(
             (mode, c.kind),
             (Mode::AcceptEdits | Mode::MissionAuto | Mode::Optimistic, ActionKind::WorktreeEdit) | (Mode::MissionAuto | Mode::Optimistic, ActionKind::PinnedDependencyInstall)
         );
@@ -361,9 +364,19 @@ impl Broker {
     }
 
     /// A task ended: its "allow similar" grants end with it, and its open cards are denied.
+    /// From now until the task ends, the permission mode no longer approves anything for it by itself (`specs/035` D-13).
+    pub fn mark_degraded(&self, task_id: &str) {
+        self.state.lock().unwrap().degraded.insert(task_id.to_string());
+    }
+
+    pub fn is_degraded(&self, task_id: &str) -> bool {
+        self.state.lock().unwrap().degraded.contains(task_id)
+    }
+
     pub fn end_task(&self, task_id: &str) {
         let mut st = self.state.lock().unwrap();
         st.similar.retain(|(t, _, _, _)| t != task_id);
+        st.degraded.remove(task_id);
         let ids: Vec<String> = st.pending.iter().filter(|(_, p)| p.req.task_id == task_id).map(|(k, _)| k.clone()).collect();
         for id in ids {
             if let Some(p) = st.pending.remove(&id) {
@@ -415,6 +428,14 @@ mod tests {
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::No("permission mode")));
         b.set_mode(Mode::Optimistic);
         assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::No("permission mode"), Need::No("permission mode")));
+        // specs/035 D-13: a task on a weaker model is approved by nothing but the operator, in every mode, until it ends.
+        b.set_mode(Mode::Optimistic);
+        b.mark_degraded("t");
+        assert!(b.is_degraded("t") && !b.is_degraded("other"));
+        assert_eq!((b.need("t", None, &edit), b.need("t", None, &install)), (Need::Yes(Tier::Amber), Need::Yes(Tier::Amber)));
+        assert_eq!(b.need("other", None, &edit), Need::No("permission mode"), "another task is unaffected");
+        b.end_task("t");
+        assert_eq!(b.need("t", None, &edit), Need::No("permission mode"), "the end of the task ends it");
         assert_eq!(Mode::parse("mission-auto"), Some(Mode::MissionAuto));
         assert_eq!(Mode::parse("optimistic"), Some(Mode::Optimistic));
         assert_eq!(Mode::parse("yolo"), None);
