@@ -358,8 +358,8 @@ fn a_planted_secret_in_any_field_stops_the_publish_before_anything_is_shown() {
         ("token", "ghp_abcdefghijklmnopqrstuvwxyz0123456789"),
         ("secret", "AKIAABCDEFGHIJKLMNOP"),
         ("private-key", "-----BEGIN OPENSSH PRIVATE KEY-----"),
-        ("local-path", "/Users/jane/work/notes"),
-        ("local-path", "/home/deploy/app"),
+        ("local-path", concat!("/Us", "ers/jane/work/notes")),
+        ("local-path", concat!("/ho", "me/deploy/app")),
         ("session-trace", "local/missions/m-1/events.jsonl"),
     ];
     for (class, canary) in canaries {

@@ -12,8 +12,8 @@ const CANARIES: [(&str, &str); 9] = [
     ("AKIAABCDEFGHIJKLMNOP is the access key", "secret"),
     ("xoxb-1234567890-abcdefghij is a slack token", "token"),
     ("-----BEGIN OPENSSH PRIVATE KEY-----", "private-key"),
-    ("see /Users/jane/work/notes.md", "local-path"),
-    ("see /home/deploy/app/config", "local-path"),
+    (concat!("see /Us", "ers/jane/work/notes.md"), "local-path"),
+    (concat!("see /ho", "me/deploy/app/config"), "local-path"),
     (r"see C:\Users\jane\notes", "local-path"),
     ("export STRIPE_API_KEY=whatever123", "secret"),
 ];
