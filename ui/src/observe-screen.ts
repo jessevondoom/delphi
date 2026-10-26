@@ -14,7 +14,9 @@ export type AgentRow = { role: string; state: string; task_id: string; endpoint:
 export type OState = {
   agents: Record<string, AgentRow>;
   nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
-  tasks: Record<string, { id: string; flow: string; prompt: string; status: string }>;
+  tasks: Record<string, { id: string; flow: string; prompt: string; status: string; session?: string }>;
+  /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
+  sessions?: { id: string; reason: string; started_ms: number; turns: number }[];
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
@@ -208,11 +210,20 @@ function strip(m: OModel, w: number): string {
   }).join(' '), w);
 }
 
+/** `session 3 · 5 asks`, plus how many tasks of earlier sessions are still running (they stay on the screen). Empty before any session began. */
+export function sessionNote(st: OState): string {
+  const cur = st.sessions?.[st.sessions.length - 1];
+  if (!cur) return '';
+  const older = Object.values(st.tasks).filter((t) => t.status === 'running' && t.session !== cur.id).length;
+  return `session ${Number(cur.id.replace(/\D/g, '')) || cur.id} · ${cur.turns} ask${cur.turns === 1 ? '' : 's'}${older ? ` · ${older} from before` : ''}`;
+}
+
 /** `delphi v0.5 · epic`: directly under the strip, no path and no mission id. */
 function titleRow(m: OModel, w: number): string {
   const name = chalk.bold(text(m)('delphi'));
   const conn = m.connected ? '' : ' · disconnected';
-  return T.clip(w < 48 ? name + dim(` · ${m.view}${conn}`) : name + dim(` v${m.info.version} · ${m.view}${conn}`), w);
+  const sess = sessionNote(m.st);
+  return T.clip(w < 48 ? name + dim(` · ${m.view}${conn}`) : name + dim(` v${m.info.version} · ${m.view}${sess ? ` · ${sess}` : ''}${conn}`), w);
 }
 
 const header = (m: OModel, w: number): string[] => [strip(m, w), titleRow(m, w), ''];

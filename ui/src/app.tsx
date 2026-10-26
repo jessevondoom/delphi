@@ -184,7 +184,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const name = lookup(typed)?.name ?? typed; // `/exit` is `/quit`, `/narrator` is `/observe`
     if (name === '/quit') { exit(); return; }
     if (name === '/help') { setHelp((h) => !h); return; }
-    if (name === '/clear') { setState((s) => ({ ...s, blocks: [] })); return; }
+    if (name === '/new') {
+      // The daemon starts the session and announces it; every console clears on that event. Clear here too, so this one does not wait.
+      cmd.call('session.new', { mission_id: mission })
+        .then(() => setState((s) => fold(s, { method: 'event', params: { type: 'session.started', payload: {} } }, Date.now())))
+        .catch((e) => note('could not start a new session: ' + (e?.message ?? JSON.stringify(e)), 'error'));
+      return;
+    }
     if (name === '/export') {
       try {
         const dir = join(info.workspace, 'local/missions', mission, 'exports');

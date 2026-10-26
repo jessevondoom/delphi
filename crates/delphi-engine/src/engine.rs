@@ -48,6 +48,8 @@ pub struct Settings {
     /// A card that times out is still denied and its id is dead, but the task is not failed: a fresh card with a
     /// new id is raised, and nothing is spent while it waits. Zero (the default) means a timeout ends the wait.
     pub approval_park_max: Duration,
+    /// `[session] conversation_tokens`: how much of the operator's session a task is told (`specs/030`); 0 tells nothing.
+    pub conversation_tokens: usize,
     /// Output budget per call, raised to leave room above the thinking budget.
     pub max_tokens: u64,
     pub max_dispatch_depth: u32,
@@ -115,6 +117,7 @@ impl Default for Settings {
         Settings {
             approval_timeout: crate::approval::DEFAULT_TIMEOUT,
             approval_park_max: Duration::ZERO,
+            conversation_tokens: crate::session::DEFAULT_CONVERSATION_TOKENS,
             max_tokens: 8192,
             max_dispatch_depth: 2,
             mission_budget_usd: 5.0,
@@ -410,6 +413,18 @@ impl Engine {
         self.start_task(m, task_id, target, prompt, true, None).await
     }
 
+    /// The conversation of the mission's current session, fitted to `[session] conversation_tokens`, with a few lines on
+    /// its earlier sessions from the central log. Reading the log can fail; then the task simply runs without it.
+    pub(crate) fn conversation_for(&self, m: &Arc<MissionState>) -> Option<crate::session::Preamble> {
+        if self.settings.conversation_tokens == 0 {
+            return None;
+        }
+        let events = m.replay().ok()?;
+        let (_, session) = crate::session::current(&events);
+        let earlier = crate::session::earlier(&self.ws.home, &m.id, 3);
+        crate::session::preamble(session, &earlier, self.settings.conversation_tokens)
+    }
+
     /// A task started by a timer (`specs/017`): it begins at the trust ceiling of whoever set the timer, so waiting
     /// cannot turn a note written under untrusted input into a clean instruction.
     pub async fn run_task_woken(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, ceiling: delphi_core::provenance::Tier) -> Result<TaskOutcome, EngineError> {
@@ -418,6 +433,18 @@ impl Engine {
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
+        // What the operator and the team have said in this session, so a follow-up has something to follow (`specs/030`).
+        // A task a timer woke, and a builder, get none; and if an earlier reply read untrusted content, this task starts
+        // below full trust as well.
+        let mut parent = parent;
+        if announce && parent.is_none() && target != "builder" {
+            if let Some(p) = self.conversation_for(m) {
+                handoff.conversation = p.text;
+                if p.ceiling < delphi_core::provenance::Tier::L5 {
+                    parent = Some(Span::with_ceiling("session", p.ceiling));
+                }
+            }
+        }
         if target == "builder" {
             // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
             handoff.implements_spec = handoff.context_pointers.iter().find(|p| p.uri.starts_with("specs/") && p.uri.ends_with(".md")).map(|p| p.uri.clone());
