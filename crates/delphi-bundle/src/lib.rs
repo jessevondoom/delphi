@@ -12,6 +12,7 @@ mod behavior;
 mod files;
 mod frontmatter;
 mod ids;
+pub mod load;
 mod manifest;
 mod relax;
 mod scan;
@@ -22,7 +23,7 @@ mod vectors;
 
 pub use files::{BUNDLE_HASH_PREFIX, build_files_json, bundle_hash};
 pub use manifest::{plugin_json, Manifest};
-pub use relax::no_relaxation;
+pub use relax::{no_relaxation, no_relaxation_doc};
 pub use summary::{inspect, Inspected, Summary};
 
 /// The structured ids a bundle directory promises to keep stable (knowledge, skills, agents, goals, perspectives),

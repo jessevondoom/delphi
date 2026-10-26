@@ -49,13 +49,13 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 /// Flags that take a value, so the word after one is not a positional argument.
-const VALUE_FLAGS: [&str; 4] = ["--against", "--order", "--workspace", "--home"];
+const VALUE_FLAGS: [&str; 5] = ["--against", "--order", "--workspace", "--home", "--skill-roles"];
 
 fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle add <dir> [--order N] [--yes] [--dry-run]\n       delphi bundle list | remove <name>   (add, list and remove take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle add <dir> [--order N] [--skill-roles <skill>=<roles>] [--yes] [--dry-run]\n       delphi bundle list | remove <name>   (add, list and remove take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -71,7 +71,15 @@ pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     return 2;
                 }
             };
-            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes") }, &Real)
+            let mut skill_roles = std::collections::BTreeMap::new();
+            for (i, _) in args.iter().enumerate().filter(|(_, a)| *a == "--skill-roles") {
+                let Some((skill, roles)) = args.get(i + 1).and_then(|v| v.split_once('=')) else {
+                    eprintln!("delphi bundle: --skill-roles wants <skill>=<role,role>");
+                    return 2;
+                };
+                skill_roles.insert(skill.to_string(), roles.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect());
+            }
+            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { skill_roles, order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes") }, &Real)
         }
         (Some("list"), _) => bundle_add::list(ws),
         (Some("remove"), Some(name)) => bundle_add::remove(ws, name),

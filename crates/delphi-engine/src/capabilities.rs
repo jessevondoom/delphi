@@ -135,7 +135,7 @@ pub fn agy_version(program: &str) -> Option<String> {
 }
 
 fn probe_ipr(contract: &str) -> Ipr {
-    Ipr { governance: "This is a capability probe. Follow the contract exactly.".into(), role: "You are a connectivity probe.".into(), persona: None, heuristics: "None.".into(), lessons: "None.".into(), context_slices: vec![], contract: contract.into(), reminder: None, nonce: "probe".into() }
+    Ipr { governance: "This is a capability probe. Follow the contract exactly.".into(), role: "You are a connectivity probe.".into(), persona: None, guidance: None, bundle_skills: None, heuristics: "None.".into(), lessons: "None.".into(), context_slices: vec![], contract: contract.into(), reminder: None, nonce: "probe".into() }
 }
 
 fn echo_tool() -> ToolDef {

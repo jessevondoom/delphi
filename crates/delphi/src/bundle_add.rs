@@ -10,6 +10,8 @@ use delphi_core::bundles::{self, Entry, Past, Source};
 use std::path::Path;
 
 pub struct AddOpts {
+    /// `--skill-roles <skill>=<role,role>`: narrow the roles a skill loads for (`specs/023` §5A).
+    pub skill_roles: std::collections::BTreeMap<String, Vec<String>>,
     pub order: Option<i64>,
     pub dry_run: bool,
     pub yes: bool,
@@ -126,6 +128,14 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
     if !bundles::plain_id(&m.org) || !bundles::plain_id(&m.name) {
         return fail("org and name must be plain ids");
     }
+    for (skill, roles) in &o.skill_roles {
+        let Some((_, offered)) = i.summary.skills.iter().find(|(n, _)| n == skill) else {
+            return fail(format!("--skill-roles: the bundle has no skill `{}`", skill));
+        };
+        if let Some(bad) = roles.iter().find(|r| !offered.contains(r)) {
+            return fail(format!("--skill-roles: `{}` is not a role the skill `{}` names ({}); a bundle can be narrowed, never widened", bad, skill, offered.join(", ")));
+        }
+    }
     // 4. Compatibility, dependencies and supersession.
     if let Some(req) = &m.compat_delphi {
         let running = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
@@ -173,6 +183,7 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
     }
     let now = delphi_core::time::now_rfc3339();
     let source = Source { kind: "directory".into(), path: dir.display().to_string() };
+    let skill_roles = o.skill_roles.clone();
     let removed: Vec<String> = if o.yes { superseded.iter().map(|e| e.id()).collect() } else { Vec::new() };
     let applied = bundles::update(ws, |lock| {
         for e in lock.bundle.iter_mut().filter(|e| removed.contains(&e.id())) {
@@ -192,6 +203,7 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
             status: "active".into(),
             review_by: m.review_by.clone(),
             title: m.title.clone(),
+            skill_roles: skill_roles.clone(),
             history: Vec::new(),
         };
         match lock.bundle.iter_mut().find(|e| e.org == m.org && e.name == m.name) {
@@ -201,7 +213,8 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
                     history.insert(0, Past { hash: e.hash.clone(), version: e.version.clone(), from: e.added_at.clone(), to: now.clone() });
                 }
                 let order = o.order.unwrap_or(e.order);
-                *e = Entry { history, ..fresh(order) };
+                let kept = if skill_roles.is_empty() { e.skill_roles.clone() } else { skill_roles.clone() };
+                *e = Entry { history, skill_roles: kept, ..fresh(order) };
                 Ok("updated")
             }
             None => {
@@ -297,7 +310,7 @@ mod tests {
     }
 
     fn opts() -> AddOpts {
-        AddOpts { order: None, dry_run: false, yes: false }
+        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false }
     }
 
     /// Re-write the copy's manifest after an edit, so step 5 sees a consistent tree.
@@ -422,6 +435,24 @@ mod tests {
         repack(src.path());
         assert_eq!(add(home.path(), &ws, src.path(), &opts(), &Real), 1, "a bundle for a newer delphi");
         assert!(!ws.join("local/bundles.lock").exists());
+    }
+
+    #[test]
+    fn skill_roles_narrow_a_skill_at_add_never_widen_it_and_survive_a_re_add() {
+        let (home, ws, src) = setup();
+        let narrow = |skill: &str, roles: &[&str]| AddOpts { skill_roles: [(skill.to_string(), roles.iter().map(|r| r.to_string()).collect())].into(), ..opts() };
+        assert_eq!(add(home.path(), &ws, src.path(), &narrow("no-such-skill", &["builder"]), &Real), 1, "a skill the bundle lacks");
+        assert_eq!(add(home.path(), &ws, src.path(), &narrow("migration-plan", &["strategist"]), &Real), 1, "a role the skill does not name is a widening");
+        assert!(!ws.join("local/bundles.lock").exists(), "refused before anything is written");
+        assert_eq!(add(home.path(), &ws, src.path(), &narrow("migration-plan", &["builder"]), &Real), 0);
+        let narrowed = |ws: &Path| bundles::read(ws).unwrap().bundle[0].skill_roles.clone();
+        assert_eq!(narrowed(&ws).get("migration-plan"), Some(&vec!["builder".to_string()]));
+        // an update without the flag keeps what the operator chose
+        edit(src.path(), "knowledge/glossary.md", "Budget", "Latency budget");
+        edit(src.path(), "bundle.toml", "version = \"1.4.0\"", "version = \"1.4.1\"");
+        repack(src.path());
+        assert_eq!(add(home.path(), &ws, src.path(), &opts(), &Real), 0);
+        assert_eq!(narrowed(&ws).get("migration-plan"), Some(&vec!["builder".to_string()]));
     }
 
     #[test]
