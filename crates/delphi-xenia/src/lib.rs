@@ -14,6 +14,8 @@ pub mod hash;
 pub mod identity;
 pub mod layout;
 pub mod sidecar;
+pub mod sticky;
+pub mod store;
 pub mod sig;
 pub mod ulid;
 

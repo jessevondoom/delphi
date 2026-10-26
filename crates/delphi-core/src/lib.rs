@@ -24,3 +24,6 @@ pub mod spawn;
 pub mod time;
 pub mod totp;
 pub mod usage;
+#[cfg(any(test, feature = "test-support"))]
+pub mod xenia_testkit;
+pub mod xenia_store;
