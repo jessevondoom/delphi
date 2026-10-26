@@ -266,6 +266,16 @@ fn auto_refresh_with(home: &Path, ws_dir: &Path, status: &delphi_xenia::release_
     Some(if code == 0 { format!("delphi: workspace `{name}` is now at release {current}; its release files are ratified") } else { format!("delphi: could not refresh workspace `{name}` (see above); run `delphi update` to retry") })
 }
 
+/// Does this workspace ask for signed releases only (`[update] require_signed = true` in `config.toml`)? The live file and the ratified
+/// copy are both read and either one asking is enough: adding the line takes effect at once, and taking it out takes effect only when
+/// the removal is ratified (`/ratify`), because `[update]` is one of the ratified access blocks (`lock::ACCESS_KEYS`). So the setting
+/// can be tightened by an edit and loosened only by the operator.
+pub fn config_requires_signed(ws_dir: &Path) -> bool {
+    ["config.toml", "local/ratified/config.access.toml"].iter().any(|f| {
+        fs::read_to_string(ws_dir.join(f)).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("update")?.get("require_signed")?.as_bool()).unwrap_or(false)
+    })
+}
+
 /// Is a workspace at release `was` due a refresh by a build of release `current`? Only a signed build refreshes; not when it is
 /// already there, and not when the workspace is newer than this binary (the downgrade guard says so on `delphi update`). A
 /// development build of the release a workspace grew from is not older than it.
@@ -312,6 +322,14 @@ pub fn run(home: &Path, only: Option<&str>, check: bool, allow_downgrade: bool, 
                 Err(e) => eprintln!("{}: {}", name, e),
             }
             continue;
+        }
+        // The workspace's own config can ask for signed releases only; a rollback restores a release that was already ratified, so it is not held to it.
+        if name != "operator" && config_requires_signed(dir) {
+            if let Some(why) = crate::release::refusal_of(&crate::release::status(), true) {
+                eprintln!("{}: refusing: {} (`[update] require_signed = true` in this workspace's config.toml)", name, why);
+                code = 1;
+                continue;
+            }
         }
         match merge(base, core, release, &seed, !check, allow_downgrade) {
             Ok(changes) => {
@@ -375,6 +393,48 @@ mod tests {
 
     fn snap(dir: &Path) -> BTreeMap<String, Vec<u8>> {
         walkdir::WalkDir::new(dir).into_iter().flatten().filter(|e| e.file_type().is_file()).map(|e| (e.path().strip_prefix(dir).unwrap().to_string_lossy().to_string(), fs::read(e.path()).unwrap())).collect()
+    }
+
+    #[test]
+    fn the_config_can_require_signed_releases_and_only_ratifying_can_take_it_out() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path();
+        assert!(!config_requires_signed(ws), "no config at all");
+        fs::create_dir_all(ws.join("local/ratified")).unwrap();
+        fs::write(ws.join("config.toml"), "[theme]\nname = \"greek\"\n").unwrap();
+        assert!(!config_requires_signed(ws), "a config without the table");
+        fs::write(ws.join("config.toml"), "[update]\nrequire_signed = true\n").unwrap();
+        assert!(config_requires_signed(ws), "adding the line takes effect at once");
+        fs::write(ws.join("local/ratified/config.access.toml"), "[update]\nrequire_signed = true\n").unwrap();
+        fs::write(ws.join("config.toml"), "[theme]\nname = \"greek\"\n").unwrap();
+        assert!(config_requires_signed(ws), "taking it out of the live file changes nothing while the ratified copy has it");
+        fs::write(ws.join("local/ratified/config.access.toml"), "").unwrap();
+        assert!(!config_requires_signed(ws), "ratifying the removal does");
+        fs::write(ws.join("config.toml"), "[update]\nrequire_signed = \"yes\"\n").unwrap();
+        assert!(!config_requires_signed(ws), "only the boolean true counts");
+        fs::write(ws.join("config.toml"), "not toml [[[").unwrap();
+        assert!(!config_requires_signed(ws), "a broken file does not count either way");
+    }
+
+    #[test]
+    fn a_workspace_that_requires_signed_releases_refuses_an_unsigned_build_and_changes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        fs::write(ws.dir.join("config.toml"), format!("{}\n[update]\nrequire_signed = true\n", fs::read_to_string(ws.dir.join("config.toml")).unwrap())).unwrap();
+        assert_eq!(run(&home, Some("w"), false, false, false, false, false), 1, "this checkout is unsigned");
+        assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older", "nothing was refreshed");
+        assert_eq!(lock_release(&ws.dir.join("base")).as_deref(), Some("0.0.1"));
+        assert_eq!(run(&home, Some("w"), true, false, false, false, false), 1, "--check says so too");
+    }
+
+    #[test]
+    fn a_rollback_restores_an_already_ratified_release_so_it_is_not_held_to_require_signed() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = older_workspace(&t);
+        assert_eq!(run(&home, Some("w"), false, false, false, false, false), 0, "updated before the setting existed");
+        fs::write(ws.dir.join("config.toml"), format!("{}\n[update]\nrequire_signed = true\n", fs::read_to_string(ws.dir.join("config.toml")).unwrap())).unwrap();
+        assert_eq!(run(&home, Some("w"), false, false, true, false, false), 0, "rollback");
+        assert_eq!(fs::read_to_string(ws.dir.join("base/GOVERNANCE.md")).unwrap(), "older");
     }
 
     #[test]

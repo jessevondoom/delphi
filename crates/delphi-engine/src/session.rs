@@ -86,6 +86,10 @@ pub struct Digest {
     /// the change log have none.
     #[serde(default)]
     pub changes: Vec<String>,
+    /// A model-written summary, when `[session] summary` is on and the session read nothing untrusted (`specs/030` §4.3). It lives on a
+    /// line of its own in the central log, written after the digest, and is joined to it when the log is read.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// The change lines of a stretch of the log, oldest first: `HH:MM role: summary`.
@@ -145,12 +149,20 @@ pub fn digest(mission: &str, workspace: &str, id: &str, ended_by: &str, session:
         tainted,
         escalated,
         changes: keep_ends(change_lines(session)),
+        summary: None,
     })
 }
 
 /// The central log: one line per finished session, across missions and workspaces, under the delphi home.
 pub fn log_path(home: &Path) -> PathBuf {
     home.join("sessions.jsonl")
+}
+
+/// Append a model-written summary of a session to the central log, on a line of its own (`specs/030` §4.3). `redact` is applied first.
+pub fn append_summary(home: &Path, mission: &str, session_id: &str, text: &str, model: &str, redact: &dyn Fn(&str) -> String) -> std::io::Result<()> {
+    std::fs::create_dir_all(home)?;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(log_path(home))?;
+    writeln!(f, "{}", serde_json::json!({"kind": "summary", "mission_id": mission, "session_id": session_id, "text": redact(text), "model": model}))
 }
 
 /// Append a digest to the central log. `redact` is applied to every line first, as for any text the daemon writes.
@@ -168,6 +180,18 @@ pub fn append_central(home: &Path, d: &Digest, redact: &dyn Fn(&str) -> String) 
 pub fn earlier(home: &Path, mission: &str, n: usize) -> Vec<Digest> {
     let Ok(text) = std::fs::read_to_string(log_path(home)) else { return Vec::new() };
     let mut all: Vec<Digest> = text.lines().filter_map(|l| serde_json::from_str::<Digest>(l).ok()).filter(|d| d.mission_id == mission).collect();
+    // Summaries are lines of their own, written after their digest; the newest one for a session wins.
+    for l in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(l) else { continue };
+        if v["kind"] != "summary" || v["mission_id"] != mission {
+            continue;
+        }
+        if let (Some(id), Some(t)) = (v["session_id"].as_str(), v["text"].as_str()) {
+            if let Some(d) = all.iter_mut().find(|d| d.session_id == id) {
+                d.summary = Some(t.to_string());
+            }
+        }
+    }
     let skip = all.len().saturating_sub(n);
     all.drain(..skip);
     all
@@ -281,7 +305,8 @@ fn past_sessions(earlier: &[Digest]) -> (String, usize) {
     let mut n = 0;
     for d in earlier.iter().rev().take(EARLIER_SESSIONS) {
         let asks = d.asks.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
-        let said = if asks.is_empty() { format!("recorded {}", d.changes.iter().take(3).cloned().collect::<Vec<_>>().join("; ")) } else { format!("asked {}", asks) };
+        // A summary, where there is one, says more than the first lines do; it is model text, so it is shown as context like the rest.
+        let said = if let Some(s) = &d.summary { s.clone() } else if asks.is_empty() { format!("recorded {}", d.changes.iter().take(3).cloned().collect::<Vec<_>>().join("; ")) } else { format!("asked {}", asks) };
         let line = format!("Earlier session {} ({} turn(s), ended {}): {}\n", d.session_id, d.turns, d.ended.get(..10).unwrap_or(&d.ended), said);
         if out.len() + line.len() > EARLIER_BYTES {
             break;

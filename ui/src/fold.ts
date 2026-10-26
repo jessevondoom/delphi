@@ -21,7 +21,7 @@ export type Agent = {
 };
 export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 /**
- * One agent's work in progress (`specs/035`): who, since when, the tool call it is waiting on, its running token total
+ * One agent's work in progress (`specs/037`): who, since when, the tool call it is waiting on, its running token total
  * when the daemon reports one, and what it has done that a summary can name. Nothing the agent thought or wrote is kept
  * here: its replies are in the chat, and the deck shows what it did.
  */
@@ -221,6 +221,13 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const entry: Done = { id: (h[h.length - 1]?.id ?? 0) + 1, role: String(e.agent ?? pl.role ?? 'agent'), what: said, elapsed: 0, at: stamp(e, now), ok: true, change: true };
       const history = [...h, entry];
       return { ...s, activity: { ...s.activity, history: history.length > HISTORY_MAX ? history.slice(-HISTORY_MAX) : history } };
+    }
+    // A weaker model wrote a save-point before anyone was asked (`specs/035` D-11); where, for the operator who is not asked (optimistic mode).
+    case 'checkpoint.saved': return addBlock(s, { kind: 'note', text: `the work so far is saved for resumption: ${sanitize(String(pl.path ?? ''))}`, at: stamp(e, now), tone: 'info' });
+    // A task moved to another model (`specs/035`): said once in the chat, so the operator is never surprised by who is answering.
+    case 'model.promoted': {
+      const pair = (v: any) => `${sanitize(String(v?.endpoint_id ?? '?'))}/${sanitize(String(v?.model_id ?? '?'))}`;
+      return addBlock(s, { kind: 'note', text: `continuing on ${pair(pl.to)} (${pair(pl.from)} is not available)`, at: stamp(e, now), tone: 'info' });
     }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };

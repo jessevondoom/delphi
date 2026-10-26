@@ -14,7 +14,7 @@ tags: [spec, narrator, monitoring, visualization, spike, draft]
 
 # Spec 034: Narrator monitoring panes (a spike)
 
-> The console's left deck got the same treatment (who is working and the recorded changes, never what agents think): `specs/035`.
+> The console's left deck got the same treatment (who is working and the recorded changes, never what agents think): `specs/037`.
 
 ## 1. What this is
 `specs/033` made usage and tool calls available live. This spike asks what an operator watching real work would want to *see*, in AI work and in creative work, tries three panes on the narrator, and sketches the rest. **Expect to cut some of them**: the operator will test them and trim. Nothing here shows reasoning or anything a model wrote; every pane shows names, counts, times and states.
@@ -44,6 +44,8 @@ What carries over: *meters you never have to ask for*, *a timeline with markers*
 | `tools` | Tools by calls with failures; **which models report their work** (share of working runs that recorded a change, red under 50 %, amber under 80 %); agents going round in circles. | `tools` and `adoption` in `observe.state` |
 
 Also in the agents pane (from `specs/033`): the cap meter, `quiet Nm` after two minutes of silence (a frame or event; the clock starts when the window opens), `⟳ tool ×N` after six identical calls in a row in one span or three failures in a row, and `✎ 0` for an agent that changed something and recorded nothing.
+
+**Two columns (2026-10-26, the operator's request).** On a window 116 columns or wider the agents view shows the roster on the left and the `tools` board on the right, so the operator sees who is working and what everyone is calling without switching views (`ui/src/columns.ts`; the left column is half the width, at most 64; each is clipped to its own column so neither pushes the other). In the half-width roster the tool counters (`41 calls · ✎ 2 · ✗ 6 · → run_command`) take a row of their own under the tokens; the loop warning stays on the roster row and is repeated in full on the board. Below 116 columns the agents view is the single column it was and `tools` is its own view. Goldens: `agents-two-columns-130x34`, `-160x40`.
 
 Thresholds are constants (`ui/src/meters.ts`): quiet 120 s, loop 6 calls or 3 failures, cap meter amber at 80 %, red at 95 %.
 
