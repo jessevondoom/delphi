@@ -5,17 +5,17 @@ delphi v0.5 · pulse
 
  pulse                                               tokens per 5s · last 3 min
 
+ since you last acted, 18m ago:  3 changes · 2 tasks done · 1 approval raised
+
+ ► waiting on you  6m  ares · run cargo test --workspace
+
  ⟦•─•⟧ hephaestus   ▂▃▂▃▅▅▄▃▅▇▆▃▂▄▅▇█▇▅▆▇█▄▂▃▅▆▇█▇▆▅▅▆  38.3k/min  ● running
-                      ▓▓▓▓▓▓▓░ 82%  ·  quiet 3m  ·  ⟳ run_command ×7  ·  → run_…
+                      ▓▓▓▓▓▓▓░ 82%  cap in ~2m  ·  in run_command 12m  ·  ⟳ run…
 
  ⟦x?x⟧ ares                                             0/min      ► waiting on…
 
 ────────────────────────────────────────────────────────────────────────────────
  all agents    ▂▃▂▃▅▅▄▃▅▇▆▃▂▄▅▇█▇▅▆▇█▄▂▃▅▆▇█▇▆▅▅▆  14.2k tokens in all
-
-
-
-
 
 
 

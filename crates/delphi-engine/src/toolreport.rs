@@ -86,6 +86,35 @@ pub fn report(events: &[EventEnvelope]) -> Report {
     r
 }
 
+/// A label value in the Prometheus text format: backslash, quote and newline escaped.
+fn label(v: &str) -> String {
+    v.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+}
+
+/// The counters in the Prometheus text exposition format, for a scrape or a node exporter's textfile collector: tool calls
+/// and failures by role and tool (a role's ten most used tools, and always `record_change`), recorded changes by role, and
+/// runs by model (all, that changed something, and of those that recorded a change). Counts only.
+pub fn prometheus(stats: &BTreeMap<String, crate::observe::RoleTools>, r: &Report) -> String {
+    let mut out = String::new();
+    let family = |out: &mut String, name: &str, help: &str, rows: Vec<(String, u64)>| {
+        out.push_str(&format!("# HELP {} {}\n# TYPE {} counter\n", name, help, name));
+        for (labels, n) in rows {
+            out.push_str(&format!("{}{{{}}} {}\n", name, labels, n));
+        }
+    };
+    let by_tool = |f: fn(&ToolCount) -> u32| -> Vec<(String, u64)> {
+        stats.iter().flat_map(|(role, t)| t.by_tool.iter().map(move |(tool, c)| (format!("role=\"{}\",tool=\"{}\"", label(role), label(tool)), f(c) as u64))).collect()
+    };
+    family(&mut out, "delphi_tool_calls_total", "Tool calls by role and tool.", by_tool(|c| c.calls));
+    family(&mut out, "delphi_tool_errors_total", "Failed tool calls by role and tool.", by_tool(|c| c.errors));
+    family(&mut out, "delphi_changes_recorded_total", "Changes agents recorded with record_change, by role.", stats.iter().filter_map(|(role, t)| t.by_tool.get(RECORD_TOOL).map(|c| (format!("role=\"{}\"", label(role)), c.calls as u64))).collect());
+    let by_model = |f: fn(&ModelRow) -> u32| -> Vec<(String, u64)> { r.by_model.iter().map(|(m, row)| (format!("model=\"{}\"", label(m)), f(row) as u64)).collect() };
+    family(&mut out, "delphi_runs_total", "Agent runs that made at least one tool call, by model.", by_model(|m| m.spans));
+    family(&mut out, "delphi_runs_worked_total", "Runs that changed something (a write, an edit, a command), by model.", by_model(|m| m.worked));
+    family(&mut out, "delphi_runs_recorded_total", "Runs that changed something and recorded a change, by model.", by_model(|m| m.recorded));
+    out
+}
+
 /// The report as text for a terminal.
 pub fn render(r: &Report, scope: &str) -> String {
     if r.total.spans == 0 {
@@ -148,6 +177,22 @@ mod tests {
         assert_eq!(r.by_model["model-y"].rate(), Some(100));
         assert_eq!(r.by_tool["record_change"].calls, 2);
         assert_eq!(ModelRow::default().rate(), None);
+    }
+
+    #[test]
+    fn the_prometheus_text_has_counters_by_role_tool_and_model_and_escapes_labels() {
+        let mut stats = BTreeMap::new();
+        let mut t = crate::observe::RoleTools::default();
+        t.by_tool.insert("read_file".into(), ToolCount { calls: 3, errors: 1 });
+        t.by_tool.insert("record_change".into(), ToolCount { calls: 2, errors: 0 });
+        stats.insert("builder".to_string(), t);
+        let log = vec![ev("agent.usage", "a", Some("model \"x\""), json!({})), call("a", "write_file"), call("a", "record_change")];
+        let text = prometheus(&stats, &report(&log));
+        assert!(text.contains("# TYPE delphi_tool_calls_total counter\ndelphi_tool_calls_total{role=\"builder\",tool=\"read_file\"} 3\n"), "{}", text);
+        assert!(text.contains("delphi_tool_errors_total{role=\"builder\",tool=\"read_file\"} 1\n"));
+        assert!(text.contains("delphi_changes_recorded_total{role=\"builder\"} 2\n"));
+        assert!(text.contains("delphi_runs_recorded_total{model=\"model \\\"x\\\"\"} 1\n"), "{}", text);
+        assert!(text.lines().all(|l| l.starts_with('#') || l.rsplit(' ').next().is_some_and(|n| n.parse::<u64>().is_ok())), "every sample ends in an integer");
     }
 
     #[test]

@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useStdout } from 'ink';
 import type { Ev } from './input.ts';
+import { SAMPLE_SECS } from './meters.ts';
 import { emptyState, epicOrder, observeFrame, parseView, stepView, type OModel, type OState, type View } from './observe-screen.ts';
 import * as A from './archives.ts';
 import { openExternal } from './external.ts';
@@ -31,6 +32,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   const total = useRef<Record<string, number>>({});
   const since = useMemo(() => Date.now(), []);
   const [liveTokens, setLiveTokens] = useState<Record<string, number>>({});
+  const [liveEst, setLiveEst] = useState<Record<string, number>>({});
   const [connected, setConnected] = useState(true);
   const still = useMemo(() => stillMotion(), []);
   const [now, setNow] = useState(Date.now());
@@ -50,7 +52,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
       const next: Record<string, number> = {};
       for (const a of Object.values(cur.agents)) {
         const logged = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
-        const live = Object.values(cur.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((x, n) => x + (R.current.liveTokens[n.id] ?? 0), 0);
+        const live = Object.values(cur.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((x, n) => x + (R.current.liveTokens[n.id] ?? R.current.liveEst[n.id] ?? 0), 0);
         next[a.role] = logged + live;
       }
       setPulse((p) => {
@@ -64,12 +66,12 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
         total.current = next;
         return out;
       });
-    }, 5000);
+    }, SAMPLE_SECS * 1000);
     return () => clearInterval(t);
   }, [busy]);
   const [arch, setArchState] = useState<A.Arch>(A.emptyArch());
-  const R = useRef({ view, pick, st, arch, scroll, selNode, size, liveTokens });
-  R.current = { view, pick, st, arch, scroll, selNode, size, liveTokens };
+  const R = useRef({ view, pick, st, arch, scroll, selNode, size, liveTokens, liveEst });
+  R.current = { view, pick, st, arch, scroll, selNode, size, liveTokens, liveEst };
   // The ref moves at once, not when React gets to the update: text and Enter can arrive in one read, and the second
   // key must see what the first one did.
   const setArch = (f: (a: A.Arch) => A.Arch) => { const n = f(R.current.arch); R.current.arch = n; setArchState(n); };
@@ -127,12 +129,19 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
           for (const [id, v] of Object.entries<any>(spans)) if (typeof v?.tokens === 'number' && next[id] !== v.tokens) { next[id] = v.tokens; changed = true; }
           return changed ? next : cur;
         });
+        setLiveEst((cur) => {
+          const next = { ...cur };
+          let changed = false;
+          for (const [id, v] of Object.entries<any>(spans)) if (typeof v?.est === 'number' && next[id] !== v.est) { next[id] = v.est; changed = true; }
+          return changed ? next : cur;
+        });
       } else if (n.method === 'event') {
         if (typeof n.params?.span_id === 'string') seen.current[n.params.span_id] = Date.now();
         timer ??= setTimeout(() => { timer = null; void load(); }, 300);
         // The span's real usage is in the log now (or it has ended): the running total no longer stands for it.
         const gone = n.params?.type === 'agent.usage' ? n.params?.span_id : ['done', 'failed', 'escalated'].includes(n.params?.payload?.state) && n.params?.type === 'dag.node.state' ? n.params?.payload?.node_id : null;
         if (gone) setLiveTokens((cur) => { if (!(gone in cur)) return cur; const { [gone]: _t, ...rest } = cur; return rest; });
+        if (n.params?.type === 'agent.usage' || gone) setLiveEst((cur) => { const id = gone ?? n.params?.span_id; if (!id || !(id in cur)) return cur; const { [id]: _e, ...rest } = cur; return rest; });
         if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) { setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; }); }
       } else if (n.method === 'resync_required') void load();
     };
@@ -170,7 +179,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, liveTokens, lastSeen: seen.current, since, pulse, connected, now, still };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, liveTokens, liveEst, lastSeen: seen.current, since, pulse, connected, now, still };
   const lines = observeFrame(model, size.w, size.h);
   const shown = useSelection(term, lines);
   return (

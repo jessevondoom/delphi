@@ -164,7 +164,7 @@ const spanNum = (k: string) => Number(k.split('_').pop()) || 0;
 export function fold(s: State, n: { method: string; params?: any }, now: number): State {
   const p = n.params ?? {};
   if (n.method === 'delta.frame') {
-    const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string; tokens?: number }>;
+    const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string; tokens?: number; est?: number }>;
     let add = '';
     let activity = s.activity;
     let agents = s.agents;
@@ -174,7 +174,7 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       // Only the fact that reasoning arrived is noted (so the badge pans); the reasoning itself is dropped on the spot, even in a blind council round.
       if (who && spans[k]?.thinking && agents[who]) agents = { ...agents, [who]: { ...agents[who]!, thinkingAt: now } };
       if (s.council && s.spans[k]) { activity = touch(activity, k, (r) => ({ ...r, blind: true })); continue; } // a council's round one stays blind
-      const total = spans[k]?.tokens;
+      const total = spans[k]?.tokens ?? spans[k]?.est;
       if (typeof total === 'number' && total >= 0) activity = touch(activity, k, (r) => ({ ...r, tokens: total }));
       if (spans[k]?.text) activity = touch(activity, k, (r) => ({ ...r, tool: null })); // it is answering: the tool call is over
       add += spans[k]?.text ?? '';
