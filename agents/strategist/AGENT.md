@@ -6,7 +6,7 @@ cognitive_profile: deep-reasoning
 default_access_scope:
   read: ["*"]
   write: ["missions/**/roadmap.md", "missions/**/councils/**"]
-  execute: ["scope-analyzer", "critical-path-calc"]
+  execute: ["scope-analyzer", "critical-path-calc", "org-context"]
 authorized_skills:
   - roadmap-sequencing
   - pr-alignment-review
