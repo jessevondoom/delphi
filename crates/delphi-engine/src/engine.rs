@@ -2447,6 +2447,7 @@ mod tests {
         opus_only_on_direct(&f);
         let task = spawn_task(&f, "architect", "What does @project/app/src/lib.rs define?");
         let card = wait_for_card(&f).await;
+        wait_for_event(&f, "approval.requested").await; // the card is in the broker a moment before its event is in the log
         // Saved first: the event is in the log before the card, and the weaker model (Sonnet, the same family) wrote the summaries.
         let kinds: Vec<String> = f.m.replay().unwrap().into_iter().map(|e| e.kind).collect();
         let (saved_at, asked_at) = (kinds.iter().position(|k| k == "checkpoint.saved").expect("saved"), kinds.iter().position(|k| k == "approval.requested").expect("asked"));
