@@ -73,8 +73,10 @@ delphi train run --suite code --arms-file /tmp/pilot-arms/arms.toml --work-dir /
 
 *Measured, C1 (`agy-builder-ready`) once each:* **Haiku 973 s, 1 build attempt, 993k tokens in, 22k out; Sonnet 1,032 s, 3
 attempts, 1.13M in, 7.8k out.** Both passed. Most of the 16 minutes is the project's own compile and test gates, not the
-model. C2 and C3 have not been run live (C3 has the most hidden tests). A guess for 9 arms x 3 cases is **7 to 10 hours**,
-serial, and it crosses at least one Claude five-hour window.
+model. *Measured on Haiku, one attempt each, both passed:* **C2 (`ollama-keyless`) 423 s, 1.41M tokens in, 20k out; C3
+(`snapshot-loaded`) 538 s, 1.32M in, 20k out.** Slower or retrying arms take longer (Sonnet needed 3 attempts on C1). A guess
+for 9 arms x 3 cases is **4 to 8 hours**, serial, and it crosses at least one Claude five-hour window: each Claude build
+reads about a million tokens.
 
 Claude's windows are shared with your own work. `--pace-window 0.85` checks the CLI's own utilization report before each
 Claude run: at 85% of the five-hour window it waits for the reset (up to 6 hours, `--pace-max-wait-hours`), and at 90% of the
