@@ -969,7 +969,7 @@ mod tests {
         st.apply(&ev(4, "build.attempt", "t_3", "", json!({"attempt": 2, "tier": "frontier", "family": "claude", "homogeneous_retry": false})));
         st.apply(&ev(5, "gates.evaluated", "t_3", "", json!({"sha": "0123456789abcdef", "gates": [{"name": "tests", "state": "green", "detail": "ok"}, {"name": "operator", "state": "red", "detail": "waiting"}]})));
         st.apply(&ev(6, "audit.recorded", "t_3", "red-team", json!({"findings": [{"severity": "P2", "title": "naming"}]})));
-        assert_eq!(st.default_view(), "epic", "a build in progress is part of the epic pane");
+        assert_eq!(st.default_view(), "dashboard", "a build in progress is on the dashboard, and in the epic pane");
         st.apply(&ev(7, "merge.approved", "t_3", "", json!({"sha": "x"})));
         st.apply(&ev(8, "action.result", "t_3", "", json!({"action_id": "merge-abc", "ok": true})));
         let b = &st.builds[0];
