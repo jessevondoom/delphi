@@ -190,6 +190,13 @@ Total about **182 h**. Critical path for the operator layer: L0 → L1 → L2 �
 - `delphi_engine::learn::task_records` folds a mission's events into one `TaskRecord` per task: outcome, rules carried, `build.attempt` count, denied cards, reverted provisional decisions and cost. `first_pass()` is done on attempt 1 with nothing denied or reverted. The record is derived and rebuildable, and nothing reads it yet (L4 will).
 - **AC-1 as built:** rules and lessons only. The engine does not load skills by name today (no skill-use event exists), so skill IDs wait for L3, which adds a `skill.used` event. The terminal outcome needed no new event; it comes from `task.completed`, `task.failed` and `task.cancelled`.
 
+**L6a (training harness, part one; `crates/delphi/src/train.rs`).**
+- `delphi train validate` reads every case under `dev/train/suites/<suite>/cases/<id>/case.toml` and names each problem; `delphi train plan --budget-usd N` lists the cases and the worst-case cost (each cap once per seed), refusing a missing budget (exit 2) and a budget under the worst case (exit 3). Neither runs anything or calls a model. CI runs `validate`.
+- **Differences from §4.3:** checks are `[[check]]` tables inside `case.toml`, not a `checks/` directory, and the hidden `rubric.md` is not read yet. Check kinds built: `outcome`, `event_count`, `event_absent`, `file_unchanged`, `file_exists`, `file_contains`.
+- **Working-home rule, stricter than §4.2 item 1:** a run's home must not exist, be empty, or carry the `.delphi-train` marker. A directory holding anything else is refused whether or not it has an operator profile. `plan --home <dir>` applies the rule now; `prepare_work_home` (creates and marks) is unused until L6b.
+- The two seed cases (`orchestration/ladder-halts-after-three-failures`, `role-behavior/orchestrator-does-not-edit-source`) have not been run on a live daemon; their checks are hypotheses.
+- Not built: running cases, the overlay, grading, reports (L6b); see [`learning-build-plan-2026-10-26.md`](../missions/2026-10-23-foundational-design/learning-build-plan-2026-10-26.md).
+
 **Suggested order of first merges:** L0, then L6 and L1 in parallel, then L2 and L7, then L3 and L4, then L9, L5, L8, L10. After L1 and L2, run the loop on real work for a few weeks before L3; the staged notes will show which triggers produce signal.
 
 ## 8. Decisions for the Operator

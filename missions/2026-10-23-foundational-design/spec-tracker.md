@@ -66,18 +66,20 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 
 | Slice | Delivers | Spec | Depends on | Hours | State |
 | :-- | :-- | :-- | :-- | --: | :-- |
-| L0 | `snapshot.loaded` event; `learn::task_records` (outcome, attempts, denials, cost per task); skill IDs wait for L3 | 031 §3.4, §7.1 | none | 10 | built (PR pending; as-built in 031 §7.1) |
-| L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | not started |
+| L0 | `snapshot.loaded` event; `learn::task_records` (outcome, attempts, denials, cost per task); skill IDs wait for L3 | 031 §3.4, §7.1 | none | 10 | built (#184); as-built in 031 §7.1 |
+| L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | next; plan in learning-build-plan-2026-10-26 §3 (events, not a table) |
 | L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | not started |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
 | L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
 | L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | not started |
-| L6 | `delphi train`: case format, overlay, safety rules, budget, report | 031 §4 | `delphi run` (built); OD-3 | 24 | not started |
+| L6 | `delphi train`: case format, overlay, safety rules, budget, report | 031 §4 | `delphi run` (built); OD-3 | 24 | L6a built (#186: validate, plan, case format, home rule); L6b next, plan §4 (overlay spike first) |
 | L7 | seed suites: learning-loop, role-behavior, orchestration, skill-trigger | 031 §4.6 | L6 (L1 for learning-loop) | 20 | not started |
 | L8 | probe mode, grader calibration | 031 §4.4-4.5 | L6, L7; OD-5 | 14 | not started |
 | L9 | `train propose`, behavior-change changelog, CI check on core paths | 031 §4.8 | L6, L7 | 12 | not started |
 | L10 | `delphi update` shows behavior changes and evidence, override conflicts | 031 §4.8 | L9 | 12 | not started |
 | L11 | harvest from `delphi contribute` bundles (post-v1) | 031 §4.7 | L9 | 10 | not started |
+
+The working plan for L1 and L6b is [`learning-build-plan-2026-10-26.md`](learning-build-plan-2026-10-26.md).
 
 Total about 182 h. Operator-layer path L0 → L1 → L2 → L4; core-layer path L6 → L7 → L9 → L10; they meet in the `learning-loop` suite.
 
