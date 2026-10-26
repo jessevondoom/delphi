@@ -21,4 +21,4 @@ delphi v0.5 · epic
   ✔ settled  Survey competitor onboarding …
                                                              pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────────────────────────────────────────────
-1 running  ·  14.2k tokens                                   ← →  ·  ○ ○ ● ○ ○ ○
+1 running  ·  14.2k tokens                             ← →  ·  ○ ○ ● ○ ○ ○ ○ ○ ○

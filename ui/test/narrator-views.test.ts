@@ -98,3 +98,21 @@ test('agents: the running builder shows its live token total (estimated) and its
   // An agent that has called nothing shows no tool line.
   assert.ok(!/ calls/.test(observeFrame(model('agents'), 100, 34).map(plain).join('\n')));
 });
+
+test('agents: a token-cap meter on the busiest running span, a quiet note when it goes silent, a flag when it loops', () => {
+  const at = (extra: Partial<OModel>, tools?: unknown) => observeFrame(model('agents', { st: { ...world(), token_cap: 20_000, tools: tools as never }, now: NOW, since: NOW - 600_000, ...extra }), 110, 34).map(plain).join('\n');
+  // 4,000 of a 20,000 cap, then 17,000 (warning colour, same text), and no meter at all without a live total.
+  assert.match(at({ liveTokens: { n3: 4_000 } }), /~16\.6k tokens {2}▓{2}░{6} 20%/);
+  assert.match(at({ liveTokens: { n3: 17_000 } }), /▓{7}░ 85%/);
+  assert.ok(!/▓/.test(at({})), 'no live total, no meter');
+  // Heard from a moment ago: nothing; silent for three minutes: `quiet 3m`; never heard from since the window opened: counted from then.
+  assert.ok(!/quiet/.test(at({ lastSeen: { n3: NOW - 5_000 } })));
+  assert.match(at({ lastSeen: { n3: NOW - 190_000 } }), /running · quiet 3m/);
+  assert.match(at({ lastSeen: {}, since: NOW - 300_000 }), /quiet 5m/);
+  // The same tool six times, or failing three times in a row.
+  const loop = (n: number, failed: number) => ({ builder: { calls: n, errors: failed, last: 'run_command', streak: { tool: 'run_command', n, failed }, by_tool: { run_command: { calls: n, errors: failed } } } });
+  assert.match(at({}, loop(6, 0)), /⟳ run_command ×6/);
+  assert.match(at({}, loop(3, 3)), /⟳ run_command ×3 \(3 failed\)/);
+  assert.ok(!/⟳/.test(at({}, loop(5, 2))), 'under both thresholds');
+});
+
