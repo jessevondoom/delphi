@@ -44,6 +44,10 @@ pub fn sign_record(who: &Identity, kind: Kind, id: &str, md: Vec<u8>) -> SignedR
 }
 
 fn common(id: &str, kind: &str, rev: u64, who: &Identity, status: &str) -> String {
+    common_with(id, kind, rev, who, status, "payments", "internal_empirical")
+}
+
+fn common_with(id: &str, kind: &str, rev: u64, who: &Identity, status: &str, tags: &str, ceiling: &str) -> String {
     format!(
         "---
 xenia: 1
@@ -57,11 +61,11 @@ author_handle: tester
 author_role: builder
 title: A note about {id} at revision {rev}
 summary: A short summary that is long enough to be a summary of a test record.
-tags: [payments]
+tags: [{tags}]
 visibility: org
 created: \"2026-10-24T09:00:00Z\"
 updated: \"2026-10-24T09:00:00Z\"
-source_ceiling: internal_empirical
+source_ceiling: {ceiling}
 confidence: medium
 status: {status}
 pointers: []
@@ -152,4 +156,37 @@ impl FreshSpec {
         let sigs = serde_json::to_string_pretty(&json!({ "signatures": list })).unwrap() + "\n";
         (body, sigs.into_bytes())
     }
+}
+
+impl SignedRecord {
+    /// `blake3:` of the record file: what an endorsement's `target_hash` must equal.
+    pub fn hash(&self) -> String {
+        hash::of(&self.md)
+    }
+}
+
+/// [`memory`] with chosen `tags` (comma-separated, may be empty) and `source_ceiling`.
+pub fn memory_with(who: &Identity, id: &str, rev: u64, status: &str, variant: &str, tags: &str, ceiling: &str) -> SignedRecord {
+    let mut t = common_with(id, "memory", rev, who, status, tags, ceiling);
+    t.push_str(&format!(
+        "supersedes: null\nreview_by: \"2027-01-24\"\nevidence: []\nrelated: []\nbody_kind: markdown\nmemory_type: gotcha\napplies_to:\n  repos: [payments]\n  tech: [stripe]\n  paths: []\nverified_by: none\n---\nBody {variant}.\n"
+    ));
+    sign_record(who, Kind::Memory, id, t.into_bytes())
+}
+
+/// [`endorsement`] with a chosen `target_hash`, `scope` (comma-separated) and the endorsement's own `tags`.
+#[allow(clippy::too_many_arguments)]
+pub fn endorsement_with(who: &Identity, id: &str, rev: u64, target: &str, target_rev: u64, target_hash: &str, verdict: &str, scope: &str) -> SignedRecord {
+    let mut t = common(id, "endorsement", rev, who, "active");
+    t.push_str(&format!(
+        "body_kind: none\ntarget: \"{target}@{target_rev}\"\ntarget_hash: \"{target_hash}\"\nverdict: {verdict}\nnote: A test note.\nscope: [{scope}]\nchecked: [target-open]\n---\n"
+    ));
+    sign_record(who, Kind::Endorsement, id, t.into_bytes())
+}
+
+/// [`tombstone`] with a chosen `reason` (`superseded`, `mistake`, `sensitive`, `departed`, `other`).
+pub fn tombstone_with(who: &Identity, id: &str, rev: u64, target: &str, action: &str, reason: &str) -> SignedRecord {
+    let mut t = common(id, "tombstone", rev, who, "active");
+    t.push_str(&format!("body_kind: none\ntarget: {target}\naction: {action}\nreason: {reason}\nnote: A test tombstone.\n---\n"));
+    sign_record(who, Kind::Tombstone, id, t.into_bytes())
 }

@@ -273,3 +273,40 @@ fn half_of_the_life_used_warns() {
     let b = assess_with(&t, &spec(&t), &["alice"]);
     assert!(!b.state.warns());
 }
+
+// --- replay: issued_at only goes forward per store ----------------------------------------------------------
+
+fn auth_issued(t: &TestOrg, issued: i64, life: i64) -> Authentic {
+    let f = FreshSpec::for_head(t, HEAD, issued, life);
+    let (stmt, sigs) = f.sign(&[&t.key("alice")]);
+    authenticate(&t.org, &t.store, &stmt, &sigs, &t.verify().unwrap()).unwrap()
+}
+
+#[test]
+fn issued_at_only_goes_forward() {
+    let t = org();
+    let stored = auth_issued(&t, now() - 3600, 7 * DAY);
+    let mark = stored.advance(None);
+    assert_eq!(mark.issued, now() - 3600);
+    // Older: replay. Equal with other bytes: replay. Same bytes: fine. Newer: fine.
+    assert_eq!(auth_issued(&t, now() - 7200, 7 * DAY).check_replay(Some(&mark)), Err("replayed-statement"));
+    assert_eq!(auth_issued(&t, now() - 3600, 6 * DAY).check_replay(Some(&mark)), Err("replayed-statement"));
+    assert_eq!(stored.check_replay(Some(&mark)), Ok(()));
+    assert_eq!(auth_issued(&t, now() - 60, 7 * DAY).check_replay(Some(&mark)), Ok(()));
+    assert_eq!(stored.check_replay(None), Ok(()));
+}
+
+#[test]
+fn a_replay_cannot_move_the_mark_back_and_assess_marks_it_stale() {
+    let t = org();
+    let mark = auth_issued(&t, now() - 3600, 7 * DAY).advance(None);
+    let old = auth_issued(&t, now() - 7200, 7 * DAY);
+    assert_eq!(old.advance(Some(&mark)), mark);
+    let f = FreshSpec::for_head(&t, HEAD, now() - 7200, 7 * DAY);
+    let (stmt, sigs) = f.sign(&[&t.key("alice")]);
+    let a = assess_after(&t.org, &t.store, Some((&stmt, &sigs)), &t.verify().unwrap(), now(), &Policy::default(), Some(&mark));
+    assert_eq!(stale(&a), "replayed-statement");
+    assert!(a.authentic.is_some(), "still genuine, so its store_head check keeps constraining the host");
+    // Without a stored mark the same statement is fresh.
+    assert!(assess(&t.org, &t.store, Some((&stmt, &sigs)), &t.verify().unwrap(), now(), &Policy::default()).state.endorsements_count());
+}

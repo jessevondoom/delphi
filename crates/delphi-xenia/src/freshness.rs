@@ -21,7 +21,7 @@
 //! (spec 011 §4.3); nothing is deleted. This module never reads a clock; `now` is Unix seconds from the caller.
 
 use crate::roster::VerifiedRoster;
-use crate::sticky::is_commit_id;
+use crate::sticky::{is_commit_id, IssuedMark};
 use crate::time::parse_utc;
 use crate::{did, hash, is_slug, is_utc_timestamp, sig};
 use serde::Deserialize;
@@ -160,6 +160,29 @@ pub struct Authentic {
     pub signing_people: usize,
     /// The people needed: 1, or a majority of the epoch's admin people when `rewrite_of` is present.
     pub needed: usize,
+    /// `blake3:` of the exact statement bytes the admins signed.
+    pub statement_hash: String,
+}
+
+impl Authentic {
+    /// Replay rule: per store, `issued_at` only goes forward. An older statement (an old, once-valid one a
+    /// hosting attacker kept) or an equal `issued_at` with other bytes (two statements the same second) is
+    /// refused; the same bytes again is the same statement and fine.
+    pub fn check_replay(&self, last: Option<&IssuedMark>) -> Result<(), &'static str> {
+        match last {
+            Some(m) if self.statement.issued < m.issued => Err("replayed-statement"),
+            Some(m) if self.statement.issued == m.issued && self.statement_hash != m.statement_hash => Err("replayed-statement"),
+            _ => Ok(()),
+        }
+    }
+
+    /// The mark after accepting this statement: never behind `last`, so a replay cannot move it back.
+    pub fn advance(&self, last: Option<&IssuedMark>) -> IssuedMark {
+        match self.check_replay(last) {
+            Ok(()) => IssuedMark { issued: self.statement.issued, statement_hash: self.statement_hash.clone() },
+            Err(_) => last.cloned().expect("a replay needs a stored mark"),
+        }
+    }
 }
 
 /// Is this statement genuine for `roster`? `Err` carries the reason it is **ignored**; an ignored statement
@@ -201,7 +224,7 @@ pub fn authenticate(org: &str, store: &str, statement_bytes: &[u8], sigs_bytes: 
     if people.len() < needed {
         return Err("rewrite-quorum-missing");
     }
-    Ok(Authentic { signing_people: people.len(), needed, statement: st })
+    Ok(Authentic { signing_people: people.len(), needed, statement: st, statement_hash: hash::of(statement_bytes) })
 }
 
 /// Is an authentic statement current at `now` under `policy`? `Err` is the reason it is not.
@@ -257,6 +280,12 @@ pub struct Assessment {
 
 /// The whole judgement for one statement, or its absence (`files` is `None` when either file is missing).
 pub fn assess(org: &str, store: &str, files: Option<(&[u8], &[u8])>, roster: &VerifiedRoster, now: i64, policy: &Policy) -> Assessment {
+    assess_after(org, store, files, roster, now, policy, None)
+}
+
+/// [`assess`] with the install's stored mark. A replayed statement stays *authentic* (its `store_head` check
+/// still applies, which only ever constrains the host) but is `Stale`, so it lets no endorsement count.
+pub fn assess_after(org: &str, store: &str, files: Option<(&[u8], &[u8])>, roster: &VerifiedRoster, now: i64, policy: &Policy, last: Option<&IssuedMark>) -> Assessment {
     let Some((stmt, sigs)) = files else {
         return Assessment { state: FreshnessState::Stale { reason: "missing" }, authentic: None };
     };
@@ -265,7 +294,7 @@ pub fn assess(org: &str, store: &str, files: Option<(&[u8], &[u8])>, roster: &Ve
         Err(reason) => return Assessment { state: FreshnessState::Stale { reason }, authentic: None },
     };
     let st = &auth.statement;
-    let state = match currency(st, now, policy) {
+    let state = match auth.check_replay(last).and_then(|()| currency(st, now, policy)) {
         Ok(()) => {
             let life = (st.expires - st.issued).max(1);
             let used = ((now - st.issued).clamp(0, life) * 100 / life) as u8;
