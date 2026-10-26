@@ -48,7 +48,7 @@ test('the chrome: a badges-only strip, the title row right under it, a blank row
   assert.equal(l[2], '', 'one blank row');
   assert.match(l[3]!, /^ ▼ needs you/, 'an approval is waiting in the sample, so the slot is the band');
   assert.match(l.at(-2)!, /^─+$/);
-  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ● ○ ○$/);
+  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ○ ● ○ ○$/);
   const all = l.join('\n');
   assert.ok(!/\$\d/.test(all) && !/spend|\bcost\b/i.test(all), 'no money anywhere');
   assert.ok(!/ \/ |\?|mission 2026/.test(l.at(-1)!) && !all.includes('2026-10-24-ui'), 'no / or ? in the footer, no mission id');
@@ -58,8 +58,8 @@ test('the title row drops the version below 48 columns, the footer drops the arr
   const narrow = observeFrame(model('epic'), 40, 14).map(plain);
   assert.equal(narrow[1]!.trimEnd(), 'delphi · epic');
   assert.doesNotMatch(narrow.at(-1)!, /←/);
-  assert.match(narrow.at(-1)!, /○ ● ○ ○ ○$/);
-  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ● ○ ○ ○$/);
+  assert.match(narrow.at(-1)!, /○ ○ ● ○ ○ ○$/);
+  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ○ ● ○ ○ ○$/);
 });
 
 test('the attention slot is body row 1 of every view: "nothing needs you" or the band, with what and where', () => {
@@ -80,10 +80,11 @@ test('the attention slot is body row 1 of every view: "nothing needs you" or the
   assert.match(observeFrame(model('council', { st: sample() }), 80, 24).map(plain)[3]!, /council t_2 needs a decision/, 'an escalated council');
 });
 
-test('views: five, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
-  assert.deepEqual([...VIEWS], ['council', 'epic', 'agents', 'archives', 'thinking']);
+test('views: six, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
+  assert.deepEqual([...VIEWS], ['dashboard', 'council', 'epic', 'agents', 'archives', 'thinking']);
   for (const gone of ['spend', 'dag', 'telemetry', '1', '4', '7']) assert.equal(parseView(gone), null, gone);
-  assert.equal(stepView('council', -1), 'council');
+  assert.equal(stepView('dashboard', -1), 'dashboard');
+  assert.equal(stepView('council', -1), 'dashboard');
   assert.equal(stepView('thinking', 1), 'thinking');
   assert.equal(stepView('epic', 1), 'agents');
   assert.equal(stepView('agents', -1), 'epic');

@@ -730,6 +730,20 @@ impl EngineService {
         Ok(json!({"session_id": id, "mission_id": m.id}))
     }
 
+    /// `session.context`: what the next task would be told of the conversation (`/context`). The operator's own
+    /// conversation, so it is for the console only, and it carries the text itself.
+    async fn session_context(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(engine_err)?;
+        let (session, _) = crate::session::current(&events);
+        let budget = self.engine.settings.conversation_tokens;
+        Ok(match self.engine.conversation_for(&m) {
+            None => json!({"session": session, "budget_tokens": budget, "turns": 0, "digested": 0, "omitted": 0, "earlier": 0, "tokens": 0, "trimmed": false, "ceiling": "L5", "text": ""}),
+            Some(p) => json!({"session": session, "budget_tokens": budget, "turns": p.turns, "digested": p.digested, "omitted": p.omitted, "earlier": p.earlier, "tokens": p.text.len() / 4, "trimmed": p.digested + p.omitted > 0, "ceiling": p.ceiling.as_str(), "text": p.text}),
+        })
+    }
+
     async fn snapshot(&self, p: Value) -> RpcOutcome {
         let m = self.mission(p["mission_id"].as_str()).await?;
         let running: Vec<Value> = self.running.lock().unwrap().iter().map(|(id, r)| json!({"task_id": id, "target": r.target, "prompt": r.prompt, "seconds": r.started.elapsed().as_secs()})).collect();
@@ -774,6 +788,7 @@ impl Extension for ServiceExt {
                 })(),
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "session.new" => svc.session_new(params, ctx).await,
+                "session.context" => svc.session_context(params, ctx).await,
                 "task.cancel" => svc.task_cancel(params, ctx).await,
                 "timer.list" => Ok(svc.timers_json()),
                 "timer.set" => svc.timer_set(params, ctx).await,
@@ -938,6 +953,22 @@ mod tests {
         assert_eq!(central_lines(&f).len(), 2, "the third task's session had one ask");
     }
 
+    // specs/030 §6: `/context` says what the next task would be told, and nothing for a session with nothing in it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_context_report_says_what_the_next_task_would_be_told() {
+        let f = setup(vec![Step::text("Redis or Postgres.")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let console = || CallContext { scope: Scope::Console, client_id: 0 };
+        let empty = svc.session_context(json!({}), console()).await.unwrap();
+        assert_eq!((empty["turns"].as_u64(), empty["text"].as_str(), empty["trimmed"].as_bool()), (Some(0), Some(""), Some(false)));
+        f.engine.run_task(&f.m, "orchestrator", "list two queue options").await.unwrap();
+        let r = svc.session_context(json!({}), console()).await.unwrap();
+        assert_eq!((r["turns"].as_u64(), r["session"].as_str(), r["ceiling"].as_str()), (Some(2), Some("s_0000"), Some("L5")));
+        assert!(r["text"].as_str().unwrap().contains("Redis or Postgres.") && r["tokens"].as_u64().unwrap() > 0, "{}", r);
+        assert!(svc.session_context(json!({}), CallContext { scope: Scope::Narrator, client_id: 0 }).await.is_err(), "the narrator may not read the conversation");
+    }
+
     // specs/030 D-1: a restart ends the session; a restart with nothing said does not pile up empty sessions.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_restart_ends_the_session_once_and_only_when_something_was_said() {
@@ -965,7 +996,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff"] {
@@ -1055,7 +1086,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1112,7 +1143,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

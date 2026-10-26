@@ -9,4 +9,4 @@ delphi · archives
  ›  1  specs/003.md › Retry ladd… specs
  ↑ ↓ pick · enter open · esc clear · ← …
 ────────────────────────────────────────
-1 running  ·  14.2k tokens     ○ ○ ○ ● ○
+1 running  ·  14.2k tokens   ○ ○ ○ ○ ● ○

@@ -156,6 +156,8 @@ pub struct Preamble {
     pub turns: usize,
     pub digested: usize,
     pub omitted: usize,
+    /// How many earlier sessions of the mission are summarised at the top of the text.
+    pub earlier: usize,
 }
 
 struct Turn {
@@ -185,7 +187,7 @@ pub fn preamble(session: &[EventEnvelope], earlier: &[Digest], budget_tokens: us
             }
         }
     }
-    let past = past_sessions(earlier);
+    let (past, past_n) = past_sessions(earlier);
     if turns.is_empty() && past.is_empty() {
         return None;
     }
@@ -226,12 +228,13 @@ pub fn preamble(session: &[EventEnvelope], earlier: &[Digest], budget_tokens: us
         text.push_str(l);
         text.push('\n');
     }
-    Some(Preamble { text: text.trim_end().to_string(), ceiling, turns: turns.len(), digested, omitted })
+    Some(Preamble { text: text.trim_end().to_string(), ceiling, turns: turns.len(), digested, omitted, earlier: past_n })
 }
 
 /// Digest lines of the mission's earlier sessions, newest last, within `EARLIER_BYTES`.
-fn past_sessions(earlier: &[Digest]) -> String {
+fn past_sessions(earlier: &[Digest]) -> (String, usize) {
     let mut out = String::new();
+    let mut n = 0;
     for d in earlier.iter().rev().take(EARLIER_SESSIONS) {
         let asks = d.asks.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
         let line = format!("Earlier session {} ({} turn(s), ended {}): asked {}\n", d.session_id, d.turns, d.ended.get(..10).unwrap_or(&d.ended), asks);
@@ -239,8 +242,9 @@ fn past_sessions(earlier: &[Digest]) -> String {
             break;
         }
         out = line + &out;
+        n += 1;
     }
-    out.trim_end().to_string()
+    (out.trim_end().to_string(), n)
 }
 
 fn clip_bytes(s: &str, max: usize) -> String {

@@ -692,7 +692,7 @@ impl ObserverState {
         if self.councils.iter().any(|c| c.phase == "round 1" || c.phase == "round 2") {
             "council"
         } else {
-            "epic"
+            "dashboard"
         }
     }
 }
@@ -957,7 +957,7 @@ mod tests {
         st.apply(&ev(5, "council.verdict", "t_2", "", json!({"path": "missions/m/councils/001-x.md", "escalated": "2 unresolved P0 finding(s)", "unresolved": [{"severity": "P0", "seat": "red-team", "title": "t"}], "options": [{"label": "PROCEED", "seats": ["architect", "red-team"]}]})));
         let c = &st.councils[0];
         assert_eq!((c.phase.as_str(), c.stances[0].text.as_str(), c.critiques[0].findings.len(), c.unresolved.len(), c.options[0].1.len()), ("escalated", "Queue.", 1, 1, 2));
-        assert_eq!(st.default_view(), "epic", "a finished council no longer pulls the view");
+        assert_eq!(st.default_view(), "dashboard", "a finished council no longer pulls the view");
     }
 
     #[test]
