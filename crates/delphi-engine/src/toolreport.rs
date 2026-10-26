@@ -66,12 +66,15 @@ impl BridgeRow {
     }
 }
 
-/// What one thread of work cost: the tokens its tasks used (input, cache, output and thinking, as the mission total counts them).
+/// What one thread of work cost: the tokens its tasks used (input, cache, output and thinking, as the mission total counts them),
+/// and how many tool calls its agents made and how many of those failed.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ThreadUse {
     pub label: String,
     pub tasks: u32,
     pub tokens: u64,
+    pub calls: u32,
+    pub errors: u32,
 }
 
 /// The key under which tokens of tasks that sit in no named thread are counted.
@@ -104,6 +107,8 @@ pub fn report(events: &[EventEnvelope]) -> Report {
     let mut r = Report::default();
     let mut tasks = std::collections::BTreeSet::new();
     let mut used: BTreeMap<String, u64> = BTreeMap::new();
+    // Tool calls and failures by task, for the threads to add up.
+    let mut called: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     // Who owns each task, by the newest `thread.named` to list it, and each thread's newest label.
     let mut owner: BTreeMap<String, String> = BTreeMap::new();
     let mut labels: BTreeMap<String, String> = BTreeMap::new();
@@ -158,17 +163,24 @@ pub fn report(events: &[EventEnvelope]) -> Report {
         let c = r.by_tool.entry(tool).or_default();
         c.calls += 1;
         c.errors += failed as u32;
+        if let Some(t) = e.task_id.clone().filter(|t| !t.is_empty()) {
+            let n = called.entry(t).or_default();
+            n.0 += 1;
+            n.1 += failed as u32;
+        }
     }
     r.threads = ThreadRow { tasks: tasks.len() as u32, named: tasks.iter().filter(|t| owner.contains_key(t.as_str())).count() as u32 };
     // Tokens by thread. A task counts for one thread only, so the rows add up to the whole.
     for (id, label) in &labels {
         let mine: Vec<&String> = owner.iter().filter(|(_, o)| *o == id).map(|(t, _)| t).collect();
-        r.by_thread.insert(id.clone(), ThreadUse { label: label.clone(), tasks: mine.iter().filter(|t| tasks.contains(**t)).count() as u32, tokens: mine.iter().map(|t| used.get(*t).copied().unwrap_or(0)).sum() });
+        let (calls, errors) = mine.iter().filter_map(|t| called.get(*t)).fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
+        r.by_thread.insert(id.clone(), ThreadUse { label: label.clone(), tasks: mine.iter().filter(|t| tasks.contains(**t)).count() as u32, tokens: mine.iter().map(|t| used.get(*t).copied().unwrap_or(0)).sum(), calls, errors });
     }
     let loose: u64 = used.iter().filter(|(t, _)| !owner.contains_key(t.as_str())).map(|(_, n)| *n).sum();
+    let (loose_calls, loose_errors) = called.iter().filter(|(t, _)| !owner.contains_key(t.as_str())).fold((0, 0), |a, (_, c)| (a.0 + c.0, a.1 + c.1));
     let loose_tasks = tasks.iter().filter(|t| !owner.contains_key(t.as_str())).count() as u32;
-    if loose > 0 || (loose_tasks > 0 && !labels.is_empty()) {
-        r.by_thread.insert(UNTHREADED.to_string(), ThreadUse { label: UNTHREADED.to_string(), tasks: loose_tasks, tokens: loose });
+    if loose > 0 || loose_calls > 0 || (loose_tasks > 0 && !labels.is_empty()) {
+        r.by_thread.insert(UNTHREADED.to_string(), ThreadUse { label: UNTHREADED.to_string(), tasks: loose_tasks, tokens: loose, calls: loose_calls, errors: loose_errors });
     }
     for s in spans.into_values().filter(|s| s.calls > 0) {
         let key = if s.model.is_empty() { "unknown".to_string() } else { s.model.clone() };
@@ -210,6 +222,8 @@ pub fn prometheus(stats: &BTreeMap<String, crate::observe::RoleTools>, r: &Repor
     family(&mut out, "delphi_runs_worked_total", "Runs that changed something (a write, an edit, a command), by model.", by_model(|m| m.worked));
     family(&mut out, "delphi_runs_recorded_total", "Runs that changed something and recorded a change, by model.", by_model(|m| m.recorded));
     family(&mut out, "delphi_thread_tokens_total", "Tokens used by the tasks of each thread the orchestrator named (everything else under one label).", r.by_thread.iter().map(|(id, t)| (format!("thread=\"{}\"", label(id)), t.tokens)).collect());
+    family(&mut out, "delphi_thread_tool_calls_total", "Tool calls made by the agents of each thread the orchestrator named (everything else under one label).", r.by_thread.iter().map(|(id, t)| (format!("thread=\"{}\"", label(id)), t.calls as u64)).collect());
+    family(&mut out, "delphi_thread_tool_errors_total", "Failed tool calls by the agents of each thread the orchestrator named (everything else under one label).", r.by_thread.iter().map(|(id, t)| (format!("thread=\"{}\"", label(id)), t.errors as u64)).collect());
     family(&mut out, "delphi_tasks_total", "Tasks started.", vec![(String::new(), r.threads.tasks as u64)]);
     family(&mut out, "delphi_tasks_in_named_threads_total", "Tasks that sit in a thread the orchestrator named (name_thread).", vec![(String::new(), r.threads.named as u64)]);
     family(&mut out, "delphi_bridge_calls_total", "Delphi tool calls made through the tool bridge by subscription CLIs.", vec![(String::new(), r.bridge.calls as u64)]);
@@ -235,11 +249,12 @@ pub fn render(r: &Report, scope: &str) -> String {
     }
     if !r.by_thread.is_empty() {
         let w = r.by_thread.values().map(|t| t.label.chars().count()).max().unwrap_or(6).max(6);
-        out.push_str("\ntokens by thread\n");
+        out.push_str("\ntokens and tool calls by thread\n");
         let mut rows: Vec<_> = r.by_thread.values().collect();
         rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.label.cmp(&b.label)));
         for t in rows {
-            out.push_str(&format!("  {:<w$}  {:>10}  {} task{}\n", t.label, t.tokens, t.tasks, if t.tasks == 1 { "" } else { "s" }, w = w));
+            let failed = if t.errors > 0 { format!(", {} failed", t.errors) } else { String::new() };
+            out.push_str(&format!("  {:<w$}  {:>10}  {} task{}  {} call{}{}\n", t.label, t.tokens, t.tasks, if t.tasks == 1 { "" } else { "s" }, t.calls, if t.calls == 1 { "" } else { "s" }, failed, w = w));
         }
     }
     if r.bridge.calls > 0 || r.bridge.refused > 0 || r.bridge.bad_connections > 0 {
@@ -354,9 +369,9 @@ mod tests {
             EventEnvelope::new("m", "thread.named", json!({"thread": "docs", "label": "Operator docs", "tasks": ["t_3", "t_2"]})),
         ];
         let r = report(&log);
-        assert_eq!(r.by_thread["retry"], ThreadUse { label: "Retry queue".into(), tasks: 1, tokens: 553 });
-        assert_eq!(r.by_thread["docs"], ThreadUse { label: "Operator docs".into(), tasks: 2, tokens: 1015 });
-        assert_eq!(r.by_thread[UNTHREADED], ThreadUse { label: UNTHREADED.into(), tasks: 1, tokens: 7 });
+        assert_eq!(r.by_thread["retry"], ThreadUse { label: "Retry queue".into(), tasks: 1, tokens: 553, calls: 0, errors: 0 });
+        assert_eq!(r.by_thread["docs"], ThreadUse { label: "Operator docs".into(), tasks: 2, tokens: 1015, calls: 0, errors: 0 });
+        assert_eq!(r.by_thread[UNTHREADED], ThreadUse { label: UNTHREADED.into(), tasks: 1, tokens: 7, calls: 0, errors: 0 });
         assert_eq!(r.by_thread.values().map(|t| t.tokens).sum::<u64>(), 553 + 1015 + 7, "every token is in exactly one row");
         // Nothing named and nothing used: no rows. Nothing named but tokens used: one row saying so.
         assert!(report(&[task("t_1")]).by_thread.is_empty());
@@ -376,7 +391,42 @@ mod tests {
         assert!(text.contains("delphi_thread_tokens_total{thread=\"a \\\"b\\\"\"} 1500\n"), "{}", text);
         assert!(text.lines().all(|l| l.starts_with('#') || l.rsplit(' ').next().is_some_and(|n| n.parse::<u64>().is_ok())));
         let t = render(&r, "mission m1");
-        assert!(t.contains("tokens by thread\n  Pricing") && t.contains("1500  1 task\n"), "{}", t);
+        assert!(t.contains("tokens and tool calls by thread\n  Pricing") && t.contains("1500  1 task  0 calls\n"), "{}", t);
+    }
+
+    /// A tool call by a span of `task`, as the log holds one.
+    fn call_in(task: &str, span: &str, tool: &str, failed: bool) -> EventEnvelope {
+        let mut e = ev("tool.result", span, None, json!({"name": tool, "is_error": failed}));
+        e.task_id = Some(task.into());
+        e
+    }
+
+    #[test]
+    fn tool_calls_and_failures_are_counted_by_thread_over_both_seat_kinds_and_add_up_to_the_total() {
+        let mut bridged = ev("harness.bridge_call", "s3", None, json!({"name": "timer", "is_error": true}));
+        bridged.task_id = Some("t_3".into());
+        let log = vec![
+            task("t_1"), task("t_2"), task("t_3"),
+            call_in("t_1", "s1", "read_file", false), call_in("t_1", "s1", "write_file", true), call_in("t_1", "s1", "write_file", false),
+            call_in("t_2", "s2", "read_file", false),
+            bridged, // a subscription CLI's call through the bridge
+            call_in("t_3", "s3", "read_file", false),
+            call_in("t_9", "s9", "search", true), // a task the log never showed starting is still in no thread
+            call("s4", "read_file"), // no task at all: counted in the tool totals, in no thread
+            EventEnvelope::new("m", "thread.named", json!({"thread": "retry", "label": "Retry queue", "tasks": ["t_1", "t_2"]})),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "docs", "label": "Docs", "tasks": ["t_3"]})),
+        ];
+        let r = report(&log);
+        assert_eq!((r.by_thread["retry"].calls, r.by_thread["retry"].errors), (4, 1));
+        assert_eq!((r.by_thread["docs"].calls, r.by_thread["docs"].errors), (2, 1));
+        assert_eq!((r.by_thread[UNTHREADED].calls, r.by_thread[UNTHREADED].errors), (1, 1));
+        assert_eq!(r.by_thread.values().map(|t| t.calls).sum::<u32>() + 1, r.by_tool.values().map(|t| t.calls).sum::<u32>(), "every call is in one row, except the one with no task");
+        let text = prometheus(&BTreeMap::new(), &r);
+        assert!(text.contains("delphi_thread_tool_calls_total{thread=\"retry\"} 4\n") && text.contains("delphi_thread_tool_errors_total{thread=\"retry\"} 1\n"), "{}", text);
+        assert!(text.contains(&format!("delphi_thread_tool_errors_total{{thread=\"{}\"}} 1\n", UNTHREADED)), "{}", text);
+        let t = render(&r, "mission m1");
+        assert!(t.contains("4 calls, 1 failed\n") && t.contains("2 calls, 1 failed\n"), "{}", t);
+        assert!(text.lines().all(|l| l.starts_with('#') || l.rsplit(' ').next().is_some_and(|n| n.parse::<u64>().is_ok())));
     }
 
     #[test]
