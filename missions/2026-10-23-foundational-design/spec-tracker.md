@@ -90,11 +90,11 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 | Slice | Delivers | Hours | State |
 | :-- | :-- | --: | :-- |
 | X1 | spec 037; research case format (`truth/`, `fact_recall`, `no_traps`, `text_matches`, draft-pack rule, `train seal`); truth packs R1-R3 (drafts, operator verification pending) | 15 | merged (#215) |
-| X2 | per-arm template home and staffing check (`--arms-file`); tokens per model in rows | 8 | built (PR open) |
+| X2 | per-arm template home and staffing check (`--arms-file`); tokens per model in rows | 8 | merged with X3 (#217) |
 | X3 | `delphi train harvest` and `check-hidden`; code cases C1-C3 (validated: fail on base, pass 3x on reference) | 20 | built (PR open) |
-| X4 | blinded bundles, jury runner | 12 | not started |
-| X5 | operator review CLI, disagreement ledger | 8 | not started |
-| X6 | report: pass rate, cost per pass, frontier, judge breakdown | 6 | not started |
+| X4 | blinded bundles, jury runner (`train judge`) | 12 | built (PR open) |
+| X5 | operator review CLI, disagreement ledger (`train review|disputes|resolve`) | 8 | built (PR open) |
+| X6 | report (`train report`): pass rate, cost per pass, frontier, judge breakdown | 6 | built (PR open) |
 | X7 | pilot supervision and debugging | 11 | not started |
 
 R4-R6 truth packs join in the first study phase.
