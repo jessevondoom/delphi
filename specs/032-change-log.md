@@ -3,7 +3,7 @@ id: spec-032-change-log
 title: "032: The change log (results, not reasoning) replaces the thinking pane"
 author: architect
 timestamp: 2026-10-25T23:30:00Z
-status: active   # decided by the operator 2026-10-25; built in one slice (§6)
+status: active   # decided by the operator 2026-10-25, approved 2026-10-26; built and merged (#187)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

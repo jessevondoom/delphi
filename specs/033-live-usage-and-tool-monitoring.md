@@ -3,7 +3,7 @@ id: spec-033-live-usage-and-tool-monitoring
 title: "033: Live usage and tool monitoring"
 author: architect
 timestamp: 2026-10-26T04:00:00Z
-status: active   # decided by the operator 2026-10-26; §3 is built, §5 is open; the panes that show it are in `specs/034`
+status: active   # decided and approved by the operator 2026-10-26; §3 is built and merged (#192); §5 is open; the panes that show it are in `specs/034`
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
