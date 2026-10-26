@@ -1571,10 +1571,10 @@ mod tests {
         let canned = mission(t.path(), &ladder_log());
         let c = case(t.path(), CHECKS);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-        // A fake `claude`: the first probe says the five-hour window is 90% used and resets in 2 s; later probes say 10%.
+        // A fake `claude`: the first probe says the five-hour window is 90% used and resets in 3 s; later probes say 10%.
         let claude = t.path().join("claude");
         let state = t.path().join("probe-count");
-        fs::write(&claude, format!("#!/bin/sh\nn=$(cat '{s}' 2>/dev/null || echo 0)\necho $((n+1)) > '{s}'\nif [ \"$n\" = 0 ]; then cat <<'EOF'\n{hot}EOF\nelse cat <<'EOF'\n{cool}EOF\nfi\n", s = state.display(), hot = rate_stream(0.9, now + 2, 0.2, now + 99999), cool = rate_stream(0.1, now + 9999, 0.2, now + 99999))).unwrap();
+        fs::write(&claude, format!("#!/bin/sh\nn=$(cat '{s}' 2>/dev/null || echo 0)\necho $((n+1)) > '{s}'\nif [ \"$n\" = 0 ]; then cat <<'EOF'\n{hot}EOF\nelse cat <<'EOF'\n{cool}EOF\nfi\n", s = state.display(), hot = rate_stream(0.9, now + 3, 0.2, now + 99999), cool = rate_stream(0.1, now + 9999, 0.2, now + 99999))).unwrap();
         fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
         let mut arm = baseline();
         arm.expect_models = vec!["haiku".into()];
@@ -1583,7 +1583,8 @@ mod tests {
         train::prepare_work_home(&config.work_dir).unwrap();
         let started = Instant::now();
         let (rows, skipped) = run_all(&config, &[&c]);
-        assert!(started.elapsed() >= Duration::from_secs(2) && rows.len() == 1 && skipped.is_empty(), "it waited for the reset, then ran: {:?} {:?}", rows.len(), skipped);
+        // The reset is whole seconds away and the wait is figured from a truncated clock, so it may be a second short of 3.
+        assert!(started.elapsed() >= Duration::from_secs(1) && rows.len() == 1 && skipped.is_empty(), "it waited for the reset, then ran: {:?} {:?}", rows.len(), skipped);
         // A weekly window at 95%: nothing runs, and what was left undone says why.
         let weekly = t.path().join("claude-weekly");
         fs::write(&weekly, format!("#!/bin/sh\ncat <<'EOF'\n{}EOF\n", rate_stream(0.1, now + 9999, 0.95, now + 500_000))).unwrap();
