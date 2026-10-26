@@ -161,6 +161,9 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 8. Hygiene: clean projects, orphaned worktrees.
     check_hygiene(ws, home, &mut r);
 
+    // 12. Added org bundles (specs/024 §4.6): the lock, the cache entry it points at, review dates.
+    check_bundles(ws, home, &mut r);
+
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
@@ -529,6 +532,30 @@ fn check_overrides(ws: &Workspace, home: &Path, r: &mut Report) {
     }
 }
 
+fn check_bundles(ws: &Workspace, home: &Path, r: &mut Report) {
+    let lock = match delphi_core::bundles::read(&ws.dir) {
+        Ok(l) => l,
+        Err(e) => return r.fail("12 bundles", "local/bundles.lock", e),
+    };
+    let today = delphi_core::bundles::today();
+    let active: Vec<_> = lock.bundle.iter().filter(|e| e.is_active()).collect();
+    for e in &active {
+        let cache = delphi_core::bundles::cache_dir(home, &e.org, &e.name, &e.hash);
+        let loc = e.id();
+        match fs::read(cache.join(".delphi-bundle/files.json")) {
+            Err(_) => r.fail("12 bundles", loc.clone(), format!("cache entry {} is missing; add the bundle again from {}", cache.display(), e.source.path)),
+            Ok(bytes) if delphi_bundle::bundle_hash(&bytes) != e.hash => r.fail("12 bundles", loc.clone(), "cache entry's files.json no longer matches the locked hash (the cache was changed)"),
+            Ok(_) => {}
+        }
+        if e.is_stale(&today) {
+            r.warn("12 bundles", loc, format!("{} is past its review date ({}); it ranks lower until its publisher releases a reviewed version", e.version, e.review_by));
+        }
+    }
+    if !active.is_empty() && r.findings.iter().all(|f| !f.check.starts_with("12") || f.level == Level::Ok) {
+        r.push(Level::Ok, "12 bundles", "local/bundles.lock", format!("{} added bundle(s), caches intact, none stale", active.len()));
+    }
+}
+
 fn check_hygiene(ws: &Workspace, home: &Path, r: &mut Report) {
     use std::os::unix::fs::PermissionsExt;
     let mut problems = 0;
@@ -614,6 +641,50 @@ mod tests {
         assert_eq!(r.exit_code(), 0);
         assert!(r.findings.iter().any(|f| f.check.starts_with("3") && f.level == Level::Ok));
         assert!(r.findings.iter().any(|f| f.check.starts_with("5") && f.level == Level::Ok));
+    }
+
+    // specs/024 §4.6: doctor says when an added bundle's cache is gone or changed, and when it is past its review date.
+    #[test]
+    fn added_bundles_are_checked_for_their_cache_and_their_review_date() {
+        let (_t, home, ws, _p) = setup();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().all(|f| !f.check.starts_with("12")), "no bundles, no finding");
+        let files_json = b"{\"bundle\":1}";
+        let hash = delphi_bundle::bundle_hash(files_json);
+        let entry = delphi_core::bundles::Entry {
+            org: "acme".into(),
+            name: "plat".into(),
+            version: "1.0.0".into(),
+            hash: hash.clone(),
+            publisher_kid: "unsigned".into(),
+            provenance: "unsigned".into(),
+            source: delphi_core::bundles::Source { kind: "directory".into(), path: "/src/plat".into() },
+            added_at: "2026-10-25T00:00:00Z".into(),
+            order: 10,
+            status: "active".into(),
+            review_by: "2999-01-01".into(),
+            title: "T".into(),
+            skill_roles: Default::default(),
+            history: Vec::new(),
+        };
+        delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![entry.clone()] }).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        let f = r.findings.iter().find(|f| f.check == "12 bundles").expect("a finding");
+        assert!(f.level == Level::Fail && f.message.contains("missing"), "{:?}", f);
+        assert_eq!(r.exit_code(), 1);
+        let cache = delphi_core::bundles::cache_dir(&home, "acme", "plat", &hash);
+        fs::create_dir_all(cache.join(".delphi-bundle")).unwrap();
+        fs::write(cache.join(".delphi-bundle/files.json"), files_json).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "12 bundles" && f.level == Level::Ok), "intact cache");
+        fs::write(cache.join(".delphi-bundle/files.json"), b"{\"bundle\":2}").unwrap();
+        assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.check == "12 bundles" && f.level == Level::Fail && f.message.contains("no longer matches")));
+        fs::write(cache.join(".delphi-bundle/files.json"), files_json).unwrap();
+        let stale = delphi_core::bundles::Entry { review_by: "2020-01-01".into(), ..entry };
+        delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![stale] }).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "12 bundles" && f.level == Level::Warn && f.message.contains("past its review date")));
+        assert_eq!(r.exit_code(), 0, "stale is a warning");
     }
 
     // specs/002 §4.1: doctor says which models are out of quota, from the daemon's saved pool state.

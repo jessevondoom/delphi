@@ -744,7 +744,7 @@ mod tests {
         fs::write(r.join("proj/bin.dat"), [0u8, 1, 2, 3]).unwrap();
         fs::write(r.join("local/missions/m1/events.jsonl"), "{}").unwrap();
         let guard = Guard {
-            zones: Zones { local: r.join("local"), team: r.join("team"), base: r.join("base"), ratified: r.join("ratified"), worktree: None, projects: vec![("app".into(), r.join("proj"))], payload: None },
+            zones: Zones { local: r.join("local"), team: r.join("team"), base: r.join("base"), ratified: r.join("ratified"), worktree: None, projects: vec![("app".into(), r.join("proj"))], bundles: vec![], payload: None },
             role: "architect".into(),
             read_globs: vec!["*".into()],
             write_globs: write_globs.iter().map(|s| s.to_string()).collect(),

@@ -12,7 +12,8 @@ delphi-core = { path = "../delphi-core" }
 delphi-adapter = { path = "../delphi-adapter" }
 delphi-sandbox = { path = "../delphi-sandbox" }
 delphi-docs = { path = "../delphi-docs" }
-serde = { version = "1.0", features = ["derive"] }
+delphi-bundle = { path = "../delphi-bundle" }
+serde ={ version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.9"
 tiny_http = "0.12"

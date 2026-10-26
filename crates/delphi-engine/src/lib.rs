@@ -5,6 +5,7 @@ pub mod artifacts;
 pub mod auth_cli;
 pub mod boot;
 pub mod bridge;
+pub mod bundle_load;
 pub mod core_main;
 pub mod council;
 pub mod build;

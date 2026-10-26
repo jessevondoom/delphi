@@ -113,6 +113,8 @@ impl AgentManifest {
 /// Memory scope budgets in bytes (`specs/004` §5.2): release 4 KB, team 3 KB, operator 3 KB, workspace 2 KB.
 pub const SCOPE_BUDGETS: [(&str, usize); 4] = [("release", 4096), ("team", 3072), ("operator", 3072), ("workspace", 2048)];
 pub const PROFILE_SUMMARY_BYTES: usize = 1024;
+/// The Rule of 25 (GOVERNANCE §6); in the team scope it counts the team's rules and the added bundles' together.
+pub const RULE_OF_25: usize = 25;
 
 /// The frozen prefix: byte-identical for the life of a task.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -120,7 +122,11 @@ pub struct Snapshot {
     pub governance: String,
     pub heuristics: String,
     pub lessons: String,
-    /// Rules dropped to fit a scope budget (logged by the caller).
+    /// Org guidance for the role from the added bundles, after the manifest (`specs/023` §6.3); empty when there is none.
+    pub guidance: String,
+    /// Skills the added bundles offer the role (`specs/023` §5A); empty when there are none.
+    pub bundle_skills: String,
+    /// Rules dropped to fit a scope budget, and bundle content that was not loaded and why (logged by the caller).
     pub trims: Vec<String>,
     /// Ratified files that were absent (a fresh workspace has empty ones, so this is usually empty).
     pub notes: Vec<String>,
@@ -218,6 +224,7 @@ impl WorkspacePaths {
 
         let mut carry = 0usize;
         let mut heur = String::new();
+        let bundle_rules = crate::bundle_load::rules(self, &mut snap.trims);
         let sources: Vec<(&str, Option<String>)> = vec![
             ("release", Some(self.release_heuristics()?)),
             ("team", self.ratified_workspace("context/team-heuristics.md").ok()),
@@ -225,13 +232,22 @@ impl WorkspacePaths {
             ("workspace", self.ratified_workspace("heuristics.md").ok()),
         ];
         for ((scope, budget), (_, text)) in SCOPE_BUDGETS.iter().zip(sources) {
-            let Some(text) = text else {
-                carry += budget; // unused budget passes to the next more specific scope
-                continue;
+            let allowed = budget + carry; // budget a scope leaves unused passes to the next more specific one
+            let (mut fitted, dropped) = match &text {
+                Some(t) => fit_rules(&rules(t), allowed),
+                None => (String::new(), vec![]),
             };
-            let body = rules(&text);
-            let allowed = budget + carry;
-            let (fitted, dropped) = fit_rules(&body, allowed);
+            if *scope == "team" && !bundle_rules.is_empty() {
+                // The bundles' rules share the team scope's budget and the Rule of 25 with the team's own, which keep
+                // their place: bundle rules take what is left, oldest-added dropped first, and the team file is not touched.
+                let team_count = fitted.lines().filter(|l| l.starts_with("### ")).count();
+                let left = allowed.saturating_sub(fitted.len() + if fitted.is_empty() { 0 } else { 2 });
+                let (block, trims) = crate::bundle_load::fit(bundle_rules.clone(), left, RULE_OF_25.saturating_sub(team_count));
+                snap.trims.extend(trims);
+                if !block.is_empty() {
+                    fitted = if fitted.is_empty() { block } else { format!("{}\n\n{}", fitted, block) };
+                }
+            }
             carry = allowed.saturating_sub(fitted.len());
             for d in dropped {
                 snap.trims.push(format!("{}: dropped rule `{}` to fit {} bytes", scope, d, allowed));
@@ -241,6 +257,8 @@ impl WorkspacePaths {
             }
         }
         snap.heuristics = heur.trim().to_string();
+        snap.guidance = crate::bundle_load::guidance(self, role, &mut snap.trims);
+        snap.bundle_skills = crate::bundle_load::skills(self, role, &mut snap.trims);
 
         let lesson_path = format!("memory/agents/{}/lessons.md", role);
         let mut lessons = String::new();
