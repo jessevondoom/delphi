@@ -57,17 +57,19 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   // The knowledge window reads through `kb.get`, the read-only knowledge API on the narrator socket (spec 028 §6a).
   const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
   const enc = encodeURIComponent;
-  const loadShelf = () => Promise.all([kb('/v1/collections'), kb('/v1/documents?limit=6'), kb('/v1/health')])
+  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(R.current.arch).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(R.current.arch)}`), kb('/v1/health')])
     .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
     .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
   useEffect(() => { if (view === 'archives' && !R.current.arch.shelf) void loadShelf(); }, [view, connected]);
   const run = (act: A.Action) => {
     const fail = (msg: string) => setArch((a) => A.withNote(a, msg));
-    if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
-    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    const a0 = R.current.arch, tp = A.trustParam(a0);
+    if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) run({ t: 'search', q: a0.q.trim() }); else if (a0.browse) run({ t: 'browse', name: a0.browse }); }
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
     else if (act.t === 'open') {
       const t = act.target;
-      kb(`/v1/doc?path=${enc(t.path)}`).then((r) => setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')))).catch(() => fail('could not open it'));
+      kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')))).catch(() => fail('could not open it'));
     } else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
