@@ -5,6 +5,7 @@
 //! the bundle brings, copies the verified tree into the content-addressed cache, records it in the workspace's
 //! `local/bundles.lock` and indexes its knowledge so the words are searchable at once. No model is called and no card is
 //! raised. `update` is the same act repeated from the lock's recorded source, under the continuity rule (`bundle_life.rs`).
+//! Shipped vectors are verified and used by B3 (`bundle_vectors`).
 
 use delphi_bundle::provenance::{self, Continuity, Level};
 use delphi_bundle::{Host, Inspected, Options};
@@ -19,6 +20,10 @@ pub struct AddOpts {
     pub yes: bool,
     /// `--replace-publisher`: accept a new publisher key for a bundle already added (`specs/024` §2.3).
     pub replace_publisher: bool,
+    /// `--no-vectors`: shipped vector caches are ignored and every chunk is embedded here (`specs/027` §5.2).
+    pub no_vectors: bool,
+    /// Start the embedding of chunks without a vector in a detached process, as the command line does. Off in tests.
+    pub embed_in_background: bool,
 }
 
 /// `Update` carries the `org/name` the lock's source is expected to still hold.
@@ -129,7 +134,7 @@ fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, shown: 
         );
     }
     if !s.vector_caches.is_empty() {
-        println!("    vectors: caches for {} (verified and used from slice B3; until then the install embeds locally)", s.vector_caches.join(", "));
+        println!("    vectors: caches for {} (used only if they match this install's embedder and pass a local spot check)", s.vector_caches.join(", "));
     }
     if !m.touches_connectors.is_empty() {
         println!("    connectors: {} (inert until mapped)", m.touches_connectors.join(", "));
@@ -361,11 +366,46 @@ pub fn apply(home: &Path, ws: &Path, source: &Path, o: &AddOpts, mode: Mode, hos
     if let (Mode::Update(_), Some(old)) = (mode, &existing) {
         crate::bundle_life::print_update_notice(home, old, &m, &dest, &files_json, host);
     }
+    vectors(home, ws, &m.org, &m.name, o);
     println!("search it with `delphi kb search <words> --bundle {}/{}`; its files are @bundle/{}/{}/knowledge/**", m.org, m.name, m.org, m.name);
     0
 }
 
-pub fn list(ws: &Path) -> i32 {
+/// Verify and apply a shipped vector cache, say how far the bundle's vectors are, and leave the rest to a detached
+/// embedding pass that a restart or a second `add` simply continues (`specs/027` §5.4). Nothing here fails the add:
+/// without vectors the bundle is searched by its words.
+pub(crate) fn vectors(home: &Path, ws: &Path, org: &str, name: &str, o: &AddOpts) {
+    let Some(entry) = bundles::read(ws).ok().and_then(|l| l.bundle.into_iter().find(|e| e.is_active() && e.org == org && e.name == name)) else { return };
+    let a = match delphi_engine::bundle_vectors::adopt(home, ws, &entry, o.no_vectors) {
+        Ok(a) => a,
+        Err(e) => return println!("vectors: not prepared ({}); the words are searchable and `delphi kb index` embeds the rest", e),
+    };
+    for n in &a.notes {
+        println!("{}", n);
+    }
+    let (done, total) = a.counts;
+    if total == 0 || done >= total {
+        return;
+    }
+    if !a.model {
+        println!("vectors: {} chunk(s) await an embedding model; until one is installed this bundle is searched by its words", total - done);
+    } else if o.embed_in_background && spawn_embedding(home, ws) {
+        println!("vectors: {}% ready; embedding the other {} chunk(s) in the background (`delphi bundle list` shows progress; search stays lexical for this bundle until then)", done * 100 / total, total - done);
+    } else {
+        println!("vectors: {}% ready; `delphi kb index` embeds the other {} chunk(s)", done * 100 / total, total - done);
+    }
+}
+
+/// `delphi kb index` in a detached process: it embeds every chunk that has no vector and, being resumable, carries on
+/// from the table after any interruption.
+fn spawn_embedding(home: &Path, ws: &Path) -> bool {
+    use std::os::unix::process::CommandExt;
+    let (Ok(exe), Some(name)) = (std::env::current_exe(), ws.file_name()) else { return false };
+    let null = std::process::Stdio::null;
+    std::process::Command::new(exe).args(["kb", "index", "--home"]).arg(home).arg("--workspace").arg(name).stdin(null()).stdout(null()).stderr(null()).process_group(0).spawn().is_ok()
+}
+
+pub fn list(home: &Path, ws: &Path) -> i32 {
     let lock = match bundles::read(ws) {
         Ok(l) => l,
         Err(e) => return fail(e),
@@ -376,8 +416,11 @@ pub fn list(ws: &Path) -> i32 {
         println!("no bundles added; `delphi bundle add <dir or file.xbundle>` adds one");
         return 0;
     }
+    let entries: Vec<Entry> = shown.iter().map(|e| (*e).clone()).collect();
+    let status = delphi_engine::bundle_vectors::statuses(home, ws, &entries);
     for e in shown {
-        println!("{:<28} {:<10} {:<16} order {:<4} {}{}", e.id(), e.version, e.provenance, e.order, short(&e.hash), if e.is_stale(&today) { format!("  STALE (review by {})", e.review_by) } else { String::new() });
+        let vectors = status.get(&e.id()).map(|s| format!("  vectors {}", s.label())).unwrap_or_default();
+        println!("{:<28} {:<10} {:<16} order {:<4} {}{}{}", e.id(), e.version, e.provenance, e.order, short(&e.hash), vectors, if e.is_stale(&today) { format!("  STALE (review by {})", e.review_by) } else { String::new() });
     }
     0
 }
@@ -437,7 +480,7 @@ mod tests {
     }
 
     fn opts() -> AddOpts {
-        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false }
+        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false, no_vectors: false, embed_in_background: false }
     }
 
     /// Re-write the copy's manifest after an edit, so step 5 sees a consistent tree.
@@ -494,6 +537,27 @@ mod tests {
         assert_eq!(hits.first().map(String::as_str), Some("@bundle/acme/acme-platform/knowledge/decisions/0042-postgres-over-dynamo.md#L14-L15"), "{:?}", hits);
         // behavior, skills and agents are not readable as files (they load as what they are, in slice B4)
         assert!(!ws.join("team").exists(), "nothing was written into the team's own files");
+    }
+
+    #[test]
+    fn a_shipped_vector_cache_is_never_trusted_without_a_model_and_the_add_still_succeeds() {
+        let (home, ws, src) = setup();
+        let texts = delphi_bundle::Tree::open(src.path()).texts("knowledge/", ".md");
+        let entries: Vec<_> = delphi_engine::bundle_vectors::chunk_keys("acme", "acme-platform", &texts).into_iter().map(|k| (k, vec![vec![0.5f32, 0.5]])).collect();
+        fs::create_dir_all(src.path().join("vectors")).unwrap();
+        fs::write(src.path().join("vectors/m.dlphvec"), delphi_engine::embed::vectors::VecCache::serialize("m", 2, "1", &entries)).unwrap();
+        let index = format!("{{\"vectors\":1,\"caches\":[{{\"file\":\"m.dlphvec\",\"model_id\":\"m\",\"dim\":2,\"embedding_format\":\"1\",\"chunker_version\":\"2\",\"chunks\":{},\"windows\":{},\"dtype\":\"f32\"}}]}}\n", entries.len(), entries.len());
+        fs::write(src.path().join("vectors/index.json"), index).unwrap();
+        edit(src.path(), "bundle.toml", "knowledge = true", "knowledge = true\nvectors = true");
+        repack(src.path());
+        for no_vectors in [false, true] {
+            assert_eq!(add(home.path(), &ws, src.path(), &AddOpts { no_vectors, ..opts() }, &Real), 0);
+            let e = bundles::read(&ws).unwrap().bundle.remove(0);
+            let s = &delphi_engine::bundle_vectors::statuses(home.path(), &ws, &[e])["acme/acme-platform"];
+            assert!(s.total > 0 && s.done == 0 && !s.shipped, "no model: nothing from the cache is used ({:?})", s);
+            assert_eq!(s.label(), "0%");
+        }
+        assert_eq!(list(home.path(), &ws), 0);
     }
 
     #[test]
@@ -592,7 +656,7 @@ mod tests {
         let e = &bundles::read(&ws).unwrap().bundle[0];
         assert_eq!(e.status, "removed");
         assert!(bundles::cache_dir(home.path(), "acme", "acme-platform", &e.hash).is_dir());
-        assert_eq!(list(&ws), 0);
+        assert_eq!(list(home.path(), &ws), 0);
         assert_eq!(add(home.path(), &ws, src.path(), &opts(), &Real), 0, "a removed bundle can be added again");
         assert!(!search(&ws, "DynamoDB").is_empty());
     }

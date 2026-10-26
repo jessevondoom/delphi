@@ -154,6 +154,8 @@ pub struct MissionState {
     next_res: AtomicU64,
     /// Content-bearing events of tasks whose output must stay in memory for now (Council Round 1).
     held: Mutex<std::collections::HashMap<String, Vec<EventEnvelope>>>,
+    /// Staged-note capture state (`learn.rs`), rebuilt from the log on open.
+    stager: Mutex<crate::learn::Stager>,
 }
 
 /// Highest trailing number among `prefix`-ed ids seen in `events` (so ids never repeat after a restart).
@@ -197,6 +199,7 @@ impl MissionState {
             reserve_gate: tokio::sync::Mutex::new(()),
             append_gate: tokio::sync::Mutex::new(()),
             held: Mutex::new(std::collections::HashMap::new()),
+            stager: Mutex::new(crate::learn::Stager::replay(crate::learn::LearningSettings::default(), &events)),
         }))
     }
 
@@ -263,6 +266,32 @@ impl MissionState {
 
     async fn commit(&self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
         let _gate = self.append_gate.lock().await;
+        let stored = self.write_and_apply(events).await?;
+        // Capture (`specs/031` §3.2): deterministic and cheap, no model call. The notes are events of their own, written
+        // under the same gate so their `seq` follows the events they cite; they are not observed again as triggers.
+        let learned: Vec<EventEnvelope> = {
+            let mut stager = self.stager.lock().unwrap();
+            stored.iter().flat_map(|e| stager.observe(e)).map(|c| self.capture_event(c)).collect()
+        };
+        if !learned.is_empty() {
+            self.write_and_apply(learned).await?;
+        }
+        Ok(stored)
+    }
+
+    fn capture_event(&self, c: crate::learn::Capture) -> EventEnvelope {
+        match c {
+            crate::learn::Capture::Note(n) => n.to_event(&self.id),
+            crate::learn::Capture::Evict(id) => EventEnvelope::new(&self.id, "learn.dropped", serde_json::json!({"id": id, "reason": "evicted"})),
+        }
+    }
+
+    /// Replace the capture settings (`[learning]`); the notes already in the log stay.
+    pub fn set_learning(&self, settings: crate::learn::LearningSettings) {
+        self.stager.lock().unwrap().set_settings(settings);
+    }
+
+    async fn write_and_apply(&self, events: Vec<EventEnvelope>) -> Result<Vec<EventEnvelope>, EngineError> {
         let log = self.log.clone();
         let known = self.registered.load(Ordering::SeqCst) as usize;
         let literals = self.secrets.snapshot();
@@ -320,7 +349,62 @@ mod tests {
     fn open(dir: &Path) -> (Arc<MissionState>, Arc<Mutex<Ledger>>, Arc<SecretRegistry>) {
         let ledger = Arc::new(Mutex::new(Ledger::open_in_memory().unwrap()));
         let secrets = SecretRegistry::new();
-        (MissionState::open(dir, "m1", Hub::new(), ledger.clone(), secrets.clone(), 5.0).unwrap(), ledger, secrets)
+        // A reopen right after a drop can find the lock still held: another test's fork/exec briefly inherits the descriptor
+        // (the same race `delphi-core`'s log tests retry through). Wait it out instead of failing.
+        let mut tries = 0;
+        let state = loop {
+            match MissionState::open(dir, "m1", Hub::new(), ledger.clone(), secrets.clone(), 5.0) {
+                Err(EngineError::Log(delphi_core::log::LogError::Locked(_))) if tries < 300 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                other => break other.unwrap(),
+            }
+        };
+        (state, ledger, secrets)
+    }
+
+    fn denied(task: &str, reason: &str) -> EventEnvelope {
+        let mut e = EventEnvelope::new("m1", "approval.resolved", json!({"approval_id": "a1", "resolution": "denied", "reason": reason, "by": "console"}));
+        e.task_id = Some(task.into());
+        e
+    }
+
+    #[tokio::test]
+    async fn a_denied_card_is_staged_next_to_it_and_survives_a_restart_once() {
+        let t = tempfile::tempdir().unwrap();
+        let (m, _, _) = open(t.path());
+        let stored = m.append(denied("t_0001", "use the existing helper")).await.unwrap();
+        let log = m.replay().unwrap();
+        let notes: Vec<&EventEnvelope> = log.iter().filter(|e| e.kind == "learn.staged").collect();
+        assert_eq!(notes.len(), 1, "{:?}", log.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>());
+        assert_eq!(notes[0].seq, stored.seq + 1, "the note follows the event it cites");
+        assert_eq!((notes[0].payload["id"].clone(), notes[0].payload["tier"].clone(), notes[0].payload["event_seqs"].clone()), (json!(format!("n{}", stored.seq)), json!("L5"), json!([stored.seq])));
+        assert_eq!(notes[0].task_id.as_deref(), Some("t_0001"));
+        drop(m);
+        // Reopening replays the log: the state is rebuilt, nothing is staged twice.
+        let (again, _, _) = open(t.path());
+        again.append(EventEnvelope::new("m1", "task.note", json!({}))).await.unwrap();
+        assert_eq!(again.replay().unwrap().iter().filter(|e| e.kind == "learn.staged").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn capture_off_stages_nothing_and_a_cap_drops_the_oldest() {
+        let t = tempfile::tempdir().unwrap();
+        let (m, _, _) = open(t.path());
+        m.set_learning(crate::learn::LearningSettings { capture: false, ..Default::default() });
+        m.append(denied("t", "x")).await.unwrap();
+        assert!(m.replay().unwrap().iter().all(|e| !e.kind.starts_with("learn.")));
+        m.set_learning(crate::learn::LearningSettings { max_notes: 10, ..Default::default() });
+        for i in 0..11 {
+            m.append(denied("t", &format!("reason {}", i))).await.unwrap();
+        }
+        let log = m.replay().unwrap();
+        let dropped: Vec<&EventEnvelope> = log.iter().filter(|e| e.kind == "learn.dropped").collect();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].payload["reason"], "evicted");
+        let staged_first = log.iter().find(|e| e.kind == "learn.staged").unwrap();
+        assert_eq!(dropped[0].payload["id"], staged_first.payload["id"], "the oldest note is the one dropped");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

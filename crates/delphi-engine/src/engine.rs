@@ -75,6 +75,8 @@ pub struct Settings {
     /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
+    /// `[learning]`: what the daemon stages for the operator to review (`specs/031` §3.6).
+    pub learning: crate::learn::LearningSettings,
     /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
     pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
@@ -132,6 +134,7 @@ impl Default for Settings {
             harness_idle: Duration::from_secs(300),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
+            learning: Default::default(),
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
@@ -352,7 +355,7 @@ fn final_text(blocks: &[ContentBlock]) -> String {
     blocks.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")
 }
 
-fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
+pub(crate) fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
     tools::ToolResult { content: msg.into(), is_error: true }
 }
 
@@ -964,7 +967,8 @@ impl Engine {
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
                     return Ok(Err(Escalate(format!("model `{}` has no [models.catalog] entry, so its cost can't be reserved", model_id))));
                 };
-                if !entry.has_prices() {
+                // A model on this machine costs nothing: a reservation of zero is a reservation (`route::ineligible` agrees).
+                if !entry.has_prices() && !ep.is_local() {
                     return Ok(Err(Escalate(format!("model `{}` has no prices, so its cost can't be reserved", model_id))));
                 }
                 let price = entry.price();
@@ -1223,6 +1227,9 @@ impl Engine {
         if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             defs.push(run_command_def());
         }
+        if self.offers_alignment(sc) {
+            defs.push(crate::align_run::def());
+        }
         defs.extend(self.connector_defs(sc).await?);
         // A bundle agent's `tools` list only removes: what the host role lacks is not in `defs`, and what the list lacks goes.
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
@@ -1253,6 +1260,9 @@ impl Engine {
                 return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
+        }
+        if name == crate::align_run::TOOL {
+            return self.exec_align(sc, args).await;
         }
         if name == "timer" {
             // As with dispatch: the schema is only offered to roles that may set timers; a forged call is refused here.
@@ -2067,6 +2077,21 @@ mod tests {
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("direct is out of quota") && r.contains("resets at")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
+    }
+
+    // A live run against Ollama caught this: a `cost_model = "local"` endpoint has no prices (`delphi setup` writes none), and both the
+    // router and the budget reservation refused it, so the local fallback could never serve a call.
+    #[tokio::test]
+    async fn a_task_runs_on_a_free_local_model_that_has_no_prices_and_costs_nothing() {
+        let f = setup(vec![Step::text("From the local model.")], 5.0, |_| {});
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\npath = \"gateway-compat\"\nbase_url = \"http://localhost:11434\"\ncredential = \"none\"\ncost_model = \"local\"\nmodels = { fast = \"qwen3:8b\", workhorse = \"qwen3:8b\", frontier = \"qwen3:8b\" }\n[models.catalog.\"qwen3:8b\"]\nmax_output_tokens = 8192\n[access]\nrole_family = { architect = \"local\" }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"ollama\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        let out = f.engine.run_task(&f.m, "architect", "Say something").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "From the local model."), "{}", out.text);
+        assert_eq!(f.model.requests()[0].endpoint_id, "ollama");
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0, "nothing is left reserved");
     }
 
     /// Claude and Gemini, each with one endpoint; one Gemini model serves every tier.
@@ -3055,6 +3080,29 @@ mod tests {
         assert_eq!(events_of(&f2, "bundle.removed").len(), 1);
     }
 
+    // specs/027 §5.4: vector readiness reaches the log when it moves, and a discarded cache is reported once.
+    #[tokio::test]
+    async fn a_mission_hears_how_far_a_bundles_vectors_are_and_that_a_cache_was_discarded_each_once() {
+        use crate::bundle_load::tests::{add_bundle, refs};
+        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c"), Step::text("d")], 5.0, |_| {});
+        let files = vec![("knowledge/index.md".to_string(), "---\nid: i\n---\n# Index\n\nThe quokka procedure.\n".to_string())];
+        let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &refs(&files));
+        crate::kb::sync_workspace(&f.engine.ws.dir).unwrap();
+        f.engine.run_task(&f.m, "architect", "one").await.unwrap();
+        let progress = events_of(&f, "bundle.vectors_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!((progress[0].payload["done"].as_u64(), progress[0].payload["total"].as_u64(), progress[0].payload["percent"].as_u64()), (Some(0), Some(1), Some(0)));
+        f.engine.run_task(&f.m, "architect", "two").await.unwrap();
+        assert_eq!(events_of(&f, "bundle.vectors_progress").len(), 1, "nothing moved, nothing said");
+        let cache = delphi_core::bundles::cache_dir(&f.engine.ws.home, "acme", "plat", &e.hash);
+        fs::write(crate::bundle_vectors::verdicts_path(&cache), r#"{"caches":{"m.dlphvec":{"status":"rejected","chunks":0,"sampled":20,"min_cosine":0.2,"failing":["ab"]}}}"#).unwrap();
+        f.engine.run_task(&f.m, "architect", "three").await.unwrap();
+        f.engine.run_task(&f.m, "architect", "four").await.unwrap();
+        let rejected = events_of(&f, "bundle.vectors_rejected");
+        assert_eq!((rejected.len(), rejected[0].payload["file"].as_str()), (1, Some("m.dlphvec")));
+        assert_eq!(rejected[0].payload["failing"], json!(["ab"]));
+    }
+
     // The tier of bundle knowledge read through a tool is L2 like team content, never the release default.
     #[tokio::test]
     async fn reading_bundle_knowledge_is_federated_content_at_l2_and_cannot_be_written() {
@@ -3097,6 +3145,42 @@ mod tests {
         assert!(events_of(&f, "org_context.built").is_empty());
     }
 
+    // specs/026 AC-5: the strategist can run the alignment pre-pass on a document; it needs no model call, is advice only,
+    // and is offered only to the roles that plan and review, and only while a bundle is added.
+    #[tokio::test]
+    async fn the_strategist_can_check_what_a_spec_cites_without_a_model_call_and_only_while_a_bundle_is_added() {
+        let spec = "---\nstatus: draft\n---\n# Spec\nServes [G-acme-01] and [G-acme-02]; follows decision 0042 and decision 0057.\n";
+        let f = setup(vec![Step::tool("a1", "check_alignment", json!({"path": "specs/012-x.md"})), Step::text("Done.")], 5.0, |_| {});
+        std::fs::create_dir_all(f.engine.ws.dir.join("team/specs")).unwrap();
+        std::fs::write(f.engine.ws.dir.join("team/specs/012-x.md"), spec).unwrap();
+        f.engine.run_task(&f.m, "strategist", "audit the spec").await.unwrap();
+        assert!(!f.model.requests()[0].body["tools"].to_string().contains("check_alignment"), "not offered with no bundle added");
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("no bundle is added"), "and a forged call is refused: there is nothing to check against");
+        let f = setup(vec![Step::tool("a1", "check_alignment", json!({"path": "specs/012-x.md"})), Step::text("Done.")], 5.0, |_| {});
+        std::fs::create_dir_all(f.engine.ws.dir.join("team/specs")).unwrap();
+        std::fs::write(f.engine.ws.dir.join("team/specs/012-x.md"), spec).unwrap();
+        crate::align::tests::fixture(&f.engine.ws);
+        let out = f.engine.run_task(&f.m, "strategist", "audit the spec").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(f.model.requests()[0].body["tools"].to_string().contains("check_alignment"));
+        assert_eq!(f.model.requests().len(), 2, "the check itself made no model call: the dispatch round trip is the whole conversation");
+        let result = f.model.requests()[1].body["messages"].to_string();
+        assert!(result.contains("ALIGN-REF-01 (P2) G-acme-02") && result.contains("ALIGN-REF-01 (P2) decision 0042") && result.contains("nothing is blocked"), "{}", result);
+        assert!(!result.contains("G-acme-01:") && !result.contains("decision 0057:"), "live citations are not findings");
+        let ev = events_of(&f, "align.finding");
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].payload["findings"].as_array().unwrap().iter().all(|x| x["level"] == "P2"));
+        assert!(events_of(&f, "approval.requested").is_empty(), "a check is not an action");
+    }
+
+    #[tokio::test]
+    async fn the_builder_and_a_text_only_span_are_not_offered_the_alignment_check() {
+        let f = builder_fixture(vec![Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::align::tests::fixture(&f.engine.ws);
+        f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert!(!f.model.requests()[0].body["tools"].to_string().contains("check_alignment"), "goals in a builder's tools invite scope creep");
+    }
+
     #[tokio::test]
     async fn without_a_bundle_there_is_no_slice_and_no_event() {
         let f = setup(vec![Step::text("a")], 5.0, |_| {});
@@ -3132,6 +3216,21 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].outcome, crate::learn::Outcome::Done);
         assert!(recs[0].rules.contains(&("release".to_string(), "H-001".to_string())));
+    }
+
+    #[tokio::test]
+    async fn staged_notes_are_never_sent_to_a_model() {
+        // `specs/031` §5.1: capture writes to the log; nothing reads it back into a prompt, a snapshot or a handoff.
+        let canary = "STAGED-CANARY-77c1";
+        let f = setup(vec![Step::text("ok"), Step::text("ok"), Step::text("ok")], 5.0, |_| {});
+        f.m.append(EventEnvelope::new(&f.m.id, "learn.staged", json!({"id": "n1", "trigger": "denied_card", "summary": canary, "event_seqs": [1], "tier": "L5"}))).await.unwrap();
+        f.engine.run_task(&f.m, "architect", "Draft the spec").await.unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "plan it").await.unwrap();
+        let reqs = f.model.requests();
+        assert!(!reqs.is_empty());
+        assert!(reqs.iter().all(|r| !r.body.to_string().contains(canary)), "a staged note reached a model request");
+        let snapshot_events: Vec<String> = events_of(&f, "snapshot.loaded").iter().chain(events_of(&f, "snapshot.trim").iter()).map(|e| e.payload.to_string()).collect();
+        assert!(snapshot_events.iter().all(|p| !p.contains(canary)));
     }
 
     #[tokio::test]

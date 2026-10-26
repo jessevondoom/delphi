@@ -16,8 +16,12 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// What a mission already knows: bundle id to the hash it last saw.
+/// What a mission already knows: bundle id to the hash it last saw. The vector events it was told live in the same map
+/// under a prefix (`vectors:` the last progress as `done/total`, `rejected:` the cache file last reported), so that a
+/// restarted engine does not say them twice.
 pub(crate) type Seen = BTreeMap<String, String>;
+const PROGRESS: &str = "vectors:";
+const REJECTED: &str = "rejected:";
 
 fn seen_from_log(m: &MissionState) -> Seen {
     let mut seen = Seen::new();
@@ -29,6 +33,12 @@ fn seen_from_log(m: &MissionState) -> Seen {
             }
             ("bundle.removed", Some(id)) => {
                 seen.remove(&id);
+            }
+            ("bundle.vectors_progress", Some(id)) => {
+                seen.insert(format!("{}{}", PROGRESS, id), format!("{}/{}", e.payload["done"].as_u64().unwrap_or(0), e.payload["total"].as_u64().unwrap_or(0)));
+            }
+            ("bundle.vectors_rejected", Some(id)) => {
+                seen.insert(format!("{}{}", REJECTED, id), e.payload["file"].as_str().unwrap_or_default().to_string());
             }
             _ => {}
         }
@@ -87,7 +97,31 @@ impl Engine {
             events.extend(stamps(m, &self.ws, e));
             seen.insert(e.id(), e.hash.clone());
         }
-        let gone: Vec<(String, String)> = seen.iter().filter(|(id, _)| !active.iter().any(|e| &e.id() == *id)).map(|(i, h)| (i.clone(), h.clone())).collect();
+        // Vector readiness (`specs/027` §5.4): the numbers come from the index, which `delphi bundle add` and the background
+        // pass change outside any mission, so they are reported here, when they have moved since the log last said so.
+        let status = crate::bundle_vectors::statuses(&self.ws.home, &self.ws.dir, &active);
+        for e in &active {
+            let Some(s) = status.get(&e.id()) else { continue };
+            let payload = |extra: serde_json::Value| {
+                let mut p = json!({"org": e.org, "name": e.name, "hash": e.hash});
+                if let (Some(p), Some(x)) = (p.as_object_mut(), extra.as_object()) {
+                    p.extend(x.clone());
+                }
+                p
+            };
+            let now = format!("{}/{}", s.done, s.total);
+            if s.total > 0 && seen.get(&format!("{}{}", PROGRESS, e.id())) != Some(&now) {
+                events.push(EventEnvelope::new(&m.id, "bundle.vectors_progress", payload(json!({"done": s.done, "total": s.total, "percent": s.percent(), "shipped": s.shipped}))));
+                seen.insert(format!("{}{}", PROGRESS, e.id()), now);
+            }
+            for r in &s.rejected {
+                if seen.get(&format!("{}{}", REJECTED, e.id())) != Some(&r.file) {
+                    events.push(EventEnvelope::new(&m.id, "bundle.vectors_rejected", payload(json!({"file": r.file, "failing": r.failing.iter().take(20).collect::<Vec<_>>(), "sampled": r.sampled}))));
+                    seen.insert(format!("{}{}", REJECTED, e.id()), r.file.clone());
+                }
+            }
+        }
+        let gone: Vec<(String, String)> = seen.iter().filter(|(id, _)| !id.starts_with(PROGRESS) && !id.starts_with(REJECTED) && !active.iter().any(|e| &e.id() == *id)).map(|(i, h)| (i.clone(), h.clone())).collect();
         for (id, hash) in gone {
             let (org, name) = id.split_once('/').unwrap_or(("", &id));
             events.push(EventEnvelope::new(&m.id, "bundle.removed", json!({"org": org, "name": name, "hash": hash})));

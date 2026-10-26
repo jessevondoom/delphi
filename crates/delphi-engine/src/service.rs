@@ -111,6 +111,7 @@ impl EngineService {
         }
         let e = &self.engine;
         let m = MissionState::open(&e.ws.dir.join("local/missions").join(id), id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
+        m.set_learning(e.settings.learning.clone());
         // The daemon has restarted since this mission was last open, so what was said before it is a past session (`specs/030`).
         if let Err(e) = self.begin_session(&m, "restart").await {
             self.notices.lock().unwrap().push(format!("could not start a session for {}: {}", id, e));
@@ -430,7 +431,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`proposition` must be 1 to 20,000 characters"));
         }
         let seats: Vec<String> = p["seats"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
-        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from) };
+        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false) };
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "council".into(), prompt: proposition.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
@@ -556,6 +557,7 @@ impl EngineService {
         let m = self.mission(p["mission_id"].as_str()).await?;
         let mut events = m.replay().map_err(engine_err)?;
         let tools = crate::observe::tool_stats(&events);
+        let adoption = crate::toolreport::report(&events);
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let mut st = crate::observe::ObserverState::new(&self.engine.settings.enabled_agents);
@@ -567,6 +569,8 @@ impl EngineService {
         v["cache_hit_ratio"] = json!(st.cache_hit_ratio());
         v["default_view"] = json!(st.default_view());
         v["tools"] = serde_json::to_value(&tools).expect("tool stats serialize");
+        v["token_cap"] = json!(self.engine.settings.harness_token_cap);
+        v["adoption"] = serde_json::to_value(&adoption).expect("adoption serializes");
         v["mission_id"] = json!(m.id);
         v["budget"] = Self::budget_json(&m);
         v["pending_proposals"] = json!(crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len());
@@ -617,7 +621,7 @@ impl EngineService {
         .await
         .map_err(|e| err(-32000, e.to_string()))?
         .map_err(|e| err(-32000, e.to_string()))?;
-        Ok(json!(hits.iter().map(|h| json!({"pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "blake3": h.blake3})).collect::<Vec<_>>()))
+        Ok(json!(hits.iter().map(|h| json!({"pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "blake3": h.blake3, "note": h.note})).collect::<Vec<_>>()))
     }
 
     /// `kb.get`: the read-only knowledge API (`specs/028` §6a) over the daemon's socket, for the narrator's archives
@@ -741,7 +745,25 @@ impl EngineService {
 
     fn ratify_list(&self) -> RpcOutcome {
         let ps = crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir);
-        Ok(Value::Array(ps.iter().map(|p| json!({"id": p.id, "kind": p.kind.as_str(), "summary": p.summary, "live_blake3": p.live_blake3, "ratified_blake3": p.ratified_blake3, "diff": p.diff.chars().take(20_000).collect::<String>()})).collect()))
+        let today = self.engine.now()[..10].to_string();
+        Ok(Value::Array(
+            ps.iter()
+                .map(|p| {
+                    let mut v = json!({"id": p.id, "kind": p.kind.as_str(), "summary": p.summary, "live_blake3": p.live_blake3, "ratified_blake3": p.ratified_blake3, "diff": p.diff.chars().take(20_000).collect::<String>()});
+                    // A spec the operator is about to approve is checked against the organization's goals and decisions it
+                    // cites (`specs/026` §5, §7.2). Advice only: the approval is the operator's act and nothing here gates it.
+                    if p.kind == crate::ratify::Kind::SpecApproval {
+                        // An approval carries no diff: the spec being approved is read from its live file.
+                        let text = std::fs::read_to_string(self.engine.ws.dir.join("team").join(&p.logical)).unwrap_or_default();
+                        let (findings, _) = crate::align::prepass(&self.engine.ws, &text, &today);
+                        if !findings.is_empty() {
+                            v["alignment"] = json!(findings.iter().map(|f| f.line()).collect::<Vec<_>>());
+                        }
+                    }
+                    v
+                })
+                .collect(),
+        ))
     }
 
     /// Ratifying and rejecting are the operator's decisions: console scope, bound to the version reviewed,
@@ -1806,6 +1828,36 @@ mod tests {
         assert!(out["text"].as_str().unwrap().contains("mission budget"));
         assert_eq!(f.model.requests().len(), 0);
         assert_eq!(events_of(&f, "budget.cap").len(), 1);
+    }
+
+    // specs/026 §7.2: the spec the operator is about to approve lists what it cites that no longer stands. Advice on the
+    // existing approval, which is still the operator's own act.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_spec_awaiting_approval_lists_what_it_cites_that_no_longer_stands() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        crate::align::tests::fixture(&f.engine.ws);
+        let dir = f.root.join("workspaces/w/team/specs");
+        fs::create_dir_all(&dir).unwrap();
+        let approved = |body: &str| format!("---\nstatus: approved\napproved_sections: \"§1\"\n---\n# Spec\n{}\n", body);
+        fs::write(dir.join("012-cites.md"), approved("Serves [G-acme-01] and [G-acme-02]; follows decision 0042 and decision 0057.")).unwrap();
+        fs::write(dir.join("013-clean.md"), approved("Serves [G-acme-01]; honors [P-acme-05].")).unwrap();
+        let s = serve(&f).await;
+        let (c_sock, c_tok) = (s.sock.clone(), s.console.clone());
+        let listed = blocking(move || {
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            c.call("ratify.list", json!({})).unwrap()
+        })
+        .await;
+        let find = |name: &str| listed.as_array().unwrap().iter().find(|p| p["id"] == format!("ws:specs/{}", name)).unwrap_or_else(|| panic!("{} not listed in {}", name, listed)).clone();
+        let cites = find("012-cites.md");
+        assert_eq!(cites["kind"], "spec-approval");
+        let lines: Vec<&str> = cites["alignment"].as_array().unwrap().iter().filter_map(|l| l.as_str()).collect();
+        assert!(lines.iter().any(|l| l.starts_with("ALIGN-REF-01 (P2) G-acme-02")) && lines.iter().any(|l| l.starts_with("ALIGN-REF-01 (P2) decision 0042")), "{:?}", lines);
+        assert_eq!(lines.len(), 2, "the live goal and the live decision are not findings: {:?}", lines);
+        assert!(find("013-clean.md").get("alignment").is_none(), "a spec that cites only what stands has nothing to add");
+        assert_eq!(f.model.requests().len(), 0, "no model read anything");
     }
 
     #[tokio::test(flavor = "multi_thread")]

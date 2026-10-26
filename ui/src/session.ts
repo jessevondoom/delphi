@@ -7,7 +7,7 @@ export type ContextReport = { session: string; budget_tokens: number; turns: num
 
 const kilo = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 /** `s_0003` as the operator sees it: `session 3`. */
-export const sessionName = (id: string) => `session ${Number(id.replace(/\D/g, '')) || id}`;
+export const sessionName = (id: string) => (Number(id.replace(/\D/g, '')) ? `session ${Number(id.replace(/\D/g, ''))}` : 'this session'); // s_0000 is the log before any /new
 
 /** The note `/context` prints. `full` adds the text itself. */
 export function contextReport(r: ContextReport, full: boolean): string {
@@ -15,7 +15,7 @@ export function contextReport(r: ContextReport, full: boolean): string {
   if (!r.turns && !r.earlier) return `${sessionName(r.session)}: nothing is carried, the next task starts clean`;
   const whole = Math.max(0, r.turns - r.digested - r.omitted);
   const parts = [
-    `${r.turns} turn${r.turns === 1 ? '' : 's'}`,
+    `${r.turns} message${r.turns === 1 ? '' : 's'}`,
     ...(r.digested || r.omitted ? [`${whole} whole, ${r.digested} as lines, ${r.omitted} left out`] : []),
     `about ${kilo(r.tokens)} of ${kilo(r.budget_tokens)} tokens`,
     ...(r.earlier ? [`${r.earlier} earlier session${r.earlier === 1 ? '' : 's'} in a line each`] : []),

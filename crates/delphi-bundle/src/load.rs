@@ -22,6 +22,24 @@ pub fn read_verified(cache: &Path, bundle_hash: &str, rel: &str) -> Result<Strin
     String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", rel))
 }
 
+/// The scalar fields of a document's frontmatter as strings (lists and mappings are left out), if it has any.
+pub fn frontmatter(text: &str) -> Option<std::collections::BTreeMap<String, String>> {
+    let fm = frontmatter_of(text)?;
+    Some(
+        fm.iter()
+            .filter_map(|(k, v)| {
+                let value = match v {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    serde_yaml::Value::Number(n) => n.to_string(),
+                    serde_yaml::Value::Bool(b) => b.to_string(),
+                    _ => return None,
+                };
+                Some((k.as_str()?.to_string(), value))
+            })
+            .collect(),
+    )
+}
+
 /// A document's body: everything after its frontmatter.
 pub fn body(text: &str) -> &str {
     body_of(text)

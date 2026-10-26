@@ -20,6 +20,7 @@ mod hooks_cmd;
 mod lint;
 mod missions;
 mod changelog;
+mod learn_cmd;
 mod toolreport;
 mod needs;
 mod xenia_cmd;
@@ -64,17 +65,18 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "relay", about: "send approval cards to your email or Telegram", synopsis: "  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]", detail: "Takes your replies too. Run it in a terminal or a tmux pane." },
     Cmd { group: "Set up", name: "skills", about: "agentskills.io skills in and out", synopsis: "  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role>\n    [--description \"…\"] [--workspace <name>] [--home <dir>]", detail: "An import is a pending proposal until you /ratify it." },
-    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n  delphi bundle package <dir> [-o <file.xbundle>]\n  delphi bundle add <dir or file.xbundle> [--order N] [--replace-publisher] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. sign (a terminal only) signs the manifest with this install's xenia key; package writes a reproducible .xbundle archive.\nadd takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its\nknowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from\nthe recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the\ncache. No model is called.\nExit codes: 0 pass · 1 failed · 2 usage." },
+    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n  delphi bundle package <dir> [-o <file.xbundle>]\n  delphi bundle add <dir or file.xbundle> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. sign (a terminal only) signs the manifest with this install's xenia key; package writes a reproducible .xbundle archive.\nadd takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its\nknowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from\nthe recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the\ncache. No model is called to add. Vectors it ships are used only if they match this install's embedder and pass a local spot check\n(--no-vectors skips them); the rest are embedded in the background, and `list` shows how far along they are.\nExit codes: 0 pass · 1 failed · 2 usage." },
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|agents|archives|changes] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
+    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|pulse|timeline|tools|archives|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. Counts only; needs no terminal." },
+    Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
@@ -227,6 +229,7 @@ fn main() {
         Some("missions") => cmd_missions(&args),
         Some("changelog") => cmd_changelog(&args),
         Some("tools") => cmd_tools(&args),
+        Some("learn") => cmd_learn(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -679,7 +682,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, archives or changes)", v);
+                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, pulse, timeline, tools, archives or changes)", v);
                 return 2;
             }
         },
@@ -811,6 +814,14 @@ fn cmd_changelog(args: &[String]) -> i32 {
 fn cmd_tools(args: &[String]) -> i32 {
     match resolve_ws("tools", args) {
         Ok((_home, ws)) => toolreport::cli(&ws.dir, &toolreport::Options { mission: flag(args, "--mission"), all: args.iter().any(|a| a == "--all"), json: args.iter().any(|a| a == "--json") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi learn list|show|drop`: the notes the daemon staged from what happened (see `learn_cmd.rs`).
+fn cmd_learn(args: &[String]) -> i32 {
+    match resolve_ws("learn", args) {
+        Ok((_home, ws)) => learn_cmd::cli(&ws.dir, args, &learn_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }

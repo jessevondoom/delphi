@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as C from './composer.ts';
 import { lookup } from './commands.ts';
-import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
+import { completions, enterAccepts, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
@@ -400,7 +400,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
               if (items.length) {
                 const it = items[Math.min(selRef.current, items.length - 1)]!;
                 const tok = comp.current.chars.slice(m!.from, m!.to).join('');
-                if (tok !== it.insert.trimEnd()) { accept(it); return; }
+                if (enterAccepts(tok, it, selRef.current)) { accept(it); return; }
               }
               if (!text && deckRef.current === 1 && backRef.current > 0) { follow(); return; } // Enter on an empty prompt jumps to the end
               const { text: t, next } = C.submit(comp.current);

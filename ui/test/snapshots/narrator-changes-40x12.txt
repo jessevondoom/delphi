@@ -9,4 +9,4 @@ delphi · changes
          wrote the spec for the change
          log
 ────────────────────────────────────────
-1 running  ·  14.2k tokens   ○ ○ ○ ○ ○ ●
+1 running  ·  14.2k t… ○ ○ ○ ○ ○ ○ ○ ○ ●

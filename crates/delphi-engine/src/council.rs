@@ -452,6 +452,8 @@ pub struct ArtifactInput<'a> {
     pub round2_text: &'a BTreeMap<String, String>,
     pub decision: &'a Decision,
     pub synthesis: &'a str,
+    /// Set for a Council run with `--lenses`: the record says which seat argued from which perspective.
+    pub lenses: Option<&'a LensPlan>,
 }
 
 /// Model text goes into the record as a blockquote, so nothing a seat writes can open a heading of its own
@@ -504,6 +506,18 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
     s.push_str(&format!("\n{}\n\n", if a.plan.homogeneous { "**Homogeneous:** one model family only, so the `[H-001]` diversity guarantee did not hold." } else { "Heterogeneous: the seats span more than one model family (`[H-001]`)." }));
     for n in &a.plan.notes {
         s.push_str(&format!("- {}\n", n));
+    }
+    if let Some(l) = a.lenses {
+        s.push_str("\n## Lenses\n\n");
+        for (role, lens) in &l.assigned {
+            s.push_str(&format!("- `{}` argued from [{}] ({})\n", role, lens.id, lens.bundle));
+        }
+        for role in &l.unassigned {
+            s.push_str(&format!("- `{}` argued from no lens\n", role));
+        }
+        if let Some(n) = &l.note {
+            s.push_str(&format!("\n{}\n", n));
+        }
     }
     s.push_str("\n## Round 1 stances (blind)\n\n");
     for (role, st) in a.stances {
@@ -597,6 +611,53 @@ pub fn slugify(s: &str) -> String {
     if out.is_empty() { "decision".into() } else { out }
 }
 
+// ── lenses (`specs/026` §4) ─────────────────────────────────────────────────
+
+/// One perspective of an added bundle, offered to a seat as the lens to argue from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lens {
+    pub id: String,
+    pub bundle: String,
+    pub title: String,
+    pub statement: String,
+    pub apply_when: String,
+    pub counter_case: String,
+}
+
+impl Lens {
+    /// The one line appended to that seat's Round 1 instruction. Bundle text, so it is bounded; it is advice to argue a
+    /// side, and the seat's own role and the Minority Report rules are unchanged.
+    pub fn instruction(&self) -> String {
+        let clip = |s: &str, n: usize| -> String { s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+        format!("Argue from this lens: [{}] {}. {} Apply when: {} Counter-case: {}", self.id, clip(&self.title, 80), clip(&self.statement, 200), clip(&self.apply_when, 150), clip(&self.counter_case, 150))
+    }
+}
+
+/// Who got which lens for one Council.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LensPlan {
+    pub assigned: Vec<(String, Lens)>,
+    /// Seats left without one because there were fewer perspectives than seats.
+    pub unassigned: Vec<String>,
+    /// What to tell the operator when the plan is empty or short.
+    pub note: Option<String>,
+}
+
+/// Distinct perspectives to seats, round-robin in slice order (bundles in overlay order, a file's own order within). With
+/// fewer perspectives than seats the last seats get none and the plan says so; with none it is a no-op with a note.
+pub fn assign_lenses(seats: &[String], lenses: &[Lens]) -> LensPlan {
+    let assigned: Vec<(String, Lens)> = seats.iter().zip(lenses.iter()).map(|(s, l)| (s.clone(), l.clone())).collect();
+    let unassigned: Vec<String> = seats.iter().skip(assigned.len()).cloned().collect();
+    let note = if lenses.is_empty() {
+        Some("--lenses: no added bundle has a perspective, so no seat has a lens".to_string())
+    } else if !unassigned.is_empty() {
+        Some(format!("--lenses: {} perspective(s) for {} seats; {} argue from no lens", lenses.len(), seats.len(), unassigned.join(", ")))
+    } else {
+        None
+    };
+    LensPlan { assigned, unassigned, note }
+}
+
 // ── prompts ─────────────────────────────────────────────────────────────────
 
 fn round1_objective(proposition: &str) -> String {
@@ -639,6 +700,8 @@ pub struct CouncilOpts {
     pub seats: Vec<String>,
     /// The family that drafted the material under review, when the operator says so.
     pub author_family: Option<String>,
+    /// `--lenses`: give each seat one of the added bundles' perspectives to argue from in Round 1 (`specs/026` §4).
+    pub lenses: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -652,6 +715,17 @@ impl Engine {
     /// Families with an allowed endpoint that is usable right now (not in cooldown, not out of quota). A
     /// Council plans from what can answer, so a family whose quota is gone is not given a seat that would
     /// only wait; with one family left it runs `homogeneous` instead (`[H-008]`), never blocked.
+    /// The added bundles' perspectives in slice order, each proven against its recorded hash first.
+    fn lenses(&self) -> Vec<Lens> {
+        let mut notes = Vec::new();
+        let mut out = Vec::new();
+        for e in delphi_core::bundles::active_entries(&self.ws.dir) {
+            let Some(t) = crate::bundle_load::read(&self.ws, &e, "behavior/perspectives.md", "perspectives", &mut notes) else { continue };
+            out.extend(delphi_bundle::load::perspectives(&t).into_iter().map(|p| Lens { id: p.id, bundle: e.id(), title: p.title, statement: p.statement, apply_when: p.apply_when, counter_case: p.counter_case }));
+        }
+        out
+    }
+
     fn available_families(&self) -> Vec<String> {
         let cfg = self.cfg.get();
         let mut f: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id)).map(|e| e.family.clone()).collect();
@@ -679,9 +753,9 @@ impl Engine {
         if let Some(s) = schema {
             self.schemas.lock().unwrap().insert(handoff_id.clone(), s);
         }
-        if !slices.is_empty() {
-            self.injected.lock().unwrap().insert(handoff_id.clone(), slices);
-        }
+        // Always registered, even with no slices (Round 1 has none): a span with an entry here is a Council seat, which the
+        // org-context slice is withheld from so that Round 1 stays blind (`specs/026` §3.1).
+        self.injected.lock().unwrap().insert(handoff_id.clone(), slices);
         let out = tokio::time::timeout(timeout, self.run_span(m, task_id, h, None, 1)).await;
         self.injected.lock().unwrap().remove(&handoff_id);
         self.schemas.lock().unwrap().remove(&handoff_id);
@@ -753,6 +827,16 @@ impl Engine {
         drop(cfg);
         m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling}))).await?;
 
+        // Lenses are assigned once, before Round 1, and each seat is shown only its own (`specs/026` §4).
+        let lens_plan = if opts.lenses {
+            let all = self.lenses();
+            let lp = assign_lenses(&roles, &all);
+            m.append(emit("council.lens_assigned", json!({"assignments": lp.assigned.iter().map(|(r, l)| json!({"role": r, "perspective": l.id, "bundle": l.bundle})).collect::<Vec<_>>(), "unassigned": lp.unassigned, "note": lp.note}))).await?;
+            Some(lp)
+        } else {
+            None
+        };
+
         // ── Round 1: blind, in parallel. Content-bearing events stay in memory until the barrier releases.
         m.hold_blocks(task_id);
         let pointers = pointers_from_prompt(proposition);
@@ -760,7 +844,11 @@ impl Engine {
         let mut set = tokio::task::JoinSet::new();
         for seat in &plan.seats {
             let (engine, m2, tid) = (self.clone(), m.clone(), task_id.to_string());
-            let h = self.council_handoff(m, task_id, &seat.role, "r1", seat, round1_objective(proposition), pointers.clone());
+            let mut objective = round1_objective(proposition);
+            if let Some((_, lens)) = lens_plan.as_ref().and_then(|lp| lp.assigned.iter().find(|(r, _)| *r == seat.role)) {
+                objective.push_str(&format!("\n\n{}", lens.instruction()));
+            }
+            let h = self.council_handoff(m, task_id, &seat.role, "r1", seat, objective, pointers.clone());
             let role = seat.role.clone();
             set.spawn(async move { (role, engine.run_seat(&m2, &tid, h, vec![], None, timeout).await) });
         }
@@ -834,7 +922,7 @@ impl Engine {
         let n = Self::next_council_number(m);
         let slug = slugify(proposition);
         let stamp = self.now();
-        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis });
+        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis, lenses: lens_plan.as_ref() });
         let dir = m.dir.join("councils");
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
@@ -1009,7 +1097,7 @@ mod tests {
         let stances: BTreeMap<String, Stance> = [("architect".to_string(), Stance::Said("Use a queue.".into())), ("red-team".to_string(), Stance::Said("It drops on crash.".into()))].into_iter().collect();
         let texts: BTreeMap<String, String> = [("architect".to_string(), "ok".to_string()), ("red-team".to_string(), "no".to_string())].into_iter().collect();
         let d = decide(round2);
-        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis })
+        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, lenses: None })
     }
 
     #[test]
@@ -1137,6 +1225,72 @@ mod tests {
         assert!(out.text.contains("Minority report:") && out.text.contains("Saved: missions/"), "{}", out.text);
     }
 
+    // specs/026 §4, AC-4: `--lenses` gives distinct perspectives round-robin in slice order, each seat sees only its own
+    // in Round 1, the record says who argued from what, and with no perspectives it is a no-op with a note.
+    fn lens(id: &str) -> Lens {
+        Lens { id: id.into(), bundle: "acme/platform".into(), title: "T".into(), statement: "S".into(), apply_when: "A".into(), counter_case: "C".into() }
+    }
+
+    #[test]
+    fn lenses_go_to_seats_in_order_with_the_rest_left_without_and_a_note_when_short_or_empty() {
+        let seats = |n: usize| ["architect", "strategist", "red-team", "writer", "scout"][..n].iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let many: Vec<Lens> = (1..=12).map(|i| lens(&format!("P-acme-{:02}", i))).collect();
+        let p = assign_lenses(&seats(5), &many);
+        assert_eq!(p.assigned.iter().map(|(r, l)| (r.as_str(), l.id.as_str())).collect::<Vec<_>>(), [("architect", "P-acme-01"), ("strategist", "P-acme-02"), ("red-team", "P-acme-03"), ("writer", "P-acme-04"), ("scout", "P-acme-05")]);
+        assert!(p.unassigned.is_empty() && p.note.is_none(), "twelve perspectives for five seats: distinct, nothing to say");
+        let two = assign_lenses(&seats(3), &many[..2]);
+        assert_eq!((two.assigned.len(), two.unassigned.clone()), (2, vec!["red-team".to_string()]));
+        assert!(two.note.as_deref().is_some_and(|n| n.contains("2 perspective(s) for 3 seats") && n.contains("red-team")), "{:?}", two.note);
+        let none = assign_lenses(&seats(3), &[]);
+        assert!(none.assigned.is_empty() && none.unassigned.len() == 3 && none.note.as_deref().is_some_and(|n| n.contains("no added bundle has a perspective")));
+        let long = Lens { statement: "x ".repeat(400), ..lens("P-acme-01") }.instruction();
+        assert!(long.starts_with("Argue from this lens: [P-acme-01]") && long.len() < 700, "bundle text in an instruction is bounded: {}", long.len());
+    }
+
+    #[tokio::test]
+    async fn a_council_with_lenses_shows_each_seat_only_its_own_and_records_who_argued_from_what() {
+        let (f, _, _) = fixture(RED_OK, None);
+        crate::align::tests::fixture(&f.engine.ws);
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { lenses: true, ..CouncilOpts::default() }).await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let assigned = &events_of(&f, "council.lens_assigned")[0].payload;
+        assert_eq!(assigned["assignments"].as_array().unwrap().len(), 2, "{}", assigned);
+        assert_eq!(assigned["unassigned"], json!(["red-team"]), "three seats, two perspectives: the last seat gets none, and the record says so");
+        assert!(assigned["note"].as_str().unwrap().contains("2 perspective(s) for 3 seats"));
+        let round1: Vec<_> = f.model.requests().into_iter().filter(|r| r.body.to_string().contains("COUNCIL, ROUND 1")).collect();
+        assert_eq!(round1.len(), 3);
+        for r in &round1 {
+            let body = r.body.to_string();
+            // (the strategist's own charter mentions the slice by name, so look for the slice's text, not its name)
+            assert!(!body.contains("Goals and perspectives below are"), "a Council seat gets a lens, not the slice, in Round 1");
+            let (a, s) = (body.contains("[P-acme-03]"), body.contains("[P-acme-05]"));
+            match who(&r.body) {
+                "architect" => assert!(a && !s, "the architect argues from the first perspective only"),
+                "strategist" => assert!(s && !a, "the strategist from the second only"),
+                _ => assert!(!a && !s && !body.contains("Argue from this lens"), "red-team has no lens"),
+            }
+        }
+        assert!(f.model.requests().iter().filter(|r| r.body.to_string().contains("COUNCIL, ROUND 2")).all(|r| !r.body.to_string().contains("Argue from this lens")), "the lens is a Round 1 framing");
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(doc.contains("## Lenses") && doc.contains("`architect` argued from [P-acme-03] (acme/platform)") && doc.contains("`red-team` argued from no lens"), "{}", doc);
+        assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
+    }
+
+    #[tokio::test]
+    async fn lenses_without_bundles_do_nothing_but_say_so_and_without_the_flag_nothing_changes() {
+        let (f, _, _) = fixture(RED_OK, None);
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { lenses: true, ..CouncilOpts::default() }).await.unwrap();
+        let ev = &events_of(&f, "council.lens_assigned")[0].payload;
+        assert!(ev["assignments"].as_array().unwrap().is_empty() && ev["note"].as_str().unwrap().contains("no added bundle has a perspective"), "{}", ev);
+        assert!(f.model.requests().iter().all(|r| !r.body.to_string().contains("Argue from this lens")));
+        let (f, _, _) = fixture(RED_OK, None);
+        crate::align::tests::fixture(&f.engine.ws);
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        assert!(events_of(&f, "council.lens_assigned").is_empty() && f.model.requests().iter().all(|r| !r.body.to_string().contains("Argue from this lens")), "opt-in: bundles alone change nothing");
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(!doc.contains("## Lenses"));
+    }
+
     #[tokio::test]
     async fn an_unresolved_p0_hands_the_decision_to_the_operator() {
         let (f, _, _) = fixture("RECOMMENDATION: DO-NOT-PROCEED\nFINDING P0 Loses jobs on crash\nCONCUR: no\nROUND 2 COMPLETE", None);
@@ -1174,7 +1328,7 @@ mod tests {
     async fn bad_councils_are_refused_before_any_model_call() {
         let f = crate::testkit::setup(vec![], 50.0, |_| {});
         for (seats, why) in [(vec!["architect", "red-team"], "3 to 5"), (vec!["architect", "red-team", "red-team"], "3 to 5"), (vec!["architect", "red-team", "orchestrator"], "arbiter"), (vec!["architect", "red-team", "poet"], "enabled role")] {
-            let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), author_family: None }).await.unwrap();
+            let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), author_family: None, lenses: false }).await.unwrap();
             assert!(matches!(&out.status, Status::Escalated(w) if w.contains(why)), "{:?}: {:?}", seats, out.status);
         }
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "   ", CouncilOpts::default()).await.unwrap();

@@ -259,15 +259,17 @@ pub fn view(ws: &WorkspacePaths, projects: &[(String, PathBuf)], today: &str) ->
     use serde_json::json;
     let clean = |s: &str| one_line(&crate::observe::sanitize(s));
     let (mut notes, mut bundles, mut goals, mut persp, mut open) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::<String>::new());
-    for e in bundles::active_entries(&ws.dir) {
+    let active = bundles::active_entries(&ws.dir);
+    let status = crate::bundle_vectors::statuses(&ws.home, &ws.dir, &active);
+    for e in active {
         let id = e.id();
         let (repos, _) = read(ws, &e, "bundle.toml", "scope", &mut notes).map(|t| load::applies_to(&t)).unwrap_or_default();
         let stale = e.is_stale(today);
         if stale {
             open.push(format!("{} is past its review date ({})", id, e.review_by));
         }
-        // `update_available` and `vectors` stay null until a source that can say (B6) and the vector build (B3) exist.
-        bundles.push(json!({"id": id, "title": clean(&e.title), "version": clean(&e.version), "provenance": clean(&e.provenance), "order": e.order, "review_by": clean(&e.review_by), "stale": stale, "matched": is_matched(&repos, projects), "source": {"kind": clean(&e.source.kind), "path": clean(&e.source.path)}, "update_available": null, "vectors": null}));
+        // `update_available` stays null until a source that can say exists (B6); `vectors` is how far the index has got.
+        bundles.push(json!({"id": id, "title": clean(&e.title), "version": clean(&e.version), "provenance": clean(&e.provenance), "order": e.order, "review_by": clean(&e.review_by), "stale": stale, "matched": is_matched(&repos, projects), "source": {"kind": clean(&e.source.kind), "path": clean(&e.source.path)}, "update_available": null, "vectors": status.get(&id).map(|s| s.label())}));
         if let Some(t) = read(ws, &e, "behavior/goals.md", "goals", &mut notes) {
             for g in load::goals(&t) {
                 if g.status == "active" && horizon_end(&g.horizon).is_some_and(|end| end.as_str() < today) {
@@ -391,7 +393,8 @@ mod tests {
         let v = view(&ws, &[("other".into(), t.path().to_path_buf())], "2026-10-26");
         let b = &v["bundles"][0];
         assert_eq!((b["id"].as_str(), b["version"].as_str(), b["provenance"].as_str(), b["stale"].as_bool(), b["matched"].as_bool()), (Some("acme/plat"), Some("1.0.0"), Some("unsigned"), Some(true), Some(false)), "{}", b);
-        assert!(b["update_available"].is_null() && b["vectors"].is_null(), "not knowable yet, so not invented");
+        assert!(b["update_available"].is_null(), "not knowable yet, so not invented");
+        assert_eq!(b["vectors"], "no chunks", "nothing indexed in this fixture, and the field is the real number now");
         assert_eq!(v["goals"].as_array().unwrap().len(), 12, "the slice caps goals at eight; the view shows them all, with their status");
         assert_eq!(v["goals"][1]["status"], "met");
         assert_eq!(v["perspectives"][0]["id"], "P-acme-01");

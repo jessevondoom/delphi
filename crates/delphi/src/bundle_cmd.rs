@@ -28,6 +28,10 @@ impl Host for Real {
         skills_cmd::standard_errors(fm, dir)
     }
 
+    fn chunk_keys(&self, org: &str, name: &str, texts: &std::collections::BTreeMap<String, String>) -> Option<std::collections::HashSet<[u8; 32]>> {
+        Some(delphi_engine::bundle_vectors::chunk_keys(org, name, texts))
+    }
+
     fn role_scope(&self, role: &str) -> Option<RoleScope> {
         let fm = frontmatter::parse(seed::builtin_agent(role)?).ok()?.frontmatter?;
         let (read, write, execute) = (strings(&fm, "default_access_scope", "read"), strings(&fm, "default_access_scope", "write"), strings(&fm, "default_access_scope", "execute"));
@@ -55,7 +59,7 @@ fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>]\n       delphi bundle add <dir or file.xbundle> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--yes] [--dry-run]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc   (these take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>]\n       delphi bundle add <dir or file.xbundle> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -79,19 +83,19 @@ pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 };
                 skill_roles.insert(skill.to_string(), roles.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect());
             }
-            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { skill_roles, order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes"), replace_publisher: flag_set("--replace-publisher") }, &Real)
+            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { skill_roles, order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes"), replace_publisher: flag_set("--replace-publisher"), no_vectors: flag_set("--no-vectors"), embed_in_background: true }, &Real)
         }
-        (Some("update"), name) => bundle_life::update(home, ws, name.map(|s| s.as_str()), &Real),
+        (Some("update"), name) => bundle_life::update(home, ws, name.map(|s| s.as_str()), true, &Real),
         (Some("rollback"), Some(name)) => {
             let to = flag(args, "--to");
             if to.as_deref().is_some_and(|t| bundle_life::hash_prefix(t).is_none()) {
                 eprintln!("delphi bundle: --to wants a bundle hash: at least 8 hex digits");
                 return 2;
             }
-            bundle_life::rollback(home, ws, name, to.as_deref(), &Real)
+            bundle_life::rollback(home, ws, name, to.as_deref(), true, &Real)
         }
         (Some("gc"), _) => bundle_life::gc(home, ws),
-        (Some("list"), _) => bundle_add::list(ws),
+        (Some("list"), _) => bundle_add::list(home, ws),
         (Some("remove"), Some(name)) => bundle_add::remove(ws, name),
         _ => {
             eprintln!("{}", USAGE);
@@ -195,6 +199,44 @@ mod tests {
         let rt = Real.role_scope("red-team").unwrap();
         assert!(!rt.tools.contains(&"Bash".to_string()), "red-team has no shell");
         assert!(Real.role_scope("librarian").is_none(), "an unbuilt role is unknown, not guessed");
+    }
+
+    /// The golden bundle with a vector cache of its real chunk keys (all of them, or half), plus `foreign` keys that no text makes.
+    fn with_cache(own_all: bool, foreign: usize) -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let texts = delphi_bundle::Tree::open(t.path()).texts("knowledge/", ".md");
+        let mut keys: Vec<[u8; 32]> = delphi_engine::bundle_vectors::chunk_keys("acme", "acme-platform", &texts).into_iter().collect();
+        keys.sort();
+        if !own_all {
+            keys.truncate(keys.len() / 2);
+        }
+        keys.extend((0..foreign).map(|i| *blake3::hash(&[i as u8, 7]).as_bytes()));
+        let entries: Vec<_> = keys.iter().map(|k| (*k, vec![vec![0.5f32, 0.5]])).collect();
+        let file = "m-2-1-2.dlphvec";
+        fs::create_dir_all(t.path().join("vectors")).unwrap();
+        fs::write(t.path().join("vectors").join(file), delphi_engine::embed::vectors::VecCache::serialize("m", 2, "1", &entries)).unwrap();
+        let index = format!("{{\"vectors\":1,\"caches\":[{{\"file\":\"{}\",\"model_id\":\"m\",\"dim\":2,\"embedding_format\":\"1\",\"chunker_version\":\"2\",\"chunks\":{},\"windows\":{},\"dtype\":\"f32\"}}]}}\n", file, entries.len(), entries.len());
+        fs::write(t.path().join("vectors/index.json"), index).unwrap();
+        let toml = fs::read_to_string(t.path().join("bundle.toml")).unwrap();
+        fs::write(t.path().join("bundle.toml"), toml.replacen("knowledge = true", "knowledge = true\nvectors = true", 1)).unwrap();
+        delphi_bundle::write_manifest(t.path(), true, &Real).unwrap();
+        t
+    }
+
+    #[test]
+    fn the_real_chunker_lets_step_12_check_that_a_caches_keys_come_from_the_bundles_own_text() {
+        let own = with_cache(true, 0);
+        let r = delphi_bundle::validate(own.path(), &Options { claude: true, ..Options::default() }, &Real);
+        assert!(r.passed() && r.warns.is_empty(), "{}", r.render("x"));
+        assert!(r.notes.iter().all(|n| !n.msg.contains("cannot chunk")), "the check really ran");
+        // keys no chunk of the text makes: more than 1% fails, as built from other text
+        let foreign = with_cache(true, 5);
+        let r = delphi_bundle::validate(foreign.path(), &Options { claude: true, ..Options::default() }, &Real);
+        assert!(r.fails.iter().any(|f| f.step == 12 && f.msg.contains("built from other text")), "{}", r.render("x"));
+        // half the chunks and none foreign is a cache that covers less, which is fine
+        let half = with_cache(false, 0);
+        assert!(delphi_bundle::validate(half.path(), &Options { claude: true, ..Options::default() }, &Real).passed());
     }
 
     #[test]

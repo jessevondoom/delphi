@@ -29,6 +29,12 @@ test('the deck lists bundles with version, provenance, scope and freshness, and 
   assert.match(s, /beta\/ops\s+0\.3\.0\s+unsigned\s+unmatched\s+stale \(2026-01-01\)\s+-\s+-/, 'stale and unmatched are words, not only colour');
 });
 
+test('the vectors column shows how far the bundle is, as the daemon reports it', () => {
+  const s = shown(loaded(view({ bundles: [bundle({ vectors: '42%' }), bundle({ id: 'beta/ops', vectors: '100% (shipped, verified)' })] })));
+  assert.match(s, /acme\/plat .*\s42%/);
+  assert.match(s, /beta\/ops .*\s100% \(shipped, verified\)/);
+});
+
 test('goals are a table, perspectives are listed, and open items say what needs a look', () => {
   const s = shown(loaded(view({ open: ['acme/plat is past its review date (2026-01-01)'], slice: { bytes: 4000, cap: 4096, bundles: 1, trimmed: ['acme/plat'] } })));
   assert.match(s, /Goals \(1\)/);

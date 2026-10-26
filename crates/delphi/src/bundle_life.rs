@@ -47,7 +47,7 @@ pub fn print_update_notice(home: &Path, old: &Entry, m: &delphi_bundle::Manifest
 
 /// `delphi bundle update [name]`: add again from each recorded source. A publisher change stops the one bundle with the
 /// re-add message and changes nothing; the others still update.
-pub fn update(home: &Path, ws: &Path, name: Option<&str>, host: &dyn Host) -> i32 {
+pub fn update(home: &Path, ws: &Path, name: Option<&str>, background: bool, host: &dyn Host) -> i32 {
     let lock = match bundles::read(ws) {
         Ok(l) => l,
         Err(e) => return fail(e),
@@ -75,7 +75,7 @@ pub fn update(home: &Path, ws: &Path, name: Option<&str>, host: &dyn Host) -> i3
             continue;
         }
         let id = e.id();
-        let opts = AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false };
+        let opts = AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false, no_vectors: false, embed_in_background: background };
         if bundle_add::apply(home, ws, Path::new(&e.source.path), &opts, Mode::Update(&id), host) != 0 {
             code = 1;
         }
@@ -90,7 +90,7 @@ pub fn hash_prefix(s: &str) -> Option<String> {
 }
 
 /// `delphi bundle rollback <name> [--to <hash>]`.
-pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, host: &dyn Host) -> i32 {
+pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background: bool, host: &dyn Host) -> i32 {
     let lock = match bundles::read(ws) {
         Ok(l) => l,
         Err(e) => return fail(e),
@@ -165,6 +165,10 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, host: &dyn
         Ok(r) => println!("rolled {} back: {} ({}) -> {} ({}); knowledge follows the lock now ({} documents added, {} updated, {} removed), prompt content from the next task", id, from.version, short(&from.hash), m.version, short(&wanted), r.added, r.updated, r.removed),
         Err(err) => return fail(format!("rolled back, but the index could not be updated: {} (run `delphi kb index`)", err)),
     }
+    // The older tree's vector verdict (beside it in the cache) still stands, so its shipped vectors apply again at once;
+    // anything without a vector is embedded as after an add.
+    let o = AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false, no_vectors: false, embed_in_background: background };
+    bundle_add::vectors(home, ws, &e.org, &e.name, &o);
     0
 }
 
@@ -229,12 +233,27 @@ pub fn gc(home: &Path, ws: &Path) -> i32 {
         }
     }
     for d in &gone {
+        // The install's vector verdicts for a tree sit beside it (`bundle_vectors`): they go with it.
+        let _ = std::fs::remove_file(delphi_engine::bundle_vectors::verdicts_path(d));
         if let Err(e) = std::fs::remove_dir_all(d) {
             eprintln!("delphi bundle: {}: {}", d.display(), e);
-        } else if let Some(parent) = d.parent() {
-            // drop the empty <org>/<name> directories this leaves
-            let _ = std::fs::remove_dir(parent).and_then(|_| parent.parent().map(std::fs::remove_dir).unwrap_or(Ok(())));
         }
+    }
+    // A verdict file whose tree is gone (an interrupted run, a hand-deleted tree) is dropped too, then the empty
+    // <org>/<name> and <org> directories this leaves.
+    for org in dirs(&root).into_iter().filter(|p| leaf(p) != ".incoming") {
+        for name in dirs(&org) {
+            for f in std::fs::read_dir(&name).into_iter().flatten().filter_map(|e| e.ok()) {
+                let file = f.file_name().to_string_lossy().to_string();
+                if let Some(tree) = file.strip_suffix(".vectors.json") {
+                    if !name.join(tree).is_dir() {
+                        let _ = std::fs::remove_file(f.path());
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir(&name);
+        }
+        let _ = std::fs::remove_dir(&org);
     }
     // Staging directories from an add that died; an hour is long past any add still running.
     let old = std::time::Duration::from_secs(3600);
@@ -295,7 +314,7 @@ mod tests {
     }
 
     fn opts() -> AddOpts {
-        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false }
+        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false, no_vectors: false, embed_in_background: false }
     }
 
     fn key(f: &Fx, name: &str) -> (PathBuf, Identity) {
@@ -500,7 +519,7 @@ mod tests {
         // 1.5.0 by the same key: an update, known-publisher, with the old hash in history
         set_version(f.src.path(), "1.5.0");
         assert_eq!(publish(f.src.path(), &a.0), 0);
-        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), &Real), 0);
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0);
         let e = lock(&f).bundle[0].clone();
         assert_eq!((e.version.as_str(), e.provenance.as_str(), e.publisher_kid.as_str(), e.history.len()), ("1.5.0", "known-publisher", a.1.did().as_str(), 1));
         assert_eq!(e.history[0].hash, v1.hash);
@@ -509,7 +528,7 @@ mod tests {
         publisher(f.src.path(), &b.1.did(), &[]);
         assert_eq!(publish(f.src.path(), &b.0), 0);
         let before = fs::read(f.ws.join("local/bundles.lock")).unwrap();
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 1);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 1);
         assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 1, "a plain add stops the same way");
         assert_eq!(fs::read(f.ws.join("local/bundles.lock")).unwrap(), before);
         // the explicit re-add accepts and pins the new key
@@ -526,13 +545,13 @@ mod tests {
         set_version(f.src.path(), "1.5.0");
         publisher(f.src.path(), &b.1.did(), &[&a.1.did()]);
         assert_eq!(publish(f.src.path(), &b.0), 0);
-        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), &Real), 0);
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0);
         assert_eq!((lock(&f).bundle[0].provenance.as_str(), lock(&f).bundle[0].publisher_kid.as_str()), ("known-publisher", b.1.did().as_str()));
         // c lists only a, which is no longer the pinned key
         set_version(f.src.path(), "1.6.0");
         publisher(f.src.path(), &c.1.did(), &[&a.1.did()]);
         assert_eq!(publish(f.src.path(), &c.0), 0);
-        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), &Real), 1);
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 1);
         assert_eq!(lock(&f).bundle[0].version, "1.5.0");
     }
 
@@ -542,7 +561,7 @@ mod tests {
         assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0);
         set_version(f.src.path(), "1.4.1");
         delphi_bundle::write_manifest(f.src.path(), true, &Real).unwrap();
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 1);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 1);
         assert_eq!(lock(&f).bundle[0].version, "1.4.0");
         assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0, "the re-add is the operator's act");
         assert_eq!(lock(&f).bundle[0].version, "1.4.1");
@@ -553,7 +572,7 @@ mod tests {
         set_version(g.src.path(), "1.5.0");
         fs::remove_file(g.src.path().join(".delphi-bundle/sig.json")).unwrap();
         delphi_bundle::write_manifest(g.src.path(), true, &Real).unwrap();
-        assert_eq!(update(g.home.path(), &g.ws, None, &Real), 1);
+        assert_eq!(update(g.home.path(), &g.ws, None, false, &Real), 1);
         assert_eq!(bundle_add::add(g.home.path(), &g.ws, g.src.path(), &AddOpts { replace_publisher: true, ..opts() }, &Real), 0);
         assert_eq!((lock(&g).bundle[0].provenance.as_str(), lock(&g).bundle[0].publisher_kid.as_str()), ("unsigned", "unsigned"));
     }
@@ -571,9 +590,9 @@ mod tests {
         set_version(f.src.path(), "1.5.0");
         assert_eq!(publish(f.src.path(), &a.0), 0);
         assert_eq!(bundle_pack::package(f.src.path(), Some(&arc), &Real), 0); // the same path now holds 1.5.0
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 0);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 0);
         assert_eq!(lock(&f).bundle[0].version, "1.5.0");
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 0, "up to date is not an error");
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 0, "up to date is not an error");
         assert_eq!(lock(&f).bundle[0].history.len(), 1);
         // the archive path now holds some other bundle
         toml_edit(f.src.path(), |t| t.replacen("name = \"acme-platform\"", "name = \"acme-other\"", 1));
@@ -585,7 +604,7 @@ mod tests {
         }
         assert_eq!(publish(f.src.path(), &a.0), 0);
         assert_eq!(bundle_pack::package(f.src.path(), Some(&arc), &Real), 0);
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 1);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 1);
         assert_eq!(lock(&f).bundle.len(), 1);
     }
 
@@ -607,12 +626,12 @@ mod tests {
         set_version(f.src.path(), "1.5.0");
         publisher(f.src.path(), &b.1.did(), &[&a.1.did()]);
         assert_eq!(publish(f.src.path(), &b.0), 0);
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 0);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 0);
         let v2 = lock(&f).bundle[0].clone();
-        assert_eq!(rollback(f.home.path(), &f.ws, "no-such", None, &Real), 1);
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some("00000000"), &Real), 1, "not in the history");
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some(&short(&v2.hash)), &Real), 1, "already current");
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, &Real), 0);
+        assert_eq!(rollback(f.home.path(), &f.ws, "no-such", None, false, &Real), 1);
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some("00000000"), false, &Real), 1, "not in the history");
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some(&short(&v2.hash)), false, &Real), 1, "already current");
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 0);
         let e = lock(&f).bundle[0].clone();
         assert_eq!((e.version.as_str(), e.hash.as_str(), e.publisher_kid.as_str(), e.provenance.as_str()), ("1.4.0", v1.hash.as_str(), a.1.did().as_str(), "signed"));
         assert_eq!((e.history.len(), e.history[0].hash.as_str(), e.history[0].left_by.as_str()), (1, v2.hash.as_str(), "rollback"));
@@ -620,7 +639,7 @@ mod tests {
         let kb = delphi_engine::kb::Kb::open(&f.ws.join("local/state.db")).unwrap();
         assert!(kb.search("Note for 1.5.0", &delphi_engine::kb::SearchOpts { legs: delphi_engine::kb::Legs::LexicalOnly, ..Default::default() }).unwrap().iter().all(|h| !h.preview.contains("Note for 1.5.0")));
         // and forward again by hash prefix
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some(&format!("blake3:{}", &short(&v2.hash)[..10])), &Real), 0);
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some(&format!("blake3:{}", &short(&v2.hash)[..10])), false, &Real), 0);
         assert_eq!(lock(&f).bundle[0].version, "1.5.0");
         assert_eq!(lock(&f).bundle[0].history[0].version, "1.4.0");
     }
@@ -633,16 +652,16 @@ mod tests {
         let v1 = lock(&f).bundle[0].clone();
         set_version(f.src.path(), "1.5.0");
         assert_eq!(publish(f.src.path(), &a.0), 0);
-        assert_eq!(update(f.home.path(), &f.ws, None, &Real), 0);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 0);
         let cached = bundles::cache_dir(f.home.path(), "acme", "acme-platform", &v1.hash);
         let readme = cached.join("README.md");
         let original = fs::read(&readme).unwrap();
         fs::write(&readme, "tampered\n").unwrap();
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, &Real), 1);
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 1);
         assert_eq!(lock(&f).bundle[0].version, "1.5.0", "nothing changed");
         fs::write(&readme, original).unwrap();
         fs::remove_dir_all(&cached).unwrap();
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, &Real), 1);
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 1);
     }
 
     #[test]
@@ -658,7 +677,7 @@ mod tests {
         for v in ["1.5.0", "1.6.0", "1.7.0"] {
             set_version(f.src.path(), v);
             assert_eq!(publish(f.src.path(), &a.0), 0);
-            assert_eq!(update(f.home.path(), &f.ws, None, &Real), 0);
+            assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 0);
         }
         assert_eq!(lock(&f).bundle[0].history.len(), 3);
         assert_eq!(gc(f.home.path(), &f.ws), 0);
@@ -667,17 +686,43 @@ mod tests {
         let dir = |h: &str| bundles::cache_dir(f.home.path(), "acme", "acme-platform", h);
         assert!(dir(&e.hash).is_dir() && dir(&e.history[0].hash).is_dir() && dir(&e.history[1].hash).is_dir());
         assert!(dir(&first.hash).is_dir(), "the other workspace still needs the first version");
-        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some(&short(&first.hash)), &Real), 1, "the lock says it is gone");
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", Some(&short(&first.hash)), false, &Real), 1, "the lock says it is gone");
         // once that workspace drops it as well, the tree goes
         assert_eq!(bundle_add::remove(&ws2, "acme-platform"), 0);
         assert_eq!(gc(f.home.path(), &f.ws), 0);
         assert!(!dir(&first.hash).exists());
         assert!(dir(&e.hash).is_dir());
-        // a removed bundle's trees go at gc
+        // the verdict file beside a tree goes with it, and an orphan one is swept
+        let verdict = |h: &str| delphi_engine::bundle_vectors::verdicts_path(&dir(h));
+        fs::write(verdict(&e.hash), "{}").unwrap();
+        fs::write(verdict("deadbeef"), "{}").unwrap();
+        assert_eq!(gc(f.home.path(), &f.ws), 0);
+        assert!(verdict(&e.hash).is_file() && !verdict("deadbeef").exists(), "a live tree keeps its verdict; an orphan is removed");
+        // a removed bundle's trees go at gc, with their verdicts and the directories above them
         assert_eq!(bundle_add::remove(&f.ws, "acme-platform"), 0);
         assert_eq!(gc(f.home.path(), &f.ws), 0);
-        assert!(!f.home.path().join("bundles/acme").exists());
+        assert!(!verdict(&e.hash).exists() && !dir(&e.hash).exists(), "tree and verdict are both gone");
+        assert!(!f.home.path().join("bundles/acme").exists(), "the empty org and name directories are removed");
         assert!(lock(&f).bundle[0].history.iter().all(|p| p.gone));
+    }
+
+    #[test]
+    fn update_starts_a_new_hash_without_a_vector_verdict_and_rollback_keeps_the_older_trees_verdict() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        let v1 = lock(&f).bundle[0].clone();
+        let verdict = |h: &str| delphi_engine::bundle_vectors::verdicts_path(&bundles::cache_dir(f.home.path(), "acme", "acme-platform", h));
+        fs::write(verdict(&v1.hash), "{\"caches\":{}}").unwrap();
+        set_version(f.src.path(), "1.5.0");
+        assert_eq!(publish(f.src.path(), &a.0), 0);
+        assert_eq!(update(f.home.path(), &f.ws, None, false, &Real), 0);
+        let v2 = lock(&f).bundle[0].clone();
+        assert!(!verdict(&v2.hash).exists(), "the new hash starts without a verdict; the vector pass writes its own");
+        assert!(verdict(&v1.hash).is_file(), "the old tree keeps its verdict while it is in the cache");
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 0);
+        assert_eq!(fs::read_to_string(verdict(&v1.hash)).unwrap(), "{\"caches\":{}}", "a rollback leaves the verdict as it was");
+        assert_eq!(lock(&f).bundle[0].hash, v1.hash);
     }
 
     #[test]
