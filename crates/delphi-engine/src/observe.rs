@@ -277,6 +277,15 @@ pub struct ToolCount {
     pub errors: u32,
 }
 
+/// The newest run of the same tool in one span: how many times in a row, and how many of the latest of those failed. A
+/// long run, or one that keeps failing, is an agent going round in circles.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Streak {
+    pub tool: String,
+    pub n: u32,
+    pub failed: u32,
+}
+
 /// What one role's agents have called in the mission: totals, the tool used last, and the count of each tool (the
 /// ten most used). Names and counts only: never arguments, results or the text around them.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -284,6 +293,8 @@ pub struct RoleTools {
     pub calls: u32,
     pub errors: u32,
     pub last: String,
+    /// The streak the role's latest call belongs to.
+    pub streak: Streak,
     pub by_tool: BTreeMap<String, ToolCount>,
 }
 
@@ -321,12 +332,21 @@ pub fn tool_call_of(kind: &str, p: &Value) -> Option<(String, bool)> {
 /// calls are the most frequent events in a log and would push everything else out of the window the fold keeps.
 pub fn tool_stats(events: &[delphi_core::event::EventEnvelope]) -> BTreeMap<String, RoleTools> {
     let mut out: BTreeMap<String, RoleTools> = BTreeMap::new();
+    // The span of each role's latest call, to tell a streak in one span from the same tool in the next.
+    let mut span_of: BTreeMap<String, String> = BTreeMap::new();
     for e in events {
         let Some((tool, failed)) = tool_call_of(&e.kind, &e.payload) else { continue };
         let role = e.agent.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| "unknown".into());
+        let span = e.span_id.clone().unwrap_or_default();
+        let same_span = span_of.insert(role.clone(), span.clone()).is_some_and(|s| s == span);
         let r = out.entry(role).or_default();
         r.calls += 1;
         r.errors += failed as u32;
+        r.streak = if same_span && r.streak.tool == tool {
+            Streak { tool: tool.clone(), n: r.streak.n + 1, failed: if failed { r.streak.failed + 1 } else { 0 } }
+        } else {
+            Streak { tool: tool.clone(), n: 1, failed: failed as u32 }
+        };
         r.last = tool.clone();
         let c = r.by_tool.entry(tool).or_default();
         c.calls += 1;
@@ -1054,9 +1074,25 @@ mod tests {
         assert_eq!((b.calls, b.errors, b.last.as_str()), (4, 1, "Bash"));
         assert_eq!(b.by_tool["read_file"], ToolCount { calls: 2, errors: 1 });
         assert_eq!(b.by_tool["record_change"], ToolCount { calls: 1, errors: 0 });
+        assert_eq!(b.streak, Streak { tool: "Bash".into(), n: 1, failed: 0 });
         assert_eq!(s["writer"].by_tool.keys().collect::<Vec<_>>(), ["WebSearch"], "control sequences are removed");
         let text = serde_json::to_string(&s).unwrap();
         assert!(!text.contains("SECRET") && !text.contains("cargo test") && !text.contains("summary"), "names and counts only: {}", text);
+    }
+
+    #[test]
+    fn a_streak_is_the_same_tool_called_again_and_again_in_one_span_and_counts_its_latest_failures() {
+        let call = |span: &str, name: &str, bad: bool| {
+            let mut e = tev("tool.result", "builder", json!({"name": name, "is_error": bad}));
+            e.span_id = Some(span.into());
+            e
+        };
+        let log = vec![call("a", "run_command", true), call("a", "run_command", false), call("a", "run_command", true), call("a", "run_command", true)];
+        assert_eq!(tool_stats(&log)["builder"].streak, Streak { tool: "run_command".into(), n: 4, failed: 2 }, "a success resets the failures, not the run");
+        let broken = vec![call("a", "run_command", false), call("a", "read_file", false), call("a", "run_command", false)];
+        assert_eq!(tool_stats(&broken)["builder"].streak.n, 1, "another tool in between ends the run");
+        let next_span = vec![call("a", "read_file", false), call("a", "read_file", false), call("b", "read_file", false)];
+        assert_eq!(tool_stats(&next_span)["builder"].streak.n, 1, "a new span starts a new run");
     }
 
     #[test]

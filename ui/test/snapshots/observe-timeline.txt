@@ -1,0 +1,30 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · timeline
+
+ ▼ needs you   council t_2 needs a decision                                   answer in the console
+
+ timeline
+
+
+  no work has started yet
+  a lane per agent appears here: each run where it happened, and a ✎ for every change it recorded
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+1 running  ·  3500 tokens                                                  ← →  ·  ○ ○ ○ ○ ○ ● ○ ○ ○

@@ -1375,9 +1375,12 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
-    // Only the arrows change the view: Right to archives, Left twice back to epic. In the other views digits, Tab and q
-    // do nothing; in archives, the knowledge window, they are text for the search box.
-    o.type_keys("\x1b[C");
+    // Only the arrows change the view: Right to archives (pulse, timeline and tools lie between), Left back to epic. In the
+    // other views digits, Tab and q do nothing; in archives, the knowledge window, they are text for the search box.
+    for _ in 0..4 {
+        o.type_keys("\x1b[C");
+        std::thread::sleep(Duration::from_millis(120));
+    }
     o.wait_for("search what Delphi knows");
     o.wait_for("collections"); // the shelf: read through `kb.get` on the narrator socket
     o.type_keys("council");
@@ -1390,13 +1393,14 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
     o.type_keys("\x7f"); // backspace goes back to the results
     o.wait_for("enter open");
-    for _ in 0..2 {
+    for _ in 0..5 {
+        // archives to epic: tools, timeline, pulse and agents lie between them
         o.type_keys("\x1b[D");
         std::thread::sleep(Duration::from_millis(120));
     }
     o.wait_for("· epic");
     o.wait_for("settled"); // the threads view: the finished task is one settled line
-    for _ in 0..6 {
+    for _ in 0..9 {
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));
     }
