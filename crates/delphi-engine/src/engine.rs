@@ -3059,8 +3059,7 @@ mod tests {
         f.engine.run_task(&f.m, "architect", "two").await.unwrap();
         assert_eq!(events_of(&f, "bundle.vectors_progress").len(), 1, "nothing moved, nothing said");
         let cache = delphi_core::bundles::cache_dir(&f.engine.ws.home, "acme", "plat", &e.hash);
-        fs::create_dir_all(cache.join("vectors")).unwrap();
-        fs::write(cache.join("vectors/verified.json"), r#"{"caches":{"m.dlphvec":{"status":"rejected","chunks":0,"sampled":20,"min_cosine":0.2,"failing":["ab"]}}}"#).unwrap();
+        fs::write(crate::bundle_vectors::verdicts_path(&cache), r#"{"caches":{"m.dlphvec":{"status":"rejected","chunks":0,"sampled":20,"min_cosine":0.2,"failing":["ab"]}}}"#).unwrap();
         f.engine.run_task(&f.m, "architect", "three").await.unwrap();
         f.engine.run_task(&f.m, "architect", "four").await.unwrap();
         let rejected = events_of(&f, "bundle.vectors_rejected");

@@ -25,8 +25,14 @@ const SPOT_MAX: usize = 500;
 /// Caps of schema 1 (`specs/023` §8); a cache over either is ignored and the install embeds locally.
 pub const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_CHUNKS: usize = 100_000;
-/// The file beside the caches that remembers what was decided about each (`specs/027` §5.5).
-const VERDICTS: &str = "verified.json";
+/// Where what was decided about a bundle's caches is remembered (`specs/027` §5.5): `<hash>.vectors.json`, a sibling of
+/// the bundle's cache directory. It is install-owned state, so it must not live inside the tree, which a bundle
+/// fills: a shipped file of the same name would otherwise vouch for its own cache. This is the one place that knows
+/// the path (`gc` deletes it with the tree).
+pub fn verdicts_path(cache: &Path) -> std::path::PathBuf {
+    let name = cache.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    cache.with_file_name(format!("{}.vectors.json", name))
+}
 
 /// The cache keys of the chunks this install makes from a bundle's text files (`path` to text, as in the tree:
 /// `knowledge/…`). The same chunker and key as indexing, with the logical path the index files them under, so
@@ -92,7 +98,7 @@ pub struct Verdict {
 }
 
 fn read_verdicts(cache: &Path) -> BTreeMap<String, Verdict> {
-    let Ok(text) = std::fs::read_to_string(cache.join("vectors").join(VERDICTS)) else { return BTreeMap::new() };
+    let Ok(text) = std::fs::read_to_string(verdicts_path(cache)) else { return BTreeMap::new() };
     let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     v["caches"]
         .as_object()
@@ -118,7 +124,7 @@ fn write_verdict(cache: &Path, v: &Verdict) {
     let body: serde_json::Map<String, Value> =
         all.into_iter().map(|(f, d)| (f, json!({"status": d.status, "chunks": d.chunks, "sampled": d.sampled, "min_cosine": d.min_cosine, "failing": d.failing}))).collect();
     // The sidecar is a convenience: failing to write it means the check runs again, never that a cache is trusted.
-    let _ = std::fs::write(cache.join("vectors").join(VERDICTS), serde_json::to_vec_pretty(&json!({"caches": body})).unwrap_or_default());
+    let _ = std::fs::write(verdicts_path(cache), serde_json::to_vec_pretty(&json!({"caches": body})).unwrap_or_default());
 }
 
 /// What `adopt` did, for `add` to print.
@@ -468,6 +474,46 @@ mod tests {
         let a = adopt_it(&mut kb, &cache, false);
         assert_eq!(a.rejected.len(), 1, "{:?}", a.notes);
         assert_eq!(a.rejected[0].failing, vec![hex(&victim)]);
+    }
+
+    #[test]
+    fn a_verdict_shipped_inside_the_bundle_vouches_for_nothing() {
+        let (_h, cache, mut kb) = setup(30);
+        ship(&cache, good(), |e| e.iter_mut().for_each(|(_, v)| v.iter_mut().for_each(|w| w.reverse())));
+        let forged = r#"{"caches":{"words.dlphvec":{"status":"verified","chunks":90,"sampled":20,"min_cosine":1.0,"failing":[]}}}"#;
+        std::fs::write(cache.join("vectors/verified.json"), forged).unwrap();
+        let a = adopt_it(&mut kb, &cache, false);
+        assert_eq!((a.applied, a.rejected.len()), (0, 1), "the spot check ran anyway: {:?}", a.notes);
+    }
+
+    #[test]
+    fn verdicts_live_beside_the_tree_and_removing_them_makes_the_next_pass_verify_again() {
+        let (_h, cache, mut kb) = setup(30);
+        let before: Vec<_> = walk(&cache);
+        ship(&cache, good(), |_| {});
+        let shipped: Vec<_> = walk(&cache);
+        adopt_it(&mut kb, &cache, false);
+        let side = verdicts_path(&cache);
+        assert!(side.is_file() && side.parent() == cache.parent() && side.to_string_lossy().ends_with("aaaa.vectors.json"));
+        assert_eq!(walk(&cache), shipped, "nothing is added inside the bundle's tree ({} files before shipping)", before.len());
+        // with the verdict gone, a cache that has since gone bad is checked again instead of trusted
+        std::fs::remove_file(&side).unwrap();
+        ship(&cache, good(), |e| e.iter_mut().for_each(|(_, v)| v.iter_mut().for_each(|w| w.reverse())));
+        let mut again = Kb::open_in_memory().unwrap();
+        again.attach_embedder(Arc::new(Words)).unwrap();
+        again.set_seed_vectors(None);
+        index_it(&mut again, &cache);
+        assert_eq!(adopt_it(&mut again, &cache, false).rejected.len(), 1);
+    }
+
+    fn walk(dir: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() { out.extend(walk(&p)) } else { out.push(p.to_string_lossy().to_string()) }
+        }
+        out.sort();
+        out
     }
 
     #[test]
