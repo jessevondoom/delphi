@@ -8,6 +8,8 @@ pub struct Options {
     pub mission: Option<String>,
     pub all: bool,
     pub json: bool,
+    /// The counters in the Prometheus text format instead of the table.
+    pub prom: bool,
 }
 
 /// The text to print for a workspace, or what is wrong with the request.
@@ -33,6 +35,9 @@ pub fn render_for(ws_dir: &Path, opts: &Options) -> Result<String, String> {
         events.extend(delphi_core::log::replay(&dir).map_err(|e| format!("could not read the log of {}: {}", id, e))?);
     }
     let r = report(&events);
+    if opts.prom {
+        return Ok(delphi_engine::toolreport::prometheus(&delphi_engine::observe::tool_stats(&events), &r));
+    }
     if opts.json {
         return serde_json::to_string_pretty(&r).map(|s| s + "\n").map_err(|e| e.to_string());
     }
@@ -73,16 +78,18 @@ mod tests {
     #[test]
     fn reports_the_latest_mission_or_all_of_them_and_refuses_bad_ids() {
         let t = tempfile::tempdir().unwrap();
-        assert!(render_for(t.path(), &Options { mission: None, all: false, json: false }).unwrap_err().contains("no missions yet"));
+        assert!(render_for(t.path(), &Options { mission: None, all: false, json: false, prom: false }).unwrap_err().contains("no missions yet"));
         write_mission(t.path(), "m1", "s1", "model-x", &["write_file", "record_change"]);
         write_mission(t.path(), "m2", "s2", "model-y", &["write_file"]);
-        let all = render_for(t.path(), &Options { mission: None, all: true, json: false }).unwrap();
+        let all = render_for(t.path(), &Options { mission: None, all: true, json: false, prom: false }).unwrap();
         assert!(all.contains("all 2 mission(s)") && all.contains("model-x") && all.contains("model-y") && all.contains("50%"), "{}", all);
-        let one = render_for(t.path(), &Options { mission: Some("m1".into()), all: false, json: true }).unwrap();
+        let one = render_for(t.path(), &Options { mission: Some("m1".into()), all: false, json: true, prom: false }).unwrap();
         let v: serde_json::Value = serde_json::from_str(&one).unwrap();
         assert_eq!((v["total"]["worked"].as_u64(), v["total"]["recorded"].as_u64()), (Some(1), Some(1)));
+        let prom = render_for(t.path(), &Options { mission: Some("m1".into()), all: false, json: false, prom: true }).unwrap();
+        assert!(prom.contains("delphi_tool_calls_total{role=\"unknown\",tool=\"write_file\"} 1"), "{}", prom);
         for bad in ["../x", "a/b", ".h", ""] {
-            assert!(render_for(t.path(), &Options { mission: Some(bad.into()), all: false, json: false }).is_err(), "{}", bad);
+            assert!(render_for(t.path(), &Options { mission: Some(bad.into()), all: false, json: false, prom: false }).is_err(), "{}", bad);
         }
     }
 }

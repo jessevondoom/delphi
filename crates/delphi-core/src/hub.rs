@@ -118,6 +118,8 @@ struct SpanBuf {
     thinking: String,
     /// The span's running token total, when it reported one since the last frame (a value, not a delta).
     tokens: Option<u64>,
+    /// An estimate of the tokens the call in flight has produced so far (an API seat: the turn is logged when it ends).
+    est: Option<u64>,
 }
 
 #[derive(Default)]
@@ -179,6 +181,13 @@ impl Hub {
         h.deltas.entry(span_id.to_string()).or_default().tokens = Some(tokens);
     }
 
+    /// Buffer an estimate of a call's tokens so far, apart from [`Hub::push_usage`]'s total: it carries no cap and is replaced by
+    /// the turn's real usage when that is logged.
+    pub fn push_estimate(&self, span_id: &str, tokens: u64) {
+        let mut h = self.inner.lock().unwrap();
+        h.deltas.entry(span_id.to_string()).or_default().est = Some(tokens);
+    }
+
     /// Send a durable event (already appended and fsync'd) to every subscribed client. A relay client gets
     /// only the kinds in [`RELAY_EVENTS`]: it carries cards to a person and has no need to see what agents say.
     pub fn publish_event(&self, event: &Value) {
@@ -201,6 +210,9 @@ impl Hub {
                 let mut v = json!({"text": b.text, "thinking": b.thinking});
                 if let Some(t) = b.tokens {
                     v["tokens"] = json!(t);
+                }
+                if let Some(t) = b.est {
+                    v["est"] = json!(t);
                 }
                 (span, v)
             })
@@ -263,11 +275,14 @@ mod tests {
         hub.subscribe(id);
         hub.push_usage("sp1", 1200);
         hub.push_usage("sp1", 3400);
+        hub.push_estimate("sp2", 700);
+        hub.push_estimate("sp2", 900);
         hub.push_delta("sp2", DeltaKind::Text, "x");
         hub.flush_frames();
         let n = q.pop().await.unwrap();
         assert_eq!(n.params["spans"]["sp1"]["tokens"], 3400);
         assert!(n.params["spans"]["sp2"].get("tokens").is_none(), "a span that reported no total carries none");
+        assert_eq!((n.params["spans"]["sp2"]["est"].as_u64(), n.params["spans"]["sp1"].get("est")), (Some(900), None), "an estimate is a separate value; the last one wins");
         // A relay never sees frames at all.
         let r = ClientQueue::new(DEFAULT_QUEUE_CAP);
         let rid = hub.attach(Scope::Relay, r.clone());

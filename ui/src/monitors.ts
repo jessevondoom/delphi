@@ -3,7 +3,8 @@
 // folded state and a few in-memory samples in, `h` lines of `w` columns out. Read-only, no boxes, no reasoning, no text a
 // model wrote: names, counts, times and states only.
 import * as T from './theme.ts';
-import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark } from './meters.ts';
+import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, SAMPLE_SECS, SAMPLES, spark } from './meters.ts';
+import { clockOf, plan } from './epic-plan.ts';
 import type { OModel, OState } from './observe-screen.ts';
 
 const dim = T.dim;
@@ -14,9 +15,8 @@ const pad = (s: string, n: number) => s + ' '.repeat(Math.max(0, n - T.width(s))
 const head = (m: OModel, title: string, right: string, w: number) => T.spread(' ' + T.accent(title), right ? dim(right + ' ') : '', w);
 const calm = (...lines: string[]) => ['', ...lines.map((l) => dim('  ' + l))];
 
-/** Seconds covered by one `pulse` sample (see `observer.tsx`) and how many samples a sparkline shows. */
-export const SAMPLE_SECS = 5;
-const SAMPLES = 36;
+/** `6m`, `1h 05m`: how long ago, coarse. */
+const ago = (ms: number) => { const m = Math.max(0, Math.round(ms / 60_000)); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
 
 /**
  * pulse: one meter row per agent that is working. A sparkline of its tokens per sample (the last three minutes), the rate
@@ -28,6 +28,18 @@ export function pulse(m: OModel, w: number, h: number): string[] {
   const out: string[] = [head(m, 'pulse', `tokens per ${SAMPLE_SECS}s · last ${Math.round((SAMPLES * SAMPLE_SECS) / 60)} min`, w)];
   if (!roles.length) return [...out, ...calm('', 'nothing is working right now', 'a meter per agent appears here while it runs: pace, the share of its token cap, and how long it has been silent')];
   const sw = Math.max(8, Math.min(SAMPLES, w - 46));
+  const now = m.now ?? 0;
+  // Coming back: what has happened since the operator last asked or answered something.
+  const sy = st.since_you;
+  if (sy && sy.since_ms > 0 && now - sy.since_ms > 60_000 && sy.changes + sy.done + sy.failed + sy.approvals > 0) {
+    const bits = ([[sy.changes, 'change', 'changes'], [sy.done, 'task done', 'tasks done'], [sy.failed, 'failed', 'failed'], [sy.approvals, 'approval raised', 'approvals raised']] as [number, string, string][]).filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+    out.push('', ' ' + dim(`since you last acted, ${ago(now - sy.since_ms)} ago:  ${bits.join(' · ')}`));
+  }
+  // Waiting on you: the human is the slowest part, so how long each card has waited.
+  for (const a of Object.values(st.approvals ?? {}).sort((x, y) => x.since_ms - y.since_ms)) {
+    const waited = now ? now - a.since_ms : 0;
+    out.push('', ' ' + colored(`► waiting on you  ${ago(waited)}`, waited > 10 * 60_000 ? T.alert : T.warn) + dim(`  ${T.roleName(a.role, m.info)} · ${a.summary}`));
+  }
   for (const r of roles) {
     const a = st.agents[r]!;
     const s = m.pulse?.[r] ?? [];
@@ -86,6 +98,22 @@ export function timeline(m: OModel, w: number, h: number): string[] {
   out.push(' ' + ' '.repeat(labelW) + dim(ticks.join('')));
   const total = (st.changes ?? []).filter((c) => c.at_ms >= from).length;
   out.push('', ' ' + dim(`${T.accent('▓')} running  █ done  ${T.alert('▒')} stopped  ${T.ok('✎')} change recorded`) + dim(`  ·  ${total} change${total === 1 ? '' : 's'} in this window`));
+  // Momentum: changes recorded per five minutes over the window, how long since the last, and when the plan says it ends.
+  const buckets = Array<number>(12).fill(0);
+  for (const c of st.changes ?? []) if (c.at_ms >= now - 60 * 60_000) buckets[Math.min(11, Math.floor((c.at_ms - (now - 60 * 60_000)) / (5 * 60_000)))]!++;
+  const last = (st.changes ?? []).reduce((t, c) => Math.max(t, c.at_ms), 0);
+  const open = plan(st, clockOf(m)).filter((i) => i.kind !== 'done');
+  const finish = open.length ? Math.max(...open.map((i) => i.end)) : 0;
+  out.push('', ' ' + dim(pad('momentum', labelW)) + T.accent(spark(buckets, 12)) + dim(`  ${buckets.reduce((a, b) => a + b, 0)} in the last hour${last ? ` · last ${ago(now - last)} ago` : ''}${finish > now ? ` · plan ends ~${hhmm(finish)} (in ${ago(finish - now)})` : ''}`));
+  // Files being changed: who has written what, and where two agents are on the same file.
+  const files = st.files ?? [];
+  if (files.length) {
+    out.push('', T.rule(m.pal)('── files being changed ' + '─'.repeat(Math.max(0, w - 24))));
+    for (const f of files) {
+      const who = Object.entries(f.roles).map(([r, n]) => `${T.roleName(r, m.info)}×${n}`).join(' ');
+      out.push('  ' + pad(T.text(m.pal)(f.path.length > 38 ? '…' + f.path.slice(-37) : f.path), 40) + dim(pad(who, 28)) + (f.clash ? colored('⚠ two agents ', T.warn) : '') + dim(hhmm(f.last_ms)));
+    }
+  }
   return out.slice(0, h);
 }
 
