@@ -6,7 +6,7 @@ import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
-import { epicRail } from './epic-rail.ts';
+import { epicThreads } from './epic-threads.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -17,16 +17,18 @@ export type OState = {
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
+  /** The orchestrator's own grouping of tasks into threads, when it sends one; otherwise the window groups by what the tasks say. */
+  threads?: { id: string; label: string; tasks: string[] }[];
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
-/** The six views, in order (`005e` §9.2). The narrator shows no money, so there is no spend view. */
-export const VIEWS = ['council', 'epic', 'forge', 'agents', 'archives', 'thinking'] as const;
+/** The five views, in order (`005e` §9.2). The narrator shows no money, so there is no spend view. */
+export const VIEWS = ['council', 'epic', 'agents', 'archives', 'thinking'] as const;
 export type View = (typeof VIEWS)[number];
 /** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
 export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
 export const parseView =(s: string): View | null => {
-  const m: Record<string, View> = { council: 'council', chamber: 'council', epic: 'epic', forge: 'forge', diffs: 'forge', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', thinking: 'thinking', reasoning: 'thinking' };
+  const m: Record<string, View> = { council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', thinking: 'thinking', reasoning: 'thinking' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -34,7 +36,6 @@ export type Hit = { pointer: string; heading: string; preview: string };
 export type OModel = {
   info: T.Info; pal: T.Pal; st: OState; view: View; pick: number; scroll: number; selNode: number;
   search: { editing: boolean; query: string; hits: Hit[]; note: string };
-  diff: { available: boolean; stat?: string; diff?: string; untracked?: string[] } | null;
   live: Record<string, string>; connected: boolean;
   /** Reasoning per running span, in memory only: never written anywhere, not in the snapshot a reopened window receives. */
   think?: Record<string, string>;
@@ -116,9 +117,9 @@ export function epicOrder(st: OState): { n: OState['nodes'][string]; depth: numb
   return out;
 }
 
-/** The epic as a rail, with its narrative and the pace row (`epic-rail.ts`). */
+/** The epic as threads of work grouped by what they are about, each with done, now and next (`epic-threads.ts`). */
 function epic(m: OModel, w: number, h: number): string[] {
-  return epicRail(m, w, h);
+  return epicThreads(m, w, h);
 }
 
 /** A full-width tinted band for the row that is running or selected; bold where there is no tint (`005f` slice 10). */
@@ -127,30 +128,6 @@ const band = (m: OModel, line: string, w: number): string => {
   const padded = line + ' '.repeat(Math.max(0, w - T.width(line)));
   return t ? t.fill(padded) : chalk.bold(line);
 };
-
-function forge(m: OModel, w: number, h: number): string[] {
-  const n = m.st.builds.length;
-  if (!n) return ['', dim('  no builds yet'), '', dim('  start one in the console: /build <request>')];
-  const idx = Math.min(m.pick, n - 1), b = m.st.builds[idx]!;
-  const head: string[] = [chalk.bold(text(m)(` build ${idx + 1}/${n}  ${b.task_id}`)) + dim(`  ${b.branch || '…'} · ${b.sha || '…'} · ${b.merge || 'in progress'}`)];
-  for (const a of b.attempts) head.push(dim(`   ${a}`));
-  for (const g of b.gates) {
-    const row = colored(`   ${glyph(g.state)} `, stateColor(g.state)) + text(m)(`${g.name.padEnd(10)} ${clean(g.detail, w - 18)}`);
-    head.push(g.state === 'running' ? band(m, row, w) : row);
-  }
-  for (const [sev, title] of b.findings) head.push(colored(`   audit ${sev} ${clean(title, 100)}`, sevColor(sev, m)));
-  if (b.flaky) head.push(colored('   a test failed once and passed on a rerun (flaky)', T.warn));
-  const diff: string[] = [rule(m, w, 'diff')];
-  const d = m.diff;
-  if (d?.available) {
-    for (const l of sanitize(d.stat ?? '').split('\n')) diff.push(text(m)(l));
-    for (const u of d.untracked ?? []) diff.push(colored(`?? ${sanitize(u)}`, T.warn));
-    for (const l of sanitize(d.diff ?? '').split('\n')) diff.push(l.startsWith('+') && !l.startsWith('+++') ? colored(l, T.ok) : l.startsWith('-') && !l.startsWith('---') ? colored(l, T.syntax.del) : l.startsWith('@@') ? colored(l, T.accent) : text(m)(l));
-  } else diff.push(dim('  no live worktree for this build: it has finished, or has not started'));
-  const headH = Math.min(head.length + 1, Math.max(3, h - 4));
-  const body = diff.slice(m.scroll === 0 ? 0 : 1 + m.scroll);
-  return [...head.slice(0, headH), ...(head.length < headH ? Array(headH - head.length).fill('') : []), ...body];
-}
 
 /** An agent row for a DAG node whose role has no agent of its own: a generic sub-agent the work spawned. */
 const NO_TOKENS: Tokens = { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0 };
@@ -285,9 +262,9 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
-  const fn = { council, epic, forge, agents, archives, thinking }[m.view];
+  const fn = { council, epic, agents, archives, thinking }[m.view];
   let body = fn(m, w, inner);
-  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'forge' && m.view !== 'thinking') body = body.slice(m.scroll);
+  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'thinking') body = body.slice(m.scroll);
   body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);

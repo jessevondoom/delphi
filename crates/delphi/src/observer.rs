@@ -16,7 +16,6 @@ use ratatui::{
 pub enum View {
     Council,
     Epic,
-    Forge,
     Agents,
     Archives,
 }
@@ -27,7 +26,6 @@ impl View {
         match self {
             View::Council => "council",
             View::Epic => "epic",
-            View::Forge => "forge",
             View::Agents => "agents",
             View::Archives => "archives",
         }
@@ -36,8 +34,7 @@ impl View {
     pub fn parse(s: &str) -> Option<View> {
         match s.to_lowercase().as_str() {
             "council" | "chamber" => Some(View::Council),
-            "epic" => Some(View::Epic),
-            "forge" | "diffs" => Some(View::Forge),
+            "epic" | "forge" | "diffs" => Some(View::Epic), // the forge view folded into the epic pane (`005g`)
             "agents" | "roster" => Some(View::Agents),
             "archives" | "kb" => Some(View::Archives),
             _ => None,
@@ -200,7 +197,7 @@ mod tests {
         for gone in ["spend", "telemetry", "dag", "1", "5"] {
             assert_eq!(View::parse(gone), None, "{}", gone);
         }
-        assert_eq!(View::Forge.name(), "forge");
+        assert_eq!(View::parse("forge"), Some(View::Epic), "the forge view became part of the epic pane");
     }
 
     #[test]

@@ -52,7 +52,7 @@ export function seatsNow(m: OModel, c: Council): { thinking: Set<string>; speaki
 export const current = (m: OModel): Council | undefined => m.st.councils[Math.min(m.pick, m.st.councils.length - 1)];
 
 /** Each seat's final position (its critique's recommendation when it has one, else its stance) and the majority. */
-function positions(c: Council) {
+export function positions(c: Council) {
   const by = new Map<string, string>();
   for (const s of c.seats) {
     const crit = c.critiques.find((k) => k.role === s.role)?.recommendation?.trim();

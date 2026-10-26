@@ -9,4 +9,4 @@ delphi · thinking
   A claim without one can be lost for
   good.
 ────────────────────────────────────────
-1 running  ·  14.2k tokens   ○ ○ ○ ○ ○ ●
+1 running  ·  14.2k tokens     ○ ○ ○ ○ ●

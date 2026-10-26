@@ -864,7 +864,7 @@ mod tests {
     }
 
     fn run(f: &mut Fx, args: Value) -> (ToolResult, Vec<Stamp>) {
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-25T12:00:00.000Z", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-25T12:00:00.000Z", stamps: vec![], events: vec![] };
         let r = Registry::builtin().run(&mut ctx, "write_archive", &args);
         (r, std::mem::take(&mut ctx.stamps))
     }
@@ -972,7 +972,7 @@ mod tests {
         let (one, _) = run(&mut f, json!({"path": "big.zip", "members": ["@project/app/src/big1.bin"]}));
         assert!(!one.is_error, "{}", one.content);
         // the cap on the output itself
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let target = Target { path: "missions/m1/artifacts/huge.zip".into(), sidecar: None };
         let r = write_artifact(&mut ctx, &target, &vec![0u8; MAX_ARTIFACT_BYTES + 1], "write_archive", &[]);
         assert!(r.is_error && r.content.contains("limit is 4194304"), "{}", r.content);
@@ -1048,7 +1048,7 @@ mod tests {
     }
 
     fn run_tool(f: &mut Fx, tool: &str, args: Value) -> (ToolResult, Vec<Stamp>) {
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-25T12:00:00.000Z", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "2026-10-25T12:00:00.000Z", stamps: vec![], events: vec![] };
         let r = Registry::builtin().run(&mut ctx, tool, &args);
         (r, std::mem::take(&mut ctx.stamps))
     }
@@ -1073,7 +1073,7 @@ mod tests {
         assert!(side.contains(&format!("artifact_blake3: {}", blake3::hash(html.as_bytes()).to_hex())) && side.contains("- title: Q3 review") && side.contains("- free-form script: no") && side.contains("produced_by: write_html"), "{}", side);
         assert_eq!(stamps.len(), 2);
         // it reads back through the same tools
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/report.html"}));
         assert!(back.content.contains("# Q3 review") && back.content.contains("| North | 120 |"), "{}", back.content);
     }
@@ -1291,7 +1291,7 @@ mod tests {
         let mut f = fx(&["missions/**"]);
         let (r, _) = run(&mut f, json!({"path": "evidence.zip", "members": ["@project/app/src/lib.rs"]}));
         assert!(!r.is_error, "{}", r.content);
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/evidence.zip", "member": "project/app/src/lib.rs"}));
         assert!(!back.is_error && back.content.contains("fn a() {}"), "{}", back.content);
     }
@@ -1322,7 +1322,7 @@ mod tests {
         assert!(side.contains("produced_by: write_deck") && side.contains("- contents: 3 slides") && !side.contains("free-form script"), "{}", side);
         let (r, _) = run_tool(&mut f, "write_report", report_args(None));
         assert!(!r.is_error, "{}", r.content);
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/q3.html"}));
         assert!(back.content.contains("# Q3") && back.content.contains("Latency"), "{}", back.content);
     }
@@ -1383,7 +1383,7 @@ mod tests {
         let mut f = fx(&["missions/**"]);
         let (r, stamps) = run_tool(&mut f, "write_sheet", sheet_args());
         assert!(!r.is_error && r.content.starts_with("created missions/m1/artifacts/latency.xlsx (") && stamps.len() == 2, "{}", r.content);
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/latency.xlsx"}));
         assert!(back.content.contains("0.2.2") && back.content.contains("(=SUM(B2:B3))"), "{}", back.content);
         let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.xlsx.provenance.md")).unwrap();
@@ -1432,7 +1432,7 @@ mod tests {
         let img = delphi_docs::png::decode(&bytes).unwrap();
         assert_eq!((img.width, img.height), (1440, 800));
         assert_eq!(img.pixel(1, 1)[..3], [0x1a, 0x1a, 0x19], "dark surface");
-        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![] };
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "architect", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
         let back = Registry::builtin().run(&mut ctx, "read_doc", &json!({"path": "missions/m1/artifacts/latency.png"}));
         assert!(back.content.contains("1440×800") && back.content.contains("Title: Median latency fell") && back.content.contains("Comment: delphi artifact: written by role architect in mission m1 with write_chart") && back.content.contains("trust L3"), "{}", back.content);
         let side = fs::read_to_string(f.root.join("local/missions/m1/artifacts/latency.png.provenance.md")).unwrap();
