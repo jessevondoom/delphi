@@ -21,7 +21,7 @@ export type Agent = {
 };
 export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 /**
- * One agent's work in progress (`specs/035`): who, since when, the tool call it is waiting on, its running token total
+ * One agent's work in progress (`specs/037`): who, since when, the tool call it is waiting on, its running token total
  * when the daemon reports one, and what it has done that a summary can name. Nothing the agent thought or wrote is kept
  * here: its replies are in the chat, and the deck shows what it did.
  */

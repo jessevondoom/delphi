@@ -341,7 +341,7 @@ function entryRows(d: Done, m: Model, w: number): string[] {
   return ['  ' + chip + '  ' + who + T.dim(` · ${d.what} · ${took(d.elapsed)}`)];
 }
 
-/** A span at work: who, for how long, its token total so far when it has one, and the tool call it waits on. Nothing it thought or wrote (`specs/035`). */
+/** A span at work: who, for how long, its token total so far when it has one, and the tool call it waits on. Nothing it thought or wrote (`specs/037`). */
 function runningRows(r: Span, m: Model, w: number): string[] {
   const f = faceOf(m.state.agents[r.role], r.role, m.now, m.still ?? false);
   const who = T.badge(r.role, f.state === 'idle' ? 'running' : f.state, m.info, m.pal, f.state === 'idle' ? 'working' : f.frame) + ' ' + T.roleColor(r.role, m.info).bold(T.roleName(r.role, m.info));

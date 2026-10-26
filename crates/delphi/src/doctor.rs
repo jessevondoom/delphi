@@ -314,6 +314,9 @@ fn check_manifest_lock(base: &Path, label: &str, r: &mut Report) {
                 if !signed {
                     r.warn("2 manifest-lock", "", "development build: not a signed release");
                 }
+                if crate::update::config_requires_signed(base.parent().unwrap_or(base)) {
+                    r.warn("2 manifest-lock", "", "this workspace requires signed releases (`[update] require_signed`) and this build is not one: `delphi update` will refuse");
+                }
             }
         }
     }
