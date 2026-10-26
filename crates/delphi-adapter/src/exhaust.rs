@@ -29,6 +29,19 @@ pub struct Exhaustion {
     pub raw: String,
 }
 
+/// The reasons that are about the account, not one model: every model on that endpoint is out when one of these is the cause.
+pub const BILLING: &str = "billing error: credits or payment need attention";
+pub const SPEND_CAP: &str = "monthly spend cap reached";
+pub const SPEND_LIMIT: &str = "spend limit set on the account reached";
+
+impl Exhaustion {
+    /// Is the whole endpoint out (credit, a spend cap or limit), rather than one model's quota? Offering another model on the same
+    /// endpoint as a stand-in would only fail the same way and ask the operator for nothing (`specs/035` G-6).
+    pub fn is_account_wide(&self) -> bool {
+        matches!(self.reason.as_str(), BILLING | SPEND_CAP | SPEND_LIMIT)
+    }
+}
+
 impl std::fmt::Display for Exhaustion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.reason)?;
@@ -95,13 +108,13 @@ pub fn classify_http(status: u16, retry_after: Option<Duration>, body: &str, now
 
     // Rule 1: explicit signals.
     if status == 402 {
-        return exhausted("billing error: credits or payment need attention", None, if message.is_empty() { body } else { message });
+        return exhausted(BILLING, None, if message.is_empty() { body } else { message });
     }
     if code == "enforced_spend_limit_reached" {
-        return exhausted("monthly spend cap reached", reset, message);
+        return exhausted(SPEND_CAP, reset, message);
     }
     if status == 400 && message.starts_with("You have reached your specified") && message.contains("usage limits") {
-        return exhausted("spend limit set on the account reached", reset, message);
+        return exhausted(SPEND_LIMIT, reset, message);
     }
     if code == "quota_exceeded" {
         return exhausted("daily quota exceeded", reset, message);
@@ -160,6 +173,16 @@ mod tests {
         for bad in ["", "soon", "12", "5d", "h"] {
             assert_eq!(parse_go_duration(bad), None, "{}", bad);
         }
+    }
+
+    #[test]
+    fn billing_and_spend_caps_are_account_wide_and_a_model_quota_is_not() {
+        let now = NOW;
+        assert!(classify_http(402, None, "{}", now).unwrap().is_account_wide());
+        assert!(classify_http(400, None, r#"{"error":{"message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}"#, now).unwrap().is_account_wide());
+        assert!(classify_http(429, None, r#"{"error":{"details":{"error_code":"enforced_spend_limit_reached"},"message":"cap"}}"#, now).unwrap().is_account_wide());
+        assert!(!classify_cli_error("Individual quota reached. Resets in 120h0m0s.", now).unwrap().is_account_wide(), "a model's own quota");
+        assert!(!classify_http(429, Some(Duration::from_secs(3600)), "{}", now).unwrap().is_account_wide(), "a long wait says nothing about the account");
     }
 
     #[test]

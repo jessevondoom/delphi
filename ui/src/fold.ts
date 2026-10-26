@@ -222,6 +222,13 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const history = [...h, entry];
       return { ...s, activity: { ...s.activity, history: history.length > HISTORY_MAX ? history.slice(-HISTORY_MAX) : history } };
     }
+    // A weaker model wrote a save-point before anyone was asked (`specs/035` D-11); where, for the operator who is not asked (optimistic mode).
+    case 'checkpoint.saved': return addBlock(s, { kind: 'note', text: `the work so far is saved for resumption: ${sanitize(String(pl.path ?? ''))}`, at: stamp(e, now), tone: 'info' });
+    // A task moved to another model (`specs/035`): said once in the chat, so the operator is never surprised by who is answering.
+    case 'model.promoted': {
+      const pair = (v: any) => `${sanitize(String(v?.endpoint_id ?? '?'))}/${sanitize(String(v?.model_id ?? '?'))}`;
+      return addBlock(s, { kind: 'note', text: `continuing on ${pair(pl.to)} (${pair(pl.from)} is not available)`, at: stamp(e, now), tone: 'info' });
+    }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {

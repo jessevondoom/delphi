@@ -8,6 +8,7 @@ import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 import { epicThreads } from './epic-threads.ts';
 import { dashboard, needs } from './dashboard.ts';
+import { joinColumns, leftWidth, TWO_COLUMNS_AT } from './columns.ts';
 import * as A from './archives.ts';
 import { pulse, timeline, toolsBoard } from './monitors.ts';
 import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark, type Paint } from './meters.ts';
@@ -21,6 +22,9 @@ export type OState = {
   tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
   sessions?: { id: string; reason: string; started_ms: number; turns: number }[];
+  /** Models that are out right now, and tasks running on a stand-in for one (`specs/035` D-7). */
+  models_out?: { endpoint_id: string; model_id: string; reason: string; back_ms: number | null }[];
+  standins?: { task: string; role: string; from: string; to: string; why: string; by: 'operator' | 'policy' | 'automatic' }[];
   councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][]; lenses?: [string, string][]; lens_note?: string }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
@@ -169,7 +173,7 @@ export function activeAgents(st: OState): AgentRow[] {
 const WORK_TOOLS = new Set(['write_file', 'edit_file', 'run_command', 'write_archive', 'write_html', 'write_chart', 'write_report', 'write_deck', 'write_sheet', 'write_diagram', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash']);
 
 /** `calls · ✎ changes recorded · ✗ failed · → the tool in use or used last` for one agent's role; nothing before its first call. */
-function toolsLine(m: OModel, a: AgentRow): string {
+function toolsLine(m: OModel, a: AgentRow, lead = true): string {
   const t = m.st.tools?.[a.role];
   if (!t || t.calls === 0) return '';
   const rec = t.by_tool['record_change']?.calls ?? 0;
@@ -177,7 +181,7 @@ function toolsLine(m: OModel, a: AgentRow): string {
   // A running agent that has changed something and recorded nothing yet: the count turns to a warning.
   const unreported = !rec && a.state === 'running' && Object.keys(t.by_tool).some((k) => WORK_TOOLS.has(k));
   if (rec) parts.push(`✎ ${rec}`);
-  const line = dim('  ·  ' + parts.join(' · ')) + (unreported ? colored(' · ✎ 0', T.warn) : '');
+  const line = dim((lead ? '  ·  ' : '') + parts.join(' · ')) + (unreported ? colored(' · ✎ 0', T.warn) : '');
   // The same tool again and again, or failing again and again: going round in circles.
   const sk = t.streak;
   const loop = a.state === 'running' && sk && (sk.n >= LOOP_CALLS || sk.failed >= LOOP_FAILS) ? colored(` · ⟳ ${clean(sk.tool, 20)} ×${sk.n}${sk.failed >= LOOP_FAILS ? ` (${sk.failed} failed)` : ''}`, sk.failed >= LOOP_FAILS ? T.alert : T.warn) : '';
@@ -185,7 +189,7 @@ function toolsLine(m: OModel, a: AgentRow): string {
 }
 
 /** The roster: a mascot per agent that is working, with its name, role, state in words, model, task and tokens. With none working, the orchestrator alone, and a line saying the system is idle. */
-function agents(m: OModel, w: number, _h: number): string[] {
+function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
   const out: string[] = [];
   const active = activeAgents(m.st);
   const idle = active.length === 0;
@@ -201,17 +205,26 @@ function agents(m: OModel, w: number, _h: number): string[] {
     const meta = [
       roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' ? quietNote(m, a.role) : ''),
       text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : ''),
-      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role) + toolsLine(m, a),
+      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role) + (stacked ? '' : toolsLine(m, a)),
     ];
+    // In a half-width column the counters wait for a fourth row under the mascot instead of running off the edge.
+    const extra = stacked ? toolsLine(m, a, false) : '';
     // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
     mk.forEach((line, i) => {
       const tail = '   ' + meta[i]!;
       out.push('  ' + line + (a.state === 'running' ? band(m, tail, Math.max(0, w - 9)) : tail));
     });
+    if (extra) out.push(' '.repeat(12) + extra);
     out.push('');
   }
   if (idle) out.push(dim('  nothing is running: the system is idle. agents appear here while they work.'));
   return out;
+}
+
+/** The agents and the tools side by side, on a window wide enough for both (`specs/034`: what each agent does, and what all of them call). */
+function agentsAndTools(m: OModel, w: number, h: number): string[] {
+  const lw = leftWidth(w), rw = Math.max(0, w - lw - 3);
+  return joinColumns(agents(m, lw, h, true), toolsBoard(m, rw, h), w, m.pal);
 }
 
 const archives = (m: OModel, w: number, h: number): string[] => A.view(m.arch, w, h, m.pal);
@@ -315,7 +328,7 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
   const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, archives, changes }[m.view];
-  let body = fn(m, w, inner);
+  let body = m.view === 'agents' && w >= TWO_COLUMNS_AT ? agentsAndTools(m, w, inner) : fn(m, w, inner);
   if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
   body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');

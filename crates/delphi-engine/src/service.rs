@@ -850,6 +850,20 @@ impl EngineService {
                 if let Err(e) = crate::session::append_central(&self.engine.ws.home, &d, &|s| secrets.redact(s)) {
                     self.notices.lock().unwrap().push(format!("could not write the session digest: {}", e));
                 }
+                // A model-written summary, when asked for, in the background: it never delays the new session and never raises a card.
+                // A session that read untrusted content is not summarised (`specs/030` §4.3).
+                let mode = self.engine.settings.session_summary;
+                if mode != crate::summary::SummaryMode::Off && !d.tainted && d.turns >= 2 {
+                    let (engine, mission, record, sid) = (self.engine.clone(), m.clone(), crate::summary::record_of(session), id.clone());
+                    tokio::spawn(async move {
+                        let Some(w) = engine.summarize_session(mode, &record).await else { return };
+                        let model = format!("{}/{}", w.endpoint_id, w.model_id);
+                        let secrets = engine.secrets.clone();
+                        if crate::session::append_summary(&engine.ws.home, &mission.id, &sid, &w.text, &model, &|s| secrets.redact(s)).is_ok() {
+                            let _ = mission.append(EventEnvelope::new(&mission.id, "session.summarized", json!({"session_id": sid, "model": model, "tokens": w.tokens}))).await;
+                        }
+                    });
+                }
             }
         }
         let next = crate::session::next_id(&events);
@@ -1108,6 +1122,67 @@ mod tests {
         assert_eq!((r["turns"].as_u64(), r["session"].as_str(), r["ceiling"].as_str()), (Some(2), Some("s_0000"), Some("L5")));
         assert!(r["text"].as_str().unwrap().contains("Redis or Postgres.") && r["tokens"].as_u64().unwrap() > 0, "{}", r);
         assert!(svc.session_context(json!({}), CallContext { scope: Scope::Narrator, client_id: 0 }).await.is_err(), "the narrator may not read the conversation");
+    }
+
+    /// Wait for a session's summary to reach the central log (it is written in the background).
+    async fn summary_of(f: &Fx, session: &str) -> Option<String> {
+        for _ in 0..150 {
+            if let Some(s) = crate::session::earlier(&f.engine.ws.home, &f.m.id, 9).into_iter().find(|d| d.session_id == session).and_then(|d| d.summary) {
+                return Some(s);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        None
+    }
+
+    // specs/030 §4.3: a finished session is summarised by a model, in the background; the summary is made safe, stored beside the digest and
+    // is what the next session is told about it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_finished_session_gets_a_model_written_summary_that_the_next_session_is_told() {
+        let f = setup(vec![Step::text("Option one is Redis, option two is Postgres."), Step::text("Going with Postgres."), Step::text("They chose\u{1b}[2J Postgres for the claim loop.\n\nNext: write the retry ladder."), Step::text("Noted.")], 5.0, |s| s.session_summary = crate::summary::SummaryMode::Fast);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        f.engine.run_task(&f.m, "orchestrator", "list two queue options").await.unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "do the second one").await.unwrap();
+        svc.begin_session(&f.m, "new").await.unwrap();
+        let summary = summary_of(&f, "s_0000").await.expect("the summary reached the central log");
+        assert_eq!(summary, "They chose Postgres for the claim loop. Next: write the retry ladder.");
+        // The line reaches the log just before the event is appended; wait for both.
+        for _ in 0..100 {
+            if !events_of(&f, "session.summarized").is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(events_of(&f, "session.summarized").len(), 1);
+        let asked = f.model.requests()[2].body.to_string();
+        assert!(asked.contains("RECORD") && asked.contains("list two queue options") && asked.contains("Option one is Redis"), "the summariser is shown the record: {}", asked);
+        assert_eq!(f.model.requests()[2].model_id, "haiku-x", "the cheapest tier of the primary family");
+        f.engine.run_task(&f.m, "orchestrator", "what now?").await.unwrap();
+        let next = f.model.requests()[3].body.to_string();
+        assert!(next.contains("Earlier session s_0000") && next.contains("They chose Postgres for the claim loop."), "{}", next);
+        assert!(!next.contains("asked list two queue options"), "the summary replaces the first lines");
+    }
+
+    // specs/030 §4.3: a session that read untrusted content is not summarised; and with the setting off nothing is asked of a model at all.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tainted_session_is_never_summarised_and_the_default_asks_no_model() {
+        for (mode, taint) in [(crate::summary::SummaryMode::Fast, true), (crate::summary::SummaryMode::Off, false)] {
+            let f = setup(vec![Step::text("One."), Step::text("Two."), Step::text("A summary that must not be written.")], 5.0, |s| s.session_summary = mode);
+            let svc = EngineService::new(f.engine.clone(), "m1");
+            svc.adopt(f.m.clone());
+            f.engine.run_task(&f.m, "orchestrator", "first").await.unwrap();
+            f.engine.run_task(&f.m, "orchestrator", "second").await.unwrap();
+            if taint {
+                let mut e = EventEnvelope::new(&f.m.id, "span.taint", json!({"ceiling": "L0", "cause": "docs.search"}));
+                e.task_id = Some("t_0002".into());
+                f.m.append(e).await.unwrap();
+            }
+            svc.begin_session(&f.m, "new").await.unwrap();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            assert_eq!(f.model.requests().len(), 2, "no summariser call ({:?}, tainted: {})", mode, taint);
+            assert!(crate::session::earlier(&f.engine.ws.home, &f.m.id, 9).iter().all(|d| d.summary.is_none()));
+        }
     }
 
     // specs/030 D-1: a restart ends the session; a restart with nothing said does not pile up empty sessions.

@@ -58,6 +58,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("away").and_then(|b| b.get("approval_park_max_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.approval_park_max = Duration::from_secs(v as u64);
     }
+    if let Some(v) = root.get("session").and_then(|b| b.get("summary")).and_then(|v| v.as_str()).and_then(crate::summary::SummaryMode::parse) {
+        s.session_summary = v;
+    }
     if let Some(v) = root.get("session").and_then(|b| b.get("conversation_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.conversation_tokens = v as usize;
     }
@@ -95,6 +98,12 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     }
     if let Some(v) = root.get("routing").and_then(|r| r.get("degrade_prompt_secs")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.degrade_wait = Duration::from_secs(v as u64);
+    }
+    if let Some(v) = root.get("routing").and_then(|r| r.get("checkpoint_model")).and_then(|v| v.as_bool()) {
+        s.checkpoint_model = v;
+    }
+    if let Some(v) = root.get("routing").and_then(|r| r.get("checkpoint_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
+        s.checkpoint_wait = Duration::from_secs(v as u64);
     }
     if let Some(v) = root.get("routing").and_then(|r| r.get("max_park_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.park_max = Some(Duration::from_secs(v as u64));

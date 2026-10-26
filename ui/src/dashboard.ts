@@ -93,6 +93,24 @@ function running(m: OModel, w: number): string[] {
   return out;
 }
 
+const eta = (ms: number) => { const mins = Math.max(1, Math.round(ms / 60_000)); return mins >= 60 ? `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m` : `${mins}m`; };
+
+/** Which models are out and until when, and which tasks run on a stand-in and who agreed (`specs/035` D-7). Empty when all is well. */
+export function failover(m: OModel, w: number): string[] {
+  const now = m.now ?? 0;
+  const out = (m.st.models_out ?? []).filter((x) => !x.back_ms || !now || x.back_ms > now);
+  const rows: string[] = [];
+  for (const x of out) {
+    const back = x.back_ms && now ? ` · back in ${eta(x.back_ms - now)}` : '';
+    rows.push(' ' + T.alert('✖') + ' ' + chalk.bold(`${x.endpoint_id}/${x.model_id}`) + dim(`  ${x.reason}${back}`));
+  }
+  const who = { operator: 'you agreed', policy: 'to finish the task, as your policy allows', automatic: 'an equal model, no question asked' } as const;
+  for (const s of m.st.standins ?? []) {
+    rows.push(' ' + T.warn('⇄') + ` ${T.roleName(s.role || 'orchestrator', m.info)} ${dim(`(${s.task})`)} on ${chalk.bold(s.to)} instead of ${s.from}` + dim(` · ${who[s.by] ?? s.by}`));
+  }
+  return rows.map((r) => T.clip(r, w));
+}
+
 function pace(m: OModel, w: number): string[] {
   const st = m.st;
   const per = st.pace.length ? st.pace[st.pace.length - 1]! : 0;
@@ -138,9 +156,11 @@ export function dashboard(m: OModel, w: number, h: number): string[] {
   const sections: [string, string[]][] = [];
   const items = needs(m.st);
   const ask: [string, string[]] = ['needs you', items.slice(0, 4).map((i) => ' ' + T.warn('►') + ' ' + clean(i, w - 4)).concat(items.length > 4 ? [dim(`   +${items.length - 4} more`)] : [])];
+  const models = failover(m, w);
   if (short) sections.push(['running now', running(m, w)], ['session', chips(m, w, true)]);
   else sections.push(['sessions', chips(m, w)], ['running now', running(m, w)]);
   if (items.length) sections.push(ask);
+  if (models.length) sections.push(['models', models]);
   if (!short) sections.push(['pace', pace(m, w)]);
   for (const [title, rows] of sections) {
     if (out.length && !short) out.push('');
