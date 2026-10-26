@@ -594,6 +594,13 @@ pub fn run(args: &[String]) -> i32 {
             }
             0
         }
+        Some("arms") => {
+            if args.get(1).map(String::as_str) != Some("init") {
+                eprintln!("usage: delphi train arms init --source-home <home> --workspace <name> --defs <arms-defs.toml> --out <new dir> [--avail avail.json] [--only a,b]");
+                return 2;
+            }
+            crate::train_arms::cli(args)
+        }
         Some("report") => crate::train_report::cli(args),
         Some(s @ ("review" | "disputes" | "resolve")) => {
             let refs: Vec<&Case> = all.iter().collect();
@@ -631,7 +638,7 @@ pub fn run(args: &[String]) -> i32 {
             crate::train_run::cli(args, &chosen)
         }
         _ => {
-            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
+            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train arms init --source-home <home> --workspace <name> --defs <arms-defs.toml> --out <new dir> [--avail avail.json]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
             2
         }
     }

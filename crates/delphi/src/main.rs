@@ -25,6 +25,7 @@ mod missions;
 mod changelog;
 mod learn_cmd;
 mod train_run;
+mod train_arms;
 mod train_hidden;
 mod train_judge;
 mod train_report;

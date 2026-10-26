@@ -57,6 +57,23 @@ no credential is printed. The JSON feeds the arm template homes.
 Subscription seats have no list endpoint to ask. If a deterministic quota endpoint for a subscription is wanted (it would
 avoid even the one-token calls), it would read the CLI's OAuth token from the keychain, so it is not built unprompted.
 
+## Building the arm homes
+
+```sh
+python3 -I dev/train/avail.py --workspace <name> --live --json avail.json
+delphi train arms init --source-home ~/.delphi --workspace <name> --defs dev/train/arms-defs.toml \
+    --avail avail.json --out /path/to/new/dir
+delphi train run --arms-file /path/to/new/dir/arms.toml --work-dir /path/to/run --no-session-cap --allow-unverified ...
+```
+
+Each arm is a throwaway copy of your workspace's configuration and ratified files, with the tier models, `[access]` and
+`role_family` rewritten as `arms-defs.toml` says and the pinned hash of those blocks re-sealed (as `/ratify` would). It carries
+no missions, state, worktrees, or your own lessons, heuristics and profile, so two arms differ only by their staffing. Your
+home is only read. Each built home is loaded the way the daemon loads it and the models its pool would use are printed, so a
+typo or an unreachable endpoint shows up here. An arm whose model `avail.json` says is exhausted or unlisted is skipped with
+the reset time. `expect_models` in the generated `arms.toml` holds each model's alias and its `claude-` long form (the Claude
+CLI may report either; the first live run confirms which).
+
 ## Spending: caps
 
 `train run` and `train judge` take `--budget-usd N`, or **`--no-session-cap`** to drop the session total on purpose. The cap on
