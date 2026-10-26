@@ -486,6 +486,7 @@ mod tests {
         let (_, c) = get(&mut api, "/v1/collections");
         assert_eq!(c.as_array().unwrap().len(), 1, "{c}");
         assert_eq!((c[0]["name"].as_str(), c[0]["documents"].as_u64()), (Some("specs"), Some(2)));
+        assert!(c[0]["updated"].as_str().unwrap().starts_with("20"), "a real date, from the files: {c}");
         let (_, d) = get(&mut api, "/v1/documents?collection=specs&limit=1");
         assert_eq!(d.as_array().unwrap().len(), 1);
         let (s, h) = get(&mut api, "/v1/health");

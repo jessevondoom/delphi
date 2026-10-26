@@ -61,7 +61,7 @@ const READER_MARGIN = 4;
 
 /** The reader's body: the document rendered at `w`, and the links in it (focus is drawn by the caller's `focus`). */
 export const layout = (e: Entry, w: number, focus: number | null = null) => renderMarkdownLinks(e.text, Math.max(10, w - READER_MARGIN), { base: e.path, focus });
-const bodyRows = (h: number) => Math.max(1, h - 4);
+const bodyRows = (h: number) => Math.max(1, h - 5); // the header, two rules, the status row and the hint
 
 /** The row a section or a line range starts on, in the rendered document: by heading text, or by how far down the source it is. */
 function startRow(e: Entry, w: number, target: Target | null): number {
@@ -212,7 +212,7 @@ function box(a: Arch, w: number): string[] {
   const q = [...a.q].slice(-(inner - 6)).join('');
   if (w < 40) return [' ' + T.accent('›') + ' ' + (q || T.dim('search')) + cursor, T.dim('─'.repeat(Math.max(0, w - 2)).padStart(w - 1))];
   const body = ` ${T.accent('›')}  ${q || (a.focus === 'box' ? '' : '')}${q ? '' : T.dim('search what Delphi knows…')}${cursor}`;
-  const fill = ' '.repeat(Math.max(0, inner - 2 - T.width(body)));
+  const fill = ' '.repeat(Math.max(0, inner - 1 - T.width(body)));
   return [center('╭' + '─'.repeat(inner) + '╮', w), center('│' + body + fill + ' │', w), center('╰' + '─'.repeat(inner) + '╯', w)];
 }
 
@@ -253,7 +253,8 @@ function results(a: Arch, w: number, h: number): string[] {
     const i = top + k, on = i === a.sel && a.focus === 'list';
     const title = `${x.path}${x.heading ? ' › ' + x.heading.split(' > ').pop() : ''}`;
     out.push(T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${on ? chalk.bold(title) : title}`, T.dim(x.collection + ' '), w));
-    const prev = sanitize(x.preview).split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).filter(Boolean).slice(0, 2);
+    // A preview opens with the section's own heading, which the title row already says.
+    const prev = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean).slice(0, 2);
     for (let n = 0; n < 2; n++) out.push(prev[n] ? T.dim('       ' + T.clip(prev[n]!, w - 9)) : '');
     out.push('');
   });
@@ -277,7 +278,7 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
     ...pad(body, rowsHigh),
     T.hairline(pal, w),
     T.spread(' ' + T.dim(status), T.dim(`${a.note ? a.note + ' · ' : ''}${a.trail.length > 1 ? `${a.at + 1}/${a.trail.length} · ` : ''}${pct}% `), w),
-  ].slice(0, h - 1).concat(hint('tab link · enter open · [ back · ] forward · y copy · esc close'));
+  ].concat(hint('tab link · enter open · [ back · ] forward · y copy · esc close'));
 }
 
 /** The pane's body: `h` rows of at most `w` columns. */

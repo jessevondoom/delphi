@@ -643,12 +643,14 @@ fn doc_info(r: &rusqlite::Row) -> rusqlite::Result<DocInfo> {
     Ok(DocInfo { rel_path: r.get(0)?, zone: r.get(1)?, source_type: r.get(2)?, status: r.get(3)?, blake3: r.get(4)?, updated_at: r.get(5)? })
 }
 
-const DOC_COLS: &str = "d.rel_path, d.zone, d.source_type, d.status, d.content_blake3, d.updated_at";
+/// A document's last change on disk: the indexer keeps the file's modification time, while `updated_at` is empty in an
+/// index the daemon built, which has no clock to give it.
+const DOC_COLS: &str = "d.rel_path, d.zone, d.source_type, d.status, d.content_blake3, strftime('%Y-%m-%dT%H:%M:%SZ', d.mtime_ns / 1000000000, 'unixepoch')";
 
 impl Kb {
     /// The collections (zones) with how many visible documents each holds and when the newest changed.
     pub fn collections(&self, opts: &SearchOpts) -> Result<Vec<(String, usize, String)>, KbError> {
-        let sql = format!("SELECT d.zone, COUNT(*), MAX(d.updated_at) FROM kb_documents d WHERE {} GROUP BY d.zone ORDER BY d.zone", allowed_sql(opts));
+        let sql = format!("SELECT d.zone, COUNT(*), strftime('%Y-%m-%dT%H:%M:%SZ', MAX(d.mtime_ns) / 1000000000, 'unixepoch') FROM kb_documents d WHERE {} GROUP BY d.zone ORDER BY d.zone", allowed_sql(opts));
         let mut st = self.conn.prepare(&sql)?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize, r.get::<_, String>(2)?)))?;
         Ok(rows.flatten().collect())
@@ -656,7 +658,7 @@ impl Kb {
 
     /// Visible documents, newest first, optionally of one collection.
     pub fn documents(&self, zone: Option<&str>, limit: usize, offset: usize, opts: &SearchOpts) -> Result<Vec<DocInfo>, KbError> {
-        let sql = format!("SELECT {DOC_COLS} FROM kb_documents d WHERE {} AND (?1 IS NULL OR d.zone = ?1) ORDER BY d.updated_at DESC, d.rel_path LIMIT ?2 OFFSET ?3", allowed_sql(opts));
+        let sql = format!("SELECT {DOC_COLS} FROM kb_documents d WHERE {} AND (?1 IS NULL OR d.zone = ?1) ORDER BY d.mtime_ns DESC, d.rel_path LIMIT ?2 OFFSET ?3", allowed_sql(opts));
         let mut st = self.conn.prepare(&sql)?;
         let rows = st.query_map(rusqlite::params![zone, limit as i64, offset as i64], doc_info)?;
         Ok(rows.flatten().collect())

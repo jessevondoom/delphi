@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { emptyArch } from '../src/archives.ts';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { observeFrame, emptyState, type OModel, type OState } from '../src/observe-screen.ts';
@@ -8,7 +9,7 @@ import { info, NOW, namedWorld, threadsWorld } from './threads-fixture.ts';
 import { snapshot } from './helpers.ts';
 
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const model = (st: OState, over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st, view: 'epic', pick: 0, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true, still: true, now: NOW, ...over });
+const model = (st: OState, over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st, view: 'epic', pick: 0, scroll: 0, selNode: 0, arch: emptyArch(), live: {}, connected: true, still: true, now: NOW, ...over });
 const frame = (st: OState, w: number, h: number, over: Partial<OModel> = {}) => observeFrame(model(st, over), w, h);
 const lines = (st: OState, w = 80, h = 24) => frame(st, w, h).map(plain);
 

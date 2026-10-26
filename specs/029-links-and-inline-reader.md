@@ -24,6 +24,9 @@ Open a file without leaving the window, by following a link, the way a browser f
 | D-2 | The mechanism is **generic**: the same link handling serves the knowledge window, the main chat and the thinking feed. |
 | D-3 | **Read-only.** |
 | D-4 | The **main chat is a source for gathering research**: what is opened or cited there is collected (§6). |
+| D-5 | `ctrl+o` enters link mode in the console. |
+| D-6 | Plain-text pointers become links **once the span closes**, not while it streams (less to move and flicker). |
+| D-7 | An external link opens the **system default browser** at that address, on `enter`, with no further confirmation. |
 
 ## 3. The link model
 A link is data, separate from how it is drawn:
@@ -50,7 +53,7 @@ target = doc { path, anchor? }       a document in the knowledge base (logical p
 | `y` | copy the focused target |
 
 - In the **console** `tab` already completes a command, so link focus starts only from a mode the operator enters (`ctrl+o`, "open a link"), which also stops a stray `enter` from opening anything. In the **narrator** and the **reader**, `tab` is free and used directly.
-- An `external` link is never fetched by Delphi. `enter` on one shows the URL and offers the system browser (`o`); nothing happens without that key.
+- An `external` link is never fetched by Delphi. `enter` on one opens its address in the system's default browser (`open` on macOS, `xdg-open` on Linux) and says so in the status row; only `http(s)` and `mailto` addresses open, passed as an argument and never as shell text. The focused link's address shows in the status row before `enter`.
 - Plain keys never type into a document: the reader has no input, so it cannot change what it shows.
 
 ## 5. The reader
@@ -83,13 +86,12 @@ The crate was considered (the operator's suggestion) and **not adopted**:
 - It is young and small (version 0.2.x, one author, a few hundred downloads), and it pulls a second TUI framework into a binary that ships four targets. That is a supply-chain and size cost for no capability the console lacks.
 - If a Rust-side renderer is wanted later, for a plain-terminal `delphi kb open <path>` with no console running, evaluate `charmed-glamour` (the rendering library under it) then, on its own merits. It is not needed for this spec.
 
-## 8. Build order
-1. `links.ts`: the link model, the shared pattern for plain-text pointers, and `{ lines, links }` from the Markdown renderer. Pure functions with tests, no UI.
-2. The reader, opened from the archives pane (`specs/028`), with focus, history and `kb.doc`.
-3. The same in the narrator's thinking feed (links in streamed reasoning are plain-text pointers only, since the stream is unparsed).
-4. The same in the main chat, behind `ctrl+o`, and the sources/pin recording of §6.
+## 8. Build order and state
+1. **Built:** `ui/src/links.ts` (the model, the pointer pattern, `parseTarget`, focus stepping) and `renderMarkdownLinks` in `ui/src/markdown.ts`, which returns `{ lines, links }` with each link's rows and columns. It marks links with zero-width OSC 8 markers that survive wrapping and are removed afterwards, so output without links is unchanged line for line.
+2. **Built:** the reader, in the archives pane (`ui/src/archives.ts`), reading through the narrator socket's new read-only `kb.get` (the same routes as `delphi kb serve`, `specs/028` §6a). Tab and shift+tab focus, `enter` opens, `[` `]` and `esc` walk the history, `y` copies, an anchor or a line range opens partway down (the range is approximate: source lines are scaled to rendered rows). External links open the browser (D-7).
+3. Next: the same in the narrator's thinking feed (pointers linked once a span closes, D-6).
+4. Next: the same in the main chat behind `ctrl+o` (D-5), and the sources/pin recording of §6.
 
 ## 9. Open questions
-1. **Entering link mode in the console:** `ctrl+o` is proposed; is there a binding you would rather use?
-2. **Plain-text pointers in the thinking feed:** linkify them as they stream, or only once the span closes? Linkifying while streaming makes links appear and move.
-3. **External links:** is `o` (open in the system browser after a confirmation) acceptable, or should external links be display-only?
+1. **Link mode in the chat:** with `ctrl+o` settled, should `esc` leave it, or `ctrl+o` again, or both? Proposed: both.
+2. **Sources from the narrator:** documents opened in the narrator's reader are not recorded as sources (the narrator is read-only and has no notebook); only the console records them (§6). Is that the right line?

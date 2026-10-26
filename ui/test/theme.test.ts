@@ -1,6 +1,7 @@
 // The palette and the terminal's capabilities (`specs/005e` §5, slice 2 of 005f).
 process.env.TZ = 'UTC';
 import test from 'node:test';
+import { emptyArch } from '../src/archives.ts';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -84,7 +85,7 @@ const model = (over: Partial<Model> = {}): Model => ({
   info, pal: { dark: true, bg: [15, 23, 42] }, state: stateWorld(), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'mission-auto', panel: null, help: false, ...over,
 });
-const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true });
+const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, arch: emptyArch(), live: {}, connected: true });
 
 /** True when any SGR sequence in `s` sets a colour (foreground, background, bright or extended). */
 function hasColour(s: string): boolean {

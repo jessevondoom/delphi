@@ -14,6 +14,8 @@ tags: [spec, ui, knowledge-base, search, narrator, draft]
 
 # Spec 028: The Knowledge Window
 
+**State (2026-10-25):** the window is built in the narrator's `archives` pane: the search box and mode line, the shelf (collections and recently changed documents), ranked results, and the inline reader of `specs/029`. Offline only. Not built: online mode, `more like this`.
+
 ## 1. What this is
 The narrator's `archives` view (the fifth, `ui/src/observe-screen.ts` `archives`) becomes the knowledge window: a search page like a search engine's front page, and an **explorer of what Delphi has stored** (specs, context, memory, skills, missions, lessons), driven by the vector search. Nothing here changes `delphi kb` (`specs/004` §3).
 
@@ -96,6 +98,8 @@ this window                                         ← →  ·  ○ ○ ○ ○
 - The query text leaves the machine only on an explicit online or both search. The window never fires an online search while typing.
 
 ### 6a. The self-hosted API (built, 2026-10-25)
+The same routes are also served to the narrator over its socket as the read-only method `kb.get` (a `/v1/...` target in, `{status, body}` out), so the knowledge window needs no HTTP server running.
+
 `delphi kb serve` serves the workspace's knowledge base over HTTP as a small, **read-only** JSON API, using the same hybrid search as the console (keyword + vector + reranker, `specs/004` §3) and no model call, so a request costs no tokens. It is for the window, the scout, and anything else on the operator's side that wants to search stored knowledge. It searches **Delphi's own documents**; it does not reach the web, so online search (the `[search]` client above) is still separate.
 
 | Endpoint | Returns |

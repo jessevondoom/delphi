@@ -2,6 +2,7 @@
 // review. Accept an intended change with `UPDATE_SNAPSHOTS=1 npm test` and read the changed files before committing.
 process.env.TZ = 'UTC'; // reply headers show a clock time
 import test from 'node:test';
+import { emptyArch } from '../src/archives.ts';
 import assert from 'node:assert/strict';
 import { frame, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
@@ -49,7 +50,7 @@ test('research panels over the chat', () => {
 });
 
 test('the Observer: every view at 100x30, and two narrow', () => {
-  const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true });
+  const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, arch: emptyArch(), live: {}, connected: true });
   for (const view of VIEWS) {
     const r = snapshot(`observe-${view}`, observeFrame(om(view), 100, 30));
     assert.ok(r.ok, r.message);
