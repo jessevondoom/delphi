@@ -19,10 +19,39 @@ pub struct Fact {
     pub id: String,
     pub claim: String,
     pub source: String,
+    /// The verbatim passage of the source's extract that supports the claim.
+    pub quote: String,
     pub weight: f64,
+    /// The patterns as written, for the review sheet.
+    pub pattern_src: Vec<String>,
     patterns: Vec<Regex>,
     /// A number the answer must contain within `tol` of `value`, in addition to any pattern.
-    number: Option<(f64, f64)>,
+    pub number: Option<(f64, f64)>,
+}
+
+/// A question the pack leaves to judgement (`specs/037` §4): a strategic call or an insight, not a fact. The assistant may
+/// draft a starting view; only the operator's own `operator_view` reaches a judge, and as a view, never as a fact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Insight {
+    pub id: String,
+    pub question: String,
+    /// A starting point written by whoever built the pack; flagged as a draft and never shown to a judge.
+    pub draft_view: String,
+    /// The operator's judgement. Empty means not yet reviewed.
+    pub operator_view: String,
+    /// Factors a good answer weighs.
+    pub considerations: Vec<String>,
+    /// How much latitude: what other well-argued views are acceptable.
+    pub acceptable: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceMeta {
+    pub id: String,
+    pub url: String,
+    pub retrieved: String,
+    pub blake3: String,
+    pub note: String,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +70,12 @@ pub struct Truth {
     pub facts: Vec<Fact>,
     pub traps: Vec<Trap>,
     pub sources: usize,
+    pub insights: Vec<Insight>,
+    pub source_meta: Vec<SourceMeta>,
+    /// Hash of everything a verification vouches for: the facts, traps, sources, extracts, rubric and insights (not meta.toml).
+    pub fingerprint: String,
+    /// The fingerprint the operator verified. When it differs from `fingerprint`, the pack was edited afterwards.
+    pub verified_fingerprint: Option<String>,
 }
 
 impl PartialEq for Truth {
@@ -106,6 +141,7 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
     if !dir.is_dir() {
         return Err(vec![format!("{}: a research case needs a `truth/` directory (specs/037 §4)", at)]);
     }
+    let mut verified_fingerprint: Option<String> = None;
     let meta = table(&dir.join("meta.toml"), at, &mut p);
     let (as_of, verified_by, verified_on) = match &meta {
         Some(m) => {
@@ -113,6 +149,7 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
             if !date_ok(&as_of) {
                 p.push(format!("{}: truth/meta.toml `as_of` must be a date like 2026-10-26", at));
             }
+            verified_fingerprint = s(m, "verified_fingerprint").map(String::from);
             let (by, on) = (s(m, "verified_by").map(String::from), s(m, "verified_on").map(String::from));
             if by.is_some() != on.is_some() || on.as_deref().is_some_and(|d| !date_ok(d)) {
                 p.push(format!("{}: truth/meta.toml `verified_by` and `verified_on` (a date) go together", at));
@@ -127,6 +164,7 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
 
     // Sources: each has an id, a URL, a retrieval date, and an extract that matches its recorded hash.
     let mut source_text: std::collections::BTreeMap<String, Option<String>> = Default::default();
+    let mut source_meta: Vec<SourceMeta> = Vec::new();
     if let Some(t) = table(&dir.join("sources.toml"), at, &mut p) {
         for (i, st) in t.get("source").and_then(|v| v.as_array()).into_iter().flatten().enumerate() {
             let here = format!("{} source #{}", at, i + 1);
@@ -144,6 +182,7 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
             if source_text.contains_key(id) {
                 p.push(format!("{}: duplicate source id `{}`", here, id));
             }
+            source_meta.push(SourceMeta { id: id.into(), url: s(st, "url").unwrap_or("").into(), retrieved: s(st, "retrieved").unwrap_or("").into(), blake3: s(st, "blake3").unwrap_or("").into(), note: s(st, "note").unwrap_or("").into() });
             let untracked = st.get("untracked").and_then(|v| v.as_bool()).unwrap_or(false);
             let extract = dir.join("sources").join(format!("{}.txt", id));
             if untracked {
@@ -208,7 +247,8 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
             if weight <= 0.0 {
                 p.push(format!("{}: `{}` weight must be above 0", here, id));
             }
-            facts.push(Fact { id, claim: claim.unwrap_or("").to_string(), source: source.unwrap_or("").to_string(), weight, patterns: pats, number });
+            let pattern_src: Vec<String> = f.get("any").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            facts.push(Fact { id, claim: claim.unwrap_or("").to_string(), source: source.unwrap_or("").to_string(), quote: quote.unwrap_or("").to_string(), weight, pattern_src, patterns: pats, number });
         }
     }
 
@@ -231,10 +271,37 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
         }
     }
 
+    let mut insights = Vec::new();
+    let ins_path = dir.join("insights.toml");
+    if ins_path.is_file() {
+        if let Some(t) = table(&ins_path, at, &mut p) {
+            let mut seen_ins = BTreeSet::new();
+            for (i, it) in t.get("insight").and_then(|v| v.as_array()).into_iter().flatten().enumerate() {
+                let here = format!("{} insight #{}", at, i + 1);
+                let Some(it) = it.as_table() else {
+                    p.push(format!("{}: not a table", here));
+                    continue;
+                };
+                let (id, question) = (s(it, "id").unwrap_or(""), s(it, "question").unwrap_or(""));
+                if id.is_empty() || question.is_empty() || !seen_ins.insert(id.to_string()) {
+                    p.push(format!("{}: needs a unique `id` and a `question`", here));
+                }
+                insights.push(Insight {
+                    id: id.into(),
+                    question: question.into(),
+                    draft_view: s(it, "draft_view").unwrap_or("").into(),
+                    operator_view: s(it, "operator_view").unwrap_or("").into(),
+                    considerations: it.get("considerations").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                    acceptable: s(it, "acceptable").unwrap_or("").into(),
+                });
+            }
+        }
+    }
     if !p.is_empty() {
         return Err(p);
     }
-    Ok(Truth { dir, as_of, verified_by, verified_on, facts, traps, sources: source_text.len() })
+    let fp = fingerprint(&dir);
+    Ok(Truth { dir, as_of, verified_by, verified_on, facts, traps, sources: source_text.len(), insights, source_meta, fingerprint: fp, verified_fingerprint })
 }
 
 /// Record the blake3 of every tracked extract in `truth/sources.toml` (after an extract was written or edited).
@@ -280,6 +347,216 @@ pub fn seal(case_dir: &Path) -> Result<usize, String> {
     Ok(sealed)
 }
 
+/// Hash of everything a verification vouches for. `meta.toml` is left out (it holds the stamp itself).
+pub fn fingerprint(dir: &Path) -> String {
+    let mut h = blake3::Hasher::new();
+    for name in ["facts.toml", "traps.toml", "sources.toml", "rubric.md", "insights.toml"] {
+        h.update(name.as_bytes());
+        h.update(&fs::read(dir.join(name)).unwrap_or_default());
+        h.update(b"\0");
+    }
+    let mut extracts: Vec<_> = fs::read_dir(dir.join("sources")).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    extracts.sort();
+    for e in extracts {
+        h.update(e.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_bytes());
+        h.update(&fs::read(&e).unwrap_or_default());
+        h.update(b"\0");
+    }
+    h.finalize().to_hex().to_string()
+}
+
+/// Record that `by` checked the pack on `on`, with the fingerprint of what was checked. Rewrites only the `verified_*` lines of
+/// `meta.toml`. Refuses a pack that does not load.
+pub fn stamp_verified(case_dir: &Path, by: &str, on: &str) -> Result<(), String> {
+    let t = load(case_dir, "pack").map_err(|e| format!("the pack does not load: {}", e.join("; ")))?;
+    if by.trim().is_empty() || !date_ok(on) {
+        return Err("give who verified it and a date like 2026-10-26".into());
+    }
+    let path = case_dir.join("truth/meta.toml");
+    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("verified_") && !l.trim_start().starts_with("# DRAFT") && !l.trim_start().starts_with("# Verifying means") && !l.trim_start().starts_with("# verified")).collect();
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    let out = format!("{}\n\nverified_by = {:?}\nverified_on = \"{}\"\nverified_fingerprint = \"{}\"\n", lines.join("\n"), by.trim(), on, t.fingerprint);
+    fs::write(&path, out).map_err(|e| e.to_string())
+}
+
+// ── the operator's review ───────────────────────────────────────────────────────────────────────────────────────
+
+/// A Markdown sheet for the operator to check a pack: every fact beside its source link and verbatim quote, the traps, the
+/// sources with their hashes, the rubric, and the judgement questions with room for the operator's own view. Generated, so it
+/// is never edited: change the files in `truth/` and regenerate.
+pub fn review_sheet(case_id: &str, prompt: &str, t: &Truth) -> String {
+    let status = if t.stale() {
+        format!("STALE: verified by {} on {} but edited since; verify again", t.verified_by.as_deref().unwrap_or("?"), t.verified_on.as_deref().unwrap_or("?"))
+    } else if t.verified() {
+        format!("VERIFIED by {} on {}", t.verified_by.as_deref().unwrap_or("?"), t.verified_on.as_deref().unwrap_or("?"))
+    } else {
+        "DRAFT: not yet checked by you; `delphi train run` will not use it without --allow-unverified".to_string()
+    };
+    let src = |id: &str| t.source_meta.iter().find(|s| s.id == id).map(|s| format!("{} (retrieved {}){}", s.url, s.retrieved, if s.note.is_empty() { String::new() } else { format!(" — {}", s.note) })).unwrap_or_else(|| id.to_string());
+    let mut o = String::new();
+    o.push_str(&format!("# Review sheet: {}\n\n_Generated by `delphi train truth-sheet`; do not edit it. Change the files in `truth/` and regenerate._\n\n", case_id));
+    o.push_str(&format!("**Status:** {}\n\n**As of:** {}\n\n**The agent is asked** (as an ordinary request, nothing says it is a test):\n\n> {}\n\n", status, t.as_of, prompt.trim().replace('\n', "\n> ")));
+    o.push_str(&format!("## How to review\n\n1. **Facts and traps** (sections 1 and 2): open each source link, find the quote, and confirm the claim says what the quote says. Confirm the patterns would catch a correct answer worded differently, and would not fire on a wrong one. A pattern is a *lower bound*: a miss costs the answer a point it deserved, so err toward loose patterns for facts and tight patterns for traps.\n2. **Sources** (section 3): is each one authoritative enough to be the record?\n3. **Rubric** (section 4): is this what a good answer must do?\n4. **Judgement calls** (section 5): these are not facts. Write your own view in `truth/insights.toml` (`operator_view`); only your view reaches a judge, and as a view.\n5. When it is right: `delphi train verify --case {} --by \"<your name>\"`. Any later edit to the pack makes the stamp stale.\n\nTo see what the checks do with an answer you write: `delphi train truth-check --case {} --text-file answer.md`.\n\n", case_id, case_id));
+    o.push_str(&format!("## 1. Facts ({})\n\n", t.facts.len()));
+    for f in &t.facts {
+        o.push_str(&format!("### `{}` (weight {})\n\n- **Claim:** {}\n- **Source:** {}\n- **Quote:**\n\n  > {}\n\n- **Counts as stated if the answer matches any of:** {}{}\n- [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right\n\n", f.id, f.weight, f.claim, src(&f.source), f.quote, f.pattern_src.iter().map(|p| format!("`{}`", p)).collect::<Vec<_>>().join(" · "), f.number.map(|(v, tol)| format!("\n- **And contains the number** {} (± {})", v, tol)).unwrap_or_default()));
+    }
+    o.push_str(&format!("## 2. Traps ({})\n\nAn answer asserting one is penalized.\n\n", t.traps.len()));
+    for tr in &t.traps {
+        let pats = fs::read_to_string(t.dir.join("traps.toml")).ok().and_then(|x| x.parse::<toml::Table>().ok()).and_then(|x| x.get("trap").and_then(|v| v.as_array()).and_then(|a| a.iter().find(|e| e.get("id").and_then(|i| i.as_str()) == Some(tr.id.as_str())).cloned())).and_then(|e| e.get("any").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|p| format!("`{}`", p))).collect::<Vec<_>>().join(" · "))).unwrap_or_default();
+        o.push_str(&format!("### `{}`\n\n- **Why it is false:** {}\n- **Fires on:** {}\n- [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer\n\n", tr.id, tr.why, pats));
+    }
+    o.push_str(&format!("## 3. Sources ({})\n\n| id | link | retrieved | extract hash | note |\n| :-- | :-- | :-- | :-- | :-- |\n", t.source_meta.len()));
+    for s in &t.source_meta {
+        o.push_str(&format!("| {} | {} | {} | `{}` | {} |\n", s.id, s.url, s.retrieved, s.blake3.chars().take(12).collect::<String>(), s.note));
+    }
+    o.push_str("\nThe full extract of each source is in `truth/sources/<id>.txt`; the quotes above were found in it automatically when the pack loaded.\n\n");
+    o.push_str(&format!("## 4. Rubric\n\nThe jury and you judge against this.\n\n{}\n\n[ ] this is what a good answer must do and avoid\n\n", fs::read_to_string(t.dir.join("rubric.md")).unwrap_or_default().trim()));
+    o.push_str("## 5. Judgement calls\n\nNot facts: strategic calls and insights where reasonable people differ. The assistant's draft is only a starting point; **write your own view** so the jury can be tested on judgement, not just recall.\n\n");
+    if t.insights.is_empty() {
+        o.push_str("_This pack has none yet._ To add one, create `truth/insights.toml`:\n\n```toml\n[[insight]]\nid = \"short-id\"\nquestion = \"The call a good answer has to make.\"\noperator_view = \"\"        # your judgement, in your words\nconsiderations = [\"what a good answer weighs\"]\nacceptable = \"what other well-argued views are fine\"\n```\n\n");
+    }
+    for i in &t.insights {
+        o.push_str(&format!("### `{}`\n\n- **Question:** {}\n- **Assistant's draft view (not shown to any judge):** {}\n- **Your view:** {}\n", i.id, i.question, if i.draft_view.is_empty() { "—".to_string() } else { i.draft_view.clone() }, if i.operator_view.is_empty() { "_not written yet: set `operator_view` in `truth/insights.toml`_".to_string() } else { i.operator_view.clone() }));
+        if !i.considerations.is_empty() {
+            o.push_str(&format!("- **A good answer weighs:** {}\n", i.considerations.join("; ")));
+        }
+        if !i.acceptable.is_empty() {
+            o.push_str(&format!("- **Latitude:** {}\n", i.acceptable));
+        }
+        o.push('\n');
+    }
+    o
+}
+
+/// What the deterministic checks make of an answer, in words: for trying a pack before verifying it.
+pub fn check_report(t: &Truth, text: &str) -> String {
+    let r = t.recall(text);
+    let traps = t.trap_hits(text);
+    format!(
+        "fact recall {:.0}% ({} of {} facts)\n  stated:  {}\n  missing: {}\ntraps: {}\n",
+        r.fraction * 100.0,
+        r.stated.len(),
+        t.facts.len(),
+        if r.stated.is_empty() { "—".into() } else { r.stated.join(", ") },
+        if r.missing.is_empty() { "—".into() } else { r.missing.join(", ") },
+        if traps.is_empty() { "none".to_string() } else { traps.join(", ") }
+    )
+}
+
+fn flag(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+fn case_prompt(case_dir: &Path) -> String {
+    fs::read_to_string(case_dir.join("case.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("prompt").and_then(|p| p.as_str().map(String::from))).unwrap_or_default()
+}
+
+/// Every research case directory under `<root>/<suite>/cases/*` that has a `truth/`, as `(suite/id, dir)`.
+pub fn truth_cases(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for suite in fs::read_dir(root).map(|rd| rd.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+        for c in fs::read_dir(suite.path().join("cases")).map(|rd| rd.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+            if c.path().join("truth").is_dir() {
+                out.push((format!("{}/{}", suite.file_name().to_string_lossy(), c.file_name().to_string_lossy()), c.path()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `delphi train truth-sheet`, `truth-check` and `verify`.
+pub fn cli(sub: &str, args: &[String], root: &Path) -> i32 {
+    let all = truth_cases(root);
+    if sub == "truth-sheet" && args.iter().any(|a| a == "--all") {
+        for (id, dir) in &all {
+            match load(dir, id) {
+                Ok(t) => {
+                    if let Err(e) = fs::write(dir.join("truth/review-sheet.md"), review_sheet(id, &case_prompt(dir), &t)) {
+                        eprintln!("delphi train truth-sheet: {}: {}", id, e);
+                        return 1;
+                    }
+                    println!("wrote {}", dir.join("truth/review-sheet.md").display());
+                }
+                Err(e) => {
+                    eprintln!("delphi train truth-sheet: {} does not load: {}", id, e.join("; "));
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
+    let Some(case) = flag(args, "--case") else {
+        eprintln!("delphi train {}: --case <suite>/<id> is required (research cases with a truth pack: {})", sub, if all.is_empty() { "none".into() } else { all.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>().join(", ") });
+        return 2;
+    };
+    let Some((id, dir)) = all.iter().find(|(i, _)| *i == case) else {
+        eprintln!("delphi train {}: no truth pack for `{}`", sub, case);
+        return 2;
+    };
+    let t = match load(dir, id) {
+        Ok(t) => t,
+        Err(e) => {
+            for p in e {
+                eprintln!("FAIL {}", p);
+            }
+            return 1;
+        }
+    };
+    match sub {
+        "truth-sheet" => {
+            let sheet = review_sheet(id, &case_prompt(dir), &t);
+            match flag(args, "--out") {
+                Some(out) => match fs::write(&out, sheet) {
+                    Ok(()) => {
+                        println!("wrote {}", out);
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("delphi train truth-sheet: {}", e);
+                        1
+                    }
+                },
+                None => {
+                    print!("{}", sheet);
+                    0
+                }
+            }
+        }
+        "truth-check" => {
+            let Some(text) = flag(args, "--text-file").and_then(|f| fs::read_to_string(f).ok()) else {
+                eprintln!("delphi train truth-check --case {} --text-file <an answer you wrote or pasted>", id);
+                return 2;
+            };
+            print!("{}", check_report(&t, &text));
+            0
+        }
+        "verify" => {
+            let Some(by) = flag(args, "--by") else {
+                eprintln!("delphi train verify --case {} --by \"<your name>\": records that you checked the pack against its sources", id);
+                return 2;
+            };
+            let on = flag(args, "--on").unwrap_or_else(|| crate::train_arms::utc(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))[..10].to_string());
+            match stamp_verified(dir, &by, &on) {
+                Ok(()) => {
+                    let unreviewed = t.insights.iter().filter(|i| i.operator_view.is_empty()).count();
+                    println!("{} verified by {} on {}{}", id, by, on, if unreviewed > 0 { format!("; {} judgement question(s) still have no operator_view and will not reach a judge", unreviewed) } else { String::new() });
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi train verify: {}", e);
+                    1
+                }
+            }
+        }
+        _ => 2,
+    }
+}
+
 /// Every number in `text`: `1,234.5`, `-3`, `0.75`; a thousands comma is dropped.
 fn numbers(text: &str) -> Vec<f64> {
     let re = Regex::new(r"-?\d[\d,]*(?:\.\d+)?").expect("static pattern");
@@ -289,7 +566,13 @@ fn numbers(text: &str) -> Vec<f64> {
 impl Truth {
     /// A pack the operator has checked. A draft may be committed but is not run without `--allow-unverified`.
     pub fn verified(&self) -> bool {
-        self.verified_by.is_some() && self.verified_on.is_some()
+        // A stamp that recorded a fingerprint holds only while the pack is unchanged: an edit after verification makes it a draft again.
+        self.verified_by.is_some() && self.verified_on.is_some() && self.verified_fingerprint.as_ref().is_none_or(|f| *f == self.fingerprint)
+    }
+
+    /// Verified once, but edited since.
+    pub fn stale(&self) -> bool {
+        self.verified_by.is_some() && self.verified_fingerprint.as_ref().is_some_and(|f| *f != self.fingerprint)
     }
 
     fn stated(f: &Fact, text: &str) -> bool {
@@ -329,6 +612,21 @@ impl Truth {
         }
         out.push_str("\nRubric:\n");
         out.push_str(&fs::read_to_string(self.dir.join("rubric.md")).unwrap_or_default());
+        // Open questions the operator has answered: a judgement to reason from or argue against, never a fact. A question still
+        // without the operator's view is not shown: the assistant's draft is not evidence.
+        let reviewed: Vec<&Insight> = self.insights.iter().filter(|i| !i.operator_view.is_empty()).collect();
+        if !reviewed.is_empty() {
+            out.push_str("\nOpen questions, where the operator's own judgement is below. It is a view, not a fact: reward an answer that reasons well toward it or argues a different view that its facts support; penalize unsupported certainty either way.\n");
+            for i in reviewed {
+                out.push_str(&format!("- [{}] {}\n  Operator's judgement: {}\n", i.id, i.question, i.operator_view));
+                if !i.considerations.is_empty() {
+                    out.push_str(&format!("  A good answer weighs: {}\n", i.considerations.join("; ")));
+                }
+                if !i.acceptable.is_empty() {
+                    out.push_str(&format!("  Latitude: {}\n", i.acceptable));
+                }
+            }
+        }
         out
     }
 
@@ -435,6 +733,99 @@ pub mod tests {
         assert!(t.recall(invented).fraction < 0.6, "inventing the paper fails the recall check too");
         let numbers = "The carbon flux was 12 percent of photosynthate.";
         assert_eq!(t.trap_hits(numbers), vec!["invented-numbers-about-it"]);
+    }
+
+    const INSIGHTS: &str = "[[insight]]\nid = \"who-benefits\"\nquestion = \"Who do the rules favor?\"\ndraft_view = \"ASSISTANT-DRAFT-SECRET\"\nconsiderations = [\"engine package\", \"rider skill\"]\nacceptable = \"any view the facts support\"\n\n[[insight]]\nid = \"confidence\"\nquestion = \"How sure should a reader be?\"\noperator_view = \"Not very; it is early.\"\n";
+
+    /// A case dir with a valid pack, a case.toml and insights.
+    fn case_with_pack(root: &Path) -> PathBuf {
+        let dir = root.join("suites/r/cases/q1");
+        fs::create_dir_all(&dir).unwrap();
+        pack(&dir);
+        fs::write(dir.join("case.toml"), "id = \"q1\"\nprompt = \"What changes in 2027?\\nBe brief.\"\n").unwrap();
+        fs::write(dir.join("truth/insights.toml"), INSIGHTS).unwrap();
+        dir
+    }
+
+    #[test]
+    fn insights_reach_a_judge_only_as_the_operators_reviewed_view() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = case_with_pack(t.path());
+        let tr = load(&dir, "r/q1").unwrap();
+        assert_eq!(tr.insights.len(), 2);
+        let b = tr.briefing();
+        assert!(b.contains("Operator's judgement: Not very; it is early.") && b.contains("a view, not a fact"), "{}", b);
+        assert!(!b.contains("ASSISTANT-DRAFT-SECRET") && !b.contains("Who do the rules favor"), "an unreviewed question and the assistant's draft never reach a judge: {}", b);
+        fs::write(dir.join("truth/insights.toml"), "[[insight]]\nid = \"x\"\n").unwrap();
+        assert!(load(&dir, "r/q1").unwrap_err().join("\n").contains("needs a unique `id` and a `question`"));
+    }
+
+    #[test]
+    fn the_review_sheet_puts_each_fact_beside_its_source_quote_and_asks_for_the_operators_view() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = case_with_pack(t.path());
+        let sheet = review_sheet("r/q1", "What changes in 2027?\nBe brief.", &load(&dir, "r/q1").unwrap());
+        for want in [
+            "# Review sheet: r/q1", "**Status:** DRAFT", "> What changes in 2027?\n> Be brief.", "### `engine` (weight 1)", "https://example.org/a (retrieved 2026-10-20)",
+            "> move the class to 850cc engines", "`850\\s?cc`", "**And contains the number** 20 (± 0)", "### `v4-ban`", "Fires on:", "`bans? V4`", "| a | https://example.org/a |",
+            "Cover the engine change.", "### `who-benefits`", "ASSISTANT-DRAFT-SECRET", "not written yet", "### `confidence`", "Not very; it is early.", "delphi train verify --case r/q1",
+        ] {
+            assert!(sheet.contains(want), "{} in\n{}", want, sheet);
+        }
+        // A pack with no insights says how to add one.
+        fs::remove_file(dir.join("truth/insights.toml")).unwrap();
+        assert!(review_sheet("r/q1", "p", &load(&dir, "r/q1").unwrap()).contains("This pack has none yet"));
+    }
+
+    #[test]
+    fn verifying_stamps_the_pack_and_any_later_edit_makes_it_a_draft_again() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = case_with_pack(t.path());
+        let before = load(&dir, "r/q1").unwrap();
+        assert!(!before.verified() && !before.stale());
+        stamp_verified(&dir, "Jesse", "2026-10-27").unwrap();
+        let after = load(&dir, "r/q1").unwrap();
+        assert!(after.verified() && !after.stale() && after.verified_by.as_deref() == Some("Jesse") && after.verified_on.as_deref() == Some("2026-10-27"));
+        assert_eq!(after.verified_fingerprint.as_deref(), Some(after.fingerprint.as_str()));
+        let meta = fs::read_to_string(dir.join("truth/meta.toml")).unwrap();
+        assert!(meta.contains("as_of") && meta.matches("verified_by").count() == 1, "{}", meta);
+        // Stamping twice rewrites the stamp, it does not stack.
+        stamp_verified(&dir, "Jesse", "2026-10-28").unwrap();
+        assert_eq!(fs::read_to_string(dir.join("truth/meta.toml")).unwrap().matches("verified_by").count(), 1);
+        // Each part the stamp vouches for, edited, makes it stale: a fact, the rubric, an insight, an extract.
+        for (file, edit) in [("facts.toml", "\n# changed\n"), ("rubric.md", "\nMore.\n"), ("insights.toml", "\n# x\n"), ("traps.toml", "\n# y\n")] {
+            let p = dir.join("truth").join(file);
+            let orig = fs::read_to_string(&p).unwrap();
+            fs::write(&p, format!("{}{}", orig, edit)).unwrap();
+            let l = load(&dir, "r/q1").unwrap();
+            assert!(!l.verified() && l.stale(), "{} edited after verification", file);
+            fs::write(&p, orig).unwrap();
+            assert!(load(&dir, "r/q1").unwrap().verified(), "restored, it is the verified pack again");
+        }
+        // Verifying needs a name and a date, and a pack that loads.
+        assert!(stamp_verified(&dir, " ", "2026-10-27").is_err() && stamp_verified(&dir, "J", "soon").is_err());
+        fs::write(dir.join("truth/facts.toml"), "[[fact]]\nid = \"x\"\n").unwrap();
+        assert!(stamp_verified(&dir, "J", "2026-10-27").unwrap_err().contains("does not load"));
+    }
+
+    #[test]
+    fn the_commands_make_sheets_check_an_answer_and_verify() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("suites");
+        let dir = case_with_pack(t.path());
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(cli("truth-sheet", &a(&["truth-sheet", "--all"]), &root), 0);
+        assert!(fs::read_to_string(dir.join("truth/review-sheet.md")).unwrap().contains("# Review sheet: r/q1"));
+        let answer = t.path().join("answer.md");
+        fs::write(&answer, "The bikes use 850cc engines. There are 20 rounds.").unwrap();
+        assert_eq!(cli("truth-check", &a(&["truth-check", "--case", "r/q1", "--text-file", answer.to_str().unwrap()]), &root), 0);
+        let rep = check_report(&load(&dir, "r/q1").unwrap(), "The bikes use 850cc engines. The rules ban V4 engines.");
+        assert!(rep.contains("fact recall 33%") && rep.contains("missing: rounds") && rep.contains("traps: v4-ban"), "{}", rep);
+        assert_eq!(cli("verify", &a(&["verify", "--case", "r/q1"]), &root), 2, "needs --by");
+        assert_eq!(cli("verify", &a(&["verify", "--case", "r/q1", "--by", "Jesse", "--on", "2026-10-27"]), &root), 0);
+        assert!(load(&dir, "r/q1").unwrap().verified());
+        assert_eq!(cli("verify", &a(&["verify", "--case", "r/none", "--by", "J"]), &root), 2);
+        assert_eq!(cli("truth-sheet", &a(&["truth-sheet"]), &root), 2, "needs --case or --all");
     }
 
     #[test]
