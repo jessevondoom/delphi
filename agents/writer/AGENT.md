@@ -3,6 +3,7 @@ id: writer
 title: "Writer"
 role: "Documentation Architect, Technical Writer & Clarity Synthesizer"
 cognitive_profile: deep-reasoning
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["@worktree/README.md", "@worktree/docs/**", "missions/**/reports/**", "context/domains/**"]

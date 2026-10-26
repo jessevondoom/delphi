@@ -3,6 +3,7 @@ id: scout
 title: "Scout"
 role: "Broad Discovery, Repository Cartographer & Literature Scout"
 cognitive_profile: high-context-discovery
+default_tier: fast
 default_access_scope:
   read: ["*"]
   write: ["missions/**/research/**", "context/domains/**"]

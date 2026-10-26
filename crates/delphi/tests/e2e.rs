@@ -312,7 +312,7 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     if let Some(launcher) = ui_launcher(e._t.path()) {
         let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "agents", Some(&launcher));
         assert_eq!(ncode, 0, "{}\n{}", screen, nerr);
-        for want in ["delphi v", "· agents", "Athena", "opus-t", "nothing needs you", "running  ·"] {
+        for want in ["delphi v", "· agents", "Athena", "sonnet-t", "nothing needs you", "running  ·"] {
             assert!(screen.contains(want), "missing `{}` in\n{}", want, screen);
         }
         assert!(!screen.contains('$') && !screen.contains("mission 2"), "the narrator shows no money and no mission id:\n{}", screen);
@@ -323,11 +323,11 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     assert!(out.contains("→ read_file(@project/proj/src/lib.rs)") && out.contains("needle"), "{}", out);
     assert!(out.contains("Athena:") || out.contains("orchestrator:"), "the active theme names the role: {}", out);
 
-    // The mock saw two calls with the operator's key, the frontier model, and the file read as the tool result.
+    // The mock saw two calls with the operator's key, the role's default model (Sonnet-class: no role starts on the top tier), and the file read as the tool result.
     let seen = m.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 2, "{:?}", seen.iter().map(|s| &s.path).collect::<Vec<_>>());
     assert_eq!((seen[0].path.as_str(), seen[0].headers["x-api-key"].as_str()), ("/v1/messages", KEY));
-    assert_eq!(seen[0].body["model"], "opus-t");
+    assert_eq!(seen[0].body["model"], "sonnet-t");
     assert!(seen[1].body["messages"].to_string().contains("pub fn needle()"));
 
     // On disk: a fsync'd event log, the cost in the ledger — and the API key nowhere.
@@ -1377,7 +1377,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
     let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
     o.wait_for("· agents");
-    o.wait_for("opus-t"); // the model the orchestrator is on
+    o.wait_for("sonnet-t"); // the model the orchestrator is on
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);

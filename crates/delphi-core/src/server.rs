@@ -26,7 +26,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Notify};
 
 /// The only methods the narrator socket answers (besides the `hello` handshake). Read-only, by name.
-pub const NARRATOR_METHODS: [&str; 13] = ["session.ping", "events.subscribe", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "kb.search", "kb.get", "usage.get", "budget.get", "approval.list", "permissions.get", "ratify.list"];
+pub const NARRATOR_METHODS: [&str; 12] = ["session.ping", "events.subscribe", "session.snapshot", "observe.snapshot", "observe.state", "kb.search", "kb.get", "usage.get", "budget.get", "approval.list", "permissions.get", "ratify.list"];
 
 /// The only methods the relay socket answers (besides the `hello` handshake): read the outstanding cards and the
 /// budget, answer a card through the relay's own narrower method, and listen. Everything else is refused by name.

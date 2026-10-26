@@ -118,13 +118,26 @@ pub struct StickyState {
     /// The last git commit the install accepted (hex). Install-owned state, kept here and not in the clone.
     pub accepted_head: Option<String>,
     pub paths: BTreeMap<String, Entry>,
+    /// The newest genuine freshness statement this install has accepted (spec 011 §4.1 follow-up): a statement
+    /// whose `issued_at` is older, or equal with other bytes, is a replay. Absent in state files written before
+    /// this rule; absent means "nothing seen yet".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_mark: Option<IssuedMark>,
+}
+
+/// `issued_at` (Unix seconds) and the hash of the statement bytes that carried it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssuedMark {
+    pub issued: i64,
+    pub statement_hash: String,
 }
 
 const VERSION: u32 = 1;
 
 impl StickyState {
     pub fn new(org: &str, store: &str) -> StickyState {
-        StickyState { v: VERSION, org: org.to_string(), store: store.to_string(), accepted_head: None, paths: BTreeMap::new() }
+        StickyState { v: VERSION, org: org.to_string(), store: store.to_string(), accepted_head: None, paths: BTreeMap::new(), freshness_mark: None }
     }
 
     /// Strict parse, bound to the expected store. Any damage is an error: a damaged sticky file is never
@@ -144,6 +157,9 @@ impl StickyState {
             if !is_commit_id(h) {
                 return Err(Error::BadField("sticky accepted_head is not a commit id"));
             }
+        }
+        if s.freshness_mark.as_ref().is_some_and(|m| !hash::is_valid(&m.statement_hash)) {
+            return Err(Error::BadField("sticky freshness mark is damaged"));
         }
         for (p, e) in &s.paths {
             if p.is_empty() || !hash::is_valid(&e.hash) {
@@ -223,6 +239,16 @@ impl StickyState {
             }
         }
         ev
+    }
+
+    /// A copy with the entries for `approved` paths dropped. Rewrite recovery uses this (spec 011 §8.4): the
+    /// operator-approved paths start over from the new head, and every other entry is kept and must still hold,
+    /// so a rewrite cannot quietly un-hide anything the operator did not approve. Pinned epoch hashes are not
+    /// here (they live in `pins.toml`) and are never touched.
+    pub fn without(&self, approved: &std::collections::BTreeSet<String>) -> StickyState {
+        let mut s = self.clone();
+        s.paths.retain(|p, _| !approved.contains(p));
+        s
     }
 
     /// Apply a clean evaluation. A dirty one is never applied, so tampering cannot half-update the state.
@@ -343,6 +369,24 @@ mod tests {
         let s = StickyState::new("acme", "main");
         let ev = s.evaluate(&[obs("records/memory/A.md", 1, 1), obs("records/memory/A.md", 9, 2)], &[]);
         assert!(!ev.is_clean());
+    }
+
+    #[test]
+    fn without_drops_only_the_named_paths_and_the_rest_still_guard() {
+        let mut s = state_with("records/memory/A.md", 4, 1);
+        let ev = s.evaluate(&[obs("records/memory/A.md", 4, 1), obs("records/memory/B.md", 2, 2)], &[]);
+        s.apply(&ev).unwrap();
+        let approved: std::collections::BTreeSet<String> = ["records/memory/B.md".to_string()].into();
+        let rest = s.without(&approved);
+        assert_eq!(rest.paths.len(), 1);
+        assert!(rest.paths.contains_key("records/memory/A.md"));
+        // The kept entry still refuses a rollback; the dropped one starts over.
+        let ev = rest.evaluate(&[obs("records/memory/A.md", 3, 9), obs("records/memory/B.md", 1, 9)], &[]);
+        assert_eq!(ev.refusals.len(), 1);
+        assert_eq!(ev.refusals[0].path(), "records/memory/A.md");
+        assert_eq!(ev.added.len(), 1);
+        // The original is untouched.
+        assert_eq!(s.paths.len(), 2);
     }
 
     #[test]

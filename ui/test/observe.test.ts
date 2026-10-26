@@ -143,9 +143,9 @@ test('the blind seat is sealed: its live text is never shown', () => {
 
 test('epic: threads of work with a a few lines each and the critical path (the pane itself: epic-threads.test.ts)', () => {
   const t = observeFrame(model('epic'), 110, 34).map(plain).join('\n');
-  assert.match(t, /\n▌▼ Implement the deck router/, 'its build has a failing audit, so it needs you');
+  assert.match(t, /\n▌▼ Deck router/, 'its build has a failing audit, so it needs you');
   assert.match(t, /\n▌ {2}▶ athena wrapping up/);
-  assert.match(t, / ▌ critical path {2}Implement the deck router/);
+  assert.match(t, / ▌ critical path {2}Deck router/);
 });
 
 test('archives: the knowledge window, a search box at rest and ranked results after a search', () => {

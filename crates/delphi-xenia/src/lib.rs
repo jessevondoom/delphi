@@ -10,6 +10,7 @@
 
 pub mod bundle_sig;
 pub mod did;
+pub mod freshness;
 pub mod frontmatter;
 pub mod hash;
 pub mod identity;
@@ -24,9 +25,14 @@ pub mod sidecar;
 pub mod sticky;
 pub mod store;
 pub mod sig;
+pub mod tier;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testkit;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testkit_records;
+pub mod time;
 pub mod ulid;
+pub mod walk;
 
 use std::fmt;
 

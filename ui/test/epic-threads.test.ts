@@ -3,7 +3,7 @@ import { emptyArch } from '../src/archives.ts';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { observeFrame, emptyState, type OModel, type OState } from '../src/observe-screen.ts';
-import { threads } from '../src/epic-threads.ts';
+import { autoLabel, kilo, threads, topicOf } from '../src/epic-threads.ts';
 import * as T from '../src/theme.ts';
 import { info, NOW, namedWorld, threadsWorld } from './threads-fixture.ts';
 import { snapshot } from './helpers.ts';
@@ -80,7 +80,7 @@ test('steps on the critical path are bold, in colour and without it; the same st
 test('each thread gives highlights only: what was decided, what is happening, and the next few steps', () => {
   const l = lines(namedWorld());
   const at = l.findIndex((x) => x.includes('Retry queue'));
-  assert.match(l[at]!, /^ ◐ Retry queue\s+▰▰▰▱▱▱ 3 of 7 $/);
+  assert.match(l[at]!, /^ ◐ Retry queue\s+44k tok 61%  ▰▰▰▱▱▱ 3 of 7 $/);
   assert.match(l[at + 1]!, /^   ✔ chose table 2 of 3 · 2 steps done$/);
   assert.match(l[at + 2]!, /^   ▶ hephaestus building 5:00 · tests 12 of 14 passed$/);
   assert.match(l[at + 3]!, /^   ○ audit → research → wrap up$/);
@@ -89,14 +89,17 @@ test('each thread gives highlights only: what was decided, what is happening, an
 
 test('a thread that waits on another says so, and the other says it feeds it', () => {
   const t = lines(namedWorld(), 100, 34).join('\n');
-  assert.match(t, /Vector database choice.*⇢ feeds Pricing tiers/);
-  assert.match(t, /Pricing tiers.*⇠ waits on Vector datab/);
+  const l = t.split('\n');
+  // The tie rides on the last line of each block, not on the header, so it costs no row.
+  const last = (heading: string) => { const at = l.findIndex((x) => /^.?[◐○▼] /.test(x) && x.includes(heading)); let i = at + 1; while (l[i] && /^.?\s{2}[^─\s]/.test(l[i]!)) i++; return l[i - 1]!; };
+  assert.match(last('Vector database choice'), /○ audit\s+⇢ feeds Pricing tiers $/);
+  assert.match(last('Pricing tiers'), /○ plan → wrap up\s+⇠ waits on Vector database choice $/);
 });
 
 test('finished threads are one line at the bottom', () => {
   const l = lines(namedWorld());
   const at = l.findIndex((x) => x.includes('settled'));
-  assert.match(l[at]!, /^ {2}✔ settled {2}Competitor onboarding$/);
+  assert.match(l[at]!, /^ {2}✔ settled {2}Competitor onboarding 9\.3k$/);
   assert.ok(!l.some((x) => x.includes('Competitor onboarding') && !x.includes('settled')));
 });
 
@@ -142,4 +145,60 @@ test('pace stays on the last body row, right-aligned with one trailing space; a 
   assert.match(last, /pace {2}[▁▂▃▄▅▆▇█]{12} $/);
   assert.equal(stringWidth(last), 80);
   assert.match(lines(namedWorld(), 80, 14).slice(0, -2).at(-1)!, /↑ ↓ {2}more/);
+});
+
+test('each thread shows what it has used and its share of everything, so the one eating the mission stands out', () => {
+  const { list } = threads(model(namedWorld()), NOW);
+  assert.deepEqual(list.map((t) => [t.label, t.tokens]), [['Vector database choice', 18_400], ['Pricing tiers', 0], ['Retry queue', 43_800], ['Competitor onboarding', 9_300]]);
+  const st = namedWorld();
+  assert.equal(list.reduce((a, t) => a + t.tokens, 0), st.tokens.input + st.tokens.cache_read + st.tokens.cache_write + st.tokens.output + st.tokens.thinking, 'the threads add up to the footer\'s total');
+  const l = lines(namedWorld());
+  assert.match(l.find((x) => x.includes('Vector database choice') && x.includes('tok'))!, /18k tok 26%/);
+  assert.match(l.find((x) => x.includes('Retry queue') && x.includes('tok'))!, /44k tok 61%/);
+  assert.ok(!l.find((x) => x.includes('Pricing tiers') && /^.?[◐○▼]/.test(x))!.includes('tok'), 'a thread that used nothing shows no count');
+  // Narrow windows keep the count and drop the share.
+  assert.match(lines(namedWorld(), 64, 24).find((x) => x.includes('Retry queue') && x.includes('tok'))!, /44k tok {2}▰/);
+});
+
+test('a thread without tokens from the daemon falls back to what its nodes counted', () => {
+  const st = namedWorld();
+  for (const t of Object.values(st.tasks)) delete t.tokens;
+  const { list } = threads(model(st), NOW);
+  assert.ok(list.every((t) => t.tokens === t.tasks.reduce((a, id) => a + Object.values(st.nodes).filter((n) => n.task_id === id).reduce((b, n) => b + n.tokens, 0), 0)));
+  assert.ok(list.find((t) => t.label === 'Retry queue')!.tokens > 0);
+});
+
+test('threads are separated by a hairline, and the settled line is separated too', () => {
+  const l = lines(namedWorld());
+  const rules = l.map((x, i) => [x, i] as const).filter(([x]) => /^ {2}─{20,}$/.test(x)).map(([, i]) => i);
+  assert.equal(rules.length, 3, 'between three live threads and before the settled line');
+  assert.ok(l[rules[2]! + 1]!.includes('settled'));
+});
+
+test('kilo keeps a count short', () => {
+  assert.deepEqual([0, 812, 999, 1000, 4200, 9999, 10_000, 38_400, 999_999, 1_000_000, 1_300_000].map(kilo), ['0', '812', '999', '1.0k', '4.2k', '10.0k', '10k', '38k', '1000k', '1.0M', '1.3M']);
+});
+
+test('threads nobody named get a name made from what the requests are about', () => {
+  assert.deepEqual(threads(model(threadsWorld()), NOW).list.map((t) => [t.label, t.named]).sort(), [
+    ['Competitor onboarding flows', false], ['Knowledge base pricing tiers', false], ['Managed vector databases', false], ['Retry queue', false]]);
+  assert.ok(threads(model(namedWorld()), NOW).list.every((t) => t.named), 'the orchestrator\'s names are marked as its own');
+  // Verbs, questions, articles and everything after the first preposition go.
+  assert.equal(topicOf('Add a retry queue to the claim loop'), 'Retry queue');
+  assert.equal(topicOf('Compare managed vector databases for the knowledge base'), 'Managed vector databases');
+  assert.equal(topicOf('Should the retry queue be a table or a file?'), 'Retry queue');
+  assert.equal(topicOf('please write the Q3 board memo, then send it'), 'Q3 board memo');
+  assert.equal(topicOf('Fix it'), 'It');
+  assert.equal(topicOf('one two three four five six seven'), 'One two three four five');
+  // A thread of several requests is named for the words they all share.
+  assert.equal(autoLabel(['Add a retry queue to the claim loop', 'Document the retry queue for operators']), 'Retry queue');
+  assert.equal(autoLabel(['Survey rival pricing pages', 'Interview three customers']), 'Rival pricing pages', 'nothing shared: the first request alone');
+  assert.equal(autoLabel([]), '');
+});
+
+test('a made-up name cannot carry control codes or run past the heading width', () => {
+  const st = threadsWorld();
+  st.tasks['t_1']!.prompt = '\x1b[2J\x1b]0;x\x07 Compare ' + 'enormous '.repeat(40) + 'databases';
+  const t = threads(model(st), NOW).list.find((x) => x.tasks.includes('t_1'))!;
+  assert.ok(!/[\x00-\x1f]/.test(t.label) && [...t.label].length <= 44, t.label);
 });

@@ -32,18 +32,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Where a fetch lands before anything is checked. Never trusted, never read by anything but this module.
-const REF_FETCHED: &str = "refs/xenia/fetched";
+pub(crate) const REF_FETCHED: &str = "refs/xenia/fetched";
 /// Keeps the accepted history reachable so it is not garbage collected. The authority for "accepted" is the
 /// sticky file, not this ref.
-const REF_ACCEPTED: &str = "refs/xenia/accepted";
+pub(crate) const REF_ACCEPTED: &str = "refs/xenia/accepted";
 
-fn io(e: impl std::fmt::Display) -> Error {
+pub(crate) fn io(e: impl std::fmt::Display) -> Error {
     Error::Io(e.to_string())
 }
 
 /// Text from git's stderr is partly attacker-controlled (a remote's `remote:` lines): one short line,
 /// control characters replaced.
-fn short(stderr: &str) -> String {
+pub(crate) fn short(stderr: &str) -> String {
     let line = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("git failed");
     line.chars().take(160).map(|c| if c.is_control() { '?' } else { c }).collect()
 }
@@ -129,13 +129,13 @@ pub fn git_command(paths: &StorePaths, scheme: Option<Scheme>, git_dir: Option<&
 // ---------------------------------------------------------------------------------------------------------
 // Running a command with limits.
 
-struct Out {
-    code: i32,
-    stdout: Vec<u8>,
-    stderr: String,
+pub(crate) struct Out {
+    pub(crate) code: i32,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: String,
 }
 
-enum RunFail {
+pub(crate) enum RunFail {
     Timeout,
     TooMuchOutput,
     DiskCap,
@@ -163,7 +163,7 @@ fn kill(child: &mut Child) {
 
 /// Run `cmd`, capturing at most `out_cap` bytes of stdout, with a wall-clock limit and an optional ceiling on
 /// how much a directory may grow while it runs. The child is killed on any breach.
-fn run(mut cmd: Command, stdin: Option<Vec<u8>>, out_cap: usize, timeout: Duration, watch: Option<(&Path, u64)>) -> std::result::Result<Out, RunFail> {
+pub(crate) fn run(mut cmd: Command, stdin: Option<Vec<u8>>, out_cap: usize, timeout: Duration, watch: Option<(&Path, u64)>) -> std::result::Result<Out, RunFail> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
     let base = watch.map(|(p, _)| dir_size(p)).unwrap_or(0);
@@ -351,12 +351,12 @@ pub fn classify_by_layout(path: &str, bytes: &[u8], rev_of: &dyn Fn(&[u8]) -> st
 // The store.
 
 pub struct Store {
-    org: String,
-    store: String,
+    pub(crate) org: String,
+    pub(crate) store: String,
     pub paths: StorePaths,
-    url: StoreUrl,
-    branch: String,
-    caps: Caps,
+    pub(crate) url: StoreUrl,
+    pub(crate) branch: String,
+    pub(crate) caps: Caps,
 }
 
 fn valid_branch(b: &str) -> bool {
@@ -370,7 +370,7 @@ fn valid_branch(b: &str) -> bool {
         && !b.ends_with(".lock")
 }
 
-fn private_dir(p: &Path) -> Result<()> {
+pub(crate) fn private_dir(p: &Path) -> Result<()> {
     match fs::symlink_metadata(p) {
         Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(Error::Key("a store directory is a symlink or not a directory")),
         Ok(_) => {}
@@ -430,11 +430,11 @@ impl Store {
         fs::set_permissions(c, fs::Permissions::from_mode(0o700)).map_err(io)
     }
 
-    fn local(&self) -> Command {
+    pub(crate) fn local(&self) -> Command {
         git_command(&self.paths, None, Some(&self.paths.clone))
     }
 
-    fn git_ok(&self, args: &[&str], out_cap: usize) -> Result<Vec<u8>> {
+    pub(crate) fn git_ok(&self, args: &[&str], out_cap: usize) -> Result<Vec<u8>> {
         let mut c = self.local();
         c.args(args);
         let out = run(c, None, out_cap, Duration::from_secs(60), None).map_err(|_| Error::Io(format!("git {} failed", args.first().unwrap_or(&""))))?;
@@ -444,14 +444,14 @@ impl Store {
         Ok(out.stdout)
     }
 
-    fn exit_code(&self, args: &[&str]) -> Result<i32> {
+    pub(crate) fn exit_code(&self, args: &[&str]) -> Result<i32> {
         let mut c = self.local();
         c.args(args);
         let out = run(c, None, 4096, Duration::from_secs(60), None).map_err(|_| Error::Io("git failed".into()))?;
         Ok(out.code)
     }
 
-    fn is_ancestor(&self, a: &str, b: &str) -> Result<bool> {
+    pub(crate) fn is_ancestor(&self, a: &str, b: &str) -> Result<bool> {
         match self.exit_code(&["merge-base", "--is-ancestor", a, b])? {
             0 => Ok(true),
             1 => Ok(false),
@@ -460,7 +460,7 @@ impl Store {
     }
 
     /// Drop the staging ref and, when the fetch brought objects we refuse, the objects too.
-    fn discard_fetched(&self, prune: bool) {
+    pub(crate) fn discard_fetched(&self, prune: bool) {
         let _ = self.git_ok(&["update-ref", "-d", REF_FETCHED], 4096);
         if prune {
             // A killed fetch leaves `tmp_pack_*`; unreachable objects are removed by an explicit gc.
@@ -493,7 +493,7 @@ impl Store {
         self.fetch_checked(accepted.as_deref())
     }
 
-    fn fetch_checked(&self, accepted: Option<&str>) -> Result<Fetch> {
+    pub(crate) fn fetch_checked(&self, accepted: Option<&str>) -> Result<Fetch> {
         let objects = self.paths.clone.join("objects");
         let mut cmd = git_command(&self.paths, Some(self.url.scheme), Some(&self.paths.clone));
         cmd.args(["fetch", "--quiet", "--force", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--no-auto-gc", "--no-auto-maintenance", "--no-show-forced-updates"]);
@@ -540,27 +540,34 @@ impl Store {
                 return Ok(Fetch::NonFastForward(NonFastForward { accepted: acc.to_string(), fetched, kind }));
             }
         }
-        let entries = match self.list_tree(&fetched)? {
-            Ok(e) => e,
+        match self.check_tip(&fetched)? {
+            Ok(entries) => Ok(Fetch::Advanced { head: fetched, from: accepted.map(str::to_string), entries }),
             Err(r) => {
                 self.discard_fetched(false);
-                return Ok(Fetch::Refused(r));
+                Ok(Fetch::Refused(r))
             }
+        }
+    }
+
+    /// The tip-tree rules for one commit: listable, no hostile entries, and a `.gitattributes` that keeps
+    /// bytes exact. Also what rewrite recovery runs on a head that is not a fast-forward.
+    pub(crate) fn check_tip(&self, commit: &str) -> Result<std::result::Result<Vec<TreeEntry>, Refused>> {
+        let entries = match self.list_tree(commit)? {
+            Ok(e) => e,
+            Err(r) => return Ok(Err(r)),
         };
         let bad = store::check_tree(&entries, &self.caps);
         if !bad.is_empty() {
-            self.discard_fetched(false);
-            return Ok(Fetch::Refused(Refused::Tree(bad)));
+            return Ok(Err(Refused::Tree(bad)));
         }
         let attrs = match entries.iter().find(|e| e.path == b".gitattributes") {
             Some(e) => Some(self.read_blobs(std::slice::from_ref(e))?.remove(0)),
             None => None,
         };
         if let Err(a) = store::check_gitattributes(attrs.as_deref()) {
-            self.discard_fetched(false);
-            return Ok(Fetch::Refused(Refused::Gitattributes(a)));
+            return Ok(Err(Refused::Gitattributes(a)));
         }
-        Ok(Fetch::Advanced { head: fetched, from: accepted.map(str::to_string), entries })
+        Ok(Ok(entries))
     }
 
     /// Count, size and total the objects a fetch added (everything reachable from `fetched` and not from
@@ -626,7 +633,7 @@ impl Store {
         Ok(None)
     }
 
-    fn list_tree(&self, commit: &str) -> Result<std::result::Result<Vec<TreeEntry>, Refused>> {
+    pub(crate) fn list_tree(&self, commit: &str) -> Result<std::result::Result<Vec<TreeEntry>, Refused>> {
         let mut c = self.local();
         c.args(["ls-tree", "-r", "-z", "--long", commit]);
         let cap = self.caps.max_tree_entries.saturating_add(1) * (self.caps.max_path_bytes * 4 + 128);
@@ -646,7 +653,7 @@ impl Store {
 
     /// Read blobs by object id in one `cat-file --batch`, which applies no filters, attributes or line-ending
     /// conversion: the bytes are exactly the committed ones, whatever `core.autocrlf` anyone has set.
-    fn read_blobs(&self, entries: &[TreeEntry]) -> Result<Vec<Vec<u8>>> {
+    pub(crate) fn read_blobs(&self, entries: &[TreeEntry]) -> Result<Vec<Vec<u8>>> {
         if entries.is_empty() {
             return Ok(Vec::new());
         }
@@ -682,7 +689,7 @@ impl Store {
     }
 
     /// The files under `records/` and `roster/` at `head`'s tip. Only `Fetch::Advanced` hands out entries.
-    fn read_snapshot(&self, head: &str, entries: &[TreeEntry]) -> Result<Snapshot> {
+    pub(crate) fn read_snapshot(&self, head: &str, entries: &[TreeEntry]) -> Result<Snapshot> {
         let tracked: Vec<TreeEntry> = entries.iter().filter(|e| std::str::from_utf8(&e.path).map(store::is_tracked_area).unwrap_or(false)).cloned().collect();
         let blobs = self.read_blobs(&tracked)?;
         let files = tracked.iter().zip(blobs).map(|(e, b)| (String::from_utf8_lossy(&e.path).into_owned(), b)).collect();
@@ -709,7 +716,7 @@ impl Store {
         StickyState::from_json(&bytes, &self.org, &self.store)
     }
 
-    fn save_sticky(&self, s: &StickyState) -> Result<()> {
+    pub(crate) fn save_sticky(&self, s: &StickyState) -> Result<()> {
         let dir = &self.paths.state;
         private_dir(dir)?;
         let tmp = dir.join(format!(".sticky.{}.tmp", std::process::id()));

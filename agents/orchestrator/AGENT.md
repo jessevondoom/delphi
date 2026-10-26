@@ -3,6 +3,7 @@ id: orchestrator
 title: "Orchestrator"
 role: "Lead Orchestrator, Coach, Council Arbiter & Model Scaler"
 cognitive_profile: deep-reasoning
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**", "context/index.md", "context/domains/**"]  # heuristics, REVIEW.md and lessons.md change only via ratified /retro proposals (GOVERNANCE §5.7, D-11)

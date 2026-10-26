@@ -93,8 +93,11 @@ pub struct AgentRow {
     pub state: String,
     pub task_id: String,
     pub endpoint: String,
+    /// The tier of the model that served the latest call (what it actually ran on, not what was asked for).
     pub tier: String,
     pub model: String,
+    /// The tier this role starts on (its manifest's `default_tier`), from its latest span: the narrator marks the model above or below it.
+    pub default_tier: String,
     /// The call before this one was on a lower tier (an upscale on the retry ladder).
     pub upscaled: bool,
     pub tokens: Tokens,
@@ -115,7 +118,12 @@ pub struct Node {
     /// The endpoint and model this agent's latest call went to (empty until its first call), and the tier it asked for.
     pub endpoint: String,
     pub model: String,
+    /// The tier of the model that served its latest call.
     pub tier: String,
+    /// The tier its role starts on, the tier asked for this task (the orchestrator may have raised or lowered it) and why (`specs/035` D-15).
+    pub default_tier: String,
+    pub requested_tier: String,
+    pub tier_reason: String,
     /// What it is waiting for, if anything: `waiting on you`, or `waiting for a model: <why>`.
     pub waiting: String,
     /// When the node was added and when it finished (`done` or `escalated`), as Unix milliseconds from the event
@@ -138,6 +146,9 @@ pub struct Task {
     pub output: String,
     /// The session it was asked in (`specs/030`); empty before the first `session.started`.
     pub session: String,
+    /// Everything its agents used, counted as the mission's total is (so the tasks add up to it): the epic pane sums
+    /// these by thread.
+    pub tokens: Tokens,
 }
 
 /// A console session as the narrator groups work by it: how it began, when, and how many requests it has held.
@@ -622,7 +633,7 @@ impl ObserverState {
                 if let Some(s) = self.sessions.last_mut() {
                     s.turns += 1;
                 }
-                self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new(), session });
+                self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new(), session, tokens: Tokens::default() });
             }
             "session.started" => {
                 let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
@@ -727,10 +738,13 @@ impl ObserverState {
                 if let Some(par) = &parent {
                     self.last_child.insert(par.clone(), id.clone());
                 }
-                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), started_ms: ts_ms(e), after, ..Default::default() });
+                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), default_tier: s(&p["default_tier"]), requested_tier: s(&p["tier"]), tier_reason: sanitize(p["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect(), started_ms: ts_ms(e), after, ..Default::default() });
                 if let Some(a) = self.agents.get_mut(&r) {
                     a.state = "running".into();
                     a.task_id = task;
+                    if !s(&p["default_tier"]).is_empty() {
+                        a.default_tier = s(&p["default_tier"]);
+                    }
                 }
             }
             "dag.node.state" => {
@@ -784,6 +798,9 @@ impl ObserverState {
                 let cost = p["cost_usd"].as_f64().unwrap_or(0.0);
                 self.spent_usd += cost;
                 self.tokens.add(p);
+                if let Some(t) = self.tasks.get_mut(&task) {
+                    t.tokens.add(p);
+                }
                 self.add_pace(ts_ms(e) / 60_000, p["input_tokens"].as_u64().unwrap_or(0) + p["output_tokens"].as_u64().unwrap_or(0));
                 self.series.push_back(cost);
                 while self.series.len() > 240 {
@@ -1451,6 +1468,25 @@ mod tests {
     }
 
     #[test]
+    fn each_task_keeps_its_own_token_count_and_the_tasks_add_up_to_the_missions_total() {
+        let mut st = ObserverState::new(&roles());
+        for (i, id) in ["t_1", "t_2"].iter().enumerate() {
+            st.apply(&ev(1 + i as u64, "task.created", id, "", json!({"prompt": "p", "target": "builder"})));
+        }
+        let usage = |seq: u64, task: &str, input: u64, cache: u64, output: u64, thinking: u64| {
+            ev(seq, "agent.usage", task, "builder", json!({"input_tokens": input, "cache_read_tokens": cache, "cache_write_tokens": 5, "output_tokens": output, "thinking_tokens": thinking, "cost_usd": 0.01}))
+        };
+        st.apply(&usage(3, "t_1", 1000, 3000, 200, 50));
+        st.apply(&usage(4, "t_2", 10, 20, 30, 40));
+        st.apply(&usage(5, "t_1", 1, 2, 3, 4));
+        st.apply(&usage(6, "t_9", 7, 7, 7, 7)); // a task the narrator never saw start: counted in the total, in no task
+        let t1 = &st.tasks["t_1"].tokens;
+        assert_eq!((t1.input, t1.cache_read, t1.cache_write, t1.output, t1.thinking), (1001, 3002, 10, 203, 54));
+        assert_eq!(st.tasks["t_2"].tokens.total(), 10 + 20 + 5 + 30 + 40);
+        assert_eq!(st.tasks.values().map(|t| t.tokens.total()).sum::<u64>() + (7 * 4 + 5), st.tokens.total());
+    }
+
+    #[test]
     fn named_threads_are_kept_cleaned_and_replaced_by_id() {
         let mut st = ObserverState::new(&roles());
         st.apply(&ev(1, "thread.named", "t_1", "orchestrator", json!({"thread": "pricing", "label": "Pricing \x1b[31mtiers\x1b[0m\n for the kb", "tasks": ["t_1", "t_2", ""]})));
@@ -1480,6 +1516,22 @@ mod tests {
         let c = &st.councils[0];
         assert_eq!((c.phase.as_str(), c.stances[0].text.as_str(), c.critiques[0].findings.len(), c.unresolved.len(), c.options[0].1.len()), ("escalated", "Queue.", 1, 1, 2));
         assert_eq!(st.default_view(), "dashboard", "a finished council no longer pulls the view");
+    }
+
+    // specs/035 D-14..D-16: a span says the tier its role starts on, the tier asked for and why; the model it ran on is the one that served it.
+    #[test]
+    fn a_node_carries_its_roles_default_tier_the_tier_asked_for_and_why_and_the_row_the_tier_that_served() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "dag.node.added", "t_1", "architect", json!({"node_id": "n1", "role": "architect", "depth": 1, "tier": "frontier", "default_tier": "workhorse", "tier_reason": "a spec\x1b[2J with a security\nmodel"})));
+        let n = &st.nodes["n1"];
+        assert_eq!((n.default_tier.as_str(), n.requested_tier.as_str(), n.tier_reason.as_str()), ("workhorse", "frontier", "a spec with a security model"));
+        assert_eq!(st.agents["architect"].default_tier, "workhorse");
+        let mut u = ev(2, "agent.usage", "t_1", "architect", json!({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.0}));
+        u["span_id"] = json!("n1");
+        u["model_id"] = json!("claude-sonnet");
+        u["model_tier"] = json!("workhorse");
+        st.apply(&u);
+        assert_eq!((st.agents["architect"].tier.as_str(), st.agents["architect"].model.as_str(), st.nodes["n1"].tier.as_str()), ("workhorse", "claude-sonnet", "workhorse"), "the model it really ran on");
     }
 
     // specs/035 D-7: which models are out and until when, and which tasks run on a stand-in, who agreed, and that it ends with the task.
