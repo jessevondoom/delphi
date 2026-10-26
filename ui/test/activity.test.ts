@@ -180,6 +180,9 @@ test('a running span shows its live token total, and the tool it waits on by nam
   s = step(s, delta('sp_b_1', { tokens: 16_600 }), 1);
   s = step(s, delta('sp_b_1', { tokens: 18_200 }), 2);
   assert.equal(s.activity.running[0]!.tokens, 18_200, 'the last total wins');
+  s = step(s, { method: 'delta.frame', params: { spans: { sp_b_1: { est: 900 } } } }, 2);
+  assert.equal(s.activity.running[0]!.tokens, 900, 'an API seat\'s estimate of the call in flight is shown the same way');
+  s = step(s, delta('sp_b_1', { tokens: 18_200 }), 2);
   s = step(s, ev('agent.block.complete', { block: { type: 'tool_call', id: 'c', name: 'run_command', arguments: { command: 'cargo test --secret-flag' } } }, 't_1', { span_id: 'sp_b_1' }), 3);
   const t = lines(model(s), 100, 24).join('\n');
   assert.match(t, /hephaestus · working · \d\d:\d\d · ~18\.2k tokens\n\s+→ run_command …/);
