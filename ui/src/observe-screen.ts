@@ -12,6 +12,7 @@ import * as A from './archives.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
+export type RoleTools = { calls: number; errors: number; last: string; by_tool: Record<string, { calls: number; errors: number }> };
 export type OState = {
   agents: Record<string, AgentRow>;
   nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
@@ -23,6 +24,8 @@ export type OState = {
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
   /** The orchestrator's own grouping of tasks into threads, when it sends one; otherwise the window groups by what the tasks say. */
   threads?: { id: string; label: string; tasks: string[] }[];
+  /** Tool use per role over the whole mission: counts and names only (`observe::tool_stats`). */
+  tools?: Record<string, RoleTools>;
   /** What agents recorded as finished (`record_change`), oldest first: their own plain words, never their reasoning. */
   changes?: { session: string; at_ms: number; role: string; task: string; summary: string; files: string[] }[];
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
@@ -43,6 +46,8 @@ export type OModel = {
   /** The knowledge window (`archives.ts`): the search box, the shelf, the results and the reader. */
   arch: A.Arch;
   live: Record<string, string>; connected: boolean;
+  /** A running span's token total so far, from the live frames: a subscription CLI logs its usage only when it ends. In memory, never saved. */
+  liveTokens?: Record<string, number>;
   /** The clock for badge animation, and whether animation is off (`DELPHI_REDUCE_MOTION`, `NO_COLOR`); the strip is static without them. */
   now?: number; still?: boolean;
 };
@@ -149,6 +154,22 @@ export function activeAgents(st: OState): AgentRow[] {
   return rows;
 }
 
+/** Tools that change something: an agent that has called one is expected to record a change (`toolreport.rs`). */
+const WORK_TOOLS = new Set(['write_file', 'edit_file', 'run_command', 'write_archive', 'write_html', 'write_chart', 'write_report', 'write_deck', 'write_sheet', 'write_diagram', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash']);
+
+/** `calls · ✎ changes recorded · ✗ failed · → the tool in use or used last` for one agent's role; nothing before its first call. */
+function toolsLine(m: OModel, a: AgentRow): string {
+  const t = m.st.tools?.[a.role];
+  if (!t || t.calls === 0) return '';
+  const rec = t.by_tool['record_change']?.calls ?? 0;
+  const parts = [`${t.calls} ${t.calls === 1 ? 'call' : 'calls'}`];
+  // A running agent that has changed something and recorded nothing yet: the count turns to a warning.
+  const unreported = !rec && a.state === 'running' && Object.keys(t.by_tool).some((k) => WORK_TOOLS.has(k));
+  if (rec) parts.push(`✎ ${rec}`);
+  const line = dim('  ·  ' + parts.join(' · ')) + (unreported ? colored(' · ✎ 0', T.warn) : '');
+  return line + (t.errors ? colored(` · ✗ ${t.errors}`, T.alert) : '') + (a.state === 'running' && t.last ? dim(` · → ${clean(t.last, 24)}`) : '');
+}
+
 /** The roster: a mascot per agent that is working, with its name, role, state in words, model, task and tokens. With none working, the orchestrator alone, and a line saying the system is idle. */
 function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
@@ -159,11 +180,14 @@ function agents(m: OModel, w: number, _h: number): string[] {
     const mk = mascot(a.role, a.state, m.info, m.pal);
     const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : idle ? 'the system is idle' : 'no call yet';
     const nm = name(m, a.role);
-    const total = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
+    const logged = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
+    // What the running spans of this role have used so far but not yet logged; shown as an estimate until the span ends.
+    const live = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((t, n) => t + (m.liveTokens?.[n.id] ?? 0), 0);
+    const total = logged + live;
     const meta = [
       roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)),
       text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : ''),
-      dim(`${kilo(total)} tokens`),
+      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + toolsLine(m, a),
     ];
     // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
     mk.forEach((line, i) => {

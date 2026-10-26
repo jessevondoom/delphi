@@ -676,6 +676,8 @@ impl Engine {
                 }
                 Event::Usage(t) => {
                     metered += t.metered();
+                    // The CLI's usage is logged once, when the span ends; the window's meter moves from this meanwhile.
+                    hub.push_usage(&span_id, metered);
                     if metered > self.settings.harness_token_cap {
                         session.kill().await;
                         failure = Some((format!("the CLI used {} tokens, over the {} cap for a span; stopped", metered, self.settings.harness_token_cap), false));

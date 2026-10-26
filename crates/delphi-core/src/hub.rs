@@ -116,6 +116,8 @@ struct Client {
 struct SpanBuf {
     text: String,
     thinking: String,
+    /// The span's running token total, when it reported one since the last frame (a value, not a delta).
+    tokens: Option<u64>,
 }
 
 #[derive(Default)]
@@ -170,6 +172,13 @@ impl Hub {
         }
     }
 
+    /// Buffer a span's running token total; it reaches clients in the next frame and is never persisted. A subscription CLI
+    /// logs its usage once, when the span ends, so this is how a window shows the meter move meanwhile. The last value wins.
+    pub fn push_usage(&self, span_id: &str, tokens: u64) {
+        let mut h = self.inner.lock().unwrap();
+        h.deltas.entry(span_id.to_string()).or_default().tokens = Some(tokens);
+    }
+
     /// Send a durable event (already appended and fsync'd) to every subscribed client. A relay client gets
     /// only the kinds in [`RELAY_EVENTS`]: it carries cards to a person and has no need to see what agents say.
     pub fn publish_event(&self, event: &Value) {
@@ -188,7 +197,13 @@ impl Hub {
         }
         let spans: serde_json::Map<String, Value> = std::mem::take(&mut h.deltas)
             .into_iter()
-            .map(|(span, b)| (span, json!({"text": b.text, "thinking": b.thinking})))
+            .map(|(span, b)| {
+                let mut v = json!({"text": b.text, "thinking": b.thinking});
+                if let Some(t) = b.tokens {
+                    v["tokens"] = json!(t);
+                }
+                (span, v)
+            })
             .collect();
         let spans = Value::Object(spans);
         // Live text is model output; a relay never receives it.
@@ -238,6 +253,28 @@ mod tests {
         assert_eq!(n.params["frame_from"], 1);
         hub.flush_frames(); // nothing pending: no empty frame
         assert!(q.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_span_running_total_rides_the_frame_as_a_value_and_the_last_one_wins() {
+        let hub = Hub::new();
+        let q = ClientQueue::new(DEFAULT_QUEUE_CAP);
+        let id = hub.attach(Scope::Narrator, q.clone());
+        hub.subscribe(id);
+        hub.push_usage("sp1", 1200);
+        hub.push_usage("sp1", 3400);
+        hub.push_delta("sp2", DeltaKind::Text, "x");
+        hub.flush_frames();
+        let n = q.pop().await.unwrap();
+        assert_eq!(n.params["spans"]["sp1"]["tokens"], 3400);
+        assert!(n.params["spans"]["sp2"].get("tokens").is_none(), "a span that reported no total carries none");
+        // A relay never sees frames at all.
+        let r = ClientQueue::new(DEFAULT_QUEUE_CAP);
+        let rid = hub.attach(Scope::Relay, r.clone());
+        hub.subscribe(rid);
+        hub.push_usage("sp1", 5);
+        hub.flush_frames();
+        assert!(r.is_empty());
     }
 
     #[tokio::test]
