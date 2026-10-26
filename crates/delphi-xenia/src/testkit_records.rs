@@ -27,9 +27,30 @@ impl SignedRecord {
     }
 }
 
-/// Sign `md` as record `kind`/`id` with `who` (the sidecar the publisher would write). `roster_epoch` and
-/// `signed_at` are informational, so tests pass anything.
+/// Rewrite the `redaction.content_hash` line of a record file so it is the real recipe hash of that file's own
+/// body and pointer text (what the publish gate writes and the verifier recomputes). Text without such a line
+/// is returned unchanged.
+pub fn seal_text(text: &str) -> String {
+    let Some(real) = crate::redaction::content_hash(text.as_bytes()) else { return text.to_string() };
+    let Some(at) = text.find("  content_hash: \"") else { return text.to_string() };
+    let from = at + "  content_hash: \"".len();
+    let Some(len) = text[from..].find('"') else { return text.to_string() };
+    format!("{}{}{}", &text[..from], real, &text[from + len..])
+}
+
+/// Sign `md` as record `kind`/`id` with `who` (the sidecar the publisher would write), after setting its
+/// `content_hash` to the real one ([`seal_text`]); use [`sign_record_raw`] to sign the bytes exactly as given.
+/// `roster_epoch` and `signed_at` are informational, so tests pass anything.
 pub fn sign_record(who: &Identity, kind: Kind, id: &str, md: Vec<u8>) -> SignedRecord {
+    let md = match String::from_utf8(md) {
+        Ok(t) => seal_text(&t).into_bytes(),
+        Err(e) => e.into_bytes(),
+    };
+    sign_record_raw(who, kind, id, md)
+}
+
+/// [`sign_record`] with the bytes exactly as given.
+pub fn sign_record_raw(who: &Identity, kind: Kind, id: &str, md: Vec<u8>) -> SignedRecord {
     let h = hash::of(&md);
     let d = Domain::record(ORG, STORE, kind, id, &who.did(), &h, 1, TS).unwrap();
     let car = Sidecar { kid: who.did(), signed_at: TS.into(), roster_epoch: 1, hash: h, sig: who.sign(&d) };

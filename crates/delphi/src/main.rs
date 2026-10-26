@@ -31,6 +31,7 @@ mod train_judge;
 mod train_report;
 mod train_review;
 mod train_truth;
+mod sessions_cmd;
 mod toolreport;
 mod needs;
 mod xenia_cmd;
@@ -87,6 +88,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
+    Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
@@ -95,7 +97,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
-    Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
+    Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--resume] [--pace-window <0-1>] [--allow-sleep] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
     Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]", detail: "" },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
@@ -241,6 +243,7 @@ fn main() {
         Some("missions") => cmd_missions(&args),
         Some("changelog") => cmd_changelog(&args),
         Some("release") => release::cli(None),
+        Some("sessions") => cmd_sessions(&args),
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("chat") => cmd_chat(&args),
@@ -856,6 +859,14 @@ fn cmd_changelog(args: &[String]) -> i32 {
 fn cmd_tools(args: &[String]) -> i32 {
     match resolve_ws("tools", args) {
         Ok((_home, ws)) => toolreport::cli(&ws.dir, &toolreport::Options { mission: flag(args, "--mission"), all: args.iter().any(|a| a == "--all"), json: args.iter().any(|a| a == "--json"), prom: args.iter().any(|a| a == "--prom") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi sessions`: the central log of finished sessions (see `sessions_cmd.rs`).
+fn cmd_sessions(args: &[String]) -> i32 {
+    match resolve_ws("sessions", args) {
+        Ok((home, _ws)) => sessions_cmd::cli(&home, &sessions_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json"), limit: flag(args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(20), full: args.iter().any(|a| a == "--full") }),
         Err(code) => code,
     }
 }

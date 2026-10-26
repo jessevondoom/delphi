@@ -18,6 +18,8 @@ pub mod layout;
 pub mod limits;
 pub mod pointer;
 pub mod record;
+pub mod redaction;
+pub mod serialize;
 pub mod pins;
 pub mod release_sig;
 pub mod roster;

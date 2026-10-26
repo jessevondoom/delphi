@@ -452,6 +452,8 @@ pub struct ArtifactInput<'a> {
     pub round2_text: &'a BTreeMap<String, String>,
     pub decision: &'a Decision,
     pub synthesis: &'a str,
+    /// The decision and the steps that follow from it.
+    pub follow: &'a crate::council_next::Followup,
     /// Set for a Council run with `--lenses`: the record says which seat argued from which perspective.
     pub lenses: Option<&'a LensPlan>,
 }
@@ -555,7 +557,9 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
         None => s.push_str("**No deterministic escalation:** no unresolved P0 and the Round 2 recommendations agree. The decision is the operator's.\n\n"),
     }
     s.push_str(&quote(a.synthesis));
-    s.push_str("\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n");
+    s.push_str("\n\n");
+    s.push_str(&crate::council_next::render_section(a.follow, a.decision.escalation.is_some()));
+    s.push_str("\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n");
     s.push_str(&minority_report(a.round2, a.decision, a.plan.homogeneous));
     s
 }
@@ -681,14 +685,16 @@ fn round2_objective(role: &str, proposition: &str) -> String {
     )
 }
 
-fn synthesis_objective(proposition: &str, escalation: Option<&str>) -> String {
+fn synthesis_objective(proposition: &str, escalation: Option<&str>, labels: &[String]) -> String {
+    let shape = crate::council_next::format_instruction(labels);
     format!(
-        "COUNCIL, SYNTHESIS. You are the arbiter. The seats' stances and critiques are attached as context slices. Proposition: {}\n\nWrite the verdict in at most 250 words of plain prose: what the Council recommends and why, where the seats agreed, and where they did not. {} You do not write the Minority Report: the daemon copies the critics' open P0/P1 items into the record verbatim, so do not restate or soften them.",
+        "COUNCIL, SYNTHESIS. You are the arbiter. The seats' stances and critiques are attached as context slices. Proposition: {}\n\nWrite the verdict in at most 250 words of plain prose: what the Council recommends and why, where the seats agreed, and where they did not. {} You do not write the Minority Report: the daemon copies the critics' open P0/P1 items into the record verbatim, so do not restate or soften them.\n\n{}",
         proposition.trim(),
         match escalation {
             Some(why) => format!("The Council has escalated to the operator ({}). Lay out the choice fairly instead of picking a side.", why),
             None => "There is no deterministic escalation.".to_string(),
-        }
+        },
+        shape
     )
 }
 
@@ -702,6 +708,9 @@ pub struct CouncilOpts {
     pub author_family: Option<String>,
     /// `--lenses`: give each seat one of the added bundles' perspectives to argue from in Round 1 (`specs/026` §4).
     pub lenses: bool,
+    /// `--tier`: raise every seat to this tier for this Council (`specs/003` §4.2). A Council is raised on demand and never lowered to save cost;
+    /// a seat steps down only when the model it needs is unavailable, as any task does.
+    pub tier: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -812,19 +821,48 @@ impl Engine {
         if let Some(bad) = roles.iter().find(|r| *r == "orchestrator" || !self.settings.enabled_agents.contains(r)) {
             return Ok((Status::Escalated(format!("`{}` cannot take a Council seat (the Orchestrator is the arbiter, and every seat must be an enabled role)", bad)), String::new()));
         }
+        // `--tier` raises the seats; it never lowers them (`specs/003` §4.2).
+        if let Some(want) = &opts.tier {
+            let rank = |t: &str| match t {
+                "fast" => 0,
+                "workhorse" => 1,
+                _ => 2,
+            };
+            if !matches!(want.as_str(), "fast" | "workhorse" | "frontier") {
+                return Ok((Status::Escalated("--tier must be fast, workhorse or frontier".into()), String::new()));
+            }
+            if let Some((r, d)) = roles.iter().map(|r| (r, self.role_default_tier(r))).find(|(_, d)| rank(want) < rank(d)) {
+                return Ok((Status::Escalated(format!("a Council is raised on demand, never lowered: `{}` starts on {}, so --tier {} is not used. A seat steps down only when the model it needs is unavailable", r, d, want)), String::new()));
+            }
+        }
         let ceiling = self.settings.council_budget_usd;
         let over_budget = |this: &Engine| this.council_spent(m, task_id) >= ceiling;
 
         let cfg = self.cfg.get();
         let available = self.available_families();
-        let plan = assign(
+        let mut plan = assign(
             &roles,
             &|r| cfg.family_for_role(r).to_string(),
             &available,
-            &|r| self.ws.load_manifest(r).map(|mf| mf.tier().to_string()).unwrap_or_else(|_| "workhorse".into()),
+            &|r| opts.tier.clone().unwrap_or_else(|| self.role_default_tier(r)),
             opts.author_family.as_deref(),
         );
         drop(cfg);
+        // `--tier` is the tier of every seat. A critic that was given a different tier of the author's family to keep it independent
+        // (`[H-008]`) keeps its separation, raised to at least the tier asked for.
+        if let Some(want) = &opts.tier {
+            let rank = |t: &str| match t {
+                "fast" => 0,
+                "workhorse" => 1,
+                _ => 2,
+            };
+            for seat in plan.seats.iter_mut() {
+                seat.tier = Some(match seat.tier.take() {
+                    Some(t) if rank(&t) > rank(want) => t,
+                    _ => want.clone(),
+                });
+            }
+        }
         m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling}))).await?;
 
         // Lenses are assigned once, before Round 1, and each seat is shown only its own (`specs/026` §4).
@@ -912,22 +950,34 @@ impl Engine {
             for (r, t) in &round2_text {
                 sl.push(ContextSlice { label: format!("council/round2/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() });
             }
-            let h = self.council_handoff(m, task_id, "orchestrator", "syn", &arbiter, synthesis_objective(proposition, decision.escalation.as_deref()), pointers.clone());
+            let labels: Vec<String> = if decision.escalation.is_some() { decision.options.iter().map(|(l, _)| l.clone()).collect() } else { Vec::new() };
+            let h = self.council_handoff(m, task_id, "orchestrator", "syn", &arbiter, synthesis_objective(proposition, decision.escalation.as_deref(), &labels), pointers.clone());
             if let Stance::Said(t) = self.run_seat(m, task_id, h, sl, None, timeout).await {
                 synthesis = t;
             }
+        }
+        // A verdict that ends in prose is a checkbox: it ends in a decision and the steps that follow (`specs/003` §4.2).
+        let step_roles: Vec<String> = self.settings.enabled_agents.iter().filter(|r| *r != "orchestrator").cloned().collect();
+        let labels: Vec<String> = if decision.escalation.is_some() { decision.options.iter().map(|(l, _)| l.clone()).collect() } else { Vec::new() };
+        let mut follow = crate::council_next::parse(&synthesis, &step_roles, &labels);
+        if follow.steps.is_empty() && decision.escalation.is_none() {
+            follow.steps = crate::council_next::from_findings(&decision.unresolved, &step_roles);
+            follow.from_findings = !follow.steps.is_empty();
+        }
+        if !follow.prose.is_empty() {
+            synthesis = follow.prose.clone();
         }
 
         // ── The record.
         let n = Self::next_council_number(m);
         let slug = slugify(proposition);
         let stamp = self.now();
-        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis, lenses: lens_plan.as_ref() });
+        let doc = render_artifact(&ArtifactInput { mission_id: &m.id, n, slug: &slug, proposition, timestamp: &stamp, plan: &plan, stances: &stances, round2: &round2, round2_text: &round2_text, decision: &decision, synthesis: &synthesis, follow: &follow, lenses: lens_plan.as_ref() });
         let dir = m.dir.join("councils");
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
         std::fs::write(dir.join(artifact_name(n, &slug)), self.secrets.redact(&doc)).map_err(|e| EngineError::Invalid(e.to_string()))?;
-        m.append(emit("council.verdict", json!({"path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>()}))).await?;
+        m.append(emit("council.verdict", json!({"n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>()}))).await?;
 
         let mut text = String::new();
         match &decision.escalation {
@@ -939,6 +989,11 @@ impl Engine {
         }
         text.push('\n');
         text.push_str(synthesis.trim());
+        let next = crate::council_next::render_text(&follow, decision.escalation.is_some());
+        if !next.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&next);
+        }
         text.push_str("\n\nMinority report:\n");
         text.push_str(minority_report(&round2, &decision, plan.homogeneous).trim_end());
         text.push_str(&format!("\n\nSaved: {}", rel));
@@ -1097,7 +1152,7 @@ mod tests {
         let stances: BTreeMap<String, Stance> = [("architect".to_string(), Stance::Said("Use a queue.".into())), ("red-team".to_string(), Stance::Said("It drops on crash.".into()))].into_iter().collect();
         let texts: BTreeMap<String, String> = [("architect".to_string(), "ok".to_string()), ("red-team".to_string(), "no".to_string())].into_iter().collect();
         let d = decide(round2);
-        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, lenses: None })
+        render_artifact(&ArtifactInput { mission_id: "m1", n: 7, slug: "queue-or-cron", proposition: "Queue or cron?", timestamp: "2026-10-24T00:00:00Z", plan: &plan, stances: &stances, round2, round2_text: &texts, decision: &d, synthesis, follow: &Default::default(), lenses: None })
     }
 
     #[test]
@@ -1146,6 +1201,10 @@ mod tests {
     }
 
     fn fixture(red_critique: &'static str, break_seat: Option<&'static str>) -> (Fx, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        fixture_with(red_critique, break_seat, "The Council recommends the queue.")
+    }
+
+    fn fixture_with(red_critique: &'static str, break_seat: Option<&'static str>, synthesis: &'static str) -> (Fx, Arc<AtomicUsize>, Arc<AtomicUsize>) {
         let f = crate::testkit::setup(vec![], 50.0, |_| {});
         two_families(&f);
         let (early_blocks, leaked) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
@@ -1170,7 +1229,7 @@ mod tests {
                 }
                 Step::text(if role == "red-team" { red_critique } else { "Reasoning.\nRECOMMENDATION: PROCEED\nROUND 2 COMPLETE" })
             } else {
-                Step::text("The Council recommends the queue.")
+                Step::text(synthesis)
             }
         });
         (f, early_blocks, leaked)
@@ -1223,6 +1282,67 @@ mod tests {
         assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
         assert!(doc.contains("- [P1] red-team: Needs idempotency keys") && doc.contains("Heterogeneous"), "{}", doc);
         assert!(out.text.contains("Minority report:") && out.text.contains("Saved: missions/"), "{}", out.text);
+    }
+
+    // specs/003 §4.2: a verdict ends in a decision and the steps that follow, in the record, the event and what the operator reads.
+    #[tokio::test]
+    async fn a_verdict_ends_in_a_decision_and_next_steps_the_operator_can_start() {
+        let (f, _, _) = fixture_with(RED_OK, None, "The Council recommends the queue as a table.\nDECISION: build the queue as a table in the existing store\nNEXT architect: write the schema and the claim query into the spec\nNEXT builder: implement the claim loop against it\n");
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        assert!(out.text.contains("Decision: build the queue as a table in the existing store") && out.text.contains("  1. architect: write the schema") && out.text.contains("  2. builder: implement the claim loop") && out.text.contains("with /follow."), "{}", out.text);
+        assert!(!out.text.contains("NEXT architect") && !out.text.contains("DECISION:"), "the directive lines are the shape, not the prose: {}", out.text);
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
+        assert!(doc.contains("## Decision and next steps") && doc.contains("**Decision:** build the queue as a table") && doc.contains("1. `architect`: write the schema") && doc.contains("## Accepted Risks & Minority Report"), "{}", doc);
+        let v = &events_of(&f, "council.verdict")[0].payload;
+        assert_eq!(v["decision"], "build the queue as a table in the existing store");
+        assert_eq!((v["steps"].as_array().unwrap().len(), v["steps"][1]["role"].as_str(), v["from_findings"].as_bool()), (2, Some("builder"), Some(false)));
+        // The arbiter was told the shape to end with.
+        let asked = f.model.requests().iter().find(|r| r.body.to_string().contains("COUNCIL, SYNTHESIS")).unwrap().body.to_string();
+        assert!(asked.contains("End with these lines") && asked.contains("DECISION:") && asked.contains("NEXT "), "{}", asked);
+    }
+
+    // specs/003 §4.2: an arbiter that ignores the shape does not leave a checkbox: the open blocking findings become the steps.
+    #[tokio::test]
+    async fn an_arbiter_that_names_no_steps_leaves_the_open_findings_as_the_steps() {
+        let (f, _, _) = fixture(RED_OK, None);
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        let v = &events_of(&f, "council.verdict")[0].payload;
+        assert_eq!((v["from_findings"].as_bool(), v["steps"][0]["role"].as_str(), v["steps"][0]["objective"].as_str()), (Some(true), Some("architect"), Some("Resolve the open P1 finding raised by red-team: Needs idempotency keys")));
+        assert!(out.text.contains("Next steps:") && out.text.contains("1. architect: Resolve the open P1 finding"), "{}", out.text);
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(doc.contains("so these are the open blocking findings"), "{}", doc);
+    }
+
+    // specs/003 §4.2: an escalated Council gives each option its own steps; nothing starts until the operator picks one.
+    #[tokio::test]
+    async fn an_escalated_council_gives_each_option_its_steps_and_asks_which() {
+        const RED_P0: &str = "RECOMMENDATION: DO-NOT-PROCEED\nFINDING P0 Loses messages on restart\nCONCUR: no\nROUND 2 COMPLETE";
+        let (f, _, _) = fixture_with(RED_P0, None, "Two honest paths.\nDECISION: needs the operator: ship the queue or stop?\nIF PROCEED\nNEXT architect: add the durability fix to the spec\nNEXT builder: build the queue\nIF DO-NOT-PROCEED\nNEXT strategist: list what a cron job would cost\n");
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)), "{:?}", out.status);
+        assert!(out.text.contains("If 1 (PROCEED):") && out.text.contains("If 2 (DO-NOT-PROCEED):") && out.text.contains("Choose with /follow <1-2>"), "{}", out.text);
+        let steps = events_of(&f, "council.verdict")[0].payload["steps"].as_array().unwrap().clone();
+        assert_eq!(steps.iter().map(|s| (s["option"].as_str().unwrap(), s["role"].as_str().unwrap())).collect::<Vec<_>>(), vec![("PROCEED", "architect"), ("PROCEED", "builder"), ("DO-NOT-PROCEED", "strategist")]);
+    }
+
+    // specs/003 §4.2: a Council is raised on demand and never lowered.
+    #[tokio::test]
+    async fn a_council_can_be_raised_on_demand_and_is_never_lowered_to_save_cost() {
+        // The builder starts on workhorse; asked for the top tier it sits there.
+        let (f, _, _) = fixture(RED_OK, None);
+        let seats: Vec<String> = ["builder", "strategist", "red-team"].iter().map(|s| s.to_string()).collect();
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.clone(), tier: Some("frontier".into()), ..Default::default() }).await.unwrap();
+        let tiers: std::collections::BTreeMap<String, String> = events_of(&f, "council.started")[0].payload["seats"].as_array().unwrap().iter().map(|s| (s["role"].as_str().unwrap().to_string(), s["tier"].as_str().unwrap().to_string())).collect();
+        assert_eq!(tiers["builder"], "frontier", "raised");
+        // The strategist starts on the top tier in this workspace: asking for less is refused, and nothing is asked of any model.
+        let (g, _, _) = fixture(RED_OK, None);
+        let out = g.engine.run_council(&g.m, g.m.next_task_id(), "Queue or cron?", CouncilOpts { tier: Some("workhorse".into()), ..Default::default() }).await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(why) if why.contains("raised on demand, never lowered")), "{:?}", out.status);
+        assert!(g.model.requests().is_empty());
+        let out = g.engine.run_council(&g.m, g.m.next_task_id(), "Queue or cron?", CouncilOpts { tier: Some("huge".into()), ..Default::default() }).await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(why) if why.contains("--tier must be")), "{:?}", out.status);
     }
 
     // specs/026 §4, AC-4: `--lenses` gives distinct perspectives round-robin in slice order, each seat sees only its own
@@ -1328,7 +1448,7 @@ mod tests {
     async fn bad_councils_are_refused_before_any_model_call() {
         let f = crate::testkit::setup(vec![], 50.0, |_| {});
         for (seats, why) in [(vec!["architect", "red-team"], "3 to 5"), (vec!["architect", "red-team", "red-team"], "3 to 5"), (vec!["architect", "red-team", "orchestrator"], "arbiter"), (vec!["architect", "red-team", "poet"], "enabled role")] {
-            let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), author_family: None, lenses: false }).await.unwrap();
+            let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), author_family: None, lenses: false, tier: None }).await.unwrap();
             assert!(matches!(&out.status, Status::Escalated(w) if w.contains(why)), "{:?}: {:?}", seats, out.status);
         }
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "   ", CouncilOpts::default()).await.unwrap();

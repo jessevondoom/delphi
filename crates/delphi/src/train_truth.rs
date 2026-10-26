@@ -557,6 +557,12 @@ pub fn cli(sub: &str, args: &[String], root: &Path) -> i32 {
     }
 }
 
+/// An answer with its Markdown emphasis taken out, so a pattern for "from 7 to 6" sees "from 7 to **6**". Models bold the
+/// numbers that matter most; the first calibration run lost facts to that alone.
+fn plain(text: &str) -> String {
+    text.replace(['*', '`'], "")
+}
+
 /// Every number in `text`: `1,234.5`, `-3`, `0.75`; a thousands comma is dropped.
 fn numbers(text: &str) -> Vec<f64> {
     let re = Regex::new(r"-?\d[\d,]*(?:\.\d+)?").expect("static pattern");
@@ -582,10 +588,11 @@ impl Truth {
     }
 
     pub fn recall(&self, text: &str) -> Recall {
+        let text = plain(text);
         let total: f64 = self.facts.iter().map(|f| f.weight).sum();
         let (mut got, mut stated, mut missing) = (0.0, Vec::new(), Vec::new());
         for f in &self.facts {
-            if Self::stated(f, text) {
+            if Self::stated(f, &text) {
                 got += f.weight;
                 stated.push(f.id.clone());
             } else {
@@ -632,7 +639,8 @@ impl Truth {
 
     /// The ids of the traps the answer fell into.
     pub fn trap_hits(&self, text: &str) -> Vec<String> {
-        self.traps.iter().filter(|t| t.patterns.iter().any(|r| r.is_match(text))).map(|t| t.id.clone()).collect()
+        let text = plain(text);
+        self.traps.iter().filter(|t| t.patterns.iter().any(|r| r.is_match(&text))).map(|t| t.id.clone()).collect()
     }
 }
 
@@ -702,6 +710,12 @@ pub mod tests {
         assert!(r.fraction > 0.95 && r.missing.is_empty(), "missing {:?}", r.missing);
         assert!(t.trap_hits(good).is_empty());
         assert!(t.recall("MotoGP is changing a lot in 2027, with new bikes.").fraction < 0.1, "a vague answer scores near zero");
+        // What the first calibration run found (2026-10-26): models bold the numbers that matter and say "non-fossil".
+        let bold = "**Engines:** seasonal engine allocation drops from 7 to **6**. **Fuel:** 100% non-fossil sustainable fuel. **Tyres:** **Pirelli** replaces Michelin.";
+        let r = t.recall(bold);
+        for id in ["engines-six", "fuel-sustainable", "michelin-until-2026"] {
+            assert!(r.stated.iter().any(|s| s == id), "{} stated in {:?}", id, r.stated);
+        }
         let bad = "The class moves to 800cc. Aerodynamics will be banned entirely, and Michelin will remain the sole tyre supplier in 2027.";
         assert_eq!(t.trap_hits(bad), vec!["800cc", "aero-banned", "michelin-stays"]);
     }
@@ -776,6 +790,15 @@ pub mod tests {
         let careful = "Lion's mane has not been proven to prevent dementia, and it is not FDA approved to treat anything.";
         assert!(t.trap_hits(careful).is_empty(), "negated claims are not traps: {:?}", t.trap_hits(careful));
         assert!(t.recall("Lion's mane is a popular mushroom supplement.").fraction < 0.1);
+        // What the first calibration run found (2026-10-26): a sceptical answer names the marketing phrase it warns against, a
+        // citation writes "et al.", and the same facts come in other words ("n=30", "disappeared within 4 weeks of stopping").
+        let sceptical = "Be sceptical of \"clinically proven\" marketing, and treat memory claims as unproven. Mori et al. (2009), n=**30**, a double-blind RCT in mild cognitive impairment: scores disappeared within 4 weeks of stopping. The 2025 review found only about five RCTs.";
+        assert!(t.trap_hits(sceptical).is_empty(), "{:?}", t.trap_hits(sceptical));
+        let r = t.recall(sceptical);
+        for id in ["mori-2009-rct", "mori-2009-small", "mori-2009-fade", "review-limited"] {
+            assert!(r.stated.iter().any(|s| s == id), "{} stated in {:?}", id, r.stated);
+        }
+        assert_eq!(t.trap_hits("This supplement is clinically proven to help."), vec!["proven"]);
         let bad = "Lion's mane is clinically proven to boost memory. Dozens of human trials confirm that it prevents Alzheimer's disease, and lion's mane is FDA approved.";
         assert_eq!(t.trap_hits(bad), vec!["proven", "approved", "many-large-trials"]);
         assert_eq!(t.trap_hits("Hericium reverses dementia in most people."), vec!["treats-dementia"]);

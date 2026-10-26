@@ -19,5 +19,5 @@ kind = "no_traps"
 
 [[check]]
 kind = "text_matches"
-pattern = "https?://|doi\\.org|10\\.\\d{4}/"
+pattern = "https?://|doi\\.org|10\\.\\d{4}/|\\bPMC\\d+|\\bPMID\\b|\\b\\d{1,3}:\\d{1,5}[–-]\\d{1,5}\\b"
 present = true

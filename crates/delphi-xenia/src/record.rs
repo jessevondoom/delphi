@@ -23,6 +23,7 @@ use crate::frontmatter::{self, bad, pick, Bad, Map};
 use crate::layout::Kind;
 use crate::limits::*;
 use crate::pointer::Pointer;
+use crate::redaction;
 use crate::sidecar::{self, Sidecar};
 use crate::{did, hash, is_slug, is_utc_timestamp, ulid, Error};
 
@@ -127,7 +128,8 @@ closed_enum!(TombstoneReason { Superseded = "superseded", Mistake = "mistake", S
 pub struct Redaction {
     pub scanner: String,
     pub scanner_version: String,
-    /// `blake3:` of body + pointers as scanned. The recipe is the publish gate's (X7); here it is only a hash.
+    /// `blake3:` of body + pointers as scanned: the recipe of [`crate::redaction`], recomputed from the file's own
+    /// bytes by [`check_content_hash`] (last step of [`check_parsed`]).
     pub content_hash: String,
 }
 
@@ -494,6 +496,9 @@ pub fn check_parsed(pinned: Pinned<'_>, at: &crate::layout::RecordPath, car: &Si
         p.check_publishable().map_err(Reject::Pointer)?;
     }
     check_dates(&record)?;
+    // Last on purpose: a record that is wrong in a specific way (a bad pointer, a bad date) is reported for that,
+    // and the hash is the final statement that the scanned text is the text in the file.
+    check_content_hash(&record, record_bytes)?;
     Ok(record)
 }
 
@@ -527,6 +532,17 @@ pub fn check_cross(r: &Record, pinned: Pinned<'_>, at: &crate::layout::RecordPat
         return Err(Reject::Mismatch("a record refers to itself"));
     }
     Ok(())
+}
+
+/// `redaction.content_hash` is the recipe of [`crate::redaction`] over the bytes this verifier holds: the exact
+/// body and the exact `pointers` and `evidence` text. The publish gate scans those bytes and writes the hash;
+/// recomputing it here means `result: passed` cannot be claimed for content other than what was scanned.
+/// Reported as a cross-check failure (`mismatch`): the record disagrees with itself.
+pub fn check_content_hash(r: &Record, record_bytes: &[u8]) -> Result<(), Reject> {
+    match redaction::content_hash(record_bytes) {
+        Some(h) if h == r.redaction.content_hash => Ok(()),
+        _ => Err(Reject::Mismatch("redaction.content_hash is not the hash of the body and pointers")),
+    }
 }
 
 /// A plain-text field: one line, NFC, no controls, bidi or tag characters, no Markdown links, no HTML, no

@@ -431,7 +431,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`proposition` must be 1 to 20,000 characters"));
         }
         let seats: Vec<String> = p["seats"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
-        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false) };
+        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from) };
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "council".into(), prompt: proposition.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
@@ -914,6 +914,130 @@ impl EngineService {
         })
     }
 
+    /// `settings.get`: what each role starts on (the shipped tier, the operator's override, the one in force), the budget, and the suggestions
+    /// still waiting for an answer. Console only: it is the operator's own configuration and what has been proposed to them.
+    async fn settings_get(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(engine_err)?;
+        let o = crate::settings_store::load(&self.engine.ws.dir);
+        let roles: Vec<Value> = self
+            .engine
+            .settings
+            .enabled_agents
+            .iter()
+            .map(|r| {
+                let shipped = self.engine.ws.load_manifest(r).map(|mf| mf.tier().to_string()).unwrap_or_else(|_| "workhorse".into());
+                let over = o.role_tier.get(r).cloned();
+                json!({"role": r, "shipped": shipped, "override": over, "effective": over.clone().unwrap_or_else(|| shipped.clone())})
+            })
+            .collect();
+        let pending: Vec<Value> = crate::settings_store::pending(&events).iter().map(|s| json!({"id": s.id, "key": s.key, "value": s.value, "reason": s.reason, "by": s.by})).collect();
+        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m)}))
+    }
+
+    /// `settings.set`: the operator changes one setting by command. `{key, value}`.
+    async fn settings_set(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let setting = crate::settings_store::parse(p["key"].as_str().unwrap_or(""), &p["value"], &self.engine.settings.enabled_agents).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let a = self.engine.apply_setting(&m, &setting, "operator", None, "", None).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        Ok(json!({"key": a.key, "old": a.old, "new": a.new, "text": a.text}))
+    }
+
+    /// `settings.accept`: the operator accepts a suggestion by id (`sg_1` or `1`).
+    async fn settings_accept(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let want = p["id"].as_str().unwrap_or("").trim_start_matches("sg_").to_string();
+        let events = m.replay().map_err(engine_err)?;
+        let s = crate::settings_store::pending(&events).into_iter().find(|s| s.id.trim_start_matches("sg_") == want).ok_or_else(|| err(code::INVALID_PARAMS, format!("no open suggestion `{}` (see /settings)", want)))?;
+        let setting = crate::settings_store::parse(&s.key, &json!(s.value), &self.engine.settings.enabled_agents).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let a = self.engine.apply_setting(&m, &setting, "suggestion", None, &s.reason, Some(&s.id)).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        Ok(json!({"key": a.key, "old": a.old, "new": a.new, "text": a.text}))
+    }
+
+    /// `settings.dismiss`: the operator turns a suggestion down; it is not made again.
+    async fn settings_dismiss(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let want = p["id"].as_str().unwrap_or("").trim_start_matches("sg_").to_string();
+        let events = m.replay().map_err(engine_err)?;
+        let s = crate::settings_store::pending(&events).into_iter().find(|s| s.id.trim_start_matches("sg_") == want).ok_or_else(|| err(code::INVALID_PARAMS, format!("no open suggestion `{}` (see /settings)", want)))?;
+        m.append(EventEnvelope::new(&m.id, "setting.dismissed", json!({"id": s.id, "key": s.key, "value": s.value}))).await.map_err(engine_err)?;
+        Ok(json!({"dismissed": s.id}))
+    }
+
+    /// `council.follow`: start the next steps of the last Council's verdict, one after the other (`specs/003` §4.2). A Council that escalated
+    /// needs `option` (its number or label); one that did not, none. The steps run as ordinary tasks, each with the Council's record to read;
+    /// the chain stops at the first that is cancelled, fails or hands back to the operator. The same steps are not started twice unless `again`.
+    async fn council_follow(self: &Arc<Self>, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(engine_err)?;
+        let verdict = events.iter().rev().find(|e| e.kind == "council.verdict").ok_or_else(|| err(code::INVALID_PARAMS, "no Council has given a verdict in this mission yet"))?;
+        let all = crate::council_next::steps_from_json(&verdict.payload["steps"]);
+        if all.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "the last Council recorded no next steps; read its record and say what to do"));
+        }
+        let path = verdict.payload["path"].as_str().unwrap_or("").to_string();
+        let n = verdict.payload["n"].as_u64().unwrap_or(0) as u32;
+        let decision = verdict.payload["decision"].as_str().map(String::from);
+        let options = crate::council_next::options_of(&all);
+        let (chosen, option): (Vec<crate::council_next::Step>, Option<String>) = if options.is_empty() {
+            (all, None)
+        } else {
+            let by_number = |k: usize| options.get(k.wrapping_sub(1)).cloned();
+            let pick = match &p["option"] {
+                Value::Number(k) => k.as_u64().and_then(|k| by_number(k as usize)),
+                Value::String(s) => s.trim().parse::<usize>().ok().and_then(by_number).or_else(|| options.iter().find(|o| o.eq_ignore_ascii_case(s.trim())).cloned()),
+                _ => None,
+            };
+            let Some(o) = pick else {
+                let list = options.iter().enumerate().map(|(i, o)| format!("{} = {}", i + 1, o)).collect::<Vec<_>>().join(", ");
+                return Err(err(code::INVALID_PARAMS, format!("this Council needs your choice: {} (for example /follow 1)", list)));
+            };
+            (all.into_iter().filter(|s| s.option.as_deref() == Some(o.as_str())).collect(), Some(o))
+        };
+        if !p["again"].as_bool().unwrap_or(false) && events.iter().any(|e| e.kind == "council.followed" && e.payload["path"] == path.as_str() && e.payload["option"] == json!(option)) {
+            return Err(err(code::INVALID_PARAMS, "those steps were already started (see the task list); `/follow again` starts them again"));
+        }
+        let k = chosen.len();
+        m.append(EventEnvelope::new(&m.id, "council.followed", json!({"path": path, "option": option, "steps": k}))).await.map_err(engine_err)?;
+        self.spawn_chain(&m, chosen, n, path.clone(), decision);
+        Ok(json!({"started": k, "option": option, "path": path}))
+    }
+
+    /// Run `steps` as tasks, one after the other, in the background. Each is a task like any other: it is listed, it can be cancelled, and the
+    /// chain ends when one is cancelled, fails or escalates, so a step that needs the operator is not followed by the next.
+    fn spawn_chain(self: &Arc<Self>, m: &Arc<MissionState>, steps: Vec<crate::council_next::Step>, n: u32, path: String, decision: Option<String>) {
+        let (svc, m) = (self.clone(), m.clone());
+        tokio::spawn(async move {
+            let k = steps.len();
+            for (i, st) in steps.iter().enumerate() {
+                let tid = m.next_task_id();
+                let prompt = crate::council_next::step_prompt(n, &path, decision.as_deref(), i + 1, k, st);
+                svc.running.lock().unwrap().insert(tid.clone(), Running { target: st.role.clone(), prompt: prompt.chars().take(120).collect(), started: Instant::now() });
+                let (engine, m2, t2, role) = (svc.engine.clone(), m.clone(), tid.clone(), st.role.clone());
+                let inner = tokio::spawn(async move { engine.run_task_with_id(&m2, t2, &role, &prompt).await });
+                svc.aborts.lock().unwrap().insert(tid.clone(), inner.abort_handle());
+                let result = inner.await;
+                svc.running.lock().unwrap().remove(&tid);
+                svc.aborts.lock().unwrap().remove(&tid);
+                match result {
+                    Ok(Ok(out)) if out.status == crate::engine::Status::Done => continue,
+                    Ok(Err(e)) => {
+                        let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": svc.engine.secrets.redact(&e.to_string())}));
+                        ev.task_id = Some(tid);
+                        let _ = m.append(ev).await;
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        });
+    }
+
     async fn snapshot(&self, p: Value) -> RpcOutcome {
         let m = self.mission(p["mission_id"].as_str()).await?;
         let running: Vec<Value> = self.running.lock().unwrap().iter().map(|(id, r)| json!({"task_id": id, "target": r.target, "prompt": r.prompt, "seconds": r.started.elapsed().as_secs()})).collect();
@@ -959,6 +1083,11 @@ impl Extension for ServiceExt {
                 "task.submit" => svc.task_submit(params, ctx).await,
                 "session.new" => svc.session_new(params, ctx).await,
                 "session.context" => svc.session_context(params, ctx).await,
+                "council.follow" => svc.council_follow(params, ctx).await,
+                "settings.get" => svc.settings_get(params, ctx).await,
+                "settings.set" => svc.settings_set(params, ctx).await,
+                "settings.accept" => svc.settings_accept(params, ctx).await,
+                "settings.dismiss" => svc.settings_dismiss(params, ctx).await,
                 "task.cancel" => svc.task_cancel(params, ctx).await,
                 "timer.list" => Ok(svc.timers_json()),
                 "timer.set" => svc.timer_set(params, ctx).await,
@@ -1205,6 +1334,110 @@ mod tests {
         }
     }
 
+    /// A Council's verdict as the Council writes it, with `steps` as `(option, role, objective)`.
+    async fn write_verdict(f: &Fx, steps: &[(Option<&str>, &str, &str)]) {
+        let steps: Vec<Value> = steps.iter().map(|(o, r, obj)| json!({"option": o, "role": r, "objective": obj})).collect();
+        let mut v = EventEnvelope::new(&f.m.id, "council.verdict", json!({"n": 1, "path": "missions/m1/councils/001-queue.md", "decision": "build the table", "steps": steps}));
+        v.task_id = Some("t_0001".into());
+        f.m.append(v).await.unwrap();
+    }
+
+    async fn wait_for_kinds(f: &Fx, kind: &str, n: usize) {
+        for _ in 0..300 {
+            if events_of(f, kind).len() >= n {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("fewer than {} `{}` events", n, kind);
+    }
+
+    // specs/003 §4.2: /follow starts the verdict's steps one after the other, each with the Council's record; not twice by accident.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn follow_starts_a_verdicts_steps_one_after_the_other_and_not_twice_by_accident() {
+        let f = setup(vec![Step::text("Spec written."), Step::text("Scope checked.")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let console = || CallContext { scope: Scope::Console, client_id: 3 };
+        assert!(svc.council_follow(json!({}), console()).await.is_err(), "no verdict yet");
+        write_verdict(&f, &[(None, "architect", "write the schema"), (None, "strategist", "check the scope")]).await;
+        let r = svc.council_follow(json!({}), console()).await.unwrap();
+        assert_eq!((r["started"].as_u64(), r["path"].as_str()), (Some(2), Some("missions/m1/councils/001-queue.md")));
+        wait_for_kinds(&f, "task.output", 2).await;
+        let kinds: Vec<String> = f.m.replay().unwrap().into_iter().map(|e| e.kind).filter(|k| k == "task.created" || k == "task.output").collect();
+        assert_eq!(kinds, vec!["task.created", "task.output", "task.created", "task.output"], "the second step starts when the first is done");
+        let created = events_of(&f, "task.created");
+        let p0 = created[0].payload["prompt"].as_str().unwrap();
+        assert!(p0.contains("Following Council 001, which decided: build the table. Step 1 of 2: write the schema") && p0.contains("@missions/m1/councils/001-queue.md"), "{}", p0);
+        assert!(created[1].payload["prompt"].as_str().unwrap().contains("Step 2 of 2: check the scope"));
+        assert_eq!((created[0].payload["target"].as_str(), created[1].payload["target"].as_str()), (Some("architect"), Some("strategist")));
+        let again = svc.council_follow(json!({}), console()).await.unwrap_err();
+        assert!(again.message.contains("already started"), "{}", again.message);
+        assert!(svc.council_follow(json!({"again": true}), console()).await.is_ok());
+        assert!(svc.council_follow(json!({}), CallContext { scope: Scope::Narrator, client_id: 1 }).await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_step_that_does_not_finish_stops_the_chain() {
+        let f = setup(vec![Step::Fail("the provider rejected the request")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        write_verdict(&f, &[(None, "architect", "write the schema"), (None, "strategist", "check the scope")]).await;
+        svc.council_follow(json!({}), CallContext { scope: Scope::Console, client_id: 3 }).await.unwrap();
+        wait_for_kinds(&f, "task.output", 1).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(events_of(&f, "task.created").len(), 1, "the second step did not start after the first handed back");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_escalated_councils_steps_wait_for_the_operators_choice_of_option() {
+        let f = setup(vec![Step::text("Done.")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        write_verdict(&f, &[(Some("PROCEED"), "architect", "spec the queue"), (Some("PROCEED"), "strategist", "check the scope"), (Some("DO-NOT-PROCEED"), "strategist", "cost the cron job")]).await;
+        let console = || CallContext { scope: Scope::Console, client_id: 3 };
+        let e = svc.council_follow(json!({}), console()).await.unwrap_err();
+        assert!(e.message.contains("needs your choice: 1 = PROCEED, 2 = DO-NOT-PROCEED"), "{}", e.message);
+        assert!(svc.council_follow(json!({"option": 7}), console()).await.is_err());
+        let r = svc.council_follow(json!({"option": "2"}), console()).await.unwrap();
+        assert_eq!((r["started"].as_u64(), r["option"].as_str()), (Some(1), Some("DO-NOT-PROCEED")));
+        wait_for_kinds(&f, "task.output", 1).await;
+        assert!(events_of(&f, "task.created")[0].payload["prompt"].as_str().unwrap().contains("cost the cron job"));
+        let by_label = svc.council_follow(json!({"option": "proceed"}), console()).await.unwrap();
+        assert_eq!(by_label["started"].as_u64(), Some(2), "a label works as well as a number");
+    }
+
+    // specs/035 D-17..D-19: the operator's own commands for settings, and the suggestions waiting for them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_operator_sets_resets_accepts_and_dismisses_settings_and_is_told_what_changed() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let console = || CallContext { scope: Scope::Console, client_id: 7 };
+        let set = svc.settings_set(json!({"key": "role_tier.builder", "value": "frontier"}), console()).await.unwrap();
+        assert_eq!((set["old"].as_str(), set["new"].as_str()), (Some("workhorse"), Some("frontier")));
+        assert!(set["text"].as_str().unwrap().contains("builder now starts on frontier (it started on workhorse; shipped: workhorse)"));
+        let got = svc.settings_get(json!({}), console()).await.unwrap();
+        let builder = got["roles"].as_array().unwrap().iter().find(|r| r["role"] == "builder").unwrap();
+        assert_eq!((builder["shipped"].as_str(), builder["override"].as_str(), builder["effective"].as_str()), (Some("workhorse"), Some("frontier"), Some("frontier")));
+        let back = svc.settings_set(json!({"key": "role_tier.builder", "value": "default"}), console()).await.unwrap();
+        assert!(back["text"].as_str().unwrap().contains("back to its shipped default, workhorse"));
+        assert!(svc.settings_set(json!({"key": "permissions", "value": "x"}), console()).await.is_err());
+        // A suggestion is accepted by number, and applies like any other change.
+        let sg = f.engine.suggest_setting(&f.m, &crate::settings_store::Setting::RoleTier { role: "architect".into(), tier: Some("workhorse".into()) }, "Sonnet has been enough", "usage").await.unwrap();
+        assert_eq!(sg, "sg_1");
+        assert_eq!(svc.settings_get(json!({}), console()).await.unwrap()["pending"].as_array().unwrap().len(), 1);
+        let acc = svc.settings_accept(json!({"id": "1"}), console()).await.unwrap();
+        assert!(acc["text"].as_str().unwrap().contains("architect now starts on workhorse (it started on frontier"), "{}", acc["text"]);
+        assert!(svc.settings_get(json!({}), console()).await.unwrap()["pending"].as_array().unwrap().is_empty());
+        assert_eq!(events_of(&f, "setting.changed").last().unwrap().payload["suggestion"], "sg_1");
+        let sg2 = f.engine.suggest_setting(&f.m, &crate::settings_store::Setting::MissionBudget { usd: 50.0 }, "a long run", "model").await.unwrap();
+        svc.settings_dismiss(json!({"id": sg2}), console()).await.unwrap();
+        assert!(crate::settings_store::pending(&f.m.replay().unwrap()).is_empty());
+        assert!(svc.settings_accept(json!({"id": "9"}), console()).await.is_err(), "no such suggestion");
+        assert!(svc.settings_set(json!({"key": "role_tier.builder", "value": "fast"}), CallContext { scope: Scope::Narrator, client_id: 1 }).await.is_err(), "only a console changes settings");
+    }
+
     // specs/030 D-1: a restart ends the session; a restart with nothing said does not pile up empty sessions.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_restart_ends_the_session_once_and_only_when_something_was_said() {
@@ -1277,7 +1510,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {
@@ -1367,7 +1600,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1424,7 +1657,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

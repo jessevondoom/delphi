@@ -385,6 +385,161 @@ impl Row {
     }
 }
 
+impl Row {
+    /// A row read back from `rows.jsonl`: enough for `--resume` and the report (per-model usage is not restored).
+    pub fn from_json(v: &Value) -> Option<Row> {
+        Some(Row {
+            case: v["case"].as_str()?.into(),
+            arm: v["arm"].as_str()?.into(),
+            seed: v["seed"].as_u64()? as u32,
+            exit_code: v["exit_code"].as_i64().map(|c| c as i32),
+            wall_secs: v["wall_secs"].as_f64().unwrap_or(0.0),
+            cost_usd: v["cost_usd"].as_f64().unwrap_or(0.0),
+            passed: v["passed"].as_bool(),
+            failed_checks: v["failed_checks"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            notes: v["notes"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            usage: BTreeMap::new(),
+            attempts: v["attempts"].as_u64().unwrap_or(0) as u32,
+            promotions: v["promotions"].as_u64().unwrap_or(0) as u32,
+            dir: v["dir"].as_str().unwrap_or("").into(),
+            error: v["error"].as_str().map(String::from),
+        })
+    }
+}
+
+/// The rows already on disk at `path`.
+pub fn read_rows(path: &Path) -> Vec<Row> {
+    fs::read_to_string(path).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter_map(|v| Row::from_json(&v)).collect()
+}
+
+fn append_row(path: &Path, row: &Row) {
+    use std::io::Write;
+    let mut line = row.to_json().to_string();
+    line.push('\n');
+    if let Err(e) = fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut f| f.write_all(line.as_bytes())) {
+        eprintln!("delphi train run: could not append to {}: {}", path.display(), e);
+    }
+}
+
+// ── pacing by the subscription's windows ─────────────────────────────────────────────────────────────────────
+
+/// When to hold Claude runs back (`specs/037` §8): a Claude subscription's five-hour and seven-day windows are shared with
+/// the operator's own work and are the binding limit on how much can run at once.
+#[derive(Debug, Clone)]
+pub struct Pace {
+    /// Wait for the reset when the five-hour window is at least this used (0-1).
+    pub five_hour: f64,
+    /// Stop the whole run when the seven-day window is at least this used: a weekly reset is too far to wait for.
+    pub seven_day: f64,
+    /// The longest a run will wait for a five-hour reset before stopping instead.
+    pub max_wait: Duration,
+    /// Extra seconds past the reset time.
+    pub margin: Duration,
+    pub claude_bin: PathBuf,
+}
+
+/// Utilization and reset time (epoch seconds) of each window, as the Claude CLI reports them with any call.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Windows {
+    pub five_hour: Option<(f64, i64)>,
+    pub seven_day: Option<(f64, i64)>,
+}
+
+/// The windows from a `claude -p --output-format stream-json --verbose` stream (its `rate_limit_event`).
+pub fn parse_windows(stream: &str) -> Windows {
+    let mut w = Windows::default();
+    for line in stream.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v["type"] != "rate_limit_event" {
+            continue;
+        }
+        let pick = |k: &str| v["rate_limit_info"]["unifiedWindows"][k].as_object().map(|o| (o.get("utilization").and_then(|x| x.as_f64()).unwrap_or(0.0), o.get("resetsAt").and_then(|x| x.as_i64()).unwrap_or(0)));
+        w.five_hour = pick("five_hour").or(w.five_hour);
+        w.seven_day = pick("seven_day").or(w.seven_day);
+    }
+    w
+}
+
+/// Ask the Claude CLI for its windows with the smallest call it can make (a few thousand cached tokens).
+pub fn probe_windows(bin: &Path, scratch: &Path) -> Result<Windows, String> {
+    fs::create_dir_all(scratch).map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(bin);
+    cmd.args(["-p", "Reply with exactly: OK", "--model", "haiku", "--output-format", "stream-json", "--verbose", "--max-turns", "1", "--tools", "", "--system-prompt", "Reply briefly.", "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"]).current_dir(scratch);
+    let (out, err) = (scratch.join("probe.out"), scratch.join("probe.err"));
+    run_process(&mut cmd, &out, &err, Duration::from_secs(90))?;
+    let w = parse_windows(&fs::read_to_string(&out).unwrap_or_default());
+    if w.five_hour.is_none() && w.seven_day.is_none() {
+        return Err("the CLI reported no window".into());
+    }
+    Ok(w)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pause {
+    Go,
+    Wait(Duration, String),
+    Halt(String),
+}
+
+pub fn pace_decision(w: &Windows, p: &Pace, now: i64) -> Pause {
+    if let Some((used, resets)) = w.seven_day {
+        if used >= p.seven_day {
+            return Pause::Halt(format!("the seven-day window is {:.0}% used (it resets {}): too far to wait for", used * 100.0, crate::train_arms::utc(resets)));
+        }
+    }
+    if let Some((used, resets)) = w.five_hour {
+        if used >= p.five_hour {
+            let wait = Duration::from_secs((resets - now).max(0) as u64) + p.margin;
+            let why = format!("the five-hour window is {:.0}% used; waiting for its reset at {}", used * 100.0, crate::train_arms::utc(resets));
+            return if wait > p.max_wait { Pause::Halt(format!("{}, which is longer than the {} s allowed", why.replace("waiting for", "its next reset is"), p.max_wait.as_secs())) } else { Pause::Wait(wait, why) };
+        }
+    }
+    Pause::Go
+}
+
+/// Before a Claude run or judge call: wait out a hot five-hour window, then go on. `Some(reason)` means stop the whole study.
+/// A window that cannot be read is not a reason to stop: the study goes on unpaced and says so.
+pub(crate) fn pace_gate(p: &Pace, scratch: &Path) -> Option<String> {
+    for _ in 0..4 {
+        match probe_windows(&p.claude_bin, scratch) {
+            Ok(w) => match pace_decision(&w, p, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)) {
+                Pause::Go => return None,
+                Pause::Wait(d, why) => {
+                    eprintln!("pace: {} ({} s)", why, d.as_secs());
+                    std::thread::sleep(d);
+                }
+                Pause::Halt(why) => {
+                    eprintln!("pace: stopping: {}", why);
+                    return Some(why);
+                }
+            },
+            Err(e) => {
+                eprintln!("pace: could not read the Claude windows ({}); going on without pacing", e);
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// `--pace-window <0-1>` (with `--pace-weekly`, `--pace-max-wait-hours`, `--claude-bin`) as a `Pace`; none without the first.
+pub(crate) fn pace_from_args(args: &[String]) -> Result<Option<Pace>, String> {
+    let Some(v) = flag(args, "--pace-window") else { return Ok(None) };
+    let five = v.parse::<f64>().ok().filter(|x| *x > 0.0 && *x <= 1.0).ok_or("--pace-window takes a fraction above 0 and at most 1 (0.85 means wait for a reset at 85% of the five-hour window)")?;
+    Ok(Some(Pace {
+        five_hour: five,
+        seven_day: flag(args, "--pace-weekly").and_then(|x| x.parse().ok()).filter(|x: &f64| *x > 0.0 && *x <= 1.0).unwrap_or(0.9),
+        max_wait: Duration::from_secs(flag(args, "--pace-max-wait-hours").and_then(|x| x.parse::<f64>().ok()).filter(|x| *x > 0.0).map_or(6 * 3600, |h| (h * 3600.0) as u64)),
+        margin: Duration::from_secs(60),
+        claude_bin: PathBuf::from(flag(args, "--claude-bin").unwrap_or_else(|| "claude".into())),
+    }))
+}
+
+/// Does this arm run on a Claude subscription seat?
+pub(crate) fn uses_claude(arm: &Arm) -> bool {
+    arm.expect_models.iter().any(|m| m.contains("claude") || ["haiku", "sonnet", "opus", "fable"].contains(&m.as_str()))
+}
+
 #[derive(Debug, Clone)]
 pub struct Arm {
     pub name: String,
@@ -458,6 +613,55 @@ pub struct Config {
     pub policy: Option<PathBuf>,
     /// `--permissions` for a build (`accept-edits` lets the Builder edit its worktree without a card per file).
     pub permissions: String,
+    /// Where each row is appended the moment its run ends, so an interrupted study keeps what it finished.
+    pub rows_path: Option<PathBuf>,
+    /// Skip runs already graded in `rows_path` (same case, arm and seed) and number new run directories after the old ones.
+    pub resume: bool,
+    /// Pace Claude runs by the subscription's utilization windows.
+    pub pace: Option<Pace>,
+}
+
+/// Seconds of real time a run may exceed its monotonic time by before it counts as slept through.
+const SLEEP_SLACK_SECS: f64 = 20.0;
+
+/// Times a run with both clocks. The monotonic clock stops while a Mac sleeps and the real clock does not, so the gap is the
+/// time the machine was asleep. A sleep drops the model CLI's network connection (the first calibration run lost two Gemini
+/// answers that way), so a run that slept measured the laptop and not the model.
+pub(crate) struct Stopwatch {
+    mono: Instant,
+    clock: std::time::SystemTime,
+}
+
+impl Stopwatch {
+    pub(crate) fn start() -> Self {
+        Stopwatch { mono: Instant::now(), clock: std::time::SystemTime::now() }
+    }
+
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.mono.elapsed()
+    }
+
+    /// The seconds the machine slept, when that is more than a moment's clock skew.
+    pub(crate) fn slept(&self) -> Option<f64> {
+        slept_secs(self.mono.elapsed(), self.clock.elapsed().ok())
+    }
+}
+
+pub(crate) fn slept_secs(monotonic: Duration, clock: Option<Duration>) -> Option<f64> {
+    let gap = clock?.as_secs_f64() - monotonic.as_secs_f64();
+    (gap > SLEEP_SLACK_SECS).then_some(gap)
+}
+
+pub(crate) fn asleep_error(secs: f64) -> String {
+    format!("the machine slept for about {:.0} s during this run, which drops the model's connection; the run is not graded (`train run` and `train judge` keep a Mac awake themselves unless given --allow-sleep; `--resume` tries it again)", secs)
+}
+
+/// Hold off idle sleep for as long as this process lives (`caffeinate` exits when the process it watches does). Best effort,
+/// macOS only; a lid closed on battery still sleeps, which the stopwatch catches.
+pub(crate) fn keep_awake(args: &[String]) {
+    if cfg!(target_os = "macos") && !cfg!(test) && !args.iter().any(|a| a == "--allow-sleep") {
+        let _ = Command::new("caffeinate").args(["-i", "-s", "-w", &std::process::id().to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    }
 }
 
 /// Run `child` to completion or kill it at `deadline`; output goes to files so a full pipe never blocks it.
@@ -505,6 +709,9 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         return Err("the truth pack is a draft (not verified by the operator); pass --allow-unverified to run it anyway".into());
     }
     let dir = cfg.work_dir.join(format!("r{:03}", index));
+    if dir.exists() {
+        return Err(format!("{} already exists; a run directory is never reused, or two runs' events would mix", dir.display()));
+    }
     row.dir = format!("r{:03}", index);
     let (home, repo) = (dir.join("home"), dir.join("repo"));
     copy_tree(arm.template_home.as_ref().unwrap_or(&cfg.template_home), &home)?;
@@ -538,10 +745,13 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         cmd.env(k, v);
     }
     let (stdout_path, stderr_path) = (dir.join("stdout.txt"), dir.join("stderr.txt"));
-    let started = Instant::now();
+    let started = Stopwatch::start();
     let (code, timed_out) = run_process(&mut cmd, &stdout_path, &stderr_path, Duration::from_secs(case.timeout_secs) + cfg.kill_grace)?;
     row.wall_secs = started.elapsed().as_secs_f64();
     row.exit_code = code;
+    if let Some(s) = started.slept() {
+        return Err(asleep_error(s));
+    }
     if timed_out {
         return Err(format!("killed after {}s", case.timeout_secs + cfg.kill_grace.as_secs()));
     }
@@ -599,18 +809,42 @@ pub fn run_all(cfg: &Config, cases: &[&Case]) -> (Vec<Row>, Vec<String>) {
     let mut rows = Vec::new();
     let mut skipped = Vec::new();
     let mut spent = 0.0;
-    let mut index = 0;
+    let prior = if cfg.resume { cfg.rows_path.as_deref().map(read_rows).unwrap_or_default() } else { Vec::new() };
+    // New run directories continue after the old ones: after every `rNNN` on disk as well as every row, because a row may have
+    // been dropped while its directory stayed (a run directory is never reused: two runs' events would mix).
+    let numbered = |name: &str| name.strip_prefix('r').and_then(|n| n.parse::<usize>().ok());
+    let on_disk = fs::read_dir(&cfg.work_dir).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str().and_then(numbered)).max().unwrap_or(0);
+    let mut index = prior.iter().filter_map(|r| numbered(&r.dir)).max().unwrap_or(0).max(on_disk);
+    let mut halt: Option<String> = None;
     for seed in 1..=cfg.seeds {
         for case in cases {
             for arm in &cfg.arms {
-                if spent + case.max_cost_usd > cfg.budget_usd {
-                    skipped.push(format!("{}/{} [{}] seed {}", case.suite, case.id, arm.name, seed));
+                let label = format!("{}/{}", case.suite, case.id);
+                if prior.iter().any(|r| r.case == label && r.arm == arm.name && r.seed == seed && r.passed.is_some()) {
                     continue;
+                }
+                if let Some(why) = &halt {
+                    skipped.push(format!("{} [{}] seed {} (stopped: {})", label, arm.name, seed, why));
+                    continue;
+                }
+                if spent + case.max_cost_usd > cfg.budget_usd {
+                    skipped.push(format!("{} [{}] seed {}", label, arm.name, seed));
+                    continue;
+                }
+                if let (Some(p), true) = (&cfg.pace, uses_claude(arm)) {
+                    halt = pace_gate(p, &cfg.work_dir.join("pace"));
+                    if let Some(why) = &halt {
+                        skipped.push(format!("{} [{}] seed {} (stopped: {})", label, arm.name, seed, why));
+                        continue;
+                    }
                 }
                 index += 1;
                 let row = run_one(cfg, case, arm, seed, index);
                 // What the run really cost counts; a run that could not be read is charged its whole cap.
                 spent += if row.passed.is_some() { row.cost_usd } else { case.max_cost_usd };
+                if let Some(p) = &cfg.rows_path {
+                    append_row(p, &row);
+                }
                 rows.push(row);
             }
         }
@@ -678,6 +912,7 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each case's own cap still applies)");
         return 2;
     };
+    keep_awake(args);
     let arms_file = flag(args, "--arms-file");
     let (template, work) = (flag(args, "--template-home"), flag(args, "--work-dir"));
     // The arms file gives each arm its own home; otherwise one --template-home serves the baseline and the candidate.
@@ -746,8 +981,21 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: {}", e);
         return 2;
     }
-    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from), permissions: flag(args, "--permissions").unwrap_or_else(|| "accept-edits".into()) };
+    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from), permissions: flag(args, "--permissions").unwrap_or_else(|| "accept-edits".into()), rows_path: None, resume: false, pace: None };
     let mut cfg = cfg;
+    let resume = args.iter().any(|a| a == "--resume");
+    let out_path = flag(args, "--out").map(PathBuf::from).unwrap_or_else(|| work.join("rows.jsonl"));
+    if out_path.exists() && !resume {
+        eprintln!("delphi train run: {} already holds results; add --resume to go on from them, or use a new --work-dir", out_path.display());
+        return 2;
+    }
+    match pace_from_args(args) {
+        Ok(p) => cfg.pace = p,
+        Err(e) => {
+            eprintln!("delphi train run: {}", e);
+            return 2;
+        }
+    }
     if cfg.policy.is_none() && cases.iter().any(|c| c.role == "builder") {
         let p = work.join("policy.toml");
         if let Err(e) = fs::write(&p, DEFAULT_POLICY) {
@@ -756,15 +1004,15 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         }
         cfg.policy = Some(p);
     }
-    let (rows, skipped) = run_all(&cfg, cases);
-    let out_path = flag(args, "--out").map(PathBuf::from).unwrap_or_else(|| work.join("rows.jsonl"));
-    let lines: String = rows.iter().map(|r| r.to_json().to_string() + "\n").collect();
-    if let Err(e) = fs::write(&out_path, lines) {
-        eprintln!("delphi train run: could not write {}: {}", out_path.display(), e);
-    }
+    cfg.rows_path = Some(out_path.clone());
+    cfg.resume = resume;
+    let (new_rows, skipped) = run_all(&cfg, cases);
+    // The report covers the old rows (on `--resume`) and the new ones; the file already holds each as it ended.
+    let mut rows = if resume { read_rows(&out_path).into_iter().filter(|r| !new_rows.iter().any(|n| n.dir == r.dir && !n.dir.is_empty())).collect() } else { Vec::new() };
+    rows.extend(new_rows);
     print!("{}", report(&rows, &arms.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), &skipped));
     println!("rows: {}", out_path.display());
-    i32::from(rows.iter().any(|r| r.passed.is_none()))
+    i32::from(rows.iter().any(|r| r.passed.is_none()) || !skipped.is_empty())
 }
 
 #[cfg(test)]
@@ -828,7 +1076,7 @@ mod tests {
     }
 
     fn cfg(root: &Path, canned: &Path, arms: Vec<Arm>, budget: f64) -> Config {
-        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None, permissions: "accept-edits".into() }
+        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None, permissions: "accept-edits".into(), rows_path: None, resume: false, pace: None }
     }
 
     fn baseline() -> Arm {
@@ -1289,6 +1537,157 @@ mod tests {
         assert_eq!(out, "[workspace]\nname = \"x\"\nprojects = [\"/tmp/r\\\"q\"]\n[access]\nk = 1\n");
         assert!(set_projects("x = 1\n", Path::new("/r")).is_err());
         assert!(set_projects("projects = []\nprojects = []\n", Path::new("/r")).is_err());
+    }
+
+    fn rate_stream(five: f64, five_reset: i64, seven: f64, seven_reset: i64) -> String {
+        format!("{{\"type\":\"system\"}}\n{{\"type\":\"rate_limit_event\",\"rate_limit_info\":{{\"status\":\"allowed\",\"unifiedWindows\":{{\"five_hour\":{{\"utilization\":{},\"resetsAt\":{},\"status\":\"allowed\"}},\"seven_day\":{{\"utilization\":{},\"resetsAt\":{},\"status\":\"allowed\"}}}}}}}}\n", five, five_reset, seven, seven_reset)
+    }
+
+    fn pace(claude: &Path) -> Pace {
+        Pace { five_hour: 0.85, seven_day: 0.9, max_wait: Duration::from_secs(20), margin: Duration::ZERO, claude_bin: claude.to_path_buf() }
+    }
+
+    #[test]
+    fn the_windows_are_read_from_the_cli_stream_and_decide_whether_to_wait_or_stop() {
+        let w = parse_windows(&rate_stream(0.84, 1793032200, 0.56, 1793365200));
+        assert_eq!((w.five_hour, w.seven_day), (Some((0.84, 1793032200)), Some((0.56, 1793365200))));
+        assert_eq!(parse_windows("garbage\n{\"type\":\"result\"}"), Windows::default());
+        let p = pace(Path::new("claude"));
+        let now = 1_000_000;
+        assert_eq!(pace_decision(&w, &p, 1793000000), Pause::Go);
+        // Five-hour window nearly used: wait for its reset (a short wait), or stop if the reset is too far off.
+        let hot = Windows { five_hour: Some((0.9, now + 10)), seven_day: Some((0.2, now + 99999)) };
+        assert!(matches!(pace_decision(&hot, &p, now), Pause::Wait(d, ref why) if d == Duration::from_secs(10) && why.contains("90% used")));
+        let far = Windows { five_hour: Some((0.9, now + 18_000)), seven_day: None };
+        assert!(matches!(pace_decision(&far, &p, now), Pause::Halt(ref why) if why.contains("longer than the 20 s allowed")));
+        // A weekly window nearly used stops the run: a weekly reset is too far to wait for.
+        let weekly = Windows { five_hour: Some((0.1, now + 100)), seven_day: Some((0.95, now + 500_000)) };
+        assert!(matches!(pace_decision(&weekly, &p, now), Pause::Halt(ref why) if why.contains("seven-day window is 95% used")));
+    }
+
+    #[test]
+    fn a_hot_five_hour_window_makes_a_claude_run_wait_and_a_hot_weekly_window_stops_the_study() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &ladder_log());
+        let c = case(t.path(), CHECKS);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        // A fake `claude`: the first probe says the five-hour window is 90% used and resets in 3 s; later probes say 10%.
+        let claude = t.path().join("claude");
+        let state = t.path().join("probe-count");
+        fs::write(&claude, format!("#!/bin/sh\nn=$(cat '{s}' 2>/dev/null || echo 0)\necho $((n+1)) > '{s}'\nif [ \"$n\" = 0 ]; then cat <<'EOF'\n{hot}EOF\nelse cat <<'EOF'\n{cool}EOF\nfi\n", s = state.display(), hot = rate_stream(0.9, now + 3, 0.2, now + 99999), cool = rate_stream(0.1, now + 9999, 0.2, now + 99999))).unwrap();
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut arm = baseline();
+        arm.expect_models = vec!["haiku".into()];
+        let mut config = cfg(t.path(), &canned, vec![arm.clone()], 10.0);
+        config.pace = Some(pace(&claude));
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let started = Instant::now();
+        let (rows, skipped) = run_all(&config, &[&c]);
+        // The reset is whole seconds away and the wait is figured from a truncated clock, so it may be a second short of 3.
+        assert!(started.elapsed() >= Duration::from_secs(1) && rows.len() == 1 && skipped.is_empty(), "it waited for the reset, then ran: {:?} {:?}", rows.len(), skipped);
+        // A weekly window at 95%: nothing runs, and what was left undone says why.
+        let weekly = t.path().join("claude-weekly");
+        fs::write(&weekly, format!("#!/bin/sh\ncat <<'EOF'\n{}EOF\n", rate_stream(0.1, now + 9999, 0.95, now + 500_000))).unwrap();
+        fs::set_permissions(&weekly, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut config2 = cfg(t.path(), &canned, vec![arm], 10.0);
+        config2.work_dir = t.path().join("work2");
+        config2.pace = Some(pace(&weekly));
+        config2.seeds = 2;
+        train::prepare_work_home(&config2.work_dir).unwrap();
+        let (rows, skipped) = run_all(&config2, &[&c]);
+        assert!(rows.is_empty() && skipped.len() == 2 && skipped.iter().all(|s| s.contains("stopped: the seven-day window is 95% used")), "{:?}", skipped);
+        // An arm that is not a Claude arm is never paced (the probe would be wasted on it).
+        let mut gem = Arm::new("gem", None);
+        gem.expect_models = vec!["gemini-3.8-flash-medium".into()];
+        assert!(!uses_claude(&gem) && uses_claude(&baseline_with("claude-haiku")) && uses_claude(&baseline_with("sonnet")));
+    }
+
+    fn baseline_with(model: &str) -> Arm {
+        let mut a = baseline();
+        a.expect_models = vec![model.into()];
+        a
+    }
+
+    #[test]
+    fn rows_are_appended_as_runs_end_and_resume_skips_what_was_graded() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &ladder_log());
+        let c = case(t.path(), CHECKS);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        let rows_path = config.work_dir.join("rows.jsonl");
+        config.rows_path = Some(rows_path.clone());
+        train::prepare_work_home(&config.work_dir).unwrap();
+        // One seed, then the study is "interrupted".
+        let (first, _) = run_all(&config, &[&c]);
+        assert_eq!(first.len(), 1);
+        assert_eq!(fs::read_to_string(&rows_path).unwrap().lines().count(), 1, "the row is on disk the moment the run ends");
+        // Resuming with two seeds runs only the second, in the next run directory.
+        config.resume = true;
+        config.seeds = 2;
+        let (second, skipped) = run_all(&config, &[&c]);
+        assert_eq!((second.len(), skipped.len(), second[0].seed, second[0].dir.as_str()), (1, 0, 2, "r002"), "{:?}", second.iter().map(|r| (&r.arm, r.seed, &r.dir)).collect::<Vec<_>>());
+        let all = read_rows(&rows_path);
+        assert_eq!(all.iter().map(|r| (r.seed, r.dir.as_str())).collect::<Vec<_>>(), vec![(1, "r001"), (2, "r002")]);
+        assert_eq!(all[0].passed, Some(true));
+        // Without --resume nothing is skipped; an ungraded row is run again on resume.
+        let mut again = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        again.work_dir = t.path().join("w3");
+        again.rows_path = Some(again.work_dir.join("rows.jsonl"));
+        train::prepare_work_home(&again.work_dir).unwrap();
+        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()) });
+        again.resume = true;
+        let (rerun, _) = run_all(&again, &[&c]);
+        assert_eq!((rerun.len(), rerun[0].dir.as_str()), (1, "r002"), "the ungraded run was tried again");
+    }
+
+    #[test]
+    fn a_resumed_run_never_reuses_a_run_directory_that_is_on_disk() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &ladder_log());
+        let c = case(t.path(), CHECKS);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        config.rows_path = Some(config.work_dir.join("rows.jsonl"));
+        config.resume = true;
+        train::prepare_work_home(&config.work_dir).unwrap();
+        // r003 is on disk although no row names it (the row was dropped): the next run is r004, and r003 is untouched.
+        fs::create_dir_all(config.work_dir.join("r003")).unwrap();
+        fs::write(config.work_dir.join("r003/marker"), "old run").unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows[0].dir, "r004");
+        assert_eq!(fs::read_to_string(config.work_dir.join("r003/marker")).unwrap(), "old run");
+        // Asked for a directory that exists, a run refuses.
+        let again = run_one(&config, &c, &baseline(), 1, 3);
+        assert!(again.error.as_deref().is_some_and(|e| e.contains("never reused")) && again.passed.is_none(), "{:?}", again.error);
+    }
+
+    #[test]
+    fn a_run_the_machine_slept_through_is_not_graded() {
+        let secs = Duration::from_secs;
+        // Real time ran ahead of the monotonic clock by ten minutes: the machine was asleep.
+        assert_eq!(slept_secs(secs(62), Some(secs(669))), Some(607.0));
+        // A moment's skew is not a sleep, nor is an unreadable clock.
+        assert_eq!(slept_secs(secs(62), Some(secs(70))), None);
+        assert_eq!(slept_secs(secs(62), None), None);
+        let w = Stopwatch::start();
+        assert_eq!(w.slept(), None, "a stopwatch that just started has not slept");
+        let e = asleep_error(607.0);
+        assert!(e.contains("slept for about 607 s") && e.contains("not graded") && e.contains("--resume"), "{}", e);
+    }
+
+    #[test]
+    fn a_work_directory_with_results_is_not_reused_without_resume() {
+        let t = tempfile::tempdir().unwrap();
+        let c = case(t.path(), CHECKS);
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let work = t.path().join("w");
+        train::prepare_work_home(&work).unwrap();
+        fs::write(work.join("rows.jsonl"), "{}\n").unwrap();
+        let tpl = template(t.path());
+        let base = ["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()];
+        assert_eq!(cli(&a(&base), &[&c]), 2);
+        let mut bad = a(&base);
+        bad.extend(["--resume".into(), "--pace-window".into(), "2".into()]);
+        assert_eq!(cli(&bad, &[&c]), 2, "a fraction above 1 is refused");
     }
 
     #[test]

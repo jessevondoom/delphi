@@ -19,5 +19,5 @@ kind = "no_traps"
 
 [[check]]
 kind = "text_matches"
-pattern = "https?://"
+pattern = "https?://|\\b(FIM|Dorna|MSMA|Grand Prix Commission|motogp\\.com)\\b"
 present = true
