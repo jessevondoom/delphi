@@ -1399,7 +1399,7 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.wait_for("nothing is thinking right now");
     assert_eq!(o.ctrl_c_out(), 0);
     // The dashboard (`specs/030`): the operational view, with the sessions, what runs now and the pace, from the same socket.
-    let mut d = PtyConsole::start_env(&e.home, &["observe", "dashboard", "--workspace", "e2e"], 34, 110, &envs);
+    let d = PtyConsole::start_env(&e.home, &["observe", "dashboard", "--workspace", "e2e"], 34, 110, &envs);
     d.wait_for("· dashboard");
     d.wait_for("running now");
     d.wait_for("nothing is running: the system is idle");
