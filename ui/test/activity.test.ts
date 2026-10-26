@@ -13,7 +13,7 @@ import { info, plain, snapshot } from './helpers.ts';
 
 const T0 = Date.parse('2026-10-25T09:00:00Z');
 const ev = (type: string, payload: any, task = 't_1', extra: any = {}) => ({ method: 'event', params: { type, task_id: task, payload, ...extra } });
-const delta = (span: string, d: { thinking?: string; text?: string }) => ({ method: 'delta.frame', params: { spans: { [span]: d } } });
+const delta = (span: string, d: { thinking?: string; text?: string; tokens?: number }) => ({ method: 'delta.frame', params: { spans: { [span]: d } } });
 const step = (s: State, n: any, at: number) => fold(s, n, T0 + at);
 
 const model = (state: State, over: Partial<Model> = {}): Model => ({
@@ -34,6 +34,7 @@ function world(): State {
   s = step(s, ev('agent.block.complete', { block: { type: 'tool_call', id: 'w1', name: 'write_file', arguments: { path: 'crates/queue.rs' } } }, 't_2', { span_id: 'sp_builder_2', agent: 'builder' }), 15_000);
   s = step(s, ev('tool.result', { tool_call_id: 'w1', content: 'ok', is_error: false }, 't_2', { span_id: 'sp_builder_2' }), 16_000);
   s = step(s, ev('dag.node.state', { node_id: 'sp_builder_2', state: 'done' }, 't_2'), 22_000);
+  s = step(s, ev('change.recorded', { summary: 'added a visibility timeout to the claim loop', role: 'builder' }, 't_2', { agent: 'builder' }), 22_500);
   s = step(s, ev('dag.node.added', { node_id: 'sp_red-team_3', role: 'red-team', depth: 1 }, 't_2'), 23_000);
   s = step(s, ev('dag.node.state', { node_id: 'sp_red-team_3', state: 'done' }, 't_2'), 44_000);
   // at work now
@@ -45,7 +46,7 @@ function world(): State {
   s = step(s, ev('dag.node.added', { node_id: 'sp_builder_6', role: 'builder', depth: 1 }, 't_5'), 56_000);
   s = step(s, delta('sp_orchestrator_4', { thinking: 'The question is whether claims need transactional guarantees. A table gives row locks for free; a file needs a lock file and careful fsync ordering. Leaning table, but check what 003 already decided about the audit trail before committing to it.' }), 52_000);
   s = step(s, ev('agent.block.complete', { block: { type: 'tool_call', id: 'r1', name: 'read_file', arguments: { path: 'specs/003-collaboration-and-council.md' } } }, 't_4', { span_id: 'sp_architect_5', agent: 'architect' }), 57_000);
-  s = step(s, delta('sp_builder_6', { text: 'fn claim(id: u64) -> Result<(), Error> {\n    let row = tx.select_for_update(id)?;' }), 58_000);
+  s = step(s, delta('sp_builder_6', { tokens: 16_600, text: 'fn claim(id: u64) -> Result<(), Error> {\n    let row = tx.select_for_update(id)?;' }), 58_000);
   return { ...s, tokens: 12_400 };
 }
 
@@ -62,7 +63,7 @@ test('a span that ends leaves the running zone and joins the history in the same
 });
 
 test('what a span did: the file it wrote, what it answered, the file it read', () => {
-  const w = world().activity.history;
+  const w = world().activity.history.filter((d) => !d.change);
   assert.deepEqual(w.map((d) => [d.role, d.what, d.elapsed]), [['architect', 'answered "table or file?"', 4000], ['builder', 'wrote crates/queue.rs', 12_000], ['red-team', 'finished', 21_000]]);
   let s = initial(0);
   s = step(s, ev('dag.node.added', { node_id: 'sp_scout_1', role: 'scout', depth: 1 }), 0);
@@ -92,7 +93,7 @@ test('a task that ends or is stopped takes its running spans with it, without a 
   assert.deepEqual([s.activity.running.length, s.activity.history.length], [0, 0]);
 });
 
-test('the history keeps the newest 500 and the running text keeps its tail', () => {
+test('the history keeps the newest 500', () => {
   let s = initial(0);
   for (let i = 1; i <= HISTORY_MAX + 7; i++) {
     s = step(s, ev('dag.node.added', { node_id: `sp_a_${i}`, role: 'architect', depth: 1 }), i * 10);
@@ -101,20 +102,17 @@ test('the history keeps the newest 500 and the running text keeps its tail', () 
   assert.equal(s.activity.history.length, HISTORY_MAX);
   assert.equal(s.activity.history[0]!.id, 8, 'the oldest seven are gone');
   assert.equal(s.activity.history[HISTORY_MAX - 1]!.id, HISTORY_MAX + 7);
-  s = step(s, ev('dag.node.added', { node_id: 'sp_b_1', role: 'builder', depth: 1 }), 99_999);
-  for (let i = 0; i < 100; i++) s = fold(s, delta('sp_b_1', { text: 'x'.repeat(100) }), 100_000 + i);
-  assert.ok(s.activity.running[0]!.text.length <= 4000);
 });
 
-test('a council\'s blind round keeps no text, only the fact that it is thinking', () => {
+test('a council\'s blind round keeps no text, only the fact that it is taking its seat', () => {
   let s = initial(0);
   s = step(s, ev('dag.node.added', { node_id: 'sp_a_1', role: 'architect', depth: 1 }), 0);
   s = step(s, ev('council.started', {}), 1);
   s = step(s, delta('sp_a_1', { thinking: 'secret stance', text: 'OPTION: table' }), 2);
   const r = s.activity.running[0]!;
-  assert.deepEqual([r.text, r.thinking, r.blind], ['', '', true]);
+  assert.deepEqual(['text' in r, 'thinking' in r, r.blind], [false, false, true]);
   assert.ok(!lines(model(s), 100, 24).join('\n').includes('table'));
-  assert.match(lines(model(s), 100, 24).join('\n'), /daedalus · thinking · \d\d:\d\d/);
+  assert.match(lines(model(s), 100, 24).join('\n'), /daedalus · taking its seat · \d\d:\d\d/);
 });
 
 test('a failed tool call shows its first line under the span until the next one', () => {
@@ -160,21 +158,55 @@ test('the chip: green with the terminal\'s own background as its text; [✔ fini
   assert.ok(!lines(model(world(), { deck: 1 }), 100, 34).join('\n').includes('finished'), 'not in the chat deck');
 });
 
-test('a running span shows at most six lines, the last six, wrapped to the window width less six', () => {
+test('what an agent thinks or writes is dropped on the spot: not kept, not drawn; the running span shows who, how long, the tool', () => {
   let s = initial(0);
   s = step(s, ev('dag.node.added', { node_id: 'sp_o_1', role: 'orchestrator', depth: 0 }), 0);
   const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1} ` + 'word '.repeat(12)).join('\n');
-  s = step(s, delta('sp_o_1', { thinking: long }), 1);
+  s = step(s, delta('sp_o_1', { thinking: long, text: 'My answer is the table.' }), 1);
+  assert.ok(!JSON.stringify(s.activity).includes('line 30') && !JSON.stringify(s.activity).includes('the table'), 'nothing of it is in the deck state');
   for (const w of [100, 80, 48, 28]) {
-    const rows = lines(model(s), w, 60);
-    const title = rows.findIndex((l) => l.includes('thinking'));
-    assert.ok(title > 0, `${w}`);
-    let n = 0;
-    for (let i = title + 1; i < rows.length && rows[i]!.startsWith('    ') && rows[i]!.trim() !== ''; i++) { n++; assert.ok(stringWidth(rows[i]!) <= w - 2, `${w}: ${rows[i]}`); }
-    assert.equal(n, 6, `${w}: six lines`);
-    assert.ok(rows.join('\n').includes('line 30'), `${w}: the newest text`);
-    assert.ok(!rows.join('\n').includes('line 1 '), `${w}: the oldest is gone`);
+    const rows = lines(model(s), w, 40);
+    const t = rows.join('\n');
+    assert.match(t, w >= 48 ? /athena · working · \d\d:\d\d/ : /athena · working/, `${w}`);
+    assert.ok(!t.includes('line 30') && !t.includes('the table') && !/thinking|writing/.test(t), `${w}: no model text, no \"thinking\"/\"writing\"`);
+    for (const l of rows) assert.ok(stringWidth(l) <= w, `${w}: ${l}`);
   }
+  assert.equal(s.live, 'My answer is the table.', 'the reply still streams into the chat');
+});
+
+test('a running span shows its live token total, and the tool it waits on by name only', () => {
+  let s = initial(0);
+  s = step(s, ev('dag.node.added', { node_id: 'sp_b_1', role: 'builder', depth: 1 }, 't_1'), 0);
+  s = step(s, delta('sp_b_1', { tokens: 16_600 }), 1);
+  s = step(s, delta('sp_b_1', { tokens: 18_200 }), 2);
+  assert.equal(s.activity.running[0]!.tokens, 18_200, 'the last total wins');
+  s = step(s, { method: 'delta.frame', params: { spans: { sp_b_1: { est: 900 } } } }, 2);
+  assert.equal(s.activity.running[0]!.tokens, 900, 'an API seat\'s estimate of the call in flight is shown the same way');
+  s = step(s, delta('sp_b_1', { tokens: 18_200 }), 2);
+  s = step(s, ev('agent.block.complete', { block: { type: 'tool_call', id: 'c', name: 'run_command', arguments: { command: 'cargo test --secret-flag' } } }, 't_1', { span_id: 'sp_b_1' }), 3);
+  const t = lines(model(s), 100, 24).join('\n');
+  assert.match(t, /hephaestus · working · \d\d:\d\d · ~18\.2k tokens\n\s+→ run_command …/);
+  assert.ok(!t.includes('secret-flag'), 'the tool\'s arguments are not drawn');
+  s = step(s, delta('sp_b_1', { text: 'Done.' }), 4);
+  assert.ok(!lines(model(s), 100, 24).join('\n').includes('→ run_command'), 'answering ends the tool call');
+});
+
+test('recorded changes join the ticker as their own sentence, by session, and survive a replay of the current session', () => {
+  let s = initial(0);
+  s = step(s, ev('session.started', { session_id: 's_0001' }), 0);
+  s = step(s, ev('change.recorded', { summary: '  reworked the\npermission model  ', role: 'builder' }, 't_1', { agent: 'builder' }), 5_000);
+  s = step(s, ev('change.recorded', { summary: '   ', role: 'builder' }, 't_1', { agent: 'builder' }), 6_000);
+  assert.deepEqual(s.activity.history.map((h) => [h.change, h.what, h.role]), [[true, 'reworked the permission model', 'builder']]);
+  const t = lines(model(s), 100, 24).join('\n');
+  assert.match(t, /✎ recorded\s+⟦.*⟧ hephaestus · \d\d:\d\d\n\s+reworked the permission model/);
+  // History from the log (a reattach) brings back this session's changes, and not the finished spans.
+  const events = [ev('session.started', { session_id: 's_0001' }), ev('change.recorded', { summary: 'old one', role: 'builder' }, 't_1', { agent: 'builder' }), ev('session.started', { session_id: 's_0002' }), ev('change.recorded', { summary: 'new one', role: 'builder' }, 't_2', { agent: 'builder' })];
+  const back = replay(initial(0), events.map((e) => ({ ...e.params, type: e.params.type })));
+  assert.deepEqual(back.activity.history.map((h) => h.what), ['new one'], 'a new session starts the log over');
+  // A session of its own: the next one clears the log but not what finished.
+  let u = world();
+  u = step(u, ev('session.started', { session_id: 's_0009' }), 70_000);
+  assert.ok(u.activity.history.every((h) => !h.change) && u.activity.history.length > 0);
 });
 
 test('the running zone stays in reach: following shows the end, with ↑ N earlier above; scrolling shows ↓ N lines below', () => {
@@ -185,11 +217,11 @@ test('the running zone stays in reach: following shows the end, with ↑ N earli
   }
   const following = lines(model(s), 80, 24);
   assert.match(following.join('\n'), /↑ \d+ earlier · pgup/);
-  assert.ok(following.join('\n').includes('hephaestus · writing'), 'the running zone is on screen');
+  assert.ok(following.join('\n').includes('hephaestus · working'), 'the running zone is on screen');
   assert.ok(!following.join('\n').includes('lines below'));
   const scrolled = lines(model(s, { activityBack: 8 }), 80, 24);
   assert.match(scrolled.join('\n'), /↓ 8 lines below · pgdn/);
-  assert.ok(!scrolled.join('\n').includes('hephaestus · writing'), 'scrolled up, the end is out of view');
+  assert.ok(!scrolled.join('\n').includes('hephaestus · working'), 'scrolled up, the end is out of view');
   const huge = lines(model(s, { activityBack: 9999 }), 80, 24);
   assert.equal(huge.length, 24, 'an offset past the start is clamped');
 });
@@ -215,7 +247,7 @@ test('a streaming frame in flight while a resync reloads the history does not br
   const late = step(reloaded, delta('sp_architect_1', { text: 'Understood.' }), 5);
   assert.equal(late.live, '', 'no live block');
   assert.equal(late.tokens, reloaded.tokens, 'and no tokens counted twice');
-  assert.ok(!lines(model(late, { deck: 1 }), 100, 24).join('\n').includes('writing'));
+  assert.ok(!lines(model(late, { deck: 1 }), 100, 24).join('\n').includes('working'));
   // A failed or stopped task is over too.
   for (const end of ['task.failed', 'task.cancelled']) {
     const s = replay(initial(0), [past[0]!, past[1]!, { type: end, task_id: 't_1', payload: { error: 'x' } }]);
@@ -230,7 +262,9 @@ test('a streaming frame in flight while a resync reloads the history does not br
 });
 
 test('replay does not bring the deck back, and the empty deck says what it is for', () => {
-  assert.deepEqual(replay(world(), []).activity, { running: [], history: [] });
+  const back = replay(world(), []).activity;
+  assert.deepEqual([back.running, back.history.every((h) => h.change)], [[], true], 'no spans come back; the session\'s recorded changes do');
+  assert.deepEqual(replay(initial(0), []).activity, { running: [], history: [] });
   assert.match(lines(model(initial(0)), 100, 24).join('\n'), /nothing running/);
 });
 
@@ -245,7 +279,7 @@ test('a streaming frame that arrives after its task is over does not bring the r
   const late = step(s, delta('sp_architect_1', { text: 'Understood.' }), 3); // the frame crossed the event on the way
   assert.equal(late.live, '', 'no live block');
   assert.equal(late.tokens, s.tokens, 'and no tokens counted twice');
-  assert.ok(!lines(model(late, { deck: 1 }), 100, 24).join('\n').includes('writing'));
+  assert.ok(!lines(model(late, { deck: 1 }), 100, 24).join('\n').includes('working'));
   // the same when the span's own end event comes first
   let t = step(initial(0), ev('dag.node.added', { node_id: 'sp_b_1', role: 'builder', depth: 1 }), 0);
   t = step(t, ev('dag.node.state', { node_id: 'sp_b_1', state: 'done' }), 1);

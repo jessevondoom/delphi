@@ -2,12 +2,12 @@
 delphi v0.5 · /proj · activity
 
 
-  Activity and thinking stream
+  Activity and changes
 
   nothing running
 
-  Reasoning, replies and tool calls appear here as they happen.
-  They live only in this window: nothing is saved.
+  Who is working and the changes they record appear here.
+  Replies are in the chat; what agents think is not shown.
 
 ────────────────────────────────────────────────────────────────────────────────
 ❯

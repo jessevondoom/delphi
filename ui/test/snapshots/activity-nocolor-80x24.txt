@@ -1,22 +1,22 @@
 ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · activity
 
-  ↑ 2 earlier · pgup
+
+  [✔ finished]  ⟦•_•⟧ daedalus · answered "table or file?" · 4s
+
+  [✔ finished]  ⟦•─•⟧ hephaestus · wrote crates/queue.rs · 12s
+
+  [✎ recorded]  ⟦•─•⟧ hephaestus · 09:00
+    added a visibility timeout to the claim loop
 
   [✔ finished]  ⟦-_-⟧ ares · finished · 21s
 
-  ⟦•─•⟧ athena · thinking · 00:12
-    The question is whether claims need transactional guarantees. A table
-    gives row locks for free; a file needs a lock file and careful fsync
-    ordering. Leaning table, but check what 003 already decided about the
-    audit trail before committing to it.
+  ⟦•─•⟧ athena · working · 00:12
 
-  ⟦•─•⟧ daedalus · → read_file(specs/003-collaboration-and-council.md) …
+  ⟦•─•⟧ daedalus · working · 00:11
+    → read_file …
 
-  ⟦•─•⟧ hephaestus · writing · 00:04
-    fn claim(id: u64) -> Result<(), Error> {
-        let row = tx.select_for_update(id)?;
-
+  ⟦•─•⟧ hephaestus · working · 00:04 · ~16.6k tokens
 ◐ working · 60s · 5 tasks                                            esc to stop
 ────────────────────────────────────────────────────────────────────────────────
 ❯

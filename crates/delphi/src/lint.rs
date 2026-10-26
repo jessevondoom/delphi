@@ -316,11 +316,11 @@ fn check_skills(tree: &Tree, r: &mut Report) {
     }
 }
 
-/// What a `SKILL.md` promises about its own package: every `templates/` file and declared script it names exists, and
+/// What a `SKILL.md` promises about its own package: every `templates/` or `assets/` file (the Agent Skills spelling) and declared script it names exists, and
 /// every `delphi check <kind>` it tells an agent to run is a kind the binary has. `has` probes the package directory.
 pub fn skill_package_errors(body: &str, fm: &Mapping, has: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut errs = Vec::new();
-    let template = Regex::new(r"\btemplates/[A-Za-z0-9_.-]+").unwrap();
+    let template = Regex::new(r"\b(?:templates|assets)/[A-Za-z0-9_.-]+").unwrap();
     for m in template.find_iter(body) {
         if !has(m.as_str()) {
             errs.push(format!("names `{}`, which is not in the package", m.as_str()));
@@ -792,6 +792,15 @@ fn check_abs_paths(tree: &Tree, r: &mut Report) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_skill_may_name_assets_as_it_names_templates_and_both_must_exist() {
+        let fm = Mapping::new();
+        let has = |p: &str| p == "assets/form.md" || p == "templates/memo.md";
+        assert!(skill_package_errors("Fill assets/form.md then templates/memo.md now", &fm, &has).is_empty());
+        let e = skill_package_errors("Fill assets/missing.md and templates/gone.md now", &fm, &has);
+        assert_eq!(e.len(), 2, "{:?}", e);
+    }
 
     #[test]
     fn write_glob_rules() {

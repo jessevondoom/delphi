@@ -1,22 +1,22 @@
 ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•─•⟧ ⟦•••⟧
 delphi v0.5 · /proj · activity
 
-  ↑ 14 earlier · pgup
+  ↑ 12 earlier · pgup
 
    ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
 
-  ⟦•─•⟧ athena · thinking · 01:22
-    The question is whether claims need transactional guarantees. A table
-    gives row locks for free; a file needs a lock file and careful fsync
-    ordering. Leaning table, but check what 003 already decided about the
-    audit trail before committing to it.
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
 
-  ⟦•─•⟧ daedalus · → read_file(specs/003-collaboration-and-council.md) …
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
 
-  ⟦•─•⟧ hephaestus · writing · 01:14
-    fn claim(id: u64) -> Result<(), Error> {
-        let row = tx.select_for_update(id)?;
+   ✔ finished   ⟦•_•⟧ odysseus · finished · 0s
 
+  ⟦•─•⟧ athena · working · 01:22
+
+  ⟦•─•⟧ daedalus · working · 01:21
+    → read_file …
+
+  ⟦•─•⟧ hephaestus · working · 01:14 · ~16.6k tokens
 ◐ working · 130s · 5 tasks                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────
 ❯

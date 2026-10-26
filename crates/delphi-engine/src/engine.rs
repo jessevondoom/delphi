@@ -338,6 +338,8 @@ pub(crate) struct SpanCtx {
     /// The bundle agent this span runs as (`specs/023` §5B): its host role's manifest applies unchanged, and its `tools`
     /// list only ever removes tools from that role's.
     pub(crate) bundle_agent: Option<crate::bundle_load::LoadedAgent>,
+    /// The run of the same tool this span is in (`observe::extend_streak`), to raise a `monitor.alert` when it becomes a loop.
+    pub(crate) streak: crate::observe::Streak,
 }
 
 impl SpanCtx {
@@ -577,7 +579,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default() };
 
             if fresh {
                 let mut open = vec![
@@ -704,6 +706,7 @@ impl Engine {
                             Some((content, is_error)) => tools::ToolResult { content, is_error }, // already persisted before the interruption
                             None => {
                                 let r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
+                                self.note_tool_call(&mut sc, &name, r.is_error).await?;
                                 // Durable before the next tool runs (or waits for an approval): a crash must not re-run a finished side effect.
                                 let payload = match sc.content_ref.take() {
                                     // A connector result: the log holds a pointer to the payload store, never the text.
@@ -1039,9 +1042,20 @@ impl Engine {
                 // of each stream that could still be the start of one.
                 let mut text_tail = LiveRedactor::new(secrets.clone());
                 let mut think_tail = LiveRedactor::new(secrets);
+                // The turn's usage is logged when it ends; meanwhile the window shows an estimate from what has streamed (about four
+                // characters to a token; the length only, the text is not looked at).
+                let mut streamed = 0usize;
                 let mut on_event = move |e: StreamEvent| match e {
-                    StreamEvent::TextDelta { text, .. } => hub.push_delta(&span_id, DeltaKind::Text, &text_tail.push(&text)),
-                    StreamEvent::ThinkingDelta { text, .. } => hub.push_delta(&span_id, DeltaKind::Thinking, &think_tail.push(&text)),
+                    StreamEvent::TextDelta { text, .. } => {
+                        streamed += text.len();
+                        hub.push_estimate(&span_id, (streamed / 4) as u64);
+                        hub.push_delta(&span_id, DeltaKind::Text, &text_tail.push(&text))
+                    }
+                    StreamEvent::ThinkingDelta { text, .. } => {
+                        streamed += text.len();
+                        hub.push_estimate(&span_id, (streamed / 4) as u64);
+                        hub.push_delta(&span_id, DeltaKind::Thinking, &think_tail.push(&text))
+                    }
                     StreamEvent::BlockComplete { .. } => {
                         for (kind, tail) in [(DeltaKind::Text, text_tail.finish()), (DeltaKind::Thinking, think_tail.finish())] {
                             if !tail.is_empty() {
@@ -1332,6 +1346,15 @@ impl Engine {
             defs.clear();
         }
         Ok(defs)
+    }
+
+    /// Count a finished tool call towards the span's streak; the call that makes it a loop is announced (`monitor.alert`), once.
+    /// An operator hook on `monitor.*` can carry it out of the window; nothing else sends it anywhere.
+    pub(crate) async fn note_tool_call(&self, sc: &mut SpanCtx, name: &str, failed: bool) -> Result<(), EngineError> {
+        if let Some(alert) = crate::observe::extend_streak(&mut sc.streak, name, failed) {
+            sc.m.append(sc.ev("monitor.alert", alert)).await?;
+        }
+        Ok(())
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
@@ -2071,6 +2094,40 @@ mod tests {
         assert_eq!(out.status, Status::Done);
         let taints = events_of(&f, "span.taint");
         assert!(taints.iter().any(|e| e.payload["cause"] == "run_command output" && e.payload["ceiling"] == "L0"), "{:?}", taints.iter().map(|e| e.payload.clone()).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn a_role_that_records_a_change_is_told_to_and_gets_it_logged_with_its_role_task_and_span() {
+        let f = setup(vec![Step::tool("c1", "record_change", json!({"summary": "reworked the permission model to be less intrusive", "files": ["specs/040.md"]})), Step::text("done")], 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Tidy the permission model").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let reqs = f.model.requests();
+        let offered = reqs[0].body["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert!(offered.contains(&"record_change".to_string()), "every role is offered it: {:?}", offered);
+        let first = reqs[0].body.to_string();
+        assert!(first.contains("runtime/change-log") && first.contains("call `record_change`"), "and is told to use it");
+        let logged = events_of(&f, "change.recorded");
+        assert_eq!(logged.len(), 1);
+        let e = &logged[0];
+        assert_eq!((e.payload["summary"].as_str(), e.payload["role"].as_str(), e.payload["files"][0].as_str()), (Some("reworked the permission model to be less intrusive"), Some("architect"), Some("specs/040.md")));
+        assert_eq!(e.agent.as_deref(), Some("architect"));
+        assert!(e.task_id.is_some() && e.span_id.is_some(), "the envelope carries the task and span the report counts against");
+        assert!(reqs[1].body["messages"].to_string().contains("recorded in the change log"), "the model is told it was recorded");
+        // The same events feed the measurement: this run did no work (a note, not a write), so it is not counted against adoption.
+        let report = crate::toolreport::report(&f.m.replay().unwrap());
+        assert_eq!((report.total.spans, report.total.worked, report.by_tool["record_change"].calls), (1, 0, 1));
+    }
+
+    #[tokio::test]
+    async fn the_same_failing_tool_again_and_again_raises_one_loop_alert() {
+        let calls: Vec<Step> = (0..4).map(|i| Step::tool(&format!("c{}", i), "read_file", json!({"path": "missions/none.md"}))).chain(std::iter::once(Step::text("giving up"))).collect();
+        let f = setup(calls, 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Look at the plan").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let alerts = events_of(&f, "monitor.alert");
+        assert_eq!(alerts.len(), 1, "{:?}", alerts.iter().map(|a| a.payload.to_string()).collect::<Vec<_>>());
+        assert_eq!((alerts[0].payload["kind"].as_str(), alerts[0].payload["tool"].as_str(), alerts[0].payload["failed"].as_u64()), (Some("loop"), Some("read_file"), Some(3)));
+        assert_eq!(alerts[0].agent.as_deref(), Some("architect"));
     }
 
     #[tokio::test]

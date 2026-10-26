@@ -15,7 +15,7 @@ import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark,
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
-export type RoleTools = { calls: number; errors: number; last: string; streak?: { tool: string; n: number; failed: number }; by_tool: Record<string, { calls: number; errors: number }> };
+export type RoleTools = { calls: number; errors: number; last: string; streak?: { tool: string; n: number; failed: number }; open?: { tool: string; since_ms: number } | null; by_tool: Record<string, { calls: number; errors: number }> };
 export type OState = {
   agents: Record<string, AgentRow>;
   nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
@@ -32,6 +32,12 @@ export type OState = {
   threads?: { id: string; label: string; tasks: string[] }[];
   /** Tool use per role over the whole mission: counts and names only (`observe::tool_stats`). */
   tools?: Record<string, RoleTools>;
+  /** Approvals the operator has not answered, by id, with when each was raised. */
+  approvals?: Record<string, { role: string; summary: string; since_ms: number }>;
+  /** What happened since the operator last asked or answered something. */
+  since_you?: { since_ms: number; changes: number; done: number; failed: number; approvals: number };
+  /** Files the team has touched: who, how often, when last; `clash` is two roles on one file. */
+  files?: { path: string; roles: Record<string, number>; writes: number; last_ms: number; clash: boolean }[];
   /** The most tokens one subscription-CLI span may use before Delphi stops it (`harness_token_cap`). */
   token_cap?: number;
   /** Which models report their work: per model, the runs that did work and the ones that recorded a change (`toolreport.rs`). */
@@ -58,6 +64,8 @@ export type OModel = {
   live: Record<string, string>; connected: boolean;
   /** A running span's token total so far, from the live frames: a subscription CLI logs its usage only when it ends. In memory, never saved. */
   liveTokens?: Record<string, number>;
+  /** An estimate of the tokens the call in flight has produced so far (an API seat), from what has streamed. Shown with the live total; it has no cap. */
+  liveEst?: Record<string, number>;
   /** When each span was last heard from (a frame or an event), in ms, and when this window first looked: a running agent silent for a while is flagged. In memory. */
   lastSeen?: Record<string, number>;
   /** Tokens per sample for each running role, oldest first (the `pulse` pane's sparklines). In memory, never saved. */
@@ -192,7 +200,7 @@ function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
     const nm = name(m, a.role);
     const logged = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
     // What the running spans of this role have used so far but not yet logged; shown as an estimate until the span ends.
-    const live = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((t, n) => t + (m.liveTokens?.[n.id] ?? 0), 0);
+    const live = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((t, n) => t + (m.liveTokens?.[n.id] ?? m.liveEst?.[n.id] ?? 0), 0);
     const total = logged + live;
     const meta = [
       roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' ? quietNote(m, a.role) : ''),

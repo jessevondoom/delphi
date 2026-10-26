@@ -19,9 +19,15 @@ export function monitorsWorld(): OState {
     { session: 's_0001', at_ms: min(16), role: 'builder', task: 't_1', summary: 'added a visibility timeout to the claim loop', files: [] },
     { session: 's_0001', at_ms: min(18), role: 'builder', task: 't_1', summary: 'wired the timeout into the config', files: [] },
   ];
+  s.approvals = { ap_1: { role: 'red-team', summary: 'run cargo test --workspace', since_ms: NOW - 6 * 60_000 } };
+  s.since_you = { since_ms: NOW - 18 * 60_000, changes: 3, done: 2, failed: 0, approvals: 1 };
+  s.files = [
+    { path: 'crates/queue/src/claim.rs', roles: { builder: 4, architect: 1 }, writes: 5, last_ms: min(18), clash: true },
+    { path: 'specs/040-retry.md', roles: { architect: 2 }, writes: 2, last_ms: min(8), clash: false },
+  ];
   s.tools = {
     architect: { calls: 9, errors: 0, last: 'write_file', streak: { tool: 'write_file', n: 1, failed: 0 }, by_tool: { read_file: { calls: 7, errors: 0 }, write_file: { calls: 1, errors: 0 }, record_change: { calls: 1, errors: 0 } } },
-    builder: { calls: 41, errors: 6, last: 'run_command', streak: { tool: 'run_command', n: 7, failed: 4 }, by_tool: { read_file: { calls: 18, errors: 0 }, edit_file: { calls: 9, errors: 1 }, run_command: { calls: 12, errors: 5 }, record_change: { calls: 2, errors: 0 } } },
+    builder: { calls: 41, errors: 6, last: 'run_command', streak: { tool: 'run_command', n: 7, failed: 4 }, open: { tool: 'run_command', since_ms: NOW - 12 * 60_000 }, by_tool: { read_file: { calls: 18, errors: 0 }, edit_file: { calls: 9, errors: 1 }, run_command: { calls: 12, errors: 5 }, record_change: { calls: 2, errors: 0 } } },
   };
   s.adoption = {
     by_model: {
@@ -43,6 +49,6 @@ export const pulseSamples = (): Record<string, number[]> => ({
 export function monitorsModel(view: OModel['view'], over: Partial<OModel> = {}): OModel {
   return {
     info, pal: { dark: true }, st: monitorsWorld(), view, pick: 0, scroll: 0, selNode: 0, arch: emptyArch(), live: {}, connected: true, still: true, now: NOW,
-    liveTokens: { n3: 410_000 }, lastSeen: { n3: NOW - 190_000 }, since: NOW - 600_000, pulse: pulseSamples(), ...over,
+    liveTokens: { n3: 410_000 }, lastSeen: { n3: NOW - 11 * 60_000 }, since: NOW - 600_000, pulse: pulseSamples(), ...over,
   } as OModel;
 }
