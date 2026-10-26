@@ -13,6 +13,7 @@ import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
+import * as O from './org.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
 import { anchorBack, bodyHeight, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
@@ -220,6 +221,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     if (name === '/mouse') { term.setMouse(!term.mouse); note(term.mouse ? 'mouse on: the wheel scrolls; drag to select and copy (double-click a word, triple-click a line)' : 'mouse off: select and copy with the terminal itself; scroll with PgUp/PgDn'); return; }
     if (name === '/sources') { openPanel(P.openSources()); return; }
     if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
+    if (name === '/org') { openPanel(P.openOrg()); loadOrg(); return; }
     if (name === '/pin') {
       const arg = line.slice(name.length).trim();
       const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
@@ -239,6 +241,20 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   };
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
+  // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs
+  // the `delphi bundle` command and returns what it printed. The deck is re-read afterwards. No card is involved.
+  const onOrg = (f: (cur: O.OrgPanel) => O.OrgPanel) => { const cur = panelRef.current; if (cur?.kind === 'org') openPanel(f(cur)); };
+  const loadOrg = () => {
+    cmd.call('org.view', {}).then((view: any) => onOrg((cur) => ({ ...cur, view, error: '' })))
+      .catch((e) => onOrg((cur) => ({ ...cur, error: String(e?.message ?? JSON.stringify(e)) })));
+  };
+  const runOrg = (body: { action: O.Verb; path?: string; name?: string }) => {
+    const target = body.action === 'add' ? O.resolveDir(body.path ?? '', info.cwd, process.env.HOME) : body.name ?? '';
+    cmd.call('org.action', { mission_id: mission, ...body, ...(body.action === 'add' ? { path: target } : {}) })
+      .then((r: any) => onOrg((cur) => ({ ...cur, busy: false, result: O.resultOf(body.action, target, r) })))
+      .catch((e) => onOrg((cur) => ({ ...cur, busy: false, result: O.resultOf(body.action, target, { ok: false, output: String(e?.message ?? JSON.stringify(e)) }) })))
+      .finally(loadOrg);
+  };
   const doSearch = (q: string) => {
     cmd.call('kb.search', { query: q }).then((r: any) => {
       const hits: P.Hit[] = (Array.isArray(r) ? r : r?.hits ?? []).map((h: any) => ({ pointer: String(h.pointer), heading: String(h.heading ?? ''), preview: String(h.preview ?? '') }));
@@ -298,7 +314,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         panelRef.current = next; setPanel(next);
         if (action.t === 'close') openPanel(null);
         else if (action.t === 'search') doSearch(action.q);
-        else if (action.t === 'load') { const cur = panelRef.current; if (cur && cur.kind !== 'notes') openPanel({ ...cur, lines: previewOf(info, action.path) }); }
+        else if (action.t === 'org') { if (action.action.t === 'run') runOrg(action.action.body); else loadOrg(); }
+        else if (action.t === 'load') { const cur = panelRef.current; if (cur && (cur.kind === 'search' || cur.kind === 'sources')) openPanel({ ...cur, lines: previewOf(info, action.path) }); }
         else if (action.t === 'insert') { openPanel(null); upd((c) => C.insert(c, action.text)); }
         else if (action.t === 'pin') { try { pin(info, mission, action.from, action.text); note('pinned to the mission notebook (/notes)', 'ok'); openPanel({ ...(panelRef.current as P.Panel), flash: 'pinned to the mission notebook (/notes)' }); } catch (er: any) { openPanel({ ...(panelRef.current as P.Panel), flash: 'could not pin: ' + er.message }); } }
         return;

@@ -5,6 +5,7 @@ import wrapAnsi from 'wrap-ansi';
 import { renderMarkdown } from './markdown.ts';
 import type { Source } from './research.ts';
 import type { Ev } from './input.ts';
+import * as Org from './org.ts';
 import * as T from './theme.ts';
 
 export type Hit = { pointer: string; heading: string; preview: string };
@@ -12,6 +13,7 @@ export type Panel = (
   | { kind: 'search'; q: string; editing: boolean; hits: Hit[]; sel: number; note: string; lines: string[] }
   | { kind: 'sources'; sel: number; lines: string[] }
   | { kind: 'notes'; scroll: number; text: string }
+  | Org.OrgPanel
 ) & { flash?: string };
 
 export type PanelAction =
@@ -20,10 +22,12 @@ export type PanelAction =
   | { t: 'search'; q: string }
   | { t: 'load'; path: string }        // fetch a preview for this logical path
   | { t: 'insert'; text: string }      // put this in the prompt (and close)
-  | { t: 'pin'; from: string; text: string };
+  | { t: 'pin'; from: string; text: string }
+  | { t: 'org'; action: Extract<Org.OrgAction, { t: 'run' | 'refresh' }> };  // the organization deck asks the app to call the daemon
 
 export const openSearch = (q = ''): Panel => ({ kind: 'search', q, editing: !q, hits: [], sel: 0, note: '', lines: [] });
 export const openSources = (): Panel => ({ kind: 'sources', sel: 0, lines: [] });
+export const openOrg = Org.openOrg;
 export const openNotes = (text: string): Panel => ({ kind: 'notes', scroll: 0, text });
 
 const pathOf = (pointer: string) => pointer.split('#')[0]!;
@@ -31,6 +35,10 @@ const sorted = (src: Record<string, Source>) => Object.values(src).sort((a, b) =
 
 export function key(p: Panel, e: Ev, src: Record<string, Source>): { panel: Panel; action: PanelAction } {
   const keep = (panel: Panel = p, action: PanelAction = { t: 'none' }) => ({ panel, action });
+  if (p.kind === 'org') {
+    const r = Org.key(p, e);
+    return { panel: r.panel, action: r.action.t === 'run' || r.action.t === 'refresh' ? { t: 'org', action: r.action } : r.action };
+  }
   if (e.t === 'ctrl' && e.c === 'c') return keep(p, { t: 'close' });
   const k = e.t === 'key' ? e.k : e.t === 'text' ? e.s : '';
   if (p.kind === 'search') {
@@ -72,7 +80,7 @@ export function key(p: Panel, e: Ev, src: Record<string, Source>): { panel: Pane
 }
 
 export const hint = (p: Panel): string =>
-  p.flash ? p.flash : p.kind === 'search' ? (p.editing ? 'type a query · enter search · esc close' : '↑↓ choose · enter put @path in the prompt · p pin to notes · / new search · esc close')
+  p.kind === 'org' ? Org.hint(p) : p.flash ? p.flash : p.kind === 'search' ? (p.editing ? 'type a query · enter search · esc close' : '↑↓ choose · enter put @path in the prompt · p pin to notes · / new search · esc close')
     : p.kind === 'sources' ? '↑↓ choose · enter put @path in the prompt · p pin · esc close'
       : '↑↓ scroll · esc close';
 
@@ -80,6 +88,7 @@ const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(10, w), { hard: true
 
 /** The panel as exactly `h` lines. */
 export function view(p: Panel, src: Record<string, Source>, pal: T.Pal, w: number, h: number): string[] {
+  if (p.kind === 'org') return Org.view(p, pal, w, h);
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
   const title = (t: string, n?: number) => '  ' + chalk.bold(T.text(pal)(t)) + (n === undefined ? '' : T.dim(` (${n})`));
   const rule = T.dim('  ' + '┈'.repeat(Math.max(0, w - 4)));
