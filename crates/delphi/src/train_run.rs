@@ -642,8 +642,8 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 /// `delphi train run ...`; `cases` are already loaded and validated by the caller.
 pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
-    let Some(budget) = flag(args, "--budget-usd").and_then(|b| b.parse::<f64>().ok()).filter(|b| *b > 0.0) else {
-        eprintln!("delphi train run: --budget-usd <dollars> is required; a run is always capped");
+    let Some(budget) = crate::train::session_budget(args) else {
+        eprintln!("delphi train run: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each case's own cap still applies)");
         return 2;
     };
     let arms_file = flag(args, "--arms-file");
@@ -685,7 +685,7 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         arms.push(Arm::new("candidate", Some(PathBuf::from(o))));
     }
     let worst = train::worst_case_usd(cases, seeds) * arms.len() as f64;
-    println!("{} case(s) x {} seed(s) x {} arm(s): at most ${:.2} against a budget of ${:.2}", cases.len(), seeds, arms.len(), worst, budget);
+    println!("{} case(s) x {} seed(s) x {} arm(s): at most ${:.2} against {}", cases.len(), seeds, arms.len(), worst, crate::train::show_budget(budget));
     if args.iter().any(|a| a == "--dry-run") {
         println!("(dry run: nothing was started; `delphi train plan` lists the cases)");
         return 0;
@@ -1229,6 +1229,31 @@ mod tests {
         assert_eq!(out, "[workspace]\nname = \"x\"\nprojects = [\"/tmp/r\\\"q\"]\n[access]\nk = 1\n");
         assert!(set_projects("x = 1\n", Path::new("/r")).is_err());
         assert!(set_projects("projects = []\nprojects = []\n", Path::new("/r")).is_err());
+    }
+
+    #[test]
+    fn no_session_cap_is_a_deliberate_choice_that_keeps_every_cases_own_cap() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(crate::train::session_budget(&a(&["run"])), None, "neither flag: refused");
+        assert_eq!(crate::train::session_budget(&a(&["run", "--budget-usd", "5"])), Some(5.0));
+        assert_eq!(crate::train::session_budget(&a(&["run", "--budget-usd", "0"])), None);
+        assert_eq!(crate::train::session_budget(&a(&["run", "--no-session-cap"])), Some(f64::INFINITY));
+        assert!(crate::train::show_budget(f64::INFINITY).contains("each case's own cap still applies") && crate::train::show_budget(2.5) == "$2.50");
+        // With no session total every run is started; each still carries its case's cap to `delphi run --budget`.
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &ladder_log());
+        let c = case(t.path(), CHECKS);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], f64::INFINITY);
+        config.seeds = 4;
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, skipped) = run_all(&config, &[&c]);
+        assert_eq!((rows.len(), skipped.len()), (4, 0));
+        let args = fs::read_to_string(config.work_dir.join("004-baseline-c1-s4").join("args.txt")).ok();
+        assert!(args.is_none() || args.unwrap().contains("--budget 2.00"));
+        // The command accepts the flag in place of a budget.
+        let (tpl, work) = (template(t.path()), t.path().join("fresh"));
+        let base = ["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap(), "--dry-run"];
+        assert_eq!(cli(&a(&base), &[&c]), 0);
     }
 
     #[test]

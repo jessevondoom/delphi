@@ -39,6 +39,30 @@ routing is configuration) and may declare `expect_models`, the model ids or pref
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
 in and out, calls and cost per model, attempts and mid-run model swaps.
 
+## Which models can I use right now?
+
+```sh
+python3 -I dev/train/avail.py --workspace <name>                 # no model is called: ~2 s
+python3 -I dev/train/avail.py --workspace <name> --live --json avail.json   # one tiny call per model, in parallel: ~40 s
+```
+
+It checks three layers, cheapest first, and only calls a model where nothing cheaper can answer. **Offline**: the workspace's
+tiers and the saved pool state (a model marked exhausted until a time). **Deterministic**: `claude auth status`, `agy models`
+(the account's catalogue), Ollama's `/api/tags`, and the model-list endpoint of any API provider whose key is in the
+environment; these say whether a model is installed and offered, never whether quota is left, because a listing cannot see a
+quota. **Live** (`--live`): the Claude CLI reports its five-hour and seven-day utilization as part of the call, and agy says
+`quota reached ... Resets in 101h`. A model with no cheaper signal is `unknown` until `--live`. Read-only on the Delphi home;
+no credential is printed. The JSON feeds the arm template homes.
+
+Subscription seats have no list endpoint to ask. If a deterministic quota endpoint for a subscription is wanted (it would
+avoid even the one-token calls), it would read the CLI's OAuth token from the keychain, so it is not built unprompted.
+
+## Spending: caps
+
+`train run` and `train judge` take `--budget-usd N`, or **`--no-session-cap`** to drop the session total on purpose. The cap on
+each case (`max_cost_usd`, passed to `delphi run --budget`) and on each judge call stays in both modes: it is what stops one
+runaway run. The runner also kills a run at its timeout.
+
 ## Judging a run (`specs/037` §6)
 
 A `delphi train run` leaves a bundle per graded run in `<work>/bundles/`, filed under a blind id with the arm and model

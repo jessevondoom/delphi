@@ -472,8 +472,8 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
         eprintln!("delphi train judge: --work-dir <the run's work dir> and --judges-file <judges.toml> ([[arm]] tables, one per judge) are required");
         return 2;
     };
-    let Some(budget) = flag(args, "--budget-usd").and_then(|b| b.parse::<f64>().ok()).filter(|b| *b > 0.0) else {
-        eprintln!("delphi train judge: --budget-usd <dollars> is required; judging is always capped");
+    let Some(budget) = crate::train::session_budget(args) else {
+        eprintln!("delphi train judge: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each call's cap still applies)");
         return 2;
     };
     let work = PathBuf::from(work);
@@ -505,7 +505,7 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
     let (rows, skipped) = run_jury(&cfg, cases, &JuryRun { judges, budget_usd: budget, only_case: flag(args, "--case") });
     let (ok, failed) = (rows.iter().filter(|r| r.verdict.is_some()).count(), rows.iter().filter(|r| r.verdict.is_none()).count());
     let spent: f64 = rows.iter().map(|r| r.cost_usd).sum();
-    println!("{} judge call(s): {} gave a verdict, {} did not; ${:.2} spent of ${:.2}", rows.len(), ok, failed, spent, budget);
+    println!("{} judge call(s): {} gave a verdict, {} did not; ${:.2} spent of {}", rows.len(), ok, failed, spent, crate::train::show_budget(budget));
     for s in &skipped {
         println!("not judged (budget): {}", s);
     }
