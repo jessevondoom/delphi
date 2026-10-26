@@ -170,7 +170,7 @@ impl Engine {
             Some(w) => w,
             None => exec.worktrees.adopt(task_id).map_err(|e| EngineError::Invalid(e.to_string()))?,
         };
-        let host_exec = exec.cfg.host_exec_paths.clone();
+        let host_exec = self.host_exec_paths()?;
         let spec = events_for(m, task_id, "worktree.created")?.last().and_then(|e| e.payload["implements_spec"].as_str().map(String::from));
 
         // 1. Commit what the build produced; every gate below is about this one SHA.

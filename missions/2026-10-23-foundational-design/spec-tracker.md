@@ -48,7 +48,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | B1 | `delphi-bundle` crate, `delphi bundle validate` (15 steps, `--against`, `--claude`), golden fixture `dev/bundles/acme-platform` in CI | 023 §14 | B0 | 20 h | built (AC-1..11 green; as-built differences in 023 §14) |
 | B2 | `bundle add` from a directory: `local/bundles.lock` with history, cache under `$DELPHI_HOME/bundles/`, `@bundle/` path, kb zone `bundles` at L2 with lexical search at once, provenance level in breadcrumbs, printed summary, `remove`, staleness | 024 §10 | B1 | 16 h | built (no daemon RPC or events yet; see 024 §10.1) |
 | B3 | vector pipeline: key match, re-keying, seeded spot check, fallback to local embedding, progress, incremental re-embed, resumability, `package --vectors` | 027 §10 | B2 | 14 h | not started |
-| B4 | behavior and agents on add: skills for named roles, bundle subagents on host roles with intersected tools, guidance block, bundle rules block in the team budget, tighten-only deny rules | 024 §10 | B2 | 18 h | B4a built (guidance, rules, skills in the prompt; 024 §10.2); B4b open (bundle agents, deny policies, stamps and events) |
+| B4 | behavior and agents on add: skills for named roles, bundle subagents on host roles with intersected tools, guidance block, bundle rules block in the team budget, tighten-only deny rules | 024 §10 | B2 | 18 h | built in two PRs: B4a (guidance, rules, skills; 024 §10.2) and B4b (bundle agents, deny policies, stamps and events; 024 §10.3). Open: `require_card`, console `@bundle:agent` |
 | B5 | org-context slice (IPR slot, caps, trimming), `/org` deck with add/update/rollback/remove/map actions, Narrator events, role manifests gain `org-context` | 026 §11 | B4 | 14 h | not started |
 | B6 | `sign`, `package`, `.xbundle` import hardening, publisher continuity with explicit `--replace-publisher`, `update` with changelog notice, `rollback` from lock history, `gc` | 024 §10 | B2 (B4 for behavior reload) | 14 h | not started |
 | B7 | compatibility: `plugin.json` generation, plugin `import` with the component table, agent host-role mapping, `.mcp.json` inert entries + `connectors map`, `assets/` synonym, `references/` indexing, `AGENTS.md` pointers, exports (`--claude-plugin`, `--strip-delphi`, `--agents-md`, `--marketplace`), `add --from-marketplace` | 025 §10 | B1, B2, B4, B6 | 18 h | not started |
@@ -62,11 +62,11 @@ Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, 
 
 ## Layered learning and training mode (spec 031, draft, 2026-10-26)
 
-Drafted at the operator's request; nothing is approved or built. Decisions OD-1..OD-6 are in the spec.
+Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbered from 030, which is console sessions). Decisions OD-1..OD-6 are in the spec.
 
 | Slice | Delivers | Spec | Depends on | Hours | State |
 | :-- | :-- | :-- | :-- | --: | :-- |
-| L0 | `snapshot.loaded` and outcome events; rule/skill IDs per task | 031 §3.4 | none | 10 | not started |
+| L0 | `snapshot.loaded` event; `learn::task_records` (outcome, attempts, denials, cost per task); skill IDs wait for L3 | 031 §3.4, §7.1 | none | 10 | built (PR pending; as-built in 031 §7.1) |
 | L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | not started |
 | L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | not started |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |

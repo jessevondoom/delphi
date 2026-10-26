@@ -630,7 +630,7 @@ impl EngineService {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws }.get(&target))
+            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true }.get(&target))
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?

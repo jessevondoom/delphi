@@ -26,6 +26,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Repo lint
         run: cargo run -q --locked -p delphi -- lint --repo .
+      - name: Training cases are well formed
+        run: cargo run -q --locked -p delphi -- train validate
       - name: Golden org bundle validates
         run: cargo run -q --locked -p delphi -- bundle validate dev/bundles/acme-platform --claude
       - name: Benchmark runner self-test

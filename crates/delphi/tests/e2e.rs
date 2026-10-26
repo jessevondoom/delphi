@@ -1381,6 +1381,9 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.type_keys("council");
     o.type_keys("\r");
     o.wait_for("result"); // "N results · 0.4 s · lexical": the daemon's own search, with no model installed here
+    o.type_keys("\x14"); // ctrl+t: trusted documents only, asked of the daemon again
+    o.wait_for("trusted only");
+    o.type_keys("\x14"); // and every document again
     o.type_keys("\r"); // the first result opens in the reader
     o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
     o.type_keys("\x7f"); // backspace goes back to the results
