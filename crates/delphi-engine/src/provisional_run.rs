@@ -36,7 +36,8 @@ impl Engine {
         if made >= self.settings.max_decisions {
             return self.defer(sc, c, decision_id, &format!("this task reached its limit of {} provisional decisions", self.settings.max_decisions)).await;
         }
-        let mut v = RuleApprover { host_exec: &self.exec.cfg.host_exec_paths }.decide(c);
+        let host_exec = self.host_exec_paths()?;
+        let mut v = RuleApprover { host_exec: &host_exec }.decide(c);
         if !v.allow || self.settings.approver == ApproverKind::Rules {
             return Ok(Provisional::Decided(v));
         }

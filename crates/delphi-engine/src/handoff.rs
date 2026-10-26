@@ -56,6 +56,10 @@ pub struct HandoffEnvelope {
     pub expected_output: ExpectedOutput,
     #[serde(default)]
     pub routing_directive: RoutingDirective,
+    /// Set when this span runs a bundle agent (`org/name:agent`) as a span of `target_agent`, its host role
+    /// (`specs/023` §5B). It is in `handoff.sent`, so a resumed span loads the same agent again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_agent: Option<String>,
 }
 
 /// Pointers + objective may not exceed 2,000 tokens, counted as bytes / 4.
@@ -80,6 +84,7 @@ impl HandoffEnvelope {
             },
             expected_output: if target == "builder" { ExpectedOutput { artifact_type: "the change made in the worktree, plus a short summary of what you changed".into(), required_fields: vec![] } } else { ExpectedOutput { artifact_type: "answer".into(), required_fields: vec![] } },
             routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1, avoid_families: vec![] },
+            bundle_agent: None,
         }
     }
 

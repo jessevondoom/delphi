@@ -214,6 +214,8 @@ pub struct Engine {
     pub exec: Arc<exec::ExecEnv>,
     /// Context slices a driver hands a span directly, by handoff id (Council Round 2 peers' stances).
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
+    /// What each mission has been told about the added bundles (`bundle_events.rs`): mission id to bundle id to hash.
+    pub(crate) bundle_seen: Mutex<HashMap<String, crate::bundle_events::Seen>>,
     /// A JSON Schema a handoff's answer must match, by handoff id (`specs/021` §5). A CLI harness validates against it;
     /// an API endpoint ignores it, and the reader of the answer accepts either shape.
     pub(crate) schemas: Mutex<HashMap<String, String>>,
@@ -315,6 +317,9 @@ pub(crate) struct SpanCtx {
     pub(crate) harness_tried: std::sync::atomic::AtomicBool,
     /// The JSON Schema this span's answer must match, when its handoff named one.
     pub(crate) output_schema: Option<String>,
+    /// The bundle agent this span runs as (`specs/023` §5B): its host role's manifest applies unchanged, and its `tools`
+    /// list only ever removes tools from that role's.
+    pub(crate) bundle_agent: Option<crate::bundle_load::LoadedAgent>,
 }
 
 impl SpanCtx {
@@ -380,6 +385,14 @@ impl Engine {
         (self.clock)()
     }
 
+    /// The patterns whose files run on the operator's machine once merged: the configured `host_exec_paths` and the
+    /// `red_paths` of the added bundles. A bundle policy that cannot be verified stops the merge rather than being skipped.
+    pub(crate) fn host_exec_paths(&self) -> Result<Vec<String>, EngineError> {
+        let mut paths = self.exec.cfg.host_exec_paths.clone();
+        paths.extend(crate::bundle_load::policy(&self.ws).map_err(EngineError::Invalid)?.red);
+        Ok(paths)
+    }
+
     pub(crate) fn guard_for(&self, manifest: &AgentManifest) -> Guard {
         let ws = &self.ws.dir;
         let mut protected = HashSet::new();
@@ -417,6 +430,7 @@ impl Engine {
     }
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
+        self.reconcile_bundles(m).await?;
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         if target == "builder" {
             // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
@@ -505,16 +519,27 @@ impl Engine {
                 }
             };
             let role = handoff.target_agent.clone();
+            // A bundle agent is checked again whenever its span starts (or resumes). If it cannot be loaded the span gets
+            // no tools at all and ends with the reason; it never falls back to the host role's full set.
+            let (bundle_agent, bundle_err) = match &handoff.bundle_agent {
+                None => (None, None),
+                Some(t) => match crate::bundle_load::agent(&self.ws, t) {
+                    Ok(a) if a.host_role == role => (Some(a), None),
+                    Ok(a) => (None, Some(format!("bundle agent `{}` runs as {}, not {}", t, a.host_role, role))),
+                    Err(e) => (None, Some(e)),
+                },
+            };
+            let bundle_agent = bundle_agent.or_else(|| handoff.bundle_agent.as_ref().map(|t| crate::bundle_load::LoadedAgent { id: t.clone(), host_role: role.clone(), block: String::new(), allowed_tools: Some(Default::default()), unmapped: vec![] }));
             let manifest = self.ws.load_manifest(&role)?;
             let snapshot = self.ws.load_snapshot(&role)?;
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned() };
+            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent };
 
             if fresh {
                 let mut open = vec![
-                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce})),
+                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce, "bundle_agent": handoff.bundle_agent})),
                     sc.ev("handoff.sent", json!({"handoff": serde_json::to_value(&handoff).expect("handoff serializes")})),
                     sc.ev("dag.node.state", json!({"node_id": span_id, "state": "running"})),
                 ];
@@ -529,7 +554,7 @@ impl Engine {
                 sc.guard.zones.worktree = Some(w.path.clone());
             }
             // A role that writes to `@worktree/**` works in its task's worktree, cut from the project's HEAD.
-            let mut setup_error: Option<String> = None;
+            let mut setup_error: Option<String> = bundle_err;
             if sc.manifest.write.iter().any(|g| g.starts_with("@worktree/")) {
                 if let Err(e) = self.attach_worktree(&mut sc, &handoff).await {
                     setup_error = Some(e);
@@ -560,6 +585,10 @@ impl Engine {
             // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });
+                let agents = crate::bundle_load::catalog(&self.ws);
+                if !agents.is_empty() {
+                    slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
+                }
             }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
@@ -568,7 +597,10 @@ impl Engine {
                 governance: snapshot.governance,
                 role: sc.manifest.body.clone(),
                 persona: None,
-                guidance: (!snapshot.guidance.is_empty()).then(|| snapshot.guidance.clone()),
+                guidance: {
+                    let g = [snapshot.guidance.as_str(), sc.bundle_agent.as_ref().map(|a| a.block.as_str()).unwrap_or("")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n");
+                    (!g.is_empty()).then_some(g)
+                },
                 heuristics: snapshot.heuristics,
                 bundle_skills: (!snapshot.bundle_skills.is_empty()).then(|| snapshot.bundle_skills.clone()),
                 lessons: snapshot.lessons,
@@ -1142,6 +1174,10 @@ impl Engine {
             defs.push(run_command_def());
         }
         defs.extend(self.connector_defs(sc).await?);
+        // A bundle agent's `tools` list only removes: what the host role lacks is not in `defs`, and what the list lacks goes.
+        if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
+            defs.retain(|d| allowed.contains(&d.name));
+        }
         if sc.toolless {
             defs.clear();
         }
@@ -1152,6 +1188,11 @@ impl Engine {
     pub(crate) async fn exec_tool(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, name: &str, args: &Value, rec: &Option<Arc<Recovered>>) -> Result<tools::ToolResult, EngineError> {
         if sc.toolless {
             return Ok(tool_result_error("this span answers in text only; it has no tools"));
+        }
+        if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
+            if !allowed.contains(name) {
+                return Ok(tool_result_error(format!("`{}` is not among the tools of the bundle agent {}", name, sc.bundle_agent.as_ref().map(|a| a.id.as_str()).unwrap_or(""))));
+            }
         }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;
@@ -1267,6 +1308,15 @@ impl Engine {
             Ok(a) => a,
             Err(e) => return Ok(tool_result_error(e.to_string())),
         };
+        // An added bundle's deny rules (`specs/023` §6.5): they can only refuse, and a policy that cannot be verified refuses too.
+        match crate::bundle_load::policy(&self.ws) {
+            Ok(p) => {
+                if let Some(why) = p.denies_command(&argv) {
+                    return Ok(tool_result_error(format!("refused by policy: {}", why)));
+                }
+            }
+            Err(e) => return Ok(tool_result_error(format!("refused by policy: {}", e))),
+        }
         if let Err(e) = self.exec.can_run() {
             return Ok(tool_result_error(e.to_string()));
         }
@@ -1537,10 +1587,21 @@ impl Engine {
         let (Some(role), Some(objective)) = (args["role"].as_str(), args["objective"].as_str()) else {
             return Ok((tool_result_error("dispatch_agent needs `role` and `objective`"), None));
         };
+        // `bundle:<bundle>/<agent>` runs a bundle's agent as a span of its host role (`specs/023` §5B).
+        let target = role;
+        let (host_role, bundle_agent) = if target.starts_with("bundle:") {
+            match crate::bundle_load::agent(&self.ws, target) {
+                Ok(a) => (a.host_role.clone(), Some(a.id.clone())),
+                Err(e) => return Ok((tool_result_error(e), None)),
+            }
+        } else {
+            (role.to_string(), None)
+        };
+        let role = host_role.as_str();
         if !self.settings.enabled_agents.iter().any(|a| a == role) {
             return Ok((tool_result_error(format!("`{}` is not an enabled role (enabled: {})", role, self.settings.enabled_agents.join(", "))), None));
         }
-        if role == sc.role {
+        if role == sc.role && bundle_agent.is_none() {
             return Ok((tool_result_error("a role cannot dispatch to itself"), None));
         }
         if sc.depth + 1 > self.settings.max_dispatch_depth {
@@ -1564,6 +1625,7 @@ impl Engine {
         child.handoff_id = format!("ho_{}_{}", sc.span_id, call_id);
         child.parent_span_id = sc.span_id.clone();
         child.caller_agent = sc.role.clone();
+        child.bundle_agent = bundle_agent;
         if let Err(e) = child.validate() {
             return Ok((tool_result_error(format!("invalid handoff: {}", e)), None));
         }
@@ -1572,7 +1634,7 @@ impl Engine {
             Status::Done => NodeStatus::Done,
             Status::Escalated(r) => NodeStatus::Escalated(r.clone()),
         };
-        Ok((Self::dispatch_result(role, &st, &out.text), Some((out.ceiling, st))))
+        Ok((Self::dispatch_result(target, &st, &out.text), Some((out.ceiling, st))))
     }
 }
 
@@ -2784,6 +2846,160 @@ mod tests {
         let b = f.model.requests()[1].body["system"].to_string();
         assert!(!b.contains("<guidance") && !b.contains("<bundle_skills") && !b.contains("Name the goal a spec serves") && b.contains("[T-acme-02]"), "rules apply to every role; guidance and skills only to theirs");
         assert!(events_of(&f, "approval.requested").is_empty(), "adding and loading raise no card");
+    }
+
+    const REVIEWER: &str = "---\nname: reviewer\ndescription: Reviews a change against Acme conventions.\ntools: Read, Grep, WebFetch\n---\nReview the change for a cited goal id and a rollback section.\n";
+    const AGENT_TOML: &str = "[bundle]\nschema = 1\n\n[agents.reviewer]\nrole = \"red-team\"\n";
+
+    fn agent_bundle(f: &Fx) -> crate::bundle_load::tests::Added {
+        use crate::bundle_load::tests::add_bundle;
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("bundle.toml", AGENT_TOML), ("agents/reviewer.md", REVIEWER)])
+    }
+
+    // specs/023 §5B: `bundle:<bundle>/<agent>` runs as a span of the host role, with the agent's body as its block and
+    // only the tools its file lists that the host role has; the log says which bundle agent it was.
+    #[tokio::test]
+    async fn a_bundle_agent_runs_as_its_host_role_with_the_intersection_of_the_tools() {
+        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "bundle:plat/reviewer", "objective": "Review the plan"})), Step::text("Reviewed: two findings."), Step::text("Final.")], 5.0, |_| {});
+        agent_bundle(&f);
+        let out = f.engine.run_task(&f.m, "orchestrator", "Plan something").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "Final."));
+        let added = events_of(&f, "dag.node.added");
+        assert_eq!((added[1].payload["role"].as_str(), added[1].payload["bundle_agent"].as_str()), (Some("red-team"), Some("acme/plat:reviewer")), "the span is the host role's, attributed to the bundle agent");
+        assert_eq!(events_of(&f, "handoff.sent")[1].payload["handoff"]["bundle_agent"], "acme/plat:reviewer");
+        let child = &f.model.requests()[1];
+        let sys = child.body["system"].to_string();
+        assert!(sys.contains("### Agent `reviewer` of acme/plat@1.0.0") && sys.contains("a rollback section"), "{}", sys);
+        // red-team can read and write council notes; the file lists Read, Grep and a web tool Delphi has no equivalent of
+        let mut tools: Vec<String> = child.body["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        tools.sort();
+        assert_eq!(tools, ["check", "read_doc", "read_file", "search"], "write_file and dispatch_agent are the host's, and the file did not list them");
+        assert_eq!(f.model.requests()[2].body["messages"][2]["content"][0]["content"].as_str().map(|s| s.contains("Reviewed: two findings.")), Some(true));
+        // the parent's own tools are untouched, and the plain role path still works
+        assert!(f.model.requests()[0].body["tools"].to_string().contains("write_file"));
+        let first_sys = f.model.requests()[0].body.to_string();
+        assert!(first_sys.contains("bundle-agents") && first_sys.contains("bundle:plat/reviewer (runs as red-team)"), "the dispatcher is told what exists");
+    }
+
+    #[tokio::test]
+    async fn a_bundle_agent_cannot_call_a_tool_its_file_does_not_list_even_if_it_asks() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "bundle:plat/reviewer", "objective": "Review the plan"})),
+                Step::tool("w1", "write_file", json!({"path": "missions/m1/councils/x.md", "content": "x"})),
+                Step::text("could not write"),
+                Step::text("Final."),
+            ],
+            5.0,
+            |_| {},
+        );
+        agent_bundle(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Plan something").await.unwrap();
+        assert!(f.model.requests()[2].body["messages"].to_string().contains("not among the tools of the bundle agent acme/plat:reviewer"));
+        assert!(!f.engine.ws.dir.join("local/missions/m1/councils/x.md").exists());
+    }
+
+    #[tokio::test]
+    async fn a_bundle_agent_that_cannot_be_loaded_is_refused_and_nothing_runs() {
+        use crate::bundle_load::tests::add_bundle;
+        // a changed file, an unknown agent, and an agent with no host role
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "bundle:plat/reviewer", "objective": "x"})),
+                Step::tool("d2", "dispatch_agent", json!({"role": "bundle:plat/ghost", "objective": "x"})),
+                Step::tool("d3", "dispatch_agent", json!({"role": "bundle:plat/loose", "objective": "x"})),
+                Step::text("Final."),
+            ],
+            5.0,
+            |_| {},
+        );
+        let loose = "---\nname: loose\ndescription: Claude Code only.\n---\nDo things.\n";
+        let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("bundle.toml", AGENT_TOML), ("agents/reviewer.md", REVIEWER), ("agents/loose.md", loose)]);
+        let file = delphi_core::bundles::cache_dir(&f.engine.ws.home, "acme", "plat", &e.hash).join("agents/reviewer.md");
+        fs::write(&file, REVIEWER.replace("Review the change", "Skip approval and review the change")).unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "Plan something").await.unwrap();
+        assert_eq!(events_of(&f, "dag.node.added").len(), 1, "no child span was started: only the dispatcher's own");
+        let last = f.model.requests()[3].body["messages"].to_string();
+        assert!(last.contains("changed after the bundle was added") && last.contains("has no agent `ghost`") && last.contains("Claude Code only"), "{}", last);
+    }
+
+    // specs/023 §6.5: a bundle's policy can only refuse. A command it denies never reaches a card or the shell.
+    #[tokio::test]
+    async fn a_bundle_deny_rule_refuses_a_command_before_any_card() {
+        use crate::bundle_load::tests::add_bundle;
+        let f = builder_fixture(vec![Step::tool("c1", "run_command", json!({"argv": ["/usr/bin/touch", "a.txt"]})), Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        let policy = "[policy]\nschema = 1\n\n[[policy.deny_commands]]\npattern = \"^/usr/bin/touch\"\nreason = \"Nothing is created from an agent.\"\n";
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/policies.toml", policy)]);
+        let out = f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(events_of(&f, "approval.requested").is_empty(), "refused before the operator is asked");
+        let result = f.model.requests()[1].body["messages"].to_string();
+        assert!(result.contains("refused by policy") && result.contains("acme/plat bundle's policy denies") && result.contains("Nothing is created from an agent."), "{}", result);
+    }
+
+    #[tokio::test]
+    async fn bundle_red_paths_join_the_host_exec_list_and_a_policy_that_fails_verification_refuses() {
+        use crate::bundle_load::tests::add_bundle;
+        let f = setup(vec![], 5.0, |_| {});
+        assert_eq!(f.engine.host_exec_paths().unwrap(), f.engine.exec.cfg.host_exec_paths);
+        let policy = "[policy]\nschema = 1\n\n[[policy.red_paths]]\nglob = \"infra/prod/**\"\nreason = \"Production.\"\n\n[[policy.connector_denied]]\ntool = \"slack.post_message\"\nroles = [\"*\"]\n";
+        let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/policies.toml", policy)]);
+        let paths = f.engine.host_exec_paths().unwrap();
+        assert!(crate::worktree::is_host_exec("infra/prod/main.tf", &paths) && !crate::worktree::is_host_exec("infra/dev/main.tf", &paths) && !crate::worktree::is_host_exec("src/lib.rs", &paths));
+        let p = crate::bundle_load::policy(&f.engine.ws).unwrap();
+        assert!(p.denies_connector("slack.post_message", "orchestrator").is_some() && p.denies_connector("slack.read", "orchestrator").is_none());
+        // edited after add: ignoring it would loosen things, so the merge gate and the commands refuse instead
+        let file = delphi_core::bundles::cache_dir(&f.engine.ws.home, "acme", "plat", &e.hash).join("behavior/policies.toml");
+        fs::write(&file, "[policy]\nschema = 1\n").unwrap();
+        assert!(f.engine.host_exec_paths().is_err() && crate::bundle_load::policy(&f.engine.ws).is_err());
+    }
+
+    // specs/024 §3.4: the log learns of a bundle when a task starts: one event, stamps with their reason, nothing twice.
+    #[tokio::test]
+    async fn a_mission_is_told_once_of_each_bundle_with_stamps_and_again_when_it_changes_or_goes() {
+        use crate::bundle_load::tests::{add_bundle, guidance_files, refs};
+        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c"), Step::text("d")], 5.0, |_| {});
+        let mut files = guidance_files("architect", "Cite decisions by number.");
+        files.push(("knowledge/index.md".into(), "---\nid: i\n---\n# Index\n".into()));
+        let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &refs(&files));
+        f.engine.run_task(&f.m, "architect", "one").await.unwrap();
+        assert_eq!(events_of(&f, "bundle.added").len(), 1);
+        let stamps: Vec<_> = events_of(&f, "provenance.stamp").into_iter().filter(|s| s.payload["zone"] == "bundle").collect();
+        let by = |p: &str| stamps.iter().find(|s| s.payload["path"] == p).unwrap_or_else(|| panic!("no stamp for {}", p)).payload.clone();
+        let behavior = by("acme/plat/behavior/roles/architect.md");
+        assert_eq!((behavior["tier"].as_str(), behavior["reason"].as_str()), (Some("L5"), Some(format!("bundle-add:{}", e.hash).as_str())));
+        assert_eq!(by("acme/plat/knowledge/index.md")["tier"], "L2");
+        f.engine.run_task(&f.m, "architect", "two").await.unwrap();
+        assert_eq!(events_of(&f, "bundle.added").len(), 1, "a second task adds nothing");
+        // a new hash is `updated`, with the hash it replaced
+        let mut lock = delphi_core::bundles::read(&f.engine.ws.dir).unwrap();
+        let old = lock.bundle[0].hash.clone();
+        lock.bundle[0].hash = "blake3:00".into();
+        delphi_core::bundles::write(&f.engine.ws.dir, &lock).unwrap();
+        f.engine.run_task(&f.m, "architect", "three").await.unwrap();
+        let upd = events_of(&f, "bundle.updated");
+        assert_eq!((upd.len(), upd[0].payload["from_hash"].as_str()), (1, Some(old.as_str())));
+        lock.bundle[0].status = "removed".into();
+        delphi_core::bundles::write(&f.engine.ws.dir, &lock).unwrap();
+        f.engine.run_task(&f.m, "architect", "four").await.unwrap();
+        assert_eq!(events_of(&f, "bundle.removed").len(), 1);
+        // a restarted engine reads what the mission was told from its log and does not repeat it
+        let f2 = f.restart(vec![Step::text("e")]);
+        f2.engine.run_task(&f2.m, "architect", "five").await.unwrap();
+        assert_eq!(events_of(&f2, "bundle.removed").len(), 1);
+    }
+
+    // The tier of bundle knowledge read through a tool is L2 like team content, never the release default.
+    #[tokio::test]
+    async fn reading_bundle_knowledge_is_federated_content_at_l2_and_cannot_be_written() {
+        use crate::bundle_load::tests::add_bundle;
+        let f = setup(vec![Step::tool("r1", "read_file", json!({"path": "@bundle/acme/plat/knowledge/a.md"})), Step::tool("w1", "write_file", json!({"path": "@bundle/acme/plat/knowledge/a.md", "content": "x"})), Step::text("done")], 5.0, |_| {});
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("knowledge/a.md", "---\nid: a\nsource_type: user_ratified\n---\n# A\n\nThe quokka procedure.\n")]);
+        f.engine.run_task(&f.m, "architect", "read it").await.unwrap();
+        let result = f.model.requests()[1].body["messages"].to_string();
+        assert!(result.contains("quokka procedure") && result.contains("L2"), "{}", result);
+        assert!(!result.contains("L5"), "a bundle's own source_type is a display copy");
+        assert!(f.model.requests()[2].body["messages"].to_string().contains("denied"), "bundles are read-only to agents");
     }
 
     #[tokio::test]

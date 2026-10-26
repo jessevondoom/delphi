@@ -9,7 +9,7 @@
 use crate::workspace::WorkspacePaths;
 use delphi_bundle::load;
 use delphi_core::bundles::{self, Entry};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One bundle's guidance for one role, at most (`specs/023` §6.3).
 pub const GUIDANCE_BYTES: usize = 2048;
@@ -166,12 +166,184 @@ pub fn fit(mut rules: Vec<BundleRule>, budget: usize, max_count: usize) -> (Stri
     (rules.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join("\n"), trims)
 }
 
+// ── bundle agents (`specs/023` §5B) ──────────────────────────────────────────
+
+/// One agent file, at most (`specs/023` §2).
+pub const AGENT_BYTES: usize = 8192;
+/// Agents listed to a dispatching role.
+const CATALOG_MAX: usize = 20;
+
+/// A bundle agent ready to run as a span of its host role.
+#[derive(Debug, Clone)]
+pub struct LoadedAgent {
+    /// `org/name:agent`, the form carried in the handoff and the log.
+    pub id: String,
+    pub host_role: String,
+    /// The agent's instructions, in a labelled block for the system channel.
+    pub block: String,
+    /// Delphi tool names the agent's `tools` list maps to; `None` when it lists none (the host's own tools).
+    pub allowed_tools: Option<BTreeSet<String>>,
+    /// Tools the file asks for that Delphi has no equivalent of.
+    pub unmapped: Vec<String>,
+}
+
+/// The Delphi tools a Claude Code tool name stands for. A Delphi tool name stands for itself. Anything else (a web
+/// tool, an MCP server's tool) has no equivalent and grants nothing: an agent file can only name tools, never add them.
+pub fn delphi_tools(claude: &str) -> Vec<String> {
+    let v: &[&str] = match claude {
+        "Read" => &["read_file", "read_doc", "check"],
+        "Grep" => &["search"],
+        "Glob" => &["list_dir"],
+        "Write" | "Edit" | "MultiEdit" => &["write_file"],
+        "Bash" => &["run_command"],
+        "Task" | "Agent" => &["dispatch_agent"],
+        "read_file" | "read_doc" | "check" | "search" | "list_dir" | "write_file" | "run_command" | "dispatch_agent" | "timer" | "name_thread" => return vec![claude.to_string()],
+        _ => &[],
+    };
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+/// Which bundle and agent a dispatch target names: `bundle:<name>/<agent>`, `bundle:<org>/<name>/<agent>` or the
+/// canonical `org/name:agent`. Several bundles with one name are ambiguous, never guessed.
+pub fn resolve(ws: &WorkspacePaths, target: &str) -> Result<(Entry, String), String> {
+    let rest = target.strip_prefix("bundle:").unwrap_or(target);
+    let (bundle, agent) = match rest.split_once(':') {
+        Some((b, a)) => (b, a),
+        None => rest.rsplit_once('/').ok_or("a bundle agent is named `bundle:<bundle>/<agent>`")?,
+    };
+    if !bundles::plain_id(agent) {
+        return Err(format!("`{}` is not an agent name", agent));
+    }
+    let found: Vec<Entry> = bundles::active_entries(&ws.dir).into_iter().filter(|e| e.id() == bundle || e.name == bundle).collect();
+    match found.len() {
+        0 => Err(format!("no added bundle named `{}`", bundle)),
+        1 => Ok((found[0].clone(), agent.to_string())),
+        _ => Err(format!("`{}` names several added bundles ({}); use org/name", bundle, found.iter().map(|e| e.id()).collect::<Vec<_>>().join(", "))),
+    }
+}
+
+/// Load, verify and check one bundle agent. Fail-closed: a file that was changed after add, grew past 8 KiB, tries to
+/// relax a rule, or has no host role is an error and nothing of it runs.
+pub fn agent(ws: &WorkspacePaths, target: &str) -> Result<LoadedAgent, String> {
+    let (e, name) = resolve(ws, target)?;
+    let cache = cache_of(ws, &e);
+    let rel = format!("agents/{}.md", name);
+    if !cache.join(&rel).is_file() {
+        return Err(format!("{} has no agent `{}`", e.id(), name));
+    }
+    let text = load::read_verified(&cache, &e.hash, &rel).map_err(|w| format!("{}: {}", e.id(), w))?;
+    if text.len() > AGENT_BYTES {
+        return Err(format!("{} agent `{}` is {} bytes (cap {})", e.id(), name, text.len(), AGENT_BYTES));
+    }
+    if let Some((line, quote)) = delphi_bundle::no_relaxation_doc(&text).first() {
+        return Err(format!("{} agent `{}` line {} tries to relax a rule (`{}`)", e.id(), name, line, quote));
+    }
+    let manifest_role = load::read_verified(&cache, &e.hash, "bundle.toml").ok().and_then(|t| load::manifest_agent_role(&t, &name));
+    let doc = load::agent(&text, &name, manifest_role).ok_or_else(|| format!("{} agent `{}` has no readable frontmatter", e.id(), name))?;
+    let host_role = doc.host_role.clone().ok_or_else(|| format!("{} agent `{}` has no host role: it is Claude Code only and cannot be dispatched", e.id(), name))?;
+    if !delphi_bundle::ROLES.contains(&host_role.as_str()) {
+        return Err(format!("{} agent `{}` names `{}`, which is not a role", e.id(), name, host_role));
+    }
+    let mut unmapped = Vec::new();
+    let allowed_tools = doc.tools.as_ref().map(|list| {
+        let mut set = BTreeSet::new();
+        for t in list {
+            let mapped = delphi_tools(t);
+            if mapped.is_empty() {
+                unmapped.push(t.clone());
+            }
+            set.extend(mapped);
+        }
+        set
+    });
+    let block = format!(
+        "### Agent `{}` of {}@{}\nYou are running as this bundle agent, as the {} role. Your role's scope, tools and approvals cap what you can do; this text adds method, never permission.\n\n{}",
+        name, e.id(), e.version, host_role, doc.body
+    );
+    Ok(LoadedAgent { id: format!("{}:{}", e.id(), name), host_role, block, allowed_tools, unmapped })
+}
+
+/// The dispatchable bundle agents, one line each, for a role that can dispatch (`@runtime/bundle-agents`).
+pub fn catalog(ws: &WorkspacePaths) -> String {
+    let mut lines = Vec::new();
+    for e in bundles::active_entries(&ws.dir) {
+        let mut names: Vec<String> = std::fs::read_dir(cache_of(ws, &e).join("agents")).into_iter().flatten().flatten().filter_map(|f| f.file_name().to_str()?.strip_suffix(".md").map(String::from)).collect();
+        names.sort();
+        for n in names {
+            let target = format!("{}:{}", e.id(), n);
+            let Ok(a) = agent(ws, &target) else { continue };
+            let description = load::read_verified(&cache_of(ws, &e), &e.hash, &format!("agents/{}.md", n)).ok().and_then(|t| load::agent(&t, &n, None)).map(|d| d.description).unwrap_or_default();
+            lines.push(format!("- bundle:{}/{} (runs as {}): {}", e.name, n, a.host_role, description));
+        }
+    }
+    lines.truncate(CATALOG_MAX);
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("Agents your organization's bundles define. Dispatch one with `dispatch_agent` and `role` set to the name shown; it runs as the role in brackets, with that role's scope, and only the tools its file lists.\n{}", lines.join("\n"))
+}
+
+// ── tighten-only policy (`specs/023` §6.5) ───────────────────────────────────
+
+/// A command refusal from an added bundle.
+#[derive(Debug, Clone)]
+pub struct DenyRule {
+    pub re: regex::Regex,
+    pub reason: String,
+    pub bundle: String,
+}
+
+/// The rules of every added bundle's `behavior/policies.toml`. They can only refuse or ask more.
+#[derive(Debug, Clone, Default)]
+pub struct BundlePolicy {
+    pub deny: Vec<DenyRule>,
+    /// Merge-gate patterns (`worktree::is_host_exec` form): a write to one is Red at merge.
+    pub red: Vec<String>,
+    /// (`connector.tool`, roles or `*`, bundle)
+    pub connectors: Vec<(String, Vec<String>, String)>,
+}
+
+/// Loaded fresh each time it is asked, so `remove` takes effect at once. A policy file that fails verification is an
+/// error, never an empty policy: ignoring a rule loosens things, so the callers refuse.
+pub fn policy(ws: &WorkspacePaths) -> Result<BundlePolicy, String> {
+    let mut out = BundlePolicy::default();
+    for e in bundles::active_entries(&ws.dir) {
+        let cache = cache_of(ws, &e);
+        if !cache.join("behavior/policies.toml").is_file() {
+            continue;
+        }
+        let text = load::read_verified(&cache, &e.hash, "behavior/policies.toml").map_err(|w| format!("bundle {}: its policy could not be verified ({}); add it again", e.id(), w))?;
+        let p = load::policies(&text).map_err(|w| format!("bundle {}: its policy is not valid ({})", e.id(), w))?;
+        for (pat, reason) in p.deny_commands {
+            out.deny.push(DenyRule { re: regex::Regex::new(&pat).map_err(|w| w.to_string())?, reason, bundle: e.id() });
+        }
+        out.red.extend(p.red_paths.into_iter().map(|(g, _)| g));
+        out.connectors.extend(p.connector_denied.into_iter().map(|(t, r)| (t, r, e.id())));
+    }
+    Ok(out)
+}
+
+impl BundlePolicy {
+    /// Why this command line is refused, if a bundle denies it.
+    pub fn denies_command(&self, argv: &[String]) -> Option<String> {
+        let line = argv.join(" ");
+        self.deny.iter().find(|r| r.re.is_match(&line)).map(|r| format!("the {} bundle's policy denies `{}`{}", r.bundle, r.re.as_str(), if r.reason.is_empty() { String::new() } else { format!(": {}", r.reason) }))
+    }
+
+    /// Whether `connector.tool` is never offered to `role` while a bundle is added.
+    pub fn denies_connector(&self, dotted: &str, role: &str) -> Option<String> {
+        self.connectors.iter().find(|(t, roles, _)| t == dotted && roles.iter().any(|r| r == "*" || r == role)).map(|(_, _, b)| format!("the {} bundle's policy never offers {} to the {} role", b, dotted, role))
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::workspace::tests::make_workspace;
     use delphi_core::bundles::{Lock, Source};
     use std::fs;
+
+    pub(crate) type Added = Entry;
 
     /// Write a cache entry for the bundle (files plus a matching `files.json`) and lock it as added.
     pub(crate) fn add_bundle(ws: &WorkspacePaths, org: &str, name: &str, order: i64, added_at: &str, files: &[(&str, &str)]) -> Entry {

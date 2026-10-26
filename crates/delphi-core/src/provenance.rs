@@ -86,6 +86,8 @@ pub enum Zone {
     Project,
     /// A task worktree.
     Worktree,
+    /// An added org bundle (`@bundle/<org>/<name>/…`): federated content the operator chose to add (`specs/024` §3).
+    Bundle,
 }
 
 impl Zone {
@@ -96,6 +98,7 @@ impl Zone {
             Zone::Local => "local",
             Zone::Project => "project",
             Zone::Worktree => "worktree",
+            Zone::Bundle => "bundle",
         }
     }
 }
@@ -129,7 +132,8 @@ pub fn origin_default(zone: Zone, path: &str, rules: &OriginRules, clean_at_base
                 Tier::L3 // a local edit since the base commit
             }
         }
-        Zone::Team => Tier::L2,
+        // The operator's add lifts a bundle to the tier `team/` content has; never higher without a per-file act.
+        Zone::Team | Zone::Bundle => Tier::L2,
         Zone::Local | Zone::Worktree => Tier::L3,
     }
 }
@@ -162,6 +166,13 @@ impl Index {
     /// Payload for the `provenance.stamp` event that records a stamp.
     pub fn stamp_payload(zone: Zone, path: &str, blake3: &str, tier: Tier) -> serde_json::Value {
         serde_json::json!({"zone": zone.as_str(), "path": path, "blake3": blake3, "tier": tier.as_str()})
+    }
+
+    /// As [`Index::stamp_payload`], with the reason the stamp was written (`bundle-add:<hash>`, `specs/024` §3.4).
+    pub fn stamp_payload_with_reason(zone: Zone, path: &str, blake3: &str, tier: Tier, reason: &str) -> serde_json::Value {
+        let mut p = Self::stamp_payload(zone, path, blake3, tier);
+        p["reason"] = reason.into();
+        p
     }
 
     /// Rebuild from a log: apply every `provenance.stamp` event.
