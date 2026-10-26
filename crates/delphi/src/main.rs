@@ -355,6 +355,9 @@ fn cmd_update(args: &[String]) -> i32 {
         return 1;
     };
     let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
+    if api != selfupdate::DEFAULT_API {
+        eprintln!("delphi update: reading releases from {api} (DELPHI_RELEASES_URL), not from the project's repository");
+    }
     let mut workspace_code = 0;
     let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |event| {
         if event == selfupdate::Event::UpToDate {

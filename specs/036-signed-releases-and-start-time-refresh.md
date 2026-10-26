@@ -3,7 +3,7 @@ id: spec-036-signed-releases-and-start-time-refresh
 title: "036: Signed releases and the start-time refresh (amends 006 section 3.1 and A6)"
 author: architect
 timestamp: 2026-10-26T14:00:00Z
-status: draft   # core logic: for the maintainers to review before it is approved; it changes nothing for anyone until the maintainers make a release key (section 4)
+status: approved   # by the operator 2026-10-26 (merge instruction after review); it changes nothing for anyone until the maintainers make a release key (section 4). Two questions remain, with recommendations (section 8)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -55,9 +55,18 @@ Until step 3 nothing changes for anyone: every build is unsigned and behaves as 
 
 Tested: the crypto and the trust decision (`delphi-xenia`), the signer and the binary agreeing on the files, the refresh with a signed status injected (ratifies the release files, leaves customized and operator-written files pending, does it once, does nothing for unsigned, invalid or opted-out), and end to end with a throwaway key: sign this checkout, rebuild, `delphi release` says signed; change one shipped file, rebuild, it says invalid and `delphi update` refuses.
 
-## 7. Not built, and open
-- **Refusing to install an unsigned binary.** `--require-signed` guards the workspace step; the self-updater installs the binary before the new program can be asked about its signature. Checking it first needs the downloaded program run once (`delphi release`) in `selfupdate.rs` before the swap.
+## 7. The self-updater, and what is not built
+**Decided (operator, 2026-10-26).** The self-updater installs a release **signed or not**, so long as it comes from the originating repository through the main install path (`delphi update` and `install.sh`). It does not refuse an unsigned binary: a source build, a development build and any release made before the key exists are unsigned by nature, and signing governs what an install *ratifies*, not whether it may be installed. Two things make "originating repository" true in code (`selfupdate.rs`):
+- Read from the project's own API, only assets served from the project's own download address (`ORIGIN_DOWNLOADS`) count; a link to anywhere else in a response is dropped, and the install stops with "no build for this machine". The checksum and the version smoke test are unchanged.
+- A mirror (`DELPHI_RELEASES_URL`) is still allowed, as it was, but `delphi update` now says every time that it is reading releases from it and not from the project's repository.
+
+Not built:
 - **Team and local seed files** (`REVIEW.md`, `context/*`, `memory/*`) are seeded once and not refreshed by an update; a signed release could refresh the ones the operator has not touched.
 - **A second signer** (two of N) and an offline-held root that signs the list of release keys: the answer to a key that is stolen before it is revoked.
 - **Trust-list freshness.** A build trusts the list it was built with; a revocation reaches an install with its next update.
-- **Decision for the maintainers:** whether the rolling `dev` channel is signed with the same key (this spec does it, so the maintainer's own installs refresh too) or with a separate, lower-trust key; and whether, once signing is in use, `--require-signed` becomes the default.
+- **`[update] require_signed = true`** in the config, for operators and organizations who want it without a flag or an environment variable (small; section 8).
+
+## 8. Two questions, with recommendations (awaiting the operator)
+**Q2. Should the rolling `dev` channel be signed with the release key?** This spec signs it with the same key, so the maintainers' own installs take the real path. *Recommendation: one key now, two before anyone but you installs releases.* While you are the only operator, a second key buys nothing: the secrets live in one repository, so whoever can run a workflow on `main` and read secrets gets both. The split matters once there are outside users, and then it has to put the release key where a push cannot reach it: a GitHub Environment `release` that requires your approval, used only by the tag-triggered release run, while dev builds use a dev key from the ordinary secrets. A stolen or careless merge can then sign dev builds but cannot forge a release. It costs a `channel` field per key in `release-keys.json` (release builds trust only release keys; dev builds trust both) and a second secret; do it when the first outside operator appears.
+
+**Q3. Should `--require-signed` become the default?** *Recommendation: not yet, and when it does, only for tagged releases.* Source builders and contributors run unsigned binaries with release-looking versions; a refusal by default would break them for no protection, and it only protects once the pipeline reliably signs. Instead: (1) build the `[update] require_signed` config setting so an organization can turn it on for its installs now; (2) after three consecutive signed releases, with `delphi doctor` showing "signed release" on your installs, refuse an unsigned *tagged release* by default (a version with no `-dev.` part that is not a local build), with an explicit `--allow-unsigned` for source builders; (3) leave development builds and the dev channel permissive, because they are unsigned by design until Q2 is settled.
