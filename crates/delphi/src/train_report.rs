@@ -167,8 +167,9 @@ fn pct(n: usize, d: usize) -> String {
     if d == 0 { "—".into() } else { format!("{:.0}%", 100.0 * n as f64 / d as f64) }
 }
 
+/// Dollars, or a dash for no dollars at all: a subscription seat reports tokens, not a price, and `$0.000` would read as free.
 fn money(v: Option<f64>) -> String {
-    v.map_or("—".into(), |v| format!("${:.3}", v))
+    v.filter(|v| *v > 0.0).map_or("—".into(), |v| format!("${:.3}", v))
 }
 
 fn toks(v: Option<f64>) -> String {
@@ -182,9 +183,9 @@ pub fn render(work: &Path, judge_models: &BTreeMap<String, Vec<String>>) -> Stri
     let mut out = String::new();
     out.push_str(&format!("{} run(s) over {} arm(s)\n\n", rows.len(), stats.len()));
     out.push_str("ARMS (graded runs; a run whose staffing or checks could not be read is not graded)\n");
-    out.push_str(&format!("{:<22}{:>7}{:>8}{:>8}{:>12}{:>12}{:>11}{:>11}{:>9}\n", "arm", "graded", "passed", "rate", "tokens/run", "$/run", "$/pass", "tokens/pass", "att/run"));
+    out.push_str(&format!("{:<22}{:>7}{:>8}{:>8}{:>12}{:>12}{:>12}{:>13}{:>9}\n", "arm", "graded", "passed", "rate", "tokens/run", "$/run", "$/pass", "tokens/pass", "att/run"));
     for s in &stats {
-        out.push_str(&format!("{:<22}{:>7}{:>8}{:>8}{:>12}{:>12}{:>11}{:>11}{:>9.1}{}\n", s.arm, s.graded, s.passed, pct(s.passed, s.graded), toks(s.tokens_per_run()), money(s.cost_per_run()), money(s.cost_per_pass()), toks(s.tokens_per_pass()), s.attempts,
+        out.push_str(&format!("{:<22}{:>7}{:>8}{:>8}{:>12}{:>12}{:>12}{:>13}{:>9.1}{}\n", s.arm, s.graded, s.passed, pct(s.passed, s.graded), toks(s.tokens_per_run()), money(s.cost_per_run()), money(s.cost_per_pass()), toks(s.tokens_per_pass()), s.attempts,
             if s.ungraded > 0 { format!("   ({} ungraded)", s.ungraded) } else { String::new() }));
     }
     let by_cost = frontier(&stats, |s| s.cost_per_run());

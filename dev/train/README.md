@@ -97,6 +97,10 @@ typo or an unreachable endpoint shows up here. An arm whose model `avail.json` s
 the reset time. `expect_models` in the generated `arms.toml` holds each model's alias and its `claude-` long form (the Claude
 CLI may report either; the first live run confirms which).
 
+**Use a short `--work-dir`** (at most 59 characters, such as `/tmp/t1`): the daemon's Unix socket lives inside each run's home
+and a socket path is limited to about 104 bytes. The commands refuse a longer one up front. Runs are `<work>/r001`, `r002`...
+(each row's `dir` says which), judge calls `<work>/j0001`...
+
 ## Spending: caps
 
 `train run` and `train judge` take `--budget-usd N`, or **`--no-session-cap`** to drop the session total on purpose. The cap on
