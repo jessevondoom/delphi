@@ -21,22 +21,22 @@ export type Agent = {
 };
 export type Approval = { id: string; task: string; role: string; tool: string; tier: string; summary: string; preview: string; blake3: string; payload: unknown; at: number; timeoutS: number };
 /**
- * One agent's work in progress (`005e` §8): its reasoning and its words so far (the tail only; a long stream never
- * grows without bound), the tool call it is waiting on, and what it has done that a summary can name.
+ * One agent's work in progress (`specs/035`): who, since when, the tool call it is waiting on, its running token total
+ * when the daemon reports one, and what it has done that a summary can name. Nothing the agent thought or wrote is kept
+ * here: its replies are in the chat, and the deck shows what it did.
  */
 export type Span = {
   span: string; task: string; role: string; depth: number; since: number;
-  thinking: string; text: string;
-  /** Which of the two the agent is doing now. */
-  last: 'thinking' | 'text';
   tool: string | null; toolId: string | null;
   wrote: string | null; read: string | null;
   error: string | null;
-  /** A council's blind round: no text is kept (`003` §3). */
+  /** Its token total so far, from the live frames of a subscription CLI (0 when none was reported). */
+  tokens: number;
+  /** A council's blind round (`003` §3). */
   blind: boolean;
 };
-/** A finished span, as the history of the activity deck shows it: a chip, who, what, how long. */
-export type Done = { id: number; role: string; what: string; elapsed: number; at: number; ok: boolean };
+/** A line of the activity deck's history: a finished span (a chip, who, what, how long) or, with `change`, a change an agent recorded (`specs/032`) with its own sentence in `what`. */
+export type Done = { id: number; role: string; what: string; elapsed: number; at: number; ok: boolean; change?: boolean };
 export type Activity = { running: Span[]; history: Done[] };
 export const HISTORY_MAX = 500;
 export const emptyActivity = (): Activity => ({ running: [], history: [] });
@@ -77,12 +77,9 @@ export function addBlock(s: State, b: Omit<Block, 'id'>): State {
   return { ...s, blocks: [...s.blocks, { ...b, id: s.nextId }], nextId: s.nextId + 1, started: s.started || b.kind === 'user' };
 }
 
-const TAIL = 4000;
-const tail = (t: string) => (t.length > TAIL ? t.slice(-TAIL) : t);
-
 function startSpan(a: Activity, span: string, task: string, role: string, depth: number, now: number): Activity {
   if (a.running.some((r) => r.span === span)) return a;
-  return { ...a, running: [...a.running, { span, task, role, depth, since: now, thinking: '', text: '', last: 'thinking', tool: null, toolId: null, wrote: null, read: null, error: null, blind: false }] };
+  return { ...a, running: [...a.running, { span, task, role, depth, since: now, tool: null, toolId: null, wrote: null, read: null, error: null, tokens: 0, blind: false }] };
 }
 
 const touch = (a: Activity, span: string, f: (r: Span) => Span): Activity => (a.running.some((r) => r.span === span) ? { ...a, running: a.running.map((r) => (r.span === span ? f(r) : r)) } : a);
@@ -133,7 +130,7 @@ const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? '')
 
 /** Past events into blocks, for reopening a mission: what was said and done, not what was pending. */
 export function replay(s: State, events: any[]): State {
-  const KEEP = new Set(['session.started', 'task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
+  const KEEP = new Set(['session.started', 'change.recorded', 'task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
   const done = events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
   // Every span of a task that has finished is over. A streaming frame can still be in flight when a resync reloads the
   // history (the daemon sends one to a client that fell behind), and without this it would bring the finished reply back as a
@@ -144,7 +141,8 @@ export function replay(s: State, events: any[]): State {
     if ((e.type === 'task.output' || e.type === 'task.failed' || e.type === 'task.cancelled') && e.task_id) over.add(String(e.task_id));
   }
   const ended = endedWith(s.ended, Object.keys(taskOf).filter((k) => over.has(taskOf[k]!)));
-  return { ...done, running: {}, agents: {}, ended, activity: emptyActivity() }; // what is running now comes from the daemon's snapshot, not from old events
+  // What is running now comes from the daemon's snapshot, not from old events; the changes recorded this session are kept.
+  return { ...done, running: {}, agents: {}, ended, activity: { running: [], history: done.activity.history.filter((h: Done) => h.change) } };
 }
 
 /** The block for a task that stopped: the reason without the engine's wrapper, and the console's own words for it. */
@@ -166,18 +164,19 @@ const spanNum = (k: string) => Number(k.split('_').pop()) || 0;
 export function fold(s: State, n: { method: string; params?: any }, now: number): State {
   const p = n.params ?? {};
   if (n.method === 'delta.frame') {
-    const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string }>;
+    const spans = (p.spans ?? {}) as Record<string, { text?: string; thinking?: string; tokens?: number }>;
     let add = '';
     let activity = s.activity;
     let agents = s.agents;
     for (const k of Object.keys(spans).sort()) {
       if (s.ended[k]) continue; // late: the span is over and its words are already in a block
       const who = s.spans[k]?.role;
-      // Reasoning is only noted as "thinking", never shown, so even a blind council round pans its badges.
+      // Only the fact that reasoning arrived is noted (so the badge pans); the reasoning itself is dropped on the spot, even in a blind council round.
       if (who && spans[k]?.thinking && agents[who]) agents = { ...agents, [who]: { ...agents[who]!, thinkingAt: now } };
-      const th = spans[k]?.thinking ? sanitize(spans[k]!.thinking!) : '', tx = spans[k]?.text ? sanitize(spans[k]!.text!) : '';
-      if (s.council && s.spans[k]) { activity = touch(activity, k, (r) => ({ ...r, blind: true, last: 'thinking' })); continue; } // a council's round one stays blind
-      if (th || tx) activity = touch(activity, k, (r) => ({ ...r, thinking: th ? tail(r.thinking + th) : r.thinking, text: tx ? tail(r.text + tx) : r.text, last: tx ? 'text' : 'thinking', tool: tx ? null : r.tool }));
+      if (s.council && s.spans[k]) { activity = touch(activity, k, (r) => ({ ...r, blind: true })); continue; } // a council's round one stays blind
+      const total = spans[k]?.tokens;
+      if (typeof total === 'number' && total >= 0) activity = touch(activity, k, (r) => ({ ...r, tokens: total }));
+      if (spans[k]?.text) activity = touch(activity, k, (r) => ({ ...r, tool: null })); // it is answering: the tool call is over
       add += spans[k]?.text ?? '';
     }
     if (!add && activity === s.activity && agents === s.agents) return s;
@@ -211,7 +210,17 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       // history replay contains the announcement, and so does the live stream. Clearing for the second would wipe the
       // "reconnected" note that was added in between, before it could be drawn.
       if (n && n === s.session) return s;
-      return { ...s, blocks: [], live: '', sources: {}, started: true, session: n || s.session + 1 };
+      // The change log is by session, like the chat: it starts over too. Finished spans stay.
+      return { ...s, blocks: [], live: '', sources: {}, started: true, session: n || s.session + 1, activity: { ...s.activity, history: s.activity.history.filter((h) => !h.change) } };
+    }
+    // A change an agent recorded (`record_change`, `specs/032`): one line in the deck's history, in the agent's own words.
+    case 'change.recorded': {
+      const said = sanitize(String(pl.summary ?? '')).replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (!said) return s;
+      const h = s.activity.history;
+      const entry: Done = { id: (h[h.length - 1]?.id ?? 0) + 1, role: String(e.agent ?? pl.role ?? 'agent'), what: said, elapsed: 0, at: stamp(e, now), ok: true, change: true };
+      const history = [...h, entry];
+      return { ...s, activity: { ...s.activity, history: history.length > HISTORY_MAX ? history.slice(-HISTORY_MAX) : history } };
     }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };

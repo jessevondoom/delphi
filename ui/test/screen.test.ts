@@ -121,20 +121,22 @@ test('stopping ends the task, clears the spinner and says so', () => {
   assert.deepEqual([Object.keys(s.running), s.blocks.at(-1)?.text], [[], '■ stopped']);
 });
 
-test('the left deck shows each running span\'s reasoning, words and tool call, never in the chat, and is not replayed', () => {
+test('the left deck shows who is working and the tool by name, never in the chat, and never what they think or write; it is not replayed', () => {
   let s = initial(0);
   s = fold(s, { method: 'event', params: { type: 'dag.node.added', task_id: 't1', payload: { node_id: 'n_1', role: 'architect', depth: 0 } } }, 1);
   s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'weighing the index ', text: '' } } } }, 2);
   s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'against a scan\x1b[2J', text: '' } } } }, 3);
-  const thinking = frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n');
-  assert.match(thinking, /⟦.{3}⟧ daedalus · thinking · 00:00/);
-  assert.match(thinking, /weighing the index against a scan/);
-  assert.ok(!thinking.includes('\x1b[2J'));
+  const working = frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n');
+  assert.match(working, /⟦.{3}⟧ daedalus · working · 00:00/);
+  assert.ok(!working.includes('weighing') && !working.includes('\x1b[2J') && !/thinking/.test(working), 'what it thinks is not drawn');
+  assert.equal(s.agents['architect']?.thinkingAt, 3, 'only the fact that it is thinking is noted, for the badge');
   s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: '', text: 'Use the index.' } } } }, 4);
-  assert.match(frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n'), /daedalus · writing[\s\S]*Use the index\./);
+  assert.ok(!frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n').includes('Use the index.'), 'its words are in the chat, not the deck');
   s = fold(s, { method: 'event', params: { type: 'agent.block.complete', span_id: 'n_1', agent: 'architect', payload: { block: { type: 'tool_call', id: 'c1', name: 'read_file', arguments: { path: 'a.rs' } } } } }, 5);
-  assert.match(frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n'), /daedalus · → read_file\(a\.rs\) …/);
+  const tool = frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n');
+  assert.match(tool, /daedalus · working[\s\S]*→ read_file …/);
+  assert.ok(!tool.includes('a.rs'), 'the arguments stay in the chat');
   assert.ok(!frame(model({ state: s, deck: 1 }), 100, 30).map(plain).join('\n').includes('weighing the index'), 'reasoning is not in the chat');
   assert.deepEqual(replay(initial(0), [{ type: 'task.output', payload: { text: 'x' } }]).activity, { running: [], history: [] }, 'nothing is replayed into the deck');
-  assert.match(frame(model({ deck: 0 }), 100, 30).map(plain).join('\n'), /nothing is saved/);
+  assert.match(frame(model({ deck: 0 }), 100, 30).map(plain).join('\n'), /Who is working and the changes they record appear here/);
 });

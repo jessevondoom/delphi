@@ -43,5 +43,5 @@ The mission log holds every `change.recorded` event with its timestamp. `delphi 
 Tool, event, fold, preamble, digest (also for sessions with changes but no questions), `delphi changelog`, `changes` view, the `/observe` and `delphi observe` names (`changes`, with `thinking` and `reasoning` as aliases), and the removal of the reasoning collection from `observer.tsx`. Tests: `tools.rs`, `observe.rs`, `session.rs`, `ui/test/narrator-views.test.ts`, `ui/test/observe.test.ts`, and golden screens.
 
 ## 7. Open
-- The console's own left deck still shows a streaming "thinking" block for a running span (`ui/src/screen.ts`, `fold.ts`). It is the console, not the narrator, and was not part of this decision; it should be reviewed against the same concern.
+- The console's left deck no longer streams reasoning: it shows who is working and the recorded changes (`specs/035`).
 - Whether models call `record_change` as reliably as asked is not measured. If not, add the final-reply fallback (store the last summary message verbatim, never anything else).
