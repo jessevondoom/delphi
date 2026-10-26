@@ -52,6 +52,21 @@ pub struct BridgeCall {
     pub reply: oneshot::Sender<ToolResult>,
 }
 
+/// A tool call of the CLI's own that the span's loop must judge (a Builder's file and shell tools), waiting for its answer.
+/// The gate holds the CLI's hook open until the loop replies, which may be after an approval card has been answered.
+#[derive(Debug)]
+pub struct HookAsk {
+    pub tool: String,
+    pub args: Value,
+    /// `(allowed, reason shown to the model when it is not)`
+    pub reply: oneshot::Sender<(bool, String)>,
+}
+
+/// The CLI's own tools a Builder's gate hands to the span's loop instead of denying. Its shell is not among them: the CLI
+/// cannot ask anyone to approve a command when it runs headless, so a Builder runs commands through Delphi's own
+/// `run_command` tool (sandboxed, classified, approved by the operator), and the gate says so when the shell is tried.
+pub const AGY_BUILDER_TOOLS: [&str; 3] = ["read_file", "write_file", "edit_file"];
+
 /// The tool-name prefix of Delphi's tools as the Antigravity CLI shows them: `mcp_<plugin>_<server>_<tool>`.
 pub const AGY_TOOL_PREFIX: &str = "mcp_delphi_delphi_";
 
@@ -66,11 +81,20 @@ pub struct HookPolicy {
     /// the span's loop checks this before it runs any Delphi call and marks the span untrusted (L0). The gate sets it
     /// before the CLI runs the tool, so a later call cannot beat it.
     pub tainted: Arc<std::sync::atomic::AtomicBool>,
+    /// A Builder's gate: the file and shell tools in [`AGY_BUILDER_TOOLS`] are asked of the span's loop, which applies the
+    /// same rules as for a Claude Builder. Without it they are denied.
+    pub ask: Option<mpsc::Sender<HookAsk>>,
 }
 
 impl HookPolicy {
     pub fn new(allow_prefixes: Vec<String>, allow_names: Vec<String>) -> HookPolicy {
-        HookPolicy { allow_prefixes, allow_names, tainted: Arc::default() }
+        HookPolicy { allow_prefixes, allow_names, tainted: Arc::default(), ask: None }
+    }
+
+    /// This policy for a Builder, with the channel its asks go to.
+    pub fn for_builder(mut self, ask: mpsc::Sender<HookAsk>) -> HookPolicy {
+        self.ask = Some(ask);
+        self
     }
 
     /// Has the gate let a tool through that reads from outside Delphi?
@@ -91,12 +115,16 @@ impl HookPolicy {
         let web = if self.allow_names.is_empty() { String::new() } else { format!(" and {}", self.allow_names.join(", ")) };
         let why = match tool {
             "call_mcp_tool" => format!("call the Delphi tools directly by their names (they start with `{}`)", own),
+            "run_command" if self.ask.is_some() => format!("your own shell is switched off in this task; run commands with the Delphi tool `{}run_command` (a program and its arguments, no shell)", own),
             "" => "the tool call named no tool".to_string(),
             t => format!("`{}` is not available in this task; the Delphi tools (names starting `{}`){} are", t, own, web),
         };
         (false, format!("denied by Delphi: {}", why))
     }
 }
+
+/// How long the hook waits for the gate when the span is not a Builder: a decision is instant. (The CLI's own limit on the hook is five seconds more.)
+pub const DEFAULT_HOOK_WAIT_SECS: u64 = 10;
 
 /// The Antigravity CLI's names for the CLI tools a `[harness.agy]` profile lists. The profile uses the Claude CLI's names
 /// for the web tools (`WebSearch`, `WebFetch`); an entry that is already an `agy` tool name (lower case, underscores) is
@@ -238,6 +266,12 @@ impl Bridge {
     /// runs `delphi __agy-hook`. Nothing outside `dir` is touched, and an earlier span's `.agents/` (a dead socket and
     /// token) is replaced. Files are mode 0600 in directories of mode 0700, because they hold the span's token.
     pub fn write_agy_workspace(&self, dir: &Path) -> std::io::Result<()> {
+        self.write_agy_workspace_waiting(dir, DEFAULT_HOOK_WAIT_SECS)
+    }
+
+    /// [`Self::write_agy_workspace`], with the hook allowed to wait `wait_secs` for the gate's answer. A Builder's hook can
+    /// be held open by an approval card, so it waits as long as the card may stay up.
+    pub fn write_agy_workspace_waiting(&self, dir: &Path, wait_secs: u64) -> std::io::Result<()> {
         use std::os::unix::fs::DirBuilderExt;
         let agents = dir.join(".agents");
         let _ = std::fs::remove_dir_all(&agents);
@@ -245,8 +279,8 @@ impl Bridge {
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&plugin)?;
         write_private(&plugin.join("plugin.json"), br#"{"name":"delphi"}"#)?;
         write_private(&plugin.join("mcp_config.json"), std::fs::read(&self.config_path)?.as_slice())?;
-        let command = format!("DELPHI_BRIDGE_SOCKET={} DELPHI_BRIDGE_TOKEN={} {} __agy-hook", sh_quote(&self.socket().display().to_string()), sh_quote(&self.token), sh_quote(&self.program.display().to_string()));
-        let hooks = json!({"delphi-gate": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": command, "timeout": 15}]}]}});
+        let command = format!("DELPHI_BRIDGE_SOCKET={} DELPHI_BRIDGE_TOKEN={} DELPHI_HOOK_WAIT={} {} __agy-hook", sh_quote(&self.socket().display().to_string()), sh_quote(&self.token), wait_secs, sh_quote(&self.program.display().to_string()));
+        let hooks = json!({"delphi-gate": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": command, "timeout": wait_secs + 5}]}]}});
         write_private(&agents.join("hooks.json"), hooks.to_string().as_bytes())
     }
 
@@ -359,7 +393,15 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
             Some(policy) => {
                 let call = &req["params"]["toolCall"];
                 let tool = call["name"].as_str().unwrap_or("");
-                let (allowed, reason) = policy.decide(tool);
+                let (mut allowed, mut reason) = policy.decide(tool);
+                if let (false, Some(ask), true) = (allowed, &policy.ask, AGY_BUILDER_TOOLS.contains(&tool)) {
+                    let (reply, answer) = oneshot::channel();
+                    (allowed, reason) = if ask.send(HookAsk { tool: tool.to_string(), args: call["args"].clone(), reply }).await.is_err() {
+                        (false, "denied by Delphi: this task has ended".to_string())
+                    } else {
+                        answer.await.unwrap_or((false, "denied by Delphi: this task ended before the call was judged".to_string()))
+                    };
+                }
                 let _ = shared.notes.send(HookNote { tool: tool.to_string(), allowed, summary: summarize_args(&call["args"]) });
                 json!({"jsonrpc": "2.0", "id": id, "result": {"decision": if allowed { "allow" } else { "deny" }, "reason": reason}})
             }
@@ -435,7 +477,8 @@ pub fn run_agy_hook() -> i32 {
         return deny("this task's gate is not configured");
     };
     let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket) else { return deny("the gate could not be reached") };
-    let wait = Some(std::time::Duration::from_secs(10));
+    let wait_secs = std::env::var("DELPHI_HOOK_WAIT").ok().and_then(|v| v.parse::<u64>().ok()).filter(|s| (1..=86_400).contains(s)).unwrap_or(DEFAULT_HOOK_WAIT_SECS);
+    let wait = Some(std::time::Duration::from_secs(wait_secs));
     let _ = stream.set_read_timeout(wait);
     let _ = stream.set_write_timeout(wait);
     let request = json!({"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": params});

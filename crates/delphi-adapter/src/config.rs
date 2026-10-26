@@ -68,7 +68,8 @@ pub struct Endpoint {
 impl Endpoint {
     /// Can a role that writes files or runs commands be served here? Every API path can. A subscription
     /// harness can only if it has a per-action approval bridge: `claude` does, `agy` does not (`specs/009` §7B),
-    /// so `agy` is limited to read-only roles and Council seats.
+    /// so `agy` is limited to read-only roles and Council seats. (The engine adds an `agy` seat whose gate it has seen
+    /// hold, `specs/020` §8.7; that is a fact about the installed CLI, not about the configuration.)
     pub fn can_mutate(&self) -> bool {
         self.path != AccessPath::Harness || self.harness.as_deref().unwrap_or("claude") == "claude"
     }

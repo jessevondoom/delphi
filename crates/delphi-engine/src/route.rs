@@ -33,6 +33,9 @@ pub struct RouteRequest {
     pub avoid_families: Vec<String>,
     /// Writes files or runs commands, so it needs an endpoint with an approval bridge.
     pub mutating: bool,
+    /// Harness endpoints that can serve a `mutating` request although `Endpoint::can_mutate` says no: an `agy` seat whose
+    /// gate has been seen to hold, for the installed version (`specs/020` §8.7). Decided by the engine, from its record.
+    pub mutating_harnesses: Vec<String>,
     /// Context the request needs, in tokens; 0 when it does not matter.
     pub min_context_tokens: u64,
     /// The role's target model (`[routing.targets]`).
@@ -147,7 +150,7 @@ fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String>
     if req.turn_by_turn && ep.path == delphi_adapter::config::AccessPath::Harness {
         return Some("a harness runs whole spans, not single turns".into());
     }
-    if req.mutating && !ep.can_mutate() {
+    if req.mutating && !ep.can_mutate() && !req.mutating_harnesses.contains(&ep.id) {
         return Some("this harness has no approval bridge, so it can only serve read-only roles".into());
     }
     let ctx = context_of(cfg, key);

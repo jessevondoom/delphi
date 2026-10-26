@@ -138,8 +138,8 @@ fn agy_seat(e: &Endpoint, p: &HarnessProfile, seen: Option<&SeatRecord>) -> Stri
     if p.bridge {
         let web = crate::bridge::agy_native_tools(&p.native_tools);
         s.push_str("  - Delphi tools: YES, over a plugin the span carries in its own working directory (they appear to the model as `mcp_delphi_delphi_<tool>`). A role gets the same Delphi tools it would get on an API seat, each call run under Delphi's classification, taint gates and approvals.\n");
-        s.push_str(&format!("  - Its own tools: a hook asks Delphi before every one and denies all but {}. Its shell, file, browser, scheduling and subagent tools are switched off, and a hook that fails counts as a denial.\n", if web.is_empty() { "none of them".to_string() } else { web.join(", ") }));
-        s.push_str("  - Trust: its span is still untrusted (L0) from the start, because Delphi cannot check the hook from outside, and the projects are checked afterwards. Actions that need a trusted span (dispatching, writing specs) therefore ask the operator on a Red card. Never a Builder task: file edits and commands have no approval path on this seat yet.\n");
+        s.push_str(&format!("  - Its own tools: a hook asks Delphi before every one and denies all but {}. Its shell, browser, scheduling and subagent tools are switched off, and a hook that fails counts as a denial. (A Builder's file tools go to Delphi for judgement and approval, and its commands run through Delphi's `run_command`.)\n", if web.is_empty() { "none of them".to_string() } else { web.join(", ") }));
+        s.push_str("  - Trust: its span starts untrusted (L0) unless `delphi endpoints test --probe` has watched the hook deny every kind of tool on the installed `agy` version; after that it starts as trusted as any role and drops to untrusted when it reads the web. The projects are checked afterwards either way. While it is untrusted, actions that need a trusted span (dispatching, writing specs) ask the operator on a Red card, and it cannot be a Builder (Delphi routes Builder tasks elsewhere).\n");
         s.push_str("  - Good for: a second family that can orchestrate, dispatch, read through Delphi's scoped tools, and sit on a Council or red-team seat; a fallback when Claude's quota is out.\n");
     } else {
         s.push_str("  - No Delphi tool reaches it (the bridge is off in `[harness.agy]`). Do not give it work that needs `timer`, `dispatch_agent`, scoped file access or connectors, and never a Builder task.\n");
@@ -227,7 +227,7 @@ gemini = ["agy-sub"]
         assert!(text.contains("CLI built-in tools for roles without a worktree: WebSearch, WebFetch. Content they fetch is untrusted"));
         assert!(text.contains("the CLI's own MCP servers load"));
         assert!(text.contains("Approvals: delegated") && text.contains("Builders stay on Delphi's rules"));
-        assert!(text.contains("`agy-sub`") && text.contains("GATED, WITH DELPHI'S TOOLS") && text.contains("mcp_delphi_delphi_") && text.contains("denies all but search_web, read_url_content") && text.contains("Never a Builder task") && text.contains("Red card"), "{}", text);
+        assert!(text.contains("`agy-sub`") && text.contains("GATED, WITH DELPHI'S TOOLS") && text.contains("mcp_delphi_delphi_") && text.contains("denies all but search_web, read_url_content") && text.contains("cannot be a Builder") && text.contains("starts untrusted (L0) unless") && text.contains("Red card"), "{}", text);
         assert!(!text.contains("ADVICE-ONLY"), "the seat is not advice-only any more");
         assert!(text.contains("No session has reported its tools yet"));
     }
