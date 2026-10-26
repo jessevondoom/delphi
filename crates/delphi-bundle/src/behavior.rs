@@ -236,6 +236,13 @@ fn policies(text: &str, r: &mut Report) {
                     r.fail(10, path, format!("policy.{}[{}] needs `{}`", k, i + 1, key));
                 }
             }
+            if k == "red_paths" {
+                if let Some(g) = it.get("glob").and_then(|v| v.as_str()) {
+                    if crate::load::red_path_pattern(g).is_none() {
+                        r.fail(10, path, format!("policy.red_paths[{}]: glob `{}` must be `dir/**`, `dir/`, `*.ext` or one path (the merge gate matches nothing else)", i + 1, g));
+                    }
+                }
+            }
             for key in regexes {
                 if let Some(pat) = it.get(*key).and_then(|v| v.as_str()) {
                     if Regex::new(pat).is_err() {

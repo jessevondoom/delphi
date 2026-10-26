@@ -538,6 +538,55 @@ fn ac_10_vector_fixtures() {
 }
 
 #[test]
+fn red_path_globs_must_be_forms_the_merge_gate_can_enforce() {
+    use load::red_path_pattern as p;
+    assert_eq!(p("infra/prod/**").as_deref(), Some("infra/prod"));
+    assert_eq!(p("./infra/prod/").as_deref(), Some("infra/prod"));
+    assert_eq!(p("*.tf").as_deref(), Some("*.tf"));
+    assert_eq!(p("deploy/run.sh").as_deref(), Some("deploy/run.sh"));
+    for bad in ["**/secrets.*", "infra/*/prod", "/etc/**", "../x/**", "", "**", "*."] {
+        assert!(p(bad).is_none(), "`{}` must be refused", bad);
+    }
+    // validate says so at step 10 rather than letting the rule silently match nothing
+    let t = bundle();
+    edit(&t, "behavior/policies.toml", "glob = \"infra/prod/**\"", "glob = \"**/prod/*.tf\"");
+    fails_with(&check(&t), 10, "the merge gate matches nothing else");
+}
+
+#[test]
+fn policies_and_agents_are_read_back_for_the_engine_and_refuse_what_a_policy_may_not_say() {
+    let ok = load::policies("[policy]\nschema = 1\n[[policy.deny_commands]]\npattern = \"^terraform\"\nreason = \"no\"\n[[policy.red_paths]]\nglob = \"infra/**\"\n[[policy.connector_denied]]\ntool = \"slack.post\"\nroles = [\"builder\"]\n").unwrap();
+    assert_eq!((ok.deny_commands.len(), ok.red_paths[0].0.as_str(), ok.connector_denied[0].1.clone()), (1, "infra", vec!["builder".to_string()]));
+    for (bad, why) in [
+        ("[policy]\nallow_commands = []\n", "refused"),
+        ("[policy]\n[[policy.deny_commands]]\npattern = \"(\"\n", "deny_commands pattern"),
+        ("[policy]\n[[policy.red_paths]]\nglob = \"a/*/b\"\n", "red_paths glob"),
+        ("[policy]\nwhatever = 1\n", "unknown policy key"),
+        ("nothing = 1\n", "no [policy]"),
+    ] {
+        let e = load::policies(bad).unwrap_err();
+        assert!(e.contains(why), "`{}` gave `{}`", bad, e);
+    }
+    let a = load::agent("---\nname: r\ndescription: D\ntools: Read, Grep\ndelphi-role: builder\n---\nBody.\n", "r", Some("red-team".into())).unwrap();
+    assert_eq!((a.host_role.as_deref(), a.tools.clone(), a.body.as_str()), (Some("red-team"), Some(vec!["Read".to_string(), "Grep".to_string()]), "Body."), "the manifest's host role wins");
+    let b = load::agent("---\nname: r\ndescription: D\ndelphi-role: builder\n---\nB\n", "r", None).unwrap();
+    assert_eq!((b.host_role.as_deref(), b.tools), (Some("builder"), None), "no tools list means the host's own");
+    assert_eq!(load::manifest_agent_role("[agents.r]\nrole = \"writer\"\n", "r").as_deref(), Some("writer"));
+    assert!(load::agent("no frontmatter", "r", None).is_none());
+}
+
+#[test]
+fn a_cache_file_is_read_only_after_it_is_proven_to_be_the_one_that_was_added() {
+    let t = bundle();
+    let hash = write_manifest(t.path(), true, &Fake).unwrap();
+    assert!(load::read_verified(t.path(), &hash, "README.md").unwrap().contains("Acme"));
+    assert!(load::read_verified(t.path(), &hash, "no/such.md").is_err(), "a file files.json does not list");
+    assert!(load::read_verified(t.path(), "blake3:00", "README.md").unwrap_err().contains("no longer matches"), "files.json against the locked hash");
+    edit(&t, "README.md", "Acme", "Evil");
+    assert!(load::read_verified(t.path(), &hash, "README.md").unwrap_err().contains("changed after the bundle was added"));
+}
+
+#[test]
 fn ac_11_a_higher_schema_is_refused_alone() {
     let t = bundle();
     edit(&t, "bundle.toml", "schema = 1", "schema = 2");

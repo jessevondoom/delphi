@@ -44,7 +44,9 @@ impl Engine {
                 }
             }
         }
-        Ok(self.connectors.offered(&sc.role).into_iter().map(|t| t.def).collect())
+        // A tool an added bundle's policy never offers this role is not in the list (`specs/023` §6.5).
+        let denied = crate::bundle_load::policy(&self.ws).map_err(EngineError::Invalid)?;
+        Ok(self.connectors.offered(&sc.role).into_iter().map(|t| t.def).filter(|d| denied.denies_connector(&d.name.replacen("__", ".", 1), &sc.role).is_none()).collect())
     }
 
     /// Is there an `action.intent` for this call that never got a result? Remote tools have no idempotency keys, so
@@ -67,6 +69,20 @@ impl Engine {
             let (ev, r) = deny(sc, format!("{} is not available to the {} role", dotted, sc.role));
             sc.m.append(ev).await?;
             return Ok(r);
+        }
+        match crate::bundle_load::policy(&self.ws) {
+            Ok(p) => {
+                if let Some(why) = p.denies_connector(&dotted, &sc.role) {
+                    let (ev, r) = deny(sc, why);
+                    sc.m.append(ev).await?;
+                    return Ok(r);
+                }
+            }
+            Err(e) => {
+                let (ev, r) = deny(sc, e);
+                sc.m.append(ev).await?;
+                return Ok(r);
+            }
         }
         let Some(class) = self.connectors.tool_class(connector, tool) else { return Ok(err_result(format!("unknown tool `{}`", dotted))) };
         if !self.connectors.is_allowed(connector, tool) {
@@ -380,6 +396,20 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         assert!(!f.model.requests()[0].body["tools"].to_string().contains("docs__"), "the architect is not offered them");
         assert!(f.connector_mock.calls.lock().unwrap().is_empty() && seen.lock().unwrap().is_empty());
         assert!(events_of(&f, "connector.denied").iter().any(|e| e.payload["reason"].as_str().unwrap().contains("not available to the architect")));
+    }
+
+    // specs/023 §6.5: a tool an added bundle never offers is not in the list and is refused if called anyway.
+    #[tokio::test]
+    async fn a_connector_tool_a_bundle_policy_denies_is_not_offered_and_cannot_be_called() {
+        let f = fixture(vec![Step::tool("c1", "docs__send", json!({"to": "a@b.c", "body": "hi"})), Step::text("ok")]).await;
+        let policy = "[policy]\nschema = 1\n\n[[policy.connector_denied]]\ntool = \"docs.send\"\nroles = [\"*\"]\n";
+        crate::bundle_load::tests::add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/policies.toml", policy)]);
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Try").await.unwrap();
+        let offered = f.model.requests()[0].body["tools"].to_string();
+        assert!(offered.contains("docs__search") && !offered.contains("docs__send"), "only the denied tool is withdrawn: {}", offered);
+        assert!(f.connector_mock.calls.lock().unwrap().is_empty() && seen.lock().unwrap().is_empty(), "nothing was sent and nobody was asked");
+        assert!(events_of(&f, "connector.denied").iter().any(|e| e.payload["reason"].as_str().unwrap().contains("acme/plat bundle's policy never offers docs.send")));
     }
 
     #[tokio::test]

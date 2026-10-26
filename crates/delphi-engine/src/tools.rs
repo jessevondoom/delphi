@@ -315,6 +315,9 @@ pub(crate) fn zone_of(logical: &str) -> (Zone, String) {
     if let Some(rest) = l.strip_prefix("@worktree/") {
         return (Zone::Worktree, rest.to_string());
     }
+    if let Some(rest) = l.strip_prefix("@bundle/") {
+        return (Zone::Bundle, rest.to_string());
+    }
     if l.starts_with("missions/") || l.starts_with("memory/") {
         return (Zone::Local, l.to_string());
     }
