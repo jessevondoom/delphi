@@ -44,9 +44,41 @@ jobs:
             ${{ runner.temp }}/seed.dlphvec
           compression-level: 0
 
+  # Sign the manifest of the files this build ships with the maintainers' release key (specs/036), once, for every target. With no
+  # RELEASE_SIGNING_KEY secret the file is `{}` and the build is unsigned, as it always was. With one, `verify` below fails the
+  # workflow unless the key's public id is in release-keys.json (a change that needs the maintainers' review) and the signature
+  # holds over exactly these files and this version.
+  sign:
+    name: sign the release files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Sign
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -eu
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo '{}' > release.sig.json
+            echo "no release key is configured: this build is unsigned"
+            exit 0
+          fi
+          umask 077
+          keydir="$RUNNER_TEMP/release-key"
+          mkdir -p "$keydir"
+          chmod 700 "$keydir"
+          printf '%s' "$RELEASE_SIGNING_KEY" | base64 -d > "$keydir/release.key"
+          cargo run -q --locked -p delphi-release -- sign --key "$keydir/release.key" --out release.sig.json
+          rm -rf "$keydir"
+          cargo run -q --locked -p delphi-release -- verify --sig release.sig.json --keys release-keys.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: releasesig
+          path: release.sig.json
+
   build:
     name: build (${{ matrix.target }})
-    needs: model
+    needs: [model, sign]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -84,6 +116,12 @@ jobs:
         with:
           name: embedmodel
           path: ${{ runner.temp }}/model
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: releasesig
+          path: ${{ runner.temp }}/releasesig
+      - name: Put the release signature in the build
+        run: cp "$RUNNER_TEMP/releasesig/release.sig.json" crates/delphi/release.sig.json
       - name: Build
         env:
           DELPHI_EMBED_MODEL_FILE: ${{ runner.temp }}/model/embed.dlphmdl

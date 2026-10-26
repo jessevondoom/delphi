@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/delphi", "crates/delphi-core", "crates/delphi-adapter", "crates/delphi-engine", "crates/delphi-sandbox", "crates/delphi-xenia", "crates/delphi-docs", "crates/delphi-bundle"]
+members = ["crates/delphi", "crates/delphi-core", "crates/delphi-adapter", "crates/delphi-engine", "crates/delphi-sandbox", "crates/delphi-xenia", "crates/delphi-docs", "crates/delphi-bundle", "crates/delphi-release"]
 resolver = "2"

@@ -100,7 +100,7 @@ brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew inst
 
 macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64). The installer puts `delphi` and `delphi-ui` in `~/.local/bin` (`--dir`, `DELPHI_INSTALL_DIR`), checks the download against its SHA-256 and the release's GitHub build attestation, and therefore needs the `gh` CLI signed in; without it the install stops unless `DELPHI_SKIP_ATTESTATION=1` accepts the checksum alone. `--version vX.Y.Z` installs a specific release; `--no-setup` skips the offer to run `delphi setup`.
 
-Later, `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending), and restarts any running daemon (`--no-restart` leaves them). `--check` shows what it would do, `--rollback` undoes all three steps, `--dev` follows the rolling build of `main`.
+Later, `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending), and restarts any running daemon (`--no-restart` leaves them). `--check` shows what it would do, `--rollback` undoes all three steps, `--dev` follows the rolling build of `main`. When the build is a **signed release** (signed in CI by the maintainers' key; `delphi release` says, and `delphi doctor` check 2), the first `delphi chat` or `delphi run` after an update refreshes the workspace and ratifies the release's own files itself, so there is nothing for you to approve; your customized files and your own files are never touched, and a build whose signature does not hold ratifies nothing and is refused by `delphi update` (`specs/036`; `--require-signed` also refuses an unsigned build; `DELPHI_NO_AUTO_UPDATE=1` turns the refresh off).
 
 **From source** (Rust 1.85 or newer; the repo pins a toolchain in `rust-toolchain.toml`):
 
@@ -255,7 +255,8 @@ delphi/
 │   ├── delphi-sandbox/    sandbox-exec (macOS) and bubblewrap (Linux), deny by default
 │   ├── delphi-docs/       dependency-free document readers and writers, charts, diagrams, PNG
 │   ├── delphi-bundle/     the org bundle standard: manifest, layout, deterministic validate
-│   └── delphi-xenia/      signed-record verification for the org memory store
+│   ├── delphi-xenia/      signed-record verification for the org memory store; the release signature
+│   └── delphi-release/    the maintainers' release-signing tool (not shipped)
 ├── ui/                    delphi-ui, the Ink console and narrator (src/, test/, dev/, README.md, TERMINALS.md)
 ├── agents/<role>/AGENT.md role manifests        skills/        skill packages and CATALOG.md
 ├── themes/greek/          default theme pack     context/       seed knowledge (index, heuristics, capability matrix)
@@ -280,7 +281,7 @@ All in [`specs/`](specs/); each file's `status` line says whether the operator h
 | 003 | [Collaboration and Council](specs/003-collaboration-and-council.md): escalation ladder, DAG, retry ladder, Council | built; one real Council |
 | 004 | [Memory, retrieval and coaching](specs/004-memory-and-coaching.md): hybrid search, ratified learning loop | search built; coaching gated |
 | 005, 005a-g | [Console and narrator](specs/005-console-and-narrator-tui.md), [avatars](specs/005a-terminal-avatar-system.md), [decks and inbox](specs/005b-deck-navigation-and-visual-interface.md), [inline console](specs/005c-inline-console.md), [full-screen console](specs/005d-full-screen-console.md), [redesign](specs/005e-console-ux-review-and-redesign.md) and [build plan](specs/005f-console-redesign-build-plan.md), [epic threads](specs/005g-epic-threads.md) | built; real-terminal pass pending |
-| 006 | [Installer, layout and updater](specs/006-installer-and-updater.md) | built (SHA-256 + attestation instead of Ed25519) |
+| 006 | [Installer, layout and updater](specs/006-installer-and-updater.md) | built (SHA-256 + attestation; the release signature of [036](specs/036-signed-releases-and-start-time-refresh.md) is built and waits for the maintainers' key) |
 | 007 | [Federation and sync](specs/007-federated-mesh-and-sync.md) | deferred |
 | 008 | [Ambient watch, rewind, HITL tiers](specs/008-ambient-watch-and-rewind.md) | tiers built; watches and rewind gated |
 | 009 | [Model access and authentication](specs/009-model-access-and-auth.md) | built; live Gemini OAuth unverified |
