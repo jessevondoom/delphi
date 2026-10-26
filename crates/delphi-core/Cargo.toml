@@ -29,3 +29,4 @@ test-support = []
 [dev-dependencies]
 delphi-core = { path = ".", features = ["test-support"] }
 tempfile = "3.8"
+delphi-xenia = { path = "../delphi-xenia", features = ["test-support"] }
