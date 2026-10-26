@@ -81,7 +81,7 @@ Added with the bridge tests (2026-10-26), in `delphi tools`, `--json` and `--pro
 Still not built, on purpose:
 - **Quiet alerts** (`monitor.alert` for silence) need a timer in the daemon; the window computes quiet from what it has heard, which the daemon does not.
 - **Session rhythm** (a week of sessions by hour): low value until there is more than one operator day of data.
-- **Per-task and per-thread counters** (group the tool counters by task and by `name_thread` thread as well as role).
+- **Per-thread counters for tool calls** (group the tool counters, not just the tokens, by `name_thread` thread as well as role). Tokens by thread are built (`specs/005g`, `delphi tools`, the epic pane).
 - **Relay delivery of alerts**: the relay carries only its six approval and completion kinds (`RELAY_EVENTS`); sending `monitor.alert` to a phone is a decision of its own.
 
 ## 6. Risks

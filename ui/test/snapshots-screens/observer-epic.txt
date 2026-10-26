@@ -3,9 +3,9 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
- ▌ critical path  Implement the deck router                                             about 3 min
+ ▌ critical path  Deck router                                                           about 3 min
 
-▌◐ Implement the deck router                                                          ▱▱▱▱▱▱ 0 of 1
+▌◐ Deck router                                                         1.2k tok 100%  ▱▱▱▱▱▱ 0 of 1
 ▌  ▶ athena wrapping up 0:01
 
 

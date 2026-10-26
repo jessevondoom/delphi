@@ -5,10 +5,10 @@ delphi · epic
 
  ▌ critical path  Vector … about 11 min
 
-▌◐ Vector database choice
+▌◐ Vector database choice       18k tok
 ▌  ✔ 1 step done
 ▌  ▶ daedalus designing 11:00
 ▌  ○ audit
  ↑ ↓  more           pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────
-1 running  ·  14.2k t… ○ ○ ● ○ ○ ○ ○ ○ ○
+1 running  ·  71.5k t… ○ ○ ● ○ ○ ○ ○ ○ ○

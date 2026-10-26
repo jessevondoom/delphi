@@ -1225,7 +1225,12 @@ mod tests {
         assert_eq!(v["roles"]["orchestrator"]["name"], "Orch");
         assert_eq!(v["roles"]["orchestrator"]["chassis"], "#a855f7");
         assert_eq!(v["roles"]["builder"]["name"], "builder", "an unthemed role keeps its id");
-        assert!(!v.to_string().to_lowercase().contains("token"), "nothing secret goes to the UI");
+        // The paths are the machine's own (a checkout called `thread-tokens` is not a secret), so only the rest is searched.
+        let mut rest = v.clone();
+        for path in ["cwd", "workspace", "workspace_name", "home", "delphi_exe", "console_socket", "narrator_socket"] {
+            rest[path] = Value::Null;
+        }
+        assert!(!rest.to_string().to_lowercase().contains("token"), "nothing secret goes to the UI: {}", rest);
     }
 
     #[test]

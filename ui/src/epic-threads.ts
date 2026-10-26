@@ -20,7 +20,9 @@ export type Status = 'done' | 'running' | 'queued' | 'stuck';
 export type Entry = { status: Status; text: string; gist: string; detail: string; role: string | null; at: number; since: number; critical: boolean; sub: Entry[] };
 export type Tie = { thread: string; label: string; dir: 'waits' | 'feeds'; open: boolean };
 export type State = 'needs-you' | 'active' | 'ahead' | 'settled';
-export type Thread = { id: string; label: string; tasks: string[]; entries: Entry[]; state: State; ties: Tie[]; done: number; total: number; critical: boolean };
+/** `named` is whether the orchestrator gave the thread its label (`name_thread`); otherwise the window made one up (`autoLabel`).
+ *  `tokens` is what the thread's tasks have used, all kinds counted as the footer's total counts them. */
+export type Thread = { id: string; label: string; named: boolean; tasks: string[]; entries: Entry[]; state: State; ties: Tie[]; done: number; total: number; critical: boolean; tokens: number };
 export type Path = { threads: Thread[]; steps: number; eta: number };
 
 const MIN = 60_000;
@@ -37,6 +39,32 @@ const span = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); ret
 const stems = (s: string): Set<string> => new Set(
   sanitize(s).toLowerCase().split(/[^a-z0-9]+/).filter((x) => x.length > 2 && !STOP.has(x)).map((x) => (x.length > 4 ? x.replace(/(ing|ed|es|s)$/, '') : x)),
 );
+
+const LEAD_VERBS = /^(?:please\s+)?(?:add|make|build|create|compare|draft|write|implement|fix|document|survey|research|plan|design|review|update|investigate|analy[sz]e|evaluate|refactor|find|figure out|set up|explore|summari[sz]e|prepare|produce|check|test|audit|decide|choose|pick|look into|work out)\b\s*/i;
+const LEAD_QUESTION = /^(?:should|do|does|is|are|can|could|will|would|which|what|how|why)\s+(?:we\s+|i\s+|you\s+)?/i;
+const LEAD_ARTICLE = /^(?:the|a|an|our|my|some)\s+/i;
+const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
+
+/** The noun phrase a request is about: `Add a retry queue to the claim loop` is `Retry queue`. The leading verb or question
+ *  word and article go, and the phrase ends at the first preposition or punctuation, at five words at most. */
+export function topicOf(request: string): string {
+  let t = sanitize(request).replace(/\s+/g, ' ').trim().replace(LEAD_QUESTION, '').replace(LEAD_VERBS, '').replace(LEAD_ARTICLE, '');
+  const cut = t.search(/\s(?:for|to|in|on|so|that|which|because|with|from|by|using|via|into|be)\s|[,.;:?!]/i);
+  if (cut > 3) t = t.slice(0, cut);
+  return cap(t.split(' ').filter(Boolean).slice(0, 5).join(' '));
+}
+
+/** A name for a thread nobody named: the words every one of its requests shares, in the first request's order (`Retry queue`
+ *  for "Add a retry queue to the claim loop" and "Document the retry queue for operators"), else the first request's topic. */
+export function autoLabel(requests: string[]): string {
+  const first = requests[0] ?? '';
+  if (requests.length > 1) {
+    const others = requests.slice(1).map(stems);
+    const kept = sanitize(first).split(/\s+/).filter((w) => { const s = [...stems(w)][0]; return s !== undefined && others.every((o) => o.has(s)); });
+    if (kept.length >= 2) return cap(kept.slice(0, 5).join(' ').replace(/[^\w\s'-]/g, ''));
+  }
+  return topicOf(first) || clean(first, 40);
+}
 
 /** Which tasks are about the same thing: a union of tasks whose words overlap enough. The orchestrator's own threads (`st.threads`) join the tasks they list. */
 function cluster(st: OState): string[][] {
@@ -117,13 +145,19 @@ export function threads(m: OModel, now: number): { list: Thread[]; path: Path } 
     for (const c of st.councils.filter((c) => set.has(c.task_id))) entries.push({ ...councilEntry(c), at: Math.min(now, ...nodes.filter((n) => n.task_id === c.task_id).map((n) => n.started_ms).filter((x) => x > 0)) });
     entries.sort((a, b) => a.at - b.at);
 
-    const label = clean(named?.label ?? st.tasks[first]?.prompt ?? st.councils.find((c) => c.task_id === first)?.proposition ?? first, 44);
+    const requests = [first, ...tasks.filter((id) => id !== first)].map((id) => st.tasks[id]?.prompt ?? st.councils.find((c) => c.task_id === id)?.proposition ?? '').filter(Boolean);
+    const label = named ? clean(named.label, 44) : clean(autoLabel(requests) || first, 44);
+    // Everything the thread's tasks have used. A daemon that predates per-task counts sends none, so fall back to its nodes (input and output only).
+    const tokens = tasks.reduce((sum, id) => {
+      const t = st.tasks[id]?.tokens;
+      return sum + (t ? t.input + t.cache_read + t.cache_write + t.output + t.thinking : nodes.filter((n) => n.task_id === id).reduce((a, n) => a + n.tokens, 0));
+    }, 0);
     const active = entries.some((e) => e.status === 'running'), stuck = entries.some((e) => e.status === 'stuck' || e.sub.some((x) => x.status === 'stuck'));
     const done = entries.filter((e) => e.status === 'done').length;
     const state: State = stuck ? 'needs-you' : active ? 'active' : entries.length && done === entries.length ? 'settled' : 'ahead';
     const id = named?.id ?? first;
     for (const t of tasks) threadOfTask.set(t, id);
-    out.push({ id, label, tasks, entries, state, ties: [], done, total: entries.length, critical: entries.some((e) => e.critical) });
+    out.push({ id, label, named: !!named, tasks, entries, state, ties: [], done, total: entries.length, critical: entries.some((e) => e.critical), tokens });
   }
 
   // Ties: a step that waits on a step in another thread. The waiting thread says what it waits on; the other says what it feeds.
@@ -154,6 +188,13 @@ export function threads(m: OModel, now: number): { list: Thread[]; path: Path } 
 
 const STEP_GLYPH: Record<Status, [string, Paint]> = { done: ['✔', T.ok], running: ['▶', T.accent], queued: ['○', T.muted], stuck: ['✖', T.alert] };
 const STATE_GLYPH: Record<State, [string, Paint]> = { 'needs-you': ['▼', T.warn], active: ['◐', T.accent], ahead: ['○', T.muted], settled: ['✔', T.ok] };
+/** A token count in few characters: 812, 4.2k, 38k, 1.3M. */
+export function kilo(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
 const meter = (done: number, of: number, n: number) => { const f = of > 0 ? Math.round((n * done) / of) : 0; return '▰'.repeat(f) + '▱'.repeat(n - f); };
 /** What a step is doing right now: its detail, else the gist of the gate of its build that is running or has failed. */
 const doingNow = (e: Entry): string => e.detail || e.sub.find((x) => x.status === 'stuck')?.gist || e.sub.find((x) => x.status === 'running')?.gist || '';
@@ -184,13 +225,19 @@ export function epicThreads(m: OModel, w: number, h: number): string[] {
   } else rows.push(` ${dim('no critical path: nothing is waiting on anything else')}`, '');
 
   const settled = list.filter((t) => t.state === 'settled');
+  const totalTokens = list.reduce((sum, t) => sum + t.tokens, 0);
+  const separator = dim('  ' + '─'.repeat(Math.max(0, w - 4)));
+  let first = true;
   for (const t of list.filter((x) => x.state !== 'settled')) {
+    if (!first) rows.push(separator);
+    first = false;
     const [g, paint] = STATE_GLYPH[t.state];
     const progress = w >= 56 && t.total ? dim(`${meter(t.done, t.total, 6)} ${t.done} of ${t.total}`) : '';
-    const tie = t.ties.find((x) => x.dir === 'waits' && x.open) ?? t.ties.find((x) => x.dir === 'feeds' && x.open);
-    const tieText = !tie || w < 64 ? '' : (tie.dir === 'waits' ? '⇠ waits on ' : '⇢ feeds ') + clean(tie.label, 16);
-    const right = [tieText ? T.warn(tieText) : '', progress].filter(Boolean).join('  ');
+    // What the thread has cost so far and its share of everything, so the one that is eating the mission is the one you see.
+    const tokens = t.tokens > 0 ? dim(`${kilo(t.tokens)} tok${w >= 72 && totalTokens > 0 ? ` ${Math.max(1, Math.round((t.tokens * 100) / totalTokens))}%` : ''}`) : '';
+    const right = [tokens, progress].filter(Boolean).join('  ');
     rows.push(T.spread(`${bar(t.critical)}${paint(g)} ${t.critical ? chalk.bold(text(t.label)) : text(t.label)}`, right ? right + ' ' : '', w));
+    const block = rows.length;
 
     const line = (status: Status, body: string, strong: boolean) => `${bar(t.critical)}  ${STEP_GLYPH[status][1](STEP_GLYPH[status][0])} ${strong ? text(body) : dim(body)}`;
     const done = t.entries.filter((e) => e.status === 'done');
@@ -208,10 +255,18 @@ export function epicThreads(m: OModel, w: number, h: number): string[] {
       const named = shown.map((e) => (e.critical ? chalk.bold(T.warn(e.gist)) : dim(e.gist)));
       rows.push(`${bar(t.critical)}  ${T.muted('○')} ${named.join(dim(' → '))}${more ? dim(` +${more}`) : ''}`);
     }
-    rows.push('');
+    // The influence between threads rides on the block's last line, so it costs no row: what this waits on, or what waits on it.
+    const tie = t.ties.find((x) => x.dir === 'waits' && x.open) ?? t.ties.find((x) => x.dir === 'feeds' && x.open);
+    if (tie && w >= 64) {
+      const tieText = T.warn((tie.dir === 'waits' ? '⇠ waits on ' : '⇢ feeds ') + clean(tie.label, 24)) + ' ';
+      if (rows.length > block) rows[rows.length - 1] = T.spread(rows.at(-1)!, tieText, w);
+      else rows.push(T.spread(`${bar(t.critical)}  `, tieText, w));
+    }
   }
-  if (settled.length) rows.push(`  ${T.ok('✔')} ${dim('settled  ' + fit(settled.map((t) => clean(t.label, 30)), Math.max(10, w - 14)))}`);
-  while (rows.length && rows.at(-1) === '') rows.pop();
+  if (settled.length) {
+    if (!first) rows.push(separator);
+    rows.push(`  ${T.ok('✔')} ${dim('settled  ' + fit(settled.map((t) => clean(t.label, 30) + (t.tokens > 0 ? ` ${kilo(t.tokens)}` : '')), Math.max(10, w - 14)))}`);
+  }
 
   const pace = T.spread(' ' + dim(rows.length > h - 1 ? '↑ ↓  more' : ''), m.st.pace?.length ? dim('pace  ') + T.accent(paceSpark(m.st.pace)) + ' ' : '', w);
   const roomRows = Math.max(1, h - 1);

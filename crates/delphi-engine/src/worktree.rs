@@ -429,31 +429,6 @@ impl Worktree {
         Ok(text.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).any(|l| MARKERS.iter().any(|m| l.contains(m))))
     }
 
-    /// What the worktree looks like now against the base commit, committed or not: the `--stat` summary, the
-    /// unified diff of tracked files (capped), and the untracked files. For the Narrator's Forge view; never
-    /// runs an external diff or text-conversion driver.
-    pub fn live_diff(&self, max_bytes: usize) -> Result<(String, String, Vec<String>), GitError> {
-        let base = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames"];
-        let mut c = self.git();
-        c.args(base).arg("--stat").arg(&self.base_sha);
-        let stat = run(c, "diff --stat")?;
-        let mut c = self.git();
-        c.args(base).arg(&self.base_sha);
-        let mut diff = run(c, "diff")?;
-        if diff.len() > max_bytes {
-            let mut end = max_bytes;
-            while !diff.is_char_boundary(end) {
-                end -= 1;
-            }
-            diff.truncate(end);
-            diff.push_str("\n… (truncated)");
-        }
-        let mut c = self.git();
-        c.args(["ls-files", "--others", "--exclude-standard", "-z"]);
-        let untracked = run(c, "ls-files")?.split('\0').filter(|p| !p.is_empty()).take(200).map(String::from).collect();
-        Ok((stat, diff, untracked))
-    }
-
     /// The unified diff of one file against the base (for the approval card), without any external driver.
     pub fn file_diff(&self, path: &str, max_bytes: usize) -> Result<String, GitError> {
         let mut c = self.git();

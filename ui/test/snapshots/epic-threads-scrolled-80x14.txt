@@ -3,12 +3,12 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
-▌  ○ audit
-
-▌○ Pricing tiers                     ⇠ waits on Vector database…  ▱▱▱▱▱▱ 0 of 2
-▌  ○ plan → wrap up
-
- ◐ Retry queue                                                    ▰▰▰▱▱▱ 3 of 7
+▌  ○ audit                                                ⇢ feeds Pricing tiers
+  ────────────────────────────────────────────────────────────────────────────
+▌○ Pricing tiers                                                  ▱▱▱▱▱▱ 0 of 2
+▌  ○ plan → wrap up                           ⇠ waits on Vector database choice
+  ────────────────────────────────────────────────────────────────────────────
+ ◐ Retry queue                                       44k tok 61%  ▰▰▰▱▱▱ 3 of 7
  ↑ ↓  more                                                   pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────────────────────────────────────────────
-1 running  ·  14.2k tokens                             ← →  ·  ○ ○ ● ○ ○ ○ ○ ○ ○
+1 running  ·  71.5k tokens                             ← →  ·  ○ ○ ● ○ ○ ○ ○ ○ ○

@@ -138,6 +138,9 @@ pub struct Task {
     pub output: String,
     /// The session it was asked in (`specs/030`); empty before the first `session.started`.
     pub session: String,
+    /// Everything its agents used, counted as the mission's total is (so the tasks add up to it): the epic pane sums
+    /// these by thread.
+    pub tokens: Tokens,
 }
 
 /// A console session as the narrator groups work by it: how it began, when, and how many requests it has held.
@@ -622,7 +625,7 @@ impl ObserverState {
                 if let Some(s) = self.sessions.last_mut() {
                     s.turns += 1;
                 }
-                self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new(), session });
+                self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new(), session, tokens: Tokens::default() });
             }
             "session.started" => {
                 let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
@@ -784,6 +787,9 @@ impl ObserverState {
                 let cost = p["cost_usd"].as_f64().unwrap_or(0.0);
                 self.spent_usd += cost;
                 self.tokens.add(p);
+                if let Some(t) = self.tasks.get_mut(&task) {
+                    t.tokens.add(p);
+                }
                 self.add_pace(ts_ms(e) / 60_000, p["input_tokens"].as_u64().unwrap_or(0) + p["output_tokens"].as_u64().unwrap_or(0));
                 self.series.push_back(cost);
                 while self.series.len() > 240 {
@@ -1448,6 +1454,25 @@ mod tests {
         for k in ["bundle.added", "bundle.updated", "bundle.removed", "org_context.built"] {
             assert!(KINDS.contains(&k));
         }
+    }
+
+    #[test]
+    fn each_task_keeps_its_own_token_count_and_the_tasks_add_up_to_the_missions_total() {
+        let mut st = ObserverState::new(&roles());
+        for (i, id) in ["t_1", "t_2"].iter().enumerate() {
+            st.apply(&ev(1 + i as u64, "task.created", id, "", json!({"prompt": "p", "target": "builder"})));
+        }
+        let usage = |seq: u64, task: &str, input: u64, cache: u64, output: u64, thinking: u64| {
+            ev(seq, "agent.usage", task, "builder", json!({"input_tokens": input, "cache_read_tokens": cache, "cache_write_tokens": 5, "output_tokens": output, "thinking_tokens": thinking, "cost_usd": 0.01}))
+        };
+        st.apply(&usage(3, "t_1", 1000, 3000, 200, 50));
+        st.apply(&usage(4, "t_2", 10, 20, 30, 40));
+        st.apply(&usage(5, "t_1", 1, 2, 3, 4));
+        st.apply(&usage(6, "t_9", 7, 7, 7, 7)); // a task the narrator never saw start: counted in the total, in no task
+        let t1 = &st.tasks["t_1"].tokens;
+        assert_eq!((t1.input, t1.cache_read, t1.cache_write, t1.output, t1.thinking), (1001, 3002, 10, 203, 54));
+        assert_eq!(st.tasks["t_2"].tokens.total(), 10 + 20 + 5 + 30 + 40);
+        assert_eq!(st.tasks.values().map(|t| t.tokens.total()).sum::<u64>() + (7 * 4 + 5), st.tokens.total());
     }
 
     #[test]

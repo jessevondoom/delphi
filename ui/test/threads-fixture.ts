@@ -17,6 +17,11 @@ export function threadsWorld(): OState {
   s.tasks['t_3'] = { id: 't_3', flow: 'build', prompt: 'Add a retry queue to the claim loop', status: 'running' };
   s.tasks['t_4'] = { id: 't_4', flow: 'docs', prompt: 'Document the retry queue for operators', status: 'running' };
   s.tasks['t_5'] = { id: 't_5', flow: 'research', prompt: 'Survey competitor onboarding flows', status: 'done' };
+  // What each task's agents used, split the way the footer's total counts it (input, cache, output, thinking), summing exactly to n.
+  const used = (n: number) => { const cache_read = Math.round(n * 0.3), output = Math.round(n * 0.15), thinking = Math.round(n * 0.05); return { input: n - cache_read - output - thinking, cache_read, cache_write: 0, output, thinking }; };
+  const perTask = { t_1: 18_400, t_2: 0, t_3: 41_200, t_4: 2_600, t_5: 9_300 };
+  for (const [id, n] of Object.entries(perTask)) s.tasks[id]!.tokens = used(n);
+  s.tokens = used(Object.values(perTask).reduce((a, b) => a + b, 0)); // the footer's total is the tasks added up
   Object.assign(s.nodes, {
     a1: node('a1', 'scout', 't_5', 'done', 1, 5), a2: node('a2', 'strategist', 't_5', 'done', 5, 8, ['a1']),
     b1: node('b1', 'scout', 't_1', 'done', 3, 9), b2: node('b2', 'architect', 't_1', 'running', 9, null, ['b1']), b3: node('b3', 'red-team', 't_1', 'pending', 0, null, ['b2']),
