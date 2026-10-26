@@ -97,6 +97,13 @@ typo or an unreachable endpoint shows up here. An arm whose model `avail.json` s
 the reset time. `expect_models` in the generated `arms.toml` holds each model's alias and its `claude-` long form (the Claude
 CLI may report either; the first live run confirms which).
 
+**Code cases need a working toolchain in the arm homes.** `arms init` writes the generating shell's `PATH` and a shared
+`CARGO_TARGET_DIR` into each home's `[exec] env` (`--exec-path`, `--cargo-target` to override), so the merge gates and the
+Builder can run `cargo`. A builder case runs with `--permissions accept-edits` and, unless you pass `--policy <file>`, a
+default card policy in `<work>/policy.toml` that allows the gate commands and a short list of programs
+(`cargo git timeout ls pwd cat head tail grep rg find wc which echo`). Those run unsandboxed as you, in a throwaway worktree
+of a repository with no remote. If that is not acceptable, pass a tighter policy.
+
 **Use a short `--work-dir`** (at most 59 characters, such as `/tmp/t1`): the daemon's Unix socket lives inside each run's home
 and a socket path is limited to about 104 bytes. The commands refuse a longer one up front. Runs are `<work>/r001`, `r002`...
 (each row's `dir` says which), judge calls `<work>/j0001`...
