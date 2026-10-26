@@ -145,8 +145,10 @@ default_peer_trust_ceiling = "federated_peer"
 # `delphi doctor` and `delphi endpoints test --probe` show whether your organization's MCP policy lets the bridge load.
 # The same block's keys apply to the Antigravity CLI as [harness.agy] where they can: `bridge` (a plugin carrying Delphi's tools
 # and a hook that denies its other tools, in the span's own working directory), `native_tools` (the web tools the hook lets
-# through: "WebSearch" and "WebFetch" become search_web and read_url_content) and `env_allow`. Its spans are always untrusted
-# (L0) and never a Builder. `delphi endpoints test --probe` checks that the hook really denies a shell command.
+# through: "WebSearch" and "WebFetch" become search_web and read_url_content) and `env_allow`. Its spans start untrusted (L0)
+# and are never a Builder until `delphi endpoints test --probe` has watched the hook deny every kind of tool on the installed agy
+# version; then they start trusted (falling to L0 when they read the web) and a Builder's file edits go through the hook and
+# Delphi's approval cards, its commands through Delphi's own run_command tool.
 # [harness.claude]
 # bridge = true                        # false: roles without a worktree run text-only (no timer, dispatch or file tools)
 # approvals = "delegate"               # "delphi": Delphi's own tiers and cards answer every request instead
