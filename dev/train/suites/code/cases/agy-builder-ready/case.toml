@@ -1,0 +1,16 @@
+# Code case C1 (specs/037 section 3), harvested from this repository's history: PR 189, the agy probe checks Builder file-tool names.
+# The agent starts from the base commit's tree (no history) with spec.md ratified; the hidden tests are the reference
+# change's test modules, run on what it builds (hidden/hidden.toml).
+id = "agy-builder-ready"
+suite = "code"
+kind = "task"
+role = "builder"
+split = "dev"
+tags = ["code", "rust", "easy"]
+max_cost_usd = 4.0
+timeout_secs = 1800
+prompt = "Implement the spec."
+spec = "spec.md"
+
+[[check]]
+kind = "hidden_tests"

@@ -32,6 +32,49 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 | `file_unchanged`, `file_exists` (`path`) | the fixture file is byte-identical, or exists, after the run |
 | `file_contains` (`path`, `text`) | the fixture file contains the text |
 
+## Arms (`specs/037` §2)
+
+`delphi train run --arms-file arms.toml` runs every arm on every case and seed; each arm has its own template home (its
+routing is configuration) and may declare `expect_models`, the model ids or prefixes it may use. A run in which any
+other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
+in and out, calls and cost per model, attempts and mid-run model swaps.
+
+## Judging a run (`specs/037` §6)
+
+A `delphi train run` leaves a bundle per graded run in `<work>/bundles/`, filed under a blind id with the arm and model
+names scrubbed; the key is `bundles/key.jsonl`. Then:
+
+```sh
+delphi train judge --work-dir W --judges-file judges.toml --budget-usd 20     # a jury of other models, both orders per pair
+delphi train review --work-dir W                                               # you, blind, before seeing the jury
+delphi train disputes --work-dir W                                             # where you and the jury differ
+delphi train resolve --work-dir W --id d1234abcd --cause rubric_gap --note "..."
+delphi train report --work-dir W --judges-file judges.toml
+```
+
+`judges.toml` is an arms file (`[[arm]]` per judge: a template home and the `expect_models` it uses). A judge never scores a
+pair that includes its own model. A pair counts for a judge only if both orders picked the same bundle. A disagreement is
+never averaged: it is contested until you and the jury's reasons have been discussed and a cause recorded. The report says
+"no evidence for a ranking" with fewer than three graded seeds per arm.
+
+## Code cases from history (`specs/037` §3, §5.2)
+
+A code case starts the agent from an earlier commit and scores it on the tests of the change that followed. It has
+`spec = "spec.md"` (the task, ratified in the run's home; it must give the names the tests use) and a `hidden/` directory
+that no run can read. Make one with:
+
+```sh
+delphi train harvest --case code/<id> --base <parent-sha> --reference <change-sha> \
+    --test-file crates/foo/src/bar.rs --cmd "cargo test -p foo --lib --locked -- bar::" --min-passed 10
+```
+
+Harvest extracts the reference's test module from each `--test-file`, then proves the case: the hidden tests must fail on
+the base commit and pass three times in a row on the reference. `delphi train check-hidden --case code/<id>` repeats the
+proof; any edit to the case invalidates it, and `delphi train run` refuses an unproven case without `--allow-unvalidated`.
+It builds the project but calls no model. A run's project is the base tree with no history; after the run the test
+module in each named file is replaced by the reference's and the command is run. `--policy <file>` is the Amber-card
+policy for headless builds.
+
 ## Research cases and truth packs (`specs/037`)
 
 A `kind = "research"` case has no `fixture/`; it has a `truth/` directory beside `case.toml` that is **never copied into a

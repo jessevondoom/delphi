@@ -49,6 +49,8 @@ pub enum Check {
     FileExists(String),
     /// A fixture file contains this text after the run.
     FileContains { path: String, text: String },
+    /// The case's withheld tests (`hidden/`), run on what the build produced.
+    HiddenTests,
     /// The deliverable states at least this weighted share of the truth pack's facts (`specs/037` §5.1).
     FactRecall { min: f64 },
     /// The deliverable falls into none of the truth pack's traps.
@@ -73,6 +75,11 @@ pub struct Case {
     pub dir: PathBuf,
     /// The stored source of truth, for a research case.
     pub truth: Option<crate::train_truth::Truth>,
+    /// The task's spec, a file in the case directory. The runner ratifies it in the run's home and the build implements it,
+    /// as an operator would (`specs/003` §3.1.2: no build without a ratified spec beyond a small bounded exemption).
+    pub spec: Option<String>,
+    /// For a code case harvested from history: the commits and the withheld tests (`specs/037` §5.2).
+    pub hidden: Option<crate::train_hidden::Hidden>,
 }
 
 /// Problems with one case or suite, one per line, each naming the file.
@@ -165,6 +172,7 @@ fn parse_check(t: &toml::Table, at: &str, problems: &mut Problems) -> Option<Che
             }
         },
         Some("no_traps") => Some(Check::NoTraps),
+        Some("hidden_tests") => Some(Check::HiddenTests),
         Some("text_matches") => {
             let Some(pattern) = str_of(t, "pattern") else {
                 problems.push(format!("{}: `text_matches` needs `pattern`", at));
@@ -249,7 +257,20 @@ pub fn load_case(dir: &Path, suite: &str) -> Result<Case, Problems> {
     if kind == Kind::Scenario && prompt.is_some() {
         p.push(format!("{}: a scenario's words go in `[[turns]]`, not `prompt`", at));
     }
-    if matches!(kind, Kind::Task | Kind::Probe) && !dir.join("fixture").is_dir() {
+    let hidden = match crate::train_hidden::load(dir, &at) {
+        Ok(h) => h,
+        Err(mut e) => {
+            p.append(&mut e);
+            None
+        }
+    };
+    let spec = str_of(&t, "spec").map(String::from);
+    if let Some(sp) = &spec {
+        if !rel_ok(sp) || !dir.join(sp).is_file() {
+            p.push(format!("{}: `spec` `{}` must be a file in the case directory", at, sp));
+        }
+    }
+    if matches!(kind, Kind::Task | Kind::Probe) && hidden.is_none() && !dir.join("fixture").is_dir() {
         p.push(format!("{}: a {} case needs a `fixture/` directory", at, if kind == Kind::Task { "task" } else { "probe" }));
     }
     // A research case's truth is read and checked against itself here; the other kinds have none.
@@ -288,13 +309,14 @@ pub fn load_case(dir: &Path, suite: &str) -> Result<Case, Problems> {
         match c {
             Check::FactRecall { .. } => needs("facts in truth/facts.toml", truth.as_ref().is_some_and(|t| !t.facts.is_empty()), &mut p),
             Check::NoTraps => needs("traps in truth/traps.toml", truth.as_ref().is_some_and(|t| !t.traps.is_empty()), &mut p),
+            Check::HiddenTests => needs("a hidden/hidden.toml (made by `delphi train harvest`)", hidden.is_some(), &mut p),
             _ => {}
         }
     }
     if !p.is_empty() {
         return Err(p);
     }
-    Ok(Case { id, suite: suite.to_string(), kind, role, split, tags, max_cost_usd, timeout_secs, prompt, turns, checks, dir: dir.to_path_buf(), truth })
+    Ok(Case { id, suite: suite.to_string(), kind, role, split, tags, max_cost_usd, timeout_secs, prompt, turns, checks, dir: dir.to_path_buf(), truth, spec, hidden })
 }
 
 /// Every case of one suite directory, in id order, and the problems found. A directory in `cases/` without a
@@ -379,6 +401,72 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
+fn flags(args: &[String], name: &str) -> Vec<String> {
+    args.iter().enumerate().filter(|(_, a)| *a == name).filter_map(|(i, _)| args.get(i + 1).cloned()).collect()
+}
+
+/// `delphi train harvest` (write a case's hidden tests from a reference commit, then prove them) and
+/// `delphi train check-hidden` (prove them again). Neither calls a model; both build and run the project.
+fn harvest_cmd(sub: &str, args: &[String], root: &Path) -> i32 {
+    let Some((suite, id)) = flag(args, "--case").and_then(|c| c.split_once('/').map(|(a, b)| (a.to_string(), b.to_string()))).filter(|(a, b)| rel_ok(a) && rel_ok(b) && !a.contains('/') && !b.contains('/')) else {
+        eprintln!("delphi train {}: --case <suite>/<id> is required", sub);
+        return 2;
+    };
+    let dir = root.join(&suite).join("cases").join(&id);
+    let source = PathBuf::from(flag(args, "--source-repo").unwrap_or_else(|| flag(args, "--repo").unwrap_or_else(|| ".".into())));
+    if sub == "harvest" {
+        let (Some(base), Some(reference)) = (flag(args, "--base"), flag(args, "--reference")) else {
+            eprintln!("delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path> [--test-file ...] --cmd \"cargo test ...\" [--min-passed N] [--timeout-secs N] [--no-validate]");
+            return 2;
+        };
+        let cmd: Vec<String> = flag(args, "--cmd").map(|c| c.split_whitespace().map(String::from).collect()).unwrap_or_default();
+        let (timeout, min) = (flag(args, "--timeout-secs").and_then(|v| v.parse().ok()).unwrap_or(1800), flag(args, "--min-passed").and_then(|v| v.parse().ok()).unwrap_or(1));
+        if let Err(e) = crate::train_hidden::write_hidden(&dir, &crate::train_hidden::Harvest { source_repo: &source, base: &base, reference: &reference, files: &flags(args, "--test-file"), cmd: &cmd, timeout_secs: timeout, min_passed: min }) {
+            eprintln!("delphi train harvest: {}", e);
+            return 1;
+        }
+        println!("wrote {}/hidden (the reference test modules and hidden.toml); the case also needs case.toml and spec.md", dir.display());
+        if args.iter().any(|a| a == "--no-validate") {
+            return 0;
+        }
+    }
+    let h = match crate::train_hidden::load(&dir, &format!("{}/{}", suite, id)) {
+        Ok(Some(h)) => h,
+        Ok(None) => {
+            eprintln!("delphi train {}: {}/{} has no hidden/hidden.toml (run `delphi train harvest` first)", sub, suite, id);
+            return 2;
+        }
+        Err(e) => {
+            for p in e {
+                eprintln!("FAIL {}", p);
+            }
+            return 1;
+        }
+    };
+    let scratch = crate::train_hidden::scratch_dir(flag(args, "--scratch").as_deref());
+    println!("validating {}/{}: building the project at the base and reference commits (no model is called)...", suite, id);
+    match crate::train_hidden::validate(&dir, &h, &source, &scratch, flag(args, "--flake-runs").and_then(|v| v.parse().ok()).filter(|n| (1..=10).contains(n)).unwrap_or(3)) {
+        Ok(v) => {
+            print!("{}", crate::train_hidden::render(&v, &h));
+            if args.iter().any(|a| a == "--scratch") {
+                println!("scratch: {} (build artifacts stay for the next check)", scratch.display());
+            } else {
+                let _ = fs::remove_dir_all(&scratch);
+            }
+            if v.ok() {
+                println!("valid: the hidden tests fail on the base and pass on the reference, repeatedly; recorded in hidden/validated.toml");
+                0
+            } else {
+                1
+            }
+        }
+        Err(e) => {
+            eprintln!("delphi train {}: {}", sub, e);
+            1
+        }
+    }
+}
+
 /// `delphi train validate|plan`.
 pub fn run(args: &[String]) -> i32 {
     let sub = args.first().map(|s| s.as_str());
@@ -403,6 +491,9 @@ pub fn run(args: &[String]) -> i32 {
                 1
             }
         };
+    }
+    if matches!(sub, Some("harvest") | Some("check-hidden")) {
+        return harvest_cmd(sub.unwrap_or(""), args, &root);
     }
     let only = flag(args, "--suite");
     let mut names = suite_names(&root);
@@ -434,6 +525,9 @@ pub fn run(args: &[String]) -> i32 {
             for c in all.iter().filter_map(|c| c.truth.as_ref().map(|t| (c, t))) {
                 let (c, t) = c;
                 println!("truth {}/{}: {} fact(s), {} trap(s), {} source(s), as of {}{}", c.suite, c.id, t.facts.len(), t.traps.len(), t.sources, t.as_of, if t.verified() { "" } else { "; DRAFT: not verified by the operator, `delphi train run` needs --allow-unverified" });
+            }
+            for c in all.iter().filter(|c| c.hidden.as_ref().is_some_and(|h| !crate::train_hidden::validated(&c.dir, h))) {
+                println!("NOTE {}/{}: hidden tests are not validated for this content; run `delphi train check-hidden --case {}/{}` (builds the project), or `train run` needs --allow-unvalidated", c.suite, c.id, c.suite, c.id);
             }
             println!("delphi train validate: {} suite(s), {} case(s), {} problem(s)", names.len(), all.len(), problems.len());
             i32::from(!problems.is_empty())
@@ -485,6 +579,21 @@ pub fn run(args: &[String]) -> i32 {
             }
             0
         }
+        Some("report") => crate::train_report::cli(args),
+        Some(s @ ("review" | "disputes" | "resolve")) => {
+            let refs: Vec<&Case> = all.iter().collect();
+            crate::train_review::cli(s, args, &refs)
+        }
+        Some("judge") => {
+            if !problems.is_empty() {
+                for p in &problems {
+                    eprintln!("FAIL {}", p);
+                }
+                return 1;
+            }
+            let refs: Vec<&Case> = all.iter().collect();
+            crate::train_judge::cli(args, &refs)
+        }
         Some("run") => {
             if !problems.is_empty() {
                 for p in &problems {
@@ -507,7 +616,7 @@ pub fn run(args: &[String]) -> i32 {
             crate::train_run::cli(args, &chosen)
         }
         _ => {
-            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir>] [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
+            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
             2
         }
     }

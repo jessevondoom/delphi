@@ -1,0 +1,58 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn ev(task: Option<&str>, kind: &str, payload: Value) -> EventEnvelope {
+        let mut e = EventEnvelope::new("m_1", kind, payload);
+        e.task_id = task.map(String::from);
+        e
+    }
+
+    #[test]
+    fn a_first_pass_build_is_done_on_attempt_one_with_nothing_denied() {
+        let evs = vec![
+            ev(Some("t1"), "snapshot.loaded", json!({"rules": [{"scope": "release", "id": "H-001"}, {"scope": "workspace-lessons", "id": "L-BLD-001"}]})),
+            ev(Some("t1"), "build.attempt", json!({"attempt": 1})),
+            ev(Some("t1"), "agent.usage", json!({"cost_usd": 0.25})),
+            ev(Some("t1"), "agent.usage", json!({"cost_usd": 0.5})),
+            ev(Some("t1"), "task.completed", json!({"status": "done"})),
+        ];
+        let r = task_records(&evs);
+        assert_eq!(r.len(), 1);
+        assert!(r[0].first_pass() && r[0].cost_usd == 0.75);
+        assert_eq!(r[0].rules.len(), 2);
+    }
+
+    #[test]
+    fn retries_denials_reverts_and_escalation_are_not_first_pass() {
+        let done = json!({"status": "done"});
+        let b = || ev(Some("t"), "build.attempt", json!({}));
+        let retried = task_records(&[b(), b(), ev(Some("t"), "task.completed", done.clone())]);
+        assert!(!retried[0].first_pass() && retried[0].attempts == 2);
+        let denied = task_records(&[b(), ev(Some("t"), "approval.resolved", json!({"resolution": "denied"})), ev(Some("t"), "task.completed", done.clone())]);
+        assert!(!denied[0].first_pass() && denied[0].denied_cards == 1);
+        let approved = task_records(&[b(), ev(Some("t"), "approval.resolved", json!({"resolution": "approved"})), ev(Some("t"), "task.completed", done.clone())]);
+        assert!(approved[0].first_pass(), "an approved card is not a rejection");
+        let reverted = task_records(&[b(), ev(Some("t"), "decision.reverted", json!({})), ev(Some("t"), "task.completed", done)]);
+        assert!(!reverted[0].first_pass() && reverted[0].reverted_decisions == 1);
+        let esc = task_records(&[b(), ev(Some("t"), "task.completed", json!({"status": "escalated", "reason": "budget"}))]);
+        assert_eq!(esc[0].outcome, Outcome::Escalated);
+        assert!(!esc[0].first_pass());
+    }
+
+    #[test]
+    fn spans_of_one_task_pool_their_rules_once_and_tasks_stay_apart() {
+        let loaded = |t: &str| ev(Some(t), "snapshot.loaded", json!({"rules": [{"scope": "release", "id": "H-001"}]}));
+        let evs = vec![loaded("a"), loaded("a"), loaded("b"), ev(None, "mission.note", json!({})), ev(Some("a"), "task.failed", json!({"error": "x"})), ev(Some("b"), "task.cancelled", json!({}))];
+        let r = task_records(&evs);
+        assert_eq!(r.iter().map(|t| t.task_id.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(r[0].rules.len(), 1);
+        assert_eq!((r[0].outcome.clone(), r[1].outcome.clone()), (Outcome::Failed, Outcome::Cancelled));
+    }
+
+    #[test]
+    fn a_task_with_no_terminal_event_is_open() {
+        assert_eq!(task_records(&[ev(Some("t"), "snapshot.loaded", json!({"rules": []}))])[0].outcome, Outcome::Open);
+    }
+}

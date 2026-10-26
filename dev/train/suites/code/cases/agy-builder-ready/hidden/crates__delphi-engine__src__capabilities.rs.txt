@@ -1,0 +1,302 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ScriptedModel, Step};
+    use delphi_adapter::blocks::ProviderMeta;
+    use delphi_adapter::claude::Usage;
+
+    const CFG: &str = r#"
+[models.claude]
+workhorse = "sonnet-x"
+[models.catalog."sonnet-x"]
+max_output_tokens = 64000
+min_thinking_budget = 1024
+max_thinking_budget = 32000
+input_usd_per_mtok = 3.0
+output_usd_per_mtok = 15.0
+[[endpoints]]
+id = "direct"
+family = "claude"
+path = "api"
+credential = "env:K"
+[[endpoints]]
+id = "gw"
+family = "claude"
+path = "gateway-compat"
+base_url = "https://gw.example.internal"
+credential = "env:K"
+"#;
+
+    fn signed_call() -> Step {
+        Step::Reply {
+            blocks: vec![
+                ContentBlock::Thinking { thought: "plan".into(), replayable: true, signature_dropped_reason: None, provider_meta: ProviderMeta { provider: Some("anthropic".into()), signature: Some("SIG".into()), data: None } },
+                ContentBlock::ToolCall { id: "toolu_1".into(), name: "echo".into(), arguments: json!({"text": "ping"}) },
+            ],
+            usage: Usage { input_tokens: 300, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100, thinking_tokens: 0 },
+            stop_reason: "tool_use",
+        }
+    }
+
+    #[tokio::test]
+    async fn a_native_endpoint_is_probed_end_to_end_within_its_token_caps() {
+        let cfg = Config::parse(CFG).unwrap();
+        let ep = cfg.endpoint("direct").unwrap().clone();
+        let model = ScriptedModel::new(vec![Step::text("OK"), signed_call(), Step::text("done")]);
+        let cap = probe(&*model, &cfg, &ep, "sonnet-x", 1000).await;
+        assert_eq!(cap.auth, "ok");
+        assert_eq!((cap.usage_reported, cap.tool_calling, cap.reasoning, cap.signature_round_trip), (Some(true), Some(true), Some(true), Some(true)));
+        assert!(!cap.degraded && cap.cost_usd.unwrap() > 0.0 && cap.tokens_used > 1000);
+        let seen = model.requests();
+        assert_eq!(seen.len(), 3);
+        assert!(seen[0].body["max_tokens"].as_u64().unwrap() <= 64, "the plain probe is capped");
+        assert_eq!(seen[1].body["thinking"]["budget_tokens"], 1024, "the model's minimum budget, nothing more");
+        assert!(seen[1].body["max_tokens"].as_u64().unwrap() <= 1024 + 512);
+        let replay = seen[2].body["messages"][1]["content"].to_string();
+        assert!(replay.contains("\"signature\":\"SIG\""), "the round trip really replays the signature: {}", replay);
+    }
+
+    #[tokio::test]
+    async fn a_failed_signature_round_trip_is_recorded_not_hidden() {
+        let cfg = Config::parse(CFG).unwrap();
+        let ep = cfg.endpoint("direct").unwrap().clone();
+        let model = ScriptedModel::new(vec![Step::text("OK"), signed_call(), Step::Fail("invalid signature")]);
+        let cap = probe(&*model, &cfg, &ep, "sonnet-x", 0).await;
+        assert_eq!((cap.tool_calling, cap.signature_round_trip), (Some(true), Some(false)));
+        assert!(cap.notes.iter().any(|n| n.contains("invalid signature")));
+    }
+
+    #[tokio::test]
+    async fn authentication_failures_stop_the_suite_after_one_request() {
+        let cfg = Config::parse(CFG).unwrap();
+        let ep = cfg.endpoint("direct").unwrap().clone();
+        for (step, want) in [(Step::NeedsReauth, "re-authenticate"), (Step::Throttle, "throttled"), (Step::Fail("401"), "failed")] {
+            let model = ScriptedModel::new(vec![step]);
+            let cap = probe(&*model, &cfg, &ep, "sonnet-x", 0).await;
+            assert!(cap.auth.starts_with(want), "{}", cap.auth);
+            assert_eq!((model.requests().len(), cap.tool_calling), (1, None));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_compat_gateway_is_marked_degraded_and_skips_the_round_trip() {
+        let cfg = Config::parse(CFG).unwrap();
+        let ep = cfg.endpoint("gw").unwrap().clone();
+        let call = Step::tool("call_1", "echo", json!({"text": "ping"}));
+        let model = ScriptedModel::new(vec![Step::text("OK"), call]);
+        let cap = probe(&*model, &cfg, &ep, "sonnet-x", 0).await;
+        assert!(cap.degraded);
+        assert_eq!((cap.tool_calling, cap.signature_round_trip), (Some(true), None));
+        assert!(cap.notes.iter().any(|n| n.contains("degraded")));
+        assert_eq!(model.requests().len(), 2);
+        assert!(model.requests()[1].body.get("thinking").is_none());
+    }
+
+    const HARNESS_CFG: &str = r#"
+[models.claude]
+fast = "haiku-x"
+[[endpoints]]
+id = "sub"
+family = "claude"
+path = "harness"
+harness = "claude"
+credential = "harness-login"
+cost_model = "subscription"
+"#;
+
+    #[tokio::test]
+    async fn a_harness_probe_proves_the_cli_is_signed_in_and_reports_the_window() {
+        let cfg = Config::parse(HARNESS_CFG).unwrap();
+        let ep = cfg.endpoint("sub").unwrap().clone();
+        let d = tempfile::tempdir().unwrap();
+        let good = crate::harness::tests::fake_cli(d.path(), r#"echo '{"type":"system","subtype":"init","session_id":"s"}'
+echo '{"type":"rate_limit_event","rate_limit_info":{"utilization":0.32,"rateLimitType":"seven_day"}}'
+echo '{"type":"result","subtype":"success","result":"OK","usage":{"input_tokens":5,"output_tokens":3}}'"#);
+        let cap = probe_harness(&cfg, &ep, &good, 7).await;
+        assert_eq!((cap.auth.as_str(), cap.usage_reported, cap.model_id.as_str()), ("ok", Some(true), "haiku-x"));
+        assert!(cap.notes.iter().any(|n| n.contains("seven-day window 32% used")), "{:?}", cap.notes);
+        let d2 = tempfile::tempdir().unwrap();
+        let bad = crate::harness::tests::fake_cli(d2.path(), "exit 1");
+        let cap = probe_harness(&cfg, &ep, &bad, 7).await;
+        assert!(cap.auth.starts_with("failed") && cap.auth.contains("signed in"), "{}", cap.auth);
+        let cap = probe_harness(&cfg, &ep, "/nonexistent/claude", 7).await;
+        assert!(cap.auth.starts_with("failed: cannot start"), "{}", cap.auth);
+    }
+
+    #[tokio::test]
+    async fn the_probe_says_whether_the_delphi_bridge_loaded_and_which_account_connectors_came_with_it() {
+        let cfg = Config::parse(HARNESS_CFG).unwrap();
+        let ep = cfg.endpoint("sub").unwrap().clone();
+        let run = |servers: &str| {
+            let d = tempfile::tempdir().unwrap();
+            let body = format!("echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s\",\"tools\":[\"mcp__delphi__probe\"],\"mcp_servers\":[{}]}}'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"OK\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}'", servers);
+            let prog = crate::harness::tests::fake_cli(d.path(), &body);
+            (d, prog)
+        };
+        let (_d, prog) = run(r#"{"name":"delphi","status":"connected"},{"name":"claude.ai Slack","status":"pending"}"#);
+        let (cap, seat) = probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("Delphi tool bridge: loaded")) && cap.notes.iter().any(|n| n.contains("account connectors loaded: claude.ai Slack (pending)")), "{:?}", cap.notes);
+        let seat = seat.expect("the seat's start-up report is returned");
+        assert_eq!((seat.endpoint_id.as_str(), seat.bridge, seat.tools.as_slice()), ("sub", true, &["mcp__delphi__probe".to_string()][..]));
+        // Policy keeps the bridge out: the seat is marked degraded and the note says what to do.
+        let (_d2, prog) = run(r#"{"name":"delphi","status":"failed"}"#);
+        let (cap, _) = probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("NOT loaded (status: failed)") && n.contains("organization policy")), "{:?}", cap.notes);
+        // A profile with the bridge off does not look for it.
+        let off = Config::parse(&format!("{}\n[harness.claude]\nbridge = false\n", HARNESS_CFG)).unwrap();
+        let (_d3, prog) = run(r#"{"name":"delphi","status":"failed"}"#);
+        let (cap, seat) = probe_harness_seat(&off, &ep, &prog, 7, Duration::ZERO).await;
+        assert!(!cap.degraded && !cap.notes.iter().any(|n| n.contains("bridge")), "{:?}", cap.notes);
+        assert!(!seat.unwrap().bridge);
+    }
+
+    const AGY_CFG: &str = r#"
+[models.gemini]
+fast = "gemini-fast"
+[[endpoints]]
+id = "ag"
+family = "gemini"
+path = "harness"
+harness = "agy"
+credential = "harness-login"
+cost_model = "subscription"
+"#;
+
+    /// A stand-in `agy` that does what the real one does inside the probe: finds the plugin and the gate in `.agents/`, asks the
+    /// gate about each tool in `attempts` the way the hook does, calls the stub tool through the plugin's server, and obeys any
+    /// tool the gate did not deny (as a CLI whose gate failed would). `leak` names a file to write regardless, `edit` changes
+    /// the seeded file regardless.
+    fn agy_probe_cli(dir: &std::path::Path, attempts: &[&str], call_tool: bool, leak: Option<&str>, edit: bool) -> String {
+        let client = format!(
+            r#"import json, socket
+cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
+s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
+f = s.makefile("rw"); f.write(json.dumps({{"token": cfg["DELPHI_BRIDGE_TOKEN"]}}) + "\n"); f.flush()
+def rpc(o):
+    f.write(json.dumps(o) + "\n"); f.flush(); return json.loads(f.readline())
+for name in {attempts}:
+    d = rpc({{"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {{"toolCall": {{"name": name, "args": {{"CommandLine": "echo x"}}}}}}}})["result"]["decision"]
+    if d == "allow":
+        open("conf-shell.txt", "w").write("x")
+if {leak}:
+    open({leak_name}, "w").write("x")
+if {edit}:
+    open("conf-edit.txt", "w").write("changed")
+if {call_tool}:
+    rpc({{"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {{"protocolVersion": "2025-11-25"}}}})
+    rpc({{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {{"name": "probe", "arguments": {{}}}}}})
+"#,
+            attempts = serde_json::to_string(attempts).unwrap(),
+            call_tool = if call_tool { "True" } else { "False" },
+            leak = if leak.is_some() { "True" } else { "False" },
+            leak_name = serde_json::to_string(leak.unwrap_or("none")).unwrap(),
+            edit = if edit { "True" } else { "False" }
+        );
+        std::fs::write(dir.join("client.py"), client).unwrap();
+        crate::harness::tests::fake_cli(dir, &format!("python3 -I '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}}}'", dir.join("client.py").display()))
+    }
+
+    const EVERY_KIND: [&str; 8] = ["run_command", "read_file", "write_file", "edit_file", "search_web", "read_url_content", "browser_subagent", "invoke_subagent"];
+    /// The same kinds of tool, but the CLI names its edit tool differently from what Delphi judges.
+    const RENAMED_EDIT: [&str; 8] = ["run_command", "read_file", "write_file", "replace_file_content", "search_web", "read_url_content", "browser_subagent", "invoke_subagent"];
+
+    #[test]
+    fn a_tool_is_classed_by_what_it_can_do_not_by_what_it_is_called_here() {
+        for (tool, kind) in [("run_command", "shell"), ("send_command_input", "shell"), ("read_file", "read"), ("list_dir", "read"), ("write_file", "write"), ("replace_file_content", "edit"), ("search_web", "web search"), ("read_url_content", "web read"), ("browser_click_element", "browser"), ("open_browser_url", "browser"), ("invoke_subagent", "subagent"), ("schedule", "schedule"), ("generate_image", "image"), ("call_mcp_tool", "mcp"), ("something_new", "other")] {
+            assert_eq!(tool_kind(tool), kind, "{}", tool);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_probe_judges_the_agy_gate_by_what_happened_not_by_what_was_promised() {
+        if !std::process::Command::new("python3").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            return;
+        }
+        let cfg = Config::parse(AGY_CFG).unwrap();
+        let ep = cfg.endpoint("ag").unwrap().clone();
+        let run = |attempts: &'static [&'static str], call_tool: bool, leak: Option<&'static str>, edit: bool| {
+            let (cfg, ep) = (cfg.clone(), ep.clone());
+            async move {
+                let d = tempfile::tempdir().unwrap();
+                let prog = agy_probe_cli(d.path(), attempts, call_tool, leak, edit);
+                probe_harness_full(&cfg, &ep, &prog, 7, Duration::ZERO, Some("agy 1.4.7".into())).await
+            }
+        };
+        // Works: the tool is served and the gate meets and denies every kind of tool; nothing runs.
+        let (cap, seat, gate) = run(&EVERY_KIND, true, None, false).await;
+        assert!(!cap.degraded && cap.auth == "ok" && cap.notes.iter().any(|n| n.contains("agy gate: verified on agy 1.4.7") && n.contains("8 kind(s)")), "{:?}", cap.notes);
+        assert!(seat.unwrap().bridge, "the seat is recorded as carrying the bridge");
+        let g = gate.unwrap();
+        assert!(g.verified && g.served && g.side_effects.is_empty() && g.agy_version == "agy 1.4.7" && g.at == 7 && g.endpoint_id == "ag", "{:?}", g);
+        assert_eq!(g.kinds, ["browser", "edit", "read", "shell", "subagent", "web read", "web search", "write"]);
+        assert!(g.builder_ready && !cap.notes.iter().any(|n| n.contains("not ready for Builders")), "{:?}", cap.notes);
+        // The gate holds, but the edit tool fires under a name Delphi does not judge: fine for every role but a Builder, and it says so.
+        let (cap, _, gate) = run(&RENAMED_EDIT, true, None, false).await;
+        let g = gate.unwrap();
+        assert!(g.verified && !g.builder_ready && !cap.degraded, "{:?}", g);
+        assert!(cap.notes.iter().any(|n| n.contains("not ready for Builders") && n.contains("edit_file") && n.contains("replace_file_content")), "{:?}", cap.notes);
+        // A file written although the gate was asked: the worst case, and it fails the seat.
+        let (cap, _, gate) = run(&EVERY_KIND, true, Some("conf-write.txt"), false).await;
+        assert!(cap.degraded && cap.auth.starts_with("failed: the agy gate did not stop") && cap.notes.iter().any(|n| n.contains("agy gate: FAILED") && n.contains("conf-write.txt was created")), "{} {:?}", cap.auth, cap.notes);
+        assert!(!gate.unwrap().verified);
+        // A file changed although the gate was asked.
+        let (cap, _, gate) = run(&EVERY_KIND, true, None, true).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("conf-edit.txt was changed")), "{:?}", cap.notes);
+        assert!(!gate.unwrap().verified);
+        // Something nobody asked for appeared: also a failure.
+        let (cap, _, _) = run(&EVERY_KIND, true, Some("surprise.sh"), false).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("surprise.sh appeared")), "{:?}", cap.notes);
+        // The model reached for too few kinds of tool: nothing got through, but that is not proof, and the note says so.
+        let (cap, _, gate) = run(&["run_command", "read_file"], true, None, false).await;
+        assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("agy gate: unproven") && n.contains("2 kind(s)")), "{:?}", cap.notes);
+        assert!(!gate.unwrap().verified, "two kinds are not enough");
+        // Without a shell among them it is not verified either, however many other kinds were tried.
+        let (_, _, gate) = run(&["read_file", "write_file", "replace_file_content", "search_web", "browser_subagent", "invoke_subagent"], true, None, false).await;
+        assert!(!gate.unwrap().verified, "the shell is the one that must have been met");
+        // Delphi's tool was never served: the plugin did not load.
+        let (cap, _, gate) = run(&EVERY_KIND, false, None, false).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("agy gate: Delphi's tool was not served")), "{:?}", cap.notes);
+        assert!(!gate.unwrap().verified);
+        // With the bridge off nothing is gated, and the note says that instead; there is no record to keep.
+        let off = Config::parse(&format!("{}\n[harness.agy]\nbridge = false\n", AGY_CFG)).unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let prog = crate::harness::tests::fake_cli(d.path(), "echo '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}'");
+        let (cap, _, gate) = probe_harness_full(&off, &ep, &prog, 7, Duration::ZERO, None).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("the Delphi bridge and gate are off")) && !cap.notes.iter().any(|n| n.contains("agy gate")), "{:?}", cap.notes);
+        assert!(gate.is_none());
+    }
+
+    #[test]
+    fn the_gate_record_is_kept_per_endpoint_tied_to_a_version_and_goes_stale() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("local/agy-gate.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let rec = |ep: &str, v: &str, at: i64, ok: bool| GateRecord { endpoint_id: ep.into(), agy_version: v.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified: ok, builder_ready: ok };
+        save_gate(&path, &rec("a", "1.4.7", 100, true)).unwrap();
+        save_gate(&path, &rec("b", "1.4.7", 100, false)).unwrap();
+        save_gate(&path, &rec("a", "1.4.8", 200, true)).unwrap();
+        let all = load_gates(&path);
+        assert_eq!(all.iter().map(|g| (g.endpoint_id.as_str(), g.agy_version.as_str(), g.at)).collect::<Vec<_>>(), [("a", "1.4.8", 200), ("b", "1.4.7", 100)], "a new probe replaces the endpoint's old record");
+        assert!(all[0].is_fresh(200 + GATE_TTL_SECS - 1) && !all[0].is_fresh(200 + GATE_TTL_SECS));
+        assert!(load_gates(&d.path().join("missing.json")).is_empty());
+        // A record from before the field existed loads, and is not ready for Builders until it is probed again.
+        std::fs::write(&path, r#"[{"endpoint_id":"a","agy_version":"1.4.7","at":1,"attempted":[],"kinds":[],"served":true,"side_effects":[],"verified":true}]"#).unwrap();
+        let old = load_gates(&path);
+        assert!(old.len() == 1 && old[0].verified && !old[0].builder_ready);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_gates(&path).is_empty(), "a damaged file is no evidence");
+    }
+
+    #[test]
+    fn results_are_merged_by_endpoint_and_model_and_expire_after_a_day() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("local/endpoint-capabilities.json");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mk = |ep: &str, model: &str, at: i64| Capability { endpoint_id: ep.into(), model_id: model.into(), path: "api".into(), degraded: false, probed_at: at, auth: "ok".into(), usage_reported: Some(true), tool_calling: Some(true), reasoning: None, signature_round_trip: None, cache: "not probed".into(), tokens_used: 1, cost_usd: None, notes: vec![] };
+        save(&p, &[mk("a", "m1", 0), mk("b", "m1", 0)]).unwrap();
+        save(&p, &[mk("a", "m1", 500)]).unwrap();
+        let all = load(&p);
+        assert_eq!(all.iter().map(|c| (c.endpoint_id.as_str(), c.probed_at)).collect::<Vec<_>>(), [("a", 500), ("b", 0)]);
+        assert!(all[0].is_fresh(500 + TTL_SECS - 1) && !all[0].is_fresh(500 + TTL_SECS));
+    }
+}
