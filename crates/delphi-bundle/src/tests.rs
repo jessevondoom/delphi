@@ -495,7 +495,7 @@ impl Host for Chunker {
     fn provenance(&self, t: &str) -> Vec<String> { Fake.provenance(t) }
     fn skill_errors(&self, f: &serde_yaml::Mapping, d: &str) -> Vec<String> { Fake.skill_errors(f, d) }
     fn role_scope(&self, r: &str) -> Option<RoleScope> { Fake.role_scope(r) }
-    fn chunk_keys(&self, _: &std::collections::BTreeMap<String, String>) -> Option<HashSet<[u8; 32]>> { Some(self.0.iter().copied().collect()) }
+    fn chunk_keys(&self, _: &str, _: &str, _: &std::collections::BTreeMap<String, String>) -> Option<HashSet<[u8; 32]>> { Some(self.0.iter().copied().collect()) }
 }
 
 #[test]

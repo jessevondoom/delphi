@@ -551,8 +551,21 @@ fn check_bundles(ws: &Workspace, home: &Path, r: &mut Report) {
             r.warn("12 bundles", loc, format!("{} is past its review date ({}); it ranks lower until its publisher releases a reviewed version", e.version, e.review_by));
         }
     }
+    // How far each bundle's vectors are (`specs/027` §5.4): search is lexical for a bundle until they are complete, which
+    // is normal for a while after an add and so is information, not a warning. A cache that failed its spot check is
+    // worth a look: its publisher's vectors did not match what this install's model makes from the same text.
+    let entries: Vec<_> = active.iter().map(|e| (*e).clone()).collect();
+    let status = delphi_engine::bundle_vectors::statuses(home, &ws.dir, &entries);
+    for e in &active {
+        for v in status.get(&e.id()).map(|s| s.rejected.as_slice()).unwrap_or_default() {
+            r.warn("12 bundles", e.id(), format!("the shipped vector cache {} failed its spot check and was discarded; the chunks are embedded locally instead", v.file));
+        }
+    }
     if !active.is_empty() && r.findings.iter().all(|f| !f.check.starts_with("12") || f.level == Level::Ok) {
-        r.push(Level::Ok, "12 bundles", "local/bundles.lock", format!("{} added bundle(s), caches intact, none stale", active.len()));
+        let vectors: Vec<String> = entries.iter().filter_map(|e| status.get(&e.id()).filter(|s| s.total > 0).map(|s| format!("{} {}", e.id(), s.label()))).collect();
+        let pending = entries.iter().any(|e| status.get(&e.id()).is_some_and(|s| s.total > 0 && !s.complete()));
+        let tail = if vectors.is_empty() { String::new() } else { format!("; vectors: {}{}", vectors.join(", "), if pending { " (search is lexical only for a bundle until its vectors are complete)" } else { "" }) };
+        r.push(Level::Ok, "12 bundles", "local/bundles.lock", format!("{} added bundle(s), caches intact, none stale{}", active.len(), tail));
     }
 }
 

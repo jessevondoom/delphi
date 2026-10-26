@@ -9,6 +9,7 @@ pub mod auth_cli;
 pub mod boot;
 pub mod bridge;
 pub mod bundle_events;
+pub mod bundle_vectors;
 pub mod bundle_load;
 pub mod org_context;
 pub mod core_main;

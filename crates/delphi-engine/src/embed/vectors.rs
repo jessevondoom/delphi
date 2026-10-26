@@ -51,6 +51,16 @@ impl VecCache {
         self.map.get(k)
     }
 
+    /// A cache made of these entries, for the model and format they were checked against.
+    pub fn from_entries(model_id: &str, dim: usize, format: &str, entries: impl IntoIterator<Item = (Key, Vec<Vec<f32>>)>) -> VecCache {
+        VecCache { model_id: model_id.into(), dim, format: format.into(), map: entries.into_iter().collect() }
+    }
+
+    /// Every entry, in no particular order.
+    pub fn entries(&self) -> impl Iterator<Item = (&Key, &Vec<Vec<f32>>)> {
+        self.map.iter()
+    }
+
     /// Made by the model and embedding format in use now?
     pub fn matches(&self, model_id: &str, dim: usize, format: &str) -> bool {
         self.model_id == model_id && self.dim == dim && self.format == format

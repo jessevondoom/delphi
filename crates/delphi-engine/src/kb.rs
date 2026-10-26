@@ -21,20 +21,20 @@ pub const SCHEMA_VERSION: &str = "1";
 /// Version of how documents are cut into chunks. An index made with another version is read again, once, because a
 /// file that has not changed would otherwise keep the chunks the old rules made. (2: frontmatter summaries of
 /// agents and skills.)
-const CHUNKER_VERSION: &str = "2";
+pub const CHUNKER_VERSION: &str = "2";
 /// Reciprocal-rank constant (`specs/004` §3.4).
 const RRF_K: f64 = 60.0;
 /// A chunk longer than this is split at blank lines outside code fences.
 const MAX_CHUNK_CHARS: usize = 3500;
 /// Files larger than this are not indexed.
-const MAX_FILE_BYTES: u64 = 512 * 1024;
+pub(crate) const MAX_FILE_BYTES: u64 = 512 * 1024;
 /// A chunk is embedded in windows of about this many characters, so the model reads all of a long section.
-const WINDOW_CHARS: usize = 1600;
+pub(crate) const WINDOW_CHARS: usize = 1600;
 /// Most windows embedded per chunk; a chunk's vectors live at `chunk_id * VEC_STRIDE + window`.
-const VEC_STRIDE: i64 = 16;
+pub(crate) const VEC_STRIDE: i64 = 16;
 /// Version of what is embedded for a chunk (the windowing and the text around each window). Changing either bumps
 /// this, and every vector is made again, just as for a new model.
-const EMBED_FORMAT: &str = "1";
+pub const EMBED_FORMAT: &str = "1";
 /// Chunks embedded per model call and per write transaction.
 const EMBED_BATCH: usize = 16;
 /// How many nearest windows the vector ranking looks at before duplicates and visibility are applied.
@@ -265,6 +265,19 @@ pub fn chunks_for(zone: &str, text: &str) -> Vec<Chunk> {
     out
 }
 
+/// For each chunk of a document at `rel_path`, the texts the model reads for it and their cache key
+/// (`embed::vectors::key`). The one place that says what a chunk's vectors are filed under, shared by the embedder, the
+/// export and a bundle's vector check, so a shipped cache is found by exactly the keys this install would make.
+pub fn embed_keys(rel_path: &str, zone: &str, text: &str) -> Vec<(embed::vectors::Key, Vec<String>)> {
+    chunks_for(zone, text)
+        .into_iter()
+        .map(|c| {
+            let pieces: Vec<String> = embed::windows(&c.raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(rel_path, &c.heading_path, &p)).collect();
+            (embed::vectors::key(&pieces), pieces)
+        })
+        .collect()
+}
+
 /// Identifier-like tokens, and a `def:<token>` marker for each one a line *opens with* (a definition such as
 /// `**[REV-SEC-04]** …`), so that a chunk defining an identifier can outrank the many that only mention it.
 pub fn identifiers(text: &str) -> String {
@@ -336,7 +349,7 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
     }
 }
 
-fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, default_source: &'static str, out: &mut Vec<SourceFile>) {
+pub(crate) fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, default_source: &'static str, out: &mut Vec<SourceFile>) {
     let Ok(rd) = std::fs::read_dir(root) else { return };
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -475,6 +488,12 @@ impl Kb {
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
         let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), frontmatter_field(text, "status").unwrap_or_else(|| "active".into()));
         let tx = self.conn.transaction()?;
+        // A bundle's file is rewritten on every add (its label may have changed), but a chunk whose text did not change
+        // keeps its vectors: they are filed under a hash of that text, so an update embeds only what was edited.
+        let carried = match (&existing, bundle) {
+            (Some((id, _)), Some(_)) => carry_vectors(&tx, *id)?,
+            _ => HashMap::new(),
+        };
         if let Some((id, _)) = &existing {
             drop_vectors(&tx, Some(*id))?;
             tx.execute("DELETE FROM kb_documents WHERE doc_id = ?1", [id])?; // cascades to the chunks, whose trigger clears both indexes
@@ -488,6 +507,16 @@ impl Kb {
                 "INSERT INTO kb_chunks(doc_id, chunk_index, start_line, end_line, rel_path, heading_path, identifiers, raw_content, contextual_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![doc_id, i as i64, c.start_line as i64, c.end_line as i64, rel_path, c.heading_path, ids, c.raw, ctx],
             )?;
+            if !carried.is_empty() {
+                let chunk_id = tx.last_insert_rowid();
+                let pieces: Vec<String> = embed::windows(&c.raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(rel_path, &c.heading_path, &p)).collect();
+                if let Some(blobs) = carried.get(&embed::vectors::key(&pieces)).filter(|b| b.len() == pieces.len()) {
+                    tx.execute("INSERT INTO kb_chunk_vec(chunk_id, windows) VALUES (?1, ?2)", params![chunk_id, blobs.len() as i64])?;
+                    for (w, blob) in blobs.iter().enumerate() {
+                        tx.execute("INSERT INTO kb_vec(rowid, trusted, scope, embedding) VALUES (?1, ?2, ?3, ?4)", params![chunk_id * VEC_STRIDE + w as i64, trusted(&source_type, &status) as i64, vec_scope(zone, rel_path), blob])?;
+                    }
+                }
+            }
         }
         tx.commit()?;
         Ok(true)
@@ -602,6 +631,31 @@ impl Kb {
 
 fn has_vec(conn: &Connection) -> bool {
     conn.query_row("SELECT 1 FROM sqlite_master WHERE name = 'kb_vec'", [], |_| Ok(())).is_ok()
+}
+
+/// The vectors of a document's chunks by cache key, as stored, to be given back to chunks whose text is unchanged.
+fn carry_vectors(conn: &Connection, doc_id: i64) -> Result<HashMap<embed::vectors::Key, Vec<Vec<u8>>>, KbError> {
+    let mut out = HashMap::new();
+    if !has_vec(conn) {
+        return Ok(out);
+    }
+    let rows: Vec<(i64, String, String, String, i64)> = {
+        let mut st = conn.prepare("SELECT c.chunk_id, c.rel_path, c.heading_path, c.raw_content, m.windows FROM kb_chunks c JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id WHERE c.doc_id = ?1")?;
+        let rows = st.query_map([doc_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.flatten().collect()
+    };
+    for (id, path, heading, raw, windows) in rows {
+        let pieces: Vec<String> = embed::windows(&raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(&path, &heading, &p)).collect();
+        if pieces.len() as i64 != windows {
+            continue;
+        }
+        let mut blobs = Vec::new();
+        for w in 0..windows {
+            blobs.push(conn.query_row("SELECT embedding FROM kb_vec WHERE rowid = ?1", [id * VEC_STRIDE + w], |r| r.get::<_, Vec<u8>>(0))?);
+        }
+        out.insert(embed::vectors::key(&pieces), blobs);
+    }
+    Ok(out)
 }
 
 /// Delete the vectors of one document, or of all of them. Done before the chunks go: the mapping table cascades,
@@ -758,6 +812,24 @@ impl Kb {
     /// Use these preloaded vectors (tests; `attach_embedder` loads the shipped ones itself).
     pub fn set_seed_vectors(&mut self, seed: Option<Arc<embed::vectors::VecCache>>) {
         self.seed = seed;
+    }
+
+    /// Also use these vectors, which the caller has already checked against this install's embedder (a bundle's
+    /// shipped cache, `bundle_vectors`), beside the release's own.
+    pub fn add_seed_vectors(&mut self, extra: &embed::vectors::VecCache) {
+        let mut all: Vec<(embed::vectors::Key, Vec<Vec<f32>>)> = extra.entries().map(|(k, v)| (*k, v.clone())).collect();
+        if let Some(have) = &self.seed {
+            all.extend(have.entries().map(|(k, v)| (*k, v.clone())));
+        }
+        self.seed = Some(Arc::new(embed::vectors::VecCache::from_entries(&extra.model_id, extra.dim, &extra.format, all)));
+    }
+
+    /// `(chunks with a vector, chunks)` for one added bundle (`org/name`).
+    pub fn bundle_vector_counts(&self, id: &str) -> Result<(usize, usize), KbError> {
+        let prefix = format!("bundles/{}/", id);
+        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM kb_chunks WHERE substr(rel_path, 1, ?2) = ?1", params![prefix, prefix.len() as i64], |r| r.get(0))?;
+        let done: i64 = self.conn.query_row("SELECT COUNT(*) FROM kb_chunks c JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id WHERE substr(c.rel_path, 1, ?2) = ?1", params![prefix, prefix.len() as i64], |r| r.get(0))?;
+        Ok((done as usize, total as usize))
     }
 
     /// Chunks the last `embed_pending` filled from the preloaded vectors without running the model.
@@ -989,6 +1061,9 @@ pub struct Hit {
     pub blake3: String,
     pub preview: String,
     pub score: f64,
+    /// `(lexical only: vectors N% ready)` on a result from an added bundle whose chunks are not all embedded yet
+    /// (`specs/026` §6): the order of results may improve when they are.
+    pub note: Option<String>,
 }
 
 /// Words that carry no topic in a question. They are left out of a query unless nothing else is left, so that
@@ -1120,6 +1195,7 @@ impl Kb {
             }
         }
         let mut hits = Vec::new();
+        let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         for (id, s) in order.into_iter().take(opts.limit.min(10)) {
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)));
             let Ok((rel_path, a, b, heading_path, raw, blake3)) = row else { continue };
@@ -1128,7 +1204,14 @@ impl Kb {
                 Some(rest) => format!("@bundle/{}#L{}-L{}", rest, a, b), // the logical path an agent reads it by
                 None => format!("{}#L{}-L{}", rel_path, a, b),
             };
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s });
+            let note = match rel_path.strip_prefix("bundles/").map(|r| r.splitn(3, '/').take(2).collect::<Vec<_>>().join("/")) {
+                Some(bundle) => readiness
+                    .entry(bundle.clone())
+                    .or_insert_with(|| self.bundle_vector_counts(&bundle).ok().filter(|(done, total)| done < total).map(|(done, total)| format!("(lexical only: vectors {}% ready)", done * 100 / total)))
+                    .clone(),
+                None => None,
+            };
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note });
         }
         Ok((hits, best_rerank))
     }
@@ -1603,6 +1686,13 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                     _ => println!("kb: no embedding model; search is lexical only"),
                 }
+                // Per added bundle, so the operator can see a long local embedding move (`specs/027` §5.4).
+                for b in delphi_core::bundles::active_entries(ws) {
+                    let (v, c) = kb.bundle_vector_counts(&b.id())?;
+                    if c > 0 {
+                        println!("kb: bundle {}: vectors for {} of {} chunk(s), {}%{}", b.id(), v, c, v * 100 / c, if v < c { " (searched by words only until complete)" } else { "" });
+                    }
+                }
                 Ok(0)
             }
             "serve" => Ok(crate::kbserve::run(home, ws, &args[1..])),
@@ -1637,7 +1727,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     println!("no results");
                 }
                 for (i, h) in hits.iter().enumerate() {
-                    println!("{}. {}  [{}]", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path });
+                    println!("{}. {}  [{}]{}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
                     for l in h.preview.lines() {
                         println!("     {}", l);
                     }
@@ -2351,6 +2441,32 @@ mod tests {
         let (tier, ctx): (String, String) = kb.conn.query_row("SELECT d.source_type, c.contextual_text FROM kb_documents d JOIN kb_chunks c ON c.doc_id = d.doc_id", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(tier, "federated_verified");
         assert!(ctx.contains("Bundle: acme/plat@1.4.0 · unsigned]"), "{}", ctx);
+    }
+
+    #[test]
+    fn a_bundle_result_says_lexical_only_until_the_bundles_vectors_are_complete_and_then_says_nothing() {
+        let docs: &[(&str, &str)] = &[("a.md", RUNBOOK), ("b.md", "# Rollback\n\nUndo the quokka procedure by redeploying the last good build.\n")];
+        let (_h, ws) = home_with_bundles(&[("acme", "plat", "blake3:aa", "2999-01-01", docs)]);
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.attach_embedder(concepts()).unwrap();
+        kb.sync_lexical(&sources(&ws), "t").unwrap();
+        let opts = SearchOpts::default();
+        let before = kb.search("quokka procedure", &opts).unwrap();
+        assert_eq!(before.len(), 2);
+        assert!(before.iter().all(|h| h.note.as_deref() == Some("(lexical only: vectors 0% ready)")), "{:?}", before.iter().map(|h| &h.note).collect::<Vec<_>>());
+        assert_eq!(kb.bundle_vector_counts("acme/plat").unwrap(), (0, 2));
+        // half way: one chunk has its vector (a restart would resume from here)
+        kb.conn.execute("INSERT INTO kb_chunk_vec(chunk_id, windows) SELECT MIN(chunk_id), 1 FROM kb_chunks", []).unwrap();
+        let half = kb.search("quokka procedure", &opts).unwrap();
+        assert!(half.iter().all(|h| h.note.as_deref() == Some("(lexical only: vectors 50% ready)")), "{:?}", half.iter().map(|h| &h.note).collect::<Vec<_>>());
+        kb.conn.execute("DELETE FROM kb_chunk_vec", []).unwrap();
+        kb.embed_pending(&mut |_, _| {}).unwrap();
+        let after = kb.search("quokka procedure", &opts).unwrap();
+        assert!(after.iter().all(|h| h.note.is_none()), "the note is gone when the vectors are complete");
+        // a document that is not a bundle's never carries the note
+        kb.upsert("context/x.md", "context", "# X\n\nthe quokka procedure\n", "t").unwrap();
+        let plain = kb.search("quokka procedure", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        assert!(plain.iter().filter(|h| h.rel_path == "context/x.md").all(|h| h.note.is_none()));
     }
 
     #[test]

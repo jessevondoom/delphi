@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 39] = [
+pub const KINDS: [&str; 41] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "org_context.built",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -466,6 +466,15 @@ impl ObserverState {
                     _ => "removed",
                 };
                 self.say(format!("bundle {}{} {}", id, if version.is_empty() { String::new() } else { format!("@{}", version) }, what));
+            }
+            "bundle.vectors_progress" | "bundle.vectors_rejected" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let id = format!("{}/{}", clip(&p["org"], 60), clip(&p["name"], 60));
+                if kind == "bundle.vectors_rejected" {
+                    self.say(format!("bundle {} shipped vectors failed verification; embedding locally", id));
+                } else {
+                    self.say(format!("bundle {} vectors {}% ready", id, p["percent"].as_u64().unwrap_or(0).min(100)));
+                }
             }
             "org_context.built" => {
                 let n = |k: &str| p[k].as_u64().unwrap_or(0);

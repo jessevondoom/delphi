@@ -60,9 +60,10 @@ pub trait Host {
     fn skill_errors(&self, fm: &serde_yaml::Mapping, dir: &str) -> Vec<String>;
     /// The built-in scope of a canonical role, or `None` when this host does not know it (the fit check then notes that).
     fn role_scope(&self, role: &str) -> Option<RoleScope>;
-    /// The keys of every embedding input the install's chunker would make from these text files (`path` to text), or
-    /// `None` when this build cannot chunk (the vector reachability check then says so and does not guess).
-    fn chunk_keys(&self, _texts: &BTreeMap<String, String>) -> Option<HashSet<[u8; 32]>> {
+    /// The keys of every embedding input the install's chunker would make from these text files (`path` to text) of
+    /// bundle `org/name`, or `None` when this build cannot chunk (the vector reachability check then says so and does
+    /// not guess). The org and name are part of the key: the index files a bundle's chunks under its own path.
+    fn chunk_keys(&self, _org: &str, _name: &str, _texts: &BTreeMap<String, String>) -> Option<HashSet<[u8; 32]>> {
         None
     }
     /// Identifiers of this workspace that a bundle should not carry (`specs/004` §5.4); empty outside a workspace.
