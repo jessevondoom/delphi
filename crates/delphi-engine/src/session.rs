@@ -50,6 +50,12 @@ pub fn has_turns(session: &[EventEnvelope]) -> bool {
     session.iter().any(is_conversation)
 }
 
+/// Is there anything worth a digest in this stretch of the log: something asked, or a change an agent recorded
+/// (work can be recorded in a session where the operator asked nothing, for example a timer's wake).
+pub fn has_content(session: &[EventEnvelope]) -> bool {
+    has_turns(session) || session.iter().any(|e| e.kind == "change.recorded")
+}
+
 fn first_line(s: &str, n: usize) -> String {
     let line = s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -108,7 +114,7 @@ fn keep_ends(mut v: Vec<String>) -> Vec<String> {
 
 /// The digest of a session, or `None` if nothing was asked in it.
 pub fn digest(mission: &str, workspace: &str, id: &str, ended_by: &str, session: &[EventEnvelope]) -> Option<Digest> {
-    if !has_turns(session) {
+    if !has_content(session) {
         return None;
     }
     let (mut asks, mut answers, mut escalated, mut tainted) = (Vec::new(), Vec::new(), 0, false);
@@ -272,7 +278,8 @@ fn past_sessions(earlier: &[Digest]) -> String {
     let mut out = String::new();
     for d in earlier.iter().rev().take(EARLIER_SESSIONS) {
         let asks = d.asks.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
-        let line = format!("Earlier session {} ({} turn(s), ended {}): asked {}\n", d.session_id, d.turns, d.ended.get(..10).unwrap_or(&d.ended), asks);
+        let said = if asks.is_empty() { format!("recorded {}", d.changes.iter().take(3).cloned().collect::<Vec<_>>().join("; ")) } else { format!("asked {}", asks) };
+        let line = format!("Earlier session {} ({} turn(s), ended {}): {}\n", d.session_id, d.turns, d.ended.get(..10).unwrap_or(&d.ended), said);
         if out.len() + line.len() > EARLIER_BYTES {
             break;
         }
@@ -333,6 +340,17 @@ mod tests {
         let mut old = serde_json::to_value(&d).unwrap();
         old.as_object_mut().unwrap().remove("changes");
         assert!(serde_json::from_value::<Digest>(old).unwrap().changes.is_empty());
+    }
+
+    #[test]
+    fn a_session_with_recorded_changes_but_no_questions_still_leaves_a_digest() {
+        let log = vec![ev(1, "change.recorded", "t_1", json!({"summary": "rotated the timer notes", "role": "builder"}))];
+        assert!(!has_turns(&log) && has_content(&log));
+        let d = digest("m", "w", "s_0001", "new", &log).expect("changes alone are worth a digest");
+        assert_eq!((d.turns, d.asks.len(), d.changes.len()), (0, 0, 1));
+        let line = past_sessions(&[d]);
+        assert!(line.contains("recorded 10:00 builder: rotated the timer notes") && !line.contains("asked"), "{}", line);
+        assert!(digest("m", "w", "s_0001", "new", &[say(1, "t_1", "hi")]).is_none(), "an answer alone is still nothing");
     }
 
     #[test]

@@ -17,6 +17,7 @@ mod home;
 mod hooks_cmd;
 mod lint;
 mod missions;
+mod changelog;
 mod needs;
 mod xenia_cmd;
 mod observer;
@@ -68,6 +69,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [council|epic|agents|archives|changes] [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
+    Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
@@ -217,6 +219,7 @@ fn main() {
         Some("doctor") => cmd_doctor(&args),
         Some("status") => cmd_status(&args),
         Some("missions") => cmd_missions(&args),
+        Some("changelog") => cmd_changelog(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -784,6 +787,14 @@ fn cmd_status(args: &[String]) -> i32 {
 fn cmd_missions(args: &[String]) -> i32 {
     match resolve_ws("missions", args) {
         Ok((_home, ws)) => missions::cli(&ws.dir),
+        Err(code) => code,
+    }
+}
+
+/// `delphi changelog`: what the team recorded as finished in a mission, as Markdown for a pull request (see `changelog.rs`).
+fn cmd_changelog(args: &[String]) -> i32 {
+    match resolve_ws("changelog", args) {
+        Ok((_home, ws)) => changelog::cli(&ws.dir, &changelog::Options { mission: flag(args, "--mission"), filter: delphi_engine::changelog::Filter { session: flag(args, "--session"), since: flag(args, "--since") }, json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }

@@ -2,6 +2,7 @@
 
 pub mod approval;
 pub mod session;
+pub mod changelog;
 pub mod artifacts;
 pub mod auth_cli;
 pub mod boot;

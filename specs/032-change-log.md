@@ -34,15 +34,14 @@ The narrator's fifth view streamed the live reasoning of running agents. The ope
 ## 4. Where it is read
 - **The narrator.** `observe::ObserverState.changes` folds the events (sanitized, newest 200, tagged with the session in force). The `changes` view (`ui/src/observe-screen.ts`) shows them newest session first, newest line first, one block per change: time, the agent's name and task, the sentence, the files.
 - **The chat summary.** The conversation preamble (`session.rs`) ends with `Changes recorded this session:` (the newest 15 within 2.4 KB, with a count when more), so a summary of the chat knows what was done and when without replaying it. It is context, at the same trust as the rest of the preamble (`specs/030` D-4).
-- **The central log.** A session's digest carries the first and last few change lines (`Digest.changes`, redacted like the other lines); digests written before this spec load with none.
+- **The central log.** A session's digest carries the first and last few change lines (`Digest.changes`, redacted like the other lines); digests written before this spec load with none. A session in which the team recorded changes but the operator asked nothing (a timer's wake, say) also leaves a digest (`session::has_content`).
 
 ## 5. Pull request summaries
-The mission log already holds every `change.recorded` event with its timestamp, so a PR description is a rendering of those lines for the session or the time range. A `delphi changelog` command that prints them as Markdown is not built (§7).
+The mission log holds every `change.recorded` event with its timestamp. `delphi changelog [--mission <id>] [--session s_0002] [--since <date or time>] [--json]` (`crates/delphi/src/changelog.rs`, rendering in `delphi-engine/src/changelog.rs`) reads it back, without a daemon or a terminal, and prints Markdown grouped by session: `- <sentence> _(<agent>, <task>, <time>)_ — \`files\``. The latest mission is used unless `--mission` is given; `--json` prints one line per change. This is the complete record; the central digest keeps only the first and last few lines.
 
 ## 6. Built
-Tool, event, fold, preamble, digest, `changes` view, the `/observe` and `delphi observe` names (`changes`, with `thinking` and `reasoning` as aliases), and the removal of the reasoning collection from `observer.tsx`. Tests: `tools.rs`, `observe.rs`, `session.rs`, `ui/test/narrator-views.test.ts`, `ui/test/observe.test.ts`, and golden screens.
+Tool, event, fold, preamble, digest (also for sessions with changes but no questions), `delphi changelog`, `changes` view, the `/observe` and `delphi observe` names (`changes`, with `thinking` and `reasoning` as aliases), and the removal of the reasoning collection from `observer.tsx`. Tests: `tools.rs`, `observe.rs`, `session.rs`, `ui/test/narrator-views.test.ts`, `ui/test/observe.test.ts`, and golden screens.
 
 ## 7. Open
-- A `delphi changelog [--session s_0002] [--since <ts>] [--md]` command for PR descriptions (§5).
 - The console's own left deck still shows a streaming "thinking" block for a running span (`ui/src/screen.ts`, `fold.ts`). It is the console, not the narrator, and was not part of this decision; it should be reviewed against the same concern.
 - Whether models call `record_change` as reliably as asked is not measured. If not, add the final-reply fallback (store the last summary message verbatim, never anything else).

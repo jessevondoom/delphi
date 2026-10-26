@@ -703,7 +703,7 @@ impl EngineService {
     async fn begin_session(&self, m: &Arc<MissionState>, reason: &str) -> Result<String, EngineError> {
         let events = m.replay()?;
         let (id, session) = crate::session::current(&events);
-        let said = crate::session::has_turns(session);
+        let said = crate::session::has_content(session);
         if reason == "restart" && (events.is_empty() || !said && events.iter().any(|e| e.kind == "session.started")) {
             return Ok(id); // nothing to close, and a session is already open
         }
