@@ -26,9 +26,13 @@ pub trait Fetcher {
     fn fetch(&self, url: &str, rev: Rev, subdir: Option<&str>, dest: &Path) -> Result<String, String>;
 }
 
-pub const MAX_ENTRIES: usize = 5000;
+/// specs/023 §2: 2,000 files outside `vectors/` plus 64 in it.
+pub const MAX_ENTRIES: usize = 2064;
+/// What the objects of one fetch may take on disk (the scratch repository). A hostile server cannot fill the disk past it.
+pub const MAX_SCRATCH_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-pub const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+/// 64 MiB outside `vectors/` plus 1 GiB in it (specs/023 §2, §8).
+pub const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024 + 64 * 1024 * 1024;
 const FETCH_SECONDS: u64 = 300;
 
 /// `git`, every unsafe feature off. `allow_file` is true only for a repository path the operator typed.
@@ -36,6 +40,8 @@ pub struct GitFetcher {
     pub allow_file: bool,
     /// `$DELPHI_HOME`: bare repositories are made under `bundles/.incoming`, never inside a staging tree.
     pub home: PathBuf,
+    /// Cap on the scratch repository's size while the fetch runs; [`MAX_SCRATCH_BYTES`] outside tests.
+    pub max_scratch: u64,
 }
 
 impl GitFetcher {
@@ -43,7 +49,13 @@ impl GitFetcher {
         let mut c = Command::new("git");
         c.env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", repo)
+            // An empty directory of its own, never the repository: nothing under HOME can configure this git.
+            .env("HOME", repo.parent().unwrap_or(repo).join("home"))
+            // Discovery can never walk up out of the scratch directory into another repository.
+            .env("GIT_CEILING_DIRECTORIES", repo.parent().unwrap_or(repo))
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_PROTOCOL_FROM_USER", "0")
+            .env("GIT_NO_LAZY_FETCH", "1")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -55,6 +67,8 @@ impl GitFetcher {
             .stdin(Stdio::null());
         for kv in [
             "core.hooksPath=/dev/null",
+            "core.attributesFile=/dev/null",
+            "http.followRedirects=false",
             "core.fsmonitor=false",
             "core.symlinks=false",
             "core.protectNTFS=true",
@@ -82,7 +96,20 @@ impl GitFetcher {
     }
 }
 
-fn run(mut c: Command, what: &str, limit: u64) -> Result<Vec<u8>, String> {
+/// Bytes under `dir`, links not followed.
+fn dir_bytes(dir: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_bytes(&e.path()),
+            Ok(_) => e.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// `watch`: a directory the child writes into and the most it may grow to; past it the child is killed.
+fn run(mut c: Command, what: &str, limit: u64, watch: Option<(&Path, u64)>) -> Result<Vec<u8>, String> {
     let mut child = c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("git could not be started ({}): is git installed?", e))?;
     let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let t_out = std::thread::spawn(move || {
@@ -104,10 +131,23 @@ fn run(mut c: Command, what: &str, limit: u64) -> Result<Vec<u8>, String> {
                 let _ = child.wait();
                 return Err(format!("git {} took more than {} seconds and was stopped", what, FETCH_SECONDS));
             }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Ok(None) => {
+                if let Some((dir, cap)) = watch {
+                    if dir_bytes(dir) > cap {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!("git {} wrote more than {} KiB into its scratch repository and was stopped (a bundle is smaller than that)", what, cap / 1024));
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10))
+            }
             Err(e) => return Err(e.to_string()),
         }
     };
+    // A fast child can finish between two polls: the size is judged once more at the end.
+    if let Some((_, cap)) = watch.filter(|(d, c)| dir_bytes(d) > *c) {
+        return Err(format!("git {} wrote more than {} KiB into its scratch repository and was stopped (a bundle is smaller than that)", what, cap / 1024));
+    }
     let (o, e) = (t_out.join().unwrap_or_default(), t_err.join().unwrap_or_default());
     if status.success() {
         Ok(o)
@@ -130,9 +170,10 @@ impl Fetcher for GitFetcher {
         if !self.allow_file && !url.starts_with("https://") {
             return Err("only https repositories are fetched".into());
         }
-        let repo = bundle_add::new_incoming(&self.home)?;
-        let result = self.fetch_in(&repo, url, rev, subdir, dest);
-        let _ = std::fs::remove_dir_all(&repo);
+        let scratch = bundle_add::new_incoming(&self.home)?;
+        let (repo, empty_home) = (scratch.join("repo"), scratch.join("home"));
+        let result = std::fs::create_dir_all(&repo).and_then(|_| std::fs::create_dir_all(&empty_home)).map_err(|e| e.to_string()).and_then(|_| self.fetch_in(&repo, url, rev, subdir, dest));
+        let _ = std::fs::remove_dir_all(&scratch);
         result
     }
 }
@@ -141,17 +182,17 @@ impl GitFetcher {
     fn fetch_in(&self, repo: &Path, url: &str, rev: Rev, subdir: Option<&str>, dest: &Path) -> Result<String, String> {
         let mut init = self.git(repo);
         init.args(["init", "--bare", "-q", "."]);
-        run(init, "init", 4096)?;
+        run(init, "init", 4096, None)?;
         let want = match rev {
             Rev::Head => "HEAD".to_string(),
             Rev::Sha(s) => s.to_string(),
         };
         let mut fetch = self.git(repo);
         fetch.args(["fetch", "--quiet", "--depth", "1", "--no-tags", "--no-recurse-submodules", "--", url, &want]);
-        run(fetch, "fetch", 4096)?;
+        run(fetch, "fetch", 4096, Some((repo, self.max_scratch)))?;
         let mut rp = self.git(repo);
         rp.args(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
-        let commit = String::from_utf8_lossy(&run(rp, "rev-parse", 256)?).trim().to_string();
+        let commit = String::from_utf8_lossy(&run(rp, "rev-parse", 256, None)?).trim().to_string();
         if let Rev::Sha(s) = rev {
             // The server may hand over anything for a name; only the exact pinned commit is accepted.
             if commit != s {
@@ -160,7 +201,7 @@ impl GitFetcher {
         }
         let mut ls = self.git(repo);
         ls.args(["ls-tree", "-r", "-z", "-l", &commit]);
-        let listing = run(ls, "ls-tree", 64 * 1024 * 1024)?;
+        let listing = run(ls, "ls-tree", 64 * 1024 * 1024, None)?;
         let prefix = subdir.map(|d| format!("{}/", d.trim_matches('/')));
         let mut files: Vec<(String, String, u64)> = Vec::new();
         let mut total = 0u64;
@@ -314,7 +355,7 @@ pub fn add_from_marketplace(home: &Path, ws: &Path, repo: &str, name: &str, o: &
 /// The fetcher for `add --from-marketplace` on the command line: https only. A local marketplace is read in place and an
 /// entry's URL is always https, whoever wrote it, so `file` is never needed and never allowed here.
 pub fn real_fetcher(home: &Path) -> GitFetcher {
-    GitFetcher { allow_file: false, home: home.to_path_buf() }
+    GitFetcher { allow_file: false, home: home.to_path_buf(), max_scratch: MAX_SCRATCH_BYTES }
 }
 
 #[cfg(test)]

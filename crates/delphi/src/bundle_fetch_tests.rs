@@ -174,7 +174,7 @@ fn repo(files: &[(&str, &str)]) -> (tempfile::TempDir, String) {
 }
 
 fn local(home: &Path) -> GitFetcher {
-    GitFetcher { allow_file: true, home: home.to_path_buf() }
+    GitFetcher { allow_file: true, home: home.to_path_buf(), max_scratch: MAX_SCRATCH_BYTES }
 }
 
 fn scratch_empty(home: &Path) -> bool {
@@ -229,7 +229,7 @@ fn the_git_wrapper_refuses_links_submodules_odd_paths_other_transports_and_optio
     assert_eq!(safe_rel("skills/a-b/SKILL.md"), Some("skills/a-b/SKILL.md"));
     // transports: file is refused unless the operator named a local repository; ssh and ext never
     let (r, sha) = repo(&[("a.md", "x\n")]);
-    let strict = GitFetcher { allow_file: false, home: home.path().to_path_buf() };
+    let strict = GitFetcher { allow_file: false, home: home.path().to_path_buf(), max_scratch: MAX_SCRATCH_BYTES };
     assert!(strict.fetch(r.path().to_str().unwrap(), Rev::Sha(&sha), None, d.path()).is_err());
     assert!(strict.fetch(&format!("file://{}", r.path().display()), Rev::Sha(&sha), None, d.path()).is_err());
     let marker = home.path().join("pwned");
@@ -238,5 +238,41 @@ fn the_git_wrapper_refuses_links_submodules_odd_paths_other_transports_and_optio
         assert!(strict.fetch(&url, Rev::Sha(&sha), None, d.path()).is_err(), "{}", url);
     }
     assert!(!marker.exists(), "no transport helper ran");
+    assert!(scratch_empty(home.path()));
+}
+
+fn random_bytes(n: usize) -> Vec<u8> {
+    let mut x = 0x9E3779B97F4A7C15u64;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect()
+}
+
+#[test]
+fn the_fetch_stops_at_the_scratch_cap_and_a_blob_deleted_at_the_tip_never_arrives() {
+    let home = tempfile::tempdir().unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let small = |h: &Path| GitFetcher { allow_file: true, home: h.to_path_buf(), max_scratch: 64 * 1024 };
+    // a blob over the cap at the tip
+    let (r, _) = repo(&[("a.md", "x\n")]);
+    fs::write(r.path().join("big.bin"), random_bytes(2 * 1024 * 1024)).unwrap();
+    git(r.path(), &["add", "-A"]);
+    git(r.path(), &["commit", "-q", "-m", "big"]);
+    let sha = git(r.path(), &["rev-parse", "HEAD"]);
+    let e = small(home.path()).fetch(r.path().to_str().unwrap(), Rev::Sha(&sha), None, d.path()).unwrap_err();
+    assert!(e.contains("scratch repository"), "{}", e);
+    assert!(scratch_empty(home.path()), "the scratch repository is removed");
+    // the big blob stays in history but is gone at the tip: a shallow fetch of the tip never takes it
+    git(r.path(), &["rm", "-q", "big.bin"]);
+    git(r.path(), &["commit", "-q", "-m", "gone"]);
+    let tip = git(r.path(), &["rev-parse", "HEAD"]);
+    let d2 = tempfile::tempdir().unwrap();
+    assert_eq!(small(home.path()).fetch(r.path().to_str().unwrap(), Rev::Sha(&tip), None, d2.path()).unwrap(), tip);
+    assert!(!d2.path().join("big.bin").exists());
     assert!(scratch_empty(home.path()));
 }
