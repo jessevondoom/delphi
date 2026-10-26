@@ -497,8 +497,46 @@ pub fn pace_decision(w: &Windows, p: &Pace, now: i64) -> Pause {
     Pause::Go
 }
 
+/// Before a Claude run or judge call: wait out a hot five-hour window, then go on. `Some(reason)` means stop the whole study.
+/// A window that cannot be read is not a reason to stop: the study goes on unpaced and says so.
+pub(crate) fn pace_gate(p: &Pace, scratch: &Path) -> Option<String> {
+    for _ in 0..4 {
+        match probe_windows(&p.claude_bin, scratch) {
+            Ok(w) => match pace_decision(&w, p, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)) {
+                Pause::Go => return None,
+                Pause::Wait(d, why) => {
+                    eprintln!("pace: {} ({} s)", why, d.as_secs());
+                    std::thread::sleep(d);
+                }
+                Pause::Halt(why) => {
+                    eprintln!("pace: stopping: {}", why);
+                    return Some(why);
+                }
+            },
+            Err(e) => {
+                eprintln!("pace: could not read the Claude windows ({}); going on without pacing", e);
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// `--pace-window <0-1>` (with `--pace-weekly`, `--pace-max-wait-hours`, `--claude-bin`) as a `Pace`; none without the first.
+pub(crate) fn pace_from_args(args: &[String]) -> Result<Option<Pace>, String> {
+    let Some(v) = flag(args, "--pace-window") else { return Ok(None) };
+    let five = v.parse::<f64>().ok().filter(|x| *x > 0.0 && *x <= 1.0).ok_or("--pace-window takes a fraction above 0 and at most 1 (0.85 means wait for a reset at 85% of the five-hour window)")?;
+    Ok(Some(Pace {
+        five_hour: five,
+        seven_day: flag(args, "--pace-weekly").and_then(|x| x.parse().ok()).filter(|x: &f64| *x > 0.0 && *x <= 1.0).unwrap_or(0.9),
+        max_wait: Duration::from_secs(flag(args, "--pace-max-wait-hours").and_then(|x| x.parse::<f64>().ok()).filter(|x| *x > 0.0).map_or(6 * 3600, |h| (h * 3600.0) as u64)),
+        margin: Duration::from_secs(60),
+        claude_bin: PathBuf::from(flag(args, "--claude-bin").unwrap_or_else(|| "claude".into())),
+    }))
+}
+
 /// Does this arm run on a Claude subscription seat?
-fn uses_claude(arm: &Arm) -> bool {
+pub(crate) fn uses_claude(arm: &Arm) -> bool {
     arm.expect_models.iter().any(|m| m.contains("claude") || ["haiku", "sonnet", "opus", "fable"].contains(&m.as_str()))
 }
 
@@ -794,26 +832,7 @@ pub fn run_all(cfg: &Config, cases: &[&Case]) -> (Vec<Row>, Vec<String>) {
                     continue;
                 }
                 if let (Some(p), true) = (&cfg.pace, uses_claude(arm)) {
-                    for _ in 0..4 {
-                        match probe_windows(&p.claude_bin, &cfg.work_dir.join("pace")) {
-                            Ok(w) => match pace_decision(&w, p, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)) {
-                                Pause::Go => break,
-                                Pause::Wait(d, why) => {
-                                    eprintln!("pace: {} ({} s)", why, d.as_secs());
-                                    std::thread::sleep(d);
-                                }
-                                Pause::Halt(why) => {
-                                    eprintln!("pace: stopping: {}", why);
-                                    halt = Some(why);
-                                    break;
-                                }
-                            },
-                            Err(e) => {
-                                eprintln!("pace: could not read the Claude windows ({}); going on without pacing", e);
-                                break;
-                            }
-                        }
-                    }
+                    halt = pace_gate(p, &cfg.work_dir.join("pace"));
                     if let Some(why) = &halt {
                         skipped.push(format!("{} [{}] seed {} (stopped: {})", label, arm.name, seed, why));
                         continue;
@@ -970,18 +989,12 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: {} already holds results; add --resume to go on from them, or use a new --work-dir", out_path.display());
         return 2;
     }
-    if let Some(v) = flag(args, "--pace-window") {
-        let Some(five) = v.parse::<f64>().ok().filter(|x| *x > 0.0 && *x <= 1.0) else {
-            eprintln!("delphi train run: --pace-window takes a fraction above 0 and at most 1 (0.85 means wait for a reset at 85% of the five-hour window)");
+    match pace_from_args(args) {
+        Ok(p) => cfg.pace = p,
+        Err(e) => {
+            eprintln!("delphi train run: {}", e);
             return 2;
-        };
-        cfg.pace = Some(Pace {
-            five_hour: five,
-            seven_day: flag(args, "--pace-weekly").and_then(|x| x.parse().ok()).filter(|x: &f64| *x > 0.0 && *x <= 1.0).unwrap_or(0.9),
-            max_wait: Duration::from_secs(flag(args, "--pace-max-wait-hours").and_then(|x| x.parse::<f64>().ok()).filter(|x| *x > 0.0).map_or(6 * 3600, |h| (h * 3600.0) as u64)),
-            margin: Duration::from_secs(60),
-            claude_bin: PathBuf::from(flag(args, "--claude-bin").unwrap_or_else(|| "claude".into())),
-        });
+        }
     }
     if cfg.policy.is_none() && cases.iter().any(|c| c.role == "builder") {
         let p = work.join("policy.toml");

@@ -131,6 +131,9 @@ can run at once. **`--pace-window 0.85`** probes the Claude CLI's own utilizatio
 thousand cached tokens) before each Claude arm's run: at 85% of the five-hour window it waits for the reset (up to
 `--pace-max-wait-hours`, default 6) and goes on; at `--pace-weekly` (default 0.9) of the seven-day window it **stops the whole
 run** and lists what was not done, since a weekly reset is too far to wait for. Gemini and Ollama arms are never paced.
+`delphi train judge` takes the same `--pace-window`, `--pace-weekly` and `--pace-max-wait-hours` for its Claude judges (a jury
+makes many calls on the same windows); a judge call halted this way is listed as not judged, and running the command again
+picks up where it left off, since judgements are filed as they are made.
 
 ## Spending: caps
 

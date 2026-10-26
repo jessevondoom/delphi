@@ -52,7 +52,7 @@ marked missing, say so, and the pattern is widened in the same way.
 ## Judge, then you
 
 ```sh
-delphi train judge --work-dir /tmp/p0 --judges-file /tmp/pilot-arms/judges.toml --no-session-cap
+delphi train judge --work-dir /tmp/p0 --judges-file /tmp/pilot-arms/judges.toml --no-session-cap --pace-window 0.85
 delphi train review --work-dir /tmp/p0        # you, blind, before seeing the jury; about 10% of pairs come back flipped
 delphi train disputes --work-dir /tmp/p0      # where you and the jury differ
 delphi train resolve --work-dir /tmp/p0 --id <id> --cause rubric_gap --note "..."
