@@ -91,6 +91,28 @@ impl Domain {
     }
 }
 
+impl Domain {
+    /// `xenia-release/1\n<version>\n<kid>\n<hash of the release manifest>\n<signed_at>` (specs/036). The version is the verifier's own
+    /// (the release it is running), so a signature made for one release does not verify under another; the leading label differs from
+    /// every other domain, so a record, fresh-record or bundle signature can never pass as a release signature, nor the other way round.
+    pub fn release(version: &str, kid: &str, manifest_hash: &str, signed_at: &str) -> Result<Domain> {
+        // A semver version, spelled with the characters semver allows: nothing that could carry a newline.
+        if version.is_empty() || version.len() > 64 || !version.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+')) {
+            return Err(Error::BadField("version"));
+        }
+        if !did::is_valid(kid) {
+            return Err(Error::BadField("kid is not a did:key"));
+        }
+        if !hash::is_valid(manifest_hash) {
+            return Err(Error::BadField("hash"));
+        }
+        if !is_utc_timestamp(signed_at) {
+            return Err(Error::BadField("signed_at"));
+        }
+        Ok(Domain(format!("xenia-release/1\n{version}\n{kid}\n{manifest_hash}\n{signed_at}")))
+    }
+}
+
 fn check_scope(org: &str, store: &str) -> Result<()> {
     if !is_slug(org, 32) {
         return Err(Error::BadField("org"));

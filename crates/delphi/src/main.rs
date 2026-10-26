@@ -28,6 +28,7 @@ mod xenia_cmd;
 mod observer;
 mod ratify_console;
 mod relay;
+mod release;
 mod report;
 mod run;
 mod seed;
@@ -76,6 +77,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
+    Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
@@ -229,6 +231,7 @@ fn main() {
         Some("status") => cmd_status(&args),
         Some("missions") => cmd_missions(&args),
         Some("changelog") => cmd_changelog(&args),
+        Some("release") => release::cli(None),
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("chat") => cmd_chat(&args),
@@ -345,7 +348,7 @@ fn cmd_update(args: &[String]) -> i32 {
     let home = home::delphi_home(flag(args, "--home").as_deref());
     let only = flag(args, "--workspace");
     if has("--workspaces-only") {
-        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"), has("--review"));
+        return update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), has("--rollback"), has("--review"), has("--require-signed"));
     }
     let Ok(dest) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         eprintln!("delphi update: cannot locate this executable");
@@ -355,12 +358,12 @@ fn cmd_update(args: &[String]) -> i32 {
     let mut workspace_code = 0;
     let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |event| {
         if event == selfupdate::Event::UpToDate {
-            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false, has("--review"));
+            workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false, has("--review"), has("--require-signed"));
             return;
         }
         let mut step = vec!["update".to_string(), "--workspaces-only".into(), "--home".into(), home.to_string_lossy().to_string()];
         step.extend(only.iter().flat_map(|w| ["--workspace".to_string(), w.clone()]));
-        step.extend(["--allow-downgrade", "--review"].iter().filter(|f| has(f)).map(|f| f.to_string()));
+        step.extend(["--allow-downgrade", "--review", "--require-signed"].iter().filter(|f| has(f)).map(|f| f.to_string()));
         if event == selfupdate::Event::RolledBack {
             step.push("--rollback".into());
         }
@@ -498,6 +501,10 @@ fn cmd_chat(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
+    // A signed release refreshes this workspace on its first start, and says so (specs/036). Nothing else starts this.
+    if let Some(line) = update::auto_refresh(&home, &ws.dir) {
+        eprintln!("{line}");
+    }
     let names = theme_names(&ws);
     if args.iter().any(|a| a == "--no-mouse") {
         // SAFETY: set before any thread exists; the full-screen console reads it at start.
@@ -630,6 +637,9 @@ fn cmd_run(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
+    if let Some(line) = update::auto_refresh(&home, &ws.dir) {
+        eprintln!("{line}");
+    }
     run::run(&home, &ws.dir, opts)
 }
 

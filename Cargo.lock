@@ -766,6 +766,7 @@ dependencies = [
  "delphi-bundle",
  "delphi-core",
  "delphi-engine",
+ "delphi-release",
  "delphi-sandbox",
  "delphi-xenia",
  "flate2",
@@ -890,6 +891,15 @@ dependencies = [
  "tokenizers 0.23.2",
  "tokio",
  "toml",
+ "walkdir",
+]
+
+[[package]]
+name = "delphi-release"
+version = "0.1.0"
+dependencies = [
+ "delphi-xenia",
+ "tempfile",
  "walkdir",
 ]
 

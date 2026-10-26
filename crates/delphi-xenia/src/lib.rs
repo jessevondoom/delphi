@@ -13,6 +13,7 @@ pub mod did;
 pub mod hash;
 pub mod identity;
 pub mod layout;
+pub mod release_sig;
 pub mod sidecar;
 pub mod sig;
 pub mod ulid;

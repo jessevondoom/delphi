@@ -305,8 +305,17 @@ fn check_manifest_lock(base: &Path, label: &str, r: &mut Report) {
         }
     }
     let signed = fs::read_to_string(&path).map(|t| !t.contains("unsigned-dev-build")).unwrap_or(false);
-    if !signed && label == "base" {
-        r.warn("2 manifest-lock", "", "development build: not a signed release");
+    if label == "base" {
+        match crate::release::status() {
+            delphi_xenia::release_sig::Check::Invalid(why) => r.fail("2 manifest-lock", "", format!("this build's release signature is invalid: {why}")),
+            delphi_xenia::release_sig::Check::Signed { kid, .. } if signed => r.push(Level::Ok, "2 manifest-lock", "", format!("signed release (key {kid})")),
+            delphi_xenia::release_sig::Check::Signed { .. } => r.warn("2 manifest-lock", "", "this build is a signed release but the workspace is still at an older one; `delphi chat` or `delphi update` refreshes it"),
+            delphi_xenia::release_sig::Check::Unsigned => {
+                if !signed {
+                    r.warn("2 manifest-lock", "", "development build: not a signed release");
+                }
+            }
+        }
     }
     if bad == 0 {
         r.push(Level::Ok, "2 manifest-lock", "", format!("{} release files match {}/manifest.lock", lock.len(), label));

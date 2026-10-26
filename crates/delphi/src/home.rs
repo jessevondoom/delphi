@@ -212,7 +212,7 @@ pub fn init(o: &InitOptions) -> Result<Workspace> {
     }
     let version = env!("CARGO_PKG_VERSION").to_string();
     // Release signing lands with packaging (roadmap Step 5); a dev build records that it is unsigned.
-    write_lock(&ws.dir.join("base/manifest.lock"), &manifest, &[("release", version.clone()), ("signature", "unsigned-dev-build".into())])?;
+    write_lock(&ws.dir.join("base/manifest.lock"), &manifest, &[("release", version.clone()), ("signature", crate::release::lock_signature())])?;
 
     // config.toml from the template, with this workspace's name, projects and theme.
     let config = render_config(&o.workspace, &o.projects, &o.theme);
@@ -281,7 +281,7 @@ pub fn init_operator_home(home: &Path) -> Result<()> {
         write_new(&op.join("base").join(&f.logical), f.bytes)?;
         manifest.insert(f.logical.clone(), hash(f.bytes));
     }
-    write_lock(&op.join("base/manifest.lock"), &manifest, &[("release", env!("CARGO_PKG_VERSION").into()), ("signature", "unsigned-dev-build".into())])?;
+    write_lock(&op.join("base/manifest.lock"), &manifest, &[("release", env!("CARGO_PKG_VERSION").into()), ("signature", crate::release::lock_signature())])?;
     write_lock(&op.join("ratified.lock"), &lock, &[("ratified_by", "init".into())])
 }
 
