@@ -475,6 +475,12 @@ impl Store {
         }
     }
 
+    /// Where X3's `pins.toml` lives for this store: `state/pins.toml`, next to the sticky file and outside the
+    /// clone (spec 011 §3.5).
+    pub fn pin_storage(&self) -> delphi_xenia::pins::FilePinStorage {
+        delphi_xenia::pins::FilePinStorage::new(self.paths.state.join("pins.toml"))
+    }
+
     /// The last accepted head, from the sticky file.
     pub fn accepted_head(&self) -> Result<Option<String>> {
         Ok(self.load_sticky()?.accepted_head)

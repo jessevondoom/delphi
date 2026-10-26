@@ -577,6 +577,17 @@ fn the_ext_transport_never_runs_even_if_a_url_got_through() {
 }
 
 #[test]
+fn the_pins_file_has_a_home_beside_the_sticky_state_and_outside_the_clone() {
+    use delphi_xenia::pins::PinStorage;
+    let f = fx();
+    f.store.pin_storage().write("format = 1\n").unwrap();
+    let p = f.store.paths.state.join("pins.toml");
+    assert_eq!(fs::read_to_string(&p).unwrap(), "format = 1\n");
+    assert_eq!(mode(&p), 0o600);
+    assert!(!p.starts_with(&f.store.paths.clone));
+}
+
+#[test]
 fn only_the_transport_the_store_url_needs_is_open() {
     let f = fx();
     f.remote.commit_files(&[(A, &rec(1, "one"))], "a");

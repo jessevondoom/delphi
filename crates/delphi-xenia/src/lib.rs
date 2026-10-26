@@ -13,10 +13,14 @@ pub mod did;
 pub mod hash;
 pub mod identity;
 pub mod layout;
+pub mod pins;
+pub mod roster;
 pub mod sidecar;
 pub mod sticky;
 pub mod store;
 pub mod sig;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testkit;
 pub mod ulid;
 
 use std::fmt;
