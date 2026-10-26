@@ -60,24 +60,24 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 
 Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, B7 branch from B2; B8 waits on the xenia plan; B12 last. Resolved questions (2026-10-25): B-1 yes; B-2 L2 for unsigned local bundles; B-3 guidance block loads on add, no ratification; B-7 scripts never executed; B-8 serve as MCP yes (B12); B-12 rollback from lock history, no cards; B-14 agent `distill` yes with staging and scan; B-15 retrieval gate frozen now, bench thresholds frozen after a pilot in a hash-pinned pre-registration, telemetry descriptive; B-16 ship vectors when the embedder is Delphi's default. Still proposed (recommendations stand, operator may revisit): B-4 (`bundle` kind supersedes `skill`), B-5 (transport order), B-6 (person scope later), B-9 (`--agents-md` path), B-10 (slice caps), B-11 (`summary`/`domain` in 001 §5), B-13 (lenses opt-in), B-17 (no default host role).
 
-## Layered learning and training mode (spec 030, draft, 2026-10-26)
+## Layered learning and training mode (spec 031, draft, 2026-10-26)
 
 Drafted at the operator's request; nothing is approved or built. Decisions OD-1..OD-6 are in the spec.
 
 | Slice | Delivers | Spec | Depends on | Hours | State |
 | :-- | :-- | :-- | :-- | --: | :-- |
-| L0 | `snapshot.loaded` and outcome events; rule/skill IDs per task | 030 §3.4 | none | 10 | not started |
-| L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 030 §3.1-3.2 | L0; OD-1 | 16 | not started |
-| L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 030 §3.5; 004 §4.2 | L1 | 20 | not started |
-| L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 030 §3.3 | L2 | 18 | not started |
-| L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 030 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
-| L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 030 §3.5-3.6 | L2 | 12 | not started |
-| L6 | `delphi train`: case format, overlay, safety rules, budget, report | 030 §4 | `delphi run` (built); OD-3 | 24 | not started |
-| L7 | seed suites: learning-loop, role-behavior, orchestration, skill-trigger | 030 §4.6 | L6 (L1 for learning-loop) | 20 | not started |
-| L8 | probe mode, grader calibration | 030 §4.4-4.5 | L6, L7; OD-5 | 14 | not started |
-| L9 | `train propose`, behavior-change changelog, CI check on core paths | 030 §4.8 | L6, L7 | 12 | not started |
-| L10 | `delphi update` shows behavior changes and evidence, override conflicts | 030 §4.8 | L9 | 12 | not started |
-| L11 | harvest from `delphi contribute` bundles (post-v1) | 030 §4.7 | L9 | 10 | not started |
+| L0 | `snapshot.loaded` and outcome events; rule/skill IDs per task | 031 §3.4 | none | 10 | not started |
+| L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | not started |
+| L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | not started |
+| L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
+| L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
+| L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | not started |
+| L6 | `delphi train`: case format, overlay, safety rules, budget, report | 031 §4 | `delphi run` (built); OD-3 | 24 | not started |
+| L7 | seed suites: learning-loop, role-behavior, orchestration, skill-trigger | 031 §4.6 | L6 (L1 for learning-loop) | 20 | not started |
+| L8 | probe mode, grader calibration | 031 §4.4-4.5 | L6, L7; OD-5 | 14 | not started |
+| L9 | `train propose`, behavior-change changelog, CI check on core paths | 031 §4.8 | L6, L7 | 12 | not started |
+| L10 | `delphi update` shows behavior changes and evidence, override conflicts | 031 §4.8 | L9 | 12 | not started |
+| L11 | harvest from `delphi contribute` bundles (post-v1) | 031 §4.7 | L9 | 10 | not started |
 
 Total about 182 h. Operator-layer path L0 → L1 → L2 → L4; core-layer path L6 → L7 → L9 → L10; they meet in the `learning-loop` suite.
 

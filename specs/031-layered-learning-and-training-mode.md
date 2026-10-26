@@ -1,6 +1,6 @@
 ---
-id: spec-030-layered-learning-and-training-mode
-title: "030: Layered Learning, Cheap Capture, and Training Mode (draft)"
+id: spec-031-layered-learning-and-training-mode
+title: "031: Layered Learning, Cheap Capture, and Training Mode (draft)"
 author: architect
 timestamp: 2026-10-26T00:00:00Z
 status: draft   # asked for by the operator on 2026-10-26; nothing here is built or approved
@@ -12,7 +12,7 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, learning-loop, memory, skills, customization, training-mode, evaluation, draft]
 ---
 
-# Spec 030: Layered Learning, Cheap Capture, and Training Mode
+# Spec 031: Layered Learning, Cheap Capture, and Training Mode
 
 > **Status: draft.** Amends nothing yet. It proposes changes to [`specs/004`](004-memory-and-coaching.md) §4–5 (the loop), [`specs/019`](019-skills-import-export.md) (skill origin), and adds one new capability, **training mode**, on top of `delphi run` ([`specs/016`](016-headless-run.md)) and the benchmark runner (`dev/bench/`, [`evaluation-plan-2026-10-25.md`](../missions/2026-10-23-foundational-design/evaluation-plan-2026-10-25.md)).
 
