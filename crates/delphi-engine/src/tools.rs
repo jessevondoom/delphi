@@ -367,7 +367,7 @@ fn xenia_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         return ToolResult::ok("no org records are indexed".to_string());
     }
     let now = delphi_core::xenia_index::unix_of(ctx.now_rfc3339).unwrap_or(0);
-    let read = crate::kb::Kb::open(&db).map_err(|e| e.to_string()).and_then(|kb| crate::xenia_read::agent_search(&kb, &query, limit, now));
+    let read = crate::kb::Kb::open(&db).map_err(|e| e.to_string()).and_then(|kb| crate::xenia_read::agent_search(&kb, query, limit, now));
     match read {
         Ok(r) => {
             r.observe(ctx.span);
@@ -801,8 +801,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "xenia_search"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "xenia_search", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -1267,7 +1267,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "xenia_search"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "xenia_search", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 }

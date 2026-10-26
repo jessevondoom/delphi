@@ -177,7 +177,7 @@ fn a_tier_change_updates_in_place_flips_the_trusted_bit_and_embeds_nothing() {
     let head = "a".repeat(40);
     let l1 = im(0, "Retry budget", "How many retries the payment client makes.", "Body.", XT::L1, None);
     let rel = l1.rel_path.clone();
-    kb.apply_xenia(ORG, STORE, &head, &[l1.clone()], &[], NOW).unwrap();
+    kb.apply_xenia(ORG, STORE, &head, std::slice::from_ref(&l1), &[], NOW).unwrap();
     kb.embed_pending(&mut |_, _| {}).unwrap();
     let made = model.0.load(Ordering::SeqCst);
     assert!(made > 0);
@@ -186,7 +186,7 @@ fn a_tier_change_updates_in_place_flips_the_trusted_bit_and_embeds_nothing() {
 
     // A steward endorses: same text, new tier.
     let l2 = IndexedMemory { tier: XT::L2, source_type: "federated_verified", endorsed_by: vec!["sam".into()], fresh_until: Some(now() + DAY), ..l1.clone() };
-    let rep = kb.apply_xenia(ORG, STORE, &head, &[l2.clone()], &[], NOW).unwrap();
+    let rep = kb.apply_xenia(ORG, STORE, &head, std::slice::from_ref(&l2), &[], NOW).unwrap();
     assert_eq!((rep.retiered, rep.rewritten, rep.added), (1, 0, 0), "{rep:?}");
     assert_eq!(model.0.load(Ordering::SeqCst), made, "no re-embedding");
     assert!(kb.xenia_vector_trust(&rel).unwrap().iter().all(|t| *t == 1), "the trusted bit followed the tier");
@@ -194,10 +194,10 @@ fn a_tier_change_updates_in_place_flips_the_trusted_bit_and_embeds_nothing() {
     assert_eq!(agent_search(&kb, "retry payment", 5, now()).unwrap().ids, vec![u(0)]);
 
     // Applying the same thing again writes nothing.
-    assert_eq!(kb.apply_xenia(ORG, STORE, &head, &[l2.clone()], &[], NOW).unwrap().unchanged, 1);
+    assert_eq!(kb.apply_xenia(ORG, STORE, &head, std::slice::from_ref(&l2), &[], NOW).unwrap().unchanged, 1);
 
     // The endorsement is withdrawn: back to L1, again in place.
-    let rep = kb.apply_xenia(ORG, STORE, &head, &[l1.clone()], &[], NOW).unwrap();
+    let rep = kb.apply_xenia(ORG, STORE, &head, std::slice::from_ref(&l1), &[], NOW).unwrap();
     assert_eq!(rep.retiered, 1);
     assert!(kb.xenia_vector_trust(&rel).unwrap().iter().all(|t| *t == 0));
     assert_eq!(model.0.load(Ordering::SeqCst), made);
@@ -217,7 +217,7 @@ fn a_record_that_leaves_force_leaves_every_search_and_its_vectors() {
     let mut kb = Kb::open_in_memory().unwrap();
     kb.attach_embedder(model).unwrap();
     let l2 = im(0, "Retry budget", "How many retries the payment client makes.", "Body.", XT::L2, None);
-    kb.apply_xenia(ORG, STORE, "a".repeat(40).as_str(), &[l2.clone()], &[], NOW).unwrap();
+    kb.apply_xenia(ORG, STORE, "a".repeat(40).as_str(), std::slice::from_ref(&l2), &[], NOW).unwrap();
     kb.embed_pending(&mut |_, _| {}).unwrap();
     assert_eq!(agent_search(&kb, "retry payment", 5, now()).unwrap().ids.len(), 1);
     // A steward's tombstone: it is hidden, so it is L0/superseded and no longer an agent's.
