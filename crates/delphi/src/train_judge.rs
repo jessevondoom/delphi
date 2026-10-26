@@ -297,7 +297,11 @@ pub fn call_judge(cfg: &JuryConfig, judge: &Arm, prompt: &str, index: usize) -> 
         cmd.env(k, v);
     }
     let (out, err) = (dir.join("stdout.txt"), dir.join("stderr.txt"));
+    let started = crate::train_run::Stopwatch::start();
     let (_, timed_out) = run_process(&mut cmd, &out, &err, cfg.timeout + Duration::from_secs(60))?;
+    if let Some(s) = started.slept() {
+        return Err(crate::train_run::asleep_error(s));
+    }
     if timed_out {
         return Err("the judge call timed out".into());
     }
@@ -480,6 +484,7 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
         eprintln!("delphi train judge: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each call's cap still applies)");
         return 2;
     };
+    crate::train_run::keep_awake(args);
     let work = PathBuf::from(work);
     if let Err(e) = crate::train_run::sock_fits(&work.join("j9999").join("home")) {
         eprintln!("delphi train judge: {}", e);

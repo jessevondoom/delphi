@@ -3,7 +3,7 @@
 [[trap]]
 id = "proven"
 why = "Nothing here is proof of a benefit; the human trials are small, short and mixed"
-any = ['\b(is|are|has been|have been|was|were) (clinically |scientifically |conclusively )?proven to\b', 'clinically proven']
+any = ['\b(is|are|has been|have been|was|were) (clinically |scientifically |conclusively )?proven to\b', '\b(is|are|has been|have been) (clinically|scientifically) proven\b']
 
 [[trap]]
 id = "treats-dementia"

@@ -348,6 +348,10 @@ pub fn cli(args: &[String]) -> i32 {
     let path = flag(args, "--exec-path").unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
     let exec_env: BTreeMap<String, String> = [("PATH".to_string(), path), ("CARGO_TARGET_DIR".to_string(), flag(args, "--cargo-target").unwrap_or_else(|| out.join("cargo-target").display().to_string()))].into();
     let mut toml_out = String::from("# Made by `delphi train arms init`. Template homes are throwaway copies: nothing here is your ratified setup.\n\n");
+    // The jury: built arms of two different families, so an arm of one family is judged by the other (`specs/037` section 6.1).
+    let judge_arms: Vec<String> = flag(args, "--judges").map(|s| s.split(',').map(String::from).collect()).unwrap_or_else(|| vec!["solo-sonnet".into(), "solo-gemini-flash".into()]);
+    let mut judges_out = String::from("# Made by `delphi train arms init`: the jury for `delphi train judge --judges-file`. A judge never scores a pair that includes its own model.\n\n");
+    let mut judges_built = 0;
     let (mut built, mut skipped, mut failed) = (0, 0, 0);
     for def in defs.iter().filter(|d| only.as_ref().is_none_or(|o| o.contains(&d.name))) {
         if let Some(why) = avail.as_ref().and_then(|a| unavailable(a, def)) {
@@ -358,7 +362,12 @@ pub fn cli(args: &[String]) -> i32 {
         match build_arm(&src, &workspace, def, &out.join("homes").join(&def.name), &exec_env) {
             Ok(b) if b.problems.is_empty() => {
                 println!("built {:<22} pool: {}", b.name, b.pool.join(", "));
-                toml_out.push_str(&format!("[[arm]]\nname = \"{}\"\ntemplate_home = \"homes/{}\"\nexpect_models = [{}]\n\n", def.name, def.name, expect_models(def).iter().map(|m| format!("\"{}\"", m)).collect::<Vec<_>>().join(", ")));
+                let entry = |name: &str| format!("[[arm]]\nname = \"{}\"\ntemplate_home = \"homes/{}\"\nexpect_models = [{}]\n\n", name, def.name, expect_models(def).iter().map(|m| format!("\"{}\"", m)).collect::<Vec<_>>().join(", "));
+                toml_out.push_str(&entry(&def.name));
+                if judge_arms.contains(&def.name) {
+                    judges_out.push_str(&entry(&format!("judge-{}", def.name.trim_start_matches("solo-"))));
+                    judges_built += 1;
+                }
                 built += 1;
             }
             Ok(b) => {
@@ -374,7 +383,15 @@ pub fn cli(args: &[String]) -> i32 {
     if built > 0 {
         let _ = fs::write(out.join("arms.toml"), toml_out);
     }
+    if judges_built > 0 {
+        let _ = fs::write(out.join("judges.toml"), judges_out);
+    }
     println!("\n{} built, {} skipped, {} failed; arms file: {}", built, skipped, failed, if built > 0 { out.join("arms.toml").display().to_string() } else { "none".into() });
+    match judges_built {
+        0 => println!("no jury file: none of {} was built (`--judges a,b` names which built arms judge)", judge_arms.join(", ")),
+        1 => println!("jury file: {} (only one judge: arms of its own model go unjudged; build another family)", out.join("judges.toml").display()),
+        _ => println!("jury file: {}", out.join("judges.toml").display()),
+    }
     if avail.is_none() {
         println!("(no --avail given: arms were not checked against what the account offers or has left)");
     }
@@ -551,8 +568,12 @@ mod tests {
         fs::write(&avail, "{\"models\": [{\"model\": \"argon\", \"status\": \"exhausted\", \"until\": 1793343010}]}").unwrap();
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let out = t.path().join("arms-out");
-        let args = a(&["--source-home", src.to_str().unwrap(), "--workspace", "w", "--defs", defs.to_str().unwrap(), "--out", out.to_str().unwrap(), "--avail", avail.to_str().unwrap()]);
+        let args = a(&["--source-home", src.to_str().unwrap(), "--workspace", "w", "--defs", defs.to_str().unwrap(), "--out", out.to_str().unwrap(), "--avail", avail.to_str().unwrap(), "--judges", "solo-haiku"]);
         assert_eq!(cli(&args), 0);
+        // A named built arm is a judge, under a `judge-` name, with the same home and models; an arm that was skipped is not.
+        let judges = fs::read_to_string(out.join("judges.toml")).unwrap();
+        assert!(judges.contains("name = \"judge-haiku\"") && judges.contains("homes/solo-haiku") && judges.contains("\"claude-haiku\"") && !judges.contains("argon"), "{}", judges);
+        assert_eq!(crate::train_run::parse_arms(&out.join("judges.toml")).unwrap()[0].name, "judge-haiku");
         let arms = fs::read_to_string(out.join("arms.toml")).unwrap();
         assert!(arms.contains("name = \"solo-haiku\"") && arms.contains("homes/solo-haiku") && arms.contains("\"claude-haiku\"") && !arms.contains("solo-argon"), "{}", arms);
         assert!(!out.join("homes/solo-argon").exists(), "an exhausted arm is skipped, not built");

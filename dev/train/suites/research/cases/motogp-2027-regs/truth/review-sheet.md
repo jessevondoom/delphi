@@ -101,8 +101,9 @@ from (seven|7) to (six|6)
 - **Counts as stated if the answer matches any of (one per line, case-insensitive):**
 
 ```
-100\s?%\s+(sustainable|non[- ]oil|renewable)
+100\s?%\s+(sustainable|non[- ](oil|fossil)|renewable)
 fully sustainable fuel
+non[- ]fossil
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
@@ -352,6 +353,7 @@ five[- ]year
 
 ```
 michelin.{0,150}(2026|until the end|exit|leav|replac)
+(replac\w*|succe\w*|takes? over from)\s+michelin
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right

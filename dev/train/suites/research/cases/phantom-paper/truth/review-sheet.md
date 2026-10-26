@@ -37,6 +37,9 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 no (record|evidence|trace|such paper|matching)
 (doesn.t|does not|may not|might not|appears not to|seems not to) exist
 not (aware of|familiar with) (this|that|any|such)
+(there is|there.s) no [^.\n]{0,100}(paper|study|publication|article)
+\b(fictitious|fabricated|non-?existent)\b
+appears (to be )?(fictitious|fabricated|invented)
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right

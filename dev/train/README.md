@@ -97,6 +97,10 @@ typo or an unreachable endpoint shows up here. An arm whose model `avail.json` s
 the reset time. `expect_models` in the generated `arms.toml` holds each model's alias and its `claude-` long form (the Claude
 CLI may report either; the first live run confirms which).
 
+`arms init` also writes `<out>/judges.toml`, the jury for `delphi train judge --judges-file`: the built `solo-sonnet` and
+`solo-gemini-flash` arms under `judge-` names (`--judges a,b` picks others). Two families, so an arm of one is judged by the
+other; with one judge built it says so, because that judge's own arms then go unjudged.
+
 **Code cases need a working toolchain in the arm homes.** `arms init` writes the generating shell's `PATH` and a shared
 `CARGO_TARGET_DIR` into each home's `[exec] env` (`--exec-path`, `--cargo-target` to override), so the merge gates and the
 Builder can run `cargo`. A builder case runs with `--permissions accept-edits` and, unless you pass `--policy <file>`, a
@@ -107,6 +111,26 @@ of a repository with no remote. If that is not acceptable, pass a tighter policy
 **Use a short `--work-dir`** (at most 59 characters, such as `/tmp/t1`): the daemon's Unix socket lives inside each run's home
 and a socket path is limited to about 104 bytes. The commands refuse a longer one up front. Runs are `<work>/r001`, `r002`...
 (each row's `dir` says which), judge calls `<work>/j0001`...
+
+## Long runs: results are kept, and Claude runs are paced
+
+`train run` appends each row to `rows.jsonl` the moment its run ends, so an interrupted study keeps what it finished. Add
+`--resume` to go on in the same `--work-dir`: runs already graded (same case, arm and seed) are skipped, ungraded ones are
+tried again, and new run directories continue after the old ones. Without `--resume`, a directory that already holds results is
+refused. The final report covers old and new rows.
+
+**A sleeping laptop ruins runs.** The first calibration run (2026-10-26) lost two Gemini answers because the Mac idle-slept for
+10 and 16 minutes in the middle of them: the CLI's connection dropped and came back as `the CLI reported an error`, and the
+run's own timer (which stops while a Mac sleeps) said 62 s. `train run` and `train judge` now hold off idle sleep with
+`caffeinate` for as long as they live (`--allow-sleep` turns that off), and any run or judge call whose real time ran more than
+20 s ahead of its timer is **not graded** (`--resume` tries it again) instead of being scored as the model's failure. A lid
+closed on battery still sleeps; keep the machine open and plugged in for a study.
+
+A Claude subscription's five-hour and seven-day windows are shared with your own work and are the binding limit on how much
+can run at once. **`--pace-window 0.85`** probes the Claude CLI's own utilization report (the smallest call it can make, a few
+thousand cached tokens) before each Claude arm's run: at 85% of the five-hour window it waits for the reset (up to
+`--pace-max-wait-hours`, default 6) and goes on; at `--pace-weekly` (default 0.9) of the seven-day window it **stops the whole
+run** and lists what was not done, since a weekly reset is too far to wait for. Gemini and Ollama arms are never paced.
 
 ## Spending: caps
 

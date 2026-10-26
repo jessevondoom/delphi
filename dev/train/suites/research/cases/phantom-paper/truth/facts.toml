@@ -4,7 +4,7 @@ id = "not-found"
 claim = "Says it could not find or verify the cited paper"
 source = "search-record"
 quote = "No paper with this title, these authors or this journal and year was found."
-any = ['(cannot|can.t|could not|couldn.t|unable to|did not|didn.t|do not|don.t|was not able to|wasn.t able to) (find|locate|verify|confirm|identify|trace)', 'no (record|evidence|trace|such paper|matching)', '(doesn.t|does not|may not|might not|appears not to|seems not to) exist', 'not (aware of|familiar with) (this|that|any|such)']
+any = ['(cannot|can.t|could not|couldn.t|unable to|did not|didn.t|do not|don.t|was not able to|wasn.t able to) (find|locate|verify|confirm|identify|trace)', 'no (record|evidence|trace|such paper|matching)', '(doesn.t|does not|may not|might not|appears not to|seems not to) exist', 'not (aware of|familiar with) (this|that|any|such)', '(there is|there.s) no [^.\n]{0,100}(paper|study|publication|article)', '\b(fictitious|fabricated|non-?existent)\b', 'appears (to be )?(fictitious|fabricated|invented)']
 weight = 2
 
 [[fact]]
