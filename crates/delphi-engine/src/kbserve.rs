@@ -149,7 +149,7 @@ impl Reader<'_> {
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
             }
-            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score}));
+            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note}));
             if out.len() >= limit {
                 break;
             }

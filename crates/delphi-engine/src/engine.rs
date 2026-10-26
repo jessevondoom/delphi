@@ -3069,6 +3069,29 @@ mod tests {
         assert_eq!(events_of(&f2, "bundle.removed").len(), 1);
     }
 
+    // specs/027 §5.4: vector readiness reaches the log when it moves, and a discarded cache is reported once.
+    #[tokio::test]
+    async fn a_mission_hears_how_far_a_bundles_vectors_are_and_that_a_cache_was_discarded_each_once() {
+        use crate::bundle_load::tests::{add_bundle, refs};
+        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c"), Step::text("d")], 5.0, |_| {});
+        let files = vec![("knowledge/index.md".to_string(), "---\nid: i\n---\n# Index\n\nThe quokka procedure.\n".to_string())];
+        let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &refs(&files));
+        crate::kb::sync_workspace(&f.engine.ws.dir).unwrap();
+        f.engine.run_task(&f.m, "architect", "one").await.unwrap();
+        let progress = events_of(&f, "bundle.vectors_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!((progress[0].payload["done"].as_u64(), progress[0].payload["total"].as_u64(), progress[0].payload["percent"].as_u64()), (Some(0), Some(1), Some(0)));
+        f.engine.run_task(&f.m, "architect", "two").await.unwrap();
+        assert_eq!(events_of(&f, "bundle.vectors_progress").len(), 1, "nothing moved, nothing said");
+        let cache = delphi_core::bundles::cache_dir(&f.engine.ws.home, "acme", "plat", &e.hash);
+        fs::write(crate::bundle_vectors::verdicts_path(&cache), r#"{"caches":{"m.dlphvec":{"status":"rejected","chunks":0,"sampled":20,"min_cosine":0.2,"failing":["ab"]}}}"#).unwrap();
+        f.engine.run_task(&f.m, "architect", "three").await.unwrap();
+        f.engine.run_task(&f.m, "architect", "four").await.unwrap();
+        let rejected = events_of(&f, "bundle.vectors_rejected");
+        assert_eq!((rejected.len(), rejected[0].payload["file"].as_str()), (1, Some("m.dlphvec")));
+        assert_eq!(rejected[0].payload["failing"], json!(["ab"]));
+    }
+
     // The tier of bundle knowledge read through a tool is L2 like team content, never the release default.
     #[tokio::test]
     async fn reading_bundle_knowledge_is_federated_content_at_l2_and_cannot_be_written() {

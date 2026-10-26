@@ -61,7 +61,6 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, host: &dyn Host, r: &mut Report)
     if !tree.has_dir("vectors") {
         return;
     }
-    let _ = m;
     let idx = "vectors/index.json";
     let Some(text) = tree.text(idx) else {
         return r.fail(12, idx, "missing (vectors/ exists but nothing names its caches)");
@@ -137,7 +136,7 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, host: &dyn Host, r: &mut Report)
                 continue;
             }
         };
-        let set = reachable.get_or_insert_with(|| host.chunk_keys(&crate::tree::Tree::texts(tree, "knowledge/", ".md")));
+        let set = reachable.get_or_insert_with(|| m.and_then(|m| host.chunk_keys(&m.org, &m.name, &crate::tree::Tree::texts(tree, "knowledge/", ".md"))));
         match set {
             None => r.note(12, &path, "key reachability was not checked: this build cannot chunk (the install re-checks at add)"),
             Some(set) => {
