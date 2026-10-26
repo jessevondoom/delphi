@@ -32,6 +32,7 @@ mod start;
 mod status;
 mod theme;
 mod timers_cmd;
+mod train;
 mod update;
 
 use std::path::PathBuf;
@@ -74,6 +75,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
+    Cmd { group: "Maintain", name: "train", about: "training mode: check and price the cases that test Delphi's own behavior", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
     Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]", detail: "" },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
@@ -228,6 +230,7 @@ fn main() {
         Some("daemon") => cmd_daemon(&args),
         Some("kb") => cmd_kb(&args),
         Some("needs") => cmd_needs(&args),
+        Some("train") => train::run(&args),
         Some("xenia") => xenia_cmd::run(&args),
         Some("connectors") => cmd_core("connectors", &args),
         Some("narrator") | Some("observe") => cmd_narrator(&args),
