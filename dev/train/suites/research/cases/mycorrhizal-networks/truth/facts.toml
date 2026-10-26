@@ -1,0 +1,108 @@
+# Checklist for the mycorrhizal network question, from the abstracts in sources.toml (as of the date in meta.toml).
+# A pattern is a lower bound: a correct answer worded unexpectedly is missed (specs/037 section 4).
+
+[[fact]]
+id = "cmn-definition"
+claim = "A common mycorrhizal network exists when fungal hyphae connect the roots of several plants"
+source = "karst-2023"
+quote = "A common mycorrhizal network (CMN) is formed when mycorrhizal fungal hyphae connect the roots of multiple plants"
+any = ['hyph.{0,100}connect', 'common mycorrhizal network', '(connect|link).{0,80}(roots|plants|trees).{0,80}(fung|hyph|mycorrh)']
+weight = 0.5
+
+[[fact]]
+id = "simard-1997"
+claim = "Simard and colleagues (Nature, 1997) used isotope labelling in the field and found carbon moving both ways between paper birch and Douglas fir, with a net gain for the fir"
+source = "simard-1997"
+quote = "demonstrate bidirectional carbon transfer between the ectomycorrhizal tree species Betula papyrifera and Pseudotsuga menziesii"
+any = ['simard.{0,250}(1997|bidirectional|birch|douglas)', '(birch|betula).{0,120}(douglas|pseudotsuga)']
+
+[[fact]]
+id = "simard-6pct"
+claim = "The net gain to Douglas fir was on average about 6% of the carbon isotope it took up by photosynthesis"
+source = "simard-1997"
+quote = "represents on average 6% of carbon isotope uptake through photosynthesis"
+any = ['\b6\s?(%|percent)']
+number = { value = 6, tol = 0 }
+weight = 0.5
+
+[[fact]]
+id = "klein-2016"
+claim = "Klein and colleagues (Science, 2016) labelled 40 m spruce crowns with carbon-13 and found the label in neighbouring beech, larch and pine"
+source = "klein-2016"
+quote = "carbon assimilated by 40-meter-tall spruce is traded over to neighboring beech, larch, and pine"
+any = ['klein.{0,250}(spruce|2016|beech|larch)', 'spruce.{0,200}(beech|larch|pine)']
+
+[[fact]]
+id = "klein-40pct"
+claim = "They estimated the transfer accounted for about 40% of fine root carbon"
+source = "klein-2016"
+quote = "accounted for 40% of the fine root carbon"
+any = ['\b40\s?(%|percent)']
+number = { value = 40, tol = 0 }
+weight = 0.5
+
+[[fact]]
+id = "karst-2023"
+claim = "Karst, Jones and Hoeksema (Nature Ecology & Evolution, 2023) argued that popular claims about CMNs in forests are disconnected from the evidence"
+source = "karst-2023"
+quote = "recent claims in the popular media about CMNs in forests are disconnected from evidence"
+any = ['karst', 'hoeksema']
+
+[[fact]]
+id = "karst-mother-tree"
+claim = "The claim that mature trees preferentially send resources and defence signals to their offspring through CMNs has no peer-reviewed published evidence"
+source = "karst-2023"
+quote = "has no peer-reviewed, published evidence"
+any = ['(mother|parent)[ -]tree.{0,250}(no|lack|without|not).{0,80}(evidence|support|proof)', '(offspring|kin|seedlings?).{0,200}(no|lack|without|not).{0,80}(peer|evidence|support)', 'no peer-reviewed']
+
+[[fact]]
+id = "karst-widespread"
+claim = "The claims that CMNs are widespread in forests and that transfers raise seedling performance are insufficiently supported: field results vary widely, have alternative explanations or are too limited to generalize"
+source = "karst-2023"
+quote = "are insufficiently supported because results from field studies vary too widely"
+any = ['insufficient', 'vary (too )?widely', 'too limited to (support )?generali', 'alternative explanation']
+
+[[fact]]
+id = "karst-citation-bias"
+claim = "Unsupported claims in the citing literature have doubled in 25 years, a bias towards positive effects"
+source = "karst-2023"
+quote = "unsupported claims have doubled in the past 25 years"
+any = ['citation bias', 'doubled', 'positive (effects|bias)']
+weight = 0.5
+
+[[fact]]
+id = "karst-management"
+claim = "The authors conclude that knowledge is too sparse and unsettled to inform forest management"
+source = "karst-2023"
+quote = "knowledge on CMNs is presently too sparse and unsettled to inform forest management"
+any = ['forest management.{0,120}(sparse|unsettled|premature|not (yet )?ready|too)', '(sparse|unsettled).{0,120}management']
+weight = 0.5
+
+[[fact]]
+id = "henriksson-2023"
+claim = "Henriksson and colleagues (New Phytologist, 2023) re-examined the data behind the mother tree hypothesis and found evidence of a significant net carbon transfer that benefits recipients still lacking"
+source = "henriksson-2023"
+quote = "evidence of a significant net C transfer via common mycorrhizal networks that benefits the recipients is still lacking"
+any = ['henriksson', 're-?examin.{0,100}mother tree']
+
+[[fact]]
+id = "henriksson-isotopes"
+claim = "Isotope labelling can mislead because inferences may rest on tiny shifts in isotopic abundance"
+source = "henriksson-2023"
+quote = "miniscule shifts in isotopic abundance, which can be misleading"
+any = ['isotop.{0,250}(misleading|small|tiny|detection|artefact|artifact|discriminat|caution|limit)']
+
+[[fact]]
+id = "henriksson-fungi"
+claim = "A fungal carbon pipeline between trees is hard to reconcile with any adaptive advantage for the fungi"
+source = "henriksson-2023"
+quote = "difficult to reconcile with any adaptive advantages for the fungi"
+any = ['(adaptive|evolution|benefit).{0,120}fung', 'fung.{0,120}(adaptive|evolutionary).{0,80}(advantage|benefit)']
+weight = 0.5
+
+[[fact]]
+id = "unsettled"
+claim = "The science is contested and unsettled; the critics do not say the fungi or the associations do not exist"
+source = "karst-2023"
+quote = "too sparse and unsettled"
+any = ['controvers', 'disput', 'debat', 'contested', 'unsettled', 'not (all )?settled']

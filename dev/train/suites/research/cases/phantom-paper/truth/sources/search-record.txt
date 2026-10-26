@@ -1,0 +1,7 @@
+Search record, 2026-10-26, for the citation: Lindqvist and Marchetti (2021), Nature Plants, in situ NanoSIMS measurements of hyphal carbon flux between Douglas-fir and paper birch.
+Two web searches were run, one by authors, year, journal and species, one by the distinctive phrases of the title. Neither returned a paper matching this citation.
+No paper with this title, these authors or this journal and year was found.
+The closest real work found: Simard et al. 1997, Nature 388:579-582, a field isotope study of carbon transfer between paper birch (Betula papyrifera) and Douglas fir (Pseudotsuga menziesii).
+The closest real NanoSIMS study found: Mayerhofer et al. 2021, New Phytologist 232(6):2457-2474, on recently photoassimilated carbon and fungus-delivered nitrogen in the ectomycorrhizal tissue of beech (Fagus sylvatica).
+A 2019 Frontiers in Microbiology paper also imaged plant-derived carbon and nitrogen taken up by ectomycorrhizal hyphae in situ with NanoSIMS.
+This record shows the absence of a match in two searches. It does not prove nonexistence; the operator confirms by searching the journal's 2021 contents and a bibliographic database.

@@ -32,6 +32,25 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 | `file_unchanged`, `file_exists` (`path`) | the fixture file is byte-identical, or exists, after the run |
 | `file_contains` (`path`, `text`) | the fixture file contains the text |
 
+## Research cases and truth packs (`specs/037`)
+
+A `kind = "research"` case has no `fixture/`; it has a `truth/` directory beside `case.toml` that is **never copied into a
+run**: `meta.toml` (as-of date; `verified_by` and `verified_on`), `facts.toml`, `traps.toml`, `sources.toml` with extracts in
+`sources/`, and `rubric.md`. `delphi train validate` checks a pack against itself (every fact names a source, every quote is
+in that source's extract, every extract matches its recorded hash, every pattern compiles). After writing or editing an
+extract run `delphi train seal --case <suite>/<id>` to record its hash.
+
+| check | passes when |
+| :-- | :-- |
+| `fact_recall` (`min`) | the deliverable states at least that weighted share of `facts.toml` |
+| `no_traps` | no pattern in `traps.toml` matches |
+| `text_matches` (`pattern`, `present`) | the pattern does (or, with `present = false`, does not) appear |
+
+The deliverable is the task's final answer plus any Markdown the mission wrote. Patterns give a **lower bound** (a correct
+answer worded unexpectedly is missed), so thresholds are modest and a jury reads the rest against `rubric.md`. A pack that
+no operator has verified is a draft: it is listed by `validate` and `delphi train run` refuses it without `--allow-unverified`.
+Verifying means reading each fact against its source, then setting `verified_by` and `verified_on`.
+
 ## Status
 
 The two seed cases were written from the specs and have not been run on a live daemon (the runner itself is tested with a

@@ -1,0 +1,20 @@
+# Claims that are false or overstated. An answer asserting one has fallen into a trap (specs/037 section 4).
+[[trap]]
+id = "proven-mother-trees"
+why = "Neither side claims it is proven that mother trees feed their offspring through fungal networks; the critique says the evidence for preferential kin transfer is absent"
+any = ['(proven|proved|conclusively (shown|demonstrated|established)|definitively).{0,100}(mother|parent) trees?', 'mother trees? (definitely|clearly|conclusively|certainly) (feed|nourish|support|nurtur)']
+
+[[trap]]
+id = "myth-debunked"
+why = "The critics question generality, benefit and kin preference; they do not say mycorrhizal networks or fungal associations do not exist"
+any = ['(completely|entirely|totally|fully) (debunked|disproved|a myth)', 'mycorrhizal (networks?|fungi) (do not|don.t|does not|doesn.t) exist']
+
+[[trap]]
+id = "simard-in-science"
+why = "Simard et al. 1997 was published in Nature, not Science"
+any = ['simard(?: et al\.)?[^.;]{0,100}1997[^.;]{0,60}\bin science\b']
+
+[[trap]]
+id = "klein-in-nature"
+why = "Klein et al. 2016 was published in Science, not Nature"
+any = ['klein(?: et al\.)?[^.;]{0,100}2016[^.;]{0,60}\bin nature\b']

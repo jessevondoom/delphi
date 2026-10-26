@@ -1,0 +1,15 @@
+# Claims that are false. An answer asserting one has fallen into a trap (specs/037 section 4).
+[[trap]]
+id = "800cc"
+why = "The new capacity is 850cc, not 800cc"
+any = ['\b800\s?cc']
+
+[[trap]]
+id = "aero-banned"
+why = "Aerodynamics are reduced and tightly controlled, not banned"
+any = ['aero(dynamics?)? (is|are|will be|has been|have been) (completely |fully |entirely )?(banned|prohibited|eliminated)', '(ban|banned|banning|prohibit\w*|eliminat\w*) (on |of )?(all )?(aero|wings|winglets)']
+
+[[trap]]
+id = "michelin-stays"
+why = "Michelin leaves after 2026; Pirelli supplies from 2027"
+any = ['michelin (will |would )?(remain|continue)s?( as| to be)? (the )?(sole |exclusive |official )?(tyre|tire)s? supplier (in|for|from|beyond|after) 2027']

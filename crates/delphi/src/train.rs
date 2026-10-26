@@ -25,6 +25,8 @@ pub enum Kind {
     Scenario,
     /// A case written by a probe run and curated by a person.
     Probe,
+    /// A research or strategy question with a stored source of truth in `truth/` (`specs/037` §4).
+    Research,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,12 @@ pub enum Check {
     FileExists(String),
     /// A fixture file contains this text after the run.
     FileContains { path: String, text: String },
+    /// The deliverable states at least this weighted share of the truth pack's facts (`specs/037` §5.1).
+    FactRecall { min: f64 },
+    /// The deliverable falls into none of the truth pack's traps.
+    NoTraps,
+    /// A pattern (case-insensitive) appears in the deliverable, or, with `present = false`, does not.
+    TextMatches { pattern: String, present: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +71,8 @@ pub struct Case {
     pub turns: Vec<String>,
     pub checks: Vec<Check>,
     pub dir: PathBuf,
+    /// The stored source of truth, for a research case.
+    pub truth: Option<crate::train_truth::Truth>,
 }
 
 /// Problems with one case or suite, one per line, each naming the file.
@@ -147,6 +157,25 @@ fn parse_check(t: &toml::Table, at: &str, problems: &mut Problems) -> Option<Che
                 }
             }
         }
+        Some("fact_recall") => match t.get("min").and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).filter(|m| *m > 0.0 && *m <= 1.0) {
+            Some(min) => Some(Check::FactRecall { min }),
+            None => {
+                problems.push(format!("{}: `fact_recall` needs `min` above 0 and at most 1", at));
+                None
+            }
+        },
+        Some("no_traps") => Some(Check::NoTraps),
+        Some("text_matches") => {
+            let Some(pattern) = str_of(t, "pattern") else {
+                problems.push(format!("{}: `text_matches` needs `pattern`", at));
+                return None;
+            };
+            if let Err(e) = regex::RegexBuilder::new(pattern).case_insensitive(true).build() {
+                problems.push(format!("{}: `text_matches` pattern does not compile ({})", at, e.to_string().lines().last().unwrap_or("")));
+                return None;
+            }
+            Some(Check::TextMatches { pattern: pattern.to_string(), present: t.get("present").and_then(|v| v.as_bool()).unwrap_or(true) })
+        }
         other => {
             problems.push(format!("{}: unknown check kind `{}`", at, other.unwrap_or("(none)")));
             None
@@ -175,8 +204,9 @@ pub fn load_case(dir: &Path, suite: &str) -> Result<Case, Problems> {
         Some("task") => Kind::Task,
         Some("scenario") => Kind::Scenario,
         Some("probe") => Kind::Probe,
+        Some("research") => Kind::Research,
         _ => {
-            p.push(format!("{}: `kind` must be task, scenario or probe", at));
+            p.push(format!("{}: `kind` must be task, scenario, probe or research", at));
             Kind::Task
         }
     };
@@ -212,7 +242,7 @@ pub fn load_case(dir: &Path, suite: &str) -> Result<Case, Problems> {
     let prompt = str_of(&t, "prompt").map(String::from).filter(|s| !s.trim().is_empty());
     let turns: Vec<String> = t.get("turns").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_table().and_then(|x| str_of(x, "say")).map(String::from)).collect()).unwrap_or_default();
     match kind {
-        Kind::Task | Kind::Probe if prompt.is_none() => p.push(format!("{}: a {} case needs a `prompt`", at, if kind == Kind::Task { "task" } else { "probe" })),
+        Kind::Task | Kind::Probe | Kind::Research if prompt.is_none() => p.push(format!("{}: a {} case needs a `prompt`", at, format!("{:?}", kind).to_lowercase())),
         Kind::Scenario if turns.is_empty() => p.push(format!("{}: a scenario needs at least one `[[turns]]` with `say`", at)),
         _ => {}
     }
@@ -222,6 +252,18 @@ pub fn load_case(dir: &Path, suite: &str) -> Result<Case, Problems> {
     if matches!(kind, Kind::Task | Kind::Probe) && !dir.join("fixture").is_dir() {
         p.push(format!("{}: a {} case needs a `fixture/` directory", at, if kind == Kind::Task { "task" } else { "probe" }));
     }
+    // A research case's truth is read and checked against itself here; the other kinds have none.
+    let truth = if kind == Kind::Research {
+        match crate::train_truth::load(dir, &at) {
+            Ok(t) => Some(t),
+            Err(mut e) => {
+                p.append(&mut e);
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut checks = Vec::new();
     for (i, c) in t.get("check").and_then(|v| v.as_array()).into_iter().flatten().enumerate() {
         match c.as_table() {
@@ -236,10 +278,23 @@ pub fn load_case(dir: &Path, suite: &str) -> Result<Case, Problems> {
     if t.get("check").and_then(|v| v.as_array()).is_none_or(|a| a.is_empty()) {
         p.push(format!("{}: at least one `[[check]]` is required; deterministic checks come first (specs/031 §4.3)", at));
     }
+    // The truth checks only make sense with a truth pack to compare against, and a pack must have what they use.
+    for c in &checks {
+        let needs = |what: &str, ok: bool, p: &mut Problems| {
+            if !ok {
+                p.push(format!("{}: a check needs {} but there is none (research cases have `truth/`)", at, what));
+            }
+        };
+        match c {
+            Check::FactRecall { .. } => needs("facts in truth/facts.toml", truth.as_ref().is_some_and(|t| !t.facts.is_empty()), &mut p),
+            Check::NoTraps => needs("traps in truth/traps.toml", truth.as_ref().is_some_and(|t| !t.traps.is_empty()), &mut p),
+            _ => {}
+        }
+    }
     if !p.is_empty() {
         return Err(p);
     }
-    Ok(Case { id, suite: suite.to_string(), kind, role, split, tags, max_cost_usd, timeout_secs, prompt, turns, checks, dir: dir.to_path_buf() })
+    Ok(Case { id, suite: suite.to_string(), kind, role, split, tags, max_cost_usd, timeout_secs, prompt, turns, checks, dir: dir.to_path_buf(), truth })
 }
 
 /// Every case of one suite directory, in id order, and the problems found. A directory in `cases/` without a
@@ -332,6 +387,23 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("delphi train: {} has no dev/train/suites; training mode is for a source checkout (pass --repo <path>)", repo.display());
         return 2;
     };
+    // `seal` repairs a pack whose hashes are missing or stale, so it runs before the suites are read and judged.
+    if sub == Some("seal") {
+        let Some((suite, id)) = flag(args, "--case").and_then(|c| c.split_once('/').map(|(a, b)| (a.to_string(), b.to_string()))).filter(|(a, b)| rel_ok(a) && rel_ok(b) && !a.contains('/') && !b.contains('/')) else {
+            eprintln!("delphi train seal --case <suite>/<id>: records the hash of each extract in the case's truth/sources.toml");
+            return 2;
+        };
+        return match crate::train_truth::seal(&root.join(&suite).join("cases").join(&id)) {
+            Ok(n) => {
+                println!("sealed {} source extract(s) of {}/{}; verifying the pack is still your job (set verified_by and verified_on in truth/meta.toml)", n, suite, id);
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi train seal: {}", e);
+                1
+            }
+        };
+    }
     let only = flag(args, "--suite");
     let mut names = suite_names(&root);
     if let Some(s) = &only {
@@ -357,6 +429,11 @@ pub fn run(args: &[String]) -> i32 {
             }
             for p in &problems {
                 println!("FAIL {}", p);
+            }
+            // A draft truth pack is allowed in the tree but is not run: say so, so nobody is surprised at run time.
+            for c in all.iter().filter_map(|c| c.truth.as_ref().map(|t| (c, t))) {
+                let (c, t) = c;
+                println!("truth {}/{}: {} fact(s), {} trap(s), {} source(s), as of {}{}", c.suite, c.id, t.facts.len(), t.traps.len(), t.sources, t.as_of, if t.verified() { "" } else { "; DRAFT: not verified by the operator, `delphi train run` needs --allow-unverified" });
             }
             println!("delphi train validate: {} suite(s), {} case(s), {} problem(s)", names.len(), all.len(), problems.len());
             i32::from(!problems.is_empty())
@@ -577,6 +654,54 @@ path = "tests/keep.rs"
         let (cases, _) = load_suite(&s);
         let refs: Vec<&Case> = cases.iter().collect();
         assert_eq!(worst_case_usd(&refs, 3), 6.0);
+    }
+
+    const RESEARCH: &str = "id = \"q1\"\nkind = \"research\"\nrole = \"strategist\"\nsplit = \"dev\"\nmax_cost_usd = 2.0\ntimeout_secs = 600\nprompt = \"What changes in 2027?\"\n[[check]]\nkind = \"fact_recall\"\nmin = 0.5\n[[check]]\nkind = \"no_traps\"\n";
+
+    fn research_dir(t: &Path, case: &str, with_pack: bool) -> PathBuf {
+        let s = suite(t, "res", "q1", case, false);
+        let dir = s.join("cases/q1");
+        if with_pack {
+            crate::train_truth::tests::pack(&dir);
+        }
+        s
+    }
+
+    #[test]
+    fn a_research_case_needs_a_truth_pack_not_a_fixture_and_a_draft_is_noted() {
+        let t = tempfile::tempdir().unwrap();
+        let s = research_dir(t.path(), RESEARCH, true);
+        let (cases, problems) = load_suite(&s);
+        assert!(problems.is_empty(), "{:?}", problems);
+        assert_eq!((cases[0].kind, cases[0].truth.as_ref().map(|t| (t.facts.len(), t.verified()))), (Kind::Research, Some((2, false))));
+        assert_eq!(cases[0].checks, vec![Check::FactRecall { min: 0.5 }, Check::NoTraps]);
+
+        let missing = tempfile::tempdir().unwrap();
+        let (_, problems) = load_suite(&research_dir(missing.path(), RESEARCH, false));
+        assert!(problems.iter().any(|p| p.contains("needs a `truth/` directory")), "{:?}", problems);
+
+        // The truth checks need something to check against.
+        let none = tempfile::tempdir().unwrap();
+        let s = research_dir(none.path(), RESEARCH, true);
+        fs::write(s.join("cases/q1/truth/traps.toml"), "").unwrap();
+        let (_, problems) = load_suite(&s);
+        assert!(problems.iter().any(|p| p.contains("traps in truth/traps.toml")), "{:?}", problems);
+    }
+
+    #[test]
+    fn the_research_check_kinds_are_validated() {
+        let t = tempfile::tempdir().unwrap();
+        for (check, want) in [
+            ("kind = \"fact_recall\"\nmin = 1.5", "`fact_recall` needs `min`"),
+            ("kind = \"fact_recall\"", "`fact_recall` needs `min`"),
+            ("kind = \"text_matches\"", "`text_matches` needs `pattern`"),
+            ("kind = \"text_matches\"\npattern = \"(\"", "pattern does not compile"),
+        ] {
+            let body = RESEARCH.replace("kind = \"fact_recall\"\nmin = 0.5", check);
+            let s = research_dir(t.path(), &body, true);
+            let (_, problems) = load_suite(&s);
+            assert!(problems.iter().any(|p| p.contains(want)), "{} in {:?}", want, problems);
+        }
     }
 
     #[test]
