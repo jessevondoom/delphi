@@ -36,7 +36,7 @@ fn cache_of(ws: &WorkspacePaths, e: &Entry) -> std::path::PathBuf {
 
 /// A verified read of `rel`, or `None` when the bundle simply does not have the file. A file that is there but fails
 /// verification or the no-relaxation check is a note, not a block.
-fn read(ws: &WorkspacePaths, e: &Entry, rel: &str, what: &str, notes: &mut Vec<String>) -> Option<String> {
+pub(crate) fn read(ws: &WorkspacePaths, e: &Entry, rel: &str, what: &str, notes: &mut Vec<String>) -> Option<String> {
     let cache = cache_of(ws, e);
     if !cache.join(rel).is_file() {
         return None;
@@ -385,7 +385,7 @@ pub(crate) mod tests {
         e
     }
 
-    const FM: &str = "---\nid: x\ntitle: T\nauthor: operator\ntimestamp: \"2026-09-12T10:00:00Z\"\nsource_type: internal_generated\nconfidence: medium\nstatus: active\nsource_mission: acme\ntags: [a]\n---\n";
+    pub(crate) const FM: &str = "---\nid: x\ntitle: T\nauthor: operator\ntimestamp: \"2026-09-12T10:00:00Z\"\nsource_type: internal_generated\nconfidence: medium\nstatus: active\nsource_mission: acme\ntags: [a]\n---\n";
 
     pub(crate) fn skill_md(name: &str, roles: &str, body: &str) -> String {
         format!("---\nname: {n}\ndescription: \"Does {n}.\"\nmetadata:\n  delphi.authorized_agents: '{r}'\n---\n{b}\n", n = name, r = roles, b = body)

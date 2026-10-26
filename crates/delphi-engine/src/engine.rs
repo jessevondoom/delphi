@@ -219,6 +219,8 @@ pub struct Engine {
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
     /// What each mission has been told about the added bundles (`bundle_events.rs`): mission id to bundle id to hash.
     pub(crate) bundle_seen: Mutex<HashMap<String, crate::bundle_events::Seen>>,
+    /// The last org-context slice and the key it was built under (`org_context.rs`).
+    pub(crate) org_cache: Mutex<Option<(String, crate::org_context::Built)>>,
     /// A JSON Schema a handoff's answer must match, by handoff id (`specs/021` §5). A CLI harness validates against it;
     /// an API endpoint ignores it, and the reader of the answer accepts either shape.
     pub(crate) schemas: Mutex<HashMap<String, String>>,
@@ -608,15 +610,30 @@ impl Engine {
                     Err(e) => slices.push(ContextSlice { label: p.uri.clone(), tier: "unavailable".into(), text: format!("(could not be read: {})", e) }),
                 }
             }
-            if let Some(extra) = self.injected.lock().unwrap().get(&handoff.handoff_id) {
-                slices.extend(extra.iter().cloned());
-            }
+            // Council seats are the spans with injected slices; their Round 1 stays blind, so they get a lens, not the slice.
+            let council_seat = {
+                let injected = self.injected.lock().unwrap();
+                if let Some(extra) = injected.get(&handoff.handoff_id) {
+                    slices.extend(extra.iter().cloned());
+                }
+                injected.contains_key(&handoff.handoff_id)
+            };
             // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });
                 let agents = crate::bundle_load::catalog(&self.ws);
                 if !agents.is_empty() {
                     slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
+                }
+            }
+            // The organization's stated goals and perspectives, for the roles whose manifest says so (`specs/026` §3).
+            if crate::org_context::gets_slice(&sc.manifest.execute, sc.toolless, council_seat) {
+                let org = self.org_context();
+                if !org.text.is_empty() {
+                    slices.push(ContextSlice { label: "@runtime/org-context".into(), tier: "L5".into(), text: org.text.clone() });
+                    if fresh {
+                        m.append(sc.ev("org_context.built", json!({"bundles": org.bundles, "bytes": org.text.len(), "trimmed": org.trimmed, "notes": org.notes}))).await?;
+                    }
                 }
             }
             if sc.span.ceiling() != before {
