@@ -15,7 +15,7 @@ const KNOWN_TOP: [&str; 13] = [
     "bundle.toml", "README.md", "LICENSE", "CHANGELOG.md", ".delphi-bundle", ".claude-plugin", "knowledge", "skills", "agents", "behavior", "evals", "vectors", ".mcp.json",
 ];
 /// What a Claude Code plugin brings that a bundle ignores (`specs/025` §2.3).
-const PLUGIN_IGNORED: [&str; 5] = ["commands", "hooks", "output-styles", "workflows", "monitors"];
+const PLUGIN_IGNORED: [&str; 9] = ["commands", "hooks", "output-styles", "workflows", "monitors", "themes", ".lsp.json", "settings.json", "CLAUDE.md"];
 
 /// One regular file of the bundle, by its path relative to the root with `/` separators.
 #[derive(Debug, Clone)]
