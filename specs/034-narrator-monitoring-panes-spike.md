@@ -14,6 +14,8 @@ tags: [spec, narrator, monitoring, visualization, spike, draft]
 
 # Spec 034: Narrator monitoring panes (a spike)
 
+> The console's left deck got the same treatment (who is working and the recorded changes, never what agents think): `specs/035`.
+
 ## 1. What this is
 `specs/033` made usage and tool calls available live. This spike asks what an operator watching real work would want to *see*, in AI work and in creative work, tries three panes on the narrator, and sketches the rest. **Expect to cut some of them**: the operator will test them and trim. Nothing here shows reasoning or anything a model wrote; every pane shows names, counts, times and states.
 

@@ -8,6 +8,7 @@ import { classify } from './attention.ts';
 import { speakerOf, type Block, type Done, type Span, type State } from './fold.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import * as T from './theme.ts';
+import { kilo } from './meters.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
 import chalk from 'chalk';
@@ -330,31 +331,31 @@ const took = (ms: number) => { const s = Math.round(ms / 1000); return s < 60 ? 
 /** `00:12`: how long a running span has been at it. */
 const mmss = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 
-/** One line of history: the chip, who, what it did, how long (`005e` §8.2). The chip is the only place this appears. */
-function entryRow(d: Done, m: Model): string {
+const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+/** The history entry as rows: the chip, who, what it did, how long (`005e` §8.2); a recorded change is its chip, who and when, then its own sentence under it (`specs/032`). */
+function entryRows(d: Done, m: Model, w: number): string[] {
+  const who = T.badge(d.role, d.ok ? 'idle' : 'escalated', m.info, m.pal) + ' ' + T.roleColor(d.role, m.info).bold(T.roleName(d.role, m.info));
+  if (d.change) return ['  ' + T.chipOk('✎ recorded') + '  ' + who + T.dim(` · ${hhmm(d.at)}`), ...wrap(d.what, w - 6).map((l) => '    ' + T.text(m.pal)(l))];
   const chip = d.ok ? T.chipOk('✔ finished') : T.chipStopped('✖ stopped');
-  return '  ' + chip + '  ' + T.badge(d.role, d.ok ? 'idle' : 'escalated', m.info, m.pal) + ' ' + T.roleColor(d.role, m.info).bold(T.roleName(d.role, m.info)) + T.dim(` · ${d.what} · ${took(d.elapsed)}`);
+  return ['  ' + chip + '  ' + who + T.dim(` · ${d.what} · ${took(d.elapsed)}`)];
 }
 
-/** A span at work: a title row, then the last six lines of what it is thinking or writing, wrapped to the window (never a narrow measure). */
+/** A span at work: who, for how long, its token total so far when it has one, and the tool call it waits on. Nothing it thought or wrote (`specs/035`). */
 function runningRows(r: Span, m: Model, w: number): string[] {
   const f = faceOf(m.state.agents[r.role], r.role, m.now, m.still ?? false);
   const who = T.badge(r.role, f.state === 'idle' ? 'running' : f.state, m.info, m.pal, f.state === 'idle' ? 'working' : f.frame) + ' ' + T.roleColor(r.role, m.info).bold(T.roleName(r.role, m.info));
-  if (r.tool) return ['  ' + who + T.dim(` · → ${r.tool} …`)];
-  const writing = r.last === 'text' && !r.blind;
-  const title = '  ' + who + T.dim(` · ${writing ? 'writing' : 'thinking'} · ${mmss(m.now - r.since)}`);
+  const title = '  ' + who + T.dim(` · ${r.blind ? 'taking its seat' : 'working'} · ${mmss(m.now - r.since)}${r.tokens > 0 && !r.blind ? ` · ~${kilo(r.tokens)} tokens` : ''}`);
   if (r.error) return [title, '    ' + T.alert(T.clip('✖ ' + r.error, w - 6))];
-  if (r.blind) return [title]; // a council's first round stays blind: no text until every seat has answered
-  const src = writing ? r.text : r.thinking;
-  const lines = src.split('\n').flatMap((l) => wrap(l, w - 6)).slice(-6);
-  return [title, ...lines.map((l) => '    ' + (writing ? T.text(m.pal)(l) : chalk.italic(T.dim(l))))];
+  if (r.tool) return [title, '    ' + T.dim(T.clip('→ ' + r.tool.replace(/\(.*$/, '') + ' …', w - 6))];
+  return [title];
 }
 
 /** The deck's lines, and where each history entry starts: history above, running spans below, a blank row between. */
 export function activityRows(m: Model, w: number): { rows: string[]; starts: number[] } {
   const { running, history } = m.state.activity;
   const rows: string[] = [], starts: number[] = [];
-  history.forEach((d, i) => { if (i) rows.push(''); starts.push(rows.length); rows.push(entryRow(d, m)); });
+  history.forEach((d, i) => { if (i) rows.push(''); starts.push(rows.length); rows.push(...entryRows(d, m, w)); });
   if (history.length && running.length) rows.push('');
   running.forEach((r, i) => { if (i) rows.push(''); rows.push(...runningRows(r, m, w)); });
   return { rows, starts };
@@ -366,7 +367,7 @@ export function activityRows(m: Model, w: number): { rows: string[]; starts: num
  */
 function activityView(m: Model, w: number, h: number): string[] {
   const { rows, starts } = activityRows(m, w);
-  if (!rows.length) return ['', '  ' + chalk.bold(T.text(m.pal)('Activity and thinking stream')), '', '  ' + T.dim('nothing running'), '', '  ' + T.dim('Reasoning, replies and tool calls appear here as they happen.'), '  ' + T.dim('They live only in this window: nothing is saved.')];
+  if (!rows.length) return ['', '  ' + chalk.bold(T.text(m.pal)('Activity and changes')), '', '  ' + T.dim('nothing running'), '', '  ' + T.dim('Who is working and the changes they record appear here.'), '  ' + T.dim('Replies are in the chat; what agents think is not shown.')];
   if (rows.length + 1 <= h) return ['', ...rows, ...Array(h - rows.length - 1).fill('')];
   const avail = Math.max(1, h - 2); // the first two rows are the marker and a blank
   const back = Math.min(m.activityBack ?? 0, Math.max(0, rows.length - avail));
