@@ -130,7 +130,7 @@ async fn live_claude_calls_a_delphi_tool_through_the_bridge_in_both_permission_m
 async fn live_agy_calls_a_delphi_tool_through_a_workspace_plugin_while_a_hook_denies_its_other_tools() {
     use delphi_engine::bridge::{HookPolicy, AGY_TOOL_PREFIX};
     use delphi_engine::harness::{cli_env, Cli, Event, Launch, LaunchProfile, Session, Tools};
-    let policy = HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec![] };
+    let policy = HookPolicy::new(vec![AGY_TOOL_PREFIX.into()], vec![]);
     let (bridge, mut calls, mut notes) = Bridge::start_gated(defs(), "Delphi's timer tool wakes you later.".into(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core")), Some(policy)).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
@@ -200,7 +200,7 @@ fn run_hook(socket: Option<&std::path::Path>, token: Option<&str>, stdin: &str) 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_agy_hook_asks_the_gate_and_every_way_it_can_fail_is_a_denial_that_says_why() {
     use delphi_engine::bridge::{HookPolicy, AGY_TOOL_PREFIX};
-    let policy = HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec!["search_web".into()] };
+    let policy = HookPolicy::new(vec![AGY_TOOL_PREFIX.into()], vec!["search_web".into()]);
     let (bridge, _calls, _notes) = Bridge::start_gated(defs(), String::new(), std::path::Path::new(env!("CARGO_BIN_EXE_delphi-core")), Some(policy)).await.unwrap();
     let (socket, token) = (bridge.socket(), bridge.token().to_string());
     let call = |name: &str, args: Value| json!({"toolCall": {"name": name, "args": args}, "conversationId": "c", "stepIdx": 3}).to_string();

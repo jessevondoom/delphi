@@ -62,12 +62,29 @@ pub struct HookPolicy {
     pub allow_prefixes: Vec<String>,
     /// Exact names of the CLI's own tools a profile allows (`search_web`, `read_url_content`).
     pub allow_names: Vec<String>,
+    /// Set the moment the gate lets one of `allow_names` through. What such a tool brings back is text nobody vetted, so
+    /// the span's loop checks this before it runs any Delphi call and marks the span untrusted (L0). The gate sets it
+    /// before the CLI runs the tool, so a later call cannot beat it.
+    pub tainted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl HookPolicy {
+    pub fn new(allow_prefixes: Vec<String>, allow_names: Vec<String>) -> HookPolicy {
+        HookPolicy { allow_prefixes, allow_names, tainted: Arc::default() }
+    }
+
+    /// Has the gate let a tool through that reads from outside Delphi?
+    pub fn has_read_outside(&self) -> bool {
+        self.tainted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Allow or deny a tool by name, with the reason the model is told when it is denied.
     pub fn decide(&self, tool: &str) -> (bool, String) {
-        if !tool.is_empty() && (self.allow_prefixes.iter().any(|p| tool.starts_with(p)) || self.allow_names.iter().any(|n| n == tool)) {
+        if !tool.is_empty() && self.allow_prefixes.iter().any(|p| tool.starts_with(p)) {
+            return (true, String::new());
+        }
+        if !tool.is_empty() && self.allow_names.iter().any(|n| n == tool) {
+            self.tainted.store(true, std::sync::atomic::Ordering::SeqCst);
             return (true, String::new());
         }
         let own = self.allow_prefixes.first().map(String::as_str).unwrap_or(AGY_TOOL_PREFIX);
@@ -533,7 +550,7 @@ mod tests {
     }
 
     fn agy_policy() -> HookPolicy {
-        HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec!["search_web".into(), "read_url_content".into()] }
+        HookPolicy::new(vec![AGY_TOOL_PREFIX.into()], vec!["search_web".into(), "read_url_content".into()])
     }
 
     #[tokio::test]
@@ -579,8 +596,22 @@ mod tests {
         // A lookalike is not Delphi's, and a call that names no tool is denied.
         assert!(!g.decide("mcp_delphi_other_timer").0 && !g.decide("xmcp_delphi_delphi_timer").0 && !g.decide("").0);
         // No web tools listed: none allowed, and the reason does not mention them.
-        let none = HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.into()], allow_names: vec![] };
+        let none = HookPolicy::new(vec![AGY_TOOL_PREFIX.into()], vec![]);
         assert!(!none.decide("search_web").0 && !none.decide("run_command").1.contains("search_web"));
+    }
+
+    #[test]
+    fn a_web_tool_through_the_gate_raises_the_flag_and_delphis_own_tools_and_denials_do_not() {
+        let g = agy_policy();
+        assert!(!g.has_read_outside());
+        assert!(g.decide("mcp_delphi_delphi_timer").0 && !g.decide("run_command").0);
+        assert!(!g.has_read_outside(), "neither Delphi's tool nor a denial brings in outside text");
+        assert!(g.decide("search_web").0);
+        assert!(g.has_read_outside(), "set by the decision, before the CLI runs the tool");
+        // A clone shares the flag, which is how the span's loop sees what the server's copy did.
+        let h = agy_policy();
+        let seen_by_loop = h.clone();
+        assert!(h.decide("read_url_content").0 && seen_by_loop.has_read_outside());
     }
 
     #[tokio::test]
