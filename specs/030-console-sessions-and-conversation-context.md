@@ -91,7 +91,7 @@ Slices, each ending with the gates green and mergeable alone.
 Total about 12 h. S1 and S2 are daemon-only and can land before any UI change; S3 depends on S1.
 
 **Built so far (2026-10-25):**
-- **S1, done** (as amended in §3): the event, `session.new`, the restart hook in `EngineService::mission`, the digest and central log, the console fold. No recovery change was needed: the session is derived from the log.
+- **S1, done** (as amended in §3): the event, `session.new`, the restart hook in `EngineService::mission`, the digest and central log, the console fold. No recovery change was needed: the session is derived from the log. One correction, 2026-10-26: the console's fold treats `session.started` for the session already on screen as a no-op. A console that reconnects after a restart is told twice (the history it rebuilds from already holds the announcement, and so does the live stream), and clearing for the second wiped the "reconnected to the daemon" note before it was drawn; that was the intermittent failure of `the_console_survives_a_daemon_restart_and_picks_up_where_it_was`.
 - **S2, done** (as amended in §4 and §5): `session.rs`, the handoff's `conversation` field, `[session] conversation_tokens`, the starting-ceiling rule. Tests: `session.rs` units, and two daemon tests (`a_follow_up_is_told…`, `a_restart_ends_the_session_once…`).
 - **S3, done (2026-10-26):** `/new` with `/clear` as its alias, the clear on `session.started`, replay showing only the current session, the footer count, `/context [full]` (`session.context`), `/export [all]`. Tests: `ui/test/session-report.test.ts`, `service::tests::the_context_report_…`. Not done: wireframe text.
 - **S4, not done:** no pty test of `/new`, no live run against a real seat.

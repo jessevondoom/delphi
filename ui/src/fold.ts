@@ -205,7 +205,14 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
     }
     // A new session (`specs/030`): the screen starts empty and the sources start over. What is still running, and what
     // waits on the operator, carries on; the welcome text does not come back.
-    case 'session.started': return { ...s, blocks: [], live: '', sources: {}, started: true, session: Number(String(pl.session_id ?? '').replace(/\D/g, '')) || s.session + 1 };
+    case 'session.started': {
+      const n = Number(String(pl.session_id ?? '').replace(/\D/g, ''));
+      // The same session announced again changes nothing. A console that reconnects after a daemon restart is told twice: its
+      // history replay contains the announcement, and so does the live stream. Clearing for the second would wipe the
+      // "reconnected" note that was added in between, before it could be drawn.
+      if (n && n === s.session) return s;
+      return { ...s, blocks: [], live: '', sources: {}, started: true, session: n || s.session + 1 };
+    }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {

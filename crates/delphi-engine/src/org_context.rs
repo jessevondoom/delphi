@@ -204,12 +204,16 @@ fn project_block(projects: &[(String, PathBuf)]) -> String {
     if lines.is_empty() { String::new() } else { format!("### Project conventions (read these first)\n{}\n", lines.join("\n")) }
 }
 
+/// Matched means one of the bundle's repo patterns names a registered project (by its last segment or whole);
+/// a bundle that names no repo, or an install with no project, is not called unmatched.
+fn is_matched(repos: &[String], projects: &[(String, PathBuf)]) -> bool {
+    repos.is_empty() || projects.is_empty() || repos.iter().any(|r| projects.iter().any(|(n, _)| glob(r, n) || glob(r.rsplit('/').next().unwrap_or(r), n)))
+}
+
 fn bundle_part(ws: &WorkspacePaths, e: &Entry, projects: &[(String, PathBuf)], today: &str, perspectives_left: &mut usize, notes: &mut Vec<String>) -> Part {
     let id = e.id();
     let (repos, _paths) = read(ws, e, "bundle.toml", "scope", notes).map(|t| load::applies_to(&t)).unwrap_or_default();
-    // Matched means one of the bundle's repo patterns names a registered project (by its last segment or whole);
-    // a bundle that names no repo, or an install with no project, is not called unmatched.
-    let matched = repos.is_empty() || projects.is_empty() || repos.iter().any(|r| projects.iter().any(|(n, _)| glob(r, n) || glob(r.rsplit('/').next().unwrap_or(r), n)));
+    let matched = is_matched(&repos, projects);
     let stale = e.is_stale(today);
     let mut part = Part {
         header: format!("{} {} ({}) · {} · matched: {} · stale: {}", id, e.version, e.org, e.provenance, if matched { "yes" } else { "no" }, if stale { "yes" } else { "no" }),
@@ -247,6 +251,49 @@ fn bundle_part(ws: &WorkspacePaths, e: &Entry, projects: &[(String, PathBuf)], t
     }
     part.open.truncate(MAX_OPEN_ITEMS);
     part
+}
+
+/// What `/org` shows (`specs/026` §7.1): everything the slice is made from, without the slice's caps, plus what the
+/// slice had to give up. Read-only and deterministic; every string that came from a bundle is a single clean line.
+pub fn view(ws: &WorkspacePaths, projects: &[(String, PathBuf)], today: &str) -> serde_json::Value {
+    use serde_json::json;
+    let clean = |s: &str| one_line(&crate::observe::sanitize(s));
+    let (mut notes, mut bundles, mut goals, mut persp, mut open) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::<String>::new());
+    for e in bundles::active_entries(&ws.dir) {
+        let id = e.id();
+        let (repos, _) = read(ws, &e, "bundle.toml", "scope", &mut notes).map(|t| load::applies_to(&t)).unwrap_or_default();
+        let stale = e.is_stale(today);
+        if stale {
+            open.push(format!("{} is past its review date ({})", id, e.review_by));
+        }
+        // `update_available` and `vectors` stay null until a source that can say (B6) and the vector build (B3) exist.
+        bundles.push(json!({"id": id, "title": clean(&e.title), "version": clean(&e.version), "provenance": clean(&e.provenance), "order": e.order, "review_by": clean(&e.review_by), "stale": stale, "matched": is_matched(&repos, projects), "source": {"kind": clean(&e.source.kind), "path": clean(&e.source.path)}, "update_available": null, "vectors": null}));
+        if let Some(t) = read(ws, &e, "behavior/goals.md", "goals", &mut notes) {
+            for g in load::goals(&t) {
+                if g.status == "active" && horizon_end(&g.horizon).is_some_and(|end| end.as_str() < today) {
+                    open.push(format!("[{}] is past its horizon ({}) and still active", clean(&g.id), clean(&g.horizon)));
+                }
+                goals.push(json!({"bundle": id, "id": clean(&g.id), "title": clean(&g.title), "horizon": clean(&g.horizon), "measure": clean(&g.measure), "status": clean(&g.status)}));
+            }
+        }
+        if let Some(t) = read(ws, &e, "behavior/perspectives.md", "perspectives", &mut notes) {
+            for p in load::perspectives(&t) {
+                persp.push(json!({"bundle": id, "id": clean(&p.id), "title": clean(&p.title), "statement": clean(&p.statement)}));
+            }
+        }
+    }
+    let built = build(ws, projects, today);
+    for t in &built.trimmed {
+        open.push(format!("{} gave up lines to fit the prompt slice ({} of {} bytes)", clean(t), built.text.len(), SLICE_BYTES));
+    }
+    // `build` reads the same files, so its notes repeat ours.
+    for n in built.notes.iter().chain(notes.iter()) {
+        let n = clean(n);
+        if !open.contains(&n) {
+            open.push(n);
+        }
+    }
+    json!({"bundles": bundles, "goals": goals, "perspectives": persp, "open": open, "slice": {"bytes": built.text.len(), "cap": SLICE_BYTES, "bundles": built.bundles, "trimmed": built.trimmed}, "unavailable": ["rollback", "map connector"]})
 }
 
 /// Everything the slice depends on, as one string: when it changes the slice is built again, and when it does not the
@@ -325,6 +372,35 @@ mod tests {
         }
         assert!(a.text.find("acme/plat 1.0.0").unwrap() < a.text.find("beta/ops 1.0.0").unwrap(), "in overlay order");
         assert!(!a.text.contains("Why:") && !a.text.contains("because"), "the slice carries stated intent, not every field");
+    }
+
+    #[test]
+    fn the_org_view_lists_everything_the_slice_is_made_from_and_what_it_gave_up() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        assert_eq!(view(&ws, &[], "2026-10-26")["bundles"], serde_json::json!([]), "no bundles, an empty view");
+        let mut goals = goal(1, "active", "2026-Q1");
+        goals.push_str(&goal(2, "met", "2026-Q1"));
+        for i in 3..=12 {
+            goals.push_str(&goal(i, "active", "2999-Q1"));
+        }
+        bundle(&ws, "acme", "plat", 10, &goals, &persp("acme", 1), &index(20, 40));
+        let mut lock = bundles::read(&ws.dir).unwrap();
+        lock.bundle[0].review_by = "2026-01-01".into();
+        bundles::write(&ws.dir, &lock).unwrap();
+        let v = view(&ws, &[("other".into(), t.path().to_path_buf())], "2026-10-26");
+        let b = &v["bundles"][0];
+        assert_eq!((b["id"].as_str(), b["version"].as_str(), b["provenance"].as_str(), b["stale"].as_bool(), b["matched"].as_bool()), (Some("acme/plat"), Some("1.0.0"), Some("unsigned"), Some(true), Some(false)), "{}", b);
+        assert!(b["update_available"].is_null() && b["vectors"].is_null(), "not knowable yet, so not invented");
+        assert_eq!(v["goals"].as_array().unwrap().len(), 12, "the slice caps goals at eight; the view shows them all, with their status");
+        assert_eq!(v["goals"][1]["status"], "met");
+        assert_eq!(v["perspectives"][0]["id"], "P-acme-01");
+        let open: Vec<&str> = v["open"].as_array().unwrap().iter().filter_map(|x| x.as_str()).collect();
+        for want in ["acme/plat is past its review date (2026-01-01)", "[G-acme-01] is past its horizon (2026-Q1) and still active"] {
+            assert!(open.contains(&want), "`{}` missing from {:?}", want, open);
+        }
+        assert!(open.iter().any(|o| o.starts_with("acme/plat gave up lines")), "the trim is an open item: {:?}", open);
+        assert_eq!(v["unavailable"], serde_json::json!(["rollback", "map connector"]));
     }
 
     #[test]

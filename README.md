@@ -145,6 +145,7 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `/decisions`, `/merge <task>` | review an optimistic build's decisions; rerun the gates and merge card |
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
+| `/org` | the added org bundles, their goals, perspectives and open items; add, update or remove a bundle (no approval card: your key is the decision) |
 | `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
 | `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | after a daemon restart; the current and past missions; housekeeping |
 
