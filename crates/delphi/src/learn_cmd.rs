@@ -138,8 +138,34 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Another test's fork/exec can briefly inherit a just-released lock descriptor, so a reopen right after a drop may
+    /// see `Locked` on a slow runner (the same race `mission::tests::open` and the log tests retry through).
+    fn open_log(dir: &Path) -> EventLog {
+        for _ in 0..300 {
+            match EventLog::open(dir, LogOptions::default()) {
+                Err(delphi_core::log::LogError::Locked(_)) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                other => return other.unwrap(),
+            }
+        }
+        EventLog::open(dir, LogOptions::default()).unwrap()
+    }
+
+    /// `drop` over a mission nobody holds; a stray inherited descriptor reads as "a daemon holds it", so wait that out.
+    fn drop_note(ws: &Path, which: &str) {
+        for _ in 0..300 {
+            match run_in(ws, "drop", Some(which), &opts()) {
+                Err(e) if e.contains("daemon") => std::thread::sleep(std::time::Duration::from_millis(10)),
+                other => {
+                    other.unwrap();
+                    return;
+                }
+            }
+        }
+        run_in(ws, "drop", Some(which), &opts()).unwrap();
+    }
+
     fn mission(ws: &Path, id: &str, events: Vec<EventEnvelope>) {
-        let mut log = EventLog::open(&ws.join("local/missions").join(id), LogOptions::default()).unwrap();
+        let mut log = open_log(&ws.join("local/missions").join(id));
         for e in events {
             log.append(e).unwrap();
         }
@@ -167,7 +193,7 @@ mod tests {
         assert!(run_in(t.path(), "show", Some("m_b/n3"), &opts()).unwrap().contains("untrusted"));
         assert!(run_in(t.path(), "show", Some("n3"), &opts()).unwrap_err().contains("names 2 notes"), "a bare id that two missions share is ambiguous");
 
-        run_in(t.path(), "drop", Some("m_a/n3"), &opts()).unwrap();
+        drop_note(t.path(), "m_a/n3");
         let after = run_in(t.path(), "list", None, &opts()).unwrap();
         assert!(!after.contains("m_a/n3") && after.contains("m_a/n9") && after.contains("2 note(s)"), "{}", after);
         let log = replay(&t.path().join("local/missions/m_a")).unwrap();
@@ -179,7 +205,7 @@ mod tests {
     fn drop_refuses_while_a_daemon_holds_the_mission() {
         let t = tempfile::tempdir().unwrap();
         mission(t.path(), "m_a", vec![staged("m_a", "n3", "x", "L5")]);
-        let _held = EventLog::open(&t.path().join("local/missions/m_a"), LogOptions::default()).unwrap();
+        let _held = open_log(&t.path().join("local/missions/m_a"));
         let err = run_in(t.path(), "drop", Some("m_a/n3"), &opts()).unwrap_err();
         assert!(err.contains("daemon") && err.contains("m_a"), "{}", err);
     }
