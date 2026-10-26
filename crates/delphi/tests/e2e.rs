@@ -1395,8 +1395,8 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));
     }
-    o.wait_for("· thinking");
-    o.wait_for("nothing is thinking right now");
+    o.wait_for("· changes");
+    o.wait_for("no changes recorded yet");
     assert_eq!(o.ctrl_c_out(), 0);
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();

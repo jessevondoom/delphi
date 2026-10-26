@@ -26,7 +26,6 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   const [scroll, setScroll] = useState(0);
   const [selNode, setSelNode] = useState(0);
   const [live, setLive] = useState<Record<string, string>>({});
-  const [think, setThink] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(true);
   const still = useMemo(() => stillMotion(), []);
   const [now, setNow] = useState(Date.now());
@@ -89,14 +88,9 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
           for (const [id, v] of Object.entries<any>(spans)) if (v?.text) next[id] = ((next[id] ?? '') + v.text).slice(-6000);
           return next;
         });
-        setThink((cur) => {
-          const next = { ...cur };
-          for (const [id, v] of Object.entries<any>(spans)) if (v?.thinking) next[id] = ((next[id] ?? '') + v.thinking).slice(-4000);
-          return next;
-        });
       } else if (n.method === 'event') {
         timer ??= setTimeout(() => { timer = null; void load(); }, 300);
-        if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) { setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; }); setThink((cur) => { const { [n.params.payload.node_id]: _y, ...rest } = cur; return rest; }); }
+        if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) { setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; }); }
       } else if (n.method === 'resync_required') void load();
     };
     ev.on('notification', onNote);
@@ -133,7 +127,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, connected, think, now, still };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, connected, now, still };
   const lines = observeFrame(model, size.w, size.h);
   const shown = useSelection(term, lines);
   return (

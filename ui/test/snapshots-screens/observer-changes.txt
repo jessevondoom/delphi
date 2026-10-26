@@ -1,13 +1,13 @@
-⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
-delphi v0.5 · thinking
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧
+delphi v0.5 · changes
 
- ▼ needs you   council t_2 needs a decision                                   answer in the console
+ ✔ nothing needs you
 
 
-  nothing is thinking right now
+  no changes recorded yet
 
-  the reasoning of running agents appears here as it streams
-  it lives only in this window: never saved, and a window opened later starts empty
+  agents add a line here when they finish a piece of work: what changed, in plain words
+  it is kept with the mission, so the chat summary and a pull request description can use it
 
 
 
