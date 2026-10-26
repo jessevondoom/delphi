@@ -42,7 +42,7 @@ in and out, calls and cost per model, attempts and mid-run model swaps.
 ## Reviewing a truth pack (your job before any research run)
 
 Each research case has a generated **review sheet** beside its pack: open `truth/review-sheet.md` in
-`suites/research/cases/<id>/truth/` (`motogp-2027-regs`, `mycorrhizal-networks`, `phantom-paper`). It puts every fact beside
+`suites/research/cases/<id>/truth/` (`motogp-2027-regs`, `mycorrhizal-networks`, `phantom-paper`, `lions-mane-claim`, `livewire-strategy`). It puts every fact beside
 its source link, the verbatim quote and the patterns, lists the traps, sources and rubric, and shows the judgement questions
 with room for your own view. Regenerate after any change with `delphi train truth-sheet --all`.
 

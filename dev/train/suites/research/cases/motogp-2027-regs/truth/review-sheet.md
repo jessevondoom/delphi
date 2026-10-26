@@ -30,7 +30,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > engine displacement will reduce from 1000cc to 850cc
 
-- **Counts as stated if the answer matches any of:** `\b850\s?-?cc\b` · `\b850 cubic`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b850\s?-?cc\b
+\b850 cubic
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `bore-75` (weight 1)
@@ -41,7 +47,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > maximum cylinder bore will reduce from 81mm to 75mm
 
-- **Counts as stated if the answer matches any of:** `\b75\s?mm` · `75 millimet`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b75\s?mm
+75 millimet
+```
+
 - **And contains the number** 75 (± 0)
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
@@ -53,7 +65,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > Engines will remain 4-stroke only, with 4 cylinders
 
-- **Counts as stated if the answer matches any of:** `(four|4)[ -]cylinder`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+(four|4)[ -]cylinder
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `engines-six` (weight 1)
@@ -64,7 +81,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > will reduce to 6 engines per season
 
-- **Counts as stated if the answer matches any of:** `\b(six|6)\s+(engines|units)` · `from (seven|7) to (six|6)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b(six|6)\s+(engines|units)
+from (seven|7) to (six|6)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `fuel-sustainable` (weight 1)
@@ -75,7 +98,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > MotoGP will race with 100% sustainable fuel from 2027
 
-- **Counts as stated if the answer matches any of:** `100\s?%\s+(sustainable|non[- ]oil|renewable)` · `fully sustainable fuel`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+100\s?%\s+(sustainable|non[- ]oil|renewable)
+fully sustainable fuel
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `tank-20` (weight 1)
@@ -86,7 +115,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > Fuel tank capacity will be reduced to 20 litres
 
-- **Counts as stated if the answer matches any of:** `\b20\s?(litres?|liters?|l)\b`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b20\s?(litres?|liters?|l)\b
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `sprint-11` (weight 0.5)
@@ -97,7 +131,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > a maximum of 11 litres will be permitted for the Sprint
 
-- **Counts as stated if the answer matches any of:** `\b11\s?(litres?|liters?|l)\b`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b11\s?(litres?|liters?|l)\b
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `ride-height-ban` (weight 1)
@@ -108,7 +147,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > No ride height devices of any kind will be permitted
 
-- **Counts as stated if the answer matches any of:** `ride[- ]height.{0,80}(ban|prohibit|scrap|remov|not be permitted|eliminat)` · `(ban|prohibit|scrap|remov|eliminat).{0,60}ride[- ]height`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+ride[- ]height.{0,80}(ban|prohibit|scrap|remov|not be permitted|eliminat)
+(ban|prohibit|scrap|remov|eliminat).{0,60}ride[- ]height
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `holeshot-ban` (weight 1)
@@ -119,7 +164,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > including “holeshot” devices activated solely for race starts
 
-- **Counts as stated if the answer matches any of:** `hole-?shot`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+hole-?shot
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `fairing-550` (weight 1)
@@ -130,7 +180,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > will reduce from 600mm to 550mm
 
-- **Counts as stated if the answer matches any of:** `\b550\s?mm`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b550\s?mm
+```
+
 - **And contains the number** 550 (± 0)
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
@@ -142,7 +197,14 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > will be moved back by 50mm
 
-- **Counts as stated if the answer matches any of:** `nose.{0,80}50\s?mm` · `50\s?mm.{0,80}nose` · `nose (is |will be )?(moved|pushed) back`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+nose.{0,80}50\s?mm
+50\s?mm.{0,80}nose
+nose (is |will be )?(moved|pushed) back
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `rear-aero-1150` (weight 0.5)
@@ -153,7 +215,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > maximum rear end height will reduce from 1250mm to 1150mm
 
-- **Counts as stated if the answer matches any of:** `1[,.]?150\s?mm`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+1[,.]?150\s?mm
+```
+
 - **And contains the number** 1150 (± 0)
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
@@ -165,7 +232,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > Manufacturers will be permitted to make one update per season
 
-- **Counts as stated if the answer matches any of:** `homologat`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+homologat
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `gps-shared` (weight 1)
@@ -176,7 +248,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > GPS data from all riders will be made available to all teams at the end of each session
 
-- **Counts as stated if the answer matches any of:** `\bGPS\b`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\bGPS\b
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `rank-b` (weight 1)
@@ -187,7 +264,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > Manufacturers who have raced in 2026 will start the 2027 season in Rank B
 
-- **Counts as stated if the answer matches any of:** `rank b`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+rank b
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `min-weight` (weight 0.5)
@@ -198,7 +280,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > The minimum bike weight in the MotoGP class will be 153kg
 
-- **Counts as stated if the answer matches any of:** `\b153\s?kg`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b153\s?kg
+```
+
 - **And contains the number** 153 (± 0)
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
@@ -210,7 +297,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > will reduce to 16, plus 4 different overall ratios
 
-- **Counts as stated if the answer matches any of:** `\b16\b.{0,50}(gear|ratio)` · `(gear|ratio).{0,60}\b16\b`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b16\b.{0,50}(gear|ratio)
+(gear|ratio).{0,60}\b16\b
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `pirelli` (weight 1)
@@ -221,7 +314,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > Pirelli will be the exclusive official tyre supplier to MotoGP from 2027
 
-- **Counts as stated if the answer matches any of:** `pirelli.{0,150}(2027|replac|exclusive|sole|official|new)` · `(replac|succe)\w*.{0,40}michelin`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+pirelli.{0,150}(2027|replac|exclusive|sole|official|new)
+(replac|succe)\w*.{0,40}michelin
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `pirelli-contract` (weight 0.5)
@@ -232,7 +331,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > A new five-year contract until 2031 inclusive
 
-- **Counts as stated if the answer matches any of:** `2031` · `five[- ]year`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+2031
+five[- ]year
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `michelin-until-2026` (weight 1)
@@ -243,7 +348,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > Michelin will remain the exclusive supplier for MotoGP and MotoE until the end of the current technical regulations, at the close of the 2026 season
 
-- **Counts as stated if the answer matches any of:** `michelin.{0,150}(2026|until the end|exit|leav|replac)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+michelin.{0,150}(2026|until the end|exit|leav|replac)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `announced-2024` (weight 0.5)
@@ -254,7 +364,14 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > The Grand Prix Commission finalised the 2027 technical regulations last week in Jerez
 
-- **Counts as stated if the answer matches any of:** `jerez` · `may 2024` · `grand prix commission`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+jerez
+may 2024
+grand prix commission
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ## 2. Traps (3)
@@ -264,19 +381,35 @@ An answer asserting one is penalized.
 ### `800cc`
 
 - **Why it is false:** The new capacity is 850cc, not 800cc
-- **Fires on:** `\b800\s?cc`
+- **Fires on (one pattern per line):**
+
+```
+\b800\s?cc
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ### `aero-banned`
 
 - **Why it is false:** Aerodynamics are reduced and tightly controlled, not banned
-- **Fires on:** `aero(dynamics?)? (is|are|will be|has been|have been) (completely |fully |entirely )?(banned|prohibited|eliminated)` · `(ban|banned|banning|prohibit\w*|eliminat\w*) (on |of )?(all )?(aero|wings|winglets)`
+- **Fires on (one pattern per line):**
+
+```
+aero(dynamics?)? (is|are|will be|has been|have been) (completely |fully |entirely )?(banned|prohibited|eliminated)
+(ban|banned|banning|prohibit\w*|eliminat\w*) (on |of )?(all )?(aero|wings|winglets)
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ### `michelin-stays`
 
 - **Why it is false:** Michelin leaves after 2026; Pirelli supplies from 2027
-- **Fires on:** `michelin (will |would )?(remain|continue)s?( as| to be)? (the )?(sole |exclusive |official )?(tyre|tire)s? supplier (in|for|from|beyond|after) 2027`
+- **Fires on (one pattern per line):**
+
+```
+michelin (will |would )?(remain|continue)s?( as| to be)? (the )?(sole |exclusive |official )?(tyre|tire)s? supplier (in|for|from|beyond|after) 2027
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ## 3. Sources (3)

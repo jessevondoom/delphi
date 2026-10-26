@@ -1,0 +1,21 @@
+# Overclaims the evidence does not support (specs/037 section 4). The patterns require the affirmative form directly adjacent
+# ("lion's mane prevents dementia"), so a negated sentence ("has not been proven to prevent dementia") does not trigger them.
+[[trap]]
+id = "proven"
+why = "Nothing here is proof of a benefit; the human trials are small, short and mixed"
+any = ['\b(is|are|has been|have been|was|were) (clinically |scientifically |conclusively )?proven to\b', 'clinically proven']
+
+[[trap]]
+id = "treats-dementia"
+why = "No trial shows lion's mane treats, cures or prevents Alzheimer's disease or dementia; one trial was in mild cognitive impairment"
+any = ["(lion.?s mane|hericium) (can |will |does |could )?(cures?|reverses?|treats?|prevents?|protects against)( or [a-z]+)? (alzheimer|dementia)"]
+
+[[trap]]
+id = "approved"
+why = "Lion's mane is a supplement; no regulator has approved it as a treatment for a cognitive condition"
+any = ['(lion.?s mane|hericium) (is|are) (FDA|EMA)[- ](approved|cleared)', '(FDA|EMA)[- ](approved|cleared) (lion.?s mane|hericium)', "(lion.?s mane|hericium)'?s? is approved"]
+
+[[trap]]
+id = "many-large-trials"
+why = "The human evidence is a handful of small trials, not dozens of large ones"
+any = ['\b(dozens|hundreds) of (human |clinical |randomi[sz]ed )?(trials|studies)\b[^.]{0,80}(confirm|show|prove|demonstrat)']
