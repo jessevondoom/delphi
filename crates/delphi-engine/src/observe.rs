@@ -165,6 +165,24 @@ pub struct Change {
 
 const MAX_CHANGES: usize = 200;
 
+/// An approval the operator has not answered yet: whose, what, and since when (the window shows how long it has waited).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Waiting {
+    pub role: String,
+    pub summary: String,
+    pub since_ms: u64,
+}
+
+/// What has happened since the operator last did something (asked, or answered an approval): the digest for coming back.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct SinceYou {
+    pub since_ms: u64,
+    pub changes: u32,
+    pub done: u32,
+    pub failed: u32,
+    pub approvals: u32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Seat {
     pub role: String,
@@ -250,6 +268,10 @@ pub struct ObserverState {
     pub threads: Vec<Thread>,
     /// The change log, oldest first (the newest 200).
     pub changes: Vec<Change>,
+    /// Approvals waiting on the operator, by id, with the time each was raised.
+    pub approvals: BTreeMap<String, Waiting>,
+    /// What happened since the operator last acted.
+    pub since_you: SinceYou,
     /// The console sessions of the mission, oldest first (the newest 20); the last is the current one.
     pub sessions: Vec<SessionRow>,
     pub pending_approvals: BTreeMap<String, String>,
@@ -290,6 +312,22 @@ pub struct Streak {
     pub failed: u32,
 }
 
+/// How many of the same tool in a row, or failures in a row, count as going round in circles (the window uses the same).
+pub const LOOP_CALLS: u32 = 6;
+pub const LOOP_FAILS: u32 = 3;
+
+/// Extend a span's streak with one more call. Returns the `monitor.alert` payload when this call is the one that takes it
+/// to a threshold (so a loop is raised once for each cause, not on every call after it: three failures in a row, or six calls
+/// of the same tool that were not already announced as failing).
+pub fn extend_streak(sk: &mut Streak, raw_tool: &str, failed: bool) -> Option<Value> {
+    let tool = tool_name(raw_tool);
+    if tool.is_empty() {
+        return None;
+    }
+    *sk = if sk.tool == tool { Streak { tool, n: sk.n + 1, failed: if failed { sk.failed + 1 } else { 0 } } } else { Streak { tool, n: 1, failed: failed as u32 } };
+    (sk.failed == LOOP_FAILS || (sk.n == LOOP_CALLS && sk.failed < LOOP_FAILS)).then(|| serde_json::json!({"kind": "loop", "tool": sk.tool, "n": sk.n, "failed": sk.failed}))
+}
+
 /// What one role's agents have called in the mission: totals, the tool used last, and the count of each tool (the
 /// ten most used). Names and counts only: never arguments, results or the text around them.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -299,7 +337,17 @@ pub struct RoleTools {
     pub last: String,
     /// The streak the role's latest call belongs to.
     pub streak: Streak,
+    /// The call it is inside now, if one has started and not come back.
+    pub open: Option<OpenTool>,
     pub by_tool: BTreeMap<String, ToolCount>,
+}
+
+/// A tool call that has started and not come back: which, and since when. An API seat's call closes with its result; a
+/// subscription CLI's own tool is not reported as finished, so it stays open until the role's next call or change.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct OpenTool {
+    pub tool: String,
+    pub since_ms: u64,
 }
 
 const MAX_TOOLS_PER_ROLE: usize = 10;
@@ -332,6 +380,72 @@ pub fn tool_call_of(kind: &str, p: &Value) -> Option<(String, bool)> {
     }
 }
 
+fn env_ms(e: &delphi_core::event::EventEnvelope) -> u64 {
+    ts_ms(&serde_json::json!({"timestamp": e.timestamp}))
+}
+
+/// A file that agents wrote or named in a recorded change: by whom, how often, when last. `clash` is two roles on one file.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct FileHeat {
+    pub path: String,
+    pub roles: BTreeMap<String, u32>,
+    pub writes: u32,
+    pub last_ms: u64,
+    pub clash: bool,
+}
+
+const FILE_TOOLS: [&str; 2] = ["write_file", "edit_file"];
+const MAX_FILES_TRACKED: usize = 300;
+const MAX_FILES_SHOWN: usize = 12;
+
+/// The files the team has touched, from three places: the files named when an agent records a change, an API seat's
+/// `write_file` and `edit_file` calls, and the same tools called from a subscription CLI. Paths only, never contents.
+pub fn file_heat(events: &[delphi_core::event::EventEnvelope]) -> Vec<FileHeat> {
+    let mut by: BTreeMap<String, FileHeat> = BTreeMap::new();
+    let mut touch = |path: &str, role: &str, ms: u64| {
+        let path: String = sanitize(path).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect();
+        if path.is_empty() {
+            return;
+        }
+        let h = by.entry(path.clone()).or_insert_with(|| FileHeat { path, ..Default::default() });
+        *h.roles.entry(role.to_string()).or_default() += 1;
+        h.writes += 1;
+        h.last_ms = h.last_ms.max(ms);
+        h.clash = h.roles.len() > 1;
+        if by.len() > MAX_FILES_TRACKED {
+            if let Some(oldest) = by.values().min_by_key(|f| f.last_ms).map(|f| f.path.clone()) {
+                by.remove(&oldest);
+            }
+        }
+    };
+    for e in events {
+        let role = e.agent.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| "unknown".into());
+        let ms = env_ms(e);
+        match e.kind.as_str() {
+            "change.recorded" => {
+                for f in e.payload["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str()) {
+                    touch(f, &role, ms);
+                }
+            }
+            "agent.block.complete" if e.payload["block"]["type"] == "tool_call" && FILE_TOOLS.contains(&tool_name(e.payload["block"]["name"].as_str().unwrap_or("")).as_str()) => {
+                if let Some(path) = e.payload["block"]["arguments"]["path"].as_str() {
+                    touch(path, &role, ms);
+                }
+            }
+            "harness.bridge_call" if FILE_TOOLS.contains(&tool_name(e.payload["name"].as_str().unwrap_or("")).as_str()) => {
+                if let Some(path) = e.payload["arguments"]["path"].as_str() {
+                    touch(path, &role, ms);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut v: Vec<FileHeat> = by.into_values().collect();
+    v.sort_by(|a, b| b.clash.cmp(&a.clash).then_with(|| b.last_ms.cmp(&a.last_ms)).then_with(|| a.path.cmp(&b.path)));
+    v.truncate(MAX_FILES_SHOWN);
+    v
+}
+
 /// Tool use per role over a whole mission log. It is a pass of its own, not part of [`ObserverState::apply`], because
 /// calls are the most frequent events in a log and would push everything else out of the window the fold keeps.
 pub fn tool_stats(events: &[delphi_core::event::EventEnvelope]) -> BTreeMap<String, RoleTools> {
@@ -339,8 +453,29 @@ pub fn tool_stats(events: &[delphi_core::event::EventEnvelope]) -> BTreeMap<Stri
     // The span of each role's latest call, to tell a streak in one span from the same tool in the next.
     let mut span_of: BTreeMap<String, String> = BTreeMap::new();
     for e in events {
+        let who = || e.agent.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| "unknown".into());
+        match e.kind.as_str() {
+            "agent.block.complete" if e.payload["block"]["type"] == "tool_call" => {
+                let tool = tool_name(e.payload["block"]["name"].as_str().unwrap_or(""));
+                if !tool.is_empty() {
+                    out.entry(who()).or_default().open = Some(OpenTool { tool, since_ms: env_ms(e) });
+                }
+            }
+            "harness.tool" => {
+                let tool = tool_name(e.payload["tool"].as_str().unwrap_or(""));
+                if !tool.is_empty() {
+                    out.entry(who()).or_default().open = Some(OpenTool { tool, since_ms: env_ms(e) });
+                }
+            }
+            "tool.result" | "harness.bridge_call" | "change.recorded" => {
+                if let Some(r) = out.get_mut(&who()) {
+                    r.open = None;
+                }
+            }
+            _ => {}
+        }
         let Some((tool, failed)) = tool_call_of(&e.kind, &e.payload) else { continue };
-        let role = e.agent.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| "unknown".into());
+        let role = who();
         let span = e.span_id.clone().unwrap_or_default();
         let same_span = span_of.insert(role.clone(), span.clone()).is_some_and(|s| s == span);
         let r = out.entry(role).or_default();
@@ -449,6 +584,9 @@ impl ObserverState {
         match kind {
             "task.created" => {
                 let flow = p["flow"].as_str().or(p["target"].as_str()).unwrap_or("task").to_string();
+                if p["prompt"].as_str().is_some_and(|t| !t.trim().is_empty()) && !matches!(p["flow"].as_str(), Some("build") | Some("council")) {
+                    self.since_you = SinceYou { since_ms: ts_ms(e), ..Default::default() };
+                }
                 let prompt = sanitize(p["prompt"].as_str().unwrap_or("")).chars().take(300).collect::<String>();
                 self.say(format!("{} started ({}): {}", task, flow, prompt.chars().take(80).collect::<String>()));
                 let session = self.sessions.last().map(|s| s.id.clone()).unwrap_or_default();
@@ -474,6 +612,7 @@ impl ObserverState {
                 if !summary.is_empty() {
                     let files = p["files"].as_array().map(|a| a.iter().map(|x| clip(x, 120)).filter(|x| !x.is_empty()).take(20).collect()).unwrap_or_default();
                     let session = self.sessions.last().map(|s| s.id.clone()).unwrap_or_default();
+                    self.since_you.changes += 1;
                     self.changes.push(Change { session, at_ms: ts_ms(e), role: if role.is_empty() { clip(&p["role"], 40) } else { role.clone() }, task: task.clone(), summary, files });
                     if self.changes.len() > MAX_CHANGES {
                         self.changes.remove(0);
@@ -527,6 +666,7 @@ impl ObserverState {
                 }
             }
             "task.completed" => {
+                self.since_you.done += 1;
                 let st = s(&p["status"]);
                 if let Some(t) = self.tasks.get_mut(&task) {
                     t.status = if st.is_empty() { "done".into() } else { st.clone() };
@@ -534,6 +674,7 @@ impl ObserverState {
                 self.say(format!("{} {}", task, if st == "escalated" { "needs you".to_string() } else { "finished".to_string() }));
             }
             "task.failed" => {
+                self.since_you.failed += 1;
                 if let Some(t) = self.tasks.get_mut(&task) {
                     t.status = "failed".into();
                 }
@@ -655,6 +796,8 @@ impl ObserverState {
                 if let Some(n) = self.nodes.get_mut(&s(&e["span_id"])) {
                     n.waiting = "waiting on you".into();
                 }
+                self.since_you.approvals += 1;
+                self.approvals.insert(id.clone(), Waiting { role: s(&p["role"]), summary: sanitize(p["summary"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect(), since_ms: ts_ms(e) });
                 self.pending_approvals.insert(id, s(&p["summary"]));
                 if let Some(a) = self.agents.get_mut(&s(&p["role"])) {
                     a.state = "waiting on you".into();
@@ -668,6 +811,9 @@ impl ObserverState {
                     }
                 }
                 self.pending_approvals.remove(&s(&p["approval_id"]));
+                self.approvals.remove(&s(&p["approval_id"]));
+                // Answering is an action of the operator's: the digest starts over from here.
+                self.since_you = SinceYou { since_ms: ts_ms(e), ..Default::default() };
                 for a in self.agents.values_mut().filter(|a| a.state == "waiting on you") {
                     a.state = "running".into();
                 }
@@ -1116,6 +1262,80 @@ mod tests {
         assert_eq!(s["writer"].by_tool.keys().collect::<Vec<_>>(), ["WebSearch"], "control sequences are removed");
         let text = serde_json::to_string(&s).unwrap();
         assert!(!text.contains("SECRET") && !text.contains("cargo test") && !text.contains("summary"), "names and counts only: {}", text);
+    }
+
+    fn tat(kind: &str, role: &str, ts: &str, payload: Value) -> delphi_core::event::EventEnvelope {
+        let mut e = tev(kind, role, payload);
+        e.timestamp = ts.into();
+        e
+    }
+
+    #[test]
+    fn a_role_is_inside_a_tool_from_when_the_call_starts_until_it_comes_back() {
+        let started = tat("agent.block.complete", "builder", "2026-10-26T10:00:00.250Z", json!({"block": {"type": "tool_call", "name": "run_command", "arguments": {"command": "SECRET"}}}));
+        let o = tool_stats(std::slice::from_ref(&started));
+        assert_eq!(o["builder"].open, Some(OpenTool { tool: "run_command".into(), since_ms: 1_793_008_800_250 }));
+        assert!(!serde_json::to_string(&o).unwrap().contains("SECRET"), "the arguments are not kept");
+        let back = tat("tool.result", "builder", "2026-10-26T10:07:00Z", json!({"name": "run_command", "is_error": false}));
+        assert_eq!(tool_stats(&[started.clone(), back])["builder"].open, None);
+        // A subscription CLI's own tool is never reported finished; recording a change closes it.
+        let cli = tat("harness.tool", "scout", "2026-10-26T10:00:00Z", json!({"tool": "Bash", "summary": "cargo test"}));
+        assert_eq!(tool_stats(std::slice::from_ref(&cli))["scout"].open.as_ref().map(|t| t.tool.as_str()), Some("Bash"));
+        let said = tat("change.recorded", "scout", "2026-10-26T10:05:00Z", json!({"summary": "x"}));
+        assert_eq!(tool_stats(&[cli, said])["scout"].open, None);
+    }
+
+    #[test]
+    fn file_heat_names_paths_by_role_and_flags_two_roles_on_one_file() {
+        let log = vec![
+            tat("agent.block.complete", "builder", "2026-10-26T10:00:00Z", json!({"block": {"type": "tool_call", "name": "write_file", "arguments": {"path": "crates/q/claim.rs", "content": "SECRET BODY"}}})),
+            tat("harness.bridge_call", "architect", "2026-10-26T10:03:00Z", json!({"name": "mcp__delphi__edit_file", "arguments": {"path": "crates/q/claim.rs"}, "is_error": false})),
+            tat("change.recorded", "builder", "2026-10-26T10:04:00Z", json!({"summary": "x", "files": ["specs/040.md", "crates/q/claim.rs"]})),
+            tat("agent.block.complete", "builder", "2026-10-26T10:05:00Z", json!({"block": {"type": "tool_call", "name": "read_file", "arguments": {"path": "ignored.rs"}}})),
+        ];
+        let h = file_heat(&log);
+        assert_eq!(h.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["crates/q/claim.rs", "specs/040.md"], "the clash first");
+        assert_eq!((h[0].clash, h[0].writes, h[0].roles["builder"], h[0].roles["architect"]), (true, 3, 2, 1));
+        assert!(!h[1].clash);
+        assert!(!serde_json::to_string(&h).unwrap().contains("SECRET"), "paths only, never contents");
+        let many: Vec<_> = (0..40).map(|i| tat("change.recorded", "builder", "2026-10-26T10:00:00Z", json!({"summary": "x", "files": [format!("f{}.rs", i)]}))).collect();
+        assert_eq!(file_heat(&many).len(), MAX_FILES_SHOWN);
+    }
+
+    #[test]
+    fn approvals_carry_when_they_were_raised_and_what_happened_since_the_operator_last_acted() {
+        let mut st = ObserverState::new(&roles());
+        let at_s = |seq: u64, mut e: Value, ts: &str| { e["seq"] = json!(seq); e["timestamp"] = json!(ts); e };
+        st.apply(&at_s(1, ev(0, "task.created", "t_1", "", json!({"prompt": "tidy the model", "target": "orchestrator"})), "2026-10-26T10:00:00Z"));
+        st.apply(&at_s(2, ev(0, "change.recorded", "t_1", "builder", json!({"summary": "a", "role": "builder"})), "2026-10-26T10:10:00Z"));
+        st.apply(&at_s(3, ev(0, "change.recorded", "t_1", "builder", json!({"summary": "b", "role": "builder"})), "2026-10-26T10:11:00Z"));
+        st.apply(&at_s(4, ev(0, "task.failed", "t_2", "builder", json!({"error": "x"})), "2026-10-26T10:12:00Z"));
+        st.apply(&at_s(5, ev(0, "approval.requested", "t_1", "builder", json!({"approval_id": "ap_1", "role": "builder", "summary": "run\n  cargo test\x1b[31m"})), "2026-10-26T10:13:00Z"));
+        assert_eq!(st.approvals["ap_1"], Waiting { role: "builder".into(), summary: "run cargo test".into(), since_ms: 1_793_009_580_000 });
+        assert_eq!(st.since_you, SinceYou { since_ms: 1_793_008_800_000, changes: 2, done: 0, failed: 1, approvals: 1 });
+        // Answering the card is the operator acting: the digest starts over, and the card is no longer waiting.
+        st.apply(&at_s(6, ev(0, "approval.resolved", "t_1", "", json!({"approval_id": "ap_1", "decision": "approved"})), "2026-10-26T10:20:00Z"));
+        assert!(st.approvals.is_empty());
+        assert_eq!(st.since_you, SinceYou { since_ms: 1_793_010_000_000, ..Default::default() });
+        // A build or council task is not the operator asking.
+        st.apply(&at_s(7, ev(0, "task.created", "t_9", "", json!({"prompt": "build it", "flow": "build"})), "2026-10-26T10:30:00Z"));
+        assert_eq!(st.since_you.since_ms, 1_793_010_000_000);
+    }
+
+    #[test]
+    fn a_loop_is_raised_once_when_a_streak_reaches_six_calls_or_three_failures() {
+        let mut sk = Streak::default();
+        let alerts: Vec<_> = (0..9).filter_map(|_| extend_streak(&mut sk, "mcp__delphi__read_file", false)).collect();
+        assert_eq!(alerts, vec![json!({"kind": "loop", "tool": "read_file", "n": 6, "failed": 0})], "once, at the sixth");
+        let mut sk = Streak::default();
+        let alerts: Vec<_> = (0..8).filter_map(|_| extend_streak(&mut sk, "run_command", true)).collect();
+        assert_eq!(alerts, vec![json!({"kind": "loop", "tool": "run_command", "n": 3, "failed": 3})], "a failing streak is announced at the third failure and not again at the sixth call");
+        let mut sk = Streak::default();
+        let alerts: Vec<_> = [true, true, false, true, true, true, true].iter().filter_map(|f| extend_streak(&mut sk, "run_command", *f)).collect();
+        assert_eq!(alerts, vec![json!({"kind": "loop", "tool": "run_command", "n": 6, "failed": 3})], "a success resets the failures; the third failure in a row after it, in the sixth call, raises it");
+        assert!(extend_streak(&mut sk, "  ", false).is_none() && sk.tool == "run_command", "a call without a name changes nothing");
+        let mut sk = Streak::default();
+        assert!((0..5).all(|i| extend_streak(&mut sk, if i % 2 == 0 { "a" } else { "b" }, true).is_none()), "alternating tools is no streak");
     }
 
     #[test]

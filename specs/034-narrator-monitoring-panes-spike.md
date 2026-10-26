@@ -3,7 +3,7 @@ id: spec-034-narrator-monitoring-panes-spike
 title: "034: Narrator monitoring panes (a spike)"
 author: architect
 timestamp: 2026-10-26T06:00:00Z
-status: approved   # approved by the operator 2026-10-26; the three panes are built and merged (#195) as a spike to test and trim; the rest are sketches (§5)
+status: approved   # approved by the operator 2026-10-26; the three panes (#195) and the sketches (§5) are built
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -54,30 +54,26 @@ Thresholds are constants (`ui/src/meters.ts`): quiet 120 s, loop 6 calls or 3 fa
 | Q-2 | Do the thresholds fit real runs (quiet 2 min, loop 6 calls)? A build waiting on a long test would trip `quiet`. |
 | Q-3 | Should `quiet` use state (waiting on a tool, on you, on the model) as the research advises, instead of one threshold? |
 
-## 5. Sketches (not built)
-**Momentum and finish estimate** (the writer's pace line). Changes per hour as a sparkline, time since the last change, and the critical-path estimate the epic pane already has:
-```
- momentum  ▁▁▂▅▇▆▃▁▁▂▆█   5 changes this hour · last change 4m ago · est. finish 22:40
-```
-**File heat** (tracon's heatmap). Which files are being written, by whom; two agents on one file lights up. Needs file paths on write events, which `record_change` carries today and the CLIs' edits do not:
-```
- files            builder  architect  red-team
- crates/q/claim.rs  ████      ░         ·        ⚠ two agents
- specs/040-retry.md  ░       ███        ·
-```
-**Waiting on you** (the human is the slowest part). How long each approval has waited and what it blocks:
-```
- waiting on you    ► approve run_command (builder)  6m   blocks 2 tasks · 41% of the critical path
-```
-**Since you left** (the creative "resume" cue). On attach after an absence, a digest from the change log:
-```
- while you were away 38m:  7 changes · 2 approvals waited · 1 task failed · builder looped on run_command
-```
-**State-based stuck detection** (Q-3): thresholds per state, one row per agent: `thinking 40s ok`, `tool run_command 9m ?`, `awaiting you 12m`, `silent 3m !`.
-**Cap and pace forecast**: from the live rate, `cap in ~6m at this pace`.
-**Session rhythm** (writers' hours): a week of sessions by hour, from the session log; low value until there is more than one operator day of data.
-**Alerts out of the window**: the same flags (`quiet`, `⟳`, cap > 95 %) as notifications through the relay (`specs/017` timers) so the operator need not watch.
-**Export**: `delphi tools --json` already exists; a Prometheus or OpenTelemetry export of the counters would let people use the dashboards they already have.
+## 5. The sketches, rounded out (2026-10-26)
+The operator approved the spike and asked for the sketches to be built. Built:
+
+| Idea | Where | How |
+| :-- | :-- | :-- |
+| **Momentum and finish estimate** | `timeline` | `momentum ▁▁▅▁█  3 in the last hour · last 2m ago · plan ends ~22:12 (in 6m)`: changes per five minutes, time since the last, and the end of the plan from the epic's critical path. |
+| **File heat** | `timeline` | `── files being changed ──`: path, who wrote it (`builder×4 architect×1`), `⚠ two agents` when two roles are on one file, when last. From `write_file`/`edit_file` calls and the files an agent names in `record_change` (`observe::file_heat`). Paths only, never contents. |
+| **Waiting on you** | `pulse` | `► waiting on you  6m  <role> · <what>` per unanswered approval, amber, red after ten minutes (`ObserverState.approvals`). |
+| **Since you left** | `pulse` | `since you last acted, 18m ago: 3 changes · 2 tasks done · 1 approval raised`: counted from the operator's last question or approval (`SinceYou`); shown after a minute and only when something happened. |
+| **State-based stuck detection** | agents, `pulse` | Silence means different things: inside a tool call it takes ten minutes to be flagged (`in run_command 12m`), thinking two (`quiet 3m`), waiting on you never. The open tool comes from `tool_stats` (`RoleTools.open`); a subscription CLI's own tool stays open until its next call or recorded change. |
+| **Cap forecast** | agents, `pulse` | `82%  cap in ~2m`: when the cap is reached at the last minute's pace, shown only within half an hour. |
+| **Live estimate for API seats** | agents, console deck | The call in flight streams an estimate (`Hub::push_estimate`, about four characters to a token, from the length only) shown as `~Nk tokens` with the logged figure; replaced when the turn's usage is logged. No cap meter: the cap is for subscription spans. |
+| **Alerts out of the window** | event log | `monitor.alert` events: `{kind: "loop", tool, n, failed}` once when a span's streak reaches six calls or three failures (`extend_streak`), and `{kind: "cap", pct: 80 or 95}` once each. Nothing sends them anywhere by itself; an operator hook on `monitor.*` (`specs/018`) carries them out. |
+| **Export** | CLI | `delphi tools --prom` prints the counters in the Prometheus text format (calls and failures by role and tool, changes recorded by role, runs by model), for a scrape or a node exporter's textfile collector. |
+
+Still not built, on purpose:
+- **Quiet alerts** (`monitor.alert` for silence) need a timer in the daemon; the window computes quiet from what it has heard, which the daemon does not.
+- **Session rhythm** (a week of sessions by hour): low value until there is more than one operator day of data.
+- **Per-task and per-thread counters** (group the tool counters by task and by `name_thread` thread as well as role).
+- **Relay delivery of alerts**: the relay carries only its six approval and completion kinds (`RELAY_EVENTS`); sending `monitor.alert` to a phone is a decision of its own.
 
 ## 6. Risks
 - Pane count: nine views is a lot to arrow through; the footer dots show where you are. Trimming is expected.
