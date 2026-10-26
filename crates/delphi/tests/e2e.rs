@@ -1381,6 +1381,9 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.type_keys("council");
     o.type_keys("\r");
     o.wait_for("result"); // "N results · 0.4 s · lexical": the daemon's own search, with no model installed here
+    o.type_keys("\x14"); // ctrl+t: trusted documents only, asked of the daemon again
+    o.wait_for("trusted only");
+    o.type_keys("\x14"); // and every document again
     o.type_keys("\r"); // the first result opens in the reader
     o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
     o.type_keys("\x7f"); // backspace goes back to the results
@@ -1395,8 +1398,8 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));
     }
-    o.wait_for("· thinking");
-    o.wait_for("nothing is thinking right now");
+    o.wait_for("· changes");
+    o.wait_for("no changes recorded yet");
     assert_eq!(o.ctrl_c_out(), 0);
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();

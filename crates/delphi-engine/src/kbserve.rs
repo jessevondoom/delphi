@@ -40,11 +40,6 @@ fn fail(status: u16, msg: &str) -> Reply {
     reply(status, json!({"error": msg}))
 }
 
-/// The view every request gets: trusted and active documents, no private agent memory.
-fn view() -> SearchOpts {
-    SearchOpts { role: Some("none".into()), include_untrusted: false, ..Default::default() }
-}
-
 pub struct Api {
     kb: Kb,
     ws: PathBuf,
@@ -73,7 +68,7 @@ impl Api {
             return fail(405, "this API is read-only: only GET and HEAD");
         }
         self.fresh();
-        Reader { kb: &self.kb, ws: &self.ws }.get(target)
+        Reader { kb: &self.kb, ws: &self.ws, operator: false }.get(target)
     }
 }
 
@@ -82,16 +77,30 @@ impl Api {
 pub struct Reader<'a> {
     pub kb: &'a Kb,
     pub ws: &'a Path,
+    /// A person at the narrator, through the daemon's socket, rather than a program on the HTTP port. The operator
+    /// sees every document, private agent memory included, each tagged with its provenance, and may ask for the
+    /// trusted ones only (`trusted_only=1`). Over HTTP the view is always the restricted one and the parameter is ignored.
+    pub operator: bool,
 }
 
 impl Reader<'_> {
+    /// The documents this request may see.
+    fn view(&self, q: &HashMap<String, String>) -> SearchOpts {
+        if self.operator {
+            SearchOpts { role: None, include_untrusted: q.get("trusted_only").map(String::as_str) != Some("1"), ..Default::default() }
+        } else {
+            // Trusted and active documents, and no private agent memory (no role is called "none").
+            SearchOpts { role: Some("none".into()), include_untrusted: false, ..Default::default() }
+        }
+    }
+
     /// `GET target` (a path and query such as `/v1/search?q=retry`). Never writes anything.
     pub fn get(&self, target: &str) -> Reply {
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let q = parse_query(query);
         let r = match path {
             "/v1/health" => self.health(),
-            "/v1/collections" => self.collections(),
+            "/v1/collections" => self.collections(&q),
             "/v1/documents" => self.documents(&q),
             "/v1/search" => self.search(&q),
             "/v1/doc" => self.doc(&q),
@@ -107,15 +116,15 @@ impl Reader<'_> {
         Ok(reply(200, json!({"ok": true, "api": 1, "documents": documents, "passages": chunks, "vectors": vectors, "model": model, "reranker": self.kb.reranker().is_some()})))
     }
 
-    fn collections(&self) -> Result<Reply, String> {
-        let c = self.kb.collections(&view()).map_err(|e| e.to_string())?;
+    fn collections(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
+        let c = self.kb.collections(&self.view(q)).map_err(|e| e.to_string())?;
         Ok(reply(200, json!(c.into_iter().map(|(name, count, updated)| json!({"name": name, "documents": count, "updated": updated})).collect::<Vec<_>>())))
     }
 
     fn documents(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
         let limit = num(q, "limit", 20).clamp(1, 200);
         let offset = num(q, "offset", 0).min(100_000);
-        let docs = self.kb.documents(q.get("collection").map(String::as_str), limit, offset, &view()).map_err(|e| e.to_string())?;
+        let docs = self.kb.documents(q.get("collection").map(String::as_str), limit, offset, &self.view(q)).map_err(|e| e.to_string())?;
         Ok(reply(200, json!(docs)))
     }
 
@@ -126,7 +135,7 @@ impl Reader<'_> {
         }
         let limit = num(q, "limit", 10).clamp(1, MAX_LIMIT);
         let collection = q.get("collection").filter(|c| !c.is_empty());
-        let mut opts = view();
+        let mut opts = self.view(q);
         // A collection filter is applied after ranking, so ask for the most there is.
         opts.limit = if collection.is_some() { MAX_LIMIT } else { limit };
         if q.get("rerank").map(String::as_str) == Some("0") {
@@ -136,11 +145,11 @@ impl Reader<'_> {
         let hits = self.kb.search(query, &opts).map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         for h in hits {
-            let Some(d) = self.kb.document(&h.rel_path, &view()).map_err(|e| e.to_string())? else { continue };
+            let Some(d) = self.kb.document(&h.rel_path, &self.view(q)).map_err(|e| e.to_string())? else { continue };
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
             }
-            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "trust": d.source_type, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score}));
+            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score}));
             if out.len() >= limit {
                 break;
             }
@@ -150,7 +159,7 @@ impl Reader<'_> {
 
     fn doc(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
         let Some(path) = q.get("path").filter(|p| !p.is_empty() && !p.contains('\0')) else { return Ok(fail(400, "`path` is required")) };
-        let Some(info) = self.kb.document(path, &view()).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
+        let Some(info) = self.kb.document(path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         // The file comes from the indexer's own list, so the logical path cannot name anything else.
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
         if std::fs::metadata(&src.path).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_DOC_BYTES {
@@ -158,7 +167,7 @@ impl Reader<'_> {
         }
         let text = std::fs::read_to_string(&src.path).map_err(|e| e.to_string())?;
         let live = blake3::hash(text.as_bytes()).to_hex().to_string();
-        let links = extract_links(&info.rel_path, &text, &|p| self.kb.document(p, &view()).ok().flatten().is_some());
+        let links = extract_links(&info.rel_path, &text, &|p| self.kb.document(p, &self.view(q)).ok().flatten().is_some());
         Ok(reply(200, json!({"path": info.rel_path, "collection": info.zone, "trust": info.source_type, "status": info.status, "blake3": live, "indexed_blake3": info.blake3, "stale": live != info.blake3, "text": text, "links": links})))
     }
 }
@@ -492,6 +501,31 @@ mod tests {
         let (s, h) = get(&mut api, "/v1/health");
         assert!(s == 200 && h["ok"] == true && h["documents"].as_u64().unwrap() >= 2, "{h}");
         assert_eq!(get(&mut api, "/v1/nope").0, 404);
+    }
+
+    #[test]
+    fn the_operator_sees_everything_with_its_provenance_and_http_cannot_widen_its_view() {
+        let (home, ws) = workspace();
+        let mut api = Api::new(home.path(), ws.path()).unwrap();
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true };
+        let paths = |r: Reply| -> Vec<String> { r.body["results"].as_array().unwrap().iter().map(|x| x["path"].as_str().unwrap().to_string()).collect() };
+        let all = op.get("/v1/search?q=zebra&rerank=0");
+        let listed = paths(Reply { status: all.status, body: all.body.clone() });
+        assert!(listed.iter().any(|p| p == "specs/web.md") && listed.iter().any(|p| p == "memory/agents/builder/notes.md"), "{listed:?}");
+        let web = all.body["results"].as_array().unwrap().iter().find(|x| x["path"] == "specs/web.md").unwrap();
+        assert_eq!((web["trust"].as_str(), web["status"].as_str()), (Some("external_untrusted"), Some("active")), "tagged, so a person can tell");
+        let trusted = paths(op.get("/v1/search?q=zebra&rerank=0&trusted_only=1"));
+        assert!(!trusted.iter().any(|p| p == "specs/web.md") && trusted.iter().any(|p| p == "memory/agents/builder/notes.md"), "{trusted:?}");
+        assert_eq!(op.get("/v1/doc?path=specs/web.md").status, 200);
+        assert_eq!(op.get("/v1/doc?path=specs/web.md&trusted_only=1").status, 404);
+        assert_eq!(op.get("/v1/doc?path=memory/agents/builder/notes.md").status, 200);
+        let names: Vec<String> = op.get("/v1/collections").body.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(names, vec!["memory", "specs"]);
+        // Over HTTP the same parameter changes nothing.
+        let (_, http) = get(&mut api, "/v1/search?q=zebra&rerank=0&trusted_only=0");
+        let h: Vec<&str> = http["results"].as_array().unwrap().iter().map(|x| x["path"].as_str().unwrap()).collect();
+        assert!(!h.iter().any(|p| p.contains("web.md") || p.contains("memory")), "{h:?}");
+        assert_eq!(get(&mut api, "/v1/doc?path=specs/web.md&trusted_only=0").0, 404);
     }
 
     #[test]

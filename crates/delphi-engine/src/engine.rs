@@ -636,6 +636,10 @@ impl Engine {
                     }
                 }
             }
+            // Every role with tools reports finished work to the change log (`record_change`), not in its reply.
+            if !sc.toolless {
+                slices.push(ContextSlice { label: "@runtime/change-log".into(), tier: "L3".into(), text: tools::CHANGE_LOG_NOTE.into() });
+            }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
             }
@@ -1168,7 +1172,7 @@ impl Engine {
         if !cfg.harness.get("agy").cloned().unwrap_or_default().bridge {
             return vec![];
         }
-        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_gate_verified(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
+        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_builder_ready(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
     }
 
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;

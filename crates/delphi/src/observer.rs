@@ -18,6 +18,7 @@ pub enum View {
     Epic,
     Agents,
     Archives,
+    Changes,
 }
 
 impl View {
@@ -28,6 +29,7 @@ impl View {
             View::Epic => "epic",
             View::Agents => "agents",
             View::Archives => "archives",
+            View::Changes => "changes",
         }
     }
 
@@ -37,6 +39,7 @@ impl View {
             "epic" | "forge" | "diffs" => Some(View::Epic), // the forge view folded into the epic pane (`005g`)
             "agents" | "roster" => Some(View::Agents),
             "archives" | "kb" => Some(View::Archives),
+            "changes" | "changelog" | "log" | "thinking" | "reasoning" => Some(View::Changes), // the reasoning pane was dropped for the change log
             _ => None,
         }
     }

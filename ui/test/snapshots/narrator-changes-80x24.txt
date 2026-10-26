@@ -1,0 +1,24 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · changes · session 2 · 2 asks · 1 from before
+
+ ✔ nothing needs you
+
+
+── session s_0002 · 10:10 · now · 2 changes ────────────────────────────────────
+  10:42  daedalus  t_2
+         wrote the spec for the change log
+         specs/032-change-log.md
+  10:21  hephaestus  t_2
+         reworked the permission model to be less intrusive; removed ratify
+         requirements for explicit updates
+
+── session s_0001 · 09:59 · 1 change ───────────────────────────────────────────
+  10:00  hephaestus  t_1
+         added a visibility timeout to the queue claim
+         crates/queue/src/claim.rs
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+1 running  ·  14.2k tokens                                     ← →  ·  ○ ○ ○ ○ ●

@@ -14,7 +14,7 @@ tags: [spec, ui, knowledge-base, search, narrator, draft]
 
 # Spec 028: The Knowledge Window
 
-**State (2026-10-25):** the window is built in the narrator's `archives` pane: the search box and mode line, the shelf (collections and recently changed documents), ranked results, and the inline reader of `specs/029`. Offline only. Not built: online mode, `more like this`.
+**State (2026-10-25):** the window is built in the narrator's `archives` pane: the search box and mode line, the shelf (collections and recently changed documents), ranked results (the top 30, with the matched words in bold), a scope filter, query history, and the inline reader of `specs/029`. A person at the narrator sees **every** document, private agent memory included, each result tagged `untrusted` or `inactive` when its provenance is not the usual; `ctrl+t` shows trusted documents only. (The HTTP API and the scout's tool keep the restricted view.) Offline only. Not built: online mode, `more like this`, search inside a document.
 
 ## 1. What this is
 The narrator's `archives` view (the fifth, `ui/src/observe-screen.ts` `archives`) becomes the knowledge window: a search page like a search engine's front page, and an **explorer of what Delphi has stored** (specs, context, memory, skills, missions, lessons), driven by the vector search. Nothing here changes `delphi kb` (`specs/004` §3).
@@ -117,7 +117,7 @@ The same routes are also served to the narrator over its socket as the read-only
 - Not yet in the API: `more like this` (the vector search seeded from a passage), which slice (b) of §9 needs.
 
 ## 7. Keys
-`/` or any letter focuses the box · `enter` search / open · `↑ ↓` move · `m` more like this · `tab` offline/online/both · `esc` clear the box, then back one level on the trail · `← →` switch view, as in every narrator view.
+Any letter types into the box · `enter` search / open · `↑ ↓` move through results, or recall earlier queries from the box · `tab` / `shift+tab` the collection searched (all, then each) · `ctrl+t` every document or trusted only · `ctrl+u` clear the box · `esc` clear the results, then the box · `← →` switch view, as in every narrator view. In the reader: `tab` link · `enter` open · `[` `]` back and forward · `y` copy · `esc` close. (`m` more like this, and `tab` for offline/online/both, are for when those exist.)
 
 ## 8. Rendering notes (Ink and the narrator)
 - The centred box uses the console prompt's box characters; under 40 columns it drops its sides and becomes a ruled line.
