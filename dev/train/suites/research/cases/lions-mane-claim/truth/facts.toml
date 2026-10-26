@@ -1,0 +1,92 @@
+# Checklist for the lion's mane question, from the abstracts in sources.toml.
+# A pattern is a lower bound: a correct answer worded unexpectedly is missed (specs/037 section 4).
+
+[[fact]]
+id = "preclinical-cells"
+claim = "In cell studies, a Hericium extract promoted nerve growth factor (NGF) gene expression, unlike three other mushrooms tested (Mori 2008)"
+source = "mori-2008"
+quote = "only H. erinaceus extract promoted NGF mRNA expression in a concentration-dependent manner"
+any = ['\bNGF\b', 'nerve growth factor', 'neurotrophic']
+
+[[fact]]
+id = "preclinical-mice"
+claim = "In mice fed Hericium powder for 7 days, NGF expression rose in the hippocampus"
+source = "mori-2008"
+quote = "increase in the level of NGF mRNA expression in the hippocampus"
+any = ['\b(mice|mouse|animal|rodent)']
+weight = 0.5
+
+[[fact]]
+id = "hericenones-not-it"
+claim = "The compounds heavily marketed (hericenones) did not promote NGF expression in those cells; the active compounds were something else"
+source = "mori-2008"
+quote = "hericenones C, D and E, constituents of H. erinaceus, failed to promote NGF gene expression"
+any = ['hericenones?[^.]{0,120}(fail|not|no |did not)']
+weight = 0.5
+
+[[fact]]
+id = "mori-2009-rct"
+claim = "A double-blind placebo-controlled trial in people aged 50-80 with mild cognitive impairment (Mori 2009) found higher cognitive scores in the Hericium group at weeks 8, 12 and 16"
+source = "mori-2009"
+quote = "the Yamabushitake group showed significantly increased scores on the cognitive function scale compared with the placebo group"
+any = ['mori[^.]{0,150}2009', 'mild cognitive impairment[^.]{0,250}(placebo|double[- ]blind)', '(placebo|double[- ]blind)[^.]{0,250}mild cognitive impairment']
+
+[[fact]]
+id = "mori-2009-small"
+claim = "That trial was small: 30 people in two groups of 15"
+source = "mori-2009"
+quote = "30 subjects were randomized into two 15-person groups"
+any = ['\b30 (subjects|participants|people|patients|adults|men and women)', 'two (groups|arms) of (15|fifteen)', '\b15 (per|in each|participants|people)']
+number = { value = 30, tol = 0 }
+
+[[fact]]
+id = "mori-2009-fade"
+claim = "The gain faded within four weeks of stopping"
+source = "mori-2009"
+quote = "at week 4 after the termination of the 16 weeks intake, the scores decreased significantly"
+any = ['(after|once|when) (they )?(stopp|discontinu|termination|ceas|withdr)[^.]{0,120}(decreas|declin|lost|disappear|fell|faded|dropp|reversed)', '(decreas|declin|faded|wore off|disappear)[^.]{0,80}(after|when)[^.]{0,40}(stopp|discontinu|ceas)', 'did not persist|not sustained']
+
+[[fact]]
+id = "saitsu-2019"
+claim = "A 12-week randomized double-blind trial (Saitsu 2019) found improvement on only one of three cognitive tests, the MMSE"
+source = "saitsu-2019"
+quote = "MMSE alone showed that oral intake of H. erinaceus significantly improved cognitive functions"
+any = ['saitsu', '\bMMSE\b', 'Mini[- ]Mental']
+
+[[fact]]
+id = "rct-2026"
+claim = "A 2026 randomized trial (n=109, adults 40-75 with cognitive complaints) reported modest improvements in visual attention and working memory, sleep and mood: a preprint, not yet peer reviewed"
+source = "rct-2026"
+quote = "109 Participants were included in the primary analysis"
+any = ['\b109\b', 'daoust', 'medrxiv|preprint|not (yet )?peer[- ]reviewed']
+number = { value = 109, tol = 0 }
+
+[[fact]]
+id = "pilot-2026"
+claim = "A small 2026 pilot in healthy adults (n=10) found no statistically significant difference in executive function or plasma BDNF"
+source = "pilot-2026"
+quote = "No statistically significant differences were observed in executive function or plasma BDNF following supplementation"
+any = ['no (statistically )?significant (differences?|effects?|changes?)', '(n|N)\s?=\s?10\b', '\b10 (healthy )?(adults|participants)', 'pilot']
+
+[[fact]]
+id = "review-limited"
+claim = "A 2025 narrative review concludes clinical validation remains limited and calls for large trials and standardized extracts"
+source = "review-2025"
+quote = "Despite promising findings, clinical validation remains limited"
+any = ['clinical (validation|evidence|data|trials?|research)[^.]{0,80}(limited|lacking|scarce|small|few|insufficient)', '(limited|lacking|few|insufficient)[^.]{0,60}clinical', 'large[- ]scale (clinical )?trials']
+
+[[fact]]
+id = "safe-in-trials"
+claim = "No adverse effects were reported in these trials"
+source = "mori-2009"
+quote = "Laboratory tests showed no adverse effect of Yamabushitake"
+any = ['(no|without|not)[^.]{0,30}adverse', 'well[- ]tolerated|generally safe|safe in']
+weight = 0.5
+
+[[fact]]
+id = "not-healthy-proof"
+claim = "The trials were in people with mild cognitive impairment or complaints, or tiny; benefit in healthy adults is not shown"
+source = "pilot-2026"
+quote = "no statistically significant differences were observed"
+any = ['healthy (adults|people|individuals)[^.]{0,120}(not|no |unproven|unclear|limited|lack)', '(not|no )[^.]{0,80}healthy (adults|people)']
+weight = 0.5

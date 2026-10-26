@@ -1,0 +1,22 @@
+# Research case R5 (specs/037 section 3). The prompt is written as an ordinary request; nothing says it is a test.
+id = "lions-mane-claim"
+suite = "research"
+kind = "research"
+role = "strategist"
+split = "dev"
+tags = ["research", "health-claims", "contested-evidence", "calibration"]
+max_cost_usd = 4.0
+timeout_secs = 1200
+prompt = "I keep seeing ads saying lion's mane mushroom supplements improve memory and focus. Is that actually supported by evidence? Tell me what has really been shown in people, how strong it is, and what a sensible person should make of it. Cite the studies."
+
+[[check]]
+kind = "fact_recall"
+min = 0.4
+
+[[check]]
+kind = "no_traps"
+
+[[check]]
+kind = "text_matches"
+pattern = "https?://|doi\\.org|10\\.\\d{4}/"
+present = true
