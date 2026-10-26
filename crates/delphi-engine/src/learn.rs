@@ -5,6 +5,7 @@
 //! derived, like the usage ledger, and can be rebuilt from `events.jsonl` at any time.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use delphi_core::event::EventEnvelope;
 use delphi_core::provenance::Tier;
@@ -140,7 +141,10 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
 
 /// The five capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5), by the name a note and
 /// `[learning] triggers` use.
-pub const TRIGGERS: [&str; 5] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"];
+pub const TRIGGERS: [&str; 6] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision", "agent_note"];
+
+/// Agent notes kept per task; the rest are ignored so one chatty task cannot push the operator's own notes out.
+const AGENT_NOTES_PER_TASK: u32 = 3;
 
 /// A staged note's summary is at most this many characters.
 pub const MAX_SUMMARY: usize = 280;
@@ -259,6 +263,110 @@ fn clip(s: &str) -> String {
     t
 }
 
+// ── the `staged` knowledge-base zone (`specs/031` §3.1) ─────────────────────────────────────────────────────────
+
+/// The kb `source_type` a note's tier maps to, so the zone's taint rules are the knowledge base's own.
+pub fn source_type_for(tier: &str) -> &'static str {
+    match tier {
+        "L5" => "user_ratified",
+        "L4" => "internal_empirical",
+        "L3" => "internal_generated",
+        "L2" => "federated_verified",
+        "L1" => "federated_peer",
+        _ => "external_untrusted",
+    }
+}
+
+/// One note as a Markdown document for the knowledge base: labelled with where it came from and how far to trust it.
+pub fn note_document(n: &LiveNote) -> String {
+    format!(
+        "---\nsource_type: {}\nauthor: daemon\nconfidence: low\nstatus: active\n---\n# Staged note {}\n\nStaged note ({} · tier {} · {} · mission {}{}{}). A candidate lesson only: not ratified, not guidance.\n\n{}\n",
+        source_type_for(&n.tier),
+        n.id,
+        n.trigger,
+        n.tier,
+        n.timestamp,
+        n.mission,
+        n.task_id.as_deref().map(|t| format!(" · task {}", t)).unwrap_or_default(),
+        n.role.as_deref().map(|r| format!(" · {}", r)).unwrap_or_default(),
+        n.summary
+    )
+}
+
+fn plain(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn newest_event_mtime(mission_dir: &Path) -> Option<std::time::SystemTime> {
+    std::fs::read_dir(mission_dir.join("events")).ok()?.flatten().filter_map(|e| e.metadata().and_then(|m| m.modified()).ok()).max()
+}
+
+/// Bring `<ws>/local/staged/` in line with the mission logs: one Markdown file per live note, `<mission>/<id>.md`.
+/// A projection, like `status.md`: the logs are the truth, a failure here is ignored, and the knowledge base indexes
+/// the files as zone `staged`. A mission whose log has not changed since it was last projected is not read again.
+pub fn project_staged(ws_dir: &Path) {
+    let out = ws_dir.join("local/staged");
+    let Ok(rd) = std::fs::read_dir(ws_dir.join("local/missions")) else {
+        let _ = std::fs::remove_dir_all(&out);
+        return;
+    };
+    let mut present = BTreeSet::new();
+    for e in rd.flatten().filter(|e| e.path().is_dir()) {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !plain(&name) {
+            continue;
+        }
+        present.insert(name.clone());
+        let target = out.join(&name);
+        let stamp = target.join(".synced");
+        let fresh = match (std::fs::metadata(&stamp).and_then(|m| m.modified()).ok(), newest_event_mtime(&e.path())) {
+            (Some(s), Some(ev)) => s >= ev,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if fresh {
+            continue;
+        }
+        let Ok(events) = delphi_core::log::replay(&e.path()) else { continue };
+        let notes = live_notes(&name, &events);
+        if notes.is_empty() {
+            let _ = std::fs::remove_dir_all(&target);
+            continue;
+        }
+        if std::fs::create_dir_all(&target).is_err() {
+            continue;
+        }
+        let mut keep = BTreeSet::new();
+        for n in &notes {
+            if !plain(&n.id) {
+                continue;
+            }
+            let file = target.join(format!("{}.md", n.id));
+            let doc = note_document(n);
+            if std::fs::read_to_string(&file).ok().as_deref() != Some(doc.as_str()) {
+                let _ = std::fs::write(&file, doc);
+            }
+            keep.insert(format!("{}.md", n.id));
+        }
+        if let Ok(old) = std::fs::read_dir(&target) {
+            for f in old.flatten() {
+                let fname = f.file_name().to_string_lossy().to_string();
+                if fname.ends_with(".md") && !keep.contains(&fname) {
+                    let _ = std::fs::remove_file(f.path());
+                }
+            }
+        }
+        let _ = std::fs::write(&stamp, "");
+    }
+    if let Ok(old) = std::fs::read_dir(&out) {
+        for d in old.flatten().filter(|d| d.path().is_dir()) {
+            if !present.contains(d.file_name().to_string_lossy().as_ref()) {
+                let _ = std::fs::remove_dir_all(d.path());
+            }
+        }
+    }
+}
+
 /// A card reason the daemon or a headless run wrote, not a person: never a lesson.
 fn machine_reason(r: &str) -> bool {
     ["headless run:", "blocked by the hook", "the task was cancelled", "the daemon restarted"].iter().any(|p| r.starts_with(p))
@@ -283,6 +391,8 @@ pub struct Stager {
     /// `seq` of the attempt-2-or-3 event per task still waiting to see whether the task finishes.
     retried: BTreeMap<String, u64>,
     tasks_seen: u32,
+    /// `note` tool calls kept per task.
+    agent_notes: BTreeMap<String, u32>,
     /// Ids of live notes, oldest first.
     live: std::collections::VecDeque<String>,
 }
@@ -335,6 +445,20 @@ impl Stager {
                     self.live.retain(|l| l != id);
                 }
                 return out;
+            }
+            // The `note` tool's request. It is the one `learn.*` event that makes a note; the note it makes is `learn.staged`.
+            "learn.note" => {
+                let kept = task.map(|t| self.agent_notes.entry(t.to_string()).or_insert(0));
+                let allowed = kept.is_none_or(|n| {
+                    *n += 1;
+                    *n <= AGENT_NOTES_PER_TASK
+                });
+                let text = e.payload["text"].as_str().unwrap_or("").trim();
+                if allowed && self.on("agent_note") && !text.is_empty() {
+                    // Never above L3, whatever the payload claims.
+                    let base = e.payload["tier"].as_str().and_then(Tier::parse).unwrap_or(Tier::L3).min(Tier::L3);
+                    out.push(mk(self, "agent_note", text.to_string(), vec![e.seq], base));
+                }
             }
             k if k.starts_with("learn.") => return out,
             "span.taint" => {
@@ -576,6 +700,20 @@ mod tests {
         let mut again = Stager::replay(settings, &log);
         let out = again.observe(&at(500, Some("t"), "approval.resolved", json!({"resolution": "denied", "reason": "one more"})));
         assert_eq!(out.iter().filter(|c| matches!(c, Capture::Evict(id) if id == "n102")).count(), 1, "{:?}", out);
+    }
+
+    #[test]
+    fn an_agent_note_is_staged_below_trusted_tiers_and_three_per_task_are_kept() {
+        let note = |seq: u64, task: &str, tier: &str| at(seq, Some(task), "learn.note", json!({"text": format!("note {}", seq), "tier": tier}));
+        let n = stage(&[note(1, "t", "L3"), note(2, "t", "L3"), note(3, "t", "L3"), note(4, "t", "L3"), note(5, "u", "L3")]);
+        assert_eq!(n.iter().map(|n| n.event_seqs[0]).collect::<Vec<_>>(), vec![1, 2, 3, 5], "the fourth note of task t is ignored, another task is unaffected");
+        assert!(n.iter().all(|n| n.trigger == "agent_note" && n.tier == Tier::L3));
+        let boosted = stage(&[note(1, "t", "L5")]);
+        assert_eq!(boosted[0].tier, Tier::L3, "an agent can never claim more than the daemon's own tier");
+        let tainted = stage(&[at(1, Some("t"), "span.taint", json!({"ceiling": "L1"})), note(2, "t", "L3")]);
+        assert_eq!(tainted[0].tier, Tier::L1);
+        let off = Stager::new(LearningSettings { triggers: ["escalation".to_string()].into(), ..Default::default() }).observe(&note(1, "t", "L3"));
+        assert!(off.is_empty());
     }
 
     #[test]

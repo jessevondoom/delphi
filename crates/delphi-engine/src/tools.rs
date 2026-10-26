@@ -189,6 +189,12 @@ impl Registry {
             classify: classify_record_change,
             exec: ToolExec::Local(record_change),
         });
+        r.register(ToolSpec {
+            def: read_def("note", "Stage a lesson for the operator to review later: one plain sentence about something that surprised you or that a future run should know (`the CI image has no python3, use python`). Staged notes are never loaded into any prompt, not even yours; the operator reads them with `delphi learn list` and decides what becomes a rule. At most three per task are kept. Do not use it to report finished work (that is `record_change`) or to store anything sensitive.", json!({"type": "object", "required": ["text"], "properties": {"text": {"type": "string", "maxLength": 280}}})),
+            requires_write_scope: false,
+            classify: classify_note,
+            exec: ToolExec::Local(note),
+        });
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
@@ -308,6 +314,30 @@ fn record_change(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let files: Vec<&str> = args.get("files").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).take(20).collect()).unwrap_or_default();
     ctx.events.push(("change.recorded".into(), json!({"summary": summary, "role": ctx.role, "files": files})));
     ToolResult::ok("recorded in the change log".to_string())
+}
+
+/// Staging a note writes one event to the operator's own log and nothing else, so it never asks.
+fn classify_note(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    str_arg(args, "text")?;
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: tool.into(), payload: args.clone(), pattern: tool.into() })
+}
+
+fn note(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    let text = match str_arg(args, "text") {
+        Ok(s) => s.split_whitespace().collect::<Vec<_>>().join(" "),
+        Err(e) => return ToolResult::err(e.0),
+    };
+    if text.is_empty() {
+        return ToolResult::err("`text` must say what to remember");
+    }
+    if text.chars().count() > crate::learn::MAX_SUMMARY {
+        return ToolResult::err(format!("`text` is over {} characters; say it in one sentence", crate::learn::MAX_SUMMARY));
+    }
+    // What an agent writes is the daemon's lowest trusted tier at best (L3), and lower still once the span has read
+    // untrusted content: the note inherits the span's ceiling, so web text cannot launder itself into a lesson.
+    let tier = ctx.span.ceiling().min(Tier::L3);
+    ctx.events.push(("learn.note".into(), json!({"text": text, "tier": tier.as_str()})));
+    ToolResult::ok("staged for the operator's review; it is not loaded into any prompt".to_string())
 }
 
 fn classify_write(tool: &str, args: &Value) -> Result<Classified, ToolError> {
@@ -734,8 +764,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -805,6 +835,24 @@ mod tests {
         assert_eq!(ctx.events, vec![("thread.named".to_string(), json!({"thread": "pricing", "label": "Pricing for the knowledge base", "tasks": ["t_1", "t_2"]}))]);
         let none = run_tool(&mut f, "name_thread", args);
         assert!(none.is_error && none.content.contains("only the orchestrator"), "{}", none.content);
+    }
+
+    #[test]
+    fn any_role_stages_a_note_that_inherits_the_spans_taint() {
+        let mut f = fx(&[]);
+        let args = json!({"text": "  the CI image has\n no python3 "});
+        assert!(Registry::builtin().classify("note", &args).unwrap().tier == ToolTier::Green, "staging a note never asks");
+        assert!(Registry::builtin().classify("note", &json!({})).is_err(), "text is required");
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "builder", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        let r = run(&mut ctx, "note", &args);
+        assert!(!r.is_error, "{}", r.content);
+        assert_eq!(ctx.events, vec![("learn.note".to_string(), json!({"text": "the CI image has no python3", "tier": "L3"}))]);
+        assert!(run_tool(&mut f, "note", json!({"text": "  "})).is_error);
+        assert!(run_tool(&mut f, "note", json!({"text": "x".repeat(281)})).is_error, "one sentence, not an essay");
+        assert!(f.span.observe_input(Tier::L0));
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role: "builder", mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        run(&mut ctx, "note", &args);
+        assert_eq!(ctx.events[0].1["tier"], "L0", "a span that read untrusted content stages untrusted notes");
     }
 
     #[test]
@@ -1155,7 +1203,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 }
