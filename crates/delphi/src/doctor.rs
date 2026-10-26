@@ -238,7 +238,7 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
                     // `[harness.agy]` (`specs/020` §8): with the bridge on (the default) a span carries Delphi's tools in a plugin and a
                     // hook gates its other tools; off, it is the old read-only, untrusted seat. Either way: no file edits or commands.
                     let bridge = v.get("harness").and_then(|h| h.get("agy")).and_then(|a| a.get("bridge")).and_then(|b| b.as_bool()).unwrap_or(true);
-                    let what = if bridge { "Delphi's tools reach it through a plugin and a hook denies its other tools, but its output is untrusted and it is never a Builder; `delphi endpoints test --probe` proves the gate holds" } else { "the bridge is off: read-only roles only, nothing gates its own tools, output is untrusted" };
+                    let what = if bridge { "Delphi's tools reach it through a plugin and a hook denies its other tools, and its output is untrusted until `delphi endpoints test --probe` has watched the gate hold on this version (after that it starts as trusted as any role, and drops to untrusted when it reads the web); it is never a Builder" } else { "the bridge is off: read-only roles only, nothing gates its own tools, output is untrusted" };
                     r.push(Level::Ok, "10 harness", id.to_string(), format!("agy {} is installed; it has no status command, so run `delphi endpoints test --probe` to prove it is signed in. {}", ver.trim(), what))
                 }
             },

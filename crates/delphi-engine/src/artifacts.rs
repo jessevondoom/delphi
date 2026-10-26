@@ -800,10 +800,10 @@ pub fn specs() -> Vec<ToolSpec> {
     ToolSpec {
         def: ToolDef {
             name: "write_diagram".into(),
-            description: "Draw a diagram as a self-contained .svg (light and dark, accessible, no script), or a .png (end `path` in .png, or set `format: \"png\"`; for messages and slides). Describe it, do not draw it: the layout is computed. `type` is flow (steps and decisions joined by arrows: `nodes` [{id, label?, kind?: step|start|end|decision, group?}] and `edges` [{from, to, label?}]; `direction` down or right; a loop back to an earlier step is drawn pointing back; `group` colours up to 4 groups and adds a legend), tree (`root` {label, children:[…]} up to 80 nodes and 8 levels; `direction` down or right) or sequence (`participants` [{id, label?}], 2 to 8, left to right, and `messages` [{from, to, label, kind?: call|reply}] in time order; from = to is a message to itself). `title` says what the diagram shows, ideally the point (\"A failed smoke test rolls the release back\"); `subtitle`, `source`, `theme` (auto, light, dark). Refused with a reason when an id is unknown, a name repeats, or the diagram is too big to read (60 nodes, 120 edges); a PNG is also refused when it would exceed 1800 x 2400, with SVG as the way out. A diagram in a page or deck is a `diagram` block. `path` is a plain name like `release.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it.".into(),
+            description: "Draw a diagram as a self-contained .svg (light and dark, accessible, no script), or a .png (end `path` in .png, or set `format: \"png\"`; for messages and slides). Describe it, do not draw it: the layout is computed. `type` is flow (steps and decisions joined by arrows: `nodes` [{id, label?, kind?: step|start|end|decision, group?}] and `edges` [{from, to, label?}]; `direction` down or right; a loop back to an earlier step is drawn pointing back; `group` colours up to 4 groups and adds a legend), tree (`root` {label, children:[…]} up to 80 nodes and 8 levels; `direction` down or right) sequence (`participants` [{id, label?}], 2 to 8, left to right, and `messages` [{from, to, label, kind?: call|reply}] in time order; from = to is a message to itself), timeline (`events` [{when, label, detail?, group?}], 2 to 24; when every `when` is a date like 2026-10-25 the axis is to scale, otherwise events are spaced evenly in the order given) or matrix (`rows` and `columns` as labels, `cells` one array per row: yes, partial, no, short text, a number or null; drawn as a filled dot, a half dot and a ring, with a key; `corner` labels the row column). `title` says what the diagram shows, ideally the point (\"A failed smoke test rolls the release back\"); `subtitle`, `source`, `theme` (auto, light, dark). Refused with a reason when an id is unknown, a name repeats, or the diagram is too big to read (60 nodes, 120 edges); a PNG is also refused when it would exceed 1800 x 2400, with SVG as the way out. A diagram in a page or deck is a `diagram` block. `path` is a plain name like `release.svg` (goes in the mission's folder) or `@worktree/…`. A provenance record is written beside it.".into(),
             input_schema: json!({"type": "object", "required": ["path", "type", "title"], "properties": {
                 "path": {"type": "string"},
-                "type": {"type": "string", "enum": ["flow", "tree", "sequence"]},
+                "type": {"type": "string", "enum": ["flow", "tree", "sequence", "timeline", "matrix"]},
                 "title": {"type": "string"},
                 "subtitle": {"type": "string"},
                 "source": {"type": "string"},
@@ -814,6 +814,11 @@ pub fn specs() -> Vec<ToolSpec> {
                 "root": {"type": "object", "description": "a tree's root: {label, children: [...]}"},
                 "participants": {"type": "array", "minItems": 2, "maxItems": 8, "items": {"type": "object", "required": ["id"]}},
                 "messages": {"type": "array", "maxItems": 60, "items": {"type": "object", "required": ["from", "to", "label"]}},
+                "events": {"type": "array", "minItems": 2, "maxItems": 24, "items": {"type": "object", "required": ["when", "label"]}},
+                "rows": {"type": "array", "maxItems": 30, "items": {"type": "string"}},
+                "columns": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+                "cells": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "description": "one array per row, one value per column: yes, partial, no, short text, a number or null"},
+                "corner": {"type": "string"},
                 "theme": {"type": "string", "enum": ["auto", "light", "dark"]}
             }}),
         },

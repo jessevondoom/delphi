@@ -270,6 +270,27 @@ impl Engine {
         }
     }
 
+    /// Is there a fresh conformance record for this agy seat, taken on the version installed now, that says the gate held?
+    async fn agy_gate_verified(&self, endpoint_id: &str, program: &str) -> bool {
+        let Some(path) = self.settings.agy_gate_file.clone().or_else(|| self.inventory.gate_path()) else { return false };
+        let Some(rec) = crate::capabilities::load_gates(&path).into_iter().find(|g| g.endpoint_id == endpoint_id) else { return false };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        if !rec.verified || !rec.served || !rec.side_effects.is_empty() || !rec.is_fresh(now) || rec.agy_version.is_empty() {
+            return false;
+        }
+        crate::capabilities::installed_agy_version(program).await.as_deref() == Some(rec.agy_version.as_str())
+    }
+
+    /// The gate lets the profile's web tools through (`search_web`, `read_url_content`), and what they bring back is text
+    /// nobody vetted. The gate raises a flag as it decides, before the CLI runs the tool; this lowers the span to L0 once
+    /// the flag is up, and it is called before every Delphi call runs, so no call can run on the old, higher footing.
+    async fn taint_if_read_outside(&self, sc: &mut SpanCtx, policy: &Option<HookPolicy>) -> Result<(), EngineError> {
+        if policy.as_ref().is_some_and(|p| p.has_read_outside()) && sc.span.observe_input(Tier::L0) {
+            sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "agy harness: it read from the web (search_web or read_url_content)"}))).await?;
+        }
+        Ok(())
+    }
+
     /// One call from the Delphi bridge: run it exactly as an API span would run it (`exec_tool`: classification, taint
     /// gate, approval, stamps), record it, and answer the CLI. The log holds the call and its result, as for any span.
     /// Returns the reason the span must stop if the call was a dispatch whose child halted (as on the API path, a halted
@@ -310,10 +331,12 @@ impl Engine {
                 if builder {
                     return Ok(Err(HarnessErr::retry("the agy harness has no approval bridge (its headless mode cannot ask), so it cannot run a Builder")));
                 }
-                // Its own tools cannot be turned off, only denied by a hook that Delphi cannot check from outside (the hook
-                // sampled well but was not tested against every tool), and a web tool brings in text nobody vetted. So
-                // nothing it returns can be vouched for: the span is untrusted from the start, and the projects are checked afterwards.
-                if sc.span.observe_input(Tier::L0) {
+                // Its own tools cannot be turned off, only denied by a hook. Until a conformance probe of this agy version has
+                // seen that hook deny every kind of tool and nothing get through (`delphi endpoints test --probe`), nothing the
+                // seat returns can be vouched for: the span is untrusted from the start. With that evidence it starts as
+                // trusted as any span, and falls to L0 the moment the gate lets a web tool through (`taint_if_read_outside`).
+                // Either way the projects are checked afterwards.
+                if !self.agy_gate_verified(&ep.id, &self.settings.agy_program).await && sc.span.observe_input(Tier::L0) {
                     sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "agy harness: its tools are gated by a hook Delphi cannot verify"}))).await?;
                 }
             }
@@ -372,8 +395,10 @@ impl Engine {
         let mut lp = LaunchProfile { native_tools: if builder || cli == Cli::Agy { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers };
         let (mut _bridge, mut bridge_rx): (Option<Bridge>, Option<tokio::sync::mpsc::Receiver<BridgeCall>>) = (None, None);
         let mut gate_rx: Option<tokio::sync::mpsc::UnboundedReceiver<HookNote>> = None;
+        let mut gate_policy: Option<HookPolicy> = None;
         if !bridge_defs.is_empty() {
-            let policy = (cli == Cli::Agy).then(|| HookPolicy { allow_prefixes: vec![AGY_TOOL_PREFIX.to_string()], allow_names: agy_native.clone() });
+            let policy = (cli == Cli::Agy).then(|| HookPolicy::new(vec![AGY_TOOL_PREFIX.to_string()], agy_native.clone()));
+            gate_policy = policy.clone();
             let started = match std::env::current_exe() {
                 Ok(exe) => Bridge::start_gated(bridge_defs.clone(), bridge_instructions(&bridge_defs), &exe, policy).await,
                 Err(e) => Err(e),
@@ -414,6 +439,7 @@ impl Engine {
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         loop {
+            self.taint_if_read_outside(sc, &gate_policy).await?;
             // The CLI's events and the Delphi bridge's calls are served by this one loop, because a bridge call runs
             // with this span's `&mut` state. A call can wait minutes for the operator; the idle clock only runs while
             // the loop is waiting for the CLI.
@@ -423,6 +449,8 @@ impl Engine {
                     if !READ_ONLY_TOOLS.contains(&call.name.as_str()) {
                         used_tools = true;
                     }
+                    // A web tool the gate let through may have run since the loop last looked: taint before this call runs.
+                    self.taint_if_read_outside(sc, &gate_policy).await?;
                     if let Some(why) = self.bridge_call(sc, call, ep, &launch.model).await? {
                         session.kill().await;
                         failure = Some((why, false));
@@ -610,7 +638,8 @@ impl Engine {
             }
         }
         if failure.is_none() {
-            if let Some(before) = projects_before {
+            self.taint_if_read_outside(sc, &gate_policy).await?;
+        if let Some(before) = projects_before {
                 if project_state(self) != before {
                     failure = Some(("the agy run changed a project checkout; its output is discarded (`git status` differs from before)".into(), false));
                 }
@@ -946,6 +975,80 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Done.","usage":
         assert!(started["gated"] == true && started["bridge"].as_array().unwrap().iter().any(|v| v == "timer"), "{}", started);
         // Still untrusted from the start; the gate is a control Delphi cannot verify from outside.
         assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("agy")));
+    }
+
+    /// A fake `agy` that reports a version, and otherwise runs `body`.
+    fn versioned_agy(dir: &std::path::Path, version: &str, body: &str) -> String {
+        fake_cli(dir, &format!("if [ \"$1\" = \"--version\" ]; then echo '{}'; exit 0; fi\n{}", version, body))
+    }
+
+    fn gate_record(dir: &std::path::Path, version: &str, at: i64, verified: bool) -> std::path::PathBuf {
+        let path = dir.join("agy-gate.json");
+        let rec = crate::capabilities::GateRecord { endpoint_id: "agy-sub".into(), agy_version: version.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified };
+        crate::capabilities::save_gate(&path, &rec).unwrap();
+        path
+    }
+
+    fn now_secs() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    /// The taint events an agy orchestrator span raised when the stand-in ran `body`, given a conformance record (or none).
+    async fn agy_taints(version_on_disk: &str, record: Option<(&str, i64, bool)>, body: &str) -> Vec<String> {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = versioned_agy(scripts.path(), version_on_disk, body);
+        let gate = record.map(|(v, at, ok)| gate_record(scripts.path(), v, at, ok));
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = gate.or(Some(scripts.path().join("none.json"))); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        events_of(&f, "span.taint").iter().map(|e| e.payload["cause"].as_str().unwrap().to_string()).collect()
+    }
+
+    const QUIET_AGY: &str = "echo '{\"event\":\"init\",\"init\":{\"model\":\"m\",\"tools\":[]}}'";
+
+    #[tokio::test]
+    async fn an_agy_span_starts_trusted_only_on_a_fresh_verified_record_for_the_version_installed_now() {
+        let body = format!("{}\n{}", QUIET_AGY, AGY_FINISH);
+        let now = now_secs();
+        // The evidence is there: nothing taints the span.
+        assert_eq!(agy_taints("agy 7.1", Some(("agy 7.1", now, true)), &body).await, Vec::<String>::new());
+        // Every way the evidence can fail leaves the span untrusted from the start.
+        for (why, version_on_disk, rec) in [
+            ("no record", "agy 7.1", None),
+            ("a record that did not verify", "agy 7.1", Some(("agy 7.1", now, false))),
+            ("a record for another version (agy updated since)", "agy 7.2", Some(("agy 7.1", now, true))),
+            ("a record gone stale", "agy 7.1", Some(("agy 7.1", now - crate::capabilities::GATE_TTL_SECS - 1, true))),
+            ("a record that names no version", "agy 7.1", Some(("", now, true))),
+        ] {
+            let t = agy_taints(version_on_disk, rec, &body).await;
+            assert!(t.len() == 1 && t[0].contains("hook Delphi cannot verify"), "{}: {:?}", why, t);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_trusted_agy_span_falls_to_l0_the_moment_the_gate_lets_a_web_tool_through_and_before_the_next_delphi_call() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_client.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_CLIENT).unwrap();
+        // AGY_CLIENT asks about the timer, then search_web (allowed), then the tools it is denied, then calls the timer.
+        let body = format!("python3 -I '{}' '{}'\n{}\n{}", helper.display(), out_file.display(), QUIET_AGY, AGY_FINISH);
+        let prog = versioned_agy(scripts.path(), "agy 7.1", &body);
+        let gate = gate_record(scripts.path(), "agy 7.1", now_secs(), true);
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = Some(gate); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let ev = f.m.replay().unwrap();
+        let taint = ev.iter().position(|e| e.kind == "span.taint").expect("the web tool tainted the span");
+        let call = ev.iter().position(|e| e.kind == "harness.bridge_call").expect("the timer ran");
+        assert!(taint < call, "tainted before the Delphi call ran");
+        assert_eq!(ev[taint].payload["ceiling"], "L0");
+        assert!(ev[taint].payload["cause"].as_str().unwrap().contains("read from the web"), "{}", ev[taint].payload);
+        assert_eq!(ev.iter().filter(|e| e.kind == "span.taint").count(), 1, "once");
     }
 
     /// A stand-in `agy` client: asks the span's gate about some tool calls the way the hook does, then calls a Delphi tool

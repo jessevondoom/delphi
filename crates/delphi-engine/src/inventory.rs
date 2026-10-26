@@ -41,6 +41,11 @@ impl Inventory {
         Inventory { path: None, seats: Mutex::new(BTreeMap::new()) }
     }
 
+    /// Where the agy conformance record sits: beside the inventory, so a test with an in-memory inventory has none.
+    pub fn gate_path(&self) -> Option<PathBuf> {
+        self.path.as_ref().map(|p| p.with_file_name("agy-gate.json"))
+    }
+
     /// Load the file if it is there and parses; anything else starts empty (the record is a cache of what the CLIs said).
     pub fn open(path: PathBuf) -> Inventory {
         let seats = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Vec<SeatRecord>>(&t).ok()).unwrap_or_default();

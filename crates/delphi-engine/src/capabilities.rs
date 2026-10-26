@@ -53,6 +53,88 @@ impl Capability {
     }
 }
 
+/// What the last conformance probe of an `agy` seat found (`specs/020` §8.5). One per endpoint, in `local/agy-gate.json`, apart
+/// from the capabilities cache because it outlives that cache's day and is keyed to the CLI's version.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateRecord {
+    pub endpoint_id: String,
+    /// `agy --version` when it was probed. A different version has not been probed.
+    pub agy_version: String,
+    pub at: i64,
+    /// Every tool the gate saw the model reach for, by the CLI's own name (all of them denied in the probe).
+    pub attempted: Vec<String>,
+    /// The kinds of tool among them (`shell`, `edit`, `browser`, ...).
+    pub kinds: Vec<String>,
+    /// Delphi's own tool reached the span through the plugin.
+    pub served: bool,
+    /// Anything that happened although the gate should have stopped it.
+    pub side_effects: Vec<String>,
+    pub verified: bool,
+}
+
+/// How long a conformance record is trusted. It is tied to the CLI's version, so what ages it out is time, not an update.
+pub const GATE_TTL_SECS: i64 = 14 * 24 * 3600;
+/// Fewest kinds of tool the probe must have seen denied before it calls the gate verified.
+pub const GATE_MIN_KINDS: usize = 5;
+
+impl GateRecord {
+    pub fn is_fresh(&self, now: i64) -> bool {
+        now - self.at < GATE_TTL_SECS
+    }
+}
+
+/// The kind of tool, from the name the hook receives.
+pub fn tool_kind(name: &str) -> &'static str {
+    match name {
+        "run_command" | "send_command_input" | "command_status" => "shell",
+        "read_file" | "view_file" | "list_dir" | "find_by_name" | "grep_search" | "sed_file" | "read_resource" | "list_resources" => "read",
+        "write_file" | "write_to_file" => "write",
+        "replace_file_content" | "multi_replace_file_content" | "notebook_edit" | "edit_file" => "edit",
+        "search_web" => "web search",
+        "read_url_content" => "web read",
+        "invoke_subagent" | "define_subagent" | "manage_subagents" => "subagent",
+        "schedule" | "manage_task" | "run_workflow" => "schedule",
+        "generate_image" => "image",
+        "call_mcp_tool" => "mcp",
+        n if n.starts_with("browser_") || n.contains("browser") => "browser",
+        _ => "other",
+    }
+}
+
+/// `agy --version` as installed now, asked at most once every five minutes by a running daemon.
+pub async fn installed_agy_version(program: &str) -> Option<String> {
+    type Cache = std::collections::HashMap<String, (std::time::Instant, Option<String>)>;
+    static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
+    if let Some((at, v)) = CACHE.lock().unwrap().get_or_insert_with(Default::default).get(program) {
+        if at.elapsed() < Duration::from_secs(300) {
+            return v.clone();
+        }
+    }
+    let p = program.to_string();
+    let v = tokio::task::spawn_blocking(move || agy_version(&p)).await.ok().flatten();
+    CACHE.lock().unwrap().get_or_insert_with(Default::default).insert(program.to_string(), (std::time::Instant::now(), v.clone()));
+    v
+}
+
+pub fn load_gates(path: &Path) -> Vec<GateRecord> {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Replace the record for this endpoint; keep the others.
+pub fn save_gate(path: &Path, rec: &GateRecord) -> std::io::Result<()> {
+    let mut all: Vec<GateRecord> = load_gates(path).into_iter().filter(|g| g.endpoint_id != rec.endpoint_id).collect();
+    all.push(rec.clone());
+    all.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
+    delphi_core::lock::write_atomic(path, serde_json::to_string_pretty(&all).expect("serializes").as_bytes())
+}
+
+/// `<program> --version`, first line: what a conformance record is tied to. `None` if it will not run.
+pub fn agy_version(program: &str) -> Option<String> {
+    let out = std::process::Command::new(program).arg("--version").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    let line = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string();
+    (out.status.success() && !line.is_empty()).then_some(line)
+}
+
 fn probe_ipr(contract: &str) -> Ipr {
     Ipr { governance: "This is a capability probe. Follow the contract exactly.".into(), role: "You are a connectivity probe.".into(), persona: None, heuristics: "None.".into(), lessons: "None.".into(), context_slices: vec![], contract: contract.into(), reminder: None, nonce: "probe".into() }
 }
@@ -201,6 +283,16 @@ pub async fn probe_harness(cfg: &Config, ep: &Endpoint, program: &str, now: i64)
 /// A Claude seat whose profile has the Delphi bridge on is started with it, so the probe shows whether an organization's
 /// MCP policy lets the bridge load, and which of the account's own connectors came with it.
 pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now: i64, settle: Duration) -> (Capability, Option<crate::inventory::SeatRecord>) {
+    let (cap, seat, _) = probe_harness_full(cfg, ep, program, now, settle, None).await;
+    (cap, seat)
+}
+
+/// What the conformance probe asks an `agy` model to attempt: one tool call each, so the gate is seen to meet every kind.
+const GATE_PROBE_PROMPT: &str = "This is a test of a tool gate; refusals are expected and fine. Do each of the following with one tool call each, in this order. If a call is refused, say so and go straight on to the next one; never retry a refused call. (1) Use the MCP tool named probe from the delphi server. (2) Run the shell command: echo x > conf-shell.txt . (3) Create a file named conf-write.txt containing hi. (4) Change the text 'original' to 'changed' in the file conf-edit.txt. (5) View the file /etc/hosts. (6) List the files in the current directory. (7) Search the web for 'rust language'. (8) Read the page at https://example.com . (9) Open https://example.com in the browser. (10) Start a subagent that says hello. (11) Schedule a reminder for tomorrow. Then reply with exactly the word OK.";
+
+/// [`probe_harness_seat`], and for an `agy` seat the conformance record (`agy_version` is what `agy --version` said, `None` in tests).
+pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now: i64, settle: Duration, agy_version: Option<String>) -> (Capability, Option<crate::inventory::SeatRecord>, Option<GateRecord>) {
+    let mut gate_record: Option<GateRecord> = None;
     let mut seat: Option<crate::inventory::SeatRecord> = None;
     let mut cap = Capability {
         endpoint_id: ep.id.clone(),
@@ -220,7 +312,7 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
     };
     let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
         cap.auth = format!("failed: the `{}` harness is not implemented", ep.harness.as_deref().unwrap_or("?"));
-        return (cap, None);
+        return (cap, None, None);
     };
     // Any tier's model will do for a connectivity probe; the cheapest configured one.
     let model = ["fast", "workhorse", "frontier"].iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
@@ -237,7 +329,7 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
     let dir = std::env::temp_dir().join(format!("delphi-probe-{}-{}", std::process::id(), PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     if std::fs::create_dir_all(&dir).is_err() {
         cap.auth = "failed: no scratch directory".into();
-        return (cap, None);
+        return (cap, None, None);
     }
     let connectors = cli == Cli::Claude && profile.claudeai_connectors;
     // `settle`: the probe is the place to learn what loads, so a real probe waits for the account's connectors as a span does.
@@ -263,7 +355,10 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
     let (mut agy_calls, mut agy_notes) = (None, None);
     if gate_wanted {
         let stub = vec![ToolDef { name: "probe".into(), description: "Gate probe: call this once.".into(), input_schema: json!({"type": "object"}) }];
-        let policy = crate::bridge::HookPolicy { allow_prefixes: vec![crate::bridge::AGY_TOOL_PREFIX.to_string()], allow_names: crate::bridge::agy_native_tools(&profile.native_tools) };
+        // Nothing of the CLI's own is allowed here, so that every attempt is a denial that can be told from a success. (The
+        // profile's web tools are tried too: they are denied in the probe and allowed in a span.)
+        let policy = crate::bridge::HookPolicy::new(vec![crate::bridge::AGY_TOOL_PREFIX.to_string()], vec![]);
+        let _ = std::fs::write(dir.join("conf-edit.txt"), "original");
         match std::env::current_exe() {
             Ok(exe) => match crate::bridge::Bridge::start_gated(stub, String::new(), &exe, Some(policy)).await {
                 Ok((b, rx, notes)) => match b.write_agy_workspace(&dir) {
@@ -279,7 +374,7 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
         }
     }
     let gate_probe = agy_calls.is_some();
-    let user_prompt = if gate_probe { "Use the MCP tool named probe from the delphi server once. Then run the shell command: echo x > gate-probe.txt . Then reply with exactly the word OK." } else { "Reply with exactly the word OK." };
+    let user_prompt = if gate_probe { GATE_PROBE_PROMPT } else { "Reply with exactly the word OK." };
     let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: user_prompt.into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
     let mut served = false;
     match Session::start(&l).await {
@@ -337,15 +432,43 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
     }
     if gate_probe {
         let decisions: Vec<crate::bridge::HookNote> = agy_notes.as_mut().map(|rx| std::iter::from_fn(|| rx.try_recv().ok()).collect()).unwrap_or_default();
-        let shell_denied = decisions.iter().any(|n| !n.allowed && n.tool == "run_command");
-        if dir.join("gate-probe.txt").exists() {
+        let mut attempted: Vec<String> = decisions.iter().map(|n| n.tool.clone()).filter(|t| !t.starts_with(crate::bridge::AGY_TOOL_PREFIX)).collect();
+        attempted.sort();
+        attempted.dedup();
+        let mut kinds: Vec<String> = attempted.iter().map(|t| tool_kind(t).to_string()).collect();
+        kinds.sort();
+        kinds.dedup();
+        // Anything that happened although the gate should have stopped it: a file written or changed, or one nobody asked for.
+        let mut side_effects: Vec<String> = Vec::new();
+        for f in ["conf-shell.txt", "conf-write.txt", "gate-probe.txt"] {
+            if dir.join(f).exists() {
+                side_effects.push(format!("{} was created", f));
+            }
+        }
+        if std::fs::read_to_string(dir.join("conf-edit.txt")).ok().as_deref() != Some("original") {
+            side_effects.push("conf-edit.txt was changed".into());
+        }
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if !matches!(n.as_str(), ".agents" | "conf-edit.txt" | "conf-shell.txt" | "conf-write.txt" | "gate-probe.txt") {
+                    side_effects.push(format!("{} appeared", n));
+                }
+            }
+        }
+        let shell_seen = kinds.iter().any(|k| k == "shell");
+        let verified = served && side_effects.is_empty() && shell_seen && kinds.len() >= GATE_MIN_KINDS;
+        let version = agy_version.clone().unwrap_or_default();
+        gate_record = Some(GateRecord { endpoint_id: ep.id.clone(), agy_version: version.clone(), at: now, attempted: attempted.clone(), kinds: kinds.clone(), served, side_effects: side_effects.clone(), verified });
+        let seen = if kinds.is_empty() { "nothing".to_string() } else { format!("{} kind(s) of tool ({})", kinds.len(), kinds.join(", ")) };
+        if !side_effects.is_empty() {
             cap.degraded = true;
-            cap.auth = "failed: the agy gate did not stop a shell command".into();
-            cap.notes.push("agy gate: FAILED. A shell command ran although the gate should have denied it; do not use this seat until it is understood (the span stays untrusted, but nothing else is checked)".into());
-        } else if served && shell_denied {
-            cap.notes.push("agy gate: verified. Delphi's tool was served through the workspace plugin and the shell was denied; the roles that need tools can run on this seat".into());
+            cap.auth = "failed: the agy gate did not stop a tool".into();
+            cap.notes.push(format!("agy gate: FAILED. Something ran although the gate should have denied it ({}). Do not use this seat until it is understood; its spans stay untrusted, but nothing else is checked", side_effects.join("; ")));
+        } else if verified {
+            cap.notes.push(format!("agy gate: verified{}. Delphi's tool was served and the gate met and denied {}; none ran, so a span on this agy version starts untrusted only if it reads from the web", if version.is_empty() { String::new() } else { format!(" on {}", version) }, seen));
         } else if served {
-            cap.notes.push("agy gate: Delphi's tool was served, but the model did not try the shell, so the denial is unproven by this probe".into());
+            cap.notes.push(format!("agy gate: unproven. Delphi's tool was served and nothing got through, but the model reached for only {}; the gate needs a shell and {} kinds of tool denied to count as verified, so the span stays untrusted. Run the probe again", seen, GATE_MIN_KINDS));
         } else {
             cap.degraded = true;
             cap.notes.push("agy gate: Delphi's tool was not served. The workspace plugin did not load, or this agy does not honor a workspace-local .agents/ any more, or the model did not call it; roles that need tools cannot run on this seat".into());
@@ -353,7 +476,7 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
     }
     let _ = std::fs::remove_dir_all(&dir);
     cap.notes.dedup();
-    (cap, seat)
+    (cap, seat, gate_record)
 }
 
 pub fn load(path: &Path) -> Vec<Capability> {
@@ -533,9 +656,10 @@ cost_model = "subscription"
 "#;
 
     /// A stand-in `agy` that does what the real one does inside the probe: finds the plugin and the gate in `.agents/`, asks the
-    /// gate about the shell the way the hook does, calls the stub tool through the plugin's server, and (if `ran_it`) obeys the
-    /// shell command anyway, as a CLI whose gate failed would.
-    fn agy_probe_cli(dir: &std::path::Path, ask_shell: bool, call_tool: bool, ran_it: bool) -> String {
+    /// gate about each tool in `attempts` the way the hook does, calls the stub tool through the plugin's server, and obeys any
+    /// tool the gate did not deny (as a CLI whose gate failed would). `leak` names a file to write regardless, `edit` changes
+    /// the seeded file regardless.
+    fn agy_probe_cli(dir: &std::path::Path, attempts: &[&str], call_tool: bool, leak: Option<&str>, edit: bool) -> String {
         let client = format!(
             r#"import json, socket
 cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
@@ -543,20 +667,35 @@ s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
 f = s.makefile("rw"); f.write(json.dumps({{"token": cfg["DELPHI_BRIDGE_TOKEN"]}}) + "\n"); f.flush()
 def rpc(o):
     f.write(json.dumps(o) + "\n"); f.flush(); return json.loads(f.readline())
-if {ask_shell}:
-    d = rpc({{"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {{"toolCall": {{"name": "run_command", "args": {{"CommandLine": "echo x > gate-probe.txt"}}}}}}}})["result"]["decision"]
-    if d == "allow" or {ran_it}:
-        open("gate-probe.txt", "w").write("x")
+for name in {attempts}:
+    d = rpc({{"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {{"toolCall": {{"name": name, "args": {{"CommandLine": "echo x"}}}}}}}})["result"]["decision"]
+    if d == "allow":
+        open("conf-shell.txt", "w").write("x")
+if {leak}:
+    open({leak_name}, "w").write("x")
+if {edit}:
+    open("conf-edit.txt", "w").write("changed")
 if {call_tool}:
     rpc({{"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {{"protocolVersion": "2025-11-25"}}}})
     rpc({{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {{"name": "probe", "arguments": {{}}}}}})
 "#,
-            ask_shell = if ask_shell { "True" } else { "False" },
+            attempts = serde_json::to_string(attempts).unwrap(),
             call_tool = if call_tool { "True" } else { "False" },
-            ran_it = if ran_it { "True" } else { "False" }
+            leak = if leak.is_some() { "True" } else { "False" },
+            leak_name = serde_json::to_string(leak.unwrap_or("none")).unwrap(),
+            edit = if edit { "True" } else { "False" }
         );
         std::fs::write(dir.join("client.py"), client).unwrap();
         crate::harness::tests::fake_cli(dir, &format!("python3 -I '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}}}'", dir.join("client.py").display()))
+    }
+
+    const EVERY_KIND: [&str; 8] = ["run_command", "read_file", "write_file", "replace_file_content", "search_web", "read_url_content", "browser_subagent", "invoke_subagent"];
+
+    #[test]
+    fn a_tool_is_classed_by_what_it_can_do_not_by_what_it_is_called_here() {
+        for (tool, kind) in [("run_command", "shell"), ("send_command_input", "shell"), ("read_file", "read"), ("list_dir", "read"), ("write_file", "write"), ("replace_file_content", "edit"), ("search_web", "web search"), ("read_url_content", "web read"), ("browser_click_element", "browser"), ("open_browser_url", "browser"), ("invoke_subagent", "subagent"), ("schedule", "schedule"), ("generate_image", "image"), ("call_mcp_tool", "mcp"), ("something_new", "other")] {
+            assert_eq!(tool_kind(tool), kind, "{}", tool);
+        }
     }
 
     #[tokio::test]
@@ -566,33 +705,67 @@ if {call_tool}:
         }
         let cfg = Config::parse(AGY_CFG).unwrap();
         let ep = cfg.endpoint("ag").unwrap().clone();
-        let run = |ask_shell: bool, call_tool: bool, ran_it: bool| {
+        let run = |attempts: &'static [&'static str], call_tool: bool, leak: Option<&'static str>, edit: bool| {
             let (cfg, ep) = (cfg.clone(), ep.clone());
             async move {
                 let d = tempfile::tempdir().unwrap();
-                let prog = agy_probe_cli(d.path(), ask_shell, call_tool, ran_it);
-                probe_harness_seat(&cfg, &ep, &prog, 7, Duration::ZERO).await
+                let prog = agy_probe_cli(d.path(), attempts, call_tool, leak, edit);
+                probe_harness_full(&cfg, &ep, &prog, 7, Duration::ZERO, Some("agy 1.4.7".into())).await
             }
         };
-        // Works: the tool is served and the shell is denied.
-        let (cap, seat) = run(true, true, false).await;
-        assert!(!cap.degraded && cap.auth == "ok" && cap.notes.iter().any(|n| n.contains("agy gate: verified")), "{:?}", cap.notes);
+        // Works: the tool is served and the gate meets and denies every kind of tool; nothing runs.
+        let (cap, seat, gate) = run(&EVERY_KIND, true, None, false).await;
+        assert!(!cap.degraded && cap.auth == "ok" && cap.notes.iter().any(|n| n.contains("agy gate: verified on agy 1.4.7") && n.contains("8 kind(s)")), "{:?}", cap.notes);
         assert!(seat.unwrap().bridge, "the seat is recorded as carrying the bridge");
-        // The shell ran although the gate was asked: the worst case, and it fails the seat.
-        let (cap, _) = run(true, true, true).await;
-        assert!(cap.degraded && cap.auth.starts_with("failed: the agy gate did not stop") && cap.notes.iter().any(|n| n.contains("agy gate: FAILED")), "{} {:?}", cap.auth, cap.notes);
-        // The model never tried the shell: the tool works but the denial is unproven, which is said, not hidden.
-        let (cap, _) = run(false, true, false).await;
-        assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("denial is unproven")), "{:?}", cap.notes);
+        let g = gate.unwrap();
+        assert!(g.verified && g.served && g.side_effects.is_empty() && g.agy_version == "agy 1.4.7" && g.at == 7 && g.endpoint_id == "ag", "{:?}", g);
+        assert_eq!(g.kinds, ["browser", "edit", "read", "shell", "subagent", "web read", "web search", "write"]);
+        // A file written although the gate was asked: the worst case, and it fails the seat.
+        let (cap, _, gate) = run(&EVERY_KIND, true, Some("conf-write.txt"), false).await;
+        assert!(cap.degraded && cap.auth.starts_with("failed: the agy gate did not stop") && cap.notes.iter().any(|n| n.contains("agy gate: FAILED") && n.contains("conf-write.txt was created")), "{} {:?}", cap.auth, cap.notes);
+        assert!(!gate.unwrap().verified);
+        // A file changed although the gate was asked.
+        let (cap, _, gate) = run(&EVERY_KIND, true, None, true).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("conf-edit.txt was changed")), "{:?}", cap.notes);
+        assert!(!gate.unwrap().verified);
+        // Something nobody asked for appeared: also a failure.
+        let (cap, _, _) = run(&EVERY_KIND, true, Some("surprise.sh"), false).await;
+        assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("surprise.sh appeared")), "{:?}", cap.notes);
+        // The model reached for too few kinds of tool: nothing got through, but that is not proof, and the note says so.
+        let (cap, _, gate) = run(&["run_command", "read_file"], true, None, false).await;
+        assert!(!cap.degraded && cap.notes.iter().any(|n| n.contains("agy gate: unproven") && n.contains("2 kind(s)")), "{:?}", cap.notes);
+        assert!(!gate.unwrap().verified, "two kinds are not enough");
+        // Without a shell among them it is not verified either, however many other kinds were tried.
+        let (_, _, gate) = run(&["read_file", "write_file", "replace_file_content", "search_web", "browser_subagent", "invoke_subagent"], true, None, false).await;
+        assert!(!gate.unwrap().verified, "the shell is the one that must have been met");
         // Delphi's tool was never served: the plugin did not load.
-        let (cap, _) = run(true, false, false).await;
+        let (cap, _, gate) = run(&EVERY_KIND, false, None, false).await;
         assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("agy gate: Delphi's tool was not served")), "{:?}", cap.notes);
-        // With the bridge off nothing is gated, and the note says that instead.
+        assert!(!gate.unwrap().verified);
+        // With the bridge off nothing is gated, and the note says that instead; there is no record to keep.
         let off = Config::parse(&format!("{}\n[harness.agy]\nbridge = false\n", AGY_CFG)).unwrap();
         let d = tempfile::tempdir().unwrap();
         let prog = crate::harness::tests::fake_cli(d.path(), "echo '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"OK\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}'");
-        let (cap, _) = probe_harness_seat(&off, &ep, &prog, 7, Duration::ZERO).await;
+        let (cap, _, gate) = probe_harness_full(&off, &ep, &prog, 7, Duration::ZERO, None).await;
         assert!(cap.degraded && cap.notes.iter().any(|n| n.contains("the Delphi bridge and gate are off")) && !cap.notes.iter().any(|n| n.contains("agy gate")), "{:?}", cap.notes);
+        assert!(gate.is_none());
+    }
+
+    #[test]
+    fn the_gate_record_is_kept_per_endpoint_tied_to_a_version_and_goes_stale() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("local/agy-gate.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let rec = |ep: &str, v: &str, at: i64, ok: bool| GateRecord { endpoint_id: ep.into(), agy_version: v.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified: ok };
+        save_gate(&path, &rec("a", "1.4.7", 100, true)).unwrap();
+        save_gate(&path, &rec("b", "1.4.7", 100, false)).unwrap();
+        save_gate(&path, &rec("a", "1.4.8", 200, true)).unwrap();
+        let all = load_gates(&path);
+        assert_eq!(all.iter().map(|g| (g.endpoint_id.as_str(), g.agy_version.as_str(), g.at)).collect::<Vec<_>>(), [("a", "1.4.8", 200), ("b", "1.4.7", 100)], "a new probe replaces the endpoint's old record");
+        assert!(all[0].is_fresh(200 + GATE_TTL_SECS - 1) && !all[0].is_fresh(200 + GATE_TTL_SECS));
+        assert!(load_gates(&d.path().join("missing.json")).is_empty());
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_gates(&path).is_empty(), "a damaged file is no evidence");
     }
 
     #[test]
