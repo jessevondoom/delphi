@@ -6,6 +6,7 @@ import { App } from './app.tsx';
 import { Rpc } from './rpc.ts';
 import { Term } from './terminal.ts';
 import { initial } from './fold.ts';
+import { emptyArch } from './archives.ts';
 import { Activity, title } from './title.ts';
 import { loadHistory } from './attach.ts';
 import { capabilities, envTheme, useCapabilities, type Info, type Rgb } from './theme.ts';
@@ -61,7 +62,7 @@ if (observeAt >= 0) {
       const st = { ...emptyState(), ...(await c.call('observe.state', {})) };
       const shown = view ?? (st.default_view as typeof view) ?? 'epic';
       c.close();
-      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true, still: true, now: Date.now() }, process.stdout.columns || 80, process.stdout.rows || 24);
+      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, arch: emptyArch(), live: {}, connected: true, still: true, now: Date.now() }, process.stdout.columns || 80, process.stdout.rows || 24);
       console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
       process.exit(0);
     } catch (e: any) {

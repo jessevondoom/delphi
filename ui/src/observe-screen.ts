@@ -7,6 +7,7 @@ import { sanitize } from './theme.ts';
 import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 import { epicThreads } from './epic-threads.ts';
+import * as A from './archives.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
@@ -32,10 +33,10 @@ export const parseView =(s: string): View | null => {
   return m[s.toLowerCase()] ?? null;
 };
 
-export type Hit = { pointer: string; heading: string; preview: string };
 export type OModel = {
   info: T.Info; pal: T.Pal; st: OState; view: View; pick: number; scroll: number; selNode: number;
-  search: { editing: boolean; query: string; hits: Hit[]; note: string };
+  /** The knowledge window (`archives.ts`): the search box, the shelf, the results and the reader. */
+  arch: A.Arch;
   live: Record<string, string>; connected: boolean;
   /** Reasoning per running span, in memory only: never written anywhere, not in the snapshot a reopened window receives. */
   think?: Record<string, string>;
@@ -172,18 +173,7 @@ function agents(m: OModel, w: number, _h: number): string[] {
   return out;
 }
 
-function archives(m: OModel, w: number, _h: number): string[] {
-  const s = m.search;
-  const out = [rule(m, w, 'knowledge base')];
-  if (s.query) out.push(chalk.bold(text(m)(` last search: ${s.query}`)));
-  else out.push(dim(' search specs, context, REVIEW.md and lessons from the console: ctrl+k'), dim(' the files an agent read, and the documents it cited, are listed there too: ctrl+s'));
-  if (s.note) out.push(dim(` ${s.note}`));
-  s.hits.forEach((hit, i) => {
-    out.push(text(m)(` ${i + 1}. ${sanitize(hit.pointer)}`) + dim(`  ${clean(hit.heading, 60)}`));
-    for (const l of sanitize(hit.preview).split('\n').slice(0, 3)) out.push(dim(`      ${clean(l, w - 8)}`));
-  });
-  return out;
-}
+const archives = (m: OModel, w: number, h: number): string[] => A.view(m.arch, w, h, m.pal);
 
 function thinking(m: OModel, w: number, h: number): string[] {
   const spans = Object.entries(m.think ?? {}).filter(([, t]) => t.trim());
@@ -264,7 +254,7 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
   const fn = { council, epic, agents, archives, thinking }[m.view];
   let body = fn(m, w, inner);
-  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'thinking') body = body.slice(m.scroll);
+  if (m.view !== 'council' && m.view !== 'epic' && m.view !== 'thinking' && m.view !== 'archives') body = body.slice(m.scroll);
   body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);

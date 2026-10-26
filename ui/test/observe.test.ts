@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { emptyArch } from '../src/archives.ts';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { emptyState, mascot, observeFrame, parseView, stepView, VIEWS, type OModel, type OState } from '../src/observe-screen.ts';
@@ -28,7 +29,7 @@ function sample(): OState {
   s.builds = [{ task_id: 't_1', branch: 'delphi/t_1', attempts: ['attempt 1: red'], sha: 'abc1234', gates: [{ name: 'tests', state: 'green', detail: '12 passed' }, { name: 'audit', state: 'red', detail: '1 finding' }], findings: [['P1', 'unchecked unwrap']], flaky: true, merge: '' }];
   return s;
 }
-const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st: sample(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true, ...over });
+const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st: sample(), view, pick: 0, scroll: 0, selNode: 1, arch: emptyArch(), live: {}, connected: true, ...over });
 
 test('every view fits the window exactly, with no boxes and no money-free surprises', () => {
   for (const view of VIEWS) for (const [w, h] of [[110, 34], [70, 20], [40, 12]] as const) {
@@ -36,7 +37,7 @@ test('every view fits the window exactly, with no boxes and no money-free surpri
     assert.equal(lines.length, h, `${view} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= w, `${view}: line wider than ${w}: ${plain(l)}`);
     // The council's cards are tinted blocks; without a tint (these models have no known background) each row is a rail `│`.
-    assert.ok(!(view === 'council' ? /[┌┐└┘]/ : /[┌┐└┘│]/).test(lines.map(plain).join('\n')), `${view}: no box characters`);
+    assert.ok(!(view === 'council' || view === 'archives' ? /[┌┐└┘]/ : /[┌┐└┘│]/).test(lines.map(plain).join('\n')), `${view}: no box characters`);
   }
 });
 
@@ -146,11 +147,15 @@ test('epic: threads of work with a a few lines each and the critical path (the p
   assert.match(t, / ▌ critical path {2}Implement the deck router/);
 });
 
-test('archives: the hits of a search and where to search from', () => {
-  assert.match(observeFrame(model('archives'), 110, 34).map(plain).join('\n'), /from the console: ctrl\+k/);
-  const a = observeFrame(model('archives', { search: { editing: true, query: 'retry', hits: [{ pointer: 'specs/003.md#retry', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' }], note: '' } }), 110, 34).map(plain).join('\n');
-  assert.match(a, /last search: retry/);
-  assert.match(a, /1\. specs\/003\.md#retry\s+Retry ladder/);
+test('archives: the knowledge window, a search box at rest and ranked results after a search', () => {
+  const rest = observeFrame(model('archives'), 110, 34).map(plain).join('\n');
+  assert.match(rest, /knowledge/);
+  assert.match(rest, /search what Delphi knows/);
+  assert.match(rest, /● offline/);
+  const hit = { path: 'specs/003.md', collection: 'specs', trust: 'internal_generated', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' };
+  const a = observeFrame(model('archives', { arch: { ...emptyArch(), q: 'retry', searched: 'retry', hits: [hit], took: 400, engine: 'hybrid' } }), 110, 34).map(plain).join('\n');
+  assert.match(a, /1 result · 0\.4 s · hybrid/);
+  assert.match(a, /1\s+specs\/003\.md › Retry ladder\s+specs/);
   assert.match(a, /three attempts/);
 });
 

@@ -1,6 +1,7 @@
 // agents, archives and thinking in the narrator's style (`005f` slice 10): lowercase section rules, a tinted
 // band for the running row, no money, no columns the operator cannot act on. Goldens at 80x24, 100x34 and 40x12.
 import test from 'node:test';
+import { emptyArch } from '../src/archives.ts';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
 import { observeFrame, VIEWS, type OModel, type OState } from '../src/observe-screen.ts';
@@ -19,15 +20,15 @@ function world(): OState {
   return s;
 }
 const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({
-  info, pal: { dark: true }, st: world(), view, pick: 0, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true, still: true, now: NOW, ...over,
+  info, pal: { dark: true }, st: world(), view, pick: 0, scroll: 0, selNode: 0, arch: emptyArch(), live: {}, connected: true, still: true, now: NOW, ...over,
 } as OModel);
 const SIZES = [[80, 24], [100, 34], [40, 12]] as const;
-const hits = [{ pointer: 'specs/003.md#retry', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' }];
+const hits = [{ path: 'specs/003.md', collection: 'specs', trust: 'internal_generated', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' }];
 const thinkText = { n3: 'The queue needs a visibility timeout.\nA claim without one can be lost for good.' };
 
 const cases: [string, Partial<OModel>][] = [
   ['agents', {}],
-  ['archives', { search: { editing: false, query: 'retry', hits, note: '' } }],
+  ['archives', { arch: { ...emptyArch(), q: 'retry', searched: 'retry', hits, took: 400, engine: 'hybrid', focus: 'list' } }],
   ['thinking', { think: thinkText }],
 ];
 
@@ -57,7 +58,7 @@ test('agents leads with the roster: name, role, state in words, model, task and 
 });
 
 test('archives and thinking keep their calm empty states', () => {
-  assert.match(observeFrame(model('archives'), 100, 24).map(plain).join('\n'), /from the console: ctrl\+k[\s\S]*ctrl\+s/);
+  assert.match(observeFrame(model('archives'), 100, 24).map(plain).join('\n'), /search what Delphi knows[\s\S]*● offline/);
   const t = observeFrame(model('thinking'), 100, 24).map(plain).join('\n');
   assert.match(t, /nothing is thinking right now/);
   assert.match(t, /never saved/);

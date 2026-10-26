@@ -3,9 +3,14 @@ delphi v0.5 · archives
 
  ✔ nothing needs you
 
-── knowledge base ──────────────────────────────────────────────────────────────────────────────────
- search specs, context, REVIEW.md and lessons from the console: ctrl+k
- the files an agent read, and the documents it cited, are listed there too: ctrl+s
+
+                                             knowledge
+                    ╭──────────────────────────────────────────────────────────╮
+                    │ ›  search what Delphi knows…                             │
+                    ╰──────────────────────────────────────────────────────────╯
+                                 ● offline    ○ online (not set up)
+
+                                         reading the index…
 
 
 
@@ -20,11 +25,6 @@ delphi v0.5 · archives
 
 
 
-
-
-
-
-
-
+ type to search · enter search · ↓ browse · ← → views
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 1 running  ·  3500 tokens                                                          ← →  ·  ○ ○ ○ ● ○
