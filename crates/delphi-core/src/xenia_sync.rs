@@ -27,7 +27,6 @@
 
 use crate::xenia_store::{io, run, Divergence, Fetch, NonFastForward, Refused, RunFail, Snapshot, Store, REF_ACCEPTED, REF_FETCHED};
 use delphi_xenia::freshness::{self, Assessment, FreshnessState, Policy};
-use delphi_xenia::sticky::IssuedMark;
 use delphi_xenia::layout::{roster_epoch, roster_epoch_sigs, FRESHNESS, FRESHNESS_SIGS};
 use delphi_xenia::pins::{self, Pins};
 use delphi_xenia::record::Pinned;
@@ -294,7 +293,8 @@ impl Store {
 
     /// Steps 2 to 5 for one fetched head. `Ok(Err(reason))` is a rejection; the walk's and the classifier's
     /// findings are returned for the caller to act on.
-    fn inspect(&self, pins: &Pins, cfg: &VerifyConfig, head: &str, snap: &Snapshot, accepted: Option<&str>, statement_base: bool, mark: Option<&IssuedMark>) -> Result<std::result::Result<Inspected, &'static str>> {
+    fn inspect(&self, pins: &Pins, cfg: &VerifyConfig, head: &str, snap: &Snapshot, sticky: &StickyState, statement_base: bool) -> Result<std::result::Result<Inspected, &'static str>> {
+        let (accepted, mark) = (sticky.accepted_head.as_deref(), sticky.freshness_mark.as_ref());
         let files = epoch_files(snap);
         if files.is_empty() {
             return Ok(Err("no-roster"));
@@ -390,7 +390,7 @@ impl Store {
             Fetch::Advanced { head, from, entries } => (head, from, entries),
         };
         let snapshot = self.read_snapshot(&head, &entries)?;
-        let ins = match self.inspect(&pins, cfg, &head, &snapshot, sticky.accepted_head.as_deref(), false, sticky.freshness_mark.as_ref())? {
+        let ins = match self.inspect(&pins, cfg, &head, &snapshot, &sticky, false)? {
             Ok(i) => i,
             Err(reason) => return Ok(VerifiedSync::Rejected { head, reason }),
         };
@@ -470,7 +470,7 @@ impl Store {
             },
         };
         let snapshot = self.read_snapshot(&head, &entries)?;
-        let ins = match self.inspect(&pins, cfg, &head, &snapshot, Some(&accepted), true, sticky.freshness_mark.as_ref())? {
+        let ins = match self.inspect(&pins, cfg, &head, &snapshot, &sticky, true)? {
             Ok(i) => i,
             Err(reason) => return Ok(Planned::refuse(reason)),
         };
