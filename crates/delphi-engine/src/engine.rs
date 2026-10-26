@@ -964,7 +964,8 @@ impl Engine {
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
                     return Ok(Err(Escalate(format!("model `{}` has no [models.catalog] entry, so its cost can't be reserved", model_id))));
                 };
-                if !entry.has_prices() {
+                // A model on this machine costs nothing: a reservation of zero is a reservation (`route::ineligible` agrees).
+                if !entry.has_prices() && !ep.is_local() {
                     return Ok(Err(Escalate(format!("model `{}` has no prices, so its cost can't be reserved", model_id))));
                 }
                 let price = entry.price();
@@ -2067,6 +2068,21 @@ mod tests {
         let out = g.engine.run_task(&g.m, "orchestrator", "hi").await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("direct is out of quota") && r.contains("resets at")), "{:?}", out.status);
         assert_eq!(g.m.budget.lock().unwrap().reserved(), 0, "released, not leaked");
+    }
+
+    // A live run against Ollama caught this: a `cost_model = "local"` endpoint has no prices (`delphi setup` writes none), and both the
+    // router and the budget reservation refused it, so the local fallback could never serve a call.
+    #[tokio::test]
+    async fn a_task_runs_on_a_free_local_model_that_has_no_prices_and_costs_nothing() {
+        let f = setup(vec![Step::text("From the local model.")], 5.0, |_| {});
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\npath = \"gateway-compat\"\nbase_url = \"http://localhost:11434\"\ncredential = \"none\"\ncost_model = \"local\"\nmodels = { fast = \"qwen3:8b\", workhorse = \"qwen3:8b\", frontier = \"qwen3:8b\" }\n[models.catalog.\"qwen3:8b\"]\nmax_output_tokens = 8192\n[access]\nrole_family = { architect = \"local\" }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"ollama\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        let out = f.engine.run_task(&f.m, "architect", "Say something").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "From the local model."), "{}", out.text);
+        assert_eq!(f.model.requests()[0].endpoint_id, "ollama");
+        assert_eq!(f.m.budget.lock().unwrap().reserved(), 0, "nothing is left reserved");
     }
 
     /// Claude and Gemini, each with one endpoint; one Gemini model serves every tier.
