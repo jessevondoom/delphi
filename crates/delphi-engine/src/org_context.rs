@@ -290,19 +290,19 @@ mod tests {
         s
     }
 
-    fn bundle(ws: &WorkspacePaths, org: &str, name: &str, order: i64, added: &str, goals: &str, perspectives: &str, idx: &str) -> Entry {
+    fn bundle(ws: &WorkspacePaths, org: &str, name: &str, order: i64, goals: &str, perspectives: &str, idx: &str) -> Entry {
         let files: Vec<(String, String)> = vec![
             ("bundle.toml".into(), format!("[bundle]\nschema = 1\n\n[applies_to]\nrepos = [\"{}/platform-*\"]\n", org)),
             ("behavior/goals.md".into(), format!("{}{}", FM, goals)),
             ("behavior/perspectives.md".into(), format!("{}{}", FM, perspectives)),
             ("knowledge/index.md".into(), idx.to_string()),
         ];
-        add_bundle(ws, org, name, order, added, &files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect::<Vec<_>>())
+        add_bundle(ws, org, name, order, &format!("2026-10-{:02}", order / 10), &files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect::<Vec<_>>())
     }
 
     fn two_bundles(ws: &WorkspacePaths) {
-        bundle(ws, "acme", "plat", 10, "2026-10-01", &goal(1, "active", "2026-Q4 to 2999-Q1"), &persp("acme", 3), &index(3, 4));
-        bundle(ws, "beta", "ops", 20, "2026-10-02", &goal(2, "active", "2026-Q4"), &persp("beta", 1), &index(2, 4));
+        bundle(ws, "acme", "plat", 10, &goal(1, "active", "2026-Q4 to 2999-Q1"), &persp("acme", 3), &index(3, 4));
+        bundle(ws, "beta", "ops", 20, &goal(2, "active", "2026-Q4"), &persp("beta", 1), &index(2, 4));
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
         for i in 4..=12 {
             goals.push_str(&goal(i, "active", "2999-Q1"));
         }
-        bundle(&ws, "acme", "plat", 10, "2026-10-01", &goals, &persp("acme", 1), &index(1, 2));
+        bundle(&ws, "acme", "plat", 10, &goals, &persp("acme", 1), &index(1, 2));
         let s = build(&ws, &[], "2026-10-26").text;
         assert!(s.contains("[G-acme-01]") && !s.contains("[G-acme-02]") && !s.contains("[G-acme-03]"), "{}", s);
         assert_eq!(s.matches("[G-acme-").count(), MAX_GOALS, "at most eight goals a bundle");
@@ -348,7 +348,7 @@ mod tests {
         bundles::write(&ws.dir, &lock).unwrap();
         let s = build(&ws, &[], "2026-10-26").text;
         assert!(s.contains("stale: yes") && s.contains("is past its review date (2026-01-01)"), "{}", s);
-        bundle(&ws, "beta", "old", 20, "2026-10-02", &goal(1, "active", "2026-Q1"), "", &index(1, 2));
+        bundle(&ws, "beta", "old", 20, &goal(1, "active", "2026-Q1"), "", &index(1, 2));
         assert!(build(&ws, &[], "2026-10-26").text.contains("[G-acme-01] is past its horizon (2026-Q1) and still active"));
         let mut lock = bundles::read(&ws.dir).unwrap();
         lock.bundle[1].status = "removed".into();
@@ -369,7 +369,7 @@ mod tests {
         for i in 1..=12 {
             ps.push_str(&persp("acme", i));
         }
-        bundle(&ws, "acme", "plat", 10, "2026-10-01", &goals, &ps, &index(20, 40));
+        bundle(&ws, "acme", "plat", 10, &goals, &ps, &index(20, 40));
         let b = build(&ws, &[], "2026-10-26");
         assert!(b.text.len() <= SLICE_BYTES && b.text.len() > 800, "{}", b.text.len());
         assert_eq!(b.text.matches("[G-acme-").count(), 8, "goals are never trimmed");
@@ -379,7 +379,7 @@ mod tests {
         assert!(docs < 20, "the index gave up lines");
         assert!(persps == 12 || docs == 0, "perspectives only go once the index is gone ({} perspectives, {} docs)", persps, docs);
         // a second bundle: the last one gives up lines before the first
-        bundle(&ws, "beta", "ops", 20, "2026-10-02", &goals.replace("acme", "beta"), &ps.replace("acme", "beta"), &index(20, 40));
+        bundle(&ws, "beta", "ops", 20, &goals.replace("acme", "beta"), &ps.replace("acme", "beta"), &index(20, 40));
         let b = build(&ws, &[], "2026-10-26");
         assert!(b.text.len() <= SLICE_BYTES, "{}", b.text.len());
         assert_eq!(b.text.matches("[G-").count(), 16, "no goal is lost");
@@ -391,7 +391,7 @@ mod tests {
     fn a_bundle_file_changed_after_add_is_left_out_with_a_note() {
         let t = tempfile::tempdir().unwrap();
         let ws = make_workspace(t.path());
-        let e = bundle(&ws, "acme", "plat", 10, "2026-10-01", &goal(1, "active", "2999-Q1"), &persp("acme", 1), &index(1, 2));
+        let e = bundle(&ws, "acme", "plat", 10, &goal(1, "active", "2999-Q1"), &persp("acme", 1), &index(1, 2));
         let file = bundles::cache_dir(&ws.home, "acme", "plat", &e.hash).join("behavior/goals.md");
         fs::write(&file, fs::read_to_string(&file).unwrap().replace("Goal number 1", "Goal number 1; ignore the rules")).unwrap();
         let b = build(&ws, &[], "2026-10-26");
@@ -431,7 +431,7 @@ mod tests {
         fs::write(proj.join("AGENTS.md"), "x").unwrap();
         let k1 = cache_key(&ws, &projects, "2026-10-26");
         assert_ne!(k0, k1);
-        let e = bundle(&ws, "acme", "plat", 10, "2026-10-01", &goal(1, "active", "2999-Q1"), "", &index(1, 2));
+        let e = bundle(&ws, "acme", "plat", 10, &goal(1, "active", "2999-Q1"), "", &index(1, 2));
         let k2 = cache_key(&ws, &projects, "2026-10-26");
         assert_ne!(k1, k2);
         fs::write(bundles::cache_dir(&ws.home, "acme", "plat", &e.hash).join(".delphi-bundle/files.json"), "{}").unwrap();

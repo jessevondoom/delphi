@@ -2435,6 +2435,8 @@ mod tests {
         };
         let task = spawn_task(&f, "architect", "Draft a spec");
         let card = wait_for_card(&f).await;
+        // The card is pending in the broker a moment before `approval.requested` reaches the log, which is what the observer reads.
+        wait_until("the observer to show the agent waiting on the operator", || fold(&f).running_agents().first().is_some_and(|r| r.waiting == "waiting on you")).await;
         let st = fold(&f);
         let rows = st.running_agents();
         assert_eq!(rows.len(), 1, "{:?}", rows);
@@ -3042,10 +3044,46 @@ mod tests {
         let f = setup(vec![Step::tool("r1", "read_file", json!({"path": "@bundle/acme/plat/knowledge/a.md"})), Step::tool("w1", "write_file", json!({"path": "@bundle/acme/plat/knowledge/a.md", "content": "x"})), Step::text("done")], 5.0, |_| {});
         add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("knowledge/a.md", "---\nid: a\nsource_type: user_ratified\n---\n# A\n\nThe quokka procedure.\n")]);
         f.engine.run_task(&f.m, "architect", "read it").await.unwrap();
-        let result = f.model.requests()[1].body["messages"].to_string();
+        // the tool result only: the architect's prompt also carries the org-context slice, which is labelled L5
+        let result = f.model.requests()[1].body["messages"][2]["content"][0]["content"].to_string();
         assert!(result.contains("quokka procedure") && result.contains("L2"), "{}", result);
         assert!(!result.contains("L5"), "a bundle's own source_type is a display copy");
         assert!(f.model.requests()[2].body["messages"].to_string().contains("denied"), "bundles are read-only to agents");
+    }
+
+    // specs/026 AC-1..3: the roles that plan and review are told the organization's goals once, in the user channel at
+    // L5 with the daemon's own sentence on top; the builder is not, and no span's ceiling moves.
+    #[tokio::test]
+    async fn the_planning_roles_get_the_org_context_slice_once_and_the_builder_does_not() {
+        use crate::bundle_load::tests::{add_bundle, FM};
+        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c")], 5.0, |_| {});
+        let goals = format!("{}## [G-acme-01] Cut p99 checkout latency\n- **Horizon:** 2026-Q4 to 2999-Q1\n- **Measure:** p99 weekly\n- **Status:** active\n", FM);
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/goals.md", &goals), ("bundle.toml", "[bundle]\nschema = 1\n")]);
+        for (i, role) in ["orchestrator", "architect", "strategist"].into_iter().enumerate() {
+            f.engine.run_task(&f.m, role, "plan it").await.unwrap();
+            let req = f.model.requests()[i].body.to_string();
+            assert_eq!(req.matches("[G-acme-01] Cut p99 checkout latency").count(), 1, "{} sees the slice exactly once", role);
+            assert!(req.contains("do not change any approval, scope, tier or rule") && req.contains("org-context"), "{}", role);
+            let sys = f.model.requests()[i].body["system"].to_string();
+            assert!(!sys.contains("G-acme-01"), "goals are never in the system channel");
+        }
+        let built = events_of(&f, "org_context.built");
+        assert_eq!(built.len(), 3);
+        assert_eq!((built[0].payload["bundles"].as_u64(), built[0].payload["trimmed"].as_array().map(|a| a.len())), (Some(1), Some(0)));
+        assert!(events_of(&f, "span.taint").is_empty(), "L5 never lowers a ceiling");
+        // the builder gets knowledge through search and pointers, not the goals (a goal in a builder's prompt invites scope creep)
+        let f = builder_fixture(vec![Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/goals.md", &goals), ("bundle.toml", "[bundle]\nschema = 1\n")]);
+        f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert!(!f.model.requests()[0].body.to_string().contains("G-acme-01"));
+        assert!(events_of(&f, "org_context.built").is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_a_bundle_there_is_no_slice_and_no_event() {
+        let f = setup(vec![Step::text("a")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "plan it").await.unwrap();
+        assert!(!f.model.requests()[0].body.to_string().contains("org-context") && events_of(&f, "org_context.built").is_empty());
     }
 
     #[tokio::test]
