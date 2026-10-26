@@ -58,6 +58,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("away").and_then(|b| b.get("approval_park_max_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.approval_park_max = Duration::from_secs(v as u64);
     }
+    if let Some(v) = root.get("session").and_then(|b| b.get("conversation_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.conversation_tokens = v as usize;
+    }
     if let Some(v) = root.get("optimistic").and_then(|b| b.get("review_wait_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.decision_review_wait = Duration::from_secs(v as u64);
     }

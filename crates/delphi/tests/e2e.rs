@@ -1670,8 +1670,12 @@ fn the_console_survives_a_daemon_restart_and_picks_up_where_it_was() {
     assert_eq!(restart.wait_exit(), 0);
     c.wait_for("the daemon connection closed");
     c.wait_for("reconnected to the daemon");
-    // The conversation is still there, and the next message works.
-    c.expect_visible("First answer.");
+    // A restart ends the session (`specs/030`): the console comes back to an empty screen, and the next message works.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while c.visible().contains("First answer.") {
+        assert!(Instant::now() < deadline, "the old session is still on the screen:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
     c.type_keys("Two");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");

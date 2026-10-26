@@ -61,7 +61,7 @@ export type State = {
   prompts: Record<string, string>;
   /** Tasks the daemon is working on, by task id. */
   running: Record<string, { since: number }>;
-  /** The operator has said something in this mission: the welcome text never comes back (`/clear` does not bring it back). */
+  /** The operator has said something in this mission: the welcome text never comes back (`/new` does not bring it back). */
   started: boolean;
 };
 
@@ -131,7 +131,7 @@ const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? '')
 
 /** Past events into blocks, for reopening a mission: what was said and done, not what was pending. */
 export function replay(s: State, events: any[]): State {
-  const KEEP = new Set(['task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
+  const KEEP = new Set(['session.started', 'task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
   const done = events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
   // Every span of a task that has finished is over. A streaming frame can still be in flight when a resync reloads the
   // history (the daemon sends one to a client that fell behind), and without this it would bring the finished reply back as a
@@ -201,6 +201,9 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       if (pl.flow === 'build' && !pl.prompt) return { ...s, running: run, agents };
       return addBlock({ ...s, running: run, agents, lastActivity: now }, { kind: 'user', text: sanitize(String(pl.prompt ?? '')), at: stamp(e, now) });
     }
+    // A new session (`specs/030`): the screen starts empty and the sources start over. What is still running, and what
+    // waits on the operator, carries on; the welcome text does not come back.
+    case 'session.started': return { ...s, blocks: [], live: '', sources: {}, started: true };
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {
