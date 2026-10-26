@@ -15,6 +15,7 @@ blake3 = "1.8.7"
 ed25519-dalek = "2"
 bs58 = "0.5"
 getrandom = "0.3"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3.8"
