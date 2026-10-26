@@ -3,9 +3,9 @@ delphi v0.5 · agents
 
  ✔ nothing needs you
 
-  ▄▄▄▄▄▄▄   hephaestus  builder  ● running · quiet 3m            │  tools                                                                              50 calls
+  ▄▄▄▄▄▄▄   hephaestus  builder  ● running · in run_command 12m  │  tools                                                                              50 calls
    •───•    frontier · claude-sonnet-5-5 · t_1                   │
-            ~740.0k tokens  ▓▓▓▓▓▓▓░ 82%                         │   read_file               ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 25
+            ~740.0k tokens  ▓▓▓▓▓▓▓░ 82%  cap in ~2m             │   read_file               ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 25
             41 calls · ✎ 2 · ✗ 6 · → run_command · ⟳ run_comman… │   run_command             ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░ 12   ✗ 5
                                                                  │   edit_file               ▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░ 9    ✗ 1
   ▄     ▄   ares  red-team  ► waiting on you                     │   record_change           ▓▓▓░░░░░░░░░░░░░░░░░░░░░ 3
