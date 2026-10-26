@@ -270,6 +270,80 @@ pub struct ObserverState {
 
 const PACE_MINUTES: usize = 12;
 
+/// Calls and failures of one tool.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct ToolCount {
+    pub calls: u32,
+    pub errors: u32,
+}
+
+/// What one role's agents have called in the mission: totals, the tool used last, and the count of each tool (the
+/// ten most used). Names and counts only: never arguments, results or the text around them.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct RoleTools {
+    pub calls: u32,
+    pub errors: u32,
+    pub last: String,
+    pub by_tool: BTreeMap<String, ToolCount>,
+}
+
+const MAX_TOOLS_PER_ROLE: usize = 10;
+
+/// A tool name as the operator knows it: Delphi's own tools lose the prefix a CLI gives them.
+pub fn tool_name(raw: &str) -> String {
+    let n = raw.strip_prefix(crate::bridge::TOOL_PREFIX).or_else(|| raw.strip_prefix(crate::bridge::AGY_TOOL_PREFIX)).unwrap_or(raw);
+    sanitize(n).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect()
+}
+
+/// Is this a tool call, as `(tool, failed)`? Three kinds of event record one, depending on who ran it: `tool.result`
+/// (an API seat's call, with its outcome), `harness.bridge_call` (a Delphi tool called from a subscription CLI, with its
+/// outcome) and `harness.tool` (the CLI's own tool, no outcome). A Delphi tool called from a CLI is also logged as
+/// `harness.tool`, as the CLI saw it; that line is skipped so each call counts once.
+pub fn tool_call_of(kind: &str, p: &Value) -> Option<(String, bool)> {
+    match kind {
+        "tool.result" | "harness.bridge_call" => {
+            let n = tool_name(p["name"].as_str()?);
+            (!n.is_empty()).then(|| (n, p["is_error"].as_bool().unwrap_or(false)))
+        }
+        "harness.tool" => {
+            let raw = p["tool"].as_str()?;
+            if raw.starts_with(crate::bridge::TOOL_PREFIX) || raw.starts_with(crate::bridge::AGY_TOOL_PREFIX) {
+                return None;
+            }
+            let n = tool_name(raw);
+            (!n.is_empty()).then_some((n, false))
+        }
+        _ => None,
+    }
+}
+
+/// Tool use per role over a whole mission log. It is a pass of its own, not part of [`ObserverState::apply`], because
+/// calls are the most frequent events in a log and would push everything else out of the window the fold keeps.
+pub fn tool_stats(events: &[delphi_core::event::EventEnvelope]) -> BTreeMap<String, RoleTools> {
+    let mut out: BTreeMap<String, RoleTools> = BTreeMap::new();
+    for e in events {
+        let Some((tool, failed)) = tool_call_of(&e.kind, &e.payload) else { continue };
+        let role = e.agent.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| "unknown".into());
+        let r = out.entry(role).or_default();
+        r.calls += 1;
+        r.errors += failed as u32;
+        r.last = tool.clone();
+        let c = r.by_tool.entry(tool).or_default();
+        c.calls += 1;
+        c.errors += failed as u32;
+    }
+    for r in out.values_mut() {
+        if r.by_tool.len() > MAX_TOOLS_PER_ROLE {
+            let mut v: Vec<(String, ToolCount)> = std::mem::take(&mut r.by_tool).into_iter().collect();
+            // `record_change` is always kept: the window shows it beside the totals.
+            v.sort_by(|a, b| (b.0 == "record_change").cmp(&(a.0 == "record_change")).then_with(|| b.1.calls.cmp(&a.1.calls)).then_with(|| a.0.cmp(&b.0)));
+            v.truncate(MAX_TOOLS_PER_ROLE);
+            r.by_tool = v.into_iter().collect();
+        }
+    }
+    out
+}
+
 /// Unix milliseconds of an event envelope's RFC 3339 `timestamp`, or 0.
 fn ts_ms(e: &Value) -> u64 {
     let t = e["timestamp"].as_str().unwrap_or("");
@@ -954,6 +1028,45 @@ mod tests {
         assert!(st.live["n2"].len() <= TEXT_CAP);
         st.apply(&ev(3, "dag.node.state", "t_1", "architect", json!({"node_id": "n2", "state": "done"})));
         assert!(!st.live.contains_key("n2"));
+    }
+
+    fn tev(kind: &str, role: &str, payload: Value) -> delphi_core::event::EventEnvelope {
+        let mut e = delphi_core::event::EventEnvelope::new("m", kind, payload);
+        e.agent = Some(role.into());
+        e
+    }
+
+    #[test]
+    fn tool_calls_are_counted_once_per_call_per_role_from_all_three_kinds_of_event() {
+        let log = vec![
+            tev("tool.result", "builder", json!({"name": "read_file", "is_error": false, "content": "SECRET TEXT"})),
+            tev("tool.result", "builder", json!({"name": "read_file", "is_error": true, "content": "denied"})),
+            tev("harness.bridge_call", "builder", json!({"name": "mcp__delphi__record_change", "is_error": false, "arguments": {"summary": "x"}})),
+            // The same call as the CLI saw it: not counted a second time. The CLI's own tools are counted.
+            tev("harness.tool", "builder", json!({"tool": "mcp__delphi__record_change", "summary": "record_change"})),
+            tev("harness.tool", "builder", json!({"tool": "mcp_delphi_delphi_read_file", "summary": ""})),
+            tev("harness.tool", "builder", json!({"tool": "Bash", "summary": "cargo test"})),
+            tev("harness.tool", "writer", json!({"tool": "WebSearch\u{1b}[31m", "summary": "q"})),
+            tev("task.output", "builder", json!({"text": "not a call"})),
+        ];
+        let s = tool_stats(&log);
+        let b = &s["builder"];
+        assert_eq!((b.calls, b.errors, b.last.as_str()), (4, 1, "Bash"));
+        assert_eq!(b.by_tool["read_file"], ToolCount { calls: 2, errors: 1 });
+        assert_eq!(b.by_tool["record_change"], ToolCount { calls: 1, errors: 0 });
+        assert_eq!(s["writer"].by_tool.keys().collect::<Vec<_>>(), ["WebSearch"], "control sequences are removed");
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(!text.contains("SECRET") && !text.contains("cargo test") && !text.contains("summary"), "names and counts only: {}", text);
+    }
+
+    #[test]
+    fn a_role_keeps_its_ten_most_used_tools_and_always_record_change() {
+        let mut log: Vec<_> = (0..14).flat_map(|i| (0..=i).map(move |_| tev("tool.result", "builder", json!({"name": format!("tool_{:02}", i)})))).collect();
+        log.push(tev("tool.result", "builder", json!({"name": "record_change"})));
+        let b = &tool_stats(&log)["builder"];
+        assert_eq!(b.by_tool.len(), MAX_TOOLS_PER_ROLE);
+        assert!(b.by_tool.contains_key("record_change") && b.by_tool.contains_key("tool_13") && !b.by_tool.contains_key("tool_00"));
+        assert_eq!(b.calls, 106, "the totals count every call, kept or not");
     }
 
     #[test]
