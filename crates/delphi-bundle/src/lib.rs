@@ -7,13 +7,16 @@
 //! [`validate`] runs the fifteen steps of `specs/023` §10 in order and fails closed: every finding names its step and
 //! the file it is about. The same function runs again at `add` (nothing trusts a publisher's "it passed").
 
+pub mod archive;
 mod agents;
 mod behavior;
+pub mod changes;
 mod files;
 mod frontmatter;
 mod ids;
 pub mod load;
 mod manifest;
+pub mod provenance;
 mod relax;
 mod scan;
 mod skills;
@@ -102,6 +105,8 @@ pub struct Report {
     /// `blake3:<hex>` of `.delphi-bundle/files.json` when it is present and the bundle's identity is known.
     pub bundle_hash: Option<String>,
     pub manifest: Option<Manifest>,
+    /// The `did:key` whose signature over the bundle verified at step 6; `None` for an unsigned bundle (or a failed one).
+    pub signer: Option<String>,
 }
 
 impl Report {

@@ -18,7 +18,7 @@ const view = (over: Partial<O.OrgView> = {}): O.OrgView => ({
   bundles: [bundle()],
   goals: [{ bundle: 'acme/plat', id: 'G-acme-01', title: 'Cut p99 checkout latency', horizon: '2026-Q4 to 2027-Q1', measure: 'p99 weekly', status: 'active' }],
   perspectives: [{ bundle: 'acme/plat', id: 'P-acme-01', title: 'Boring', statement: 'prefer boring technology.' }],
-  open: [], slice: { bytes: 900, cap: 4096, bundles: 1, trimmed: [] }, unavailable: ['rollback', 'map connector'], ...over,
+  open: [], slice: { bytes: 900, cap: 4096, bundles: 1, trimmed: [] }, unavailable: ['map connector'], ...over,
 });
 const loaded = (v: O.OrgView = view()): O.OrgPanel => ({ ...O.openOrg(), view: v });
 const shown = (p: O.OrgPanel, w = 110) => O.lines(p, pal, w).map(plain).join('\n');
@@ -38,10 +38,11 @@ test('goals are a table, perspectives are listed, and open items say what needs 
   assert.match(s, /prompt slice is 4000 of 4096 bytes, trimmed for acme\/plat/);
 });
 
-test('rollback and map connector are listed as unavailable, never as actions', () => {
+test('map connector is listed as unavailable, never as an action, and rollback is an action', () => {
   const s = shown(loaded());
-  assert.match(s, /not available yet: rollback, map connector/);
-  assert.doesNotMatch(s, /^\s+(r|m)\s+(rollback|map)/m);
+  assert.match(s, /not available yet: map connector/);
+  assert.doesNotMatch(s, /^\s+m\s+map/m);
+  assert.match(s, /^\s+r\s+rollback <name> \[hash\]/m);
   assert.match(s, /No action asks for an approval/);
 });
 
@@ -94,6 +95,15 @@ test('update and remove ask for a name, prefilled when only one bundle is added,
   assert.deepEqual(r.action, { t: 'run', body: { action: 'remove', name: 'beta/ops' } });
   assert.equal(O.key(O.key(two, text('x')).panel, key('esc')).panel.asking, null);
   assert.equal(O.key(loaded(view({ bundles: [] })), text('x')).panel.asking, null, 'nothing to remove');
+});
+
+test('rollback asks for a name and optionally a hash, and runs with both', () => {
+  let r = O.key(loaded(), text('r'));
+  assert.deepEqual([r.panel.asking, r.panel.input], ['rollback', 'acme/plat']);
+  assert.deepEqual(O.key(r.panel, key('enter')).action, { t: 'run', body: { action: 'rollback', name: 'acme/plat' } });
+  r = O.key(r.panel, text(' blake3:abcdef12'));
+  assert.deepEqual(O.key(r.panel, key('enter')).action, { t: 'run', body: { action: 'rollback', name: 'acme/plat', to: 'blake3:abcdef12' } });
+  assert.equal(O.key(loaded(view({ bundles: [] })), text('r')).panel.asking, null, 'nothing to roll back');
 });
 
 test('g reloads, esc and q close, and the panel is reachable through the shared panel keys', () => {

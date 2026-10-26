@@ -3,7 +3,8 @@
 //! `delphi bundle add` runs in the CLI and the daemon is not in that loop, and events live in missions, not in the
 //! workspace. So the log learns of a bundle when a task starts: the first time a mission sees an added bundle it gets
 //! `bundle.added` and one `provenance.stamp` for each of the bundle's files, with reason `bundle-add:<hash>`; a new hash
-//! of a bundle it knew is `bundle.updated`; one that is no longer added is `bundle.removed`. Nothing here changes what
+//! of a bundle it knew is `bundle.updated`, or `bundle.rolled_back` when the lock says a
+//! rollback put the earlier hash back (`specs/024` §4.4); one that is no longer added is `bundle.removed`. Nothing here changes what
 //! loads (that is read from the lock and the cache, `bundle_load`); it is the record, and it costs no model turn.
 
 use crate::engine::Engine;
@@ -23,7 +24,7 @@ fn seen_from_log(m: &MissionState) -> Seen {
     for e in m.replay().unwrap_or_default() {
         let id = || Some(format!("{}/{}", e.payload["org"].as_str()?, e.payload["name"].as_str()?));
         match (e.kind.as_str(), id()) {
-            ("bundle.added" | "bundle.updated", Some(id)) => {
+            ("bundle.added" | "bundle.updated" | "bundle.rolled_back", Some(id)) => {
                 seen.insert(id, e.payload["hash"].as_str().unwrap_or_default().to_string());
             }
             ("bundle.removed", Some(id)) => {
@@ -76,7 +77,11 @@ impl Engine {
             };
             match seen.get(&e.id()) {
                 Some(h) if *h == e.hash => continue,
-                Some(h) => events.push(EventEnvelope::new(&m.id, "bundle.updated", payload(json!({"from_hash": h})))),
+                Some(h) => {
+                    // `rollback` leaves the version it replaced at the head of the history, marked; an update never does.
+                    let rolled_back = e.history.first().is_some_and(|p| p.left_by == "rollback" && p.hash == *h);
+                    events.push(EventEnvelope::new(&m.id, if rolled_back { "bundle.rolled_back" } else { "bundle.updated" }, payload(json!({"from_hash": h}))));
+                }
                 None => events.push(EventEnvelope::new(&m.id, "bundle.added", payload(json!({})))),
             }
             events.extend(stamps(m, &self.ws, e));

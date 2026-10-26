@@ -820,10 +820,12 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "delphi-core",
+ "delphi-xenia",
  "regex",
  "semver",
  "serde_json",
  "serde_yaml_ng",
+ "tar",
  "tempfile",
  "toml",
  "unicode-normalization",

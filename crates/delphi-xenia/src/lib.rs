@@ -8,6 +8,7 @@
 //! Milestone X1 (primitives): identity, `did:key`, hashes, signing domains, strict Ed25519 verification,
 //! the sidecar, ULIDs and the store layout paths.
 
+pub mod bundle_sig;
 pub mod did;
 pub mod hash;
 pub mod identity;

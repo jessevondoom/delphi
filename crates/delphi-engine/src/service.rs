@@ -673,9 +673,9 @@ impl EngineService {
         Ok(crate::org_context::view(&self.engine.ws, &self.engine.projects, &self.engine.now()[..10]))
     }
 
-    /// `org.action`: the operator's explicit `add <dir>`, `update <name>` or `remove <name>` in the console. It runs the
-    /// same `delphi bundle` command the shell does (one implementation of every check), shows what it printed and raises
-    /// no approval card (`specs/024` OD-1). `rollback` and `map connector` do not exist yet and are refused by name.
+    /// `org.action`: the operator's explicit `add <path>`, `update <name>`, `rollback <name> [to]` or `remove <name>` in the
+    /// console. It runs the same `delphi bundle` command the shell does (one implementation of every check), shows what it
+    /// printed and raises no approval card (`specs/024` OD-1). `map connector` does not exist yet and is refused by name.
     async fn org_action(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let word = |k: &str| -> Result<String, RpcError> {
@@ -695,19 +695,29 @@ impl EngineService {
                 vec!["add".into(), path]
             }
             "remove" => vec!["remove".into(), word("name")?],
-            // An update is adding again from the directory the bundle came from.
-            "update" => {
+            // `update` re-adds from the recorded source under the publisher-continuity rule; `rollback` re-points the lock at
+            // an earlier cached version. Both are the CLI's commands, run as a child process like add and remove.
+            verb @ ("update" | "rollback") => {
                 let name = word("name")?;
                 let found: Vec<_> = delphi_core::bundles::active_entries(&ws.dir).into_iter().filter(|e| e.name == name || e.id() == name).collect();
                 match found.as_slice() {
                     [] => return Err(err(code::INVALID_PARAMS, format!("no added bundle named `{}`", name))),
-                    [e] if e.source.kind == "directory" && !e.source.path.starts_with('-') => vec!["add".into(), e.source.path.clone()],
-                    [e] => return Err(err(code::INVALID_PARAMS, format!("{} came from a {} source, and only a directory can be added again", e.id(), e.source.kind))),
+                    [_] => {}
                     _ => return Err(err(code::INVALID_PARAMS, format!("`{}` is ambiguous; use org/name", name))),
                 }
+                let mut args = vec![verb.to_string(), name];
+                if let (true, Some(to)) = (verb == "rollback", p["to"].as_str().map(str::trim).filter(|t| !t.is_empty())) {
+                    // a hash or a prefix of one: lowercase hex only, so nothing here can be read as a flag
+                    let h = to.strip_prefix("blake3:").unwrap_or(to);
+                    if h.len() < 8 || h.len() > 64 || !h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+                        return Err(err(code::INVALID_PARAMS, "`to` must be a bundle hash: at least 8 lowercase hex digits"));
+                    }
+                    args.extend(["--to".to_string(), h.to_string()]);
+                }
+                args
             }
-            a @ ("rollback" | "map_connector") => return Err(err(code::INVALID_PARAMS, format!("`{}` is not available yet", a))),
-            other => return Err(err(code::INVALID_PARAMS, format!("unknown org action `{}` (add, update, remove)", other))),
+            a @ "map_connector" => return Err(err(code::INVALID_PARAMS, format!("`{}` is not available yet", a))),
+            other => return Err(err(code::INVALID_PARAMS, format!("unknown org action `{}` (add, update, rollback, remove)", other))),
         };
         let exe = match self.bundle_exe.lock().unwrap().clone() {
             Some(e) => e,
@@ -1073,7 +1083,7 @@ mod tests {
         let ws_name = f.engine.ws.dir.file_name().unwrap().to_string_lossy().to_string();
         let s = serve(&f).await;
         let (sock, tok, nsock, ntok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
-        let (view, add, update, remove, refused, narrator, pending) = blocking(move || {
+        let (view, add, update, remove, rollback, refused, narrator, pending) = blocking(move || {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
@@ -1081,8 +1091,9 @@ mod tests {
             let add = c.call("org.action", json!({"action": "add", "path": "/srv/bundles/acme"})).unwrap();
             let update = c.call("org.action", json!({"action": "update", "name": "plat"})).unwrap();
             let remove = c.call("org.action", json!({"action": "remove", "name": "acme/plat"})).unwrap();
+            let rollback = c.call("org.action", json!({"action": "rollback", "name": "plat", "to": "blake3:abcdef12"})).unwrap();
             let mut refused = Vec::new();
-            for p in [json!({"action": "add", "path": "relative/dir"}), json!({"action": "add", "path": "--yes"}), json!({"action": "remove", "name": "-x"}), json!({"action": "update", "name": "nope"}), json!({"action": "rollback", "name": "plat"}), json!({"action": "map_connector"}), json!({"action": "publish"})] {
+            for p in [json!({"action": "add", "path": "relative/dir"}), json!({"action": "add", "path": "--yes"}), json!({"action": "remove", "name": "-x"}), json!({"action": "update", "name": "nope"}), json!({"action": "rollback", "name": "plat", "to": "--yes"}), json!({"action": "rollback", "name": "plat", "to": "abc"}), json!({"action": "rollback", "name": "nope"}), json!({"action": "map_connector"}), json!({"action": "publish"})] {
                 refused.push(rpc_code(c.call("org.action", p)));
             }
             let pending = c.call("approval.list", json!({})).unwrap();
@@ -1090,15 +1101,16 @@ mod tests {
             n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             n.hello(&ntok).unwrap();
             let narrator = (rpc_code(n.call("org.view", json!({}))), rpc_code(n.call("org.action", json!({"action": "remove", "name": "plat"}))));
-            (view, add, update, remove, refused, narrator, pending)
+            (view, add, update, remove, rollback, refused, narrator, pending)
         })
         .await;
-        assert_eq!((view["bundles"][0]["id"].as_str(), view["goals"][0]["id"].as_str(), view["unavailable"][0].as_str()), (Some("acme/plat"), Some("G-acme-01"), Some("rollback")));
+        assert_eq!((view["bundles"][0]["id"].as_str(), view["goals"][0]["id"].as_str(), view["unavailable"][0].as_str()), (Some("acme/plat"), Some("G-acme-01"), Some("map connector")));
         let tail = format!("--workspace {} --home {}", ws_name, f.engine.ws.home.display());
         assert_eq!((add["ok"].as_bool(), add["output"].as_str()), (Some(true), Some(format!("bundle add /srv/bundles/acme {}", tail).as_str())));
-        assert_eq!(update["output"].as_str(), Some(format!("bundle add /x {}", tail).as_str()), "an update adds again from the recorded source directory");
+        assert_eq!(update["output"].as_str(), Some(format!("bundle update plat {}", tail).as_str()), "an update is the CLI update, which re-adds from the recorded source");
         assert_eq!(remove["output"].as_str(), Some(format!("bundle remove acme/plat {}", tail).as_str()));
-        assert_eq!(refused, vec![Some(code::INVALID_PARAMS); 7], "{:?}", refused);
+        assert_eq!(rollback["output"].as_str(), Some(format!("bundle rollback plat --to abcdef12 {}", tail).as_str()), "a rollback names the hash it was given, validated");
+        assert_eq!(refused, vec![Some(code::INVALID_PARAMS); 9], "{:?}", refused);
         assert_eq!(narrator, (Some(code::FORBIDDEN), Some(code::FORBIDDEN)), "the narrator reads nothing of the organization and changes nothing");
         assert_eq!(pending, json!([]), "no action raises an approval card");
         assert_eq!(events_of(&f, "bundle.added").len(), 1, "the log learns of the added bundle without waiting for a task");

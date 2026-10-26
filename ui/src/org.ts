@@ -10,7 +10,7 @@ import * as T from './theme.ts';
 export type OrgBundle = {
   id: string; title: string; version: string; provenance: string; order: number; review_by: string;
   stale: boolean; matched: boolean; source: { kind: string; path: string };
-  /** `null` until a source that can say exists (slice B6) */
+  /** `null` until something can say (an update check against the recorded source is not built) */
   update_available: string | boolean | null;
   /** `null` until vectors are built (slice B3) */
   vectors: string | null;
@@ -23,7 +23,7 @@ export type OrgView = {
   unavailable: string[];
 };
 
-export type Verb = 'add' | 'update' | 'remove';
+export type Verb = 'add' | 'update' | 'rollback' | 'remove';
 export type OrgPanel = {
   kind: 'org';
   view: OrgView | null;
@@ -43,7 +43,7 @@ export type OrgAction =
   | { t: 'none' }
   | { t: 'close' }
   | { t: 'refresh' }
-  | { t: 'run'; body: { action: Verb; path?: string; name?: string } };
+  | { t: 'run'; body: { action: Verb; path?: string; name?: string; to?: string } };
 
 export const openOrg = (): OrgPanel => ({ kind: 'org', view: null, error: '', scroll: 0, asking: null, input: '', busy: false, result: null });
 
@@ -72,7 +72,9 @@ export function key(p: OrgPanel, e: Ev): { panel: OrgPanel; action: OrgAction } 
     if (k === 'enter') {
       const v = p.input.trim();
       if (!v) return keep({ ...p, flash: p.asking === 'add' ? 'type the directory of the bundle' : 'type the name of an added bundle' });
-      const body = p.asking === 'add' ? { action: 'add' as const, path: v } : { action: p.asking, name: v };
+      // rollback takes `name` or `name <hash>`: the second word is the version to go back to (default: the previous one)
+      const [name, to] = v.split(/\s+/);
+      const body = p.asking === 'add' ? { action: 'add' as const, path: v } : p.asking === 'rollback' && to ? { action: 'rollback' as const, name: name!, to } : { action: p.asking, name: v };
       return keep({ ...p, asking: null, input: '', busy: true, flash: undefined }, { t: 'run', body });
     }
     return keep();
@@ -85,9 +87,9 @@ export function key(p: OrgPanel, e: Ev): { panel: OrgPanel; action: OrgAction } 
   if (p.busy) return keep();
   if (k === 'g') return keep({ ...p, flash: undefined }, { t: 'refresh' });
   if (k === 'a') return keep({ ...p, asking: 'add', input: '' });
-  if (k === 'u' || k === 'x') {
+  if (k === 'u' || k === 'x' || k === 'r') {
     if (!p.view?.bundles.length) return keep({ ...p, flash: 'no bundle is added yet' });
-    return keep({ ...p, asking: k === 'u' ? 'update' : 'remove', input: onlyOne(p.view) });
+    return keep({ ...p, asking: k === 'u' ? 'update' : k === 'r' ? 'rollback' : 'remove', input: onlyOne(p.view) });
   }
   return keep();
 }
@@ -96,8 +98,9 @@ export const hint = (p: OrgPanel): string =>
   p.flash ? p.flash
     : p.busy ? 'working…'
       : p.asking === 'add' ? 'type the directory of the bundle · enter add · esc cancel'
-        : p.asking ? `type the name of the bundle to ${p.asking} · enter ${p.asking} · esc cancel`
-          : 'a add <dir> · u update <name> · x remove <name> · g reload · ↑↓ scroll · esc close';
+        : p.asking === 'rollback' ? 'type the bundle name, and a version hash to go back to if not the previous one · enter rollback · esc cancel'
+          : p.asking ? `type the name of the bundle to ${p.asking} · enter ${p.asking} · esc cancel`
+          : 'a add <dir> · u update <name> · x remove <name> · r rollback <name> · g reload · ↑↓ scroll · esc close';
 
 /** A fixed-width cell: cut with an ellipsis, padded with spaces. */
 const pad = (s: string, n: number): string => s + ' '.repeat(Math.max(0, n - T.width(s)));
@@ -143,7 +146,8 @@ export function lines(p: OrgPanel, pal: T.Pal, w: number): string[] {
   row(T.dim(`the prompt slice is ${v.slice.bytes} of ${v.slice.cap} bytes${v.slice.trimmed.length ? `, trimmed for ${v.slice.trimmed.map(clean).join(', ')}` : ''}`));
   head('Actions');
   row('a  add <dir>       check a bundle directory again here, then copy and index it');
-  row('u  update <name>   add it again from the directory it came from');
+  row('u  update <name>   add it again from where it came from (a new publisher key needs `delphi bundle add --replace-publisher`)');
+  row('r  rollback <name> [hash]   go back to an earlier version still in the cache; no approval, the lock history is the record');
   row('x  remove <name>   take it out of the lock and the index');
   row('g  reload          read the organization again');
   row(T.dim(`not available yet: ${v.unavailable.map((u) => clean(u).replace('_', ' ')).join(', ')}. No action asks for an approval: you pressing the key is the decision.`));

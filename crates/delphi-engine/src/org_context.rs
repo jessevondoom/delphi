@@ -293,7 +293,7 @@ pub fn view(ws: &WorkspacePaths, projects: &[(String, PathBuf)], today: &str) ->
             open.push(n);
         }
     }
-    json!({"bundles": bundles, "goals": goals, "perspectives": persp, "open": open, "slice": {"bytes": built.text.len(), "cap": SLICE_BYTES, "bundles": built.bundles, "trimmed": built.trimmed}, "unavailable": ["rollback", "map connector"]})
+    json!({"bundles": bundles, "goals": goals, "perspectives": persp, "open": open, "slice": {"bytes": built.text.len(), "cap": SLICE_BYTES, "bundles": built.bundles, "trimmed": built.trimmed}, "unavailable": ["map connector"]})
 }
 
 /// Everything the slice depends on, as one string: when it changes the slice is built again, and when it does not the
@@ -400,7 +400,7 @@ mod tests {
             assert!(open.contains(&want), "`{}` missing from {:?}", want, open);
         }
         assert!(open.iter().any(|o| o.starts_with("acme/plat gave up lines")), "the trim is an open item: {:?}", open);
-        assert_eq!(v["unavailable"], serde_json::json!(["rollback", "map connector"]));
+        assert_eq!(v["unavailable"], serde_json::json!(["map connector"]));
     }
 
     #[test]

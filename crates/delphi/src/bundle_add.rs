@@ -1,13 +1,15 @@
-//! `delphi bundle add|list|remove` (`specs/024` §4): adopt an org bundle from a directory.
+//! `delphi bundle add|list|remove` (`specs/024` §4): adopt an org bundle from a directory or an `.xbundle` archive.
 //!
-//! Adding is the operator's explicit act (OD-1): it runs every check of `specs/023` §10 on this install, prints what the
-//! bundle brings, copies the verified tree into the content-addressed cache, records it in the workspace's
+//! Adding is the operator's explicit act (OD-1): it runs every check of `specs/023` §10 on this install (a signature is
+//! verified strictly, `specs/024` §2.1), computes the provenance level and checks publisher continuity (§2.3), prints what
+//! the bundle brings, copies the verified tree into the content-addressed cache, records it in the workspace's
 //! `local/bundles.lock` and indexes its knowledge so the words are searchable at once. No model is called and no card is
-//! raised. Behavior, skills and agents load in slice B4; vectors in B3; signatures are verified in B6.
+//! raised. `update` is the same act repeated from the lock's recorded source, under the continuity rule (`bundle_life.rs`).
 
+use delphi_bundle::provenance::{self, Continuity, Level};
 use delphi_bundle::{Host, Inspected, Options};
 use delphi_core::bundles::{self, Entry, Past, Source};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct AddOpts {
     /// `--skill-roles <skill>=<role,role>`: narrow the roles a skill loads for (`specs/023` §5A).
@@ -15,39 +17,94 @@ pub struct AddOpts {
     pub order: Option<i64>,
     pub dry_run: bool,
     pub yes: bool,
+    /// `--replace-publisher`: accept a new publisher key for a bundle already added (`specs/024` §2.3).
+    pub replace_publisher: bool,
 }
 
-fn fail(msg: impl AsRef<str>) -> i32 {
+/// `Update` carries the `org/name` the lock's source is expected to still hold.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode<'a> {
+    Add,
+    Update(&'a str),
+}
+
+pub(crate) fn fail(msg: impl AsRef<str>) -> i32 {
     eprintln!("delphi bundle: {}", msg.as_ref());
     1
 }
 
 /// `name` or `org/name` against an entry.
-fn matches(e: &Entry, name: &str) -> bool {
+pub(crate) fn matches(e: &Entry, name: &str) -> bool {
     e.name == name || e.id() == name
 }
 
-fn short(hash: &str) -> String {
+pub(crate) fn short(hash: &str) -> String {
     hash.trim_start_matches("blake3:").chars().take(12).collect()
 }
 
-fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, dir: &Path) {
+/// A source opened for adding: a directory as it is, or an archive extracted into `.incoming/` (removed on drop unless it
+/// was moved into the cache).
+struct Opened {
+    dir: PathBuf,
+    kind: &'static str,
+    /// The path the operator gave, canonical; what the lock records and messages show.
+    path: String,
+    incoming: Option<PathBuf>,
+}
+
+impl Drop for Opened {
+    fn drop(&mut self) {
+        if let Some(i) = &self.incoming {
+            let _ = std::fs::remove_dir_all(i);
+        }
+    }
+}
+
+fn new_incoming(home: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let dir = home.join("bundles/.incoming").join(format!("{}-{}", std::process::id(), nanos));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn open_source(home: &Path, source: &Path) -> Result<Opened, String> {
+    let canon = source.canonicalize().map_err(|e| format!("{}: {}", source.display(), e))?;
+    let path = canon.display().to_string();
+    if canon.is_dir() {
+        return Ok(Opened { dir: canon, kind: "directory", path, incoming: None });
+    }
+    if !canon.is_file() {
+        return Err(format!("{}: not a directory or an archive", path));
+    }
+    // An archive is hostile input: it is read under the caps and extracted into a fresh staging directory.
+    let incoming = new_incoming(home)?;
+    let opened = Opened { dir: incoming.clone(), kind: "archive", path: path.clone(), incoming: Some(incoming.clone()) };
+    let file = std::fs::File::open(&canon).map_err(|e| format!("{}: {}", path, e))?;
+    delphi_bundle::archive::extract(std::io::BufReader::new(file), &incoming, &delphi_bundle::archive::Limits::STANDARD).map_err(|e| format!("{}: the archive was refused: {}", path, e))?;
+    Ok(opened)
+}
+
+fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, shown: &str, provenance_line: &str, brief: bool) {
     let s = &i.summary;
     println!("{} ({}) {}@{}", m.title, m.name, m.org, m.version);
-    println!("  publisher: {} · provenance: unsigned (signatures are verified from slice B6) · bundle {}", m.publisher_name, short(hash));
+    println!("  publisher: {} · provenance: {} · bundle {}", m.publisher_name, provenance_line, short(hash));
     println!("  review by {} · audience {}", m.review_by, m.audience);
-    println!("\n  README.md:");
-    for l in &s.readme_head {
-        println!("    {}", l);
-    }
-    if s.readme_more > 0 {
-        println!("    … {} more lines in {}/README.md", s.readme_more, dir.display());
+    if !brief {
+        println!("\n  README.md:");
+        for l in &s.readme_head {
+            println!("    {}", l);
+        }
+        if s.readme_more > 0 {
+            println!("    … {} more lines in {}/README.md", s.readme_more, shown);
+        }
     }
     println!("\n  brings:");
     println!("    knowledge: {} files, {} KiB (searched, never always loaded; tier federated_verified)", s.knowledge_files, s.knowledge_bytes / 1024);
     if !s.skills.is_empty() {
         let list: Vec<String> = s.skills.iter().map(|(n, r)| format!("{} ({})", n, r.join(", "))).collect();
-        println!("    skills: {} (load with slice B4)", list.join("; "));
+        println!("    skills: {}", list.join("; "));
     }
     if !s.agents.is_empty() {
         let list: Vec<String> = s
@@ -59,11 +116,11 @@ fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, dir: &P
                 None => format!("{} (Claude Code only)", n),
             })
             .collect();
-        println!("    agents: {} (dispatchable with slice B4)", list.join("; "));
+        println!("    agents: {}", list.join("; "));
     }
     if s.goals + s.perspectives + s.rules + s.policy_entries + s.guidance_roles.len() > 0 {
         println!(
-            "    behavior: {} goals, {} perspectives, {} rules, {} policy entries, guidance for {} (loads with slice B4)",
+            "    behavior: {} goals, {} perspectives, {} rules, {} policy entries, guidance for {}",
             s.goals,
             s.perspectives,
             s.rules,
@@ -80,10 +137,11 @@ fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, dir: &P
     println!("    touches roles: {}", m.touches_roles.join(", "));
 }
 
-/// Write the verified tree into a staging directory next to the cache, then move it into place. Files get no execute bit.
+/// Write the verified tree of a directory source into a staging directory next to the cache, then move it into place.
+/// Files get no execute bit.
 fn stage(home: &Path, tree: &delphi_bundle::Tree, files_json: &str, dest: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    let incoming = home.join("bundles/.incoming").join(format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
+    let incoming = new_incoming(home)?;
     let write = |rel: &str, bytes: &[u8]| -> Result<(), String> {
         let p = incoming.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| format!("{}: {}", rel, e))?;
@@ -107,26 +165,50 @@ fn stage(home: &Path, tree: &delphi_bundle::Tree, files_json: &str, dest: &Path)
     result
 }
 
-pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> i32 {
-    let dir = match dir.canonicalize() {
-        Ok(d) => d,
-        Err(e) => return fail(format!("{}: {}", dir.display(), e)),
+/// `sig.json` is not part of the bundle hash, so a bundle already in the cache can be presented again with a different
+/// signature. The cache keeps the one that was just verified, so a later look at the cached tree agrees with the lock.
+fn sync_sig(src: &Path, dest: &Path) {
+    let (from, to) = (src.join(".delphi-bundle/sig.json"), dest.join(".delphi-bundle/sig.json"));
+    match std::fs::read(&from) {
+        Ok(bytes) => {
+            let _ = std::fs::write(&to, bytes);
+        }
+        Err(_) => {
+            let _ = std::fs::remove_file(&to);
+        }
+    }
+}
+
+pub fn add(home: &Path, ws: &Path, source: &Path, o: &AddOpts, host: &dyn Host) -> i32 {
+    apply(home, ws, source, o, Mode::Add, host)
+}
+
+pub fn apply(home: &Path, ws: &Path, source: &Path, o: &AddOpts, mode: Mode, host: &dyn Host) -> i32 {
+    let opened = match open_source(home, source) {
+        Ok(o) => o,
+        Err(e) => return fail(e),
     };
+    let dir = opened.dir.clone();
     // 2. Every step of specs/023 §10 runs here, on this install: nothing trusts a publisher's "it passed".
     let i = delphi_bundle::inspect(&dir, &Options::default(), host);
     for w in &i.report.warns {
         eprintln!("warning: step {}: {}{}", w.step, if w.at.is_empty() { String::new() } else { format!("{}: ", w.at) }, w.msg);
     }
     let (Some(m), Some(hash), Some(files_json)) = (i.manifest.clone(), i.hash.clone(), i.files_json.clone()) else {
-        print!("{}", i.report.render(&dir.display().to_string()));
+        print!("{}", i.report.render(&opened.path));
         return fail("the bundle failed validation; nothing was added");
     };
     if !i.report.passed() {
-        print!("{}", i.report.render(&dir.display().to_string()));
+        print!("{}", i.report.render(&opened.path));
         return fail("the bundle failed validation; nothing was added");
     }
     if !bundles::plain_id(&m.org) || !bundles::plain_id(&m.name) {
         return fail("org and name must be plain ids");
+    }
+    if let Mode::Update(id) = mode {
+        if id != format!("{}/{}", m.org, m.name) {
+            return fail(format!("{} now holds {}/{}, not {}; add it with `delphi bundle add {}` if that is what you mean", opened.path, m.org, m.name, id, opened.path));
+        }
     }
     for (skill, roles) in &o.skill_roles {
         let Some((_, offered)) = i.summary.skills.iter().find(|(n, _)| n == skill) else {
@@ -136,6 +218,29 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
             return fail(format!("--skill-roles: `{}` is not a role the skill `{}` names ({}); a bundle can be narrowed, never widened", bad, skill, offered.join(", ")));
         }
     }
+    let lock = match bundles::read(ws) {
+        Ok(l) => l,
+        Err(e) => return fail(e),
+    };
+    // 3. The provenance level and publisher continuity (specs/024 §2.2, §2.3). A removed bundle pins nothing.
+    let existing: Option<Entry> = lock.bundle.iter().find(|e| e.org == m.org && e.name == m.name && e.is_active()).cloned();
+    let signer = i.report.signer.clone();
+    let level = match provenance::continuity(existing.as_ref().map(|e| e.publisher_kid.as_str()), signer.as_deref(), &m.publisher_predecessors) {
+        Continuity::Changed { old, new } => {
+            if !o.replace_publisher {
+                return fail(provenance::changed_message(&old, &new, &opened.path));
+            }
+            println!("accepting the new publisher {} in place of {} (--replace-publisher)", new, old);
+            if signer.is_some() { Level::Signed } else { Level::Unsigned }
+        }
+        Continuity::NoContinuity(l) => {
+            if matches!(mode, Mode::Update(_)) {
+                return fail(format!("{}/{} was added unsigned, so it has no publisher to continue: a later version is a re-add; run `delphi bundle add {}`", m.org, m.name, opened.path));
+            }
+            l
+        }
+        Continuity::FirstAdd(l) | Continuity::Same(l) => l,
+    };
     // 4. Compatibility, dependencies and supersession.
     if let Some(req) = &m.compat_delphi {
         let running = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
@@ -143,10 +248,6 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
             return fail(format!("this bundle needs delphi {} and this is {}", req, running));
         }
     }
-    let lock = match bundles::read(ws) {
-        Ok(l) => l,
-        Err(e) => return fail(e),
-    };
     for dep in &m.depends_on {
         let (name, req) = dep.split_once('@').unwrap();
         let ok = lock.bundle.iter().any(|e| e.is_active() && matches(e, name) && semver::Version::parse(&e.version).is_ok_and(|v| semver::VersionReq::parse(req).is_ok_and(|r| r.matches(&v))));
@@ -164,8 +265,13 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
             return fail(format!("{} also defines {} (and {} more); name it in overlays.supersedes or rename: nothing was added", other.id(), shown.join(", "), clash.len().saturating_sub(5)));
         }
     }
+    if matches!(mode, Mode::Update(_)) && existing.as_ref().is_some_and(|e| e.hash == hash && e.provenance == level.as_str()) {
+        println!("{}/{}@{} is up to date ({})", m.org, m.name, m.version, short(&hash));
+        return 0;
+    }
     // 5. The summary, non-blocking.
-    print_summary(&i, &m, &hash, &dir);
+    let prov_line = provenance::describe(level, &m.publisher_name, signer.as_deref(), existing.as_ref().map(|e| e.version.as_str()), &opened.path);
+    print_summary(&i, &m, &hash, &opened.path, &prov_line, matches!(mode, Mode::Update(_)));
     for s in &superseded {
         println!("  supersedes {} ({})", s.id(), if o.yes { "will be removed" } else { "kept; pass --yes to remove it" });
     }
@@ -175,16 +281,32 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
     }
     // 6. Cache, lock, index.
     let dest = bundles::cache_dir(home, &m.org, &m.name, &hash);
-    if !dest.is_dir() {
+    if dest.is_dir() {
+        sync_sig(&dir, &dest);
+    } else if opened.incoming.is_some() {
+        // An archive was extracted here already and passed every check: move that very tree into the cache. A manifest the
+        // archive lacked is written from what the install computed.
+        let fj = dir.join(".delphi-bundle/files.json");
+        if !fj.is_file() {
+            if let Err(e) = std::fs::create_dir_all(fj.parent().unwrap()).and_then(|_| std::fs::write(&fj, files_json.as_bytes())) {
+                return fail(e.to_string());
+            }
+        }
+        let moved = std::fs::create_dir_all(dest.parent().unwrap()).and_then(|_| std::fs::rename(&dir, &dest));
+        if let Err(e) = moved {
+            return fail(format!("{}: {}", dest.display(), e));
+        }
+    } else {
         let tree = delphi_bundle::Tree::open(&dir);
         if let Err(e) = stage(home, &tree, &files_json, &dest) {
             return fail(e);
         }
     }
     let now = delphi_core::time::now_rfc3339();
-    let source = Source { kind: "directory".into(), path: dir.display().to_string() };
+    let source_rec = Source { kind: opened.kind.into(), path: opened.path.clone() };
     let skill_roles = o.skill_roles.clone();
     let removed: Vec<String> = if o.yes { superseded.iter().map(|e| e.id()).collect() } else { Vec::new() };
+    let kid = signer.clone().unwrap_or_else(|| provenance::UNSIGNED.to_string());
     let applied = bundles::update(ws, |lock| {
         for e in lock.bundle.iter_mut().filter(|e| removed.contains(&e.id())) {
             e.status = "removed".into();
@@ -195,9 +317,9 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
             name: m.name.clone(),
             version: m.version.clone(),
             hash: hash.clone(),
-            publisher_kid: "unsigned".into(),
-            provenance: "unsigned".into(),
-            source: source.clone(),
+            publisher_kid: kid.clone(),
+            provenance: level.as_str().into(),
+            source: source_rec.clone(),
             added_at: now.clone(),
             order,
             status: "active".into(),
@@ -210,8 +332,10 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
             Some(e) => {
                 let mut history = e.history.clone();
                 if e.hash != hash {
-                    history.insert(0, Past { hash: e.hash.clone(), version: e.version.clone(), from: e.added_at.clone(), to: now.clone() });
+                    history.insert(0, Past::of(e, &now));
                 }
+                // A version that is current again is no longer "before".
+                history.retain(|p| p.hash != hash);
                 let order = o.order.unwrap_or(e.order);
                 let kept = if skill_roles.is_empty() { e.skill_roles.clone() } else { skill_roles.clone() };
                 *e = Entry { history, skill_roles: kept, ..fresh(order) };
@@ -234,6 +358,9 @@ pub fn add(home: &Path, ws: &Path, dir: &Path, o: &AddOpts, host: &dyn Host) -> 
     for id in &removed {
         println!("removed superseded {}", id);
     }
+    if let (Mode::Update(_), Some(old)) = (mode, &existing) {
+        crate::bundle_life::print_update_notice(home, old, &m, &dest, &files_json, host);
+    }
     println!("search it with `delphi kb search <words> --bundle {}/{}`; its files are @bundle/{}/{}/knowledge/**", m.org, m.name, m.org, m.name);
     0
 }
@@ -246,11 +373,11 @@ pub fn list(ws: &Path) -> i32 {
     let today = bundles::today();
     let shown: Vec<&Entry> = lock.bundle.iter().filter(|e| e.is_active()).collect();
     if shown.is_empty() {
-        println!("no bundles added; `delphi bundle add <dir>` adds one");
+        println!("no bundles added; `delphi bundle add <dir or file.xbundle>` adds one");
         return 0;
     }
     for e in shown {
-        println!("{:<28} {:<10} {:<10} order {:<4} {}{}", e.id(), e.version, e.provenance, e.order, short(&e.hash), if e.is_stale(&today) { format!("  STALE (review by {})", e.review_by) } else { String::new() });
+        println!("{:<28} {:<10} {:<16} order {:<4} {}{}", e.id(), e.version, e.provenance, e.order, short(&e.hash), if e.is_stale(&today) { format!("  STALE (review by {})", e.review_by) } else { String::new() });
     }
     0
 }
@@ -272,7 +399,7 @@ pub fn remove(ws: &Path, name: &str) -> i32 {
         Err(e) => return fail(e),
     };
     match delphi_engine::kb::sync_workspace(ws) {
-        Ok(r) => println!("removed {}: {} documents left the index; the cache entry stays until `gc`", id, r.removed),
+        Ok(r) => println!("removed {}: {} documents left the index; the cache entry stays until `delphi bundle gc`", id, r.removed),
         Err(e) => return fail(format!("removed, but the index could not be updated: {} (run `delphi kb index`)", e)),
     }
     0
@@ -310,7 +437,7 @@ mod tests {
     }
 
     fn opts() -> AddOpts {
-        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false }
+        AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false }
     }
 
     /// Re-write the copy's manifest after an edit, so step 5 sees a consistent tree.

@@ -618,3 +618,110 @@ fn knowledge_prose_that_reads_as_an_instruction_is_only_a_warning() {
 }
 
 use std::collections::HashSet;
+
+// ── slice B6: signatures (`specs/024` AC-1) ──────────────────────────────────
+
+use delphi_xenia::identity::Identity;
+
+const AT: &str = "2026-10-25T20:00:00Z";
+
+/// The golden bundle with `publisher.did` set to `who`, its manifest written and a signature by `who` over it.
+fn signed_bundle(who: &Identity) -> tempfile::TempDir {
+    let t = bundle();
+    edit(&t, "bundle.toml", "[publisher]\n", &format!("[publisher]\ndid = \"{}\"\n", who.did()));
+    write_manifest(t.path(), false, &Fake).unwrap();
+    sign_dir(&t, who);
+    t
+}
+
+fn sign_dir(t: &tempfile::TempDir, who: &Identity) {
+    let m = check(t).manifest.unwrap();
+    let files = fs::read(t.path().join(".delphi-bundle/files.json")).unwrap();
+    let sig = delphi_xenia::bundle_sig::sign(who, &m.org, &m.name, &m.version, &files, AT).unwrap();
+    put(t, ".delphi-bundle/sig.json", &sig.to_json());
+}
+
+#[test]
+fn ac_1_a_valid_signature_verifies_and_names_the_signer_and_an_unsigned_bundle_says_so() {
+    let who = Identity::from_seed([1; 32]);
+    let t = signed_bundle(&who);
+    let r = check(&t);
+    assert!(r.passed(), "{}", r.render("signed"));
+    assert_eq!(r.signer.as_deref(), Some(who.did().as_str()));
+    assert!(r.warns.is_empty(), "a verified signature is not a warning: {}", r.render("x"));
+
+    let t = bundle();
+    edit(&t, "bundle.toml", "[publisher]\n", &format!("[publisher]\ndid = \"{}\"\n", who.did()));
+    write_manifest(t.path(), false, &Fake).unwrap();
+    let r = check(&t);
+    assert!(r.passed() && r.signer.is_none());
+    assert!(r.notes.iter().any(|n| n.step == 6 && n.msg.contains("unsigned") && n.msg.contains("recommended")), "{}", r.render("x"));
+    let r = check(&bundle());
+    assert!(r.passed() && r.signer.is_none() && r.notes.iter().any(|n| n.step == 6 && n.msg == "unsigned"));
+}
+
+#[test]
+fn ac_1_a_flipped_byte_anywhere_fails_at_the_signature_step() {
+    let who = Identity::from_seed([1; 32]);
+    for rel in ["knowledge/glossary.md", "README.md", "behavior/goals.md"] {
+        let t = signed_bundle(&who);
+        let text = fs::read_to_string(t.path().join(rel)).unwrap();
+        put(&t, rel, &format!("{}\nand one more line\n", text.trim_end_matches('\n')));
+        let r = check(&t);
+        fails_with(&r, 6, "the tree does not match the signed manifest");
+        assert!(r.signer.is_none(), "{rel}");
+    }
+    // files.json itself: one hash digit changed
+    let t = signed_bundle(&who);
+    let files = fs::read_to_string(t.path().join(".delphi-bundle/files.json")).unwrap();
+    let at = files.find("blake3:").unwrap() + 7;
+    let flipped = if &files[at..at + 1] == "0" { "1" } else { "0" };
+    put(&t, ".delphi-bundle/files.json", &format!("{}{}{}", &files[..at], flipped, &files[at + 1..]));
+    let r = check(&t);
+    fails_with(&r, 6, "does not verify");
+    assert!(r.signer.is_none());
+}
+
+#[test]
+fn ac_1_a_changed_name_org_or_version_fails_even_when_the_manifest_is_rewritten_to_match() {
+    let who = Identity::from_seed([1; 32]);
+    for (from, to) in [("version = \"1.4.0\"", "version = \"1.4.1\""), ("name = \"acme-platform\"", "name = \"acme-other\""), ("org = \"acme\"", "org = \"evil\"")] {
+        let t = signed_bundle(&who);
+        edit(&t, "bundle.toml", from, to);
+        // an attacker who also regenerates files.json: the manifest bytes change, so the signed hash no longer matches
+        write_manifest(t.path(), false, &Fake).unwrap();
+        let r = check(&t);
+        fails_with(&r, 6, "does not verify");
+        assert!(r.signer.is_none(), "{to}");
+    }
+    // only the name changed in bundle.toml, files.json untouched: step 5 and step 6 both fail
+    let t = signed_bundle(&who);
+    edit(&t, "bundle.toml", "name = \"acme-platform\"", "name = \"acme-other\"");
+    let r = check(&t);
+    fails_with(&r, 6, "does not verify");
+    fails_with(&r, 5, "disagrees with bundle.toml");
+}
+
+#[test]
+fn ac_1_a_signature_under_another_kid_or_another_key_fails() {
+    let (who, other) = (Identity::from_seed([1; 32]), Identity::from_seed([2; 32]));
+    // sig.json rewritten to name another kid: the signature does not verify under it
+    let t = signed_bundle(&who);
+    let sig = fs::read_to_string(t.path().join(".delphi-bundle/sig.json")).unwrap();
+    put(&t, ".delphi-bundle/sig.json", &sig.replace(&who.did(), &other.did()));
+    fails_with(&check(&t), 6, "does not verify");
+    // signed by another key while bundle.toml names the first as the publisher
+    let t = signed_bundle(&who);
+    sign_dir(&t, &other);
+    fails_with(&check(&t), 6, "other than publisher.did");
+    // a signature on a bundle that names no publisher.did
+    let t = signed_bundle(&who);
+    edit(&t, "bundle.toml", &format!("did = \"{}\"\n", who.did()), "");
+    write_manifest(t.path(), false, &Fake).unwrap();
+    sign_dir(&t, &who);
+    fails_with(&check(&t), 6, "publisher.did is not set");
+    // a damaged signature file is a failure, never a skip
+    let t = signed_bundle(&who);
+    put(&t, ".delphi-bundle/sig.json", "{\"alg\": \"ed25519\"}\n");
+    fails_with(&check(&t), 6, "does not verify");
+}
