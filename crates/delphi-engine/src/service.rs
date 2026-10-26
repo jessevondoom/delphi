@@ -587,6 +587,7 @@ impl EngineService {
         let mut events = m.replay().map_err(engine_err)?;
         let tools = crate::observe::tool_stats(&events);
         let adoption = crate::toolreport::report(&events);
+        let files = crate::observe::file_heat(&events);
         events.retain(|e| crate::observe::KINDS.contains(&e.kind.as_str()));
         let skip = events.len().saturating_sub(4000);
         let mut st = crate::observe::ObserverState::new(&self.engine.settings.enabled_agents);
@@ -600,6 +601,7 @@ impl EngineService {
         v["tools"] = serde_json::to_value(&tools).expect("tool stats serialize");
         v["token_cap"] = json!(self.engine.settings.harness_token_cap);
         v["adoption"] = serde_json::to_value(&adoption).expect("adoption serializes");
+        v["files"] = serde_json::to_value(&files).expect("file heat serializes");
         v["mission_id"] = json!(m.id);
         v["budget"] = Self::budget_json(&m);
         v["pending_proposals"] = json!(crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len());
