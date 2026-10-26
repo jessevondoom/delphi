@@ -2305,6 +2305,7 @@ fn live_claude_runs_out_and_the_task_finishes_on_a_local_model_after_the_operato
     println!("=== THE CARD: Claude is out; the stand-in is local and reduced, so the operator is asked ===\n{}", c.visible());
     assert!(c.visible().contains("ollama/gemma4") || c.visible().contains("ollama/"), "the stand-in is the local model, not a lesser model on the account that is out:\n{}", c.visible());
     assert!(!c.visible().contains("mock/sonnet-t") && !c.visible().contains("mock/haiku-t"), "{}", c.visible());
+    std::thread::sleep(Duration::from_millis(800)); // the console refuses an answer in a card's first 300 ms, so a stray key cannot approve it
     c.type_keys("/y");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
