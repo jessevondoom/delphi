@@ -38,6 +38,24 @@ pub(crate) fn samples() -> Vec<(&'static str, Value)> {
                 {"label": "delphi-engine", "children": [{"label": "tools"}, {"label": "artifacts"}, {"label": "approvals"}]},
                 {"label": "delphi-docs", "children": [{"label": "readers"}, {"label": "chart engine"}, {"label": "diagrams"}]},
                 {"label": "delphi-adapter"}]}})),
+        ("timeline-milestones", json!({
+            "type": "timeline", "title": "Documents and dataviz shipped in eleven slices", "subtitle": "spec 014",
+            "events": [
+                {"when": "2026-10-25", "label": "Spec ratified", "detail": "five decisions as recommended", "group": "Reading"},
+                {"when": "2026-10-26", "label": "Readers R0 to R5", "detail": "archives, office, PDF, html, data, mail", "group": "Reading"},
+                {"when": "2026-10-27", "label": "Pages and zips", "group": "Creating"},
+                {"when": "2026-10-28", "label": "Charts", "detail": "six forms in SVG", "group": "Creating"},
+                {"when": "2026-11-02", "label": "Decks and reports", "group": "Creating"},
+                {"when": "2026-11-03", "label": "Sheets and more charts", "detail": "xlsx, csv, five forms", "group": "Creating"},
+                {"when": "2026-11-09", "label": "PNG and diagrams", "group": "Creating"}]})),
+        ("matrix-forms", json!({
+            "type": "matrix", "title": "Every chart form answers one question", "corner": "form",
+            "rows": ["bar", "line", "stacked-bar", "donut", "heatmap", "box"],
+            "columns": ["Compare", "Trend", "Parts of a whole", "Spread", "Best for"],
+            "cells": [
+                ["yes", "no", "no", "no", "categories"], ["partial", "yes", "no", "no", "time"],
+                ["partial", "partial", "yes", "no", "totals"], ["no", "no", "yes", "no", "2 to 4 parts"],
+                ["partial", "partial", "no", "no", "a grid"], ["partial", "no", "no", "yes", "groups"]]})),
         ("sequence-approval", json!({
             "type": "sequence", "title": "A scripted page always asks the operator",
             "participants": [{"id": "agent", "label": "Agent"}, {"id": "engine", "label": "Engine"}, {"id": "op", "label": "Operator"}, {"id": "fs", "label": "Mission folder"}],
@@ -75,7 +93,14 @@ fn each_rule_refuses_with_a_reason_that_says_what_would_work() {
         (json!({"type": "flow"}), "`title`"),
         (json!({"type": "flow", "title": "T"}), "needs `nodes`"),
         (json!({"type": "radar", "title": "T"}), "unknown diagram type"),
-        (json!({"type": "timeline", "title": "T"}), "not available yet"),
+        (json!({"type": "timeline", "title": "T"}), "needs `events`"),
+        (json!({"type": "timeline", "title": "T", "events": [{"when": "2026-01-01", "label": "only"}]}), "between 2 and 24"),
+        (json!({"type": "timeline", "title": "T", "events": [{"label": "x"}, {"when": "b", "label": "y"}]}), "needs `when`"),
+        (json!({"type": "timeline", "title": "T", "events": [{"when": "a"}, {"when": "b", "label": "y"}]}), "needs a `label`"),
+        (json!({"type": "matrix", "title": "T"}), "needs `rows`"),
+        (json!({"type": "matrix", "title": "T", "rows": ["a", "b"], "columns": ["x", "y"], "cells": [["yes", "no"]]}), "has 1 rows but there are 2"),
+        (json!({"type": "matrix", "title": "T", "rows": ["a", "b"], "columns": ["x", "y"], "cells": [["yes", "no"], ["yes"]]}), "has 1 values but there are 2"),
+        (json!({"type": "matrix", "title": "T", "rows": ["a", "b"], "columns": ["x", "y"], "cells": [["yes", [1]], ["yes", "no"]]}), "list or object"),
         (json!({"type": "flow", "title": "T", "theme": "neon", "nodes": two.clone()}), "`theme`"),
         (flow(json!([]), json!([])), "between 1 and 60"),
         (flow(json!([{"id": "a"}, {"id": "a"}]), json!([])), "two nodes have the id `a`"),
@@ -181,6 +206,42 @@ fn a_tree_centres_each_parent_over_its_children_without_overlaps() {
     // node order is depth-first: 0 root, 1 core (2,3,4), 5 engine (6,7,8), 9 docs (10,11,12), 13 adapter
     assert!((cx(1) - cx(3)).abs() < 1.0 && (cx(5) - cx(7)).abs() < 1.0 && (cx(9) - cx(11)).abs() < 1.0, "parents sit over the middle child");
     assert!(b[0].1 < b[1].1 && b[1].1 < b[2].1, "levels run down the page");
+}
+
+#[test]
+fn a_dated_timeline_is_to_scale_and_its_cards_never_overlap() {
+    let svg = render_svg(&diagram(sample("timeline-milestones")).unwrap(), None);
+    let b = node_boxes(&svg);
+    assert_eq!(b.len(), 7, "{}", svg);
+    for (i, a) in b.iter().enumerate() {
+        for c in &b[i + 1..] {
+            assert!(a.2 + 4.0 <= c.0 || c.2 + 4.0 <= a.0 || a.3 + 4.0 <= c.1 || c.3 + 4.0 <= a.1, "{:?} overlaps {:?}", a, c);
+        }
+    }
+    // the dots sit on the axis at x positions proportional to the dates: Oct 25 -> Nov 9 is 15 days; Nov 2 is day 8
+    let dots: Vec<f64> = svg.split("<circle class=\"d").skip(1).map(|t| t.split("cx=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap()).collect();
+    assert_eq!(dots.len(), 7);
+    let frac = |i: usize| (dots[i] - dots[0]) / (dots[6] - dots[0]);
+    assert!((frac(4) - 8.0 / 15.0).abs() < 0.01 && (frac(1) - 1.0 / 15.0).abs() < 0.01, "{:?}", dots);
+    assert!(svg.contains(">2026-11-02</text>") && svg.contains(">Spec ratified</text>"));
+    // undated events are spaced evenly in the order given
+    let even = render_svg(&diagram(json!({"type": "timeline", "title": "T", "events": [{"when": "kickoff", "label": "a"}, {"when": "beta", "label": "b"}, {"when": "launch", "label": "c"}]})).unwrap(), None);
+    let xs: Vec<f64> = even.split("<circle class=\"nd\" cx=\"").skip(1).map(|t| t.split('"').next().unwrap().parse().unwrap()).collect();
+    assert!(((xs[1] - xs[0]) - (xs[2] - xs[1])).abs() < 0.5, "{:?}", xs);
+}
+
+#[test]
+fn a_matrix_draws_three_distinct_shapes_for_yes_partial_and_no_and_prints_other_text() {
+    let svg = render_svg(&diagram(sample("matrix-forms")).unwrap(), None);
+    // the sample has 5 filled, 6 half and 13 empty marks in the grid, and one of each shape in the key
+    assert_eq!(svg.matches("<circle class=\"f1\"").count(), 5 + 1);
+    assert_eq!(svg.matches("<circle class=\"k1\"").count(), 7);
+    assert_eq!(svg.matches("<circle class=\"ed2\"").count(), 14);
+    assert!(svg.matches("<circle class=\"f1\"").count() >= 6 && svg.contains("class=\"ed2\"") && svg.contains("class=\"k1\""), "{}", svg);
+    assert!(svg.contains(">categories</text>") && svg.contains(">2 to 4 parts</text>") && svg.contains(">Parts of a whole</text>") || svg.contains(">Parts of a</text>"), "{}", svg);
+    assert!(svg.contains(">yes</text>") && svg.contains(">partial</text>") && svg.contains(">no</text>"), "the key names the shapes");
+    let d = describe(&svg);
+    assert!(d.starts_with("Matrix of 6 rows by 5 columns") && d.contains("bar: Compare yes, Trend no"), "{}", d);
 }
 
 #[test]

@@ -6,9 +6,11 @@
 //! title and description), so it embeds in pages and decks, and becomes a PNG through the same rasterizer.
 
 mod flow;
+mod matrix;
 mod sequence;
 #[cfg(test)]
 mod tests;
+mod timeline;
 mod tree;
 
 use crate::chart::palette::{mix, SERIES_DARK, SERIES_LIGHT, SURFACE_DARK, SURFACE_LIGHT};
@@ -25,6 +27,8 @@ pub enum Kind {
     Flow,
     Tree,
     Sequence,
+    Timeline,
+    Matrix,
 }
 
 impl Kind {
@@ -33,6 +37,8 @@ impl Kind {
             Kind::Flow => "flow",
             Kind::Tree => "tree",
             Kind::Sequence => "sequence",
+            Kind::Timeline => "timeline",
+            Kind::Matrix => "matrix",
         }
     }
 }
@@ -42,6 +48,8 @@ enum Body {
     Flow(flow::Flow),
     Tree(tree::Tree),
     Sequence(sequence::Sequence),
+    Timeline(timeline::Timeline),
+    Matrix(matrix::Matrix),
 }
 
 #[derive(Debug, Clone)]
@@ -81,7 +89,7 @@ pub(crate) fn short(v: &Value, k: &str, max: usize, what: &str) -> Result<Option
 
 /// Read and check a diagram. The error says what is wrong and what would work.
 pub fn from_json(v: &Value) -> Result<DiagramSpec, DocError> {
-    let kind = str_field(v, "type").ok_or_else(|| bad("a diagram needs a `type`: flow, tree or sequence"))?;
+    let kind = str_field(v, "type").ok_or_else(|| bad("a diagram needs a `type`: flow, tree, sequence, timeline or matrix"))?;
     let title = short(v, "title", 140, "the title")?.ok_or_else(|| bad("a diagram needs a `title` that says what it shows"))?;
     let subtitle = short(v, "subtitle", 200, "the subtitle")?;
     let source = short(v, "source", 300, "`source`")?;
@@ -95,8 +103,9 @@ pub fn from_json(v: &Value) -> Result<DiagramSpec, DocError> {
         "flow" | "flowchart" => (Kind::Flow, Body::Flow(flow::parse(v)?)),
         "tree" | "hierarchy" => (Kind::Tree, Body::Tree(tree::parse(v)?)),
         "sequence" => (Kind::Sequence, Body::Sequence(sequence::parse(v)?)),
-        "timeline" | "matrix" => return Err(bad(format!("`{}` diagrams are not available yet; use flow, tree or sequence (or a `table` block for a matrix)", kind))),
-        other => return Err(bad(format!("unknown diagram type `{}`; use flow, tree or sequence", other))),
+        "timeline" => (Kind::Timeline, Body::Timeline(timeline::parse(v)?)),
+        "matrix" => (Kind::Matrix, Body::Matrix(matrix::parse(v)?)),
+        other => return Err(bad(format!("unknown diagram type `{}`; use flow, tree, sequence, timeline or matrix", other))),
     };
     Ok(DiagramSpec { kind, title, subtitle, source, theme, body })
 }
@@ -105,6 +114,7 @@ pub fn from_json(v: &Value) -> Result<DiagramSpec, DocError> {
 fn groups(spec: &DiagramSpec) -> &[String] {
     match &spec.body {
         Body::Flow(f) => &f.groups,
+        Body::Timeline(t) => &t.groups,
         _ => &[],
     }
 }
@@ -119,6 +129,8 @@ fn layout(spec: &DiagramSpec) -> Scene {
         Body::Flow(f) => flow::layout(f, top),
         Body::Tree(t) => tree::layout(t, top),
         Body::Sequence(s) => sequence::layout(s, top),
+        Body::Timeline(t) => timeline::layout(t, top),
+        Body::Matrix(m) => matrix::layout(m, top),
     }
 }
 
