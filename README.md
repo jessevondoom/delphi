@@ -137,6 +137,7 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `@<role> <request>` | ask one role directly (by role ID or its theme name) |
 | `/build [--optimistic] <request>` | worktree, tests, audit, then your merge card |
 | `/council [--lenses] <proposition>` | a blind three-round Council; `--lenses` gives each seat one of your bundles' perspectives to argue from |
+| `/distill [<path\|missions/id> …]` | the writer drafts bundle knowledge from allow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of the mission; nothing is written into a bundle |
 | `/timer <when> <note>`, `/timer @architect 1h …` | wake a role later; `/timer list`, `/timer cancel <id>` |
 | `/y` `/a` `/n` `/d` | approve once, approve similar this task (Amber only), reject, show the card's payload |
 | `/permissions [default\|accept-edits\|mission-auto\|optimistic]` | approval mode (`Shift+Tab` cycles it) |
@@ -158,7 +159,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Group | Commands |
 | :-- | :-- |
 | Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
-| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle validate\|manifest\|sign\|package\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
+| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle init\|validate [--report]\|distill\|manifest\|sign\|package [--vectors]\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
 | Maintain | `update` · `xenia whoami` · `help` |
@@ -235,7 +236,7 @@ This is an early project built mostly by its own agents under one operator. The 
 - Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
 
 **Specified, not built**
-- `package --vectors`, `bundle serve`, team alignment (slices B7 to B12; adding, signing, archives, update and rollback, B2 and B6, and the adopter side of vectors, B3, are built); the Xenia store itself (011/012) and the Librarian role (013).
+- `bundle serve`, plugin compatibility and evaluation (slices B7, B11, B12; adding, signing, archives, update and rollback, B2 and B6, vectors, B3 and the publisher side in B10, alignment, B9, and authoring, B10, are built); the Xenia store itself (011/012) and the Librarian role (013).
 - Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
 - Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
 

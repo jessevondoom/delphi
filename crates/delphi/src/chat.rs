@@ -52,6 +52,8 @@ pub enum Input {
     Merge(String),
     /// `/council [--seats a,b,c] [--author family] <proposition>`: a three-round Council on a decision.
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
+    /// `/distill [<path|missions/id>…]`: the writer drafts bundle knowledge from allow-listed sources into a staging directory (`specs/027` §2.3).
+    Distill(Vec<String>),
     /// `/observe [view]` (`/narrator` is an unlisted alias): open the narrator, the read-only full-screen window (a new tmux window when inside tmux, else the command to run).
     Narrator(Option<String>),
     /// `/more`: the rest of a reply the inline console shortened.
@@ -108,6 +110,7 @@ pub fn parse_input(line: &str) -> Input {
                 Some(t) => Input::Merge(t.to_string()),
                 None => Input::Unknown("/merge needs the build's task id, for example `/merge t_0003`".into()),
             },
+            "distill" => Input::Distill(rest.iter().map(|s| s.to_string()).collect()),
             "council" => parse_council(cmd.trim_start().strip_prefix("council").unwrap_or("")),
             "y" | "yes" => Input::Answer(Decision::Allow),
             "a" | "always" => Input::Answer(Decision::AllowSimilar),
@@ -853,6 +856,13 @@ impl Session {
                 Ok(v) => {
                     self.shared.running.fetch_add(1, Ordering::SeqCst);
                     say(&format!("({} council convened; the seats answer blind, then critique each other)\n", v["task_id"].as_str().unwrap_or("task")));
+                }
+                Err(e) => say(&format!("{}\n", rpc_error(&e))),
+            },
+            Input::Distill(from) => match self.cmd.call("bundle.distill", json!({"mission_id": self.mission_id, "from": from})) {
+                Ok(v) => {
+                    self.shared.running.fetch_add(1, Ordering::SeqCst);
+                    say(&format!("({} distill started; drafts go to a staging directory of this mission, nothing is written into a bundle)\n", v["task_id"].as_str().unwrap_or("task")));
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },

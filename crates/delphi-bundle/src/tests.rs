@@ -725,3 +725,103 @@ fn ac_1_a_signature_under_another_kid_or_another_key_fails() {
     put(&t, ".delphi-bundle/sig.json", "{\"alg\": \"ed25519\"}\n");
     fails_with(&check(&t), 6, "does not verify");
 }
+
+/// One value per scan class, assembled so that `delphi lint` does not flag this file's own fixtures.
+fn canaries() -> Vec<(&'static str, String)> {
+    vec![
+        ("secret", format!("key sk-ant-{}", "api03-abcdefghijklmnopqrstuvwx")),
+        ("token", format!("token gh{}_abcdefghijklmnopqrstuvwxyz0123456789", "p")),
+        ("private-key", format!("-----BEGIN RSA PRIVATE {}-----\nabc\n-----END RSA PRIVATE KEY-----", "KEY")),
+        ("local-path", format!("see /{}/someone/notes.md", "Users")),
+        ("e-mail", "mail someone@acme.example".to_string()),
+    ]
+}
+
+struct Named;
+impl Host for Named {
+    fn provenance(&self, t: &str) -> Vec<String> { Fake.provenance(t) }
+    fn skill_errors(&self, f: &serde_yaml::Mapping, d: &str) -> Vec<String> { Fake.skill_errors(f, d) }
+    fn role_scope(&self, r: &str) -> Option<RoleScope> { Fake.role_scope(r) }
+    fn identifiers(&self) -> Vec<String> { vec!["project-heron".into()] }
+    fn roster_handles(&self) -> Vec<String> { vec!["jessevondoom".into()] }
+}
+
+#[test]
+fn ac_7_one_canary_per_scan_class_in_a_knowledge_file_a_goal_a_skill_body_and_a_pointer_label_is_found() {
+    let place = |t: &tempfile::TempDir, which: &str, text: &str| match which {
+        "knowledge" => put(t, "knowledge/glossary.md", &(fs::read_to_string(t.path().join("knowledge/glossary.md")).unwrap() + text + "\n")),
+        "goal" => put(t, "behavior/goals.md", &(fs::read_to_string(t.path().join("behavior/goals.md")).unwrap() + text + "\n")),
+        "skill" => put(t, "skills/migration-plan/SKILL.md", &(fs::read_to_string(t.path().join("skills/migration-plan/SKILL.md")).unwrap() + text + "\n")),
+        _ => edit(t, "knowledge/glossary.md", "tags: [glossary]", &format!("tags: [glossary]\npointers:\n  - {{ scheme: https, locator: \"https://wiki.acme.example/x\", pin: {{ kind: none }}, label: \"{}\", content_type: text/markdown }}", text.replace('\n', " ").replace('"', "'"))),
+    };
+    for where_ in ["knowledge", "goal", "skill", "pointer label"] {
+        for (class, text) in canaries() {
+            if where_ == "pointer label" && class == "private-key" {
+                continue; // a key block is several lines and cannot sit in a one-line label
+            }
+            let t = bundle();
+            place(&t, where_, &text);
+            let r = check(&t);
+            assert!(r.fails.iter().any(|f| f.step == 8), "{} in {} was not found: {:#?}", class, where_, r.fails);
+            // and the report names the class at a file and a line, without the value
+            let (_, _, hits) = redaction::findings(t.path(), &Fake);
+            assert!(hits.iter().any(|h| h.hit.class == class && h.hit.fail), "{} in {}: {:#?}", class, where_, hits);
+            let md = redaction::render(t.path(), &Fake);
+            assert!(!md.contains("abcdefghijklmnopqrstuvwx") && !md.contains("someone/notes") && !md.contains("someone@"), "the report never carries the value: {}", md);
+        }
+    }
+    // the two classes that are only warnings: the workspace's identifiers and a person's handle
+    let t = bundle();
+    place(&t, "knowledge", "Run by jessevondoom for project-heron.");
+    let r = validate(t.path(), &Options::default(), &Named);
+    assert!(r.passed(), "{}", r.render("x"));
+    let msgs: Vec<&str> = r.warns.iter().filter(|w| w.step == 8).map(|w| w.msg.as_str()).collect();
+    assert!(msgs.iter().any(|m| m.contains("project-heron")) && msgs.iter().any(|m| m.contains("jessevondoom")), "{:?}", msgs);
+}
+
+#[test]
+fn the_redaction_report_lists_every_hit_in_the_templates_table_with_file_line_and_class() {
+    let t = bundle();
+    let mut text = fs::read_to_string(t.path().join("knowledge/glossary.md")).unwrap();
+    text.push_str(&format!("\nfirst: mail someone@acme.example\nsecond: see /{}/someone/notes.md\nthird: handled by jessevondoom\n", "Users"));
+    put(&t, "knowledge/glossary.md", &text);
+    let md = redaction::render(t.path(), &Named);
+    assert!(md.starts_with("# Redaction report: acme/acme-platform 1.4.0\n"), "{}", md);
+    for needle in ["## Summary", "## Findings", "| # | File:line | Class | Found | Action | Reason |", "## Pointers that replace removed detail", "## Author's attestation", "## Human approval"] {
+        assert!(md.contains(needle), "the template's section `{}` is missing:\n{}", needle, md);
+    }
+    let line_of = |needle: &str| fs::read_to_string(t.path().join("knowledge/glossary.md")).unwrap().lines().position(|l| l.contains(needle)).unwrap() + 1;
+    assert!(md.contains(&format!("| knowledge/glossary.md:{} | e-mail | an address at acme.example |", line_of("first:"))), "{}", md);
+    assert!(md.contains(&format!("| knowledge/glossary.md:{} | local-path | a path under /Users/… |", line_of("second:"))), "{}", md);
+    assert!(md.contains(&format!("| knowledge/glossary.md:{} | person-name (warning) | the handle `jessevondoom` |", line_of("third:"))), "{}", md);
+    assert!(!md.contains("someone"), "no value of a hit is printed: {}", md);
+    // a clean bundle says so
+    assert!(redaction::render(bundle().path(), &Fake).contains("| – | none |"));
+}
+
+#[test]
+fn a_staging_file_inside_a_bundle_fails_step_8_and_a_reference_to_a_mission_log_warns() {
+    let t = bundle();
+    put(&t, ".distill/2026-10-26/knowledge/draft.md", "# draft\n");
+    fails_with(&check(&t), 8, "distill staging");
+    let t = bundle();
+    put(&t, "knowledge/glossary.md", &(fs::read_to_string(t.path().join("knowledge/glossary.md")).unwrap() + "copied from local/missions/m1/events.jsonl\n"));
+    let r = check(&t);
+    assert!(r.passed() && r.warns.iter().any(|w| w.step == 8 && w.msg.contains("event log")), "{}", r.render("x"));
+}
+
+#[test]
+fn mask_text_removes_what_the_scan_finds_so_a_model_never_reads_it() {
+    let ctx = scan::Context { contact: None, identifiers: vec!["project-heron".into()], handles: vec!["jessevondoom".into()] };
+    let mut text = String::new();
+    for (_, c) in canaries() {
+        text.push_str(&c);
+        text.push('\n');
+    }
+    text.push_str("for project-heron by jessevondoom\n");
+    let masked = scan::mask_text(&text, &ctx);
+    assert!(scan::scan_text(&masked, &ctx).iter().all(|h| !h.fail && h.class != "identifier" && h.class != "person-name"), "{}", masked);
+    for gone in ["abcdefghijklmnopqrstuvwx", "someone", "project-heron", "jessevondoom"] {
+        assert!(!masked.contains(gone), "`{}` survived: {}", gone, masked);
+    }
+}

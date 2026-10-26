@@ -117,7 +117,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `clarity-synthesis` | Translates dense research or specs into lucid human reports and briefs. | `templates/executive-brief.md` |
 | `narrative-briefing` | Structures plans, proposals, and release announcements with zero filler. | instructions |
 | `concision-audit` | Audits docs and KB articles for bloat, redundancy, and unverified claims. | instructions |
-| `org-bundle-authoring` | Creates, sanitizes and packages an org knowledge bundle (`specs/023`) from allow-listed sources, with a human-approved redaction report before packaging. *Proposed with the sharing-layer specs (`specs/027` §2.6); its `delphi bundle` commands are not built.* | `templates/redaction-report.md`, `delphi check provenance` |
+| `org-bundle-authoring` | Creates, sanitizes and packages an org knowledge bundle (`specs/023`) from allow-listed sources, with a human-approved redaction report before packaging. *`specs/027` §2.6; its `delphi bundle init|distill|validate --report|package --vectors` commands are built (slice B10).* | `templates/redaction-report.md`, `delphi check provenance` |
 
 ### 9. **Integrator** (External Integrations, GitHub Ops & Protocol Specialist)
 | Skill | Purpose | Backing |

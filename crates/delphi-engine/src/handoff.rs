@@ -64,6 +64,11 @@ pub struct HandoffEnvelope {
     /// the envelope's size limit, and capped by `[session] conversation_tokens`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub conversation: String,
+    /// Set for a bundle `distill` span (`specs/027` §2.3): the logical staging directory its only write goes to. It is in
+    /// `handoff.sent`, so a resumed span is narrowed the same way: reads limited to the allow-list, one write tool, no
+    /// harness, and nothing written outside this directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distill: Option<String>,
 }
 
 /// Pointers + objective may not exceed 2,000 tokens, counted as bytes / 4.
@@ -90,6 +95,7 @@ impl HandoffEnvelope {
             routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1, avoid_families: vec![] },
             bundle_agent: None,
             conversation: String::new(),
+            distill: None,
         }
     }
 

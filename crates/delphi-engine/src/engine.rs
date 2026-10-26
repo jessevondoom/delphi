@@ -583,6 +583,10 @@ impl Engine {
                 m.append_batch(open).await?;
             }
 
+            // A bundle `distill` span is narrowed before anything is read or offered (`distill.rs`).
+            if let Some(stage) = &handoff.distill {
+                crate::distill::narrow(&mut sc, stage);
+            }
             // Other roles of a task that has a worktree (an auditor) can read it; their write globs keep them out.
             if let Some(w) = self.exec.known_worktree(task_id) {
                 sc.guard.zones.worktree = Some(w.path.clone());
@@ -609,7 +613,8 @@ impl Engine {
                     r
                 };
                 match resolved {
-                    Ok((text, tier)) => slices.push(ContextSlice { label: p.uri.clone(), tier: tier.as_str().into(), text }),
+                    // What a distill span reads has been through the redactor and the step 8 scan's masks first.
+                    Ok((text, tier)) => slices.push(ContextSlice { label: p.uri.clone(), tier: tier.as_str().into(), text: if handoff.distill.is_some() { self.secrets.redact(&crate::distill::mask(&self.ws.dir, &text)) } else { text } }),
                     Err(e) => slices.push(ContextSlice { label: p.uri.clone(), tier: "unavailable".into(), text: format!("(could not be read: {})", e) }),
                 }
             }
@@ -670,7 +675,8 @@ impl Engine {
             // tried by the family's API endpoints; and the other way round when every API endpoint is down.
             let mut harness_tried = false;
             let mut harness_result: Option<Result<String, Escalate>> = None;
-            if let Some(hep) = if setup_error.is_none() { self.route_harness(&sc) } else { None } {
+            // A distill span never runs in a subscription CLI: that CLI has tools of its own that the narrowed guard does not govern.
+            if let Some(hep) = if setup_error.is_none() && handoff.distill.is_none() { self.route_harness(&sc) } else { None } {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
                 match self.run_harness(&mut sc, &ipr, &hep).await? {
