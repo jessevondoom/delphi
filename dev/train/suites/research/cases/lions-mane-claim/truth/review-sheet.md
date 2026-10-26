@@ -83,7 +83,7 @@ hericenones?[^.]{0,120}(fail|not|no |did not)
 - **Counts as stated if the answer matches any of (one per line, case-insensitive):**
 
 ```
-mori[^.]{0,150}2009
+mori\b[^\n]{0,150}2009
 mild cognitive impairment[^.]{0,250}(placebo|double[- ]blind)
 (placebo|double[- ]blind)[^.]{0,250}mild cognitive impairment
 ```
@@ -104,6 +104,7 @@ mild cognitive impairment[^.]{0,250}(placebo|double[- ]blind)
 \b30 (subjects|participants|people|patients|adults|men and women)
 two (groups|arms) of (15|fifteen)
 \b15 (per|in each|participants|people)
+\bn\s?=\s?30\b
 ```
 
 - **And contains the number** 30 (± 0)
@@ -123,6 +124,8 @@ two (groups|arms) of (15|fifteen)
 (after|once|when) (they )?(stopp|discontinu|termination|ceas|withdr)[^.]{0,120}(decreas|declin|lost|disappear|fell|faded|dropp|reversed)
 (decreas|declin|faded|wore off|disappear)[^.]{0,80}(after|when)[^.]{0,40}(stopp|discontinu|ceas)
 did not persist|not sustained
+(disappear|decreas|declin|fad|revert|lost|dropp)[^\n]{0,80}(stopp|discontinu|ceas|termination|withdr)
+revert\w* to baseline
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
@@ -197,6 +200,7 @@ pilot
 clinical (validation|evidence|data|trials?|research)[^.]{0,80}(limited|lacking|scarce|small|few|insufficient)
 (limited|lacking|few|insufficient)[^.]{0,60}clinical
 large[- ]scale (clinical )?trials
+\bonly (about |around |roughly |a )?(few|five|\d+|two|three|four)[^\n.]{0,30}(RCTs?|randomi[sz]ed|trials)
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
@@ -213,7 +217,7 @@ large[- ]scale (clinical )?trials
 
 ```
 (no|without|not)[^.]{0,30}adverse
-well[- ]tolerated|generally safe|safe in
+well[- ]tolerated|generally (considered )?safe|safe in|(favou?rable|good) safety
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
@@ -229,7 +233,7 @@ well[- ]tolerated|generally safe|safe in
 - **Counts as stated if the answer matches any of (one per line, case-insensitive):**
 
 ```
-healthy (adults|people|individuals)[^.]{0,120}(not|no |unproven|unclear|limited|lack)
+healthy (young )?(adults|people|individuals)[^\n]{0,200}(not |no |zero|unproven|unclear|limited|lack|underpowered|non-significant|neither)
 (not|no )[^.]{0,80}healthy (adults|people)
 ```
 
@@ -246,7 +250,7 @@ An answer asserting one is penalized.
 
 ```
 \b(is|are|has been|have been|was|were) (clinically |scientifically |conclusively )?proven to\b
-clinically proven
+\b(is|are|has been|have been) (clinically|scientifically) proven\b
 ```
 
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer

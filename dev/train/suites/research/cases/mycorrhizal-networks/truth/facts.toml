@@ -67,7 +67,7 @@ id = "karst-citation-bias"
 claim = "Unsupported claims in the citing literature have doubled in 25 years, a bias towards positive effects"
 source = "karst-2023"
 quote = "unsupported claims have doubled in the past 25 years"
-any = ['citation bias', 'doubled', 'positive (effects|bias)']
+any = ['citation bias', 'doubled', 'positive (effects|bias)', '(favou?r|bias\w*)[^.\n]{0,40}positive (results|findings|effects)']
 weight = 0.5
 
 [[fact]]
@@ -90,7 +90,7 @@ id = "henriksson-isotopes"
 claim = "Isotope labelling can mislead because inferences may rest on tiny shifts in isotopic abundance"
 source = "henriksson-2023"
 quote = "miniscule shifts in isotopic abundance, which can be misleading"
-any = ['isotop.{0,250}(misleading|small|tiny|detection|artefact|artifact|discriminat|caution|limit)']
+any = ['isotop.{0,250}(misleading|small|tiny|detection|artefact|artifact|discriminat|caution|limit)', '(tiny|small|slight)[^.\n]{0,40}isotop[^.\n]{0,80}(mislead|misread|misinterpret|artefact|artifact)']
 
 [[fact]]
 id = "henriksson-fungi"

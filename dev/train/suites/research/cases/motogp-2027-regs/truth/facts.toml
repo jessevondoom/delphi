@@ -36,7 +36,7 @@ id = "fuel-sustainable"
 claim = "Fuel is 100% sustainable (non oil-refinement origin) from 2027"
 source = "crash-2027-regs"
 quote = "MotoGP will race with 100% sustainable fuel from 2027"
-any = ['100\s?%\s+(sustainable|non[- ]oil|renewable)', 'fully sustainable fuel']
+any = ['100\s?%\s+(sustainable|non[- ](oil|fossil)|renewable)', 'fully sustainable fuel', 'non[- ]fossil']
 
 [[fact]]
 id = "tank-20"
@@ -150,7 +150,7 @@ id = "michelin-until-2026"
 claim = "Michelin supplies until the end of the 2026 season"
 source = "tyrepress-pirelli"
 quote = "Michelin will remain the exclusive supplier for MotoGP and MotoE until the end of the current technical regulations, at the close of the 2026 season"
-any = ['michelin.{0,150}(2026|until the end|exit|leav|replac)']
+any = ['michelin.{0,150}(2026|until the end|exit|leav|replac)', '(replac\w*|succe\w*|takes? over from)\s+michelin']
 
 [[fact]]
 id = "announced-2024"

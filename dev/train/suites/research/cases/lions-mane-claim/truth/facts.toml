@@ -29,14 +29,14 @@ id = "mori-2009-rct"
 claim = "A double-blind placebo-controlled trial in people aged 50-80 with mild cognitive impairment (Mori 2009) found higher cognitive scores in the Hericium group at weeks 8, 12 and 16"
 source = "mori-2009"
 quote = "the Yamabushitake group showed significantly increased scores on the cognitive function scale compared with the placebo group"
-any = ['mori[^.]{0,150}2009', 'mild cognitive impairment[^.]{0,250}(placebo|double[- ]blind)', '(placebo|double[- ]blind)[^.]{0,250}mild cognitive impairment']
+any = ['mori\b[^\n]{0,150}2009', 'mild cognitive impairment[^.]{0,250}(placebo|double[- ]blind)', '(placebo|double[- ]blind)[^.]{0,250}mild cognitive impairment']
 
 [[fact]]
 id = "mori-2009-small"
 claim = "That trial was small: 30 people in two groups of 15"
 source = "mori-2009"
 quote = "30 subjects were randomized into two 15-person groups"
-any = ['\b30 (subjects|participants|people|patients|adults|men and women)', 'two (groups|arms) of (15|fifteen)', '\b15 (per|in each|participants|people)']
+any = ['\b30 (subjects|participants|people|patients|adults|men and women)', 'two (groups|arms) of (15|fifteen)', '\b15 (per|in each|participants|people)', '\bn\s?=\s?30\b']
 number = { value = 30, tol = 0 }
 
 [[fact]]
@@ -44,7 +44,7 @@ id = "mori-2009-fade"
 claim = "The gain faded within four weeks of stopping"
 source = "mori-2009"
 quote = "at week 4 after the termination of the 16 weeks intake, the scores decreased significantly"
-any = ['(after|once|when) (they )?(stopp|discontinu|termination|ceas|withdr)[^.]{0,120}(decreas|declin|lost|disappear|fell|faded|dropp|reversed)', '(decreas|declin|faded|wore off|disappear)[^.]{0,80}(after|when)[^.]{0,40}(stopp|discontinu|ceas)', 'did not persist|not sustained']
+any = ['(after|once|when) (they )?(stopp|discontinu|termination|ceas|withdr)[^.]{0,120}(decreas|declin|lost|disappear|fell|faded|dropp|reversed)', '(decreas|declin|faded|wore off|disappear)[^.]{0,80}(after|when)[^.]{0,40}(stopp|discontinu|ceas)', 'did not persist|not sustained', '(disappear|decreas|declin|fad|revert|lost|dropp)[^\n]{0,80}(stopp|discontinu|ceas|termination|withdr)', 'revert\w* to baseline']
 
 [[fact]]
 id = "saitsu-2019"
@@ -73,14 +73,14 @@ id = "review-limited"
 claim = "A 2025 narrative review concludes clinical validation remains limited and calls for large trials and standardized extracts"
 source = "review-2025"
 quote = "Despite promising findings, clinical validation remains limited"
-any = ['clinical (validation|evidence|data|trials?|research)[^.]{0,80}(limited|lacking|scarce|small|few|insufficient)', '(limited|lacking|few|insufficient)[^.]{0,60}clinical', 'large[- ]scale (clinical )?trials']
+any = ['clinical (validation|evidence|data|trials?|research)[^.]{0,80}(limited|lacking|scarce|small|few|insufficient)', '(limited|lacking|few|insufficient)[^.]{0,60}clinical', 'large[- ]scale (clinical )?trials', '\bonly (about |around |roughly |a )?(few|five|\d+|two|three|four)[^\n.]{0,30}(RCTs?|randomi[sz]ed|trials)']
 
 [[fact]]
 id = "safe-in-trials"
 claim = "No adverse effects were reported in these trials"
 source = "mori-2009"
 quote = "Laboratory tests showed no adverse effect of Yamabushitake"
-any = ['(no|without|not)[^.]{0,30}adverse', 'well[- ]tolerated|generally safe|safe in']
+any = ['(no|without|not)[^.]{0,30}adverse', 'well[- ]tolerated|generally (considered )?safe|safe in|(favou?rable|good) safety']
 weight = 0.5
 
 [[fact]]
@@ -88,5 +88,5 @@ id = "not-healthy-proof"
 claim = "The trials were in people with mild cognitive impairment or complaints, or tiny; benefit in healthy adults is not shown"
 source = "pilot-2026"
 quote = "no statistically significant differences were observed"
-any = ['healthy (adults|people|individuals)[^.]{0,120}(not|no |unproven|unclear|limited|lack)', '(not|no )[^.]{0,80}healthy (adults|people)']
+any = ['healthy (young )?(adults|people|individuals)[^\n]{0,200}(not |no |zero|unproven|unclear|limited|lack|underpowered|non-significant|neither)', '(not|no )[^.]{0,80}healthy (adults|people)']
 weight = 0.5

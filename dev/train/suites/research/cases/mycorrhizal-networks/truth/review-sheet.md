@@ -176,6 +176,7 @@ alternative explanation
 citation bias
 doubled
 positive (effects|bias)
+(favou?r|bias\w*)[^.\n]{0,40}positive (results|findings|effects)
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
@@ -226,6 +227,7 @@ re-?examin.{0,100}mother tree
 
 ```
 isotop.{0,250}(misleading|small|tiny|detection|artefact|artifact|discriminat|caution|limit)
+(tiny|small|slight)[^.\n]{0,40}isotop[^.\n]{0,80}(mislead|misread|misinterpret|artefact|artifact)
 ```
 
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right

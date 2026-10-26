@@ -297,7 +297,11 @@ pub fn call_judge(cfg: &JuryConfig, judge: &Arm, prompt: &str, index: usize) -> 
         cmd.env(k, v);
     }
     let (out, err) = (dir.join("stdout.txt"), dir.join("stderr.txt"));
+    let started = crate::train_run::Stopwatch::start();
     let (_, timed_out) = run_process(&mut cmd, &out, &err, cfg.timeout + Duration::from_secs(60))?;
+    if let Some(s) = started.slept() {
+        return Err(crate::train_run::asleep_error(s));
+    }
     if timed_out {
         return Err("the judge call timed out".into());
     }
@@ -402,6 +406,8 @@ pub struct JuryRun {
     pub budget_usd: f64,
     /// Restrict to one case id.
     pub only_case: Option<String>,
+    /// Pace Claude judges by the subscription's windows, as a run does.
+    pub pace: Option<crate::train_run::Pace>,
 }
 
 /// Judge every pair of bundles (same case and seed, different arms) with every judge that may score it, in both orders.
@@ -411,6 +417,7 @@ pub fn run_jury(cfg: &JuryConfig, cases: &[&crate::train::Case], jury: &JuryRun)
     let key = read_key(&cfg.work_dir);
     let done: Vec<JudgeRow> = read_judgements(&cfg.work_dir);
     let (mut rows, mut skipped, mut spent, mut index) = (Vec::new(), Vec::new(), done.iter().map(|r| r.cost_usd).sum::<f64>(), done.len());
+    let mut halt: Option<String> = None;
     let mut groups: BTreeMap<(String, u32), Vec<&KeyRow>> = BTreeMap::new();
     for k in key.iter().filter(|k| jury.only_case.as_ref().is_none_or(|c| k.case.ends_with(c.as_str()) || &k.case == c)) {
         groups.entry((k.case.clone(), k.seed)).or_default().push(k);
@@ -433,6 +440,13 @@ pub fn run_jury(cfg: &JuryConfig, cases: &[&crate::train::Case], jury: &JuryRun)
                         if spent + cfg.call_cap_usd > jury.budget_usd {
                             skipped.push(format!("{} s{} [{}] {} vs {}", case_label, seed, judge.name, x.blind, y.blind));
                             continue;
+                        }
+                        if let (Some(p), true) = (&jury.pace, crate::train_run::uses_claude(judge)) {
+                            halt = halt.or_else(|| crate::train_run::pace_gate(p, &cfg.work_dir.join("pace")));
+                            if let Some(why) = &halt {
+                                skipped.push(format!("{} s{} [{}] {} vs {} (stopped: {})", case_label, seed, judge.name, x.blind, y.blind, why));
+                                continue;
+                            }
                         }
                         index += 1;
                         let prompt = judge_prompt(&ba.task, &reference, &x.text, &y.text);
@@ -480,6 +494,7 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
         eprintln!("delphi train judge: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each call's cap still applies)");
         return 2;
     };
+    crate::train_run::keep_awake(args);
     let work = PathBuf::from(work);
     if let Err(e) = crate::train_run::sock_fits(&work.join("j9999").join("home")) {
         eprintln!("delphi train judge: {}", e);
@@ -510,12 +525,19 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
         call_cap_usd: call_cap,
         timeout: Duration::from_secs(600),
     };
-    let (rows, skipped) = run_jury(&cfg, cases, &JuryRun { judges, budget_usd: budget, only_case: flag(args, "--case") });
+    let pace = match crate::train_run::pace_from_args(args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("delphi train judge: {}", e);
+            return 2;
+        }
+    };
+    let (rows, skipped) = run_jury(&cfg, cases, &JuryRun { judges, budget_usd: budget, only_case: flag(args, "--case"), pace });
     let (ok, failed) = (rows.iter().filter(|r| r.verdict.is_some()).count(), rows.iter().filter(|r| r.verdict.is_none()).count());
     let spent: f64 = rows.iter().map(|r| r.cost_usd).sum::<f64>().max(0.0);
     println!("{} judge call(s): {} gave a verdict, {} did not; ${:.2} spent of {}", rows.len(), ok, failed, spent, crate::train::show_budget(budget));
     for s in &skipped {
-        println!("not judged (budget): {}", s);
+        println!("not judged: {}", s);
     }
     println!("judgements: {}", work.join("judgements.jsonl").display());
     i32::from(failed > 0)
@@ -679,7 +701,7 @@ print(json.dumps({"type": "run.summary", "outcome": "done", "exit_code": 0, "mis
         let t = tempfile::tempdir().unwrap();
         let (work, case, a, b) = jury_fixture(t.path(), &["claude-haiku-x"], &["gemini-flash-x"]);
         let cfg = jury_cfg(&work, t.path(), "alpha");
-        let run = JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 10.0, only_case: None };
+        let run = JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 10.0, only_case: None, pace: None };
         let (rows, skipped) = run_jury(&cfg, &[&case], &run);
         assert_eq!((rows.len(), skipped.len()), (2, 0), "one pair, two orders");
         assert!(rows.iter().all(|r| r.verdict.is_some() && r.error.is_none()), "{:?}", rows);
@@ -691,9 +713,29 @@ print(json.dumps({"type": "run.summary", "outcome": "done", "exit_code": 0, "mis
         // A position-follower: always picks the first candidate shown.
         let t2 = tempfile::tempdir().unwrap();
         let (work2, case2, a2, b2) = jury_fixture(t2.path(), &["claude-haiku-x"], &["gemini-flash-x"]);
-        let (rows2, _) = run_jury(&jury_cfg(&work2, t2.path(), "first"), &[&case2], &JuryRun { judges: vec![judge(t2.path(), "j", &[])], budget_usd: 10.0, only_case: None });
+        let (rows2, _) = run_jury(&jury_cfg(&work2, t2.path(), "first"), &[&case2], &JuryRun { judges: vec![judge(t2.path(), "j", &[])], budget_usd: 10.0, only_case: None, pace: None });
         let refs2: Vec<&JudgeRow> = rows2.iter().collect();
         assert_eq!(resolve(&refs2, &a2, &b2), Resolved::Inconsistent);
+    }
+
+    #[test]
+    fn a_claude_judge_stops_the_jury_when_the_weekly_window_is_nearly_used_and_other_judges_are_not_paced() {
+        let t = tempfile::tempdir().unwrap();
+        let (work, case, _a, _b) = jury_fixture(t.path(), &["claude-haiku-x"], &["gemini-flash-x"]);
+        let cfg = jury_cfg(&work, t.path(), "alpha");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        // A fake `claude` whose seven-day window is 95% used.
+        let claude = t.path().join("claude");
+        fs::write(&claude, format!("#!/bin/sh\ncat <<'EOF'\n{{\"type\":\"rate_limit_event\",\"rate_limit_info\":{{\"unifiedWindows\":{{\"five_hour\":{{\"utilization\":0.1,\"resetsAt\":{}}},\"seven_day\":{{\"utilization\":0.95,\"resetsAt\":{}}}}}}}}}\nEOF\n", now + 9999, now + 500_000)).unwrap();
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        let pace = crate::train_run::Pace { five_hour: 0.85, seven_day: 0.9, max_wait: Duration::from_secs(20), margin: Duration::ZERO, claude_bin: claude };
+        let paced = JuryRun { judges: vec![judge(t.path(), "j-sonnet", &["sonnet"])], budget_usd: 10.0, only_case: None, pace: Some(pace.clone()) };
+        let (rows, skipped) = run_jury(&cfg, &[&case], &paced);
+        assert!(rows.is_empty() && skipped.len() == 2 && skipped.iter().all(|s| s.contains("stopped: the seven-day window is 95% used")), "{:?} {:?}", rows.len(), skipped);
+        // A judge that is not on a Claude seat is never held back by it.
+        let other = JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 10.0, only_case: None, pace: Some(pace) };
+        let (rows, skipped) = run_jury(&cfg, &[&case], &other);
+        assert_eq!((rows.len(), skipped.len()), (2, 0));
     }
 
     #[test]
@@ -701,7 +743,7 @@ print(json.dumps({"type": "run.summary", "outcome": "done", "exit_code": 0, "mis
         let t = tempfile::tempdir().unwrap();
         let (work, case, _a, _b) = jury_fixture(t.path(), &["claude-haiku-x"], &["gemini-flash-x"]);
         let cfg = jury_cfg(&work, t.path(), "alpha");
-        let own = JuryRun { judges: vec![judge(t.path(), "j-gemini", &["gemini"])], budget_usd: 10.0, only_case: None };
+        let own = JuryRun { judges: vec![judge(t.path(), "j-gemini", &["gemini"])], budget_usd: 10.0, only_case: None, pace: None };
         let (rows, _) = run_jury(&cfg, &[&case], &own);
         assert!(rows.is_empty(), "arm-b used a gemini model, so a gemini judge sits this pair out");
         // Each call really costs 0.1 and is capped at 0.5; with a budget of 0.55 the first call fits (0 + 0.5) and the second
@@ -709,7 +751,7 @@ print(json.dumps({"type": "run.summary", "outcome": "done", "exit_code": 0, "mis
         let mut cfg = cfg;
         let (mx, my) = (canned(t.path(), "cx", "{\"winner\": \"X\"}", Some("gemma-x")), canned(t.path(), "cy", "{\"winner\": \"Y\"}", Some("gemma-x")));
         cfg.env = vec![("FAKE_PICK".into(), "alpha".into()), ("FAKE_MX".into(), mx.display().to_string()), ("FAKE_MY".into(), my.display().to_string())];
-        let tight = JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 0.55, only_case: None };
+        let tight = JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 0.55, only_case: None, pace: None };
         let (rows, skipped) = run_jury(&cfg, &[&case], &tight);
         assert_eq!((rows.len(), skipped.len()), (1, 1), "{:?}", skipped);
         assert!((rows[0].cost_usd - 0.1).abs() < 1e-9);
@@ -722,7 +764,7 @@ print(json.dumps({"type": "run.summary", "outcome": "done", "exit_code": 0, "mis
         let mut cfg = jury_cfg(&work, t.path(), "alpha");
         let (mx, my) = (canned(t.path(), "sx", "{\"winner\": \"X\"}", Some("other-model")), canned(t.path(), "sy", "{\"winner\": \"Y\"}", Some("other-model")));
         cfg.env = vec![("FAKE_PICK".into(), "alpha".into()), ("FAKE_MX".into(), mx.display().to_string()), ("FAKE_MY".into(), my.display().to_string())];
-        let (rows, _) = run_jury(&cfg, &[&case], &JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 10.0, only_case: None });
+        let (rows, _) = run_jury(&cfg, &[&case], &JuryRun { judges: vec![judge(t.path(), "j-gemma", &["gemma"])], budget_usd: 10.0, only_case: None, pace: None });
         assert!(rows.iter().all(|r| r.verdict.is_none() && r.error.as_deref().is_some_and(|e| e.contains("judge staffing violated"))), "{:?}", rows);
     }
 
