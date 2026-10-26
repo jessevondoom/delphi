@@ -25,6 +25,10 @@ pub mod time;
 pub mod totp;
 pub mod usage;
 #[cfg(any(test, feature = "test-support"))]
+pub mod xenia_fixture;
+#[cfg(any(test, feature = "test-support"))]
 pub mod xenia_testkit;
+pub mod xenia_index;
+pub mod xenia_ingress;
 pub mod xenia_store;
 pub mod xenia_sync;

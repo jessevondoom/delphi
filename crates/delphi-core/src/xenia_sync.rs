@@ -54,7 +54,7 @@ impl VerifyConfig {
     }
 }
 
-fn rerr(e: RosterError) -> Error {
+pub(crate) fn rerr(e: RosterError) -> Error {
     Error::BadField(e.reason())
 }
 
@@ -96,7 +96,33 @@ impl<'a> GitSource<'a> {
         GitSource { store }
     }
 
-    fn sh(&self, args: &[&str], stdin: Option<Vec<u8>>, cap: usize) -> Result<Vec<u8>> {
+    /// Every commit reachable from `head`, parents before children (the whole history a fetch brought in, which the
+    /// fetch caps already bound). The index uses it to learn the tags of earlier revisions.
+    pub(crate) fn all_commits(&self, head: &str) -> Result<Vec<CommitInfo>> {
+        check_commit(head)?;
+        self.rev_list(head)
+    }
+
+    fn rev_list(&self, range: &str) -> Result<Vec<CommitInfo>> {
+        let cap = (self.store.caps.max_new_commits as usize + 1) * (65 * 8 + 4);
+        let out = self.sh(&["rev-list", "--reverse", "--topo-order", "--parents", range], None, cap)?;
+        let mut v = Vec::new();
+        for line in String::from_utf8_lossy(&out).lines() {
+            let mut ids = line.split(' ');
+            let id = ids.next().unwrap_or("").to_string();
+            let parents: Vec<String> = ids.map(str::to_string).collect();
+            if check_commit(&id).is_err() || parents.iter().any(|p| check_commit(p).is_err()) {
+                return Err(Error::BadField("rev-list printed something unexpected"));
+            }
+            v.push(CommitInfo { id, parents });
+            if v.len() as u64 > self.store.caps.max_new_commits {
+                return Err(Error::Oversize("too many commits"));
+            }
+        }
+        Ok(v)
+    }
+
+    pub(crate) fn sh(&self, args: &[&str], stdin: Option<Vec<u8>>, cap: usize) -> Result<Vec<u8>> {
         let mut c = self.store.local();
         c.args(args);
         let out = run(c, stdin, cap, Duration::from_secs(120), None).map_err(|f| match f {
@@ -118,22 +144,7 @@ impl Source for GitSource<'_> {
     fn commits(&self, base: &str, head: &str) -> Result<Vec<CommitInfo>> {
         check_commit(base)?;
         check_commit(head)?;
-        let cap = (self.store.caps.max_new_commits as usize + 1) * (65 * 8 + 4);
-        let out = self.sh(&["rev-list", "--reverse", "--topo-order", "--parents", &format!("{base}..{head}")], None, cap)?;
-        let mut v = Vec::new();
-        for line in String::from_utf8_lossy(&out).lines() {
-            let mut ids = line.split(' ');
-            let id = ids.next().unwrap_or("").to_string();
-            let parents: Vec<String> = ids.map(str::to_string).collect();
-            if check_commit(&id).is_err() || parents.iter().any(|p| check_commit(p).is_err()) {
-                return Err(Error::BadField("rev-list printed something unexpected"));
-            }
-            v.push(CommitInfo { id, parents });
-            if v.len() as u64 > self.store.caps.max_new_commits {
-                return Err(Error::Oversize("too many commits"));
-            }
-        }
-        Ok(v)
+        self.rev_list(&format!("{base}..{head}"))
     }
 
     fn changes(&self, parent: Option<&str>, commit: &str) -> Result<Vec<Change>> {
@@ -245,7 +256,7 @@ struct Inspected {
     quarantined: Vec<(String, &'static str)>,
 }
 
-fn epoch_files(snap: &Snapshot) -> Vec<EpochFile> {
+pub(crate) fn epoch_files(snap: &Snapshot) -> Vec<EpochFile> {
     let mut v = Vec::new();
     for n in 1..=MAX_EPOCHS as u64 {
         let (Some(j), Some(s)) = (snap.files.get(&roster_epoch(n)), snap.files.get(&roster_epoch_sigs(n))) else { break };
@@ -261,12 +272,12 @@ fn advance_mark(next: &mut StickyState, assessment: &Assessment) {
     }
 }
 
-fn statement_files(snap: &Snapshot) -> Option<(&[u8], &[u8])> {
+pub(crate) fn statement_files(snap: &Snapshot) -> Option<(&[u8], &[u8])> {
     Some((snap.files.get(FRESHNESS)?.as_slice(), snap.files.get(FRESHNESS_SIGS)?.as_slice()))
 }
 
 impl Store {
-    fn load_pins(&self) -> Result<Pins> {
+    pub(crate) fn load_pins(&self) -> Result<Pins> {
         let p = pins::load(&self.pin_storage()).map_err(rerr)?.ok_or(Error::BadField("this store has not been joined (no pins)"))?;
         if p.org() != self.org || p.store() != self.store {
             return Err(Error::BadField("the pins belong to another store"));
@@ -276,7 +287,7 @@ impl Store {
 
     /// Is `a` an ancestor of `b`, or `b` itself? An object the clone does not have (git says 128) is "no": a
     /// statement may name any commit, and one we cannot find cannot be a base.
-    fn is_ancestor_or_equal(&self, a: &str, b: &str) -> Result<bool> {
+    pub(crate) fn is_ancestor_or_equal(&self, a: &str, b: &str) -> Result<bool> {
         if a == b {
             return Ok(true);
         }
@@ -287,7 +298,7 @@ impl Store {
         }
     }
 
-    fn pinned(&self) -> Pinned<'_> {
+    pub(crate) fn pinned(&self) -> Pinned<'_> {
         Pinned { org: &self.org, store: &self.store }
     }
 

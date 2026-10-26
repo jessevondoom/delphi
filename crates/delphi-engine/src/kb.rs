@@ -17,6 +17,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[path = "kb_xenia.rs"]
+mod xenia;
+pub use xenia::{XeniaApply, XeniaRow};
+
 pub const SCHEMA_VERSION: &str = "1";
 /// Version of how documents are cut into chunks. An index made with another version is read again, once, because a
 /// file that has not changed would otherwise keep the chunks the old rules made. (2: frontmatter summaries of
@@ -450,6 +454,7 @@ impl Kb {
 
     fn init(conn: Connection) -> Result<Kb, KbError> {
         conn.execute_batch(SCHEMA)?;
+        xenia::ensure(&conn)?;
         // An index made before files were compared by modification time gains the columns; 0 means "read it once".
         let columns: Vec<String> = conn.prepare("PRAGMA table_info(kb_documents)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().collect();
         for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0")] {
@@ -557,7 +562,8 @@ impl Kb {
     pub fn sync_lexical(&mut self, files: &[SourceFile], now: &str) -> Result<IndexReport, KbError> {
         let mut rep = IndexReport::default();
         let known: HashMap<String, (i64, i64)> = {
-            let mut st = self.conn.prepare("SELECT rel_path, mtime_ns, size FROM kb_documents")?;
+            // The Xenia zone is derived from a store clone, not from files: a file sync neither sees nor drops it.
+            let mut st = self.conn.prepare("SELECT rel_path, mtime_ns, size FROM kb_documents WHERE zone != 'xenia'")?;
             let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))))?;
             rows.flatten().collect()
         };
@@ -610,7 +616,8 @@ impl Kb {
     /// `rebuild` without running the model; `embed_pending` gives the chunks their vectors afterwards.
     pub fn rebuild_lexical(&mut self, files: &[SourceFile], now: &str) -> Result<IndexReport, KbError> {
         drop_vectors(&self.conn, None)?;
-        self.conn.execute("DELETE FROM kb_documents", [])?;
+        // Only what files made: the Xenia zone comes from the store clone and `xenia_index` brings it up to date.
+        self.conn.execute("DELETE FROM kb_documents WHERE zone != 'xenia'", [])?;
         self.conn.execute("INSERT INTO kb_fts_ident(kb_fts_ident) VALUES('rebuild')", [])?;
         self.conn.execute("INSERT INTO kb_fts_prose(kb_fts_prose) VALUES('rebuild')", [])?;
         self.sync_lexical(files, now)
@@ -729,6 +736,13 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     }
     if !opts.include_staged {
         allowed.push_str(" AND d.zone != 'staged'");
+    }
+    // The Xenia zone is judged by its own rule, whatever `include_untrusted` says: invisible unless a view is asked
+    // for, and then L2 only (agents) or the rest (the quarantine read).
+    match opts.xenia {
+        XeniaView::Off => allowed.push_str(" AND d.zone != 'xenia'"),
+        XeniaView::Agent => allowed.push_str(" AND d.zone = 'xenia' AND d.status = 'active' AND d.source_type = 'federated_verified'"),
+        XeniaView::Quarantine => allowed.push_str(" AND d.zone = 'xenia' AND NOT (d.status = 'active' AND d.source_type = 'federated_verified')"),
     }
     if let Some(b) = &opts.bundle {
         // `org` or `org/name`, plain ids only: anything else matches nothing, so it cannot widen the filter.
@@ -1045,6 +1059,34 @@ pub struct SearchOpts {
     /// Include zone `staged`: notes the daemon captured from what happened (`specs/031` §3.1). Off by default, so an
     /// ordinary search never mixes unreviewed candidate lessons into its answer.
     pub include_staged: bool,
+    /// Which Xenia records a search may see (`specs/011` §5.3). The zone is invisible unless asked for, and each view
+    /// is exclusive: it returns Xenia records and nothing else.
+    pub xenia: XeniaView,
+}
+
+/// The three ways to see the Xenia zone. The default sees none of it, so every ordinary search, listing and read is
+/// blind to org records: an agent gets L2 summaries only through [`XeniaView::Agent`], and an L1 or L0 record (or a
+/// hidden one) only through [`XeniaView::Quarantine`], an explicit act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XeniaView {
+    #[default]
+    Off,
+    /// Active `federated_verified` records.
+    Agent,
+    /// Everything else in the zone: unendorsed, clamped, stale-demoted, hidden.
+    Quarantine,
+}
+
+impl SearchOpts {
+    /// The view an agent gets: L2 summaries.
+    pub fn xenia_agent(limit: usize) -> SearchOpts {
+        SearchOpts { xenia: XeniaView::Agent, limit, ..SearchOpts::default() }
+    }
+
+    /// The explicit quarantine read.
+    pub fn xenia_quarantine(limit: usize) -> SearchOpts {
+        SearchOpts { xenia: XeniaView::Quarantine, include_untrusted: true, limit, ..SearchOpts::default() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1056,7 +1098,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, xenia: XeniaView::Off }
     }
 }
 
