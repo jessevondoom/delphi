@@ -1,0 +1,23 @@
+# Research case R6: business strategy (specs/037 section 3). The figures are checkable; the recommendation is judged (insights.toml).
+id = "livewire-strategy"
+suite = "research"
+kind = "research"
+role = "strategist"
+split = "dev"
+tags = ["research", "strategy", "business", "judgement", "time-sensitive"]
+max_cost_usd = 5.0
+timeout_secs = 1500
+prompt = "I sit on the board of a mid-sized motorcycle company and we are studying how Harley-Davidson has handled its electric business, LiveWire. Using the most recent public financial results you can find, give me a recommendation for how Harley-Davidson should treat LiveWire over the next two years: keep funding it as it is, ring-fence it, change its strategy, or something else. Be explicit about the numbers you rely on, your assumptions and what would change your mind, and cite your sources."
+
+# Lower bound on the checklist (the figures); the recommendation itself is for the jury and you.
+[[check]]
+kind = "fact_recall"
+min = 0.4
+
+[[check]]
+kind = "no_traps"
+
+[[check]]
+kind = "text_matches"
+pattern = "https?://|sec\\.gov|10-Q|press release"
+present = true

@@ -1,0 +1,32 @@
+# Judgement calls for R6 (specs/037 section 4): not facts. `draft_view` is the assistant's starting point and is never shown to a
+# judge. Write your own judgement in `operator_view`; only that reaches a judge, and as a view, not a fact.
+# This is the pack where judgement matters most: the figures are checkable, the recommendation is not.
+
+[[insight]]
+id = "keep-funding"
+question = "Should Harley-Davidson keep funding LiveWire at the current pace, and on what terms?"
+draft_view = "Assistant's draft, to be overwritten: ring-fence it with explicit milestones. Unit growth is off a tiny base (267 vs 55), the segment loses about five times its revenue, and the company leans on related-party financing, so funding at the current pace without conditions buys time, not a path to economics. Tie further support to evidence that the S4 Honcho lowers cost per unit and raises volume, and decide in advance what result ends the support."
+operator_view = ""
+considerations = [
+  "unit economics: revenue per unit against the loss, and what scale would change",
+  "cash runway and who funds it (related party, market raises)",
+  "brand and strategic value to Harley beyond the segment's own profit",
+  "the option value of staying in electric against the cost of waiting",
+]
+acceptable = "Any recommendation (continue, ring-fence, restructure, sell, stop) that states its assumptions and its stopping rule. Unconditional continuation or exit with no reasoning is not."
+
+[[insight]]
+id = "what-would-change-my-mind"
+question = "What evidence should change that recommendation, and by when would it be visible?"
+draft_view = "Assistant's draft, to be overwritten: cost per S4 unit and the first quarters of S4 deliveries; whether the operating loss falls as volume rises; the next funding round's terms."
+operator_view = ""
+considerations = ["names observable milestones with timing", "separates leading from lagging signals"]
+acceptable = "Any concrete, observable trigger. 'Keep watching' is not a trigger."
+
+[[insight]]
+id = "alternatives"
+question = "Which alternative to the status quo is most credible, and what does it give up?"
+draft_view = "Assistant's draft, to be overwritten: a partnership or minority sale preserves the option and shares the burn but cedes control and the brand halo; an exit is cleanest financially but forfeits the segment's option value."
+operator_view = ""
+considerations = ["compares at least two alternatives against the same criteria"]
+acceptable = "A reasoned ranking of alternatives, not a list."

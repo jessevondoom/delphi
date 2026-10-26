@@ -30,7 +30,14 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > A common mycorrhizal network (CMN) is formed when mycorrhizal fungal hyphae connect the roots of multiple plants
 
-- **Counts as stated if the answer matches any of:** `hyph.{0,100}connect` · `common mycorrhizal network` · `(connect|link).{0,80}(roots|plants|trees).{0,80}(fung|hyph|mycorrh)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+hyph.{0,100}connect
+common mycorrhizal network
+(connect|link).{0,80}(roots|plants|trees).{0,80}(fung|hyph|mycorrh)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `simard-1997` (weight 1)
@@ -41,7 +48,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > demonstrate bidirectional carbon transfer between the ectomycorrhizal tree species Betula papyrifera and Pseudotsuga menziesii
 
-- **Counts as stated if the answer matches any of:** `simard.{0,250}(1997|bidirectional|birch|douglas)` · `(birch|betula).{0,120}(douglas|pseudotsuga)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+simard.{0,250}(1997|bidirectional|birch|douglas)
+(birch|betula).{0,120}(douglas|pseudotsuga)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `simard-6pct` (weight 0.5)
@@ -52,7 +65,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > represents on average 6% of carbon isotope uptake through photosynthesis
 
-- **Counts as stated if the answer matches any of:** `\b6\s?(%|percent)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b6\s?(%|percent)
+```
+
 - **And contains the number** 6 (± 0)
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
@@ -64,7 +82,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > carbon assimilated by 40-meter-tall spruce is traded over to neighboring beech, larch, and pine
 
-- **Counts as stated if the answer matches any of:** `klein.{0,250}(spruce|2016|beech|larch)` · `spruce.{0,200}(beech|larch|pine)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+klein.{0,250}(spruce|2016|beech|larch)
+spruce.{0,200}(beech|larch|pine)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `klein-40pct` (weight 0.5)
@@ -75,7 +99,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > accounted for 40% of the fine root carbon
 
-- **Counts as stated if the answer matches any of:** `\b40\s?(%|percent)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+\b40\s?(%|percent)
+```
+
 - **And contains the number** 40 (± 0)
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
@@ -87,7 +116,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > recent claims in the popular media about CMNs in forests are disconnected from evidence
 
-- **Counts as stated if the answer matches any of:** `karst` · `hoeksema`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+karst
+hoeksema
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `karst-mother-tree` (weight 1)
@@ -98,7 +133,14 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > has no peer-reviewed, published evidence
 
-- **Counts as stated if the answer matches any of:** `(mother|parent)[ -]tree.{0,250}(no|lack|without|not).{0,80}(evidence|support|proof)` · `(offspring|kin|seedlings?).{0,200}(no|lack|without|not).{0,80}(peer|evidence|support)` · `no peer-reviewed`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+(mother|parent)[ -]tree.{0,250}(no|lack|without|not).{0,80}(evidence|support|proof)
+(offspring|kin|seedlings?).{0,200}(no|lack|without|not).{0,80}(peer|evidence|support)
+no peer-reviewed
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `karst-widespread` (weight 1)
@@ -109,7 +151,15 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > are insufficiently supported because results from field studies vary too widely
 
-- **Counts as stated if the answer matches any of:** `insufficient` · `vary (too )?widely` · `too limited to (support )?generali` · `alternative explanation`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+insufficient
+vary (too )?widely
+too limited to (support )?generali
+alternative explanation
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `karst-citation-bias` (weight 0.5)
@@ -120,7 +170,14 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > unsupported claims have doubled in the past 25 years
 
-- **Counts as stated if the answer matches any of:** `citation bias` · `doubled` · `positive (effects|bias)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+citation bias
+doubled
+positive (effects|bias)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `karst-management` (weight 0.5)
@@ -131,7 +188,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > knowledge on CMNs is presently too sparse and unsettled to inform forest management
 
-- **Counts as stated if the answer matches any of:** `forest management.{0,120}(sparse|unsettled|premature|not (yet )?ready|too)` · `(sparse|unsettled).{0,120}management`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+forest management.{0,120}(sparse|unsettled|premature|not (yet )?ready|too)
+(sparse|unsettled).{0,120}management
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `henriksson-2023` (weight 1)
@@ -142,7 +205,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > evidence of a significant net C transfer via common mycorrhizal networks that benefits the recipients is still lacking
 
-- **Counts as stated if the answer matches any of:** `henriksson` · `re-?examin.{0,100}mother tree`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+henriksson
+re-?examin.{0,100}mother tree
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `henriksson-isotopes` (weight 1)
@@ -153,7 +222,12 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > miniscule shifts in isotopic abundance, which can be misleading
 
-- **Counts as stated if the answer matches any of:** `isotop.{0,250}(misleading|small|tiny|detection|artefact|artifact|discriminat|caution|limit)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+isotop.{0,250}(misleading|small|tiny|detection|artefact|artifact|discriminat|caution|limit)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `henriksson-fungi` (weight 0.5)
@@ -164,7 +238,13 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > difficult to reconcile with any adaptive advantages for the fungi
 
-- **Counts as stated if the answer matches any of:** `(adaptive|evolution|benefit).{0,120}fung` · `fung.{0,120}(adaptive|evolutionary).{0,80}(advantage|benefit)`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+(adaptive|evolution|benefit).{0,120}fung
+fung.{0,120}(adaptive|evolutionary).{0,80}(advantage|benefit)
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ### `unsettled` (weight 1)
@@ -175,7 +255,17 @@ To see what the checks do with an answer you write: `delphi train truth-check --
 
   > too sparse and unsettled
 
-- **Counts as stated if the answer matches any of:** `controvers` · `disput` · `debat` · `contested` · `unsettled` · `not (all )?settled`
+- **Counts as stated if the answer matches any of (one per line, case-insensitive):**
+
+```
+controvers
+disput
+debat
+contested
+unsettled
+not (all )?settled
+```
+
 - [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right
 
 ## 2. Traps (4)
@@ -185,25 +275,48 @@ An answer asserting one is penalized.
 ### `proven-mother-trees`
 
 - **Why it is false:** Neither side claims it is proven that mother trees feed their offspring through fungal networks; the critique says the evidence for preferential kin transfer is absent
-- **Fires on:** `(proven|proved|conclusively (shown|demonstrated|established)|definitively).{0,100}(mother|parent) trees?` · `mother trees? (definitely|clearly|conclusively|certainly) (feed|nourish|support|nurtur)`
+- **Fires on (one pattern per line):**
+
+```
+(scientists|studies|research|science|researchers) (have |has )?(proven|proved|conclusively (shown|demonstrated|established)|definitively (shown|demonstrated))[^.]{0,80}(mother|parent) trees?
+\b(is|are|has been|have been|was|were) (now )?(proven|conclusively shown|conclusively demonstrated)[^.]{0,60}(mother|parent) trees?
+mother trees? (definitely|clearly|conclusively|certainly) (feed|nourish|support|nurtur)
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ### `myth-debunked`
 
 - **Why it is false:** The critics question generality, benefit and kin preference; they do not say mycorrhizal networks or fungal associations do not exist
-- **Fires on:** `(completely|entirely|totally|fully) (debunked|disproved|a myth)` · `mycorrhizal (networks?|fungi) (do not|don.t|does not|doesn.t) exist`
+- **Fires on (one pattern per line):**
+
+```
+(completely|entirely|totally|fully) (debunked|disproved|a myth)
+mycorrhizal (networks?|fungi) (do not|don.t|does not|doesn.t) exist
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ### `simard-in-science`
 
 - **Why it is false:** Simard et al. 1997 was published in Nature, not Science
-- **Fires on:** `simard(?: et al\.)?[^.;]{0,100}1997[^.;]{0,60}\bin science\b`
+- **Fires on (one pattern per line):**
+
+```
+simard(?: et al\.)?[^.;]{0,100}1997[^.;]{0,60}\bin science\b
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ### `klein-in-nature`
 
 - **Why it is false:** Klein et al. 2016 was published in Science, not Nature
-- **Fires on:** `klein(?: et al\.)?[^.;]{0,100}2016[^.;]{0,60}\bin nature\b`
+- **Fires on (one pattern per line):**
+
+```
+klein(?: et al\.)?[^.;]{0,100}2016[^.;]{0,60}\bin nature\b
+```
+
 - [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer
 
 ## 3. Sources (4)

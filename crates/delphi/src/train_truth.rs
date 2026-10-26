@@ -402,12 +402,12 @@ pub fn review_sheet(case_id: &str, prompt: &str, t: &Truth) -> String {
     o.push_str(&format!("## How to review\n\n1. **Facts and traps** (sections 1 and 2): open each source link, find the quote, and confirm the claim says what the quote says. Confirm the patterns would catch a correct answer worded differently, and would not fire on a wrong one. A pattern is a *lower bound*: a miss costs the answer a point it deserved, so err toward loose patterns for facts and tight patterns for traps.\n2. **Sources** (section 3): is each one authoritative enough to be the record?\n3. **Rubric** (section 4): is this what a good answer must do?\n4. **Judgement calls** (section 5): these are not facts. Write your own view in `truth/insights.toml` (`operator_view`); only your view reaches a judge, and as a view.\n5. When it is right: `delphi train verify --case {} --by \"<your name>\"`. Any later edit to the pack makes the stamp stale.\n\nTo see what the checks do with an answer you write: `delphi train truth-check --case {} --text-file answer.md`.\n\n", case_id, case_id));
     o.push_str(&format!("## 1. Facts ({})\n\n", t.facts.len()));
     for f in &t.facts {
-        o.push_str(&format!("### `{}` (weight {})\n\n- **Claim:** {}\n- **Source:** {}\n- **Quote:**\n\n  > {}\n\n- **Counts as stated if the answer matches any of:** {}{}\n- [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right\n\n", f.id, f.weight, f.claim, src(&f.source), f.quote, f.pattern_src.iter().map(|p| format!("`{}`", p)).collect::<Vec<_>>().join(" · "), f.number.map(|(v, tol)| format!("\n- **And contains the number** {} (± {})", v, tol)).unwrap_or_default()));
+        o.push_str(&format!("### `{}` (weight {})\n\n- **Claim:** {}\n- **Source:** {}\n- **Quote:**\n\n  > {}\n\n- **Counts as stated if the answer matches any of (one per line, case-insensitive):**\n\n```\n{}\n```\n{}\n- [ ] the claim matches the quote   [ ] the source is good enough   [ ] the patterns are right\n\n", f.id, f.weight, f.claim, src(&f.source), f.quote, f.pattern_src.join("\n"), f.number.map(|(v, tol)| format!("\n- **And contains the number** {} (± {})", v, tol)).unwrap_or_default()));
     }
     o.push_str(&format!("## 2. Traps ({})\n\nAn answer asserting one is penalized.\n\n", t.traps.len()));
     for tr in &t.traps {
-        let pats = fs::read_to_string(t.dir.join("traps.toml")).ok().and_then(|x| x.parse::<toml::Table>().ok()).and_then(|x| x.get("trap").and_then(|v| v.as_array()).and_then(|a| a.iter().find(|e| e.get("id").and_then(|i| i.as_str()) == Some(tr.id.as_str())).cloned())).and_then(|e| e.get("any").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|p| format!("`{}`", p))).collect::<Vec<_>>().join(" · "))).unwrap_or_default();
-        o.push_str(&format!("### `{}`\n\n- **Why it is false:** {}\n- **Fires on:** {}\n- [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer\n\n", tr.id, tr.why, pats));
+        let pats = fs::read_to_string(t.dir.join("traps.toml")).ok().and_then(|x| x.parse::<toml::Table>().ok()).and_then(|x| x.get("trap").and_then(|v| v.as_array()).and_then(|a| a.iter().find(|e| e.get("id").and_then(|i| i.as_str()) == Some(tr.id.as_str())).cloned())).and_then(|e| e.get("any").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>().join("\n"))).unwrap_or_default();
+        o.push_str(&format!("### `{}`\n\n- **Why it is false:** {}\n- **Fires on (one pattern per line):**\n\n```\n{}\n```\n\n- [ ] it really is false   [ ] the pattern is tight enough not to fire on a correct answer\n\n", tr.id, tr.why, pats));
     }
     o.push_str(&format!("## 3. Sources ({})\n\n| id | link | retrieved | extract hash | note |\n| :-- | :-- | :-- | :-- | :-- |\n", t.source_meta.len()));
     for s in &t.source_meta {
@@ -720,6 +720,9 @@ pub mod tests {
         let bad = "Science has proven that mother trees feed their offspring. The skeptics' case is completely debunked, and mycorrhizal networks do not exist anyway. Simard et al. 1997 appeared in Science; Klein et al. 2016 appeared in Nature.";
         assert_eq!(t.trap_hits(bad), vec!["proven-mother-trees", "myth-debunked", "simard-in-science", "klein-in-nature"]);
         assert!(t.recall("Trees do talk to each other through fungi.").fraction < 0.1);
+        for careful in ["Science has not proven that mother trees feed their offspring.", "It has not been proven that mother trees nurture their young.", "Mother trees feeding their offspring is not proven."] {
+            assert!(!t.trap_hits(careful).contains(&"proven-mother-trees".to_string()), "a negated sentence is not a trap: {}", careful);
+        }
     }
 
     #[test]
@@ -748,6 +751,37 @@ pub mod tests {
     }
 
     #[test]
+    fn the_committed_livewire_pack_accepts_an_answer_that_reads_the_figures_and_catches_invented_ones() {
+        let t = committed("research/livewire-strategy");
+        let good = "In Q2 2026 LiveWire reported consolidated revenue of $9.1 million, up 55%, and a net loss of $18.2 million. It sold 267 electric motorcycles against 55 a year earlier (up 386%), but electric motorcycle revenue was $3.6 million \
+            against an operating loss of $18.0 million, about $13.5 thousand of revenue per bike. STACYC sold 5,223 units and roughly broke even. Net cash used by operating activities was $26.4 million, adjusted EBITDA a loss of $15.1 million, \
+            and related party interest expense rose. It holds 76% of the US electric 50+ kW segment, began producing the S4 Honcho, closed the Dust Motorcycles acquisition and reiterated its full-year guidance. https://www.sec.gov";
+        let r = t.recall(good);
+        assert!(r.fraction > 0.95 && r.missing.is_empty(), "missing {:?}", r.missing);
+        assert!(t.trap_hits(good).is_empty(), "{:?}", t.trap_hits(good));
+        assert!(t.recall("LiveWire is growing and Harley should keep supporting it.").fraction < 0.1);
+        let bad = "LiveWire reported a profit this quarter. LiveWire's quarterly revenue was $450 million, and LiveWire sold 4,000 electric motorcycles.";
+        assert_eq!(t.trap_hits(bad), vec!["profitable", "revenue-magnitude", "thousands-of-bikes"]);
+    }
+
+    #[test]
+    fn the_committed_lions_mane_pack_accepts_a_calibrated_answer_and_catches_overclaims() {
+        let t = committed("research/lions-mane-claim");
+        let good = "The evidence is thin. Mori 2008 found in cells that Hericium extract promotes NGF expression, and in mice raised NGF in the hippocampus, but the hericenones marketed did not do it. In people: Mori 2009, a double-blind placebo-controlled trial in mild cognitive impairment, \
+            was small (30 subjects, two groups of 15) and scores rose at weeks 8, 12 and 16 but decreased significantly after stopping. Saitsu 2019 found improvement on the MMSE alone. A 2026 randomized trial of 109 participants (a medRxiv preprint, not peer reviewed) reported modest gains, while a \
+            2026 pilot of ten adults found no statistically significant differences. A 2025 narrative review says clinical validation remains limited and calls for large-scale trials. No adverse effects were seen, but benefit in healthy adults is not shown. https://doi.org/10.1002/ptr.2634";
+        let r = t.recall(good);
+        assert!(r.fraction > 0.95 && r.missing.is_empty(), "missing {:?}", r.missing);
+        assert!(t.trap_hits(good).is_empty(), "{:?}", t.trap_hits(good));
+        let careful = "Lion's mane has not been proven to prevent dementia, and it is not FDA approved to treat anything.";
+        assert!(t.trap_hits(careful).is_empty(), "negated claims are not traps: {:?}", t.trap_hits(careful));
+        assert!(t.recall("Lion's mane is a popular mushroom supplement.").fraction < 0.1);
+        let bad = "Lion's mane is clinically proven to boost memory. Dozens of human trials confirm that it prevents Alzheimer's disease, and lion's mane is FDA approved.";
+        assert_eq!(t.trap_hits(bad), vec!["proven", "approved", "many-large-trials"]);
+        assert_eq!(t.trap_hits("Hericium reverses dementia in most people."), vec!["treats-dementia"]);
+    }
+
+    #[test]
     fn insights_reach_a_judge_only_as_the_operators_reviewed_view() {
         let t = tempfile::tempdir().unwrap();
         let dir = case_with_pack(t.path());
@@ -767,7 +801,7 @@ pub mod tests {
         let sheet = review_sheet("r/q1", "What changes in 2027?\nBe brief.", &load(&dir, "r/q1").unwrap());
         for want in [
             "# Review sheet: r/q1", "**Status:** DRAFT", "> What changes in 2027?\n> Be brief.", "### `engine` (weight 1)", "https://example.org/a (retrieved 2026-10-20)",
-            "> move the class to 850cc engines", "`850\\s?cc`", "**And contains the number** 20 (± 0)", "### `v4-ban`", "Fires on:", "`bans? V4`", "| a | https://example.org/a |",
+            "> move the class to 850cc engines", "850\\s?cc", "**And contains the number** 20 (± 0)", "### `v4-ban`", "Fires on", "bans? V4", "| a | https://example.org/a |",
             "Cover the engine change.", "### `who-benefits`", "ASSISTANT-DRAFT-SECRET", "not written yet", "### `confidence`", "Not very; it is early.", "delphi train verify --case r/q1",
         ] {
             assert!(sheet.contains(want), "{} in\n{}", want, sheet);

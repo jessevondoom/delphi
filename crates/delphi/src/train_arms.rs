@@ -181,7 +181,7 @@ pub struct Built {
 
 /// Rewrite the endpoints and access blocks of `config` as `def` says. Endpoints the arm does not name are removed, so the arm
 /// cannot reach a model it did not declare.
-fn rewrite_config(config: &str, def: &ArmDef) -> Result<String, String> {
+fn rewrite_config(config: &str, def: &ArmDef, exec_env: &BTreeMap<String, String>) -> Result<String, String> {
     let mut v: toml::Value = toml::from_str(config).map_err(|e| format!("config.toml: {}", e))?;
     let t = v.as_table_mut().ok_or("config.toml is not a table")?;
     let (families, order) = {
@@ -227,11 +227,20 @@ fn rewrite_config(config: &str, def: &ArmDef) -> Result<String, String> {
     } else {
         access.insert("role_family".into(), toml::Value::Table(rf));
     }
+    // The gates and the Builder's commands run `cargo`: say where it is, and share one build cache across every arm's builds.
+    if !exec_env.is_empty() {
+        let exec = t.entry("exec").or_insert_with(|| toml::Value::Table(Default::default())).as_table_mut().ok_or("[exec] is not a table")?;
+        let mut env = exec.get("env").and_then(|e| e.as_table()).cloned().unwrap_or_default();
+        for (k, val) in exec_env {
+            env.insert(k.clone(), toml::Value::String(val.clone()));
+        }
+        exec.insert("env".into(), toml::Value::Table(env));
+    }
     toml::to_string_pretty(&v).map_err(|e| e.to_string())
 }
 
 /// Build one arm's home under `out_home` from `source_home`'s `workspace`. The source is only read.
-pub fn build_arm(source_home: &Path, workspace: &str, def: &ArmDef, out_home: &Path) -> Result<Built, String> {
+pub fn build_arm(source_home: &Path, workspace: &str, def: &ArmDef, out_home: &Path, exec_env: &BTreeMap<String, String>) -> Result<Built, String> {
     let src_ws = source_home.join("workspaces").join(workspace);
     if !src_ws.join("config.toml").is_file() {
         return Err(format!("{} has no workspace `{}`", source_home.display(), workspace));
@@ -239,7 +248,7 @@ pub fn build_arm(source_home: &Path, workspace: &str, def: &ArmDef, out_home: &P
     let ws = out_home.join("workspaces").join(workspace);
     copy_filtered(&src_ws, &ws, Path::new(""))?;
     // The configuration, rewritten; then its access blocks sealed as `/ratify` would.
-    let new = rewrite_config(&fs::read_to_string(ws.join("config.toml")).map_err(|e| e.to_string())?, def)?;
+    let new = rewrite_config(&fs::read_to_string(ws.join("config.toml")).map_err(|e| e.to_string())?, def, exec_env)?;
     fs::write(ws.join("config.toml"), &new).map_err(|e| e.to_string())?;
     let blocks = lock::access_blocks(&new);
     lock::write_atomic(&ws.join("local/ratified").join("config.access.toml"), blocks.as_bytes()).map_err(|e| e.to_string())?;
@@ -335,6 +344,9 @@ pub fn cli(args: &[String]) -> i32 {
         eprintln!("delphi train arms init: {}", e);
         return 2;
     }
+    // Where a build finds `cargo`, and one shared target directory so an arm's gates do not each rebuild the project.
+    let path = flag(args, "--exec-path").unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+    let exec_env: BTreeMap<String, String> = [("PATH".to_string(), path), ("CARGO_TARGET_DIR".to_string(), flag(args, "--cargo-target").unwrap_or_else(|| out.join("cargo-target").display().to_string()))].into();
     let mut toml_out = String::from("# Made by `delphi train arms init`. Template homes are throwaway copies: nothing here is your ratified setup.\n\n");
     let (mut built, mut skipped, mut failed) = (0, 0, 0);
     for def in defs.iter().filter(|d| only.as_ref().is_none_or(|o| o.contains(&d.name))) {
@@ -343,7 +355,7 @@ pub fn cli(args: &[String]) -> i32 {
             skipped += 1;
             continue;
         }
-        match build_arm(&src, &workspace, def, &out.join("homes").join(&def.name)) {
+        match build_arm(&src, &workspace, def, &out.join("homes").join(&def.name), &exec_env) {
             Ok(b) if b.problems.is_empty() => {
                 println!("built {:<22} pool: {}", b.name, b.pool.join(", "));
                 toml_out.push_str(&format!("[[arm]]\nname = \"{}\"\ntemplate_home = \"homes/{}\"\nexpect_models = [{}]\n\n", def.name, def.name, expect_models(def).iter().map(|m| format!("\"{}\"", m)).collect::<Vec<_>>().join(", ")));
@@ -416,7 +428,7 @@ mod tests {
         let src = source(t.path());
         let before = fs::read_to_string(src.join("workspaces/w/config.toml")).unwrap();
         let out = t.path().join("homes/solo-haiku");
-        let b = build_arm(&src, "w", &def("solo-haiku", "claude-sub", ["haiku", "haiku", "haiku"]), &out).unwrap();
+        let b = build_arm(&src, "w", &def("solo-haiku", "claude-sub", ["haiku", "haiku", "haiku"]), &out, &BTreeMap::new()).unwrap();
         assert!(b.problems.is_empty(), "{:?}", b.problems);
         assert!(b.pool.iter().all(|p| p == "claude-sub/haiku") && !b.pool.is_empty(), "{:?}", b.pool);
         // The gemini endpoint is gone, and the role preference for it with it (it would be a config error).
@@ -439,12 +451,30 @@ mod tests {
     }
 
     #[test]
+    fn builds_get_a_path_to_cargo_and_a_shared_target_dir_in_the_pinned_exec_block() {
+        let t = tempfile::tempdir().unwrap();
+        let src = source(t.path());
+        let env: BTreeMap<String, String> = [("PATH".to_string(), "/opt/cargo/bin:/usr/bin".to_string()), ("CARGO_TARGET_DIR".to_string(), "/tmp/shared-target".to_string())].into();
+        let out = t.path().join("homes/solo");
+        let b = build_arm(&src, "w", &def("solo", "claude-sub", ["haiku", "haiku", "haiku"]), &out, &env).unwrap();
+        assert!(b.problems.is_empty(), "{:?}", b.problems);
+        let cfg = fs::read_to_string(out.join("workspaces/w/config.toml")).unwrap();
+        let v: toml::Value = toml::from_str(&cfg).unwrap();
+        assert_eq!((v["exec"]["env"]["PATH"].as_str(), v["exec"]["env"]["CARGO_TARGET_DIR"].as_str()), (Some("/opt/cargo/bin:/usr/bin"), Some("/tmp/shared-target")));
+        // `[exec]` is a pinned block: the sealed hash covers it, so the daemon trusts it without a prompt.
+        assert!(delphi_engine::boot::effective_config(&out.join("workspaces/w"), &cfg).unwrap().1.is_empty());
+        // With nothing to add, the config has no [exec] added.
+        let plain = build_arm(&src, "w", &def("plain", "claude-sub", ["haiku", "haiku", "haiku"]), &t.path().join("homes/plain"), &BTreeMap::new()).unwrap();
+        assert!(plain.problems.is_empty() && !fs::read_to_string(t.path().join("homes/plain/workspaces/w/config.toml")).unwrap().contains("[exec"));
+    }
+
+    #[test]
     fn a_mixed_arm_keeps_both_endpoints_and_the_cross_family_reviewer() {
         let t = tempfile::tempdir().unwrap();
         let src = source(t.path());
         let mut d = def("team-mixed", "claude-sub", ["haiku", "sonnet", "fable"]);
         d.models.insert("agy-sub".into(), TIERS.iter().zip(["flash-low", "flash-medium", "flash-high"]).map(|(t, m)| (t.to_string(), m.to_string())).collect());
-        let b = build_arm(&src, "w", &d, &t.path().join("homes/mixed")).unwrap();
+        let b = build_arm(&src, "w", &d, &t.path().join("homes/mixed"), &BTreeMap::new()).unwrap();
         assert!(b.problems.is_empty(), "{:?}", b.problems);
         for want in ["claude-sub/fable", "claude-sub/haiku", "agy-sub/flash-high", "agy-sub/flash-low"] {
             assert!(b.pool.contains(&want.to_string()), "{} in {:?}", want, b.pool);
@@ -457,9 +487,9 @@ mod tests {
     fn an_arm_naming_an_endpoint_the_home_lacks_fails_with_what_it_has() {
         let t = tempfile::tempdir().unwrap();
         let src = source(t.path());
-        let e = build_arm(&src, "w", &def("x", "ollama", ["a", "b", "c"]), &t.path().join("homes/x")).unwrap_err();
+        let e = build_arm(&src, "w", &def("x", "ollama", ["a", "b", "c"]), &t.path().join("homes/x"), &BTreeMap::new()).unwrap_err();
         assert!(e.contains("no endpoint `ollama`") && e.contains("claude-sub, agy-sub"), "{}", e);
-        assert!(build_arm(&src, "nowhere", &def("x", "claude-sub", ["a", "b", "c"]), &t.path().join("homes/y")).unwrap_err().contains("no workspace"));
+        assert!(build_arm(&src, "nowhere", &def("x", "claude-sub", ["a", "b", "c"]), &t.path().join("homes/y"), &BTreeMap::new()).unwrap_err().contains("no workspace"));
     }
 
     #[test]

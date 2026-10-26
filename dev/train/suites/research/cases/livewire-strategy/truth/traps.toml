@@ -1,0 +1,15 @@
+# Claims that are false against the quarter's figures (specs/037 section 4).
+[[trap]]
+id = "profitable"
+why = "LiveWire lost $18.2 million in the quarter; it was not profitable"
+any = ['livewire[^.]{0,100}(turned a profit|is profitable|was profitable|reported a profit|posted a profit|returned to profit)']
+
+[[trap]]
+id = "revenue-magnitude"
+why = "LiveWire's quarterly revenue was $9.1 million, not hundreds of millions"
+any = ['livewire[^.]{0,80}(quarterly |q2 |second[- ]quarter )?revenue[^.]{0,40}\$\s?\d{3}(\.\d)?\s?(m|million)', 'livewire[^.]{0,60}\$\s?\d(\.\d)?\s?billion in (quarterly |q2 )?revenue']
+
+[[trap]]
+id = "thousands-of-bikes"
+why = "LiveWire sold 267 electric motorcycles in the quarter, not thousands"
+any = ['(livewire|harley)[^.]{0,100}(sold|delivered|shipped)[^.]{0,40}\b[1-9],?\d{3}\s+electric motorcycles']
