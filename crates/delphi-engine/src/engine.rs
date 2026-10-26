@@ -644,6 +644,10 @@ impl Engine {
             // A role that dispatches work picks a family and tier; what the chosen path can do is its business to know.
             if sc.manifest.execute.iter().any(|e| e == "agent-dispatch") && !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/tool-inventory".into(), tier: "L3".into(), text: crate::inventory::render(&self.cfg.get(), &self.inventory.seats()) });
+                // The operator's overview groups work by the threads this role names; when tasks are piling up in none, say which.
+                if let Some(text) = m.replay().ok().and_then(|events| crate::thread_nudge::reminder(&events)) {
+                    slices.push(ContextSlice { label: "@runtime/unnamed-threads".into(), tier: "L3".into(), text });
+                }
                 let agents = crate::bundle_load::catalog(&self.ws);
                 if !agents.is_empty() {
                     slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
