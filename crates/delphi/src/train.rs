@@ -401,6 +401,21 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// The session's dollar budget: `--budget-usd N`, or `--no-session-cap` to drop the session total on purpose. The cap on each
+/// case (and on each judge call) always stays: it is what stops one runaway run, and a session with no total is only as safe
+/// as those. `None` when neither flag is given.
+pub(crate) fn session_budget(args: &[String]) -> Option<f64> {
+    if args.iter().any(|a| a == "--no-session-cap") {
+        return Some(f64::INFINITY);
+    }
+    flag(args, "--budget-usd").and_then(|b| b.parse::<f64>().ok()).filter(|b| *b > 0.0)
+}
+
+/// How a budget reads in a message.
+pub(crate) fn show_budget(b: f64) -> String {
+    if b.is_finite() { format!("${:.2}", b) } else { "no session cap (each case's own cap still applies)".into() }
+}
+
 fn flags(args: &[String], name: &str) -> Vec<String> {
     args.iter().enumerate().filter(|(_, a)| *a == name).filter_map(|(i, _)| args.get(i + 1).cloned()).collect()
 }
@@ -540,8 +555,8 @@ pub fn run(args: &[String]) -> i32 {
                 eprintln!("delphi train: fix the cases first (`delphi train validate`)");
                 return 1;
             }
-            let Some(budget) = flag(args, "--budget-usd").and_then(|b| b.parse::<f64>().ok()).filter(|b| *b > 0.0) else {
-                eprintln!("delphi train plan: --budget-usd <dollars> is required; a run is always capped");
+            let Some(budget) = session_budget(args) else {
+                eprintln!("delphi train plan: --budget-usd <dollars> (or --no-session-cap, which keeps each case's cap) is required");
                 return 2;
             };
             if let Some(h) = flag(args, "--home") {
@@ -568,7 +583,7 @@ pub fn run(args: &[String]) -> i32 {
                 println!("{}/{:<34}{:<9}{:<13}up to ${:.2}, {}s", c.suite, c.id, format!("{:?}", c.kind).to_lowercase(), c.role, c.max_cost_usd, c.timeout_secs);
             }
             let worst = worst_case_usd(&chosen, seeds);
-            println!("{} case(s) x {} seed(s): at most ${:.2} against a budget of ${:.2} (nothing was run)", chosen.len(), seeds, worst, budget);
+            println!("{} case(s) x {} seed(s): at most ${:.2} against {} (nothing was run)", chosen.len(), seeds, worst, show_budget(budget));
             if chosen.is_empty() {
                 eprintln!("delphi train plan: no cases in the `{}` split", split);
                 return 1;
@@ -578,6 +593,14 @@ pub fn run(args: &[String]) -> i32 {
                 return 3;
             }
             0
+        }
+        Some(s @ ("truth-sheet" | "truth-check" | "verify")) => crate::train_truth::cli(s, args, &root),
+        Some("arms") => {
+            if args.get(1).map(String::as_str) != Some("init") {
+                eprintln!("usage: delphi train arms init --source-home <home> --workspace <name> --defs <arms-defs.toml> --out <new dir> [--avail avail.json] [--only a,b]");
+                return 2;
+            }
+            crate::train_arms::cli(args)
         }
         Some("report") => crate::train_report::cli(args),
         Some(s @ ("review" | "disputes" | "resolve")) => {
@@ -616,7 +639,7 @@ pub fn run(args: &[String]) -> i32 {
             crate::train_run::cli(args, &chosen)
         }
         _ => {
-            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
+            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train truth-sheet --case <suite>/<id> | --all   (a sheet to check a truth pack)\n       delphi train truth-check --case <suite>/<id> --text-file <answer>\n       delphi train verify --case <suite>/<id> --by <name>\n       delphi train arms init --source-home <home> --workspace <name> --defs <arms-defs.toml> --out <new dir> [--avail avail.json]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
             2
         }
     }

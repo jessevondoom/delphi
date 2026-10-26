@@ -1,0 +1,22 @@
+# Judgement calls for R2 (specs/037 section 4): not facts. `draft_view` is the assistant's starting point and is never shown to a
+# judge. Write your own judgement in `operator_view`; only that reaches a judge, and as a view, not a fact.
+
+[[insight]]
+id = "how-confident"
+question = "How confident can a curious non-specialist be that 'mother trees' nurture their young through fungal networks?"
+draft_view = "Assistant's draft, to be overwritten: not confident. Fungal networks exist and carbon moving between trees through them has been measured in some studies, but whether that helps seedlings, or is directed at kin, is unestablished and disputed; a fair summary is 'plausible but unproven, and the popular version overreaches'."
+operator_view = ""
+considerations = [
+  "keeps existence, transfer, benefit and kin preference apart",
+  "weighs field studies against critiques of method (isotope labelling, alternative pathways, few forest types)",
+  "notes citation bias as a reason the literature may look stronger than the data",
+]
+acceptable = "Anywhere from 'unproven' to 'weakly supported' is defensible with reasoning. 'Established' and 'debunked' are not."
+
+[[insight]]
+id = "popular-sources"
+question = "How should an assistant treat popular books and documentaries on this topic, as evidence?"
+draft_view = "Assistant's draft, to be overwritten: as claims to check against the primary literature, not as evidence; useful for knowing what the public has been told."
+operator_view = ""
+considerations = ["checks a popular claim against a primary paper before repeating it"]
+acceptable = "Any answer that does not treat popularity as proof."

@@ -1,0 +1,110 @@
+# The arms of the training study (specs/037 section 2) as staffing definitions for `delphi train arms init`.
+#
+# Endpoint ids and model ids are those of the operator's own home (`claude-sub` is the Claude CLI login, `agy-sub` is
+# Antigravity). A tier model is what answers that tier: a "solo" arm maps all three tiers to one model, so every role runs on it
+# and the retry ladder's upscaling has nowhere to go; a team arm gives the tiers different models; the cross-family reviewer
+# (role_family red-team = gemini) is what makes a mix mixed.
+#
+#   delphi train arms init --source-home ~/.delphi --workspace delphi --defs dev/train/arms-defs.toml \
+#       --avail avail.json --out /path/to/new/dir
+#
+# An arm whose model `avail.json` says is exhausted (or unlisted) is skipped with the reason, not built.
+
+# ── solo Claude: one model on every tier ──
+[[arm]]
+name = "solo-haiku"
+note = "Haiku on every role and tier"
+[arm.models.claude-sub]
+fast = "haiku"
+workhorse = "haiku"
+frontier = "haiku"
+[arm.role_family]
+
+[[arm]]
+name = "solo-sonnet"
+note = "Sonnet on every role and tier"
+[arm.models.claude-sub]
+fast = "sonnet"
+workhorse = "sonnet"
+frontier = "sonnet"
+[arm.role_family]
+
+[[arm]]
+name = "solo-opus"
+note = "Opus on every role and tier"
+[arm.models.claude-sub]
+fast = "opus"
+workhorse = "opus"
+frontier = "opus"
+[arm.role_family]
+
+[[arm]]
+name = "solo-fable"
+note = "Fable on every role and tier: the single frontier agent"
+[arm.models.claude-sub]
+fast = "fable"
+workhorse = "fable"
+frontier = "fable"
+[arm.role_family]
+
+# ── solo Gemini (through agy): Flash at one effort, and the Argon frontier when its quota allows ──
+[[arm]]
+name = "solo-gemini-flash"
+note = "Gemini 3.8 Flash (medium) on every role and tier"
+[arm.models.agy-sub]
+fast = "gemini-3.8-flash-medium"
+workhorse = "gemini-3.8-flash-medium"
+frontier = "gemini-3.8-flash-medium"
+[arm.role_family]
+
+[[arm]]
+name = "solo-gemini-argon"
+note = "Gemini 4 Argon (medium) on every role and tier"
+[arm.models.agy-sub]
+fast = "gemini-4-argon-medium"
+workhorse = "gemini-4-argon-medium"
+frontier = "gemini-4-argon-medium"
+[arm.role_family]
+
+# ── teams ──
+[[arm]]
+name = "team-cheap-claude"
+note = "the full team on Haiku and Sonnet; no frontier tier"
+[arm.models.claude-sub]
+fast = "haiku"
+workhorse = "sonnet"
+frontier = "sonnet"
+[arm.role_family]
+
+[[arm]]
+name = "team-frontier"
+note = "the full team on Fable: separates team structure from model class"
+[arm.models.claude-sub]
+fast = "fable"
+workhorse = "fable"
+frontier = "fable"
+[arm.role_family]
+
+# ── mixes ──
+[[arm]]
+name = "team-mixed"
+note = "cheap Claude workers, a Fable frontier tier, and the cross-family reviewer on Gemini"
+[arm.models.claude-sub]
+fast = "haiku"
+workhorse = "sonnet"
+frontier = "fable"
+[arm.models.agy-sub]
+fast = "gemini-3.8-flash-low"
+workhorse = "gemini-3.8-flash-medium"
+frontier = "gemini-3.8-flash-high"
+[arm.role_family]
+red-team = "gemini"
+
+[[arm]]
+name = "cheap-first"
+note = "start cheap, the retry ladder escalates to the frontier tier on failure (the default routing, Claude only)"
+[arm.models.claude-sub]
+fast = "haiku"
+workhorse = "sonnet"
+frontier = "fable"
+[arm.role_family]

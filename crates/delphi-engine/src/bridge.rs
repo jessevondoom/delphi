@@ -161,8 +161,28 @@ fn summarize_args(args: &Value) -> String {
     pick.unwrap_or("").chars().take(200).collect()
 }
 
+/// What the bridge turned away on its own, before anything reached the span: calls for a tool the span was not offered
+/// (a model that guessed a name, or a forged call) and connections that did not open with the span's token. Counts and
+/// tool names only, never arguments; the span logs it once at its end (`harness.bridge_refused`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Refusals {
+    pub not_offered: u32,
+    /// The first few distinct tool names asked for, cut to 60 characters each.
+    pub tools: Vec<String>,
+    pub bad_connections: u32,
+}
+
+const MAX_REFUSED_NAMES: usize = 10;
+
+impl Refusals {
+    pub fn is_empty(&self) -> bool {
+        self.not_offered == 0 && self.bad_connections == 0
+    }
+}
+
 /// A running bridge. Dropping it stops the server and removes its directory.
 pub struct Bridge {
+    refusals: Arc<std::sync::Mutex<Refusals>>,
     dir: PathBuf,
     config_path: PathBuf,
     token: String,
@@ -250,14 +270,20 @@ impl Bridge {
         }
         let (tx, rx) = mpsc::channel::<BridgeCall>(16);
         let (notes, notes_rx) = mpsc::unbounded_channel::<HookNote>();
-        let shared = Arc::new(Shared { tools: tools.iter().map(|t| mcp_tool(t, hook.is_some())).collect(), names: tools.iter().map(|t| t.name.clone()).collect(), instructions, token: token.clone(), tx, hook, notes });
+        let refusals = Arc::new(std::sync::Mutex::new(Refusals::default()));
+        let shared = Arc::new(Shared { tools: tools.iter().map(|t| mcp_tool(t, hook.is_some())).collect(), names: tools.iter().map(|t| t.name.clone()).collect(), instructions, token: token.clone(), tx, hook, notes, refusals: refusals.clone() });
         let accept = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let shared = shared.clone();
                 tokio::spawn(async move { serve(stream, shared).await });
             }
         });
-        Ok((Bridge { dir, config_path, token, accept, program: program.to_path_buf() }, rx, notes_rx))
+        Ok((Bridge { refusals, dir, config_path, token, accept, program: program.to_path_buf() }, rx, notes_rx))
+    }
+
+    /// What the bridge turned away since the last call (see [`Refusals`]); the count starts again from nothing.
+    pub fn take_refusals(&self) -> Refusals {
+        std::mem::take(&mut *self.refusals.lock().unwrap())
     }
 
     /// For the Antigravity CLI: write this span's `.agents/` into `dir`, a directory Delphi made for the span and the CLI
@@ -314,6 +340,7 @@ struct Shared {
     tx: mpsc::Sender<BridgeCall>,
     hook: Option<HookPolicy>,
     notes: mpsc::UnboundedSender<HookNote>,
+    refusals: Arc<std::sync::Mutex<Refusals>>,
 }
 
 fn same_token(a: &str, b: &str) -> bool {
@@ -329,7 +356,13 @@ async fn serve(stream: UnixStream, shared: Arc<Shared>) {
     // The first line is the token and nothing else.
     match lines.read_line(&mut buf).await {
         Ok(n) if n > 0 && n < 256 && serde_json::from_str::<Value>(&buf).ok().and_then(|v| v["token"].as_str().map(|t| same_token(t, &shared.token))).unwrap_or(false) => {}
-        _ => return,
+        // Nothing legitimate opens a connection and then fails to say who it is; a connection that closes before saying anything is not counted.
+        Ok(0) | Err(_) => return,
+        _ => {
+            let mut r = shared.refusals.lock().unwrap();
+            r.bad_connections = r.bad_connections.saturating_add(1);
+            return;
+        }
     }
     loop {
         buf.clear();
@@ -372,6 +405,13 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
             let name = req["params"]["name"].as_str().unwrap_or("").to_string();
             let call_id = req["params"]["_meta"]["claudecode/toolUseId"].as_str().unwrap_or("").to_string();
             let content = if !shared.names.contains(&name) {
+                let mut r = shared.refusals.lock().unwrap();
+                r.not_offered = r.not_offered.saturating_add(1);
+                let shown: String = name.chars().take(60).collect();
+                if r.tools.len() < MAX_REFUSED_NAMES && !r.tools.contains(&shown) {
+                    r.tools.push(shown);
+                }
+                drop(r);
                 ToolResult { content: format!("`{}` is not one of the tools Delphi offered this task", name), is_error: true }
             } else {
                 let (reply, rx) = oneshot::channel();
@@ -590,6 +630,194 @@ mod tests {
         let (mut r, mut w) = client(&b, b.token()).await;
         let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer", "arguments": {}}})).await;
         assert_eq!(resp["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn a_notification_gets_no_reply_and_a_line_that_is_not_json_is_skipped_without_closing_the_connection() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        w.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\nthis is not json\n{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"ping\"}\n").await.unwrap();
+        // None of those three lines is answered (a notification, garbage, and a null id are not requests), so the first
+        // line back is the answer to the ping that follows.
+        let pong = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 7, "method": "ping"})).await;
+        assert_eq!(pong["id"], 7, "{}", pong);
+    }
+
+    #[tokio::test]
+    async fn a_slow_tool_call_does_not_hold_up_a_ping_and_each_reply_carries_its_own_id() {
+        let (b, mut rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        w.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer", "arguments": {}}})).as_bytes()).await.unwrap();
+        let held = rx.recv().await.expect("the call reached the span");
+        // The call is waiting for an approval card, say. The CLI's ping is answered meanwhile.
+        let pong = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 2, "method": "ping"})).await;
+        assert_eq!(pong["id"], 2);
+        held.reply.send(ToolResult { content: "late".into(), is_error: false }).unwrap();
+        let mut line = String::new();
+        r.read_line(&mut line).await.unwrap();
+        let late: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!((late["id"].as_i64(), late["result"]["content"][0]["text"].as_str()), (Some(1), Some("late")));
+    }
+
+    #[tokio::test]
+    async fn many_clients_at_once_each_get_the_answer_to_their_own_call() {
+        let (b, mut rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let span = tokio::spawn(async move {
+            // Answer in reverse arrival order, so a bridge that paired replies by position would swap them.
+            let mut calls = Vec::new();
+            while calls.len() < 8 {
+                calls.push(rx.recv().await.expect("a call"));
+            }
+            for call in calls.into_iter().rev() {
+                let note = call.args["note"].as_str().unwrap().to_string();
+                call.reply.send(ToolResult { content: format!("echo {}", note), is_error: false }).unwrap();
+            }
+        });
+        let mut clients = Vec::new();
+        for i in 0..8 {
+            let (mut r, mut w) = client(&b, b.token()).await;
+            clients.push(tokio::spawn(async move {
+                let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 100 + i, "method": "tools/call", "params": {"name": "timer", "arguments": {"note": format!("n{}", i)}}})).await;
+                (i, resp)
+            }));
+        }
+        for c in clients {
+            let (i, resp) = c.await.unwrap();
+            assert_eq!((resp["id"].as_i64(), resp["result"]["content"][0]["text"].as_str()), (Some(100 + i), Some(format!("echo n{}", i).as_str())));
+        }
+        span.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reply_longer_than_the_limit_is_cut_with_a_note_so_one_result_cannot_fill_the_clis_context() {
+        let (b, mut rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let span = tokio::spawn(async move {
+            let call = rx.recv().await.unwrap();
+            call.reply.send(ToolResult { content: "é".repeat(MAX_REPLY_CHARS + 50), is_error: false }).unwrap();
+        });
+        let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer", "arguments": {}}})).await;
+        span.await.unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.ends_with("[the result was cut at the bridge's size limit]"), "{}", &text[text.len() - 80..]);
+        assert_eq!(text.chars().filter(|c| *c == 'é').count(), MAX_REPLY_CHARS, "cut on a character, never inside one");
+    }
+
+    #[tokio::test]
+    async fn a_call_with_no_arguments_reaches_the_span_as_an_empty_object_and_with_no_call_id() {
+        let (b, mut rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let span = tokio::spawn(async move {
+            let call = rx.recv().await.unwrap();
+            let seen = (call.args.clone(), call.call_id.clone());
+            call.reply.send(ToolResult { content: "ok".into(), is_error: false }).unwrap();
+            seen
+        });
+        ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer"}})).await;
+        assert_eq!(span.await.unwrap(), (json!({}), String::new()));
+    }
+
+    #[tokio::test]
+    async fn a_span_that_drops_the_call_without_answering_gives_the_cli_an_error_not_a_hang() {
+        let (b, mut rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let span = tokio::spawn(async move { drop(rx.recv().await.unwrap()) });
+        let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "timer", "arguments": {}}})).await;
+        span.await.unwrap();
+        assert_eq!(resp["result"]["isError"], true);
+        assert!(resp["result"]["content"][0]["text"].as_str().unwrap().contains("ended before the tool finished"));
+    }
+
+    #[tokio::test]
+    async fn a_request_line_over_the_limit_closes_the_connection_and_the_bridge_keeps_serving_others() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let mut huge = vec![b'x'; MAX_LINE + 10];
+        huge.push(b'\n');
+        let _ = w.write_all(&huge).await; // the server may close while this is still being written
+        let mut rest = Vec::new();
+        let _ = r.read_to_end(&mut rest).await;
+        assert!(rest.is_empty(), "no answer to a line that size");
+        let (mut r2, mut w2) = client(&b, b.token()).await;
+        assert!(ask(&mut r2, &mut w2, json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).await["result"].is_object());
+    }
+
+    #[tokio::test]
+    async fn a_first_line_that_is_not_just_the_token_closes_the_connection_in_silence() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let long = format!("{}\n", json!({"token": b.token(), "padding": "x".repeat(300)}));
+        for first in [long, "not json\n".to_string(), "{\"nope\":1}\n".to_string(), "{\"token\":17}\n".to_string()] {
+            let (r, mut w) = UnixStream::connect(b.socket()).await.unwrap().into_split();
+            w.write_all(first.as_bytes()).await.unwrap();
+            w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n").await.unwrap();
+            let mut rest = Vec::new();
+            BufReader::new(r).read_to_end(&mut rest).await.unwrap();
+            assert!(rest.is_empty(), "answered {:?}: {}", first.chars().take(30).collect::<String>(), String::from_utf8_lossy(&rest));
+        }
+    }
+
+    #[tokio::test]
+    async fn calls_for_tools_that_were_not_offered_are_counted_by_name_once_each_and_bounded_and_taking_them_starts_again() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        assert!(b.take_refusals().is_empty());
+        for (i, name) in ["write_file", "write_file", "write_file"].iter().chain(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"].iter()).enumerate() {
+            ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": name, "arguments": {"secret": "never recorded"}}})).await;
+        }
+        ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "x".repeat(200), "arguments": {}}})).await;
+        let got = b.take_refusals();
+        assert_eq!(got.not_offered, 16, "every refused call is counted");
+        assert_eq!(got.tools.len(), MAX_REFUSED_NAMES, "but only the first few distinct names are kept");
+        assert_eq!(got.tools[0], "write_file");
+        assert_eq!(got.tools.iter().filter(|t| *t == "write_file").count(), 1, "a name once, however often it was asked for");
+        assert!(!format!("{:?}", got).contains("never recorded"), "arguments are never kept");
+        assert!(b.take_refusals().is_empty(), "taking resets the count");
+        // The offered tool is not a refusal.
+        ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).await;
+        assert!(b.take_refusals().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_name_cut_to_sixty_characters_is_what_is_kept_of_a_refused_tool() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ü".repeat(200), "arguments": {}}})).await;
+        assert_eq!(b.take_refusals().tools, vec!["ü".repeat(60)]);
+    }
+
+    #[tokio::test]
+    async fn connections_that_do_not_open_with_the_token_are_counted_but_one_that_just_closes_is_not() {
+        let (b, _rx) = Bridge::start(defs(), String::new(), Path::new("/x/delphi")).await.unwrap();
+        // A wrong token, a first line that is not JSON, and one that is far too long.
+        for first in ["{\"token\":\"wrong\"}\n".to_string(), "hello\n".to_string(), format!("{}\n", "x".repeat(400))] {
+            let (r, mut w) = UnixStream::connect(b.socket()).await.unwrap().into_split();
+            w.write_all(first.as_bytes()).await.unwrap();
+            let mut rest = Vec::new();
+            BufReader::new(r).read_to_end(&mut rest).await.unwrap(); // the server closes, which is how we know it has judged the line
+        }
+        // A probe that connects and goes away without a word is not an attack on the token.
+        drop(UnixStream::connect(b.socket()).await.unwrap());
+        let (mut r, mut w) = client(&b, b.token()).await;
+        assert!(ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).await["result"].is_object());
+        let got = b.take_refusals();
+        assert_eq!((got.bad_connections, got.not_offered), (3, 0));
+    }
+
+    #[tokio::test]
+    async fn every_offered_tool_is_listed_in_the_order_given_and_only_those_can_be_called() {
+        let mut offered = defs();
+        offered.push(ToolDef { name: "name_thread".into(), description: "Name a thread.".into(), input_schema: json!({"type": "object", "properties": {"tasks": {"type": "array", "items": {"type": "string"}}}}) });
+        let (b, mut rx) = Bridge::start(offered, String::new(), Path::new("/x/delphi")).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        let list = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).await;
+        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["timer", "name_thread"]);
+        // A name that differs only by case or by the CLI's prefix is not the tool: the span is asked for exact names.
+        for wrong in ["Timer", "mcp__delphi__timer", "timer ", ""] {
+            let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": wrong, "arguments": {}}})).await;
+            assert_eq!(resp["result"]["isError"], true, "{:?}", wrong);
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     fn agy_policy() -> HookPolicy {

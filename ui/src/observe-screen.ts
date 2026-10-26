@@ -20,7 +20,8 @@ export type RoleTools = { calls: number; errors: number; last: string; streak?: 
 export type OState = {
   agents: Record<string, AgentRow>;
   nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
-  tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string }>;
+  /** `tokens` is everything the task's agents used, counted as the mission total is; a daemon that predates it sends none. */
+  tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string; tokens?: Tokens }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
   sessions?: { id: string; reason: string; started_ms: number; turns: number }[];
   /** Models that are out right now, and tasks running on a stand-in for one (`specs/035` D-7). */

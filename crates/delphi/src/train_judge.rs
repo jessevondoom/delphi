@@ -275,7 +275,7 @@ pub struct JudgeCall {
 /// declared `expect_models` is an error: it did not measure that judge.
 pub fn call_judge(cfg: &JuryConfig, judge: &Arm, prompt: &str, index: usize) -> Result<JudgeCall, String> {
     let template = judge.template_home.as_ref().ok_or("a judge needs a template_home")?;
-    let dir = cfg.work_dir.join("judging").join(format!("{:04}-{}", index, judge.name));
+    let dir = cfg.work_dir.join(format!("j{:04}", index));
     let (home, repo) = (dir.join("home"), dir.join("repo"));
     copy_tree(template, &home)?;
     let ws_dir = home.join("workspaces").join(&cfg.workspace);
@@ -287,7 +287,11 @@ pub fn call_judge(cfg: &JuryConfig, judge: &Arm, prompt: &str, index: usize) -> 
     let text = fs::read_to_string(&cfg_path).map_err(|e| format!("template home has no workspace `{}` ({})", cfg.workspace, e))?;
     fs::write(&cfg_path, set_projects(&text, &repo)?).map_err(|e| e.to_string())?;
     let mut cmd = Command::new(&cfg.delphi_bin);
-    cmd.args(["run", &format!("@red-team {}", prompt), "--json", "--on-card", "deny", "--workspace", &cfg.workspace, "--home"]).arg(&home).args(["--budget", &format!("{:.2}", cfg.call_cap_usd), "--timeout", &format!("{}s", cfg.timeout.as_secs())]);
+    // Delphi refuses an inline message over 8 KB ("pass pointers, not content"), so the pair goes in a file of the judge's
+    // project and the message points at it.
+    fs::write(repo.join("judge-input.md"), prompt).map_err(|e| e.to_string())?;
+    let message = "@red-team Read @project/repo/judge-input.md: it holds a task, a reference record and two candidate answers, and says how to judge them. Reply with ONLY the JSON object it asks for.";
+    cmd.args(["run", message, "--json", "--on-card", "deny", "--workspace", &cfg.workspace, "--home"]).arg(&home).args(["--budget", &format!("{:.2}", cfg.call_cap_usd), "--timeout", &format!("{}s", cfg.timeout.as_secs())]);
     cmd.current_dir(&repo).env_remove("DELPHI_HOME").env_remove("DELPHI_WORKSPACE");
     for (k, v) in &cfg.env {
         cmd.env(k, v);
@@ -472,11 +476,15 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
         eprintln!("delphi train judge: --work-dir <the run's work dir> and --judges-file <judges.toml> ([[arm]] tables, one per judge) are required");
         return 2;
     };
-    let Some(budget) = flag(args, "--budget-usd").and_then(|b| b.parse::<f64>().ok()).filter(|b| *b > 0.0) else {
-        eprintln!("delphi train judge: --budget-usd <dollars> is required; judging is always capped");
+    let Some(budget) = crate::train::session_budget(args) else {
+        eprintln!("delphi train judge: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each call's cap still applies)");
         return 2;
     };
     let work = PathBuf::from(work);
+    if let Err(e) = crate::train_run::sock_fits(&work.join("j9999").join("home")) {
+        eprintln!("delphi train judge: {}", e);
+        return 2;
+    }
     if !work.join(crate::train::MARKER).is_file() || !work.join("bundles/key.jsonl").is_file() {
         eprintln!("delphi train judge: {} is not a `delphi train run` work directory with bundles", work.display());
         return 2;
@@ -504,8 +512,8 @@ pub fn cli(args: &[String], cases: &[&crate::train::Case]) -> i32 {
     };
     let (rows, skipped) = run_jury(&cfg, cases, &JuryRun { judges, budget_usd: budget, only_case: flag(args, "--case") });
     let (ok, failed) = (rows.iter().filter(|r| r.verdict.is_some()).count(), rows.iter().filter(|r| r.verdict.is_none()).count());
-    let spent: f64 = rows.iter().map(|r| r.cost_usd).sum();
-    println!("{} judge call(s): {} gave a verdict, {} did not; ${:.2} spent of ${:.2}", rows.len(), ok, failed, spent, budget);
+    let spent: f64 = rows.iter().map(|r| r.cost_usd).sum::<f64>().max(0.0);
+    println!("{} judge call(s): {} gave a verdict, {} did not; ${:.2} spent of {}", rows.len(), ok, failed, spent, crate::train::show_budget(budget));
     for s in &skipped {
         println!("not judged (budget): {}", s);
     }
@@ -600,7 +608,7 @@ mod tests {
 import os, shutil, sys, json
 a = sys.argv
 home = a[a.index('--home') + 1]; ws = a[a.index('--workspace') + 1]
-prompt = a[2]
+prompt = open("judge-input.md").read()
 x = prompt.index('=== CANDIDATE X ===')
 first_is_alpha = prompt.index('ALPHA', x) < prompt.index('BETA', x)
 pick = os.environ.get('FAKE_PICK', 'first')

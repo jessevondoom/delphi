@@ -39,6 +39,74 @@ routing is configuration) and may declare `expect_models`, the model ids or pref
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
 in and out, calls and cost per model, attempts and mid-run model swaps.
 
+## Reviewing a truth pack (your job before any research run)
+
+Each research case has a generated **review sheet** beside its pack: open `truth/review-sheet.md` in
+`suites/research/cases/<id>/truth/` (`motogp-2027-regs`, `mycorrhizal-networks`, `phantom-paper`). It puts every fact beside
+its source link, the verbatim quote and the patterns, lists the traps, sources and rubric, and shows the judgement questions
+with room for your own view. Regenerate after any change with `delphi train truth-sheet --all`.
+
+```sh
+delphi train truth-sheet --case research/phantom-paper          # print the sheet
+delphi train truth-check --case research/phantom-paper --text-file answer.md   # what the checks make of an answer you wrote
+delphi train verify --case research/phantom-paper --by "Your Name"            # when you are satisfied
+```
+
+`verify` records your name, the date and a **fingerprint** of everything you checked (facts, traps, sources and extracts,
+rubric, insights). Any later edit makes the stamp stale and the pack a draft again.
+
+**Facts and judgement are different things to review.** Facts are checked against their sources (the pack already confirmed each
+quote appears in its extract; your part is whether the claim means what the quote says and the source is good enough).
+**Judgement calls** (`truth/insights.toml`) are strategic questions or insights where reasonable people differ: the assistant
+wrote a starting view (never shown to any judge), and **only the `operator_view` you write reaches a judge, as a view, not a
+fact**. That is how the study tests the jury on judgement and not only on recall: reward reasoning toward your view or a
+well-argued alternative, penalize unsupported certainty.
+
+## Which models can I use right now?
+
+```sh
+python3 -I dev/train/avail.py --workspace <name>                 # no model is called: ~2 s
+python3 -I dev/train/avail.py --workspace <name> --live --json avail.json   # one tiny call per model, in parallel: ~40 s
+```
+
+It checks three layers, cheapest first, and only calls a model where nothing cheaper can answer. **Offline**: the workspace's
+tiers and the saved pool state (a model marked exhausted until a time). **Deterministic**: `claude auth status`, `agy models`
+(the account's catalogue), Ollama's `/api/tags`, and the model-list endpoint of any API provider whose key is in the
+environment; these say whether a model is installed and offered, never whether quota is left, because a listing cannot see a
+quota. **Live** (`--live`): the Claude CLI reports its five-hour and seven-day utilization as part of the call, and agy says
+`quota reached ... Resets in 101h`. A model with no cheaper signal is `unknown` until `--live`. Read-only on the Delphi home;
+no credential is printed. The JSON feeds the arm template homes.
+
+Subscription seats have no list endpoint to ask. If a deterministic quota endpoint for a subscription is wanted (it would
+avoid even the one-token calls), it would read the CLI's OAuth token from the keychain, so it is not built unprompted.
+
+## Building the arm homes
+
+```sh
+python3 -I dev/train/avail.py --workspace <name> --live --json avail.json
+delphi train arms init --source-home ~/.delphi --workspace <name> --defs dev/train/arms-defs.toml \
+    --avail avail.json --out /path/to/new/dir
+delphi train run --arms-file /path/to/new/dir/arms.toml --work-dir /path/to/run --no-session-cap --allow-unverified ...
+```
+
+Each arm is a throwaway copy of your workspace's configuration and ratified files, with the tier models, `[access]` and
+`role_family` rewritten as `arms-defs.toml` says and the pinned hash of those blocks re-sealed (as `/ratify` would). It carries
+no missions, state, worktrees, or your own lessons, heuristics and profile, so two arms differ only by their staffing. Your
+home is only read. Each built home is loaded the way the daemon loads it and the models its pool would use are printed, so a
+typo or an unreachable endpoint shows up here. An arm whose model `avail.json` says is exhausted or unlisted is skipped with
+the reset time. `expect_models` in the generated `arms.toml` holds each model's alias and its `claude-` long form (the Claude
+CLI may report either; the first live run confirms which).
+
+**Use a short `--work-dir`** (at most 59 characters, such as `/tmp/t1`): the daemon's Unix socket lives inside each run's home
+and a socket path is limited to about 104 bytes. The commands refuse a longer one up front. Runs are `<work>/r001`, `r002`...
+(each row's `dir` says which), judge calls `<work>/j0001`...
+
+## Spending: caps
+
+`train run` and `train judge` take `--budget-usd N`, or **`--no-session-cap`** to drop the session total on purpose. The cap on
+each case (`max_cost_usd`, passed to `delphi run --budget`) and on each judge call stays in both modes: it is what stops one
+runaway run. The runner also kills a run at its timeout.
+
 ## Judging a run (`specs/037` §6)
 
 A `delphi train run` leaves a bundle per graded run in `<work>/bundles/`, filed under a blind id with the arm and model

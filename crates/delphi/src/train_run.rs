@@ -287,6 +287,19 @@ pub fn ratify_spec(ws_dir: &Path, name: &str, text: &str) -> Result<(), String> 
     lock::write(&lock_path, &lk).map_err(|e| e.to_string())
 }
 
+/// The longest a home path may be for the daemon's sockets to bind: they live at `<home>/run/<12 hex>.narrator.sock`, and a Unix
+/// socket path is limited to about 104 bytes (macOS) and 108 (Linux). The first live run failed on exactly this.
+pub const MAX_HOME_PATH: usize = 100 - "/run/".len() - "e36f9b156d7d.narrator.sock".len();
+
+/// Refuse a home whose socket path would not fit, with the fix, instead of a daemon that dies before it is ready.
+pub fn sock_fits(home: &Path) -> Result<(), String> {
+    let n = home.to_string_lossy().len();
+    if n > MAX_HOME_PATH {
+        return Err(format!("the run's home path is {} characters and the daemon's socket would not fit (a Unix socket path is limited to about 104); use a shorter --work-dir ({}...: at most {} characters, such as /tmp/t1)", n, home.to_string_lossy().chars().take(24).collect::<String>(), MAX_HOME_PATH.saturating_sub("/r000/home".len())));
+    }
+    Ok(())
+}
+
 // ── one run ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -307,6 +320,8 @@ pub struct Row {
     /// `build.attempt` events of the run's task (0 for work that never builds) and models the pool swapped in mid-run.
     pub attempts: u32,
     pub promotions: u32,
+    /// The run's directory under the work directory (short, so the daemon's socket path fits; see [`sock_fits`]).
+    pub dir: String,
     pub error: Option<String>,
 }
 
@@ -355,7 +370,7 @@ impl Row {
     pub fn to_json(&self) -> Value {
         json!({"case": self.case, "arm": self.arm, "seed": self.seed, "exit_code": self.exit_code, "wall_secs": (self.wall_secs * 10.0).round() / 10.0,
                "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error,
-               "attempts": self.attempts, "promotions": self.promotions,
+               "attempts": self.attempts, "promotions": self.promotions, "dir": self.dir,
                "tokens_in": self.usage.values().map(ModelUse::tokens_in).sum::<u64>(), "tokens_out": self.usage.values().map(ModelUse::tokens_out).sum::<u64>(),
                "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>()})
     }
@@ -458,7 +473,7 @@ fn summary_of(stdout: &str) -> Option<Value> {
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, error: None };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -476,7 +491,8 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     if case.truth.as_ref().is_some_and(|t| !t.verified()) && !cfg.allow_unverified {
         return Err("the truth pack is a draft (not verified by the operator); pass --allow-unverified to run it anyway".into());
     }
-    let dir = cfg.work_dir.join(format!("{:03}-{}-{}-s{}", index, arm.name, case.id, seed));
+    let dir = cfg.work_dir.join(format!("r{:03}", index));
+    row.dir = format!("r{:03}", index);
     let (home, repo) = (dir.join("home"), dir.join("repo"));
     copy_tree(arm.template_home.as_ref().unwrap_or(&cfg.template_home), &home)?;
     let ws_dir = home.join("workspaces").join(&cfg.workspace);
@@ -642,8 +658,8 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 /// `delphi train run ...`; `cases` are already loaded and validated by the caller.
 pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
-    let Some(budget) = flag(args, "--budget-usd").and_then(|b| b.parse::<f64>().ok()).filter(|b| *b > 0.0) else {
-        eprintln!("delphi train run: --budget-usd <dollars> is required; a run is always capped");
+    let Some(budget) = crate::train::session_budget(args) else {
+        eprintln!("delphi train run: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each case's own cap still applies)");
         return 2;
     };
     let arms_file = flag(args, "--arms-file");
@@ -654,6 +670,7 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         return 2;
     };
     let (template, work) = (PathBuf::from(template.unwrap_or_default()), PathBuf::from(work));
+
     let mut arms = match &arms_file {
         Some(f) => match parse_arms(Path::new(f)) {
             Ok(a) => a,
@@ -685,7 +702,7 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         arms.push(Arm::new("candidate", Some(PathBuf::from(o))));
     }
     let worst = train::worst_case_usd(cases, seeds) * arms.len() as f64;
-    println!("{} case(s) x {} seed(s) x {} arm(s): at most ${:.2} against a budget of ${:.2}", cases.len(), seeds, arms.len(), worst, budget);
+    println!("{} case(s) x {} seed(s) x {} arm(s): at most ${:.2} against {}", cases.len(), seeds, arms.len(), worst, crate::train::show_budget(budget));
     if args.iter().any(|a| a == "--dry-run") {
         println!("(dry run: nothing was started; `delphi train plan` lists the cases)");
         return 0;
@@ -705,6 +722,10 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         return 2;
     }
     let delphi_bin = flag(args, "--delphi-bin").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| PathBuf::from("delphi"));
+    if let Err(e) = sock_fits(&work.join("r999").join("home")) {
+        eprintln!("delphi train run: {}", e);
+        return 2;
+    }
     if let Err(e) = train::prepare_work_home(&work) {
         eprintln!("delphi train run: {}", e);
         return 2;
@@ -808,9 +829,9 @@ mod tests {
         assert_eq!((rows[0].passed, rows[0].failed_checks.clone(), rows[0].cost_usd), (Some(true), vec![], 0.5), "{:?}", rows[0]);
         // The template was copied, not used: its config still points elsewhere; the run's home points at its own repo.
         assert!(fs::read_to_string(cfg.template_home.join("workspaces/train/config.toml")).unwrap().contains("/somewhere/else"));
-        let run_cfg = fs::read_to_string(cfg.work_dir.join("001-baseline-c1-s1").join("home").join("workspaces/train/config.toml")).unwrap();
-        assert!(run_cfg.contains("001-baseline-c1-s1/repo"), "{}", run_cfg);
-        assert!(cfg.work_dir.join("001-baseline-c1-s1/repo/.git").is_dir() && cfg.work_dir.join("001-baseline-c1-s1/repo/keep.txt").is_file());
+        let run_cfg = fs::read_to_string(cfg.work_dir.join("r001").join("home").join("workspaces/train/config.toml")).unwrap();
+        assert!(run_cfg.contains("r001/repo"), "{}", run_cfg);
+        assert!(cfg.work_dir.join("r001/repo/.git").is_dir() && cfg.work_dir.join("r001/repo/keep.txt").is_file());
     }
 
     /// A research case with a truth pack beside it (verified or a draft).
@@ -839,7 +860,7 @@ mod tests {
         assert_eq!((rows[0].passed, rows[0].failed_checks.clone()), (Some(true), vec![]), "{:?}", rows[0]);
         assert!(rows[0].notes[0].contains("fact recall 100%"), "{:?}", rows[0].notes);
         // The task is addressed by role and works in an empty repository (a research case has no fixture).
-        let repo = config.work_dir.join("001-baseline-q1-s1").join("repo");
+        let repo = config.work_dir.join("r001").join("repo");
         assert!(repo.join(".git").is_dir() && fs::read_dir(&repo).unwrap().flatten().all(|e| e.file_name() == ".git"));
     }
 
@@ -966,8 +987,8 @@ mod tests {
         train::prepare_work_home(&config.work_dir).unwrap();
         let (rows, _) = run_all(&config, &[&c]);
         assert_eq!(rows.len(), 2);
-        assert!(!config.work_dir.join("001-baseline-c1-s1/home/MARK").exists());
-        assert_eq!(fs::read_to_string(config.work_dir.join("002-second-c1-s1/home/MARK")).unwrap(), "second");
+        assert!(!config.work_dir.join("r001/home/MARK").exists());
+        assert_eq!(fs::read_to_string(config.work_dir.join("r002/home/MARK")).unwrap(), "second");
     }
 
     #[test]
@@ -1068,7 +1089,7 @@ mod tests {
         train::prepare_work_home(&config.work_dir).unwrap();
         let (rows, _) = run_all(&config, &[&c]);
         assert_eq!((rows[0].passed, rows[0].failed_checks.clone(), rows[0].error.clone()), (Some(true), vec![], None), "{:?}", rows[0]);
-        let run = config.work_dir.join("001-baseline-hc-s1");
+        let run = config.work_dir.join("r001");
         let log = Command::new("git").args(["log", "--format=%s"]).current_dir(run.join("repo")).output().unwrap();
         let log = String::from_utf8_lossy(&log.stdout).to_string();
         assert!(log.contains("fixture") && log.contains("solve") && !log.contains("secret reference change") && !log.contains("base"), "no history of the real project: {}", log);
@@ -1183,10 +1204,10 @@ mod tests {
         assert_eq!(rows.len(), 2);
         let load = |run: &str| delphi_engine::workspace::WorkspacePaths::new(&config.work_dir.join(run).join("home"), "train").load_manifest("builder");
         // The overlay is loaded by the daemon's own loader, hash check included.
-        assert!(load("002-candidate-c1-s1").is_ok(), "{:?}", load("002-candidate-c1-s1").err());
-        assert!(fs::read_to_string(config.work_dir.join("002-candidate-c1-s1").join("home").join("workspaces/train/local/ratified/agents/builder/AGENT.md")).unwrap().contains("Candidate note"));
+        assert!(load("r002").is_ok(), "{:?}", load("r002").err());
+        assert!(fs::read_to_string(config.work_dir.join("r002").join("home").join("workspaces/train/local/ratified/agents/builder/AGENT.md")).unwrap().contains("Candidate note"));
         // The baseline arm and the template keep the original text.
-        for p in [config.work_dir.join("001-baseline-c1-s1/home"), config.template_home.clone()] {
+        for p in [config.work_dir.join("r001/home"), config.template_home.clone()] {
             let text = fs::read_to_string(p.join("workspaces/train/local/ratified/agents/builder/AGENT.md")).unwrap();
             assert!(!text.contains("Candidate note"), "{}", p.display());
         }
@@ -1211,7 +1232,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, error: None };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);
@@ -1229,6 +1250,47 @@ mod tests {
         assert_eq!(out, "[workspace]\nname = \"x\"\nprojects = [\"/tmp/r\\\"q\"]\n[access]\nk = 1\n");
         assert!(set_projects("x = 1\n", Path::new("/r")).is_err());
         assert!(set_projects("projects = []\nprojects = []\n", Path::new("/r")).is_err());
+    }
+
+    #[test]
+    fn a_work_directory_too_long_for_the_daemons_socket_is_refused_up_front_with_the_fix() {
+        assert!(sock_fits(Path::new("/tmp/t1/r001/home")).is_ok());
+        let long = format!("/{}/r001/home", "x".repeat(80));
+        let e = sock_fits(Path::new(&long)).unwrap_err();
+        assert!(e.contains("socket would not fit") && e.contains("shorter --work-dir"), "{}", e);
+        assert_eq!(MAX_HOME_PATH, 69, "100 minus /run/ and a 12-hex .narrator.sock name");
+        // The command refuses before creating anything.
+        let t = tempfile::tempdir().unwrap();
+        let c = case(t.path(), CHECKS);
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (tpl, work) = (template(t.path()), t.path().join("w".repeat(60)));
+        assert_eq!(cli(&a(&["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()]), &[&c]), 2);
+        assert!(!work.exists());
+    }
+
+    #[test]
+    fn no_session_cap_is_a_deliberate_choice_that_keeps_every_cases_own_cap() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(crate::train::session_budget(&a(&["run"])), None, "neither flag: refused");
+        assert_eq!(crate::train::session_budget(&a(&["run", "--budget-usd", "5"])), Some(5.0));
+        assert_eq!(crate::train::session_budget(&a(&["run", "--budget-usd", "0"])), None);
+        assert_eq!(crate::train::session_budget(&a(&["run", "--no-session-cap"])), Some(f64::INFINITY));
+        assert!(crate::train::show_budget(f64::INFINITY).contains("each case's own cap still applies") && crate::train::show_budget(2.5) == "$2.50");
+        // With no session total every run is started; each still carries its case's cap to `delphi run --budget`.
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &ladder_log());
+        let c = case(t.path(), CHECKS);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], f64::INFINITY);
+        config.seeds = 4;
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, skipped) = run_all(&config, &[&c]);
+        assert_eq!((rows.len(), skipped.len()), (4, 0));
+        let args = fs::read_to_string(config.work_dir.join("r004").join("args.txt")).ok();
+        assert!(args.is_none() || args.unwrap().contains("--budget 2.00"));
+        // The command accepts the flag in place of a budget.
+        let (tpl, work) = (template(t.path()), t.path().join("fresh"));
+        let base = ["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap(), "--dry-run"];
+        assert_eq!(cli(&a(&base), &[&c]), 0);
     }
 
     #[test]
