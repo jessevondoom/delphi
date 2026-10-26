@@ -1,0 +1,23 @@
+# Research case R2 (specs/037 section 3). The prompt is written as an ordinary request; nothing says it is a test.
+id = "mycorrhizal-networks"
+suite = "research"
+kind = "research"
+role = "strategist"
+split = "dev"
+tags = ["research", "science", "contested-evidence"]
+max_cost_usd = 4.0
+timeout_secs = 1200
+prompt = "A friend told me that trees in a forest 'talk' to each other and share food through underground fungal networks, and that big 'mother trees' look after their young this way. Is that actually established? Please look at what the research really shows, including any strong criticism of the popular version, and give me an honest summary of how confident we can be. Cite the papers."
+
+# A lower bound on the checklist; the jury reads the rest against the rubric.
+[[check]]
+kind = "fact_recall"
+min = 0.5
+
+[[check]]
+kind = "no_traps"
+
+[[check]]
+kind = "text_matches"
+pattern = "https?://|doi\\.org|10\\.\\d{4}/"
+present = true

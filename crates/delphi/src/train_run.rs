@@ -128,10 +128,15 @@ fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
 
 /// A fresh repository holding exactly the case's fixture, committed.
 fn make_repo(case: &Case, repo: &Path) -> Result<(), String> {
-    copy_tree(&case.dir.join("fixture"), repo)?;
+    if case.dir.join("fixture").is_dir() {
+        copy_tree(&case.dir.join("fixture"), repo)?;
+    } else {
+        // A research case has no fixture; the workspace still needs a project, so it gets an empty repository.
+        fs::create_dir_all(repo).map_err(|e| e.to_string())?;
+    }
     git(repo, &["init", "-q", "-b", "main"])?;
     git(repo, &["add", "-A"])?;
-    git(repo, &["commit", "-q", "-m", "fixture"])
+    git(repo, &["commit", "-q", "--allow-empty", "-m", "fixture"])
 }
 
 // ── checks ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -141,6 +146,39 @@ struct Ctx<'a> {
     record: Option<TaskRecord>,
     fixture: &'a Path,
     repo: &'a Path,
+    /// What the task delivered: its final answer and any Markdown it wrote in the mission (`specs/037` §5.1).
+    deliverable: String,
+    truth: Option<&'a crate::train_truth::Truth>,
+}
+
+/// The task's final `task.output` text plus every Markdown file the mission wrote (reports, notes), in that order.
+pub fn deliverable_of(events: &[EventEnvelope], task: Option<&str>, mission_dir: &Path) -> String {
+    let mut out = String::new();
+    if let Some(e) = events.iter().rev().find(|e| e.kind == "task.output" && (task.is_none() || e.task_id.as_deref() == task)) {
+        out.push_str(e.payload["text"].as_str().unwrap_or(""));
+    }
+    let mut files = Vec::new();
+    collect_md(mission_dir, &mut files);
+    files.sort();
+    for f in files {
+        if let Ok(t) = fs::read_to_string(&f) {
+            out.push_str("\n\n");
+            out.push_str(&t);
+        }
+    }
+    out
+}
+
+fn collect_md(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let (p, name) = (e.path(), e.file_name().to_string_lossy().to_string());
+        match e.file_type() {
+            Ok(t) if t.is_dir() && name != "events" && !name.starts_with('.') => collect_md(&p, out),
+            Ok(t) if t.is_file() && name.ends_with(".md") => out.push(p),
+            _ => {}
+        }
+    }
 }
 
 fn outcome_word(r: &Option<TaskRecord>) -> &'static str {
@@ -184,6 +222,28 @@ fn eval_check(c: &Check, ctx: &Ctx) -> Result<(), String> {
             (_, Err(_)) => Err(format!("{} is missing after the run", p)),
             (Err(_), _) => Err(format!("{} is not in the fixture", p)),
         },
+        Check::FactRecall { min } => {
+            let Some(t) = ctx.truth else { return Err("no truth pack to compare against".into()) };
+            let r = t.recall(&ctx.deliverable);
+            if r.fraction + 1e-9 >= *min {
+                Ok(())
+            } else {
+                Err(format!("fact recall {:.0}%, wanted {:.0}% (missing: {})", r.fraction * 100.0, min * 100.0, r.missing.join(", ")))
+            }
+        }
+        Check::NoTraps => {
+            let Some(t) = ctx.truth else { return Err("no truth pack to compare against".into()) };
+            let hits = t.trap_hits(&ctx.deliverable);
+            if hits.is_empty() { Ok(()) } else { Err(format!("fell into trap(s): {}", hits.join(", "))) }
+        }
+        Check::TextMatches { pattern, present } => {
+            let found = regex::RegexBuilder::new(pattern).case_insensitive(true).build().map(|r| r.is_match(&ctx.deliverable)).unwrap_or(false);
+            if found == *present {
+                Ok(())
+            } else {
+                Err(format!("pattern `{}` {} in the deliverable", pattern, if *present { "is missing" } else { "appears" }))
+            }
+        }
         Check::FileExists(p) => ctx.repo.join(p).is_file().then_some(()).ok_or_else(|| format!("{} does not exist", p)),
         Check::FileContains { path, text } => match fs::read_to_string(ctx.repo.join(path)) {
             Ok(t) if t.contains(text.as_str()) => Ok(()),
@@ -206,13 +266,15 @@ pub struct Row {
     /// `None` when the run did not produce a log to check (an infrastructure problem), which is not a failed case.
     pub passed: Option<bool>,
     pub failed_checks: Vec<String>,
+    /// Measurements worth reading beside the verdict, such as fact recall (`specs/037`).
+    pub notes: Vec<String>,
     pub error: Option<String>,
 }
 
 impl Row {
     pub fn to_json(&self) -> Value {
         json!({"case": self.case, "arm": self.arm, "seed": self.seed, "exit_code": self.exit_code, "wall_secs": (self.wall_secs * 10.0).round() / 10.0,
-               "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "error": self.error})
+               "cost_usd": (self.cost_usd * 10000.0).round() / 10000.0, "passed": self.passed, "failed_checks": self.failed_checks, "notes": self.notes, "error": self.error})
     }
 }
 
@@ -235,6 +297,8 @@ pub struct Config {
     pub env: Vec<(String, String)>,
     /// Added to each case's own timeout before the runner kills the process.
     pub kill_grace: Duration,
+    /// Run a research case whose truth pack the operator has not verified (a draft).
+    pub allow_unverified: bool,
 }
 
 /// Run `child` to completion or kill it at `deadline`; output goes to files so a full pipe never blocks it.
@@ -263,7 +327,7 @@ fn summary_of(stdout: &str) -> Option<Value> {
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), error: None };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), error: None };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -274,6 +338,9 @@ pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) ->
 fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row: &mut Row) -> Result<(), String> {
     if case.kind == Kind::Scenario {
         return Err("scenario cases are not run yet (task and probe cases only)".into());
+    }
+    if case.truth.as_ref().is_some_and(|t| !t.verified()) && !cfg.allow_unverified {
+        return Err("the truth pack is a draft (not verified by the operator); pass --allow-unverified to run it anyway".into());
     }
     let dir = cfg.work_dir.join(format!("{:03}-{}-{}-s{}", index, arm.name, case.id, seed));
     let (home, repo) = (dir.join("home"), dir.join("repo"));
@@ -288,7 +355,8 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
 
     let prompt = case.prompt.clone().unwrap_or_default();
-    let input = if case.role == "builder" { format!("/build {}", prompt) } else { prompt };
+    // A builder case goes through the build flow; any other role is addressed by name, as in the console.
+    let input = if case.role == "builder" { format!("/build {}", prompt) } else { format!("@{} {}", case.role, prompt) };
     let mut cmd = Command::new(&cfg.delphi_bin);
     cmd.args(["run", &input, "--json", "--on-card", "deny", "--workspace", &cfg.workspace, "--home"]).arg(&home).args(["--budget", &format!("{:.2}", case.max_cost_usd), "--timeout", &format!("{}s", case.timeout_secs)]);
     cmd.current_dir(&repo).env_remove("DELPHI_HOME").env_remove("DELPHI_WORKSPACE");
@@ -320,7 +388,16 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let records = task_records(&events);
     let task = summary["task_id"].as_str();
     let record = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).cloned();
-    let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo };
+    let deliverable = deliverable_of(&events, task, &ws_dir.join("local/missions").join(mission));
+    let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo, deliverable, truth: case.truth.as_ref() };
+    if let Some(t) = ctx.truth {
+        let r = t.recall(&ctx.deliverable);
+        row.notes.push(format!("fact recall {:.0}% ({} of {} facts{})", r.fraction * 100.0, r.stated.len(), t.facts.len(), if r.missing.is_empty() { String::new() } else { format!("; missing {}", r.missing.join(", ")) }));
+        let traps = t.trap_hits(&ctx.deliverable);
+        if !traps.is_empty() {
+            row.notes.push(format!("traps: {}", traps.join(", ")));
+        }
+    }
     row.failed_checks = case.checks.iter().filter_map(|c| eval_check(c, &ctx).err()).collect();
     row.passed = Some(row.failed_checks.is_empty());
     Ok(())
@@ -448,12 +525,17 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: no cases chosen");
         return 1;
     }
+    let drafts: Vec<String> = cases.iter().filter(|c| c.truth.as_ref().is_some_and(|t| !t.verified())).map(|c| format!("{}/{}", c.suite, c.id)).collect();
+    if !drafts.is_empty() && !args.iter().any(|a| a == "--allow-unverified") {
+        eprintln!("delphi train run: these cases have a truth pack the operator has not verified: {}\n  verify the pack (set `verified_by` and `verified_on` in its meta.toml) or pass --allow-unverified", drafts.join(", "));
+        return 2;
+    }
     let delphi_bin = flag(args, "--delphi-bin").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| PathBuf::from("delphi"));
     if let Err(e) = train::prepare_work_home(&work) {
         eprintln!("delphi train run: {}", e);
         return 2;
     }
-    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60) };
+    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified") };
     let (rows, skipped) = run_all(&cfg, cases);
     let out_path = flag(args, "--out").map(PathBuf::from).unwrap_or_else(|| work.join("rows.jsonl"));
     let lines: String = rows.iter().map(|r| r.to_json().to_string() + "\n").collect();
@@ -526,7 +608,7 @@ mod tests {
     }
 
     fn cfg(root: &Path, canned: &Path, arms: Vec<Arm>, budget: f64) -> Config {
-        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5) }
+        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false }
     }
 
     fn baseline() -> Arm {
@@ -555,6 +637,85 @@ mod tests {
         let run_cfg = fs::read_to_string(cfg.work_dir.join("001-baseline-c1-s1").join("home").join("workspaces/train/config.toml")).unwrap();
         assert!(run_cfg.contains("001-baseline-c1-s1/repo"), "{}", run_cfg);
         assert!(cfg.work_dir.join("001-baseline-c1-s1/repo/.git").is_dir() && cfg.work_dir.join("001-baseline-c1-s1/repo/keep.txt").is_file());
+    }
+
+    /// A research case with a truth pack beside it (verified or a draft).
+    fn research_case(root: &Path, verified: bool, checks: &str) -> Case {
+        let dir = root.join("suites/r/cases/q1");
+        fs::create_dir_all(&dir).unwrap();
+        crate::train_truth::tests::pack(&dir);
+        if verified {
+            fs::write(dir.join("truth/meta.toml"), "as_of = \"2026-10-01\"\nverified_by = \"operator\"\nverified_on = \"2026-10-26\"\n").unwrap();
+        }
+        fs::write(dir.join("case.toml"), format!("id = \"q1\"\nsuite = \"r\"\nkind = \"research\"\nrole = \"strategist\"\nsplit = \"dev\"\nmax_cost_usd = 2.0\ntimeout_secs = 30\nprompt = \"What changes in 2027?\"\n{}", checks)).unwrap();
+        train::load_case(&dir, "r").unwrap()
+    }
+
+    const RESEARCH_CHECKS: &str = "[[check]]\nkind = \"fact_recall\"\nmin = 0.6\n[[check]]\nkind = \"no_traps\"\n[[check]]\nkind = \"text_matches\"\npattern = \"cannot find|no such\"\npresent = false\n";
+
+    #[test]
+    fn a_research_case_is_graded_on_what_the_task_delivered_against_its_truth_pack() {
+        let t = tempfile::tempdir().unwrap();
+        let good = "From 2027 the bikes use 850cc engines and the calendar has 20 rounds.";
+        let canned = mission(t.path(), &[("task.output", json!({"status": "done", "text": good})), ("task.completed", json!({"status": "done"}))]);
+        let c = research_case(t.path(), true, RESEARCH_CHECKS);
+        let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!((rows[0].passed, rows[0].failed_checks.clone()), (Some(true), vec![]), "{:?}", rows[0]);
+        assert!(rows[0].notes[0].contains("fact recall 100%"), "{:?}", rows[0].notes);
+        // The task is addressed by role and works in an empty repository (a research case has no fixture).
+        let repo = config.work_dir.join("001-baseline-q1-s1").join("repo");
+        assert!(repo.join(".git").is_dir() && fs::read_dir(&repo).unwrap().flatten().all(|e| e.file_name() == ".git"));
+    }
+
+    #[test]
+    fn a_research_answer_that_misses_facts_or_falls_into_a_trap_fails_in_words() {
+        let t = tempfile::tempdir().unwrap();
+        let bad = "The new rules ban V4 engines. I cannot find more.";
+        let canned = mission(t.path(), &[("task.output", json!({"status": "done", "text": bad})), ("task.completed", json!({"status": "done"}))]);
+        let c = research_case(t.path(), true, RESEARCH_CHECKS);
+        let config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        let f = rows[0].failed_checks.join(" | ");
+        for want in ["fact recall 0%", "missing: engine, rounds", "fell into trap(s): v4-ban", "`cannot find|no such` appears"] {
+            assert!(f.contains(want), "{} in {}", want, f);
+        }
+        assert!(rows[0].notes.iter().any(|n| n.contains("traps: v4-ban")));
+    }
+
+    #[test]
+    fn markdown_the_mission_wrote_counts_as_part_of_the_deliverable() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("m");
+        fs::create_dir_all(dir.join("research")).unwrap();
+        fs::write(dir.join("research/report.md"), "850cc engines").unwrap();
+        fs::write(dir.join("notes.txt"), "ignored").unwrap();
+        let events = vec![event("task.output", json!({"status": "done", "text": "short answer"}))];
+        let d = deliverable_of(&events, Some("t_0001"), &dir);
+        assert!(d.starts_with("short answer") && d.contains("850cc engines") && !d.contains("ignored"), "{}", d);
+    }
+
+    #[test]
+    fn a_draft_truth_pack_is_not_run_without_the_flag() {
+        let t = tempfile::tempdir().unwrap();
+        let canned = mission(t.path(), &[("task.completed", json!({"status": "done"}))]);
+        let c = research_case(t.path(), false, RESEARCH_CHECKS);
+        let mut config = cfg(t.path(), &canned, vec![baseline()], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows[0].passed, None);
+        assert!(rows[0].error.as_deref().unwrap_or("").contains("draft"), "{:?}", rows[0].error);
+        config.allow_unverified = true;
+        let (rows, _) = run_all(&config, &[&c]);
+        assert!(rows[0].error.is_none() && rows[0].passed.is_some(), "{:?}", rows[0]);
+        // The command refuses up front, before any directory is made.
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (tpl, work) = (template(t.path()), t.path().join("fresh"));
+        let base = ["run", "--budget-usd", "9", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()];
+        assert_eq!(cli(&a(&base), &[&c]), 2);
+        assert!(!work.exists());
     }
 
     #[test]
@@ -655,7 +816,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], error: None };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], error: None };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);

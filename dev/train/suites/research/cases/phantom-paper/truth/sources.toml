@@ -1,0 +1,7 @@
+# The record of the searches that found no such paper, and where the closest real works are. `delphi train seal --case research/phantom-paper` fills in the hash.
+[[source]]
+id = "search-record"
+url = "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9291818/"
+retrieved = "2026-10-26"
+note = "Our own record of two web searches; the URL is the closest real NanoSIMS paper found (Mayerhofer et al. 2021)"
+blake3 = "144f9f19ee85ea74b01d3321837867ffabc41ef29647bb77ec5c8f8ea60aee87"

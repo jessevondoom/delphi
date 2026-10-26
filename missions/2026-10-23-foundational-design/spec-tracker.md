@@ -83,6 +83,22 @@ The working plan for L1 and L6b is [`learning-build-plan-2026-10-26.md`](learnin
 
 Total about 182 h. Operator-layer path L0 → L1 → L2 → L4; core-layer path L6 → L7 → L9 → L10; they meet in the `learning-loop` suite.
 
+## Training experiments: quality and efficiency (spec 037, draft, 2026-10-26)
+
+Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (operator review time and model dollars are separate; the dollar cap OD-T1 is open). Suite: C1-C3 from repo history, R1-R6 research and strategy with stored truth packs.
+
+| Slice | Delivers | Hours | State |
+| :-- | :-- | --: | :-- |
+| X1 | spec 037; research case format (`truth/`, `fact_recall`, `no_traps`, `text_matches`, draft-pack rule, `train seal`); truth packs R1-R3 (drafts, operator verification pending) | 15 | built (PR open) |
+| X2 | per-arm template home and forced routing; tokens per model in rows | 8 | not started |
+| X3 | `delphi train harvest`; cases C1-C3 | 20 | not started |
+| X4 | blinded bundles, jury runner | 12 | not started |
+| X5 | operator review CLI, disagreement ledger | 8 | not started |
+| X6 | report: pass rate, cost per pass, frontier, judge breakdown | 6 | not started |
+| X7 | pilot supervision and debugging | 11 | not started |
+
+R4-R6 truth packs join in the first study phase.
+
 ## Roadmap steps, for cross-reference
 
 | Step | State |

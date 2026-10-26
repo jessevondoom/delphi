@@ -25,6 +25,7 @@ mod missions;
 mod changelog;
 mod learn_cmd;
 mod train_run;
+mod train_truth;
 mod toolreport;
 mod needs;
 mod xenia_cmd;

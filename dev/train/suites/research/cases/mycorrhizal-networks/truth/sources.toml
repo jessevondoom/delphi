@@ -1,0 +1,28 @@
+# Abstracts of the key papers on both sides. `delphi train seal --case research/mycorrhizal-networks` fills in the hashes.
+[[source]]
+id = "simard-1997"
+url = "https://www.nature.com/articles/41557"
+retrieved = "2026-10-26"
+note = "Abstract as printed on ideas.repec.org (the Nature page is paywalled); DOI 10.1038/41557"
+blake3 = "ccdc71c2bb59bd3655e0b691c9a82581abe226e0c30d75f1bab01308c686e39c"
+
+[[source]]
+id = "klein-2016"
+url = "https://doi.org/10.1126/science.aad6188"
+retrieved = "2026-10-26"
+note = "Abstract from Europe PMC; the University of Basel press release is at sciencedaily.com/releases/2016/04/160414144711.htm"
+blake3 = "73ac083604680d2cbf278b622807d4dffecdb800018f9ee836bf3e844117dd8b"
+
+[[source]]
+id = "karst-2023"
+url = "https://www.nature.com/articles/s41559-023-01986-1"
+retrieved = "2026-10-26"
+note = "Abstract from the Nature Ecology & Evolution page"
+blake3 = "e41dece9fa0a893998cd4713ac4ca9522b74d3fffbde3a0b564d881d986ec4de"
+
+[[source]]
+id = "henriksson-2023"
+url = "https://doi.org/10.1111/nph.18935"
+retrieved = "2026-10-26"
+note = "Abstract from Europe PMC"
+blake3 = "222bf45d1b2f2923bbcff539dfddc4a43a8d26c53a19c4185fdc3e25ced7f4a7"

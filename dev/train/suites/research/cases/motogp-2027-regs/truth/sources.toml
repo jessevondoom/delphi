@@ -1,0 +1,21 @@
+# Where each fact comes from. `delphi train seal --case research/motogp-2027-regs` fills in the hashes.
+[[source]]
+id = "crash-2027-regs"
+url = "https://www.crash.net/motogp/news/1048005/1/motogp-confirms-2027-regulations-here-they-are"
+retrieved = "2026-10-26"
+note = "Crash.net, May 2024: Dorna's announcement of the 2027 rules plus the Grand Prix Commission's technical regulation text (excerpt)"
+blake3 = "776297eccdeb8f978195b356efeb5dc8d2cd0784c990ae24c666e566e83bea21"
+
+[[source]]
+id = "cycleonline-press"
+url = "https://www.cycleonline.com.au/2024/05/07/motogp-technical-regulations-overhauled-for-2027-season/"
+retrieved = "2026-10-26"
+note = "CycleOnline, 7 May 2024: the same announcement as a press release (excerpt)"
+blake3 = "56ece5ee880d8313b7f5f7d019a49b1b6887384256db27183d47209286729836"
+
+[[source]]
+id = "tyrepress-pirelli"
+url = "https://www.tyrepress.com/2025/03/pirelli-set-to-become-exclusive-motogp-tyre-supplier-as-michelin-exits/"
+retrieved = "2026-10-26"
+note = "Tyrepress, 6 March 2025: Dorna's statement that Pirelli becomes the tyre supplier from 2027 (excerpt)"
+blake3 = "df401d43b41322fb1fc530d7faafd2959110067a8f97c4fb95459a71221aaa97"
