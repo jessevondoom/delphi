@@ -2,6 +2,8 @@
 
 pub mod approval;
 pub mod session;
+pub mod settings_run;
+pub mod settings_store;
 pub mod summary;
 pub mod checkpoint;
 pub mod changelog;
@@ -19,6 +21,7 @@ pub mod bundle_load;
 pub mod org_context;
 pub mod core_main;
 pub mod council;
+pub mod council_next;
 pub mod distill;
 pub mod build;
 pub mod capabilities;

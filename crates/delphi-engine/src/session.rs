@@ -178,22 +178,29 @@ pub fn append_central(home: &Path, d: &Digest, redact: &dyn Fn(&str) -> String) 
 
 /// The newest `n` digests of a mission, oldest first. A line that does not parse is skipped.
 pub fn earlier(home: &Path, mission: &str, n: usize) -> Vec<Digest> {
+    let mut all: Vec<Digest> = every(home).into_iter().filter(|d| d.mission_id == mission).collect();
+    let skip = all.len().saturating_sub(n);
+    all.drain(..skip);
+    all
+}
+
+/// Every finished session in the central log, oldest first, across missions and workspaces, each with its summary when one was written.
+/// A line that does not parse is skipped.
+pub fn every(home: &Path) -> Vec<Digest> {
     let Ok(text) = std::fs::read_to_string(log_path(home)) else { return Vec::new() };
-    let mut all: Vec<Digest> = text.lines().filter_map(|l| serde_json::from_str::<Digest>(l).ok()).filter(|d| d.mission_id == mission).collect();
+    let mut all: Vec<Digest> = text.lines().filter_map(|l| serde_json::from_str::<Digest>(l).ok()).collect();
     // Summaries are lines of their own, written after their digest; the newest one for a session wins.
     for l in text.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(l) else { continue };
-        if v["kind"] != "summary" || v["mission_id"] != mission {
+        if v["kind"] != "summary" {
             continue;
         }
-        if let (Some(id), Some(t)) = (v["session_id"].as_str(), v["text"].as_str()) {
-            if let Some(d) = all.iter_mut().find(|d| d.session_id == id) {
+        if let (Some(m), Some(id), Some(t)) = (v["mission_id"].as_str(), v["session_id"].as_str(), v["text"].as_str()) {
+            if let Some(d) = all.iter_mut().find(|d| d.mission_id == m && d.session_id == id) {
                 d.summary = Some(t.to_string());
             }
         }
     }
-    let skip = all.len().saturating_sub(n);
-    all.drain(..skip);
     all
 }
 

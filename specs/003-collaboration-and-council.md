@@ -166,6 +166,18 @@ sequenceDiagram
    - If critics raised no unresolved items, the section must read exactly `Unanimous — no unresolved P0/P1 (Red-Team concurs).`, which requires Red-Team's explicit `concur: true`. This removes the incentive to invent dissent just to satisfy the linter.
 5. **Deterministic Escalation:** Orchestrator does not decide whether there is a deadlock. Any unresolved `P0`, or conflicting `recommendation` fields among Round 2 outputs, escalates to the **operator** as a structured decision gate.
 
+### 4.2 A verdict that moves the work forward, and a Council raised on demand (2026-10-26)
+A verdict that ends in prose is a checkbox. The arbiter's synthesis therefore ends in a **decision** and the **next steps**, in a fixed shape the daemon parses (`council_next.rs`):
+```
+DECISION: <what we do, in one sentence>
+NEXT <role>: <one concrete step, for that role, in one sentence>      (one to five, in order)
+```
+When the Council escalated, the decision is `needs the operator: <the question>` and each option has its own steps under a line `IF <the option's label, exactly>`. Steps naming a role that does not exist, or the orchestrator, are dropped; labels match exactly before they match loosely (`PROCEED` is not `DO-NOT-PROCEED`); steps outside an option, in an escalated Council, are dropped. If the arbiter gives no usable steps and the Council did not escalate, the open P0/P1 findings become the steps (for the architect to resolve), so the verdict is never only a description.
+
+The record gains a `## Decision and next steps` section (the Minority Report is unchanged and the daemon still writes it); `council.verdict` carries `decision` and `steps`; the operator is shown them with how to start them. **`/follow`** (`council.follow`) starts the last verdict's steps as ordinary tasks, one after the other, each with the Council's record to read; for an escalated Council `/follow <n>` picks the option. The chain stops at the first step that is cancelled, fails or hands back to the operator. The same steps are not started twice without `/follow again`.
+
+**`/council --tier frontier`** raises every seat to that tier for this Council. A Council is raised on demand and never lowered to save cost (a seat asked for less than its default is refused); a seat steps down only through failover when its model is unavailable (`specs/035`). Seats otherwise sit at each role's default (`specs/035` D-14).
+
 ---
 
 ## 5. Verification Plan

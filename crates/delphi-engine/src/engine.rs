@@ -384,7 +384,7 @@ fn run_command_def() -> ToolDef {
 fn dispatch_def() -> ToolDef {
     ToolDef {
         name: "dispatch_agent".into(),
-        description: "Hand a self-contained task to another enabled role (for example `architect` to draft a spec, `red-team` to audit one, `strategist` to check scope). Give an objective and pointers to the files it needs; do not paste file contents. Returns that role's final report. Every role starts on its default model (Sonnet-class or lower): raise `tier` to `frontier` only for a task that needs it, and say why in `tier_reason`; lower it to `fast` for a simple lookup.".into(),
+        description: "Hand a self-contained task to another enabled role (for example `architect` to draft a spec, `red-team` to audit one, `strategist` to check scope). Give an objective and pointers to the files it needs; do not paste file contents. Returns that role's final report. Every role starts on its default model (Sonnet-class or lower): raise `tier` to `frontier` only for a task that needs it, and say why in `tier_reason`. A role is never lowered below its default to save cost.".into(),
         input_schema: json!({"type": "object", "required": ["role", "objective"], "properties": {
             "role": {"type": "string"}, "objective": {"type": "string"},
             "tier": {"type": "string", "enum": ["fast", "workhorse", "frontier"]}, "tier_reason": {"type": "string"},
@@ -466,6 +466,7 @@ impl Engine {
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         self.reconcile_bundles(m).await?;
+        let operator_task = parent.is_none();
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         // What the operator and the team have said in this session, so a follow-up has something to follow (`specs/030`).
         // A task a timer woke, and a builder, get none; and if an earlier reply read untrusted content, this task starts
@@ -488,7 +489,7 @@ impl Engine {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
         }
         if announce {
-            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target}));
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "source": if operator_task { "operator" } else { "timer" }}));
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
@@ -579,14 +580,14 @@ impl Engine {
             let bundle_agent = bundle_agent.or_else(|| handoff.bundle_agent.as_ref().map(|t| crate::bundle_load::LoadedAgent { id: t.clone(), host_role: role.clone(), block: String::new(), allowed_tools: Some(Default::default()), unmapped: vec![] }));
             let manifest = self.ws.load_manifest(&role)?;
             let snapshot = self.ws.load_snapshot(&role)?;
-            let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
+            let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default() };
 
             if fresh {
                 let mut open = vec![
-                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce, "bundle_agent": handoff.bundle_agent, "tier": sc.tier, "default_tier": sc.manifest.tier(), "tier_reason": handoff.routing_directive.tier_reason})),
+                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce, "bundle_agent": handoff.bundle_agent, "tier": sc.tier, "default_tier": self.default_tier_of(&sc.role, &sc.manifest), "tier_reason": handoff.routing_directive.tier_reason})),
                     sc.ev("handoff.sent", json!({"handoff": serde_json::to_value(&handoff).expect("handoff serializes")})),
                     sc.ev("dag.node.state", json!({"node_id": span_id, "state": "running"})),
                 ];
@@ -1345,6 +1346,9 @@ impl Engine {
         if sc.manifest.execute.iter().any(|e| e == "timers") {
             defs.push(timer_def());
         }
+        if sc.manifest.execute.iter().any(|e| e == "settings") {
+            defs.push(crate::settings_run::def());
+        }
         if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             defs.push(run_command_def());
         }
@@ -1393,6 +1397,12 @@ impl Engine {
         }
         if name == crate::align_run::TOOL {
             return self.exec_align(sc, args).await;
+        }
+        if name == crate::settings_run::TOOL {
+            if !sc.manifest.execute.iter().any(|e| e == "settings") {
+                return Ok(tool_result_error("this role's manifest does not authorize changing settings"));
+            }
+            return self.exec_settings(sc, args).await;
         }
         if name == "timer" {
             // As with dispatch: the schema is only offered to roles that may set timers; a forged call is refused here.
@@ -1826,12 +1836,17 @@ impl Engine {
             if !matches!(want, "fast" | "workhorse" | "frontier") {
                 return Ok((tool_result_error("`tier` must be fast, workhorse or frontier"), None));
             }
-            let default = self.ws.load_manifest(role).map(|mf| mf.tier()).unwrap_or("workhorse");
+            let default_tier = self.role_default_tier(role);
+            let default = default_tier.as_str();
             let reason = crate::observe::sanitize(args["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ");
+            if rank(want) < rank(default) {
+                return Ok((tool_result_error(format!("`{}` starts on {}; it is not lowered to {}. A model is only stepped down when the one it needs is unavailable, never to save cost (that is already what the default is for)", role, default, want)), None));
+            }
             if rank(want) > rank(default) && reason.is_empty() {
                 return Ok((tool_result_error(format!("`{}` starts on {}; raising it to {} needs `tier_reason`: say what about this task needs more", role, default, want)), None));
             }
             if want != default {
+                self.note_raise(&sc.m, role, want).await;
                 child.routing_directive.model_tier = Some(want.to_string());
                 child.routing_directive.tier_reason = Some(reason.chars().take(200).collect()).filter(|r: &String| !r.is_empty());
             }
@@ -1872,7 +1887,7 @@ mod tool_schema_tests {
     #[test]
     fn every_tool_delphi_defines_has_a_schema_the_strictest_provider_accepts() {
         let mut defs = tools::tool_defs(true);
-        defs.extend([dispatch_def(), timer_def(), run_command_def()]);
+        defs.extend([dispatch_def(), timer_def(), run_command_def(), crate::settings_run::def()]);
         assert!(defs.len() >= 14);
         let mut bad = Vec::new();
         for d in &defs {
@@ -3160,16 +3175,104 @@ mod tests {
         assert_eq!((p["tier"].as_str(), p["default_tier"].as_str(), p["tier_reason"].as_str()), (Some("frontier"), Some("workhorse"), Some("it touches the claim loop's locking")));
     }
 
-    // specs/035 D-15: lowering a role's model needs no reason, and the child really runs on the model of that tier.
+    // specs/035 D-15: a role is stepped down only when the model it needs is unavailable, never to save cost: dispatch refuses to lower it.
     #[tokio::test]
-    async fn lowering_a_roles_model_for_a_task_needs_no_reason_and_the_child_runs_on_it() {
-        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Draft a plan", "tier": "fast"})), Step::text("Plan ready."), Step::text("All done.")], 5.0, |_| {});
+    async fn dispatch_refuses_to_lower_a_roles_model_to_save_cost_and_the_child_never_starts() {
+        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Draft a plan", "tier": "fast"})), Step::text("Understood."), Step::text("Done.")], 5.0, |_| {});
         let out = f.engine.run_task(&f.m, "orchestrator", "Plan").await.unwrap();
-        assert_eq!((out.status, out.text.as_str()), (Status::Done, "All done."));
-        assert_eq!(f.model.requests().iter().map(|r| r.model_id.as_str()).collect::<Vec<_>>(), vec!["opus-x", "haiku-x", "opus-x"], "the architect ran on the fast model");
-        let added = events_of(&f, "dag.node.added");
-        let p = &added[1].payload;
-        assert_eq!((p["tier"].as_str(), p["default_tier"].as_str(), p["tier_reason"].is_null()), (Some("fast"), Some("frontier"), true));
+        assert_eq!(out.status, Status::Done);
+        let bodies: Vec<String> = f.model.requests().iter().map(|r| r.body.to_string()).collect();
+        assert!(bodies[1].contains("starts on frontier; it is not lowered to fast") && bodies[1].contains("never to save cost"), "{}", bodies[1]);
+        assert_eq!(events_of(&f, "dag.node.added").len(), 1, "the architect never started");
+    }
+
+    /// A task from the operator, as a console message makes one, whose first model turn calls `change_setting`.
+    async fn ask_for_a_setting(steps: Vec<Step>, prompt: &'static str) -> Fx {
+        let f = setup(steps, 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", prompt).await.unwrap();
+        f
+    }
+
+    // specs/035 D-17: the operator asks in their own words; the change is made, logged, and the reply says exactly what changed.
+    #[tokio::test]
+    async fn the_operator_asking_in_their_own_words_changes_a_roles_default_and_is_told_what_changed() {
+        let f = ask_for_a_setting(
+            vec![Step::tool("s1", "change_setting", json!({"key": "role_tier.builder", "value": "fast", "quote": "start the builder on the fast tier", "reason": "cheap edits"})), Step::text("The builder now starts on fast.")],
+            "Please start the builder on the fast tier from now on.",
+        )
+        .await;
+        assert_eq!(f.engine.role_default_tier("builder"), "fast", "the next task sees it");
+        assert_eq!(f.engine.role_default_tier("architect"), "frontier", "nothing else moved");
+        let changed = &events_of(&f, "setting.changed")[0].payload;
+        assert_eq!((changed["key"].as_str(), changed["old"].as_str(), changed["new"].as_str(), changed["by"].as_str()), (Some("role_tier.builder"), Some("workhorse"), Some("fast"), Some("prompt")));
+        assert_eq!(changed["quote"], "start the builder on the fast tier");
+        let told = f.model.requests()[1].body.to_string();
+        assert!(told.contains("builder now starts on fast (it started on workhorse; shipped: workhorse)") && told.contains("Tell the operator exactly this"), "{}", told);
+        assert!(crate::settings_store::path(&f.engine.ws.dir).exists());
+    }
+
+    // specs/035 D-17: and the budget, the other thing a prompt may set.
+    #[tokio::test]
+    async fn the_operator_can_set_the_budget_ceiling_by_asking() {
+        let f = ask_for_a_setting(vec![Step::tool("s1", "change_setting", json!({"key": "mission_budget_usd", "value": "20", "quote": "raise the budget to 20 dollars"})), Step::text("Done.")], "Raise the budget to 20 dollars, I want a longer run.").await;
+        assert_eq!(f.m.budget.lock().unwrap().cap_micro(), 20_000_000);
+        assert!(f.model.requests()[1].body.to_string().contains("budget ceiling is now $20.00 (it was $5.00)"));
+    }
+
+    // specs/035 D-17: nothing the operator did not say, and nothing from untrusted content, changes a setting; it waits as a suggestion.
+    #[tokio::test]
+    async fn without_the_operators_own_words_a_change_waits_as_a_suggestion_and_nothing_is_changed() {
+        for (quote, prompt, why) in [("", "Look at the plan.", "you did not quote"), ("set the builder to fast please", "Look at the plan.", "not in the operator's message"), ("yes", "Yes, look at the plan.", "not in the operator's message")] {
+            let f = ask_for_a_setting(vec![Step::tool("s1", "change_setting", json!({"key": "role_tier.builder", "value": "fast", "quote": quote, "reason": "it would be cheaper"})), Step::text("Noted.")], prompt).await;
+            assert_eq!(f.engine.role_default_tier("builder"), "workhorse", "unchanged (quote `{}`)", quote);
+            assert!(events_of(&f, "setting.changed").is_empty());
+            let told = f.model.requests()[1].body.to_string();
+            assert!(told.contains("Not applied") && told.contains(why) && told.contains("/settings accept 1"), "{}", told);
+            let open = crate::settings_store::pending(&f.m.replay().unwrap());
+            assert_eq!((open.len(), open[0].key.as_str(), open[0].value.as_str()), (1, "role_tier.builder", "fast"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_task_that_read_untrusted_content_cannot_change_a_setting_even_with_a_perfect_quote() {
+        let f = ask_for_a_setting(
+            vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("s1", "change_setting", json!({"key": "role_tier.builder", "value": "frontier", "quote": "use the best model for the builder"})), Step::text("Noted.")],
+            "Use the best model for the builder, and read the vendored file.",
+        )
+        .await;
+        assert_eq!(f.engine.role_default_tier("builder"), "workhorse");
+        assert!(f.model.requests()[2].body.to_string().contains("something untrusted has been read"), "{}", f.model.requests()[2].body);
+    }
+
+    #[tokio::test]
+    async fn what_a_prompt_may_not_change_says_what_it_may() {
+        let f = ask_for_a_setting(vec![Step::tool("s1", "change_setting", json!({"key": "permissions", "value": "mission-auto", "quote": "turn on auto approvals"})), Step::text("Noted.")], "Turn on auto approvals.").await;
+        let told = f.model.requests()[1].body.to_string();
+        assert!(told.contains("cannot be changed this way") && told.contains("role_tier.<role>") && told.contains("never by a prompt"), "{}", told);
+        assert!(events_of(&f, "setting.changed").is_empty() && events_of(&f, "setting.suggested").is_empty());
+    }
+
+    // specs/035 D-19: if the orchestrator keeps raising one role to one tier, Delphi suggests making it the default, once.
+    #[tokio::test]
+    async fn raising_a_role_again_and_again_makes_delphi_suggest_the_default_once() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let raised = |n: u32| {
+            let mut e = EventEnvelope::new(&f.m.id, "dag.node.added", json!({"node_id": format!("n{}", n), "role": "builder", "tier": "frontier", "default_tier": "workhorse"}));
+            e.task_id = Some(format!("t_{}", n));
+            e
+        };
+        f.m.append(raised(1)).await.unwrap();
+        f.engine.note_raise(&f.m, "builder", "frontier").await;
+        assert!(events_of(&f, "setting.suggested").is_empty(), "twice is not a pattern yet");
+        f.m.append(raised(2)).await.unwrap();
+        f.engine.note_raise(&f.m, "builder", "frontier").await;
+        let s = events_of(&f, "setting.suggested");
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].payload["key"].as_str(), s[0].payload["value"].as_str(), s[0].payload["by"].as_str()), (Some("role_tier.builder"), Some("frontier"), Some("usage")));
+        assert!(s[0].payload["reason"].as_str().unwrap().contains("raised builder to frontier for 3 tasks"));
+        f.m.append(raised(3)).await.unwrap();
+        f.engine.note_raise(&f.m, "builder", "frontier").await;
+        assert_eq!(events_of(&f, "setting.suggested").len(), 1, "not asked again, accepted or not");
     }
 
     // specs/035 D-16: after a failover the events say the tier of the model that really served the call, so the panes can show it.

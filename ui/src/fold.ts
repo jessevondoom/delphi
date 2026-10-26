@@ -222,6 +222,14 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const history = [...h, entry];
       return { ...s, activity: { ...s.activity, history: history.length > HISTORY_MAX ? history.slice(-HISTORY_MAX) : history } };
     }
+    // A setting changed (by the operator's command, by their words, or by accepting a suggestion): said once, as the daemon wrote it.
+    case 'setting.changed': return addBlock(s, { kind: 'note', text: sanitize(String(pl.text ?? `${pl.key}: ${pl.old} → ${pl.new}`)), at: stamp(e, now), tone: 'ok' });
+    // Somebody proposed a change that waits for the operator.
+    case 'setting.suggested': {
+      const n = String(pl.id ?? '').replace('sg_', '');
+      const who = pl.by === 'usage' ? 'Delphi noticed a pattern' : 'the orchestrator suggests';
+      return addBlock(s, { kind: 'note', text: `${who}: ${sanitize(String(pl.key))} → ${sanitize(String(pl.value))} (${sanitize(String(pl.reason ?? ''))}). /settings accept ${n} to make it, /settings dismiss ${n} to decline.`, at: stamp(e, now), tone: 'info' });
+    }
     // A weaker model wrote a save-point before anyone was asked (`specs/035` D-11); where, for the operator who is not asked (optimistic mode).
     case 'checkpoint.saved': return addBlock(s, { kind: 'note', text: `the work so far is saved for resumption: ${sanitize(String(pl.path ?? ''))}`, at: stamp(e, now), tone: 'info' });
     // A task moved to another model (`specs/035`): said once in the chat, so the operator is never surprised by who is answering.

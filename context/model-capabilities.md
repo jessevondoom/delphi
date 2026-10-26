@@ -78,6 +78,8 @@ flowchart TD
    - Any task touching [GOVERNANCE.md](../GOVERNANCE.md), security boundaries, concurrency state machines, or `delphi update` migrations automatically upscales **Architect**, **Red-Team**, and **Strategist** to `frontier` (`Claude Opus` + `Gemini Pro`) with high thinking budgets.
 
 ### 3.2 Concrete Downscaling Triggers (When Orchestrator Saves Cost & Latency)
+
+> **Superseded 2026-10-26 (`specs/035` D-14, D-15).** The Orchestrator no longer lowers a model to save cost or latency. Efficiency is in the defaults: each role starts on the right tier for its work (Sonnet-class, or lower for the scout, integrator and investigator), and the Orchestrator may only raise a role for a task that needs it. A model steps down only when the one it needs is unavailable. The cases below describe what the *defaults* are for.
 1. **Deterministic Script Execution:** When an agent is primarily invoking a deterministic script in `skills/*/scripts/` (e.g., `manage_worktree.sh`, `audit_kb_links.py`, `gh_sync.py`) and formatting its output, Orchestrator downscales to `Gemini Flash` or `Claude Haiku` with `thinking_budget: 0`.
 2. **Boilerplate & Mechanical Refactors:** When **Architect**'s spec leaves zero architectural ambiguity (e.g., adding a typed field across 4 files with existing test patterns), Orchestrator keeps **Builder** on `Claude Sonnet` with `thinking_budget: 0` or `low` rather than burning `Opus` tokens.
 3. **Routine Compaction Passes:** Post-mission scratchpad compaction where provenance tags are already clean runs on `Gemini Flash` before **Orchestrator** performs her final high-reasoning coaching review.

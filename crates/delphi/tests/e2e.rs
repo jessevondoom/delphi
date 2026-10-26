@@ -2335,3 +2335,61 @@ fn live_claude_runs_out_and_the_task_finishes_on_a_local_model_after_the_operato
     assert!(!m.seen.lock().unwrap().is_empty(), "the primary was tried first");
     assert_eq!(c.ctrl_c_out(), 0);
 }
+
+/// A live check of settings by prompt (`specs/035` D-17, D-18) against a real local model: the operator asks in their own words, the model
+/// has to call `change_setting` with a quote that is really in the message, and the chat says what changed. `cargo test -p delphi --test e2e
+/// live_a_prompt -- --ignored --nocapture`; needs Ollama (`DELPHI_LIVE_MODEL`, default `gemma4:latest`). Nothing leaves the machine. Whether a
+/// small model manages the tool call is exactly what this finds out, so it prints the screen either way.
+#[test]
+#[ignore = "needs a local Ollama model"]
+fn live_a_prompt_changes_a_setting_and_the_reply_says_what_changed() {
+    let model = std::env::var("DELPHI_LIVE_MODEL").unwrap_or_else(|_| "gemma4:latest".into());
+    ensure_daemon_binary();
+    let t = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
+    let home = t.path().join("h");
+    let proj = t.path().join("proj");
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::write(proj.join("src/lib.rs"), "pub fn needle() -> u32 { 42 }\n").unwrap();
+    for args in [vec!["init", "-q"], vec!["add", "."]] {
+        assert!(Command::new("git").arg("-C").arg(&proj).args(&args).stdout(Stdio::null()).status().unwrap().success());
+    }
+    assert!(Command::new("git").arg("-C").arg(&proj).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "base"]).stdout(Stdio::null()).status().unwrap().success());
+    run(&["init", "--non-interactive", "--home", home.to_str().unwrap(), "--workspace", "e2e", "--project", proj.to_str().unwrap()]);
+    let ws = home.join("workspaces/e2e");
+    let config = format!(
+        "[workspace]\nname = \"e2e\"\nprojects = [\"{proj}\"]\n[theme]\nname = \"greek\"\n[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\npath = \"gateway-compat\"\nbase_url = \"http://localhost:11434\"\ncredential = \"none\"\ncost_model = \"local\"\nmodels = {{ fast = \"{m}\", workhorse = \"{m}\", frontier = \"{m}\" }}\n[models.catalog.\"{m}\"]\nmax_output_tokens = 2048\n[access]\norder = {{ local = [\"ollama\"] }}\nallowed_endpoints = [\"ollama\"]\nrole_family = {{ orchestrator = \"local\", architect = \"local\", builder = \"local\", red-team = \"local\", strategist = \"local\" }}\n",
+        proj = proj.display(),
+        m = model
+    );
+    std::fs::write(ws.join("config.toml"), config).unwrap();
+    let _reap = common::DaemonReaper::new(&home);
+    let Some(launcher) = ui_launcher(t.path()) else { panic!("the UI launcher is needed (ui/node_modules)") };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&home, &["chat", "--workspace", "e2e"], 40, 130, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Please start the builder on the fast tier from now on.");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    let settings = ws.join("local/settings.toml");
+    let deadline = Instant::now() + Duration::from_secs(900);
+    loop {
+        let v = c.visible();
+        if v.contains("now starts on fast") || v.contains("Not applied") || v.contains("Stopped:") || (v.contains("Athena · ") && !v.contains("· writing") && v.contains("Please start the builder")) {
+            std::thread::sleep(Duration::from_secs(3));
+            break;
+        }
+        assert!(Instant::now() < deadline, "nothing in 900 s:\n{}", v);
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    println!("=== THE SCREEN ===\n{}", c.visible());
+    println!("=== local/settings.toml ===\n{}", std::fs::read_to_string(&settings).unwrap_or_else(|_| "(none)".into()));
+    let changed = std::fs::read_to_string(&settings).unwrap_or_default().contains("fast");
+    println!("=== RESULT: the model {} the setting ===", if changed { "changed" } else { "did NOT change" });
+    assert_eq!(c.ctrl_c_out(), 0);
+}

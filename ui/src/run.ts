@@ -32,19 +32,36 @@ export function renderUsage(v: any): string {
   return lines.join('\n');
 }
 
-export function parseCouncil(args: string): { proposition: string; seats: string[]; author: string | null; lenses: boolean } | string {
-  const usage = '/council needs a proposition, for example `/council Should the retry queue be a table or a file?` (optional: --seats architect,strategist,red-team --author claude --lenses)';
+/** `/settings` with no argument: what each role starts on, what is waiting for a yes, and how to change either. */
+export function renderSettings(v: any): string {
+  const lines = ['what each role starts on (the shipped tier, then yours if you changed it):'];
+  for (const r of v.roles ?? []) lines.push(`  ${String(r.role).padEnd(13)} ${r.override ? `${r.shipped} → ${r.override}  (yours)` : r.shipped}`);
+  const b = v.budget ?? {};
+  if (b.cap_usd !== undefined) lines.push(`budget ceiling ${usd(b.cap_usd, 2)} · spent ${usd(b.spent_usd, 4)}`);
+  const pending = v.pending ?? [];
+  if (pending.length) {
+    lines.push('waiting for your yes:');
+    for (const s of pending) lines.push(`  ${String(s.id).replace('sg_', '')}  ${s.key} → ${s.value}   ${s.reason}${s.by === 'usage' ? '  (Delphi noticed)' : ''}`);
+    lines.push('  /settings accept <n> · /settings dismiss <n>');
+  }
+  lines.push('change one: /settings set role_tier.architect frontier · /settings reset architect · or just ask, for example "start the architect on frontier".');
+  return lines.join('\n');
+}
+
+export function parseCouncil(args: string): { proposition: string; seats: string[]; author: string | null; lenses: boolean; tier: string | null } | string {
+  const usage = '/council needs a proposition, for example `/council Should the retry queue be a table or a file?` (optional: --seats architect,strategist,red-team --author claude --lenses --tier frontier)';
   const words = args.split(/\s+/).filter(Boolean);
   const rest: string[] = [];
-  let seats: string[] = [], author: string | null = null, lenses = false;
+  let seats: string[] = [], author: string | null = null, lenses = false, tier: string | null = null;
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
     if (w === '--seats' && rest.length === 0) { const v = words[++i]; if (!v) return usage; seats = v.split(',').filter(Boolean); }
     else if (w === '--author' && rest.length === 0) { const v = words[++i]; if (!v) return usage; author = v; }
     else if (w === '--lenses' && rest.length === 0) lenses = true;
+    else if (w === '--tier' && rest.length === 0) { const v = words[++i]; if (!v || !['fast', 'workhorse', 'frontier'].includes(v)) return usage; tier = v; }
     else rest.push(w);
   }
-  return rest.length ? { proposition: rest.join(' '), seats, author, lenses } : usage;
+  return rest.length ? { proposition: rest.join(' '), seats, author, lenses, tier } : usage;
 }
 
 /** `20m`, `90s`, `2h`, `1d` or bare seconds, in seconds. */
@@ -159,8 +176,26 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
     case 'council': {
       const p = parseCouncil(arg);
       if (typeof p === 'string') { ctx.post(p); return; }
-      const v = await call('council.start', { proposition: p.proposition, seats: p.seats, author_family: p.author, ...(p.lenses ? { lenses: true } : {}) });
+      const v = await call('council.start', { proposition: p.proposition, seats: p.seats, author_family: p.author, ...(p.lenses ? { lenses: true } : {}), ...(p.tier ? { tier: p.tier } : {}) });
       if (v) { ctx.post(`(${v.task_id ?? 'task'} council convened; the seats answer blind, then critique each other)`); ctx.started?.(); } return;
+    }
+    case 'follow': {
+      // The steps of the last Council's verdict, one after the other. A Council that asked for a choice needs the option's number.
+      const again = rest.includes('again');
+      const option = rest.find((w) => w !== 'again');
+      const v = await call('council.follow', { ...(option ? { option } : {}), ...(again ? { again: true } : {}) });
+      if (v) { ctx.post(`(started ${v.started} step${v.started === 1 ? '' : 's'}${v.option ? ` for ${v.option}` : ''}; each starts when the one before it is done)`); ctx.started?.(); }
+      return;
+    }
+    case 'settings': {
+      const usage = '/settings · /settings accept <n> · /settings dismiss <n> · /settings set <role_tier.role | mission_budget_usd> <value> · /settings reset <role>';
+      const sub = rest[0];
+      if (!sub) { const v = await call('settings.get'); if (v) ctx.post(renderSettings(v)); return; }
+      // A change says what changed in the chat, from the daemon's own event, so it is said once however it was asked for.
+      if (sub === 'accept' || sub === 'dismiss') { if (!rest[1]) { ctx.post(usage); return; } const v = await call(`settings.${sub}`, { id: rest[1] }); if (v && sub === 'dismiss') ctx.post(`dismissed ${v.dismissed}`); return; }
+      if (sub === 'reset') { if (!rest[1]) { ctx.post(usage); return; } await call('settings.set', { key: `role_tier.${rest[1]}`, value: 'default' }); return; }
+      if (sub === 'set') { if (rest.length < 3) { ctx.post(usage); return; } await call('settings.set', { key: rest[1], value: rest.slice(2).join(' ') }); return; }
+      ctx.post(usage); return;
     }
     case 'distill': {
       const v = await call('bundle.distill', { from: rest });
