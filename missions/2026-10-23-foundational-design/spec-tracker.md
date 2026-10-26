@@ -62,11 +62,11 @@ Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, 
 
 ## Layered learning and training mode (spec 031, draft, 2026-10-26)
 
-Drafted at the operator's request; nothing is approved or built. Decisions OD-1..OD-6 are in the spec.
+Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbered from 030, which is console sessions). Decisions OD-1..OD-6 are in the spec.
 
 | Slice | Delivers | Spec | Depends on | Hours | State |
 | :-- | :-- | :-- | :-- | --: | :-- |
-| L0 | `snapshot.loaded` and outcome events; rule/skill IDs per task | 031 §3.4 | none | 10 | not started |
+| L0 | `snapshot.loaded` event; `learn::task_records` (outcome, attempts, denials, cost per task); skill IDs wait for L3 | 031 §3.4, §7.1 | none | 10 | built (PR pending; as-built in 031 §7.1) |
 | L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | not started |
 | L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | not started |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
