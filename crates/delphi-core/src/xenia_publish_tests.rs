@@ -809,6 +809,18 @@ fn crlf_in_a_source_is_normalized_before_hashing_and_a_lone_cr_is_refused() {
 }
 
 #[test]
+fn a_review_or_expiry_date_that_is_not_in_the_future_is_refused_at_publish() {
+    let fx = Fx::new();
+    for (review_by, expires) in [("2026-10-26", None), ("2026-10-01", None), ("2027-01-24", Some("2026-10-26"))] {
+        let mut d = draft("A note", &["rust"]);
+        d.review_by = review_by.into();
+        d.expires = expires.map(String::from);
+        let err = fx.publisher(&NoIndex).prepare(&fx.key("erin"), vec![d.into_item()]).err().unwrap();
+        assert!(matches!(err, PublishError::Serialize(SerializeError::Invalid(delphi_xenia::record::Reject::Date(_)))), "{review_by} {expires:?}: {err:?}");
+    }
+}
+
+#[test]
 fn what_the_gate_writes_has_a_content_hash_the_verifier_recomputes() {
     let fx = Fx::new();
     let mut d = draft("A note", &["rust"]);
