@@ -1,0 +1,12 @@
+⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
+delphi · changes
+
+ ✔ nothing needs you
+
+
+── session s_0002 · 10:10 · now · 2 cha…
+  10:42  daedalus  t_2
+         wrote the spec for the change
+         log
+────────────────────────────────────────
+1 running  ·  14.2k tokens     ○ ○ ○ ○ ●

@@ -619,6 +619,10 @@ impl Engine {
                     slices.push(ContextSlice { label: "@runtime/bundle-agents".into(), tier: "L3".into(), text: agents });
                 }
             }
+            // Every role with tools reports finished work to the change log (`record_change`), not in its reply.
+            if !sc.toolless {
+                slices.push(ContextSlice { label: "@runtime/change-log".into(), tier: "L3".into(), text: tools::CHANGE_LOG_NOTE.into() });
+            }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
             }
