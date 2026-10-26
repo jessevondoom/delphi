@@ -90,7 +90,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), S
 
 // ── preparing a run ─────────────────────────────────────────────────────────────────────────────────────────────
 
-fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
+pub(crate) fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("{}: {}", dst.display(), e))?;
     for e in fs::read_dir(src).map_err(|e| format!("{}: {}", src.display(), e))?.flatten() {
         let (from, to) = (e.path(), dst.join(e.file_name()));
@@ -108,7 +108,7 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 /// Point `[workspace] projects` at `repo`; the one line is the only edit, and it is not a pinned block.
-pub fn set_projects(config: &str, repo: &Path) -> Result<String, String> {
+pub(crate) fn set_projects(config: &str, repo: &Path) -> Result<String, String> {
     let re = regex::Regex::new(r"(?m)^projects\s*=\s*\[[^\]]*\]").expect("static pattern");
     if re.find_iter(config).count() != 1 {
         return Err("the template workspace config must have exactly one `projects = [...]` line".into());
@@ -539,6 +539,8 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     row.attempts = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).map_or(0, |r| r.attempts);
     let record = records.iter().find(|r| Some(r.task_id.as_str()) == task).or(records.last()).cloned();
     let deliverable = deliverable_of(&events, task, &ws_dir.join("local/missions").join(mission));
+    // What the run delivered, for the jury: taken before the hidden tests are placed in the repository.
+    let draft = crate::train_judge::draft(case, &repo, &deliverable);
     let ctx = Ctx { events: &events, record, fixture: &case.dir.join("fixture"), repo: &repo, deliverable, truth: case.truth.as_ref(), case, target: cfg.work_dir.join("target"), scratch: dir.join("hidden") };
     if let Some(t) = ctx.truth {
         let r = t.recall(&ctx.deliverable);
@@ -550,6 +552,10 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     row.failed_checks = case.checks.iter().filter_map(|c| eval_check(c, &ctx).err()).collect();
     row.passed = Some(row.failed_checks.is_empty());
+    let models: Vec<String> = row.usage.keys().cloned().collect();
+    if let Err(e) = crate::train_judge::file_bundle(&cfg.work_dir, &draft, &crate::train_judge::Filing { arm: &arm.name, case: &format!("{}/{}", case.suite, case.id), seed, models: &models, passed: row.passed, failed: &row.failed_checks }) {
+        row.notes.push(format!("no bundle for the jury: {}", e));
+    }
     Ok(())
 }
 

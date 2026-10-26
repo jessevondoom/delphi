@@ -39,6 +39,24 @@ routing is configuration) and may declare `expect_models`, the model ids or pref
 other model made a call is not graded: it no longer measures that arm. See `arms-pilot-example.toml`. Rows record tokens
 in and out, calls and cost per model, attempts and mid-run model swaps.
 
+## Judging a run (`specs/037` §6)
+
+A `delphi train run` leaves a bundle per graded run in `<work>/bundles/`, filed under a blind id with the arm and model
+names scrubbed; the key is `bundles/key.jsonl`. Then:
+
+```sh
+delphi train judge --work-dir W --judges-file judges.toml --budget-usd 20     # a jury of other models, both orders per pair
+delphi train review --work-dir W                                               # you, blind, before seeing the jury
+delphi train disputes --work-dir W                                             # where you and the jury differ
+delphi train resolve --work-dir W --id d1234abcd --cause rubric_gap --note "..."
+delphi train report --work-dir W --judges-file judges.toml
+```
+
+`judges.toml` is an arms file (`[[arm]]` per judge: a template home and the `expect_models` it uses). A judge never scores a
+pair that includes its own model. A pair counts for a judge only if both orders picked the same bundle. A disagreement is
+never averaged: it is contested until you and the jury's reasons have been discussed and a cause recorded. The report says
+"no evidence for a ranking" with fewer than three graded seeds per arm.
+
 ## Code cases from history (`specs/037` §3, §5.2)
 
 A code case starts the agent from an earlier commit and scores it on the tests of the change that followed. It has
