@@ -10,7 +10,7 @@ delphi v0.5 · dashboard · session 3 · 3 asks · 1 from before
  session 3 (current)
  ► athena  t_2   2:14  waiting for a model: claude is out of q…  Which queue should the claim loop…
  session 2 (earlier, still running)
- ● daedalus  t_1  18:00  working  build Add a retry queue to the claim loop
+ ● hephaestus  t_1  18:00  working  build Add a retry queue to the claim loop
 
 ── pace ────────────────────────────────────────────────────────────────────────────────────────────
  ▁▁▂▃▄▆█▇▅▄▃▂ 900 tokens/min  ·  14.2k tokens  ·  cache 42%  ·  2 retries  ·  1 agent working

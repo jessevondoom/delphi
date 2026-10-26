@@ -5,6 +5,7 @@ pub mod session;
 pub mod summary;
 pub mod checkpoint;
 pub mod changelog;
+pub mod thread_nudge;
 pub mod toolreport;
 pub mod artifacts;
 pub mod auth_cli;

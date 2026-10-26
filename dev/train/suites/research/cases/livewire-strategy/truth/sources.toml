@@ -1,0 +1,7 @@
+# `delphi train seal --case research/livewire-strategy` fills in the hash.
+[[source]]
+id = "livewire-q2-2026"
+url = "https://www.motorcycle.com/bikes/news/livewire-reports-q2-2026-results-44668585"
+retrieved = "2026-10-26"
+note = "LiveWire Group's own Q2 2026 press release (23 July 2026), reproduced in full by Motorcycle.com; the original is on Business Wire (403 to automated fetch) and the figures are also in Harley-Davidson's 10-Q and 8-K for the quarter (sec.gov)"
+blake3 = "4235d97629c8ad35a9c047b23aecdca2874126c0cd8c8fe6a7197c736df1fdf6"

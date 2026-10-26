@@ -2,7 +2,7 @@
 [[trap]]
 id = "proven-mother-trees"
 why = "Neither side claims it is proven that mother trees feed their offspring through fungal networks; the critique says the evidence for preferential kin transfer is absent"
-any = ['(proven|proved|conclusively (shown|demonstrated|established)|definitively).{0,100}(mother|parent) trees?', 'mother trees? (definitely|clearly|conclusively|certainly) (feed|nourish|support|nurtur)']
+any = ['(scientists|studies|research|science|researchers) (have |has )?(proven|proved|conclusively (shown|demonstrated|established)|definitively (shown|demonstrated))[^.]{0,80}(mother|parent) trees?', '\b(is|are|has been|have been|was|were) (now )?(proven|conclusively shown|conclusively demonstrated)[^.]{0,60}(mother|parent) trees?', 'mother trees? (definitely|clearly|conclusively|certainly) (feed|nourish|support|nurtur)']
 
 [[trap]]
 id = "myth-debunked"
