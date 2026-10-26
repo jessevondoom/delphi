@@ -446,6 +446,16 @@ pub fn render_usage(v: &Value) -> String {
     s
 }
 
+/// The role an `@tag` means: a role ID (`architect`) or the theme name that role holds (`Daedalus`), either in any case.
+/// An unknown tag is returned as written so the daemon says which role it does not know.
+pub fn resolve_role(names: &HashMap<String, String>, tag: &str) -> String {
+    let want = tag.to_lowercase();
+    if names.contains_key(&want) {
+        return want;
+    }
+    names.iter().find(|(_, n)| n.to_lowercase() == want).map(|(id, _)| id.clone()).unwrap_or_else(|| tag.to_string())
+}
+
 pub fn submit_params(mission: &str, target: Option<&str>, text: &str) -> Value {
     let mut p = json!({"mission_id": mission, "prompt": text});
     if let Some(t) = target {
@@ -846,7 +856,7 @@ impl Session {
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Prompt { target, text } => match self.cmd.call("task.submit", submit_params(&self.mission_id, target.as_deref(), &text)) {
+            Input::Prompt { target, text } => match self.cmd.call("task.submit", submit_params(&self.mission_id, target.map(|t| resolve_role(&self.shared.names, &t)).as_deref(), &text)) {
                 Ok(v) => {
                     self.shared.running.fetch_add(1, Ordering::SeqCst);
                     say(&format!("({} started)\n", v["task_id"].as_str().unwrap_or("task")));
@@ -1134,6 +1144,15 @@ mod tests {
 
     fn names() -> HashMap<String, String> {
         [("orchestrator", "Athena"), ("architect", "Daedalus")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+
+    #[test]
+    fn an_at_tag_is_a_role_id_or_the_theme_name_it_holds() {
+        let n = names();
+        assert_eq!(resolve_role(&n, "architect"), "architect");
+        assert_eq!(resolve_role(&n, "Daedalus"), "architect");
+        assert_eq!(resolve_role(&n, "athena"), "orchestrator");
+        assert_eq!(resolve_role(&n, "Nobody"), "Nobody");
     }
 
     #[test]
