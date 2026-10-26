@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "tickets": { "type": "http", "url": "https://mcp.zed.example/mcp", "headers": { "X-Team": "${TEAM}" } }
+  }
+}
