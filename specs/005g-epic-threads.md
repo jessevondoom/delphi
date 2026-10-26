@@ -3,7 +3,8 @@ id: spec-005g-epic-threads
 title: "005g: The epic pane as threads (supersedes the rail in 005e §9.2 and replaces the forge view)"
 author: architect
 timestamp: 2026-10-25T22:00:00Z
-status: draft   # built on branch worktree-epic-threads; the operator decided the open questions of the first draft on 2026-10-25 (§7)
+status: approved   # by the operator, 2026-10-26; the open questions of the first draft were decided on 2026-10-25 (§7); built and merged in #168
+approved_by: operator (2026-10-26)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -82,7 +83,8 @@ In that frame the retry queue is the busiest thing on screen but is *not* what t
 - **Tool `name_thread {thread, label, tasks[]}`** (`crates/delphi-engine/src/tools.rs`), offered to every role, accepted only from the orchestrator (the others get an error that tells them to say it in their report). Green tier: it touches only the overview. It asks the engine to log a `thread.named` event; calling it again with the same `thread` renames the thread or changes its tasks.
 - **Event `thread.named`** is in the narrator's kinds (`observe.rs`); the fold keeps `threads: [{id, label, tasks}]` in `observe.state`, cleaned (control characters removed, whitespace collapsed, label 80 and id 60 characters), replaced by id, at most 40 threads of 50 tasks.
 - **`agents/orchestrator/AGENT.md` §2.7** tells the orchestrator when to call it: when it plans, again when the plan changes, before the first dispatch of a thread, with a label a person would say.
-- **Not covered:** the tool exists in the engine's own tool loop. Seats that reach Delphi's tools over the harness bridge (`020`) do not get it yet, so a Claude-subscription orchestrator will not name threads until the bridge lists it. Until then the window's grouping (§3) is what shows.
+- **Seats on the harness bridge** (`020`) get it too: the bridge offers the registry's tools, and a call runs through the same `exec_tool` as an API span's, so the event is logged. Tested end to end through a fake Claude CLI over the MCP bridge and through the `agy` plugin and gate (`harness_run` tests): the orchestrator's call logs `thread.named` and the narrator's state carries the thread; another role is offered the tool but refused; bad arguments log nothing; an oversize label is cut in the call's log and again in the state.
+- **Measured:** `delphi tools` reports the share of tasks that sit in an orchestrator-named thread, and `delphi tools --prom` exports it (`delphi_tasks_total`, `delphi_tasks_in_named_threads_total`), so whether models actually name their work can be watched like `record_change` adoption (`034` §5).
 
 ## 5. Acceptance criteria
 - The epic pane matches its goldens (`ui/test/snapshots/epic-threads-*.txt`): named threads at 80x24 and 100x34, derived labels, narrow, scrolled, empty.
@@ -101,5 +103,5 @@ In that frame the retry queue is the busiest thing on screen but is *not* what t
 - **The critical path summarises what matters** and is drawn through the threads it touches (§2).
 
 ## 8. Open
-- Seats on the harness bridge cannot call `name_thread` yet (§4); until they can, those missions show derived labels.
+- Nobody has watched a real model decide to call `name_thread` on a live mission. The tests prove the plumbing; the adoption figure (§4) is how to see whether the orchestrator's instructions are enough.
 - `plan()` still returns every item's `critical` flag; the pane uses it for the path and the bar. The old per-thread ETA was dropped; the path's own estimate is the only time shown.

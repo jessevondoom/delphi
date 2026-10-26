@@ -71,6 +71,13 @@ The operator approved the spike and asked for the sketches to be built. Built:
 | **Alerts out of the window** | event log | `monitor.alert` events: `{kind: "loop", tool, n, failed}` once when a span's streak reaches six calls or three failures (`extend_streak`), and `{kind: "cap", pct: 80 or 95}` once each. Nothing sends them anywhere by itself; an operator hook on `monitor.*` (`specs/018`) carries them out. |
 | **Export** | CLI | `delphi tools --prom` prints the counters in the Prometheus text format (calls and failures by role and tool, changes recorded by role, runs by model), for a scrape or a node exporter's textfile collector. |
 
+Added with the bridge tests (2026-10-26), in `delphi tools`, `--json` and `--prom` (`toolreport.rs`):
+
+| Idea | How |
+| :-- | :-- |
+| **Thread-naming adoption** | `thread naming: tasks 4  named 3  rate 75%`: the share of started tasks that sit in a thread the orchestrator named with `name_thread` (`specs/005g`), the same question as `record_change` adoption for a different tool. `delphi_tasks_total`, `delphi_tasks_in_named_threads_total`. |
+| **Bridge row** | `tool bridge: calls 12  average 340 ms  refused 1  connections without the token 0`: Delphi tool calls from subscription CLIs, their average time (an approval card counts), and what the bridge turned away by itself (`harness.bridge_refused`: a tool the span was not offered, a connection without the span's token). `delphi_bridge_calls_total`, `delphi_bridge_call_millis_total`, `delphi_bridge_refused_total{kind}`. A model guessing tool names, or something probing the socket, shows here and nowhere else. |
+
 Still not built, on purpose:
 - **Quiet alerts** (`monitor.alert` for silence) need a timer in the daemon; the window computes quiet from what it has heard, which the daemon does not.
 - **Session rhythm** (a week of sessions by hour): low value until there is more than one operator day of data.

@@ -34,11 +34,45 @@ impl ModelRow {
     }
 }
 
+/// How reliably the orchestrator names the work (`name_thread`, `specs/005g`): tasks, and those that sit in a thread it named.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ThreadRow {
+    pub tasks: u32,
+    pub named: u32,
+}
+
+impl ThreadRow {
+    /// Percent of tasks in a named thread, or `None` when there were no tasks.
+    pub fn rate(&self) -> Option<u32> {
+        (self.tasks > 0).then(|| (self.named * 100 + self.tasks / 2) / self.tasks)
+    }
+}
+
+/// The tool bridge's own account of a subscription CLI's Delphi tool calls: how many, how long they took (from arriving to
+/// being answered, so an approval card counts), and what it turned away by itself (`harness.bridge_refused`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct BridgeRow {
+    pub calls: u32,
+    pub millis: u64,
+    /// Calls for a tool the span was not offered.
+    pub refused: u32,
+    /// Connections that did not open with the span's token.
+    pub bad_connections: u32,
+}
+
+impl BridgeRow {
+    pub fn average_ms(&self) -> Option<u64> {
+        (self.calls > 0).then(|| self.millis / self.calls as u64)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Report {
     pub by_model: BTreeMap<String, ModelRow>,
     pub by_tool: BTreeMap<String, ToolCount>,
     pub total: ModelRow,
+    pub threads: ThreadRow,
+    pub bridge: BridgeRow,
 }
 
 #[derive(Default)]
@@ -55,7 +89,26 @@ struct Span {
 pub fn report(events: &[EventEnvelope]) -> Report {
     let mut spans: BTreeMap<String, Span> = BTreeMap::new();
     let mut r = Report::default();
+    let (mut tasks, mut in_threads) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
     for e in events {
+        // Counted whatever span they belong to, or none.
+        match e.kind.as_str() {
+            "task.created" => {
+                if let Some(t) = e.task_id.clone().filter(|t| !t.is_empty()) {
+                    tasks.insert(t);
+                }
+            }
+            "thread.named" => in_threads.extend(e.payload["tasks"].as_array().into_iter().flatten().filter_map(|t| t.as_str()).map(String::from)),
+            "harness.bridge_call" => {
+                r.bridge.calls += 1;
+                r.bridge.millis += e.payload["duration_ms"].as_u64().unwrap_or(0);
+            }
+            "harness.bridge_refused" => {
+                r.bridge.refused += e.payload["not_offered"].as_u64().unwrap_or(0) as u32;
+                r.bridge.bad_connections += e.payload["bad_connections"].as_u64().unwrap_or(0) as u32;
+            }
+            _ => {}
+        }
         let Some(id) = e.span_id.clone().filter(|s| !s.is_empty()) else { continue };
         if let Some(m) = e.model_id.as_deref().filter(|m| !m.is_empty()) {
             spans.entry(id.clone()).or_default().model = m.to_string();
@@ -73,6 +126,7 @@ pub fn report(events: &[EventEnvelope]) -> Report {
         c.calls += 1;
         c.errors += failed as u32;
     }
+    r.threads = ThreadRow { tasks: tasks.len() as u32, named: tasks.intersection(&in_threads).count() as u32 };
     for s in spans.into_values().filter(|s| s.calls > 0) {
         let key = if s.model.is_empty() { "unknown".to_string() } else { s.model.clone() };
         for row in [r.by_model.entry(key).or_default(), &mut r.total] {
@@ -112,6 +166,11 @@ pub fn prometheus(stats: &BTreeMap<String, crate::observe::RoleTools>, r: &Repor
     family(&mut out, "delphi_runs_total", "Agent runs that made at least one tool call, by model.", by_model(|m| m.spans));
     family(&mut out, "delphi_runs_worked_total", "Runs that changed something (a write, an edit, a command), by model.", by_model(|m| m.worked));
     family(&mut out, "delphi_runs_recorded_total", "Runs that changed something and recorded a change, by model.", by_model(|m| m.recorded));
+    family(&mut out, "delphi_tasks_total", "Tasks started.", vec![(String::new(), r.threads.tasks as u64)]);
+    family(&mut out, "delphi_tasks_in_named_threads_total", "Tasks that sit in a thread the orchestrator named (name_thread).", vec![(String::new(), r.threads.named as u64)]);
+    family(&mut out, "delphi_bridge_calls_total", "Delphi tool calls made through the tool bridge by subscription CLIs.", vec![(String::new(), r.bridge.calls as u64)]);
+    family(&mut out, "delphi_bridge_call_millis_total", "Milliseconds from a bridge call arriving to its answer, summed; divide by the calls for the average.", vec![(String::new(), r.bridge.millis)]);
+    family(&mut out, "delphi_bridge_refused_total", "What the tool bridge turned away by itself, by kind.", vec![("kind=\"not_offered\"".into(), r.bridge.refused as u64), ("kind=\"bad_connection\"".into(), r.bridge.bad_connections as u64)]);
     out
 }
 
@@ -126,6 +185,12 @@ pub fn render(r: &Report, scope: &str) -> String {
     out.push_str(&format!("  {:<w$}  {:>5}  {:>6}  {:>8}  {:>5}  {:>6}  {:>6}\n", "model", "runs", "worked", "recorded", "rate", "calls", "failed", w = w));
     for (k, m) in r.by_model.iter().chain(std::iter::once((&"all".to_string(), &r.total))) {
         out.push_str(&format!("  {:<w$}  {:>5}  {:>6}  {:>8}  {:>5}  {:>6}  {:>6}\n", k, m.spans, m.worked, m.recorded, pct(m), m.calls, m.errors, w = w));
+    }
+    if r.threads.tasks > 0 {
+        out.push_str(&format!("\nthread naming: tasks that sit in a thread the orchestrator named\n  tasks {}  named {}  rate {}\n", r.threads.tasks, r.threads.named, r.threads.rate().map(|p| format!("{}%", p)).unwrap_or_else(|| "-".into())));
+    }
+    if r.bridge.calls > 0 || r.bridge.refused > 0 || r.bridge.bad_connections > 0 {
+        out.push_str(&format!("\ntool bridge\n  calls {}  average {} ms  refused {}  connections without the token {}\n", r.bridge.calls, r.bridge.average_ms().unwrap_or(0), r.bridge.refused, r.bridge.bad_connections));
     }
     out.push_str("\ntools\n");
     let mut tools: Vec<_> = r.by_tool.iter().collect();
@@ -193,6 +258,69 @@ mod tests {
         assert!(text.contains("delphi_changes_recorded_total{role=\"builder\"} 2\n"));
         assert!(text.contains("delphi_runs_recorded_total{model=\"model \\\"x\\\"\"} 1\n"), "{}", text);
         assert!(text.lines().all(|l| l.starts_with('#') || l.rsplit(' ').next().is_some_and(|n| n.parse::<u64>().is_ok())), "every sample ends in an integer");
+    }
+
+    fn task(id: &str) -> EventEnvelope {
+        let mut e = EventEnvelope::new("m", "task.created", json!({"prompt": "p", "target": "orchestrator"}));
+        e.task_id = Some(id.into());
+        e
+    }
+
+    #[test]
+    fn naming_adoption_is_the_share_of_tasks_that_sit_in_a_thread_the_orchestrator_named() {
+        let log = vec![
+            task("t_1"), task("t_2"), task("t_3"), task("t_4"),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "a", "label": "A", "tasks": ["t_1", "t_2", "t_nope"]})),
+            // Renaming a thread does not count its tasks twice, and a task listed in two threads is one task.
+            EventEnvelope::new("m", "thread.named", json!({"thread": "a", "label": "A again", "tasks": ["t_1", "t_2"]})),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "b", "label": "B", "tasks": ["t_2", "t_3"]})),
+        ];
+        let r = report(&log);
+        assert_eq!((r.threads.tasks, r.threads.named, r.threads.rate()), (4, 3, Some(75)), "t_nope was never started, so it counts for nothing");
+        assert_eq!(ThreadRow::default().rate(), None);
+        assert_eq!(report(&[]).threads, ThreadRow::default());
+        // It is counted from the log alone, with or without spans: no tool call is needed.
+        assert_eq!(report(&log).total.spans, 0);
+    }
+
+    #[test]
+    fn the_bridge_row_counts_calls_their_time_and_what_the_bridge_turned_away() {
+        let mut call = ev("harness.bridge_call", "a", None, json!({"name": "timer", "is_error": false, "duration_ms": 300}));
+        call.span_id = None; // counted whatever span it belongs to
+        let log = vec![
+            call,
+            ev("harness.bridge_call", "a", None, json!({"name": "note", "is_error": false, "duration_ms": 100})),
+            ev("harness.bridge_call", "a", None, json!({"name": "old", "is_error": true})), // a log from before durations were kept
+            ev("harness.bridge_refused", "a", None, json!({"not_offered": 2, "tools": ["x", "y"], "bad_connections": 1})),
+            ev("harness.bridge_refused", "b", None, json!({"not_offered": 1, "tools": ["x"], "bad_connections": 0})),
+        ];
+        let r = report(&log);
+        assert_eq!(r.bridge, BridgeRow { calls: 3, millis: 400, refused: 3, bad_connections: 1 });
+        assert_eq!(r.bridge.average_ms(), Some(133));
+        assert_eq!(BridgeRow::default().average_ms(), None);
+    }
+
+    #[test]
+    fn the_prometheus_text_and_the_report_carry_naming_and_bridge_counters() {
+        let log = vec![
+            task("t_1"), task("t_2"),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "a", "label": "A", "tasks": ["t_1"]})),
+            ev("agent.usage", "a", Some("model-x"), json!({})), call("a", "write_file"),
+            ev("harness.bridge_call", "a", None, json!({"name": "timer", "is_error": false, "duration_ms": 250})),
+            ev("harness.bridge_refused", "a", None, json!({"not_offered": 2, "tools": ["x"], "bad_connections": 1})),
+        ];
+        let r = report(&log);
+        let text = prometheus(&BTreeMap::new(), &r);
+        for want in ["delphi_tasks_total{} 2\n", "delphi_tasks_in_named_threads_total{} 1\n", "delphi_bridge_calls_total{} 1\n", "delphi_bridge_call_millis_total{} 250\n", "delphi_bridge_refused_total{kind=\"not_offered\"} 2\n", "delphi_bridge_refused_total{kind=\"bad_connection\"} 1\n"] {
+            assert!(text.contains(want), "{}\n{}", want, text);
+        }
+        assert!(text.lines().all(|l| l.starts_with('#') || l.rsplit(' ').next().is_some_and(|n| n.parse::<u64>().is_ok())), "every sample ends in an integer");
+        let t = render(&r, "mission m1");
+        assert!(t.contains("tasks 2  named 1  rate 50%"), "{}", t);
+        assert!(t.contains("calls 1  average 250 ms  refused 2  connections without the token 1"), "{}", t);
+        // Nothing to say, nothing printed.
+        let quiet = render(&report(&[ev("agent.usage", "a", Some("m"), json!({})), call("a", "read_file")]), "mission m1");
+        assert!(!quiet.contains("thread naming") && !quiet.contains("tool bridge"), "{}", quiet);
     }
 
     #[test]
