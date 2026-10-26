@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 42] = [
+pub const KINDS: [&str; 43] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
+    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -151,6 +151,29 @@ pub struct SessionRow {
 
 const MAX_SESSIONS: usize = 20;
 
+/// A model that is out of quota or otherwise unusable right now (`model.exhausted`), until `back_ms` if the provider said when.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct ModelOut {
+    pub endpoint_id: String,
+    pub model_id: String,
+    pub reason: String,
+    pub back_ms: Option<u64>,
+}
+
+/// A task running on a model other than the one that would have served it (`model.promoted`), and who agreed to that:
+/// `operator` (a card was answered), `policy` (`[access] on_weaker = "finish"`) or `automatic` (an equal model took over).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Standin {
+    pub task: String,
+    pub role: String,
+    pub from: String,
+    pub to: String,
+    pub why: String,
+    pub by: String,
+}
+
+const MAX_FAILOVER_ROWS: usize = 20;
+
 /// One line of the change log (`change.recorded`): what an agent says it finished, in its own plain words, with the
 /// session it happened in and when. Results only; nothing of the reasoning behind them is ever recorded.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -252,6 +275,9 @@ pub struct ObserverState {
     pub changes: Vec<Change>,
     /// The console sessions of the mission, oldest first (the newest 20); the last is the current one.
     pub sessions: Vec<SessionRow>,
+    /// Models that are out right now and tasks running on a stand-in for one (`specs/035` D-7).
+    pub models_out: Vec<ModelOut>,
+    pub standins: Vec<Standin>,
     pub pending_approvals: BTreeMap<String, String>,
     pub spent_usd: f64,
     pub tokens: Tokens,
@@ -446,6 +472,9 @@ impl ObserverState {
         let p = &e["payload"];
         let task = s(&e["task_id"]);
         let role = s(&e["agent"]);
+        if matches!(kind, "task.output" | "task.completed" | "task.failed" | "task.cancelled") {
+            self.standins.retain(|x| x.task != task);
+        }
         match kind {
             "task.created" => {
                 let flow = p["flow"].as_str().or(p["target"].as_str()).unwrap_or("task").to_string();
@@ -756,8 +785,34 @@ impl ObserverState {
             "endpoint.throttled" => self.say(format!("{} is throttled; trying the next endpoint", s(&p["endpoint_id"]))),
             "model.homogeneous" => self.say(format!("no model outside {} was usable; this pass is homogeneous", s(&p["avoided"]))),
             "model.degraded_confirm" if p["state"] == "asked" => self.say("asking whether a weaker model may run this task".to_string()),
-            "model.recovered" => self.say(format!("{} is back ({})", s(&p["endpoint_id"]), s(&p["model_id"]))),
-            "model.exhausted" => self.say(format!("{} is out of quota ({}); trying the next endpoint", s(&p["endpoint_id"]), s(&p["reason"]))),
+            "model.recovered" => {
+                let (ep, md) = (s(&p["endpoint_id"]), s(&p["model_id"]));
+                self.models_out.retain(|m| !(m.endpoint_id == ep && m.model_id == md));
+                self.say(format!("{} is back ({})", ep, md));
+            }
+            "model.exhausted" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let row = ModelOut { endpoint_id: clip(&p["endpoint_id"], 40), model_id: clip(&p["model_id"], 60), reason: clip(&p["reason"], 80), back_ms: p["reset_at"].as_i64().filter(|t| *t > 0).map(|t| t as u64 * 1000) };
+                match self.models_out.iter().position(|m| m.endpoint_id == row.endpoint_id && m.model_id == row.model_id) {
+                    Some(i) => self.models_out[i] = row,
+                    None if self.models_out.len() < MAX_FAILOVER_ROWS => self.models_out.push(row),
+                    None => {}
+                }
+                self.say(format!("{} is out of quota ({}); trying the next endpoint", s(&p["endpoint_id"]), s(&p["reason"])));
+            }
+            "model.promoted" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let pair = |v: &Value| format!("{}/{}", clip(&v["endpoint_id"], 40), clip(&v["model_id"], 60));
+                let why = clip(&p["reason"], 160);
+                let by = if why.contains("confirmed by the operator") { "operator" } else if why.contains("on_weaker") { "policy" } else { "automatic" };
+                let row = Standin { task: task.clone(), role: role.clone(), from: pair(&p["from"]), to: pair(&p["to"]), why, by: by.into() };
+                match self.standins.iter().position(|x| x.task == task) {
+                    Some(i) => self.standins[i] = row,
+                    None if self.standins.len() < MAX_FAILOVER_ROWS => self.standins.push(row),
+                    None => {}
+                }
+                self.say(format!("{} is running on {} instead of {}", if role.is_empty() { task.clone() } else { role.clone() }, pair(&p["to"]), pair(&p["from"])));
+            }
             "harness.fallback" => self.say(format!("{} fell back to the API", s(&p["from"]))),
             _ => {}
         }
@@ -1204,6 +1259,26 @@ mod tests {
         let c = &st.councils[0];
         assert_eq!((c.phase.as_str(), c.stances[0].text.as_str(), c.critiques[0].findings.len(), c.unresolved.len(), c.options[0].1.len()), ("escalated", "Queue.", 1, 1, 2));
         assert_eq!(st.default_view(), "dashboard", "a finished council no longer pulls the view");
+    }
+
+    // specs/035 D-7: which models are out and until when, and which tasks run on a stand-in, who agreed, and that it ends with the task.
+    #[test]
+    fn the_state_says_which_models_are_out_and_which_tasks_run_on_a_stand_in() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "model.exhausted", "t_1", "architect", json!({"endpoint_id": "direct", "model_id": "opus-x", "reason": "quota\x1b[2J reached", "reset_at": 1_790_003_600i64})));
+        st.apply(&ev(2, "model.exhausted", "t_1", "architect", json!({"endpoint_id": "direct", "model_id": "opus-x", "reason": "quota reached", "reset_at": 1_790_007_200i64})));
+        assert_eq!(st.models_out.len(), 1, "one row per model, updated in place");
+        assert_eq!((st.models_out[0].back_ms, st.models_out[0].reason.as_str()), (Some(1_790_007_200_000), "quota reached"));
+        st.apply(&ev(3, "model.promoted", "t_1", "architect", json!({"from": {"endpoint_id": "direct", "model_id": "opus-x"}, "to": {"endpoint_id": "ollama", "model_id": "qwen"}, "reason": "exhausted: quota reached; to finish the task under way, as [access] on_weaker = \"finish\" allows, with a reduced local model"})));
+        st.apply(&ev(4, "model.promoted", "t_2", "builder", json!({"from": {"endpoint_id": "direct", "model_id": "sonnet-x"}, "to": {"endpoint_id": "gem", "model_id": "gem-flash"}, "reason": "exhausted: quota reached; confirmed by the operator, with tier fast instead of workhorse"})));
+        st.apply(&ev(5, "model.promoted", "t_3", "scout", json!({"from": {"endpoint_id": "direct", "model_id": "opus-x"}, "to": {"endpoint_id": "gem", "model_id": "gem-pro"}, "reason": "exhausted: quota reached"})));
+        let by: Vec<(&str, &str, &str)> = st.standins.iter().map(|s| (s.task.as_str(), s.to.as_str(), s.by.as_str())).collect();
+        assert_eq!(by, vec![("t_1", "ollama/qwen", "policy"), ("t_2", "gem/gem-flash", "operator"), ("t_3", "gem/gem-pro", "automatic")]);
+        st.apply(&ev(6, "task.output", "t_1", "", json!({"status": "done", "text": "ok"})));
+        assert_eq!(st.standins.len(), 2, "a stand-in ends with its task");
+        st.apply(&ev(7, "model.recovered", "t_1", "", json!({"endpoint_id": "direct", "model_id": "opus-x"})));
+        assert!(st.models_out.is_empty(), "a model that is back is no longer out");
+        assert!(KINDS.contains(&"model.promoted"));
     }
 
     #[test]

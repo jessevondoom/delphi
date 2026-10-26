@@ -50,6 +50,8 @@ pub struct Settings {
     pub approval_park_max: Duration,
     /// `[session] conversation_tokens`: how much of the operator's session a task is told (`specs/030`); 0 tells nothing.
     pub conversation_tokens: usize,
+    /// `[session] summary`: whether a finished session gets a model-written summary in the central log (`specs/030` §4.3).
+    pub session_summary: crate::summary::SummaryMode,
     /// Output budget per call, raised to leave room above the thinking budget.
     pub max_tokens: u64,
     pub max_dispatch_depth: u32,
@@ -120,6 +122,7 @@ impl Default for Settings {
             approval_timeout: crate::approval::DEFAULT_TIMEOUT,
             approval_park_max: Duration::ZERO,
             conversation_tokens: crate::session::DEFAULT_CONVERSATION_TOKENS,
+            session_summary: crate::summary::SummaryMode::Off,
             max_tokens: 8192,
             max_dispatch_depth: 2,
             mission_budget_usd: 5.0,
@@ -920,8 +923,16 @@ impl Engine {
                     // consent to run sonnet instead of opus is not consent to run sonnet instead of a 1M-token model.
                     let pair = (from.clone(), to.clone());
                     let (confirmed, declined) = self.degraded_decisions(m, &sc.task_id, &pair);
-                    let mut ok = confirmed;
-                    if !confirmed && !declined {
+                    // `[access] on_weaker` (`specs/035` D-4): `never` runs nothing weaker; `finish` lets a task that is already under way (this
+                    // span has made a model turn) carry on without a card. A task the operator already declined stays declined.
+                    use delphi_adapter::config::OnWeaker;
+                    if cfg.access.on_weaker == OnWeaker::Never && !confirmed {
+                        *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the operator's policy runs nothing weaker", from, why) });
+                        return Ok(Err(Escalate(format!("{}{}: {} is unavailable ({}) and [access] on_weaker = \"never\" does not allow running on the weaker {}", EXHAUSTED, note, from, why, to))));
+                    }
+                    let by_policy = cfg.access.on_weaker == OnWeaker::Finish && turn_index > 1 && !confirmed && !declined;
+                    let mut ok = confirmed || by_policy;
+                    if !confirmed && !declined && !by_policy {
                         let summary = self.secrets.redact(&format!("{} is unavailable ({}). Run this task on {} instead? It has {}.", from, why, to, lost.join(" and ")));
                         let detail = json!({"target": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "unavailable": self.secrets.redact(why), "lost": lost});
                         m.append(sc.ev("model.degraded_confirm", json!({"state": "asked", "detail": detail}))).await?;
@@ -949,7 +960,8 @@ impl Engine {
                         *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the weaker {} was declined", from, why, to) });
                         return Ok(Err(Escalate(format!("{}{}: the operator declined the weaker model {} (it has {}); {} is unavailable ({})", EXHAUSTED, note, to, lost.join(" and "), from, why))));
                     }
-                    (key.clone(), Some((target.clone(), format!("{}; confirmed by the operator, with {}", why, lost.join(" and ")))))
+                    let agreed = if by_policy { "to finish the task under way, as [access] on_weaker = \"finish\" allows" } else { "confirmed by the operator" };
+                    (key.clone(), Some((target.clone(), format!("{}; {}, with {}", why, agreed, lost.join(" and ")))))
                 }
                 Route::NoModel { .. } if cfg.pool_entries().is_empty() => return Ok(Err(Escalate(NO_MODEL.to_string()))),
                 Route::NoModel { back_at, .. } => {
@@ -1055,6 +1067,14 @@ impl Engine {
                         m.append(sc.agent_ev("budget.release", json!({"reservation_id": rid, "reason": "quota exhausted"}), ep, &model_id)).await?;
                         m.append(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": model_id, "reason": x.reason, "reset_at": x.reset_at, "raw": self.secrets.redact(&x.raw)}))).await?;
                         self.pool.record_exhausted(&ep.id, &model_id, &x);
+                        // A billing error or a spend cap is the account's, not one model's: the endpoint's other models are out too, and
+                        // must not be offered as a stand-in that fails the same way (`specs/035` G-6).
+                        if x.is_account_wide() {
+                            for k in cfg.pool_entries().into_iter().filter(|k| k.endpoint_id == ep.id && k.model_id != model_id) {
+                                m.append(sc.ev("model.exhausted", json!({"endpoint_id": ep.id, "model_id": k.model_id, "reason": x.reason, "reset_at": x.reset_at, "raw": "", "account_wide": true}))).await?;
+                                self.pool.record_exhausted(&ep.id, &k.model_id, &x);
+                            }
+                        }
                         exhausted_note.get_or_insert_with(|| format!("{} is out of quota ({})", ep.id, self.secrets.redact(&x.to_string())));
                         continue 'endpoints;
                     }
@@ -2180,6 +2200,74 @@ mod tests {
         assert_eq!(states, vec!["asked", "confirmed"]);
         assert!(events_of(&f, "model.promoted")[0].payload["reason"].as_str().unwrap().contains("confirmed by the operator"));
         assert_eq!(f.m.budget.lock().unwrap().reserved(), 0);
+    }
+
+    // specs/035 G-6, found by a live run: "credit balance too low" is the account's, so the endpoint's other models are out as well and
+    // a weaker model on the same endpoint is never offered as a stand-in that fails the same way.
+    #[tokio::test]
+    async fn a_billing_error_takes_every_model_on_the_endpoint_out_and_the_task_moves_to_another_endpoint() {
+        let f = setup(vec![Step::ExhaustBilling, Step::text("Served by the other endpoint.")], 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Served by the other endpoint."), "{}", out.text);
+        let served: Vec<(String, String)> = f.model.requests().iter().map(|r| (r.endpoint_id.clone(), r.model_id.clone())).collect();
+        assert_eq!(served, vec![("direct".into(), "opus-x".into()), ("backup".into(), "opus-x".into())]);
+        let out_models: Vec<String> = f.engine.pool.snapshot().iter().filter(|e| e.endpoint_id == "direct" && e.state == crate::pool::State::Exhausted).map(|e| e.model_id.clone()).collect();
+        assert!(out_models.contains(&"opus-x".to_string()) && out_models.contains(&"sonnet-x".to_string()), "every model on the endpoint is out: {:?}", out_models);
+        let events = events_of(&f, "model.exhausted");
+        assert!(events.iter().any(|e| e.payload["model_id"] == "sonnet-x" && e.payload["account_wide"] == true), "the narrator is told too");
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"), "no card for a stand-in that cannot work");
+    }
+
+    fn on_weaker(f: &Fx, policy: &str) {
+        let text = crate::testkit::CONFIG.replace("[access]", &format!("[access]\non_weaker = \"{}\"", policy));
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    // specs/035 D-4 `finish`: a task already under way carries on, on the weaker model, with no card; the switch is logged with its reason.
+    #[tokio::test]
+    async fn with_on_weaker_finish_a_task_under_way_finishes_on_the_weaker_model_without_a_card() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Finished on the weaker model.")], 5.0, |_| {});
+        on_weaker(&f, "finish");
+        // Opus is up on the direct API for the first turn and has no second endpoint to go to when it runs out.
+        f.engine.pool.record_exhausted("backup", "opus-x", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600), raw: String::new() });
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Finished on the weaker model."), "{}", out.text);
+        assert_eq!(f.model.requests().last().unwrap().model_id, "sonnet-x", "the last turn ran on the weaker model");
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"), "no card was raised");
+        assert!(events_of(&f, "model.degraded_confirm").is_empty());
+        let why = events_of(&f, "model.promoted").last().unwrap().payload["reason"].as_str().unwrap().to_string();
+        assert!(why.contains("on_weaker") && why.contains("tier workhorse instead of frontier"), "{}", why);
+    }
+
+    // The same policy does not let a task that has not started begin on a weaker model unasked.
+    #[tokio::test]
+    async fn with_on_weaker_finish_a_task_not_yet_started_still_asks() {
+        let f = setup(vec![Step::text("Done on the weaker model.")], 5.0, |_| {});
+        on_weaker(&f, "finish");
+        opus_out(&f, 3600);
+        let task = spawn_task(&f, "architect", "Plan the change");
+        let card = wait_for_card(&f).await;
+        assert_eq!((card.tool.as_str(), card.tier), ("model", ApprovalTier::Amber));
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    // specs/035 D-4 `never`: nothing weaker runs, no card is raised, and the task waits for the primary.
+    #[tokio::test]
+    async fn with_on_weaker_never_the_task_waits_for_the_primary_and_nothing_weaker_runs() {
+        let f = setup(vec![Step::text("Back on the primary.")], 5.0, |s| {
+            s.park_max = None;
+        });
+        on_weaker(&f, "never");
+        opus_out(&f, 3600);
+        let task = spawn_task(&f, "architect", "Plan the change");
+        wait_for_event(&f, "task.blocked").await;
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"), "never means no question either");
+        assert!(f.model.requests().is_empty() && !task.is_finished());
+        f.advance(3601);
+        let out = task.await.unwrap().unwrap();
+        assert_eq!(out.text, "Back on the primary.");
+        assert_eq!(f.model.requests().iter().map(|r| r.model_id.clone()).collect::<Vec<_>>(), vec!["opus-x"]);
     }
 
     // specs/002 §4.1 test 6a, the other half: declining does not stop the task, it waits for the target.

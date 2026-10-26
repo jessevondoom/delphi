@@ -213,6 +213,11 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       if (n && n === s.session) return s;
       return { ...s, blocks: [], live: '', sources: {}, started: true, session: n || s.session + 1 };
     }
+    // A task moved to another model (`specs/035`): said once in the chat, so the operator is never surprised by who is answering.
+    case 'model.promoted': {
+      const pair = (v: any) => `${sanitize(String(v?.endpoint_id ?? '?'))}/${sanitize(String(v?.model_id ?? '?'))}`;
+      return addBlock(s, { kind: 'note', text: `continuing on ${pair(pl.to)} (${pair(pl.from)} is not available)`, at: stamp(e, now), tone: 'info' });
+    }
     case 'council.started': return { ...s, council: true, lastActivity: now };
     case 'council.barrier.released': return { ...s, council: false };
     case 'task.output': {

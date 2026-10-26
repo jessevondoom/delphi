@@ -98,6 +98,12 @@ fn mock(script: Vec<String>) -> Mock {
                     let mut sc = script.lock().unwrap();
                     if sc.len() > 1 { sc.remove(0) } else { sc[0].clone() }
                 };
+                if reply == "HTTP402" {
+                    // A billing error: the provider says the account is out of credit (an explicit exhaustion signal, `specs/002` §4.1).
+                    let body = r#"{"type":"error","error":{"type":"billing_error","message":"Your credit balance is too low."}}"#;
+                    let _ = write!(s, "HTTP/1.1 402 Payment Required\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body);
+                    return;
+                }
                 let _ = write!(s, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n");
                 if reply == "HANG" {
                     // Accept the request and never finish: the daemon is killed while waiting.
@@ -2263,5 +2269,56 @@ role_family = {{ orchestrator = "local", architect = "local", builder = "local",
     println!("=== AFTER /new: the same question has nothing to refer to ===\n{}", c.visible());
     let central = std::fs::read_to_string(home.join("sessions.jsonl")).unwrap_or_default();
     println!("=== central log ===\n{}", central);
+    assert_eq!(c.ctrl_c_out(), 0);
+}
+
+/// A live check of failover (`specs/035`): the primary ("Claude", a mock) reports it is out of credit, and the work goes to a real
+/// local model: `cargo test -p delphi --test e2e live_claude -- --ignored --nocapture` with Ollama running (`DELPHI_LIVE_MODEL`, default
+/// `gemma4:latest`). The stand-in is a reduced model, so the operator is asked first (the default `on_weaker = "ask"`).
+#[test]
+#[ignore = "needs a local Ollama model"]
+fn live_claude_runs_out_and_the_task_finishes_on_a_local_model_after_the_operator_agrees() {
+    let model = std::env::var("DELPHI_LIVE_MODEL").unwrap_or_else(|_| "gemma4:latest".into());
+    let m = mock(vec!["HTTP402".into()]);
+    let e = setup(m.port);
+    let config = format!(
+        "{}\n[[endpoints]]\nid = \"ollama\"\nfamily = \"local\"\npath = \"gateway-compat\"\nbase_url = \"http://localhost:11434\"\ncredential = \"none\"\ncost_model = \"local\"\nmodels = {{ fast = \"{m}\", workhorse = \"{m}\", frontier = \"{m}\" }}\n[models.catalog.\"{m}\"]\nmax_output_tokens = 2048\n",
+        std::fs::read_to_string(e.ws.join("config.toml")).unwrap().replace("order = { claude = [\"mock\"] }", "order = { claude = [\"mock\"], local = [\"ollama\"] }\nfailover = [\"local\"]").replace("allowed_endpoints = [\"mock\"]", "allowed_endpoints = [\"mock\", \"ollama\"]"),
+        m = model
+    );
+    std::fs::write(e.ws.join("config.toml"), config).unwrap();
+    let Some(launcher) = ui_launcher(e._t.path()) else { panic!("the UI launcher is needed (ui/node_modules)") };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 40, 130, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    c.type_keys("Name two programming languages at random, in one short sentence.");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    c.wait_for("approval needed");
+    c.expect_visible("reduced local model");
+    println!("=== THE CARD: Claude is out; the stand-in is local and reduced, so the operator is asked ===\n{}", c.visible());
+    assert!(c.visible().contains("ollama/gemma4") || c.visible().contains("ollama/"), "the stand-in is the local model, not a lesser model on the account that is out:\n{}", c.visible());
+    assert!(!c.visible().contains("mock/sonnet-t") && !c.visible().contains("mock/haiku-t"), "{}", c.visible());
+    c.type_keys("/y");
+    std::thread::sleep(Duration::from_millis(150));
+    c.type_keys("\r");
+    let deadline = Instant::now() + Duration::from_secs(900);
+    loop {
+        let v = c.visible();
+        if v.contains("Athena · ") && v.contains("continuing on") && !v.contains("· writing") {
+            break;
+        }
+        assert!(!v.contains("Stopped:"), "the task stopped:\n{}", v);
+        assert!(Instant::now() < deadline, "no reply in 900 s:\n{}", v);
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    println!("=== AFTER: the task finished on the local model ===\n{}", c.visible());
+    assert!(!m.seen.lock().unwrap().is_empty(), "the primary was tried first");
     assert_eq!(c.ctrl_c_out(), 0);
 }

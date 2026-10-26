@@ -2,6 +2,7 @@
 
 pub mod approval;
 pub mod session;
+pub mod summary;
 pub mod changelog;
 pub mod toolreport;
 pub mod artifacts;
