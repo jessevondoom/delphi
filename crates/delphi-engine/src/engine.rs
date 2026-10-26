@@ -1069,7 +1069,7 @@ impl Engine {
         let state = self.pool.snapshot();
         cfg.pool_entries().into_iter().filter(|k| k.family == family).any(|k| {
             let Some(ep) = cfg.endpoint(&k.endpoint_id) else { return false };
-            if mutating && !ep.can_mutate() {
+            if mutating && !ep.can_mutate() && !self.mutating_harnesses().contains(&ep.id) {
                 return false;
             }
             state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id).is_none_or(|e| match (e.state, e.until) {
@@ -1079,6 +1079,16 @@ impl Engine {
                 (crate::pool::State::Exhausted, None) => false,
             })
         })
+    }
+
+    /// The `agy` seats that may serve a role that writes files and runs commands: the profile has the gate on, and a
+    /// conformance probe of the installed version has seen it hold (`specs/020` §8.7).
+    pub(crate) fn mutating_harnesses(&self) -> Vec<String> {
+        let cfg = self.cfg.get();
+        if !cfg.harness.get("agy").cloned().unwrap_or_default().bridge {
+            return vec![];
+        }
+        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_gate_verified(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
     }
 
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;
@@ -1091,6 +1101,7 @@ impl Engine {
             prefer_family: Some(sc.family.clone()),
             avoid_families: sc.avoid_families.clone(),
             mutating: sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped"),
+            mutating_harnesses: self.mutating_harnesses(),
             min_context_tokens: 0,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
             turn_by_turn,

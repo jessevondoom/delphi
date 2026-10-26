@@ -28,6 +28,7 @@ pub mod harness_run;
 pub mod inventory;
 pub mod embed;
 pub mod kb;
+pub mod kbserve;
 pub mod vecext;
 pub mod mission;
 pub mod models_cli;

@@ -102,7 +102,7 @@ pub fn tool_kind(name: &str) -> &'static str {
 }
 
 /// `agy --version` as installed now, asked at most once every five minutes by a running daemon.
-pub async fn installed_agy_version(program: &str) -> Option<String> {
+pub fn installed_agy_version(program: &str) -> Option<String> {
     type Cache = std::collections::HashMap<String, (std::time::Instant, Option<String>)>;
     static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
     if let Some((at, v)) = CACHE.lock().unwrap().get_or_insert_with(Default::default).get(program) {
@@ -110,8 +110,7 @@ pub async fn installed_agy_version(program: &str) -> Option<String> {
             return v.clone();
         }
     }
-    let p = program.to_string();
-    let v = tokio::task::spawn_blocking(move || agy_version(&p)).await.ok().flatten();
+    let v = agy_version(program);
     CACHE.lock().unwrap().get_or_insert_with(Default::default).insert(program.to_string(), (std::time::Instant::now(), v.clone()));
     v
 }

@@ -3,9 +3,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useStdout } from 'ink';
 import type { Ev } from './input.ts';
-import { emptyState, epicOrder, observeFrame, parseView, stepView, type Hit, type OModel, type OState, type View } from './observe-screen.ts';
+import { emptyState, epicOrder, observeFrame, parseView, stepView, type OModel, type OState, type View } from './observe-screen.ts';
+import * as A from './archives.ts';
+import { openExternal } from './external.ts';
+import { copyText } from './links.ts';
 import type { Rpc } from './rpc.ts';
-import { useSelection } from './select.ts';
+import { copyToClipboard, useSelection } from './select.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 import { stillMotion } from './motion.ts';
@@ -35,9 +38,12 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     const t = setInterval(() => setNow(Date.now()), 300);
     return () => clearInterval(t);
   }, [still, busy]);
-  const [search, setSearch] = useState<OModel['search']>({ editing: false, query: '', hits: [], note: '' });
-  const R = useRef({ view, pick, st, search, scroll, selNode, size });
-  R.current = { view, pick, st, search, scroll, selNode, size };
+  const [arch, setArchState] = useState<A.Arch>(A.emptyArch());
+  const R = useRef({ view, pick, st, arch, scroll, selNode, size });
+  R.current = { view, pick, st, arch, scroll, selNode, size };
+  // The ref moves at once, not when React gets to the update: text and Enter can arrive in one read, and the second
+  // key must see what the first one did.
+  const setArch = (f: (a: A.Arch) => A.Arch) => { const n = f(R.current.arch); R.current.arch = n; setArchState(n); };
   const picked = useRef(first !== null);
 
   const load = () => cmd.call('observe.state', {}).then((s: OState) => {
@@ -47,6 +53,24 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   }).catch(() => setConnected(false));
 
   useEffect(() => { void load(); }, []);
+
+  // The knowledge window reads through `kb.get`, the read-only knowledge API on the narrator socket (spec 028 §6a).
+  const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
+  const enc = encodeURIComponent;
+  const loadShelf = () => Promise.all([kb('/v1/collections'), kb('/v1/documents?limit=6'), kb('/v1/health')])
+    .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
+    .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
+  useEffect(() => { if (view === 'archives' && !R.current.arch.shelf) void loadShelf(); }, [view, connected]);
+  const run = (act: A.Action) => {
+    const fail = (msg: string) => setArch((a) => A.withNote(a, msg));
+    if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    else if (act.t === 'open') {
+      const t = act.target;
+      kb(`/v1/doc?path=${enc(t.path)}`).then((r) => setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')))).catch(() => fail('could not open it'));
+    } else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
+    else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
+  };
 
   useEffect(() => {
     const onResize = () => setSize({ w: stdout.columns, h: stdout.rows });
@@ -91,6 +115,10 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     const onEv = (e: Ev) => {
       const { view: v } = R.current;
       if (e.t === 'bg') { if (!themeForced) setPal({ dark: e.dark }); return; }
+      if (v === 'archives' && !(e.t === 'ctrl' && e.c === 'c')) {
+        const r = A.key(R.current.arch, e, R.current.size.w, Math.max(1, R.current.size.h - 7));
+        if (r.used) { setArch(() => r.a); run(r.action); return; }
+      }
       if (e.t === 'wheel') { setScroll((x) => Math.max(0, x + (e.dir === 'up' ? -3 : 3))); return; }
       if (e.t === 'ctrl' && e.c === 'c') { exit(); return; }
       if (e.t !== 'key' || e.shift || e.alt) return;
@@ -105,7 +133,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, search, live, connected, think, now, still };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, connected, think, now, still };
   const lines = observeFrame(model, size.w, size.h);
   const shown = useSelection(term, lines);
   return (

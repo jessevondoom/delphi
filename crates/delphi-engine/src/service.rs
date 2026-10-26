@@ -607,6 +607,33 @@ impl EngineService {
         Ok(json!(hits.iter().map(|h| json!({"pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "blake3": h.blake3})).collect::<Vec<_>>()))
     }
 
+    /// `kb.get`: the read-only knowledge API (`specs/028` §6a) over the daemon's socket, for the narrator's archives
+    /// pane and the reader. `target` is a path and query such as `/v1/doc?path=specs/004.md`; the answer is the
+    /// HTTP API's `{status, body}`. The index is brought up to date first, as for `kb.search`.
+    async fn kb_get(&self, p: Value) -> RpcOutcome {
+        let target = p["target"].as_str().unwrap_or("").to_string();
+        if !target.starts_with("/v1/") || target.len() > 2048 {
+            return Err(err(code::INVALID_PARAMS, "`target` must be a /v1/ path of at most 2048 characters"));
+        }
+        let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let r = tokio::task::spawn_blocking(move || -> Result<crate::kbserve::Reply, crate::kb::KbError> {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+            let model = crate::kb::attach_default(&home, &mut kb)?;
+            kb.refresh(&ws, "")?;
+            if model {
+                let (vectors, chunks) = kb.vector_counts()?;
+                if vectors < chunks {
+                    crate::kb::embed_in_background(&home, &ws);
+                }
+            }
+            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws }.get(&target))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e| err(-32000, e.to_string()))?;
+        Ok(json!({"status": r.status, "body": r.body}))
+    }
+
     async fn kb_index(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
@@ -718,6 +745,7 @@ impl Extension for ServiceExt {
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
+                "kb.get" => svc.kb_get(params).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
                 "observe.state" => svc.observe_state(params).await,
                 "observe.diff" => svc.observe_diff(params).await,
@@ -930,7 +958,7 @@ mod tests {
         // The list is part of the contract: adding a method here is a decision, so this test names it.
         let mut listed: Vec<&str> = delphi_core::server::NARRATOR_METHODS.to_vec();
         listed.sort();
-        assert_eq!(listed, vec!["approval.list", "budget.get", "events.subscribe", "kb.search", "observe.diff", "observe.snapshot", "observe.state", "permissions.get", "ratify.list", "session.ping", "session.snapshot", "usage.get"]);
+        assert_eq!(listed, vec!["approval.list", "budget.get", "events.subscribe", "kb.get", "kb.search", "observe.diff", "observe.snapshot", "observe.state", "permissions.get", "ratify.list", "session.ping", "session.snapshot", "usage.get"]);
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
         let s = serve(&f).await;
         let (sock, tok) = (s.narrator_sock.clone(), s.narrator.clone());
@@ -995,7 +1023,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1357,6 +1385,10 @@ mod tests {
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
             assert_eq!(c.call("observe.diff", json!({"task_id": "t_0001"})).unwrap()["available"], false, "no live worktree for a plain task");
+            let health = c.call("kb.get", json!({"target": "/v1/health"})).unwrap();
+            assert!(health["status"] == 200 && health["body"]["ok"] == true, "{health}");
+            assert_eq!(c.call("kb.get", json!({"target": "/v1/doc?path=../../etc/passwd"})).unwrap()["status"], 404, "a path outside the index finds nothing");
+            assert_eq!(rpc_code(c.call("kb.get", json!({"target": "/etc/passwd"}))), Some(code::INVALID_PARAMS), "only /v1/ targets");
             c.call("observe.snapshot", json!({})).unwrap()
         })
         .await;

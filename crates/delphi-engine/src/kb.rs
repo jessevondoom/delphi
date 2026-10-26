@@ -651,6 +651,80 @@ fn embed_text(rel_path: &str, heading_path: &str, piece: &str) -> String {
     }
 }
 
+/// The SQL condition (over `kb_documents d`) for the documents `opts` may see: nothing untrusted or inactive unless
+/// asked, and a role sees only its own private memory. Search, listing and reading all use this one filter.
+fn allowed_sql(opts: &SearchOpts) -> String {
+    let mut allowed = String::from("1=1");
+    if !opts.include_untrusted {
+        allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
+    }
+    if let Some(r) = &opts.role {
+        // An agent sees only its own private memory (a whole path segment, not a prefix). A role name that is
+        // not a plain identifier matches nothing, so it cannot be used to widen the filter.
+        if valid_role(r) {
+            allowed.push_str(&format!(" AND (d.zone != 'memory' OR d.rel_path LIKE 'memory/agents/{}/%')", r));
+        } else {
+            allowed.push_str(" AND d.zone != 'memory'");
+        }
+    }
+    if opts.no_bundles {
+        allowed.push_str(" AND d.zone != 'bundles'");
+    }
+    if let Some(b) = &opts.bundle {
+        // `org` or `org/name`, plain ids only: anything else matches nothing, so it cannot widen the filter.
+        let parts: Vec<&str> = b.split('/').collect();
+        if parts.len() <= 2 && parts.iter().all(|p| delphi_core::bundles::plain_id(p)) {
+            allowed.push_str(&format!(" AND d.rel_path LIKE 'bundles/{}/%'", b));
+        } else {
+            allowed.push_str(" AND 1=0");
+        }
+    }
+    allowed
+}
+
+/// A document as the index knows it (no text).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DocInfo {
+    pub rel_path: String,
+    pub zone: String,
+    pub source_type: String,
+    pub status: String,
+    pub blake3: String,
+    pub updated_at: String,
+}
+
+fn doc_info(r: &rusqlite::Row) -> rusqlite::Result<DocInfo> {
+    Ok(DocInfo { rel_path: r.get(0)?, zone: r.get(1)?, source_type: r.get(2)?, status: r.get(3)?, blake3: r.get(4)?, updated_at: r.get(5)? })
+}
+
+/// A document's last change on disk: the indexer keeps the file's modification time, while `updated_at` is empty in an
+/// index the daemon built, which has no clock to give it.
+const DOC_COLS: &str = "d.rel_path, d.zone, d.source_type, d.status, d.content_blake3, strftime('%Y-%m-%dT%H:%M:%SZ', d.mtime_ns / 1000000000, 'unixepoch')";
+
+impl Kb {
+    /// The collections (zones) with how many visible documents each holds and when the newest changed.
+    pub fn collections(&self, opts: &SearchOpts) -> Result<Vec<(String, usize, String)>, KbError> {
+        let sql = format!("SELECT d.zone, COUNT(*), strftime('%Y-%m-%dT%H:%M:%SZ', MAX(d.mtime_ns) / 1000000000, 'unixepoch') FROM kb_documents d WHERE {} GROUP BY d.zone ORDER BY d.zone", allowed_sql(opts));
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize, r.get::<_, String>(2)?)))?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// Visible documents, newest first, optionally of one collection.
+    pub fn documents(&self, zone: Option<&str>, limit: usize, offset: usize, opts: &SearchOpts) -> Result<Vec<DocInfo>, KbError> {
+        let sql = format!("SELECT {DOC_COLS} FROM kb_documents d WHERE {} AND (?1 IS NULL OR d.zone = ?1) ORDER BY d.mtime_ns DESC, d.rel_path LIMIT ?2 OFFSET ?3", allowed_sql(opts));
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map(rusqlite::params![zone, limit as i64, offset as i64], doc_info)?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// One visible document by logical path; `None` when it is not indexed or not visible to `opts`.
+    pub fn document(&self, rel_path: &str, opts: &SearchOpts) -> Result<Option<DocInfo>, KbError> {
+        let sql = format!("SELECT {DOC_COLS} FROM kb_documents d WHERE {} AND d.rel_path = ?1", allowed_sql(opts));
+        Ok(self.conn.query_row(&sql, [rel_path], doc_info).ok())
+    }
+}
+
 fn valid_role(r: &str) -> bool {
     !r.is_empty() && r.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_alphanumeric() || c == '-')
 }
@@ -983,31 +1057,7 @@ impl Kb {
         if terms.is_empty() {
             return Ok((vec![], None));
         }
-        let mut allowed = String::from("1=1");
-        if !opts.include_untrusted {
-            allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
-        }
-        if let Some(r) = &opts.role {
-            // An agent sees only its own private memory (a whole path segment, not a prefix). A role name that is
-            // not a plain identifier matches nothing, so it cannot be used to widen the filter.
-            if valid_role(r) {
-                allowed.push_str(&format!(" AND (d.zone != 'memory' OR d.rel_path LIKE 'memory/agents/{}/%')", r));
-            } else {
-                allowed.push_str(" AND d.zone != 'memory'");
-            }
-        }
-        if opts.no_bundles {
-            allowed.push_str(" AND d.zone != 'bundles'");
-        }
-        if let Some(b) = &opts.bundle {
-            // `org` or `org/name`, plain ids only: anything else matches nothing, so it cannot widen the filter.
-            let parts: Vec<&str> = b.split('/').collect();
-            if parts.len() <= 2 && parts.iter().all(|p| delphi_core::bundles::plain_id(p)) {
-                allowed.push_str(&format!(" AND d.rel_path LIKE 'bundles/{}/%'", b));
-            } else {
-                allowed.push_str(" AND 1=0");
-            }
-        }
+        let allowed = allowed_sql(opts);
         let mut score: HashMap<i64, f64> = HashMap::new();
         let nearest = if opts.legs != Legs::LexicalOnly { self.vector_ranked(query, opts, &allowed)? } else { vec![] };
         if opts.legs != Legs::VectorOnly {
@@ -1555,6 +1605,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 }
                 Ok(0)
             }
+            "serve" => Ok(crate::kbserve::run(home, ws, &args[1..])),
             "search" => {
                 let query: Vec<&str> = args[1..].iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
                 let role = args.iter().position(|a| a == "--role").and_then(|i| args.get(i + 1)).cloned();
@@ -1649,7 +1700,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
             }
             "model" => model_cmd(home, &args[1..]),
             _ => {
-                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] | miss | eval | model | seed-export <out>");
+                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] | serve | miss | eval | model | seed-export <out>");
                 Ok(2)
             }
         }

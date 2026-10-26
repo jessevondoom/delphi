@@ -1373,14 +1373,18 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
-    // Only the arrows change the view: Right to archives, Left twice back to epic; digits, Tab and q do nothing.
+    // Only the arrows change the view: Right to archives, Left twice back to epic. In the other views digits, Tab and q
+    // do nothing; in archives, the knowledge window, they are text for the search box.
     o.type_keys("\x1b[C");
-    o.wait_for("from the console: ctrl+k");
-    o.type_keys("2");
-    o.type_keys("\t");
-    o.type_keys("q");
-    std::thread::sleep(Duration::from_millis(300));
-    o.expect_visible("· archives"); // digits, Tab and q are not bound
+    o.wait_for("search what Delphi knows");
+    o.wait_for("collections"); // the shelf: read through `kb.get` on the narrator socket
+    o.type_keys("council");
+    o.type_keys("\r");
+    o.wait_for("result"); // "N results · 0.4 s · lexical": the daemon's own search, with no model installed here
+    o.type_keys("\r"); // the first result opens in the reader
+    o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
+    o.type_keys("\x7f"); // backspace goes back to the results
+    o.wait_for("enter open");
     for _ in 0..2 {
         o.type_keys("\x1b[D");
         std::thread::sleep(Duration::from_millis(120));

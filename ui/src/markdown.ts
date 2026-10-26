@@ -5,16 +5,58 @@ import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import { highlightLine } from './highlight.ts';
 import wrapAnsi from 'wrap-ansi';
+import stringWidth from 'string-width';
+import { isPointerText, parseTarget, POINTER_RE, type Link, type Target } from './links.ts';
+
+/**
+ * While `renderMarkdownLinks` runs, links are wrapped in zero-width OSC 8 markers (`delphi-link:<id>`). They survive
+ * the wrap, so that afterwards each link's rows and columns can be read off the finished lines (spec 029 §3); the markers
+ * are then removed. Outside that call `ctx` is null and rendering is exactly what it was.
+ */
+type Ctx = { base?: string; focus?: number | null; links: Link[] };
+let ctx: Ctx | null = null;
+const OPEN = (id: number) => `\x1b]8;;delphi-link:${id}\x1b\\`;
+const CLOSE = '\x1b]8;;\x1b\\';
+
+/** `label` as a link to `target`: styled, registered with the renderer, and marked so its place can be found. */
+function linked(label: string, plain: string, target: Target): string {
+  const c = ctx!;
+  const id = c.links.length;
+  c.links.push({ id, label: plain, target, spans: [] });
+  return OPEN(id) + (c.focus === id ? chalk.inverse(label) : label) + CLOSE;
+}
+
+/** Text with the logical paths in it turned into links (only while links are being collected). */
+function withPointers(text: string): string {
+  if (!ctx) return text;
+  let out = '', last = 0;
+  for (const m of text.matchAll(POINTER_RE)) {
+    const target = parseTarget(m[0]);
+    if (!target) continue;
+    out += text.slice(last, m.index) + linked(T.link(m[0]), m[0], target);
+    last = m.index! + m[0].length;
+  }
+  return out + text.slice(last);
+}
 
 const inline = (toks: Token[] | undefined): string =>
   (toks ?? []).map((t) => {
     switch (t.type) {
       case 'strong': return chalk.bold(inline((t as Tokens.Strong).tokens));
       case 'em': return chalk.italic(inline((t as Tokens.Em).tokens));
-      case 'codespan': return T.accent((t as Tokens.Codespan).text);
-      case 'link': return T.link((t as Tokens.Link).text) + chalk.dim(` <${(t as Tokens.Link).href}>`);
+      case 'codespan': {
+        const text = (t as Tokens.Codespan).text;
+        const target = ctx && isPointerText(text) ? parseTarget(text) : null;
+        return target ? linked(T.accent(text), text, target) : T.accent(text);
+      }
+      case 'link': {
+        const l = t as Tokens.Link;
+        const target = ctx ? parseTarget(l.href, ctx.base) : null;
+        if (target) return linked(T.link(l.text), l.text, target) + (target.k === 'external' ? chalk.dim(` <${l.href}>`) : '');
+        return T.link(l.text) + chalk.dim(` <${l.href}>`);
+      }
       case 'br': return '\n';
-      case 'text': return (t as Tokens.Text).tokens ? inline((t as Tokens.Text).tokens) : (t as Tokens.Text).text;
+      case 'text': return (t as Tokens.Text).tokens ? inline((t as Tokens.Text).tokens) : withPointers((t as Tokens.Text).text);
       default: return (t as any).raw ?? '';
     }
   }).join('');
@@ -68,4 +110,40 @@ export function wrapLine(l: string, width: number): string[] {
 export function renderMarkdown(src: string, width: number): string[] {
   const lines = new Lexer().lex(sanitize(src)).flatMap((t) => block(t));
   return lines.flatMap((l) => (l === '' ? [''] : wrapLine(l, width)));
+}
+
+const OSC = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const TOKENS = /\x1b\]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)|\x1b\[[0-9;]*m|[^\x1b]+|\x1b/g;
+
+/** Reads each link's rows and columns off wrapped lines carrying the markers, then removes the markers. */
+function collect(lines: string[], links: Link[]): string[] {
+  lines.forEach((line, row) => {
+    let col = 0, open: { id: number; col: number } | null = null;
+    const close = () => { if (open && col > open.col) links[open.id]!.spans.push({ line: row, col: open.col, width: col - open.col }); open = null; };
+    for (const m of line.matchAll(TOKENS)) {
+      if (m[1] !== undefined) {
+        close();
+        const id = /^delphi-link:(\d+)$/.exec(m[1]);
+        if (id && links[Number(id[1])]) open = { id: Number(id[1]), col };
+      } else if (!m[0].startsWith('\x1b')) col += stringWidth(m[0]);
+    }
+    close();
+  });
+  return lines.map((l) => l.replace(OSC, ''));
+}
+
+/**
+ * `renderMarkdown`, and the links in it: `[label](target)` links and logical paths written as plain text (in prose or in
+ * code spans), each with the rows and columns it occupies in the returned lines. `base` is the logical path of the
+ * document, for relative links; `focus` is the link to draw reversed. Fenced code is left alone.
+ */
+export function renderMarkdownLinks(src: string, width: number, opts: { base?: string; focus?: number | null } = {}): { lines: string[]; links: Link[] } {
+  const links: Link[] = [];
+  ctx = { ...opts, links };
+  try {
+    const lines = new Lexer().lex(sanitize(src)).flatMap((t) => block(t));
+    return { lines: collect(lines.flatMap((l) => (l === '' ? [''] : wrapLine(l, width))), links), links };
+  } finally {
+    ctx = null;
+  }
 }
