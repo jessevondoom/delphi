@@ -597,6 +597,8 @@ impl EngineService {
         let (ws, home, role) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone(), p["role"].as_str().map(String::from));
         // Reranking reads the best results with a second model and adds about half a second; `"rerank": false` skips it.
         let rerank = p["rerank"].as_bool().unwrap_or(true);
+        // Notes the daemon staged are searched only when asked for (`specs/031` §3.1).
+        let staged = p["staged"].as_bool().unwrap_or(false);
         let hits = tokio::task::spawn_blocking(move || -> Result<Vec<crate::kb::Hit>, crate::kb::KbError> {
             let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
             // A search never waits for the model to read the corpus, and never answers from a stale index: the words
@@ -610,7 +612,7 @@ impl EngineService {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            let mut opts = crate::kb::SearchOpts { role: role.clone(), ..Default::default() };
+            let mut opts = crate::kb::SearchOpts { role: role.clone(), include_staged: staged, ..Default::default() };
             if !rerank {
                 opts.rerank_weight = 0.0;
             }
