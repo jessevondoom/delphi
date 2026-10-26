@@ -24,7 +24,7 @@ Open a file without leaving the window, by following a link, the way a browser f
 | D-2 | The mechanism is **generic**: the same link handling serves the knowledge window, the main chat and the thinking feed. |
 | D-3 | **Read-only.** |
 | D-4 | The **main chat is a source for gathering research**: what is opened or cited there is collected (§6). |
-| D-5 | `ctrl+o` enters link mode in the console. |
+| D-5 | `ctrl+o` enters link mode in the console; `esc` leaves it. |
 | D-6 | Plain-text pointers become links **once the span closes**, not while it streams (less to move and flicker). |
 | D-7 | An external link opens the **system default browser** at that address, on `enter`, with no further confirmation. |
 
@@ -92,6 +92,8 @@ The crate was considered (the operator's suggestion) and **not adopted**:
 3. Next: the same in the narrator's thinking feed (pointers linked once a span closes, D-6).
 4. Next: the same in the main chat behind `ctrl+o` (D-5), and the sources/pin recording of §6.
 
-## 9. Open questions
-1. **Link mode in the chat:** with `ctrl+o` settled, should `esc` leave it, or `ctrl+o` again, or both? Proposed: both.
-2. **Sources from the narrator:** documents opened in the narrator's reader are not recorded as sources (the narrator is read-only and has no notebook); only the console records them (§6). Is that the right line?
+## 9. Settled questions (operator, 2026-10-25)
+1. **Leaving link mode:** `esc` leaves it, and only `esc`, so it behaves like every other mode here (`ctrl+o` enters; it does not toggle).
+2. **Sources from the narrator:** documents opened in the narrator's reader are **not** recorded as sources. The narrator is for human access and research, and is read-only; only the console records sources (§6).
+
+Nothing is open for slices 3 and 4.
