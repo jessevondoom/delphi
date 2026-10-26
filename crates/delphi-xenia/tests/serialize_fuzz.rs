@@ -296,13 +296,13 @@ fn a_record_with_one_defect_is_refused_for_a_stated_reason() {
         Defect { name: "pointer with a signed-URL query", apply: |r| r.pointers = vec![bad_pointer(Scheme::Https, "https://h.example/x?X-Amz-Signature=abc")], expect: "invalid", verifier: Some("bad-pointer") },
         Defect { name: "pointer with a delphi URI", apply: |r| r.pointers = vec![bad_pointer(Scheme::Https, "delphi://cap/abc")], expect: "invalid", verifier: Some("bad-pointer") },
         Defect { name: "drive pointer", apply: |r| { let mut p = bad_pointer(Scheme::Drive, "1AbCdEfGhIjKlMnOpQrStUv"); p.pin = Pin { kind: PinKind::DriveRevision, value: Some("12345".into()) }; r.pointers = vec![p] }, expect: "invalid", verifier: Some("bad-pointer") },
-        Defect { name: "nine pointers", apply: |r| r.pointers = (0..=MAX_POINTERS).map(|i| good_pointer(i)).collect(), expect: "invalid", verifier: Some("over-limit") },
-        Defect { name: "five evidence pointers", apply: |r| r.evidence = (0..=MAX_EVIDENCE).map(|i| good_pointer(i)).collect(), expect: "invalid", verifier: Some("over-limit") },
+        Defect { name: "nine pointers", apply: |r| r.pointers = (0..=MAX_POINTERS).map(good_pointer).collect(), expect: "invalid", verifier: Some("over-limit") },
+        Defect { name: "five evidence pointers", apply: |r| r.evidence = (0..=MAX_EVIDENCE).map(good_pointer).collect(), expect: "invalid", verifier: Some("over-limit") },
         Defect { name: "refers to itself", apply: |r| r.related = vec![r.id.clone()], expect: "invalid", verifier: Some("mismatch") },
         Defect { name: "related is not a ULID", apply: |r| r.related = vec!["nope".into()], expect: "invalid", verifier: Some("bad-schema") },
         Defect { name: "scanner name with a space", apply: |r| r.redaction.scanner = "rev sec".into(), expect: "invalid", verifier: Some("bad-schema") },
         Defect { name: "content hash is not a hash", apply: |r| r.redaction.content_hash = "blake3:zz".into(), expect: "invalid", verifier: Some("bad-schema") },
-        Defect { name: "file over 16 KiB", apply: |r| { r.pointers = (0..MAX_POINTERS).map(|i| fat_pointer(i)).collect(); r.evidence = (0..MAX_EVIDENCE).map(|i| fat_pointer(i)).collect(); r.summary = "é".repeat(MAX_SUMMARY_CHARS); r.body = "b".repeat(MAX_BODY_BYTES); r.body_kind = BodyKind::Markdown }, expect: "too-large", verifier: Some("oversize") },
+        Defect { name: "file over 16 KiB", apply: |r| { r.pointers = (0..MAX_POINTERS).map(fat_pointer).collect(); r.evidence = (0..MAX_EVIDENCE).map(fat_pointer).collect(); r.summary = "é".repeat(MAX_SUMMARY_CHARS); r.body = "b".repeat(MAX_BODY_BYTES); r.body_kind = BodyKind::Markdown }, expect: "too-large", verifier: Some("oversize") },
     ];
     // The control: the undamaged base record is accepted, so each refusal below is the defect's doing.
     let ok = serialize::serialize(&base()).expect("the base record serializes");
