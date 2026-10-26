@@ -18,7 +18,7 @@ function ctx(state = initial(0), calls: any[] = [], reply: (m: string, p: any) =
 const ev = (type: string, payload: any, timestamp?: string) => ({ method: 'event', params: { type, payload, timestamp } });
 
 test('/council parses seats, author and the proposition', () => {
-  assert.deepEqual(parseCouncil('--seats architect,red-team --author claude Should we?'), { proposition: 'Should we?', seats: ['architect', 'red-team'], author: 'claude' });
+  assert.deepEqual(parseCouncil('--seats architect,red-team --author claude Should we?'), { proposition: 'Should we?', seats: ['architect', 'red-team'], author: 'claude', lenses: false });
   assert.match(String(parseCouncil('')), /needs a proposition/);
 });
 

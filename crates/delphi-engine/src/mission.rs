@@ -320,7 +320,19 @@ mod tests {
     fn open(dir: &Path) -> (Arc<MissionState>, Arc<Mutex<Ledger>>, Arc<SecretRegistry>) {
         let ledger = Arc::new(Mutex::new(Ledger::open_in_memory().unwrap()));
         let secrets = SecretRegistry::new();
-        (MissionState::open(dir, "m1", Hub::new(), ledger.clone(), secrets.clone(), 5.0).unwrap(), ledger, secrets)
+        // A reopen right after a drop can find the lock still held: another test's fork/exec briefly inherits the descriptor
+        // (the same race `delphi-core`'s log tests retry through). Wait it out instead of failing.
+        let mut tries = 0;
+        let state = loop {
+            match MissionState::open(dir, "m1", Hub::new(), ledger.clone(), secrets.clone(), 5.0) {
+                Err(EngineError::Log(delphi_core::log::LogError::Locked(_))) if tries < 300 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                other => break other.unwrap(),
+            }
+        };
+        (state, ledger, secrets)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

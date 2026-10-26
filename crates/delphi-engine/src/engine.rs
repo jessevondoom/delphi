@@ -352,7 +352,7 @@ fn final_text(blocks: &[ContentBlock]) -> String {
     blocks.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")
 }
 
-fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
+pub(crate) fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
     tools::ToolResult { content: msg.into(), is_error: true }
 }
 
@@ -1223,6 +1223,9 @@ impl Engine {
         if sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
             defs.push(run_command_def());
         }
+        if self.offers_alignment(sc) {
+            defs.push(crate::align_run::def());
+        }
         defs.extend(self.connector_defs(sc).await?);
         // A bundle agent's `tools` list only removes: what the host role lacks is not in `defs`, and what the list lacks goes.
         if let Some(allowed) = sc.bundle_agent.as_ref().and_then(|a| a.allowed_tools.as_ref()) {
@@ -1253,6 +1256,9 @@ impl Engine {
                 return Ok(tool_result_error("this role's manifest does not authorize agent-dispatch"));
             }
             return self.exec_dispatch(sc, call_id, args, rec).await;
+        }
+        if name == crate::align_run::TOOL {
+            return self.exec_align(sc, args).await;
         }
         if name == "timer" {
             // As with dispatch: the schema is only offered to roles that may set timers; a forged call is refused here.
@@ -3084,6 +3090,42 @@ mod tests {
         f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
         assert!(!f.model.requests()[0].body.to_string().contains("G-acme-01"));
         assert!(events_of(&f, "org_context.built").is_empty());
+    }
+
+    // specs/026 AC-5: the strategist can run the alignment pre-pass on a document; it needs no model call, is advice only,
+    // and is offered only to the roles that plan and review, and only while a bundle is added.
+    #[tokio::test]
+    async fn the_strategist_can_check_what_a_spec_cites_without_a_model_call_and_only_while_a_bundle_is_added() {
+        let spec = "---\nstatus: draft\n---\n# Spec\nServes [G-acme-01] and [G-acme-02]; follows decision 0042 and decision 0057.\n";
+        let f = setup(vec![Step::tool("a1", "check_alignment", json!({"path": "specs/012-x.md"})), Step::text("Done.")], 5.0, |_| {});
+        std::fs::create_dir_all(f.engine.ws.dir.join("team/specs")).unwrap();
+        std::fs::write(f.engine.ws.dir.join("team/specs/012-x.md"), spec).unwrap();
+        f.engine.run_task(&f.m, "strategist", "audit the spec").await.unwrap();
+        assert!(!f.model.requests()[0].body["tools"].to_string().contains("check_alignment"), "not offered with no bundle added");
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("no bundle is added"), "and a forged call is refused: there is nothing to check against");
+        let f = setup(vec![Step::tool("a1", "check_alignment", json!({"path": "specs/012-x.md"})), Step::text("Done.")], 5.0, |_| {});
+        std::fs::create_dir_all(f.engine.ws.dir.join("team/specs")).unwrap();
+        std::fs::write(f.engine.ws.dir.join("team/specs/012-x.md"), spec).unwrap();
+        crate::align::tests::fixture(&f.engine.ws);
+        let out = f.engine.run_task(&f.m, "strategist", "audit the spec").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(f.model.requests()[0].body["tools"].to_string().contains("check_alignment"));
+        assert_eq!(f.model.requests().len(), 2, "the check itself made no model call: the dispatch round trip is the whole conversation");
+        let result = f.model.requests()[1].body["messages"].to_string();
+        assert!(result.contains("ALIGN-REF-01 (P2) G-acme-02") && result.contains("ALIGN-REF-01 (P2) decision 0042") && result.contains("nothing is blocked"), "{}", result);
+        assert!(!result.contains("G-acme-01:") && !result.contains("decision 0057:"), "live citations are not findings");
+        let ev = events_of(&f, "align.finding");
+        assert_eq!(ev.len(), 1);
+        assert!(ev[0].payload["findings"].as_array().unwrap().iter().all(|x| x["level"] == "P2"));
+        assert!(events_of(&f, "approval.requested").is_empty(), "a check is not an action");
+    }
+
+    #[tokio::test]
+    async fn the_builder_and_a_text_only_span_are_not_offered_the_alignment_check() {
+        let f = builder_fixture(vec![Step::text("done")], |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::align::tests::fixture(&f.engine.ws);
+        f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        assert!(!f.model.requests()[0].body["tools"].to_string().contains("check_alignment"), "goals in a builder's tools invite scope creep");
     }
 
     #[tokio::test]
