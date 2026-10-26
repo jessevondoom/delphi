@@ -3,6 +3,7 @@ id: investigator
 title: "Investigator"
 role: "Precision Researcher, Bug Tracker & Benchmark Specialist"
 cognitive_profile: fast-triage
+default_tier: fast
 default_access_scope:
   read: ["*"]
   write: ["missions/**/research/**"]

@@ -104,6 +104,14 @@ fn rank(tier: &str) -> i32 {
     }
 }
 
+/// The tier a pair actually served a request for `wanted`: `wanted` when the endpoint maps that tier to this model (a subscription with one
+/// model serves every tier), else the pair's own tier. This is what the narrator shows as the model's tier, not what was asked for
+/// (`specs/035` D-16): after a failover the two differ.
+pub fn served_tier(cfg: &Config, key: &PoolKey, wanted: &str) -> String {
+    let serves = cfg.endpoint(&key.endpoint_id).and_then(|ep| cfg.resolve_model(ep, wanted)).as_deref() == Some(key.model_id.as_str());
+    if serves { wanted.to_string() } else { key.tier.clone() }
+}
+
 fn tier_name(rank: i32) -> &'static str {
     match rank {
         0 => "fast",
@@ -236,11 +244,12 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
     let reduced = |k: &PoolKey| cfg.is_reduced(&k.endpoint_id, &k.model_id);
     let ideal_reduced = reduced(&ideal);
     let similar = |k: &PoolKey| rank_at(cfg, k, ideal_rank) >= ideal_rank && !(ideal_ctx > 0 && context_of(cfg, k) > 0 && context_of(cfg, k) < ideal_ctx) && (ideal_reduced || !reduced(k));
-    // The ladder (`specs/035` D-9). Among similar pairs prefer the closest tier (equal before higher), then the usual order. Among the
-    // weaker ones the most capable, a reduced model last.
+    // The ladder (`specs/035` D-9). A stand-in that is no step down is silent: the closest tier first (equal before higher), and at the
+    // same tier the same lineage before another, then the usual order. Only a step down (a lesser tier, a shorter window, a reduced model)
+    // needs the save-point and the card, and there too the model's own lineage comes first, the most capable first, a reduced model last.
     let ideal_lineage = cfg.lineage_of(&ideal);
     let same_lineage = |k: &PoolKey| cfg.lineage_of(k) == ideal_lineage;
-    let closest_similar = |scope: &dyn Fn(&PoolKey) -> bool| usable.iter().enumerate().filter(|(_, k)| similar(k) && scope(k)).min_by_key(|(i, k)| (rank_at(cfg, k, ideal_rank) - ideal_rank, *i)).map(|(_, k)| k.clone());
+    let closest_similar = || usable.iter().enumerate().filter(|(_, k)| similar(k)).min_by_key(|(i, k)| (rank_at(cfg, k, ideal_rank) - ideal_rank, !same_lineage(k), *i)).map(|(_, k)| k.clone());
     let weakest_first = |scope: &dyn Fn(&PoolKey) -> bool| usable.iter().enumerate().filter(|(_, k)| scope(k)).min_by_key(|(i, k)| (reduced(k) as i32, -rank_at(cfg, k, ideal_rank), *i)).map(|(_, k)| k.clone());
     let weaker_route = |key: PoolKey| {
         let mut lost = Vec::new();
@@ -256,21 +265,10 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
         }
         Route::Weaker { homogeneous: homogeneous(&key), key, why: ideal_why.clone(), back_at: ideal_back_at, target: ideal.clone(), lost }
     };
-    let similar_route = |key: PoolKey| Route::Similar { homogeneous: homogeneous(&key), key, why: ideal_why.clone(), target: ideal.clone() };
-    let any = |_: &PoolKey| true;
-    if cfg.access.failover_prefers == delphi_adapter::config::FailoverPrefers::Family {
-        // Stay in the lineage: the same model elsewhere, then the next model down, one step at a time; only then look at other lineages.
-        if let Some(key) = closest_similar(&same_lineage) {
-            return similar_route(key);
-        }
-        if let Some(key) = weakest_first(&|k: &PoolKey| same_lineage(k) && !similar(k)) {
-            return weaker_route(key);
-        }
+    if let Some(key) = closest_similar() {
+        return Route::Similar { homogeneous: homogeneous(&key), key, why: ideal_why, target: ideal };
     }
-    if let Some(key) = closest_similar(&any) {
-        return similar_route(key);
-    }
-    if let Some(key) = weakest_first(&any) {
+    if let Some(key) = weakest_first(&|k: &PoolKey| same_lineage(k)).or_else(|| weakest_first(&|_: &PoolKey| true)) {
         return weaker_route(key);
     }
     let back_at = blocked.iter().filter_map(|b| b.back_at).min();
@@ -427,35 +425,35 @@ order = { claude = ["direct", "bedrock"] }
     }
 
     #[test]
-    fn under_capability_ordering_the_same_tier_on_another_family_beats_a_higher_tier_on_the_preferred_one() {
-        let c = Config::parse(&CONFIG.replace("[access]\n", "[access]\nfailover_prefers = \"capability\"\n")).unwrap();
+    fn the_same_tier_on_another_family_beats_a_higher_tier_on_the_preferred_one() {
+        let c = cfg();
         let state = down(&c, &["sonnet-x", "bedrock-sonnet-x"]);
         let r = resolve_route(&c, &state, NOW, &req("builder", "workhorse"));
         assert!(matches!(r, Route::Similar { .. }), "{:?}", r);
         assert_eq!(picked(&r), "gem/gem-flash", "equal tier first: the pricier frontier model is not used when an equal one is up");
-        // The default, `family`, stays in the lineage: the model above is the same lineage and no worse.
-        let d = cfg();
-        let r = resolve_route(&d, &down(&d, &["sonnet-x", "bedrock-sonnet-x"]), NOW, &req("builder", "workhorse"));
-        assert_eq!(picked(&r), "direct/opus-x", "in the family first, even a step up: {:?}", r);
     }
 
-    // specs/035 AC-9: Opus out, Sonnet up: Sonnet, not a Gemini peer; the family gone: the equal-tier peer before a lesser model elsewhere.
+    // specs/035 D-9 (AC-9): a stand-in that is no step down is silent, any lineage, the closest tier first and the same lineage first at
+    // one tier; only a step down needs the save-point and the card, and there the model's own lineage comes first.
     #[test]
-    fn the_ladder_stays_in_the_family_and_goes_down_one_step_at_a_time_before_looking_elsewhere() {
+    fn an_equal_tier_takes_over_silently_and_only_a_step_down_stays_in_the_family_and_needs_the_card() {
         let c = cfg();
         let r = resolve_route(&c, &down(&c, &["opus-x", "bedrock-opus-x"]), NOW, &req("architect", "frontier"));
+        assert!(matches!(r, Route::Similar { .. }) && r.key().unwrap().family == "gemini" && !r.needs_confirmation(), "an equal-tier model on another provider, no question: {:?}", r);
+        // The equal-tier peers gone: now it is a step down, and the family comes first: Sonnet (the most capable lesser one), with the card.
+        let frontier_gone = ["opus-x", "bedrock-opus-x", "gem-pro", "gem-agy"];
+        let r = resolve_route(&c, &down(&c, &frontier_gone), NOW, &req("architect", "frontier"));
         match &r {
             Route::Weaker { key, lost, .. } => assert_eq!((key.model_id.as_str(), key.family.as_str(), lost[0].as_str()), ("sonnet-x", "claude", "tier workhorse instead of frontier")),
             other => panic!("the next model down in the family, with the card: {:?}", other),
         }
-        let r = resolve_route(&c, &down(&c, &["opus-x", "bedrock-opus-x", "sonnet-x", "bedrock-sonnet-x"]), NOW, &req("architect", "frontier"));
+        let r = resolve_route(&c, &down(&c, &["opus-x", "bedrock-opus-x", "gem-pro", "gem-agy", "sonnet-x", "bedrock-sonnet-x"]), NOW, &req("architect", "frontier"));
         assert_eq!(picked(&r), "direct/haiku-x", "then the step after that, still in the family");
-        let r = resolve_route(&c, &down(&c, &["opus-x", "bedrock-opus-x", "sonnet-x", "bedrock-sonnet-x", "haiku-x"]), NOW, &req("architect", "frontier"));
-        assert!(matches!(r, Route::Similar { .. }) && r.key().unwrap().family == "gemini", "only now another lineage, and an equal one first: {:?}", r);
-        // The earlier ordering, kept as an option.
-        let cap = Config::parse(&CONFIG.replace("[access]\n", "[access]\nfailover_prefers = \"capability\"\n")).unwrap();
-        let r = resolve_route(&cap, &down(&cap, &["opus-x", "bedrock-opus-x"]), NOW, &req("architect", "frontier"));
-        assert!(matches!(r, Route::Similar { .. }) && r.key().unwrap().family == "gemini", "{:?}", r);
+        let r = resolve_route(&c, &down(&c, &["opus-x", "bedrock-opus-x", "gem-pro", "gem-agy", "sonnet-x", "bedrock-sonnet-x", "haiku-x"]), NOW, &req("architect", "frontier"));
+        assert!(r.needs_confirmation() && r.key().unwrap().family == "gemini", "only when the family is gone, a lesser model elsewhere: {:?}", r);
+        // At the same tier the model's own lineage is preferred: Sonnet on Bedrock before Gemini Flash when Sonnet on the API is out.
+        let r = resolve_route(&c, &down(&c, &["sonnet-x"]), NOW, &req("builder", "workhorse"));
+        assert_eq!(picked(&r), "bedrock/bedrock-sonnet-x");
     }
 
     // specs/035 AC-10 / D-10: Gemini's subscription serves Claude models from a pool of its own; they are the Claude lineage.
@@ -688,13 +686,6 @@ order = { claude = ["direct", "bedrock"] }
             Route::Weaker { key, lost, .. } => assert!(key.model_id == "gem-flash" && lost[0].contains("tier workhorse instead of frontier"), "the target's own family, one model down: {:?}", r),
             other => panic!("{:?}", other),
         }
-        // The earlier ordering would have gone to the 200K Claude models, a shorter window.
-        let cap = Config::parse(&CONFIG.replace("[access]\n", "[access]\nfailover_prefers = \"capability\"\n")).unwrap();
-        let r = resolve_route(&cap, &down(&cap, &["gem-pro", "gem-agy"]), NOW, &RouteRequest { target: Some("gem-pro".into()), ..req("red-team", "workhorse") });
-        match &r {
-            Route::Weaker { key, lost, .. } => assert!(key.model_id == "opus-x" && lost[0].contains("200000-token context instead of 1000000"), "{:?}", r),
-            other => panic!("{:?}", other),
-        }
         // A target nobody serves is a preference nothing can meet: the role gets its ordinary choice (config validation rejects it earlier).
         let r = resolve_route(&c, &[], NOW, &RouteRequest { target: Some("nope".into()), ..req("red-team", "workhorse") });
         assert_eq!(picked(&r), "direct/sonnet-x", "{:?}", r);
@@ -725,7 +716,7 @@ order = { claude = ["direct", "bedrock"] }
     fn cooldowns_and_resets_expire_as_the_clock_moves() {
         let c = cfg();
         let state = [entry("direct", "sonnet-x", State::CoolingDown, Some(NOW + 60)), entry("bedrock", "bedrock-sonnet-x", State::Exhausted, Some(NOW + 60))];
-        assert_eq!(picked(&resolve_route(&c, &state, NOW, &req("builder", "workhorse"))), "direct/opus-x", "both Claude workhorse pairs are down: the family's next model, here a step up, before another family");
+        assert_eq!(picked(&resolve_route(&c, &state, NOW, &req("builder", "workhorse"))), "gem/gem-flash", "both Claude workhorse pairs are down: an equal tier elsewhere");
         assert_eq!(picked(&resolve_route(&c, &state, NOW + 61, &req("builder", "workhorse"))), "direct/sonnet-x", "after the wait the target is back");
         let probing = [entry("direct", "sonnet-x", State::Exhausted, None)];
         assert!(matches!(resolve_route(&c, &probing, NOW + 100_000, &req("builder", "workhorse")), Route::Similar { .. }), "no known reset: it stays down until a probe clears it");

@@ -93,8 +93,11 @@ pub struct AgentRow {
     pub state: String,
     pub task_id: String,
     pub endpoint: String,
+    /// The tier of the model that served the latest call (what it actually ran on, not what was asked for).
     pub tier: String,
     pub model: String,
+    /// The tier this role starts on (its manifest's `default_tier`), from its latest span: the narrator marks the model above or below it.
+    pub default_tier: String,
     /// The call before this one was on a lower tier (an upscale on the retry ladder).
     pub upscaled: bool,
     pub tokens: Tokens,
@@ -115,7 +118,12 @@ pub struct Node {
     /// The endpoint and model this agent's latest call went to (empty until its first call), and the tier it asked for.
     pub endpoint: String,
     pub model: String,
+    /// The tier of the model that served its latest call.
     pub tier: String,
+    /// The tier its role starts on, the tier asked for this task (the orchestrator may have raised or lowered it) and why (`specs/035` D-15).
+    pub default_tier: String,
+    pub requested_tier: String,
+    pub tier_reason: String,
     /// What it is waiting for, if anything: `waiting on you`, or `waiting for a model: <why>`.
     pub waiting: String,
     /// When the node was added and when it finished (`done` or `escalated`), as Unix milliseconds from the event
@@ -730,10 +738,13 @@ impl ObserverState {
                 if let Some(par) = &parent {
                     self.last_child.insert(par.clone(), id.clone());
                 }
-                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), started_ms: ts_ms(e), after, ..Default::default() });
+                self.nodes.insert(id.clone(), Node { id: id.clone(), role: r.clone(), parent, depth: p["depth"].as_u64().unwrap_or(0), task_id: task.clone(), state: "pending".into(), default_tier: s(&p["default_tier"]), requested_tier: s(&p["tier"]), tier_reason: sanitize(p["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect(), started_ms: ts_ms(e), after, ..Default::default() });
                 if let Some(a) = self.agents.get_mut(&r) {
                     a.state = "running".into();
                     a.task_id = task;
+                    if !s(&p["default_tier"]).is_empty() {
+                        a.default_tier = s(&p["default_tier"]);
+                    }
                 }
             }
             "dag.node.state" => {
@@ -1505,6 +1516,22 @@ mod tests {
         let c = &st.councils[0];
         assert_eq!((c.phase.as_str(), c.stances[0].text.as_str(), c.critiques[0].findings.len(), c.unresolved.len(), c.options[0].1.len()), ("escalated", "Queue.", 1, 1, 2));
         assert_eq!(st.default_view(), "dashboard", "a finished council no longer pulls the view");
+    }
+
+    // specs/035 D-14..D-16: a span says the tier its role starts on, the tier asked for and why; the model it ran on is the one that served it.
+    #[test]
+    fn a_node_carries_its_roles_default_tier_the_tier_asked_for_and_why_and_the_row_the_tier_that_served() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "dag.node.added", "t_1", "architect", json!({"node_id": "n1", "role": "architect", "depth": 1, "tier": "frontier", "default_tier": "workhorse", "tier_reason": "a spec\x1b[2J with a security\nmodel"})));
+        let n = &st.nodes["n1"];
+        assert_eq!((n.default_tier.as_str(), n.requested_tier.as_str(), n.tier_reason.as_str()), ("workhorse", "frontier", "a spec with a security model"));
+        assert_eq!(st.agents["architect"].default_tier, "workhorse");
+        let mut u = ev(2, "agent.usage", "t_1", "architect", json!({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.0}));
+        u["span_id"] = json!("n1");
+        u["model_id"] = json!("claude-sonnet");
+        u["model_tier"] = json!("workhorse");
+        st.apply(&u);
+        assert_eq!((st.agents["architect"].tier.as_str(), st.agents["architect"].model.as_str(), st.nodes["n1"].tier.as_str()), ("workhorse", "claude-sonnet", "workhorse"), "the model it really ran on");
     }
 
     // specs/035 D-7: which models are out and until when, and which tasks run on a stand-in, who agreed, and that it ends with the task.

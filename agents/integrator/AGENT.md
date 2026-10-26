@@ -3,6 +3,7 @@ id: integrator
 title: "Integrator"
 role: "External Integrations, GitHub/API Operations & Protocol Bridge"
 cognitive_profile: fast-triage
+default_tier: fast
 default_access_scope:
   read: ["*"]
   write: ["missions/**/comms/**"]  # outbound GitHub ops via the gh API (Red tier), never repo files such as .github/**

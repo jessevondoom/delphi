@@ -29,6 +29,9 @@ pub struct RoutingDirective {
     /// `claude` (the default) or `gemini`. Failover never crosses families.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_family: Option<String>,
+    /// Why the orchestrator raised (or lowered) the tier for this task (`specs/035` D-15); shown in the narrator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_budget_tokens: Option<u32>,
     #[serde(default)]
@@ -92,7 +95,7 @@ impl HandoffEnvelope {
                 vec!["Read-only work: you cannot run code or change the project; write only the notes and drafts your tools allow.".into(), "Be brief: the operator reads your answer in a terminal. Answer in about 20 lines; if more detail is worth keeping, write it to a file under your mission folder and point to it.".into()]
             },
             expected_output: if target == "builder" { ExpectedOutput { artifact_type: "the change made in the worktree, plus a short summary of what you changed".into(), required_fields: vec![] } } else { ExpectedOutput { artifact_type: "answer".into(), required_fields: vec![] } },
-            routing_directive: RoutingDirective { model_tier: None, model_family: None, thinking_budget_tokens: None, attempt_number: 1, avoid_families: vec![] },
+            routing_directive: RoutingDirective { model_tier: None, model_family: None, tier_reason: None, thinking_budget_tokens: None, attempt_number: 1, avoid_families: vec![] },
             bundle_agent: None,
             conversation: String::new(),
             distill: None,

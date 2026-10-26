@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import type { OModel, OState } from './observe-screen.ts';
+import * as V from './tiers.ts';
 
 type Task = OState['tasks'][string];
 const taskNum = (id: string) => Number(id.replace(/\D/g, '')) || 0;
@@ -67,15 +68,16 @@ function chips(m: OModel, w: number, only = false): string[] {
 function taskRow(m: OModel, t: Task, w: number): string {
   const nodes = Object.values(m.st.nodes).filter((n: Node) => n.task_id === t.id);
   const live = nodes.filter((n) => n.state === 'running');
-  const top = nodes.find((n) => n.depth === 0) ?? live[0];
+  const top = live.find((n) => n.depth === 0) ?? live[0] ?? nodes.find((n) => n.depth === 0);
   const role = top?.role ?? t.flow;
   const waiting = live.map((n) => n.waiting ?? '').find((x) => x);
   const starts = nodes.map((n) => n.started_ms).filter((x) => x > 0);
   const el = m.now && starts.length ? mmss(m.now - Math.min(...starts)) : '';
   const who = T.roleName(role, m.info) + (live.length > 1 ? dim(` +${live.length - 1}`) : '');
   const tag = t.flow === 'build' || t.flow === 'council' ? dim(`${t.flow} `) : '';
+  const chip = top?.model ? ` ${dim(clean(top.model, 22))}${V.mark(top.tier, top.default_tier) ? ' ' + V.mark(top.tier, top.default_tier) : ''}` : '';
   const state = waiting ? T.warn(clean(waiting, Math.max(24, Math.min(60, Math.floor(w * 0.4))))) : T.accent('working');
-  const head = ` ${waiting ? T.warn('►') : T.accent('●')} ${chalk.bold(who)}  ${dim(t.id)}  ${dim(el.padStart(5))}  ${state}  `;
+  const head = ` ${waiting ? T.warn('►') : T.accent('●')} ${chalk.bold(who)}${chip}  ${dim(t.id)}  ${dim(el.padStart(5))}  ${state}  `;
   const room = Math.max(0, w - T.width(head) - 1);
   return T.clip(head + tag + (room > 8 ? dim(clean(t.prompt, Math.max(0, room - T.width(tag)))) : ''), w);
 }

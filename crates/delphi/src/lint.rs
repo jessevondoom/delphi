@@ -446,6 +446,14 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
             errs.push(format!("cognitive_profile `{}` is not one of {:?}", c, COGNITIVE));
         }
     }
+    // `default_tier` (`specs/035` D-14): a known tier, and no built-in role starts at the top one.
+    if let Some(t) = get_str(fm, "default_tier") {
+        if !["fast", "workhorse", "frontier"].contains(&t) {
+            errs.push(format!("default_tier `{}` is not one of fast, workhorse, frontier", t));
+        } else if t == "frontier" && !dir.starts_with("custom/") {
+            errs.push("default_tier `frontier`: no built-in role starts on the top tier; the orchestrator raises a role for a task that needs it (specs/035 D-14)".into());
+        }
+    }
     if ROLES.contains(&id) && get_str(fm, "memory_scope") != Some(format!("memory/agents/{}/", id).as_str()) {
         errs.push(format!("memory_scope must be `memory/agents/{}/`", id));
     }
@@ -868,6 +876,17 @@ mod tests {
 
     fn fails(tree: &Tree, check: &str) -> Vec<String> {
         run(tree).findings.into_iter().filter(|f| f.level == Level::Fail && f.check == check).map(|f| format!("{} {}", f.location, f.message)).collect()
+    }
+
+    // specs/035 D-14: a manifest says its default tier in a word we know, and no built-in role starts on the top one.
+    #[test]
+    fn default_tier_is_checked_and_no_built_in_role_starts_on_the_top_tier() {
+        let with = |t: &str| frontmatter_of(&BUILDER.replace("cognitive_profile: code-craft\n", &format!("cognitive_profile: code-craft\ndefault_tier: {}\n", t))).unwrap();
+        assert!(manifest_errors(&with("workhorse"), "builder").is_empty());
+        assert!(manifest_errors(&with("fast"), "builder").is_empty());
+        assert!(manifest_errors(&with("huge"), "builder").iter().any(|e| e.contains("default_tier `huge`")));
+        assert!(manifest_errors(&with("frontier"), "builder").iter().any(|e| e.contains("no built-in role starts on the top tier")));
+        assert!(manifest_errors(&with("frontier"), "custom/builder").is_empty(), "an operator's own override may start a role on the top tier");
     }
 
     const BUILDER: &str = "---\nid: builder\ntitle: B\nrole: b\ncognitive_profile: code-craft\nmemory_scope: memory/agents/builder/\nmax_turn_budget: 5\ndefault_access_scope: {read: ['*'], write: ['@worktree/**'], execute: ['test-runner']}\nauthorized_skills: [tdd-execution]\n---\nbody\n";
