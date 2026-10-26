@@ -780,7 +780,8 @@ fn the_preview_lists_similar_records_bounded_and_without_control_characters() {
     let fx = Fx::new();
     let mut hits: Vec<SimilarHit> = (1..=9).map(|i| SimilarHit { id: format!("01JBX3Q8T2M9Z4K7WYH5N6D70{i}"), title: format!("Similar {i}"), tier: "L2".into(), score: 1.0 - i as f32 / 10.0 }).collect();
     hits[0].title = "evil\u{1b}[31m\ntitle".into();
-    hits.push(SimilarHit { id: "01JBX3Q8T2M9Z4K7WYH5N6D001".into(), title: "this record itself".into(), tier: "L1".into(), score: 2.0 });
+    // First in line: if the self-exclusion were missing it would take a slot before the cap is reached.
+    hits.insert(0, SimilarHit { id: "01JBX3Q8T2M9Z4K7WYH5N6D001".into(), title: "this record itself".into(), tier: "L1".into(), score: 2.0 });
     let idx = FakeIndex(hits);
     let p = fx.publisher(&idx);
     let prepared = p.prepare(&fx.key("erin"), vec![draft("A note", &["rust"]).into_item()]).unwrap();
