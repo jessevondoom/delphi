@@ -348,13 +348,22 @@ impl Engine {
 
     /// Is there a fresh conformance record for this agy seat, taken on the version installed now, that says the gate held?
     pub(crate) fn agy_gate_verified(&self, endpoint_id: &str, program: &str) -> bool {
-        let Some(path) = self.settings.agy_gate_file.clone().or_else(|| self.inventory.gate_path()) else { return false };
-        let Some(rec) = crate::capabilities::load_gates(&path).into_iter().find(|g| g.endpoint_id == endpoint_id) else { return false };
+        self.agy_gate_record(endpoint_id, program).is_some()
+    }
+
+    /// [`Self::agy_gate_verified`], and the probe also saw the file tools a Builder is judged by fire under their names.
+    pub(crate) fn agy_builder_ready(&self, endpoint_id: &str, program: &str) -> bool {
+        self.agy_gate_record(endpoint_id, program).is_some_and(|r| r.builder_ready)
+    }
+
+    fn agy_gate_record(&self, endpoint_id: &str, program: &str) -> Option<crate::capabilities::GateRecord> {
+        let path = self.settings.agy_gate_file.clone().or_else(|| self.inventory.gate_path())?;
+        let rec = crate::capabilities::load_gates(&path).into_iter().find(|g| g.endpoint_id == endpoint_id)?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         if !rec.verified || !rec.served || !rec.side_effects.is_empty() || !rec.is_fresh(now) || rec.agy_version.is_empty() {
-            return false;
+            return None;
         }
-        crate::capabilities::installed_agy_version(program).as_deref() == Some(rec.agy_version.as_str())
+        (crate::capabilities::installed_agy_version(program).as_deref() == Some(rec.agy_version.as_str())).then_some(rec)
     }
 
     /// The gate lets the profile's web tools through (`search_web`, `read_url_content`), and what they bring back is text
@@ -411,8 +420,8 @@ impl Engine {
                     if !profile.bridge {
                         return Ok(Err(HarnessErr::retry("the agy harness cannot run a Builder with `bridge = false` in [harness.agy]: without the gate nothing judges its file and shell calls")));
                     }
-                    if !self.agy_gate_verified(&ep.id, &self.settings.agy_program) {
-                        return Ok(Err(HarnessErr::retry("the agy harness cannot run a Builder until its gate has been verified for the installed version: run `delphi endpoints test --probe`")));
+                    if !self.agy_builder_ready(&ep.id, &self.settings.agy_program) {
+                        return Ok(Err(HarnessErr::retry("the agy harness cannot run a Builder until its gate has been verified for the installed version, with the file tools Delphi judges seen to fire: run `delphi endpoints test --probe`")));
                     }
                     if wt.as_ref().is_some_and(|w| w.path.join(".agents").exists() && !is_ours(&w.path.join(".agents"))) {
                         return Ok(Err(HarnessErr::retry("the project has its own `.agents` directory, which the agy gate would overwrite; a Builder cannot run on this project with agy")));
@@ -1124,7 +1133,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"Done.","usage":
 
     fn gate_record(dir: &std::path::Path, version: &str, at: i64, verified: bool) -> std::path::PathBuf {
         let path = dir.join("agy-gate.json");
-        let rec = crate::capabilities::GateRecord { endpoint_id: "agy-sub".into(), agy_version: version.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified };
+        let rec = crate::capabilities::GateRecord { endpoint_id: "agy-sub".into(), agy_version: version.into(), at, attempted: vec!["run_command".into()], kinds: vec!["shell".into()], served: true, side_effects: vec![], verified, builder_ready: verified };
         crate::capabilities::save_gate(&path, &rec).unwrap();
         path
     }
@@ -1354,6 +1363,19 @@ open(sys.argv[1], "w").write(json.dumps(out))
         let args = fs::read_to_string(&args_file).unwrap();
         assert!(args.contains("--mode accept-edits"), "the CLI's own permission layer would otherwise refuse the edits the gate allowed: {}", args);
         assert!(!args.contains("dangerously-skip-permissions"), "{}", args);
+    }
+
+    #[tokio::test]
+    async fn a_verified_gate_whose_file_tools_were_not_seen_under_the_names_delphi_judges_does_not_get_builders() {
+        let (f, scripts, out_file) = agy_builder(json!([]), Some(("agy 7.1", true)));
+        let path = scripts.path().join("agy-gate.json");
+        let mut recs: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        recs[0]["builder_ready"] = json!(false);
+        fs::write(&path, recs.to_string()).unwrap();
+        assert!(f.engine.agy_gate_verified("agy-sub", &f.engine.settings.agy_program) && !f.engine.agy_builder_ready("agy-sub", &f.engine.settings.agy_program));
+        assert!(f.engine.mutating_harnesses().is_empty(), "routing leaves the Builder to other seats");
+        f.engine.run_task(&f.m, "builder", BUILD_TASK).await.unwrap();
+        assert!(!out_file.exists(), "agy was never started for the Builder");
     }
 
     #[tokio::test]

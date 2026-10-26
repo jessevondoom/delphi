@@ -1151,7 +1151,7 @@ impl Engine {
         if !cfg.harness.get("agy").cloned().unwrap_or_default().bridge {
             return vec![];
         }
-        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_gate_verified(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
+        cfg.endpoints.iter().filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("agy") && self.agy_builder_ready(&e.id, &self.settings.agy_program)).map(|e| e.id.clone()).collect()
     }
 
     /// What this span asks of a model (`route.rs`). The usual family and the role's target are preferences;
