@@ -1,10 +1,20 @@
 // What Tab completes: slash commands at the start, and after an `@` the roles and files a request can point at.
-import { COMMANDS, filter } from './commands.ts';
+import { COMMANDS, filter, lookup } from './commands.ts';
 import { graphemes } from './text.ts';
 import type { Info } from './theme.ts';
 
 export type Item = { label: string; desc: string; insert: string };
 export type Completion = { items: Item[]; from: number; to: number };
+
+/**
+ * Enter with the menu open: does it take the highlighted item (true) or run what was typed (false)? What was typed runs
+ * when it already is the item, or is a whole command name or alias (`/clear` for `/new`, `/exit` for `/quit`) and the
+ * operator has not moved the highlight off the first item; otherwise Enter completes it, as Tab does.
+ */
+export function enterAccepts(typed: string, item: Item, highlighted: number): boolean {
+  if (typed === item.insert.trimEnd()) return false;
+  return !(highlighted === 0 && lookup(typed) !== undefined);
+}
 
 /** `listDir('specs')` names the entries of a directory under the team root (injected so this stays pure). */
 export type ListDir = (rel: string) => { name: string; dir: boolean }[];
