@@ -39,6 +39,74 @@ pub fn rules(text: &str) -> Vec<RuleDoc> {
     crate::behavior::sections(body_of(text), "T").into_iter().map(|(id, text)| RuleDoc { id, text: text.trim_end().to_string() }).collect()
 }
 
+fn field_of(section: &str, name: &str) -> Option<String> {
+    let re = regex::Regex::new(&format!(r"(?mi)^\s*[-*]\s+\*\*{}:\*\*\s*(.*)$", regex::escape(name))).ok()?;
+    re.captures(section).map(|c| c[1].trim().to_string())
+}
+
+/// One `## [G-<org>-NN] title` goal of `behavior/goals.md` (`specs/023` §6.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalDoc {
+    pub id: String,
+    pub title: String,
+    pub horizon: String,
+    pub measure: String,
+    /// `active` | `met` | `dropped` | `superseded` (lowercased, first word).
+    pub status: String,
+}
+
+pub fn goals(text: &str) -> Vec<GoalDoc> {
+    crate::behavior::sections(body_of(text), "G")
+        .into_iter()
+        .map(|(id, sec)| {
+            let heading = sec.lines().next().unwrap_or("");
+            GoalDoc {
+                title: heading.split_once(']').map(|x| x.1).unwrap_or("").trim().to_string(),
+                horizon: field_of(&sec, "Horizon").unwrap_or_default(),
+                measure: field_of(&sec, "Measure").unwrap_or_default(),
+                status: field_of(&sec, "Status").unwrap_or_default().to_ascii_lowercase().split_whitespace().next().unwrap_or("").to_string(),
+                id,
+            }
+        })
+        .collect()
+}
+
+/// One `## [P-<org>-NN] title` perspective of `behavior/perspectives.md` (`specs/023` §6.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerspectiveDoc {
+    pub id: String,
+    pub title: String,
+    pub statement: String,
+    pub apply_when: String,
+    pub counter_case: String,
+}
+
+pub fn perspectives(text: &str) -> Vec<PerspectiveDoc> {
+    crate::behavior::sections(body_of(text), "P")
+        .into_iter()
+        .map(|(id, sec)| PerspectiveDoc {
+            title: sec.lines().next().unwrap_or("").split_once(']').map(|x| x.1).unwrap_or("").trim().to_string(),
+            statement: field_of(&sec, "Statement").unwrap_or_default(),
+            apply_when: field_of(&sec, "Apply when").unwrap_or_default(),
+            counter_case: field_of(&sec, "Counter-case").unwrap_or_default(),
+            id,
+        })
+        .collect()
+}
+
+/// The list items of `knowledge/index.md`: (title, path relative to `knowledge/`, summary), in the author's order.
+pub fn index_entries(text: &str) -> Vec<(String, String, String)> {
+    let item = regex::Regex::new(r"(?m)^\s*[-*]\s+\[([^\]]*)\]\(([^)]*)\)\s*:\s*(.*)$").unwrap();
+    item.captures_iter(body_of(text)).map(|c| (c[1].trim().to_string(), c[2].trim().trim_start_matches("./").to_string(), c[3].trim().to_string())).collect()
+}
+
+/// `[applies_to]` of a `bundle.toml`: (repos, paths) globs.
+pub fn applies_to(bundle_toml: &str) -> (Vec<String>, Vec<String>) {
+    let Ok(t) = bundle_toml.parse::<toml::Table>() else { return (vec![], vec![]) };
+    let list = |k: &str| t.get("applies_to").and_then(|a| a.as_table()).and_then(|a| a.get(k)).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    (list("repos"), list("paths"))
+}
+
 /// What a prompt needs of a bundle skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDoc {
