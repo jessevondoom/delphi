@@ -16,6 +16,12 @@ ed25519-dalek = "2"
 bs58 = "0.5"
 getrandom = "0.3"
 unicode-normalization = "0.1"
+# pins.toml (state/pins.toml, spec 011 §3.3); the same parser the rest of the workspace uses.
+toml = "1.1"
+
+[features]
+# Test-only: the signed-roster builder in `testkit`, for other crates' tests (as delphi-docs does).
+test-support = []
 
 [dev-dependencies]
 tempfile = "3.8"
