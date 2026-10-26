@@ -12,7 +12,7 @@ export type OrgBundle = {
   stale: boolean; matched: boolean; source: { kind: string; path: string };
   /** `null` until a source that can say exists (slice B6) */
   update_available: string | boolean | null;
-  /** `null` until vectors are built (slice B3) */
+  /** how far the bundle's vectors are, e.g. `42%` or `100% (shipped, verified)`; `null` from a daemon that predates slice B3 */
   vectors: string | null;
 };
 export type OrgGoal = { bundle: string; id: string; title: string; horizon: string; measure: string; status: string };
