@@ -55,6 +55,7 @@ pub fn sign(dir: &Path, key_path: &Path, against: Option<PathBuf>, host: &dyn Ho
         }
         return fail("the bundle does not validate, so it is not signed");
     }
+    print_warnings(&r);
     let Some(m) = r.manifest.clone() else { return fail("no readable bundle.toml") };
     let id = match Identity::load_or_create(key_path) {
         Ok(i) => i,
@@ -92,6 +93,72 @@ pub fn sign(dir: &Path, key_path: &Path, against: Option<PathBuf>, host: &dyn Ho
     0
 }
 
+/// The warnings a publisher should read before anything leaves (`specs/027` §6): the identifiers and names step 8 warns
+/// about, and the rest. They do not stop the bundle; `validate --report` lists each with its line.
+fn print_warnings(r: &delphi_bundle::Report) {
+    for w in &r.warns {
+        eprintln!("[warn] step {}: {}{}", w.step, if w.at.is_empty() { String::new() } else { format!("{}: ", w.at) }, w.msg);
+    }
+    if r.warns.iter().any(|w| w.step == 8) {
+        eprintln!("[warn] step 8 findings are in the bundle; `delphi bundle validate <dir> --report <file>` lists each line, and a person approves that report before the bundle is shared");
+    }
+}
+
+/// Put `[sections] vectors = true` in `bundle.toml` when it is not there, so the install reads the directory.
+fn declare_vectors(toml: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_sections = false;
+    let mut done = toml.lines().any(|l| l.trim_start().starts_with("vectors") && l.contains('='));
+    if done {
+        return toml.to_string();
+    }
+    for l in toml.lines() {
+        out.push(l);
+        if l.trim() == "[sections]" {
+            in_sections = true;
+        }
+        if in_sections && !done {
+            out.push("vectors = true");
+            done = true;
+        }
+    }
+    let mut text = out.join("\n");
+    if !done {
+        text.push_str("\n\n[sections]\nvectors = true");
+    }
+    text.push('\n');
+    text
+}
+
+/// `delphi bundle package --vectors` (`specs/027` §5.1): embed the bundle's knowledge with the install's model and write
+/// `vectors/<cache>.dlphvec` and `vectors/index.json`. The keys are the ones an adopter's check computes, so step 12 of
+/// `validate` passes by construction. Returns what to tell the author.
+pub fn add_vectors(dir: &Path, host: &dyn Host, model: &dyn delphi_engine::embed::Embedder, progress: &mut dyn FnMut(usize, usize)) -> Result<String, String> {
+    let early = delphi_bundle::validate(dir, &Options::default(), host);
+    let blocking: Vec<String> = early.fails.iter().filter(|f| f.step <= 4).map(|f| format!("{}{}", if f.at.is_empty() { String::new() } else { format!("{}: ", f.at) }, f.msg)).collect();
+    if !blocking.is_empty() {
+        return Err(format!("the bundle is not well-formed yet:\n  {}", blocking.join("\n  ")));
+    }
+    let m = early.manifest.ok_or("no readable bundle.toml")?;
+    let built = delphi_engine::bundle_vectors::build_cache(dir, &m.org, &m.name, model, progress)?;
+    let vdir = dir.join("vectors");
+    std::fs::create_dir_all(&vdir).map_err(|e| format!("vectors/: {}", e))?;
+    delphi_core::lock::write_atomic(&vdir.join(&built.file), &built.bytes).map_err(|e| format!("vectors/{}: {}", built.file, e))?;
+    let existing = std::fs::read_to_string(vdir.join("index.json")).ok();
+    delphi_core::lock::write_atomic(&vdir.join("index.json"), delphi_engine::bundle_vectors::merged_index(existing.as_deref(), &built.entry).as_bytes()).map_err(|e| format!("vectors/index.json: {}", e))?;
+    let toml_path = dir.join("bundle.toml");
+    let toml = std::fs::read_to_string(&toml_path).map_err(|e| format!("bundle.toml: {}", e))?;
+    let declared = declare_vectors(&toml);
+    if declared != toml {
+        std::fs::write(&toml_path, declared).map_err(|e| format!("bundle.toml: {}", e))?;
+    }
+    let mut msg = format!("wrote vectors/{} ({} chunks, {} windows, {:.1} MiB) for {}", built.file, built.chunks, built.windows, built.bytes.len() as f64 / (1024.0 * 1024.0), model.model_id());
+    if !model.model_id().starts_with("bge-base-en-v1.5") {
+        msg.push_str(&format!("\nwarning: {} is not Delphi's default embedder (bge-base-en-v1.5); few adopters will match it and the rest embed locally anyway", model.model_id()));
+    }
+    Ok(msg)
+}
+
 /// `delphi bundle package <dir> [-o file]`: refresh `files.json`, validate for distribution, write the archive.
 pub fn package(dir: &Path, out: Option<&Path>, host: &dyn Host) -> i32 {
     let claude = dir.join(".claude-plugin/plugin.json").is_file();
@@ -103,6 +170,7 @@ pub fn package(dir: &Path, out: Option<&Path>, host: &dyn Host) -> i32 {
         print!("{}", r.render(&dir.display().to_string()));
         return fail(if r.fails.iter().any(|f| f.step == 6) { "the bundle does not validate; if files changed since it was signed, run `delphi bundle sign` again" } else { "the bundle does not validate; nothing was packaged" });
     }
+    print_warnings(&r);
     let (Some(m), Some(hash)) = (r.manifest.clone(), r.bundle_hash.clone()) else { return fail("no readable bundle.toml") };
     let out = out.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(format!("{}-{}.xbundle", m.name, m.version)));
     let Ok(dir_abs) = dir.canonicalize() else { return fail("cannot resolve the bundle directory") };

@@ -447,6 +447,35 @@ impl EngineService {
         Ok(json!({"task_id": task_id, "mission_id": mid}))
     }
 
+    /// `bundle.distill`: the writer drafts knowledge files for an org bundle from allow-listed sources into a staging
+    /// directory of the mission (`distill.rs`, `specs/027` §2.3). Console only; it writes nothing into any bundle.
+    async fn distill_start(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let from: Vec<String> = p["from"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
+        if from.len() > 200 || from.iter().any(|s| s.len() > 300) {
+            return Err(err(code::INVALID_PARAMS, "`from` is at most 200 paths of 300 characters"));
+        }
+        let req = crate::distill::Request { from };
+        // Refused up front, so the operator hears why instead of finding a failed task.
+        if !self.engine.settings.enabled_agents.iter().any(|a| a == "writer") {
+            return Err(err(code::INVALID_PARAMS, "the writer role is not enabled: add \"writer\" to [agents] enabled in config.toml"));
+        }
+        let task_id = m.next_task_id();
+        self.running.lock().unwrap().insert(task_id.clone(), Running { target: "writer".into(), prompt: "distill knowledge for a bundle".into(), started: Instant::now() });
+        let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
+        let h = tokio::spawn(async move {
+            if let Err(e) = engine.run_distill(&m, tid.clone(), &req).await {
+                let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
+                ev.task_id = Some(tid.clone());
+                let _ = m.append(ev).await;
+            }
+            running.lock().unwrap().remove(&tid);
+        });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
+        Ok(json!({"task_id": task_id, "mission_id": mid}))
+    }
+
     fn approval_resolve(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let (Some(id), Some(hash)) = (p["approval_id"].as_str(), p["payload_blake3"].as_str()) else {
@@ -905,6 +934,7 @@ impl Extension for ServiceExt {
                 "decisions.list" => svc.decisions_list(params).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
+                "bundle.distill" => svc.distill_start(params, ctx).await,
                 "kb.search" => svc.kb_search(params).await,
                 "kb.get" => svc.kb_get(params).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
@@ -1152,7 +1182,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff"] {
@@ -1242,7 +1272,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1299,7 +1329,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

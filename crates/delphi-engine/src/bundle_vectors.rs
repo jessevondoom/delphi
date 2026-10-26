@@ -311,6 +311,73 @@ pub fn statuses(home: &Path, ws: &Path, entries: &[Entry]) -> BTreeMap<String, S
         .collect()
 }
 
+/// A cache a publisher built for a bundle: the file to write under `vectors/` and its entry for `vectors/index.json`.
+#[derive(Debug)]
+pub struct Built {
+    pub file: String,
+    pub bytes: Vec<u8>,
+    pub entry: Value,
+    pub chunks: usize,
+    pub windows: usize,
+}
+
+/// A file name for a cache that passes the tree's name rule (`^[A-Za-z0-9._-]{1,64}$`) whatever the model is called.
+fn cache_file_name(model_id: &str, dim: usize) -> String {
+    let clean: String = model_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c } else { '-' }).collect();
+    let tail = format!("-{}-{}-{}.dlphvec", dim, kb::EMBED_FORMAT, kb::CHUNKER_VERSION);
+    let room = 64usize.saturating_sub(tail.len());
+    format!("{}{}", clean.chars().take(room).collect::<String>(), tail)
+}
+
+/// The publisher side of the pipeline (`specs/027` §5.1, `delphi bundle package --vectors`): embed every chunk of the
+/// bundle at `dir` with `model` and return a `DLPHVEC1` cache keyed exactly as an adopter keys the same text. The chunks
+/// and keys are [`bundle_chunks`], the function the adopter's check uses, so a cache built here is reachable there by
+/// construction. Nothing is written; the caller puts the file and the index entry in the tree.
+pub fn build_cache(dir: &Path, org: &str, name: &str, model: &dyn crate::embed::Embedder, progress: &mut dyn FnMut(usize, usize)) -> Result<Built, String> {
+    let chunks = bundle_chunks(dir, org, name);
+    if chunks.is_empty() {
+        return Err("the bundle has no knowledge chunks to embed (knowledge/ holds no Markdown)".into());
+    }
+    if chunks.len() > MAX_CHUNKS {
+        return Err(format!("{} chunks is over the {} a cache may hold (specs/023 §8); ship fewer files or none", chunks.len(), MAX_CHUNKS));
+    }
+    let windows: usize = chunks.values().map(|p| p.len()).sum();
+    // Four bytes a number, as the file stores them, plus the key and count of each entry.
+    let size = windows as u64 * model.dim() as u64 * 4 + chunks.len() as u64 * 33;
+    if size > MAX_CACHE_BYTES {
+        return Err(format!("the cache would be about {} MiB, over the {} MiB cap (specs/023 §8)", size / (1024 * 1024), MAX_CACHE_BYTES / (1024 * 1024)));
+    }
+    // A few chunks per model call: the model batches, and a failure names how far it got.
+    let keys: Vec<&Key> = chunks.keys().collect();
+    let mut entries: Vec<(Key, Vec<Vec<f32>>)> = Vec::with_capacity(keys.len());
+    for batch in keys.chunks(16) {
+        let texts: Vec<String> = batch.iter().flat_map(|k| chunks[*k].iter().cloned()).collect();
+        let mut vecs = model.embed_documents(&texts).map_err(|e| format!("the embedding model failed after {} of {} chunks: {}", entries.len(), keys.len(), e))?;
+        if vecs.len() != texts.len() || vecs.iter().any(|v| v.len() != model.dim()) {
+            return Err("the embedding model returned vectors of the wrong number or size".into());
+        }
+        vecs.reverse();
+        for k in batch {
+            let n = chunks[*k].len();
+            entries.push((**k, (0..n).map(|_| vecs.pop().expect("counted above")).collect()));
+        }
+        progress(entries.len(), keys.len());
+    }
+    let file = cache_file_name(model.model_id(), model.dim());
+    let bytes = VecCache::serialize(model.model_id(), model.dim(), kb::EMBED_FORMAT, &entries);
+    let entry = json!({"file": file, "model_id": model.model_id(), "dim": model.dim(), "embedding_format": kb::EMBED_FORMAT, "chunker_version": kb::CHUNKER_VERSION, "chunks": entries.len(), "windows": windows, "dtype": "f32"});
+    Ok(Built { file, bytes, entry, chunks: entries.len(), windows })
+}
+
+/// `vectors/index.json` with `entry` in it: an entry for the same file is replaced, others are kept, and an existing
+/// index that is not a cache list is rebuilt (the file is the publisher's own, written by this command).
+pub fn merged_index(existing: Option<&str>, entry: &Value) -> String {
+    let mut caches: Vec<Value> = existing.and_then(|t| serde_json::from_str::<Value>(t).ok()).and_then(|v| v["caches"].as_array().cloned()).unwrap_or_default();
+    caches.retain(|c| c["file"] != entry["file"]);
+    caches.push(entry.clone());
+    format!("{}\n", serde_json::to_string_pretty(&json!({"vectors": 1, "caches": caches})).expect("json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,5 +705,59 @@ mod tests {
         assert_eq!(s(10, 10, true).label(), "100% (shipped, verified)");
         assert_eq!(s(10, 10, false).label(), "100% (local)");
         assert_eq!(s(0, 0, false).label(), "no chunks");
+    }
+
+    // specs/027 §5.1: the publisher's cache is made by the keys the adopter checks, so it is applied and verified there.
+    #[test]
+    fn a_cache_built_by_the_publisher_side_is_reachable_verified_and_applied_by_the_adopter() {
+        let (_h, cache, mut kb) = setup(30);
+        let built = build_cache(&cache, "acme", "platform", &Words, &mut |_, _| {}).unwrap();
+        assert_eq!((built.chunks, built.windows), (90, 90));
+        assert_eq!(built.entry["model_id"], "words-test");
+        assert!(built.file.len() <= 64 && built.file.ends_with(".dlphvec") && built.file.bytes().all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b)), "{}", built.file);
+        // the keys are exactly the ones `validate` step 12 computes from the bundle's own text
+        let texts: BTreeMap<String, String> = (0..30).map(|n| (format!("knowledge/d{n}.md"), doc(n))).collect();
+        let want = chunk_keys("acme", "platform", &texts);
+        let got: HashSet<Key> = VecCache::parse(&built.bytes).unwrap().entries().map(|(k, _)| *k).collect();
+        assert_eq!(got, want);
+        std::fs::create_dir_all(cache.join("vectors")).unwrap();
+        std::fs::write(cache.join("vectors").join(&built.file), &built.bytes).unwrap();
+        std::fs::write(cache.join("vectors/index.json"), merged_index(None, &built.entry)).unwrap();
+        let a = adopt_it(&mut kb, &cache, false);
+        assert_eq!(a.applied, 90, "{:?}", a.notes);
+        assert!(a.rejected.is_empty() && a.notes.iter().any(|n| n.contains("verified")), "{:?}", a.notes);
+        assert_eq!(kb.embed_pending(&mut |_, _| {}).unwrap(), 0, "nothing is left for the model");
+    }
+
+    #[test]
+    fn building_a_cache_refuses_an_empty_bundle_and_a_failing_model_and_names_how_far_it_got() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("knowledge")).unwrap();
+        assert!(build_cache(t.path(), "acme", "platform", &Words, &mut |_, _| {}).unwrap_err().contains("no knowledge chunks"));
+        let (_h, cache, _kb) = setup(40);
+        struct Dies;
+        impl Embedder for Dies {
+            fn model_id(&self) -> &str { "dies" }
+            fn dim(&self) -> usize { 4 }
+            fn min_similarity(&self) -> f32 { 0.0 }
+            fn embed_documents(&self, _: &[String]) -> Result<Vec<Vec<f32>>, String> { Err("out of memory".into()) }
+            fn embed_query(&self, _: &str) -> Result<Vec<f32>, String> { Err("out of memory".into()) }
+        }
+        let e = build_cache(&cache, "acme", "platform", &Dies, &mut |_, _| {}).unwrap_err();
+        assert!(e.contains("failed after 0 of 120 chunks") && e.contains("out of memory"), "{}", e);
+    }
+
+    #[test]
+    fn a_rebuilt_index_keeps_other_caches_and_replaces_the_one_for_the_same_file() {
+        let a = json!({"file": "a.dlphvec", "chunks": 1});
+        let b = json!({"file": "b.dlphvec", "chunks": 2});
+        let first = merged_index(None, &a);
+        let both = merged_index(Some(&first), &b);
+        let again = merged_index(Some(&both), &json!({"file": "a.dlphvec", "chunks": 9}));
+        let v: Value = serde_json::from_str(&again).unwrap();
+        let caches = v["caches"].as_array().unwrap();
+        assert_eq!((v["vectors"].as_u64(), caches.len()), (Some(1), 2));
+        assert!(caches.iter().any(|c| c["file"] == "a.dlphvec" && c["chunks"] == 9) && caches.iter().any(|c| c["file"] == "b.dlphvec"));
+        assert_eq!(merged_index(Some("not json"), &a), first, "a damaged index is rebuilt");
     }
 }
