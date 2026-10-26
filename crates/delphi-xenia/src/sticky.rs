@@ -118,13 +118,26 @@ pub struct StickyState {
     /// The last git commit the install accepted (hex). Install-owned state, kept here and not in the clone.
     pub accepted_head: Option<String>,
     pub paths: BTreeMap<String, Entry>,
+    /// The newest genuine freshness statement this install has accepted (spec 011 §4.1 follow-up): a statement
+    /// whose `issued_at` is older, or equal with other bytes, is a replay. Absent in state files written before
+    /// this rule; absent means "nothing seen yet".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_mark: Option<IssuedMark>,
+}
+
+/// `issued_at` (Unix seconds) and the hash of the statement bytes that carried it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IssuedMark {
+    pub issued: i64,
+    pub statement_hash: String,
 }
 
 const VERSION: u32 = 1;
 
 impl StickyState {
     pub fn new(org: &str, store: &str) -> StickyState {
-        StickyState { v: VERSION, org: org.to_string(), store: store.to_string(), accepted_head: None, paths: BTreeMap::new() }
+        StickyState { v: VERSION, org: org.to_string(), store: store.to_string(), accepted_head: None, paths: BTreeMap::new(), freshness_mark: None }
     }
 
     /// Strict parse, bound to the expected store. Any damage is an error: a damaged sticky file is never
@@ -144,6 +157,9 @@ impl StickyState {
             if !is_commit_id(h) {
                 return Err(Error::BadField("sticky accepted_head is not a commit id"));
             }
+        }
+        if s.freshness_mark.as_ref().is_some_and(|m| !hash::is_valid(&m.statement_hash)) {
+            return Err(Error::BadField("sticky freshness mark is damaged"));
         }
         for (p, e) in &s.paths {
             if p.is_empty() || !hash::is_valid(&e.hash) {

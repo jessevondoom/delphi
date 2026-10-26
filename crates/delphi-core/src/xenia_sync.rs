@@ -27,6 +27,7 @@
 
 use crate::xenia_store::{io, run, Divergence, Fetch, NonFastForward, Refused, RunFail, Snapshot, Store, REF_ACCEPTED, REF_FETCHED};
 use delphi_xenia::freshness::{self, Assessment, FreshnessState, Policy};
+use delphi_xenia::sticky::IssuedMark;
 use delphi_xenia::layout::{roster_epoch, roster_epoch_sigs, FRESHNESS, FRESHNESS_SIGS};
 use delphi_xenia::pins::{self, Pins};
 use delphi_xenia::record::Pinned;
@@ -254,6 +255,13 @@ fn epoch_files(snap: &Snapshot) -> Vec<EpochFile> {
     v
 }
 
+/// Record the newest genuine statement's `issued_at`; a replay leaves the mark where it was.
+fn advance_mark(next: &mut StickyState, assessment: &Assessment) {
+    if let Some(a) = &assessment.authentic {
+        next.freshness_mark = Some(a.advance(next.freshness_mark.as_ref()));
+    }
+}
+
 fn statement_files(snap: &Snapshot) -> Option<(&[u8], &[u8])> {
     Some((snap.files.get(FRESHNESS)?.as_slice(), snap.files.get(FRESHNESS_SIGS)?.as_slice()))
 }
@@ -286,7 +294,7 @@ impl Store {
 
     /// Steps 2 to 5 for one fetched head. `Ok(Err(reason))` is a rejection; the walk's and the classifier's
     /// findings are returned for the caller to act on.
-    fn inspect(&self, pins: &Pins, cfg: &VerifyConfig, head: &str, snap: &Snapshot, accepted: Option<&str>, statement_base: bool) -> Result<std::result::Result<Inspected, &'static str>> {
+    fn inspect(&self, pins: &Pins, cfg: &VerifyConfig, head: &str, snap: &Snapshot, accepted: Option<&str>, statement_base: bool, mark: Option<&IssuedMark>) -> Result<std::result::Result<Inspected, &'static str>> {
         let files = epoch_files(snap);
         if files.is_empty() {
             return Ok(Err("no-roster"));
@@ -295,7 +303,7 @@ impl Store {
             Ok(r) => r,
             Err(e) => return Ok(Err(e.reason())),
         };
-        let assessment = freshness::assess(&self.org, &self.store, statement_files(snap), &roster, cfg.now, &cfg.policy);
+        let assessment = freshness::assess_after(&self.org, &self.store, statement_files(snap), &roster, cfg.now, &cfg.policy, mark);
         let auth_head = assessment.authentic.as_ref().map(|a| a.statement.store_head.clone());
         // Check 2: the fetched head descends from the head the admin verified.
         if let Some(sh) = &auth_head {
@@ -349,7 +357,8 @@ impl Store {
     /// clock alone: no fetch, no write.
     pub fn freshness_status(&self, cfg: &VerifyConfig) -> Result<FreshnessState> {
         let pins = self.load_pins()?;
-        let Some(head) = self.load_sticky()?.accepted_head else {
+        let sticky = self.load_sticky()?;
+        let Some(head) = sticky.accepted_head.clone() else {
             return Ok(FreshnessState::Stale { reason: "nothing-accepted" });
         };
         let snap = self.roster_snapshot(&head)?;
@@ -358,7 +367,7 @@ impl Store {
             Some(Ok(r)) => r,
             _ => return Ok(FreshnessState::Stale { reason: "roster-invalid" }),
         };
-        Ok(freshness::assess(&self.org, &self.store, statement_files(&snap), &roster, cfg.now, &cfg.policy).state)
+        Ok(freshness::assess_after(&self.org, &self.store, statement_files(&snap), &roster, cfg.now, &cfg.policy, sticky.freshness_mark.as_ref()).state)
     }
 
     /// Fetch and verify. See the module docs for the order of checks and what each failure leaves behind.
@@ -381,7 +390,7 @@ impl Store {
             Fetch::Advanced { head, from, entries } => (head, from, entries),
         };
         let snapshot = self.read_snapshot(&head, &entries)?;
-        let ins = match self.inspect(&pins, cfg, &head, &snapshot, sticky.accepted_head.as_deref(), false)? {
+        let ins = match self.inspect(&pins, cfg, &head, &snapshot, sticky.accepted_head.as_deref(), false, sticky.freshness_mark.as_ref())? {
             Ok(i) => i,
             Err(reason) => return Ok(VerifiedSync::Rejected { head, reason }),
         };
@@ -397,6 +406,7 @@ impl Store {
         let mut next = sticky;
         next.apply(&ev)?;
         next.accepted_head = Some(head.clone());
+        advance_mark(&mut next, &ins.assessment);
         self.commit_accepted(&pins, &ins.roster, &next, &head)?;
         Ok(VerifiedSync::Accepted {
             freshness: ins.assessment.state,
@@ -460,7 +470,7 @@ impl Store {
             },
         };
         let snapshot = self.read_snapshot(&head, &entries)?;
-        let ins = match self.inspect(&pins, cfg, &head, &snapshot, Some(&accepted), true)? {
+        let ins = match self.inspect(&pins, cfg, &head, &snapshot, Some(&accepted), true, sticky.freshness_mark.as_ref())? {
             Ok(i) => i,
             Err(reason) => return Ok(Planned::refuse(reason)),
         };
@@ -548,6 +558,7 @@ impl Store {
         }
         next.apply(&ev)?;
         next.accepted_head = Some(plan.fetched.clone());
+        advance_mark(&mut next, &ins.assessment);
         self.append_rewrite_log(cfg, &plan)?;
         self.commit_accepted(&pins, &ins.roster, &next, &plan.fetched)?;
         let _ = self.git_ok(&["update-ref", "-d", REF_FETCHED], 4096);
