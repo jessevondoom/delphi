@@ -62,6 +62,9 @@ pub fn split_frontmatter(text: &str) -> (Option<Value>, &str) {
 pub struct AgentManifest {
     pub id: String,
     pub cognitive_profile: String,
+    /// The tier this role starts on (`fast`, `workhorse`, `frontier`), when the manifest says (`specs/035` D-14). Unset: from the profile,
+    /// which never gives `frontier`: a role is raised for a task by the orchestrator, it does not start there.
+    pub default_tier: Option<String>,
     pub read: Vec<String>,
     pub write: Vec<String>,
     pub execute: Vec<String>,
@@ -82,6 +85,7 @@ impl AgentManifest {
         Ok(AgentManifest {
             id: fm.get("id").and_then(|v| v.as_str()).ok_or_else(|| LoadError::Invalid("manifest has no id".into()))?.to_string(),
             cognitive_profile: fm.get("cognitive_profile").and_then(|v| v.as_str()).unwrap_or("code-craft").to_string(),
+            default_tier: fm.get("default_tier").and_then(|v| v.as_str()).filter(|t| matches!(*t, "fast" | "workhorse" | "frontier")).map(String::from),
             read: strings(scope.and_then(|s| s.get("read"))),
             write: strings(scope.and_then(|s| s.get("write"))),
             execute: strings(scope.and_then(|s| s.get("execute"))),
@@ -100,10 +104,16 @@ impl AgentManifest {
         }
     }
 
-    /// Model tier requested for this profile.
+    /// The tier this role starts on (`specs/035` D-14): the manifest's `default_tier`, else Sonnet-class (`workhorse`) for every profile but
+    /// `fast-triage`. Nothing starts at `frontier`; the orchestrator raises a role's tier for a task that needs it (`dispatch_agent`'s `tier`).
     pub fn tier(&self) -> &'static str {
+        match self.default_tier.as_deref() {
+            Some("fast") => return "fast",
+            Some("workhorse") => return "workhorse",
+            Some("frontier") => return "frontier",
+            _ => {}
+        }
         match self.cognitive_profile.as_str() {
-            "deep-reasoning" => "frontier",
             "fast-triage" => "fast",
             _ => "workhorse",
         }
@@ -309,6 +319,31 @@ impl WorkspacePaths {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    // specs/035 D-14: the shipped roles start on Sonnet-class or lower; none on the top tier. The scout (Argos) starts lower still.
+    #[test]
+    fn no_shipped_role_starts_on_the_top_tier_and_the_scout_starts_lower() {
+        let shipped = [
+            ("orchestrator", include_str!("../../../agents/orchestrator/AGENT.md"), "workhorse"),
+            ("architect", include_str!("../../../agents/architect/AGENT.md"), "workhorse"),
+            ("builder", include_str!("../../../agents/builder/AGENT.md"), "workhorse"),
+            ("red-team", include_str!("../../../agents/red-team/AGENT.md"), "workhorse"),
+            ("strategist", include_str!("../../../agents/strategist/AGENT.md"), "workhorse"),
+            ("writer", include_str!("../../../agents/writer/AGENT.md"), "workhorse"),
+            ("scout", include_str!("../../../agents/scout/AGENT.md"), "fast"),
+            ("integrator", include_str!("../../../agents/integrator/AGENT.md"), "fast"),
+            ("investigator", include_str!("../../../agents/investigator/AGENT.md"), "fast"),
+        ];
+        for (role, text, want) in shipped {
+            let m = AgentManifest::parse(text).unwrap();
+            assert_eq!((m.tier(), m.default_tier.as_deref()), (want, Some(want)), "{}", role);
+        }
+        // Without a `default_tier` no profile gives the top tier either, and an unknown word is ignored.
+        let bare = |profile: &str, extra: &str| AgentManifest::parse(&format!("---\nid: x\ncognitive_profile: {}\n{}---\n", profile, extra)).unwrap().tier();
+        assert_eq!((bare("deep-reasoning", ""), bare("code-craft", ""), bare("high-context-discovery", ""), bare("fast-triage", "")), ("workhorse", "workhorse", "workhorse", "fast"));
+        assert_eq!(bare("deep-reasoning", "default_tier: enormous\n"), "workhorse");
+        assert_eq!(bare("deep-reasoning", "default_tier: frontier\n"), "frontier", "an operator's own override can");
+    }
+
     use super::*;
 
     /// A minimal but real ratified workspace in `root`, using the repository's own seed files.
@@ -343,7 +378,10 @@ pub(crate) mod tests {
             ("red-team", include_str!("../../../agents/red-team/AGENT.md")),
             ("strategist", include_str!("../../../agents/strategist/AGENT.md")),
         ] {
-            add(&format!("agents/{}/AGENT.md", role), text);
+            // These roles used to start on the top tier. The failover tests are about running out of the top model, so the test workspace
+            // keeps them there; the shipped manifests start on `workhorse` (`specs/035` D-14).
+            let text = if matches!(role, "orchestrator" | "architect" | "red-team" | "strategist") { text.replace("default_tier: workhorse", "default_tier: frontier") } else { text.to_string() };
+            add(&format!("agents/{}/AGENT.md", role), &text);
         }
         add("context/team-heuristics.md", "---\nid: t\n---\n### [T-001] Team rule\n- keep it short\n");
         add("heuristics.md", "---\nid: w\n---\n### [W-001] Workspace rule\n- prefer small diffs\n");

@@ -9,16 +9,17 @@ import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 import { epicThreads } from './epic-threads.ts';
 import { dashboard, needs } from './dashboard.ts';
 import { joinColumns, leftWidth, TWO_COLUMNS_AT } from './columns.ts';
+import * as V from './tiers.ts';
 import * as A from './archives.ts';
 import { pulse, timeline, toolsBoard } from './monitors.ts';
 import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark, type Paint } from './meters.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
-export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
+export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; default_tier?: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
 export type RoleTools = { calls: number; errors: number; last: string; streak?: { tool: string; n: number; failed: number }; open?: { tool: string; since_ms: number } | null; by_tool: Record<string, { calls: number; errors: number }> };
 export type OState = {
   agents: Record<string, AgentRow>;
-  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
+  nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
   /** `tokens` is everything the task's agents used, counted as the mission total is; a daemon that predates it sends none. */
   tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string; tokens?: Tokens }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
@@ -156,7 +157,7 @@ const band = (m: OModel, line: string, w: number): string => {
 
 /** An agent row for a DAG node whose role has no agent of its own: a generic sub-agent the work spawned. */
 const NO_TOKENS: Tokens = { input: 0, cache_read: 0, cache_write: 0, output: 0, thinking: 0 };
-const subAgent = (n: OState['nodes'][string]): AgentRow => ({ role: n.role, state: n.state, task_id: n.task_id, endpoint: '', tier: '', model: '', upscaled: false, tokens: { ...NO_TOKENS, input: n.tokens }, cost_usd: n.cost_usd, calls: 0 });
+const subAgent = (n: OState['nodes'][string]): AgentRow => ({ role: n.role, state: n.state, task_id: n.task_id, endpoint: n.endpoint ?? '', tier: n.tier ?? '', model: n.model ?? '', default_tier: n.default_tier, upscaled: false, tokens: { ...NO_TOKENS, input: n.tokens }, cost_usd: n.cost_usd, calls: 0 });
 
 /** Who is at work right now: the agents that are not idle, and every running node whose role has no agent (sub-agents). */
 export function activeAgents(st: OState): AgentRow[] {
@@ -197,7 +198,11 @@ function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
   const orch: AgentRow = m.st.agents.orchestrator ?? { role: 'orchestrator', state: 'idle', task_id: '', endpoint: '', tier: '', model: '', upscaled: false, tokens: NO_TOKENS, cost_usd: 0, calls: 0 };
   for (const a of idle ? [orch] : active) {
     const mk = mascot(a.role, a.state, m.info, m.pal);
-    const model = a.model ? `${a.tier} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : idle ? 'the system is idle' : 'no call yet';
+    // The model it is really on, with where that stands against what its role starts on (`specs/035` D-16); and why, if the orchestrator chose it.
+    const vs = V.mark(a.tier, a.default_tier);
+    const why = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running' && n.tier_reason).map((n) => n.tier_reason!)[0];
+    const model = a.model ? `${a.tier}${vs ? " " + vs : ""} · ${clean(a.model, 28)}${a.upscaled ? ' ⬆' : ''}` : idle ? 'the system is idle' : 'no call yet';
+    const versusNote = a.model && vs ? dim(`  ${V.words(a.tier, a.default_tier)}${why ? ' · ' + clean(why, 40) : ''}`) : '';
     const nm = name(m, a.role);
     const logged = a.tokens.input + a.tokens.cache_read + a.tokens.cache_write + a.tokens.output + a.tokens.thinking;
     // What the running spans of this role have used so far but not yet logged; shown as an estimate until the span ends.
@@ -205,7 +210,7 @@ function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
     const total = logged + live;
     const meta = [
       roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' ? quietNote(m, a.role) : ''),
-      text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : ''),
+      text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : '') + versusNote,
       dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role) + (stacked ? '' : toolsLine(m, a)),
     ];
     // In a half-width column the counters wait for a fourth row under the mascot instead of running off the edge.

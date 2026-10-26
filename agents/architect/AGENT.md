@@ -3,6 +3,7 @@ id: architect
 title: "Architect"
 role: "Systems Architect, Creative Designer & Spec Author"
 cognitive_profile: deep-reasoning
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["specs/**", "missions/**/specs/**", "missions/**/research/**"]  # v1 also covers discovery (D-07, specs/003 §2)

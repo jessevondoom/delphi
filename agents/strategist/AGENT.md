@@ -3,6 +3,7 @@ id: strategist
 title: "Strategist"
 role: "Long-Horizon Strategist, Sequencer & Scope Auditor"
 cognitive_profile: deep-reasoning
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**/roadmap.md", "missions/**/councils/**"]

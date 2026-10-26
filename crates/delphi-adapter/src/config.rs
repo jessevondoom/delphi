@@ -321,18 +321,6 @@ pub struct Access {
     /// What to do when only a weaker or reduced model is left (`specs/035` D-4).
     #[serde(default)]
     pub on_weaker: OnWeaker,
-    /// The order of stand-ins (`specs/035` D-9): `family` stays in the model's lineage and goes down a step at a time before it
-    /// looks elsewhere; `capability` takes an equal-tier model of any lineage before a lesser one in the family.
-    #[serde(default)]
-    pub failover_prefers: FailoverPrefers,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FailoverPrefers {
-    #[default]
-    Family,
-    Capability,
 }
 
 /// `[access] on_weaker`: `ask` puts a card to the operator; `finish` lets a task already under way carry on without one;
