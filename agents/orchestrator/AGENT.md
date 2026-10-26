@@ -7,7 +7,7 @@ default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**", "context/index.md", "context/domains/**"]  # heuristics, REVIEW.md and lessons.md change only via ratified /retro proposals (GOVERNANCE §5.7, D-11)
-  execute: ["agent-dispatch", "model-scaler", "council-barrier", "provenance-validator", "kb-link-auditor", "lesson-deduper", "timers", "org-context"]
+  execute: ["agent-dispatch", "model-scaler", "council-barrier", "provenance-validator", "kb-link-auditor", "lesson-deduper", "timers", "org-context", "settings"]
 authorized_skills:
   - task-decomposition
   - dynamic-model-scaling
