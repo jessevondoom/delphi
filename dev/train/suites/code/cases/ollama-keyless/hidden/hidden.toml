@@ -1,0 +1,17 @@
+# Made by `delphi train harvest`: the reference change's test modules, withheld from the agent (specs/037 section 5.2).
+[source]
+base_sha = "38cfc130d0b37965e64d88d0509c6d7cfc10559d"
+reference_sha = "800939e4e6972bba8526463f185d8332ff8859bc"
+
+[[hidden_test]]
+file = "crates/delphi-adapter/src/config.rs"
+module = "crates__delphi-adapter__src__config.rs.txt"
+
+[[hidden_test]]
+file = "crates/delphi-adapter/src/platform.rs"
+module = "crates__delphi-adapter__src__platform.rs.txt"
+
+[hidden_run]
+cmd = ["cargo", "test", "-p", "delphi-adapter", "--lib", "--locked"]
+timeout_secs = 2400
+min_passed = 50

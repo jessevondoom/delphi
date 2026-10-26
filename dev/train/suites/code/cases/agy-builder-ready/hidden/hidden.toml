@@ -1,0 +1,17 @@
+# Made by `delphi train harvest`: the reference change's test modules, withheld from the agent (specs/037 section 5.2).
+[source]
+base_sha = "0bab04e71c8e592836a7addfc76fe007399acc23"
+reference_sha = "c00813b037a28a946274f48ba5b9de086d3a3222"
+
+[[hidden_test]]
+file = "crates/delphi-engine/src/capabilities.rs"
+module = "crates__delphi-engine__src__capabilities.rs.txt"
+
+[[hidden_test]]
+file = "crates/delphi-engine/src/harness_run.rs"
+module = "crates__delphi-engine__src__harness_run.rs.txt"
+
+[hidden_run]
+cmd = ["cargo", "test", "-p", "delphi-engine", "--lib", "--locked", "--", "capabilities::", "harness_run::"]
+timeout_secs = 2400
+min_passed = 30

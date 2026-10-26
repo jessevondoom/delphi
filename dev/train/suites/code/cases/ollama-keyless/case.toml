@@ -1,0 +1,16 @@
+# Code case C2 (specs/037 section 3), harvested from this repository's history: PR 156, the adapter half of the Ollama keyless fallback.
+# The agent starts from the base commit's tree (no history) with spec.md ratified; the hidden tests are the reference
+# change's test modules, run on what it builds (hidden/hidden.toml).
+id = "ollama-keyless"
+suite = "code"
+kind = "task"
+role = "builder"
+split = "dev"
+tags = ["code", "rust", "medium"]
+max_cost_usd = 5.0
+timeout_secs = 2400
+prompt = "Implement the spec."
+spec = "spec.md"
+
+[[check]]
+kind = "hidden_tests"
