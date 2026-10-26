@@ -49,12 +49,12 @@ pub(crate) fn short(hash: &str) -> String {
 
 /// A source opened for adding: a directory as it is, or an archive extracted into `.incoming/` (removed on drop unless it
 /// was moved into the cache).
-struct Opened {
-    dir: PathBuf,
-    kind: &'static str,
+pub(crate) struct Opened {
+    pub(crate) dir: PathBuf,
+    pub(crate) kind: &'static str,
     /// The path the operator gave, canonical; what the lock records and messages show.
-    path: String,
-    incoming: Option<PathBuf>,
+    pub(crate) path: String,
+    pub(crate) incoming: Option<PathBuf>,
 }
 
 impl Drop for Opened {
@@ -65,7 +65,7 @@ impl Drop for Opened {
     }
 }
 
-fn new_incoming(home: &Path) -> Result<PathBuf, String> {
+pub(crate) fn new_incoming(home: &Path) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let dir = home.join("bundles/.incoming").join(format!("{}-{}", std::process::id(), nanos));
@@ -193,6 +193,12 @@ pub fn apply(home: &Path, ws: &Path, source: &Path, o: &AddOpts, mode: Mode, hos
         Ok(o) => o,
         Err(e) => return fail(e),
     };
+    apply_opened(home, ws, opened, o, mode, host, None)
+}
+
+/// [`apply`] for a tree that is already in a staging directory under `.incoming/` (a marketplace fetch): the same checks
+/// and the same move into the cache. `expect_hash` is the bundle hash the locator claimed; a different one is refused.
+pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mode: Mode, host: &dyn Host, expect_hash: Option<&str>) -> i32 {
     let dir = opened.dir.clone();
     // 2. Every step of specs/023 §10 runs here, on this install: nothing trusts a publisher's "it passed".
     let i = delphi_bundle::inspect(&dir, &Options::default(), host);
@@ -209,6 +215,9 @@ pub fn apply(home: &Path, ws: &Path, source: &Path, o: &AddOpts, mode: Mode, hos
     }
     if !bundles::plain_id(&m.org) || !bundles::plain_id(&m.name) {
         return fail("org and name must be plain ids");
+    }
+    if let Some(want) = expect_hash.filter(|w| *w != hash) {
+        return fail(format!("the marketplace entry says the bundle hash is {} but the fetched tree hashes to {}; nothing was added", short(want), short(&hash)));
     }
     if let Mode::Update(id) = mode {
         if id != format!("{}/{}", m.org, m.name) {

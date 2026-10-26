@@ -1,4 +1,4 @@
-//! Step 4 of `specs/023` §10 (`bundle.toml`), step 13 (the Claude Code `plugin.json` agreement), step 14 (the evals
+//! Step 4 of `specs/023` §10 (`bundle.toml`), `plugin.json` generation (step 13 itself is `claude_plugin.rs`), step 14 (the evals
 //! section) and the `--against` version-bump check of §9.
 
 use crate::tree::Tree;
@@ -120,8 +120,13 @@ fn sub<'a>(root: &'a Table, k: &str, r: &mut Report) -> Option<&'a Table> {
 
 /// Today as `YYYY-MM-DD` (UTC), from the system clock.
 fn today() -> String {
+    in_days(0)
+}
+
+/// The date `n` days from today as `YYYY-MM-DD` (UTC); `import` sets `review_by` with it.
+pub(crate) fn in_days(n: i64) -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
-    let z = secs.div_euclid(86_400) + 719_468;
+    let z = secs.div_euclid(86_400) + n + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
@@ -346,25 +351,6 @@ pub fn plugin_json(m: &Manifest, bundle_hash: Option<&str>) -> String {
     keywords.extend(m.keywords.iter().cloned());
     let v = serde_json::json!({"name": m.name, "version": m.version, "description": m.description, "author": author, "license": m.license, "keywords": keywords, "metadata": meta});
     serde_json::to_string_pretty(&v).unwrap() + "\n"
-}
-
-pub fn check_claude(tree: &Tree, m: Option<&Manifest>, r: &mut Report) {
-    let Some(m) = m else { return };
-    let Some(text) = tree.text(".claude-plugin/plugin.json") else {
-        r.note(13, ".claude-plugin/plugin.json", "absent; `delphi bundle manifest --claude` generates it");
-        return;
-    };
-    let v: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => return r.fail(13, ".claude-plugin/plugin.json", format!("not valid JSON: {}", e)),
-    };
-    for (k, want) in [("name", &m.name), ("version", &m.version), ("description", &m.description), ("license", &m.license)] {
-        match v.get(k).and_then(|x| x.as_str()) {
-            Some(got) if got == want => {}
-            Some(got) => r.fail(13, ".claude-plugin/plugin.json", format!("`{}` is `{}` but bundle.toml says `{}`", k, got, want)),
-            None => r.fail(13, ".claude-plugin/plugin.json", format!("`{}` is missing (bundle.toml says `{}`)", k, want)),
-        }
-    }
 }
 
 // ── step 14: evals ───────────────────────────────────────────────────────────
