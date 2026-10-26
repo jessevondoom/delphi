@@ -36,6 +36,8 @@ pub struct EngineService {
     open_gate: tokio::sync::Mutex<()>,
     /// Recovery plans awaiting the operator's decision, by mission.
     recovery: Mutex<HashMap<String, PlanState>>,
+    /// The `delphi` binary that `org.action` runs (`bundle add|remove`); this process when unset.
+    bundle_exe: Mutex<Option<std::path::PathBuf>>,
 }
 
 struct PlanState {
@@ -80,7 +82,12 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None) })
+    }
+
+    /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
+    pub fn set_bundle_exe(&self, exe: std::path::PathBuf) {
+        *self.bundle_exe.lock().unwrap() = Some(exe);
     }
 
     pub fn set_notices(&self, n: Vec<String>) {
@@ -658,6 +665,68 @@ impl EngineService {
         Ok(json!({"added": rep.added, "updated": rep.updated, "removed": rep.removed, "unchanged": rep.unchanged}))
     }
 
+    /// `org.view` (`specs/026` §7.1): the added bundles, goals, perspectives and open items. A read, and no model call.
+    fn org_view(&self, ctx: &CallContext) -> RpcOutcome {
+        need_console(ctx)?;
+        Ok(crate::org_context::view(&self.engine.ws, &self.engine.projects, &self.engine.now()[..10]))
+    }
+
+    /// `org.action`: the operator's explicit `add <dir>`, `update <name>` or `remove <name>` in the console. It runs the
+    /// same `delphi bundle` command the shell does (one implementation of every check), shows what it printed and raises
+    /// no approval card (`specs/024` OD-1). `rollback` and `map connector` do not exist yet and are refused by name.
+    async fn org_action(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let word = |k: &str| -> Result<String, RpcError> {
+            let v = p[k].as_str().map(str::trim).unwrap_or("");
+            if v.is_empty() || v.len() > 4096 || v.starts_with('-') || v.contains('\0') {
+                return Err(err(code::INVALID_PARAMS, format!("`{}` is required (and must not start with `-`)", k)));
+            }
+            Ok(v.to_string())
+        };
+        let ws = &self.engine.ws;
+        let args: Vec<String> = match p["action"].as_str().unwrap_or("") {
+            "add" => {
+                let path = word("path")?;
+                if !std::path::Path::new(&path).is_absolute() {
+                    return Err(err(code::INVALID_PARAMS, "`path` must be an absolute directory"));
+                }
+                vec!["add".into(), path]
+            }
+            "remove" => vec!["remove".into(), word("name")?],
+            // An update is adding again from the directory the bundle came from.
+            "update" => {
+                let name = word("name")?;
+                let found: Vec<_> = delphi_core::bundles::active_entries(&ws.dir).into_iter().filter(|e| e.name == name || e.id() == name).collect();
+                match found.as_slice() {
+                    [] => return Err(err(code::INVALID_PARAMS, format!("no added bundle named `{}`", name))),
+                    [e] if e.source.kind == "directory" && !e.source.path.starts_with('-') => vec!["add".into(), e.source.path.clone()],
+                    [e] => return Err(err(code::INVALID_PARAMS, format!("{} came from a {} source, and only a directory can be added again", e.id(), e.source.kind))),
+                    _ => return Err(err(code::INVALID_PARAMS, format!("`{}` is ambiguous; use org/name", name))),
+                }
+            }
+            a @ ("rollback" | "map_connector") => return Err(err(code::INVALID_PARAMS, format!("`{}` is not available yet", a))),
+            other => return Err(err(code::INVALID_PARAMS, format!("unknown org action `{}` (add, update, remove)", other))),
+        };
+        let exe = match self.bundle_exe.lock().unwrap().clone() {
+            Some(e) => e,
+            None => std::env::current_exe().map_err(|e| err(-32000, e.to_string()))?,
+        };
+        let ws_name = ws.dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let mut cmd = tokio::process::Command::new(exe);
+        cmd.arg("bundle").args(&args).arg("--workspace").arg(ws_name).arg("--home").arg(&ws.home).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        let out = tokio::time::timeout(Duration::from_secs(180), cmd.output()).await.map_err(|_| err(-32000, "the bundle command took too long and was stopped"))?.map_err(|e| err(-32000, format!("could not run the bundle command: {}", e)))?;
+        let ok = out.status.success();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let output: String = crate::observe::sanitize(text.trim_end()).chars().take(8000).collect();
+        if ok {
+            // Tell the mission's log now, so the Narrator shows it before the next task starts.
+            if let Ok(m) = self.mission(p["mission_id"].as_str()).await {
+                let _ = self.engine.reconcile_bundles(&m).await;
+            }
+        }
+        Ok(json!({"ok": ok, "code": out.status.code(), "output": output}))
+    }
+
     fn ratify_list(&self) -> RpcOutcome {
         let ps = crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir);
         Ok(Value::Array(ps.iter().map(|p| json!({"id": p.id, "kind": p.kind.as_str(), "summary": p.summary, "live_blake3": p.live_blake3, "ratified_blake3": p.ratified_blake3, "diff": p.diff.chars().take(20_000).collect::<String>()})).collect()))
@@ -822,6 +891,8 @@ impl Extension for ServiceExt {
                     Ok(json!({"mode": mode.as_str()}))
                 })(),
                 "session.snapshot" => svc.snapshot(params).await,
+                "org.view" => svc.org_view(&ctx),
+                "org.action" => svc.org_action(params, ctx).await,
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
@@ -872,6 +943,8 @@ mod tests {
         let daemon = Daemon::with_hub(cfg, f.engine.hub.clone()).unwrap();
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
+        // `org.action` runs `delphi bundle …`; here `echo` stands in and prints the command line it was given.
+        svc.set_bundle_exe(PathBuf::from("/bin/echo"));
         daemon.set_extension(svc.extension());
         let (console, narrator, relay) = (daemon.console_token().to_string(), daemon.narrator_token().to_string(), daemon.relay_token().to_string());
         tokio::spawn(daemon.serve_all(listener, Some(narrator_listener), Some(relay_listener)));
@@ -987,6 +1060,49 @@ mod tests {
         assert!(!body.contains("An answer.") && body.contains("Earlier session"), "{}", body);
     }
 
+    // specs/026 AC-7: `/org` reads the view and each action is the operator's explicit act: it runs the bundle command,
+    // returns what it printed, raises no card, and the log learns of the change at once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn org_view_and_org_action_serve_the_console_run_the_bundle_command_and_raise_no_card() {
+        use crate::bundle_load::tests::{add_bundle, FM};
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let goals = format!("{}## [G-acme-01] Cut p99 checkout latency\n- **Horizon:** 2026-Q4 to 2999-Q1\n- **Measure:** p99 weekly\n- **Status:** active\n", FM);
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/goals.md", &goals), ("bundle.toml", "[bundle]\nschema = 1\n")]);
+        let ws_name = f.engine.ws.dir.file_name().unwrap().to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let (view, add, update, remove, refused, narrator, pending) = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let view = c.call("org.view", json!({})).unwrap();
+            let add = c.call("org.action", json!({"action": "add", "path": "/srv/bundles/acme"})).unwrap();
+            let update = c.call("org.action", json!({"action": "update", "name": "plat"})).unwrap();
+            let remove = c.call("org.action", json!({"action": "remove", "name": "acme/plat"})).unwrap();
+            let mut refused = Vec::new();
+            for p in [json!({"action": "add", "path": "relative/dir"}), json!({"action": "add", "path": "--yes"}), json!({"action": "remove", "name": "-x"}), json!({"action": "update", "name": "nope"}), json!({"action": "rollback", "name": "plat"}), json!({"action": "map_connector"}), json!({"action": "publish"})] {
+                refused.push(rpc_code(c.call("org.action", p)));
+            }
+            let pending = c.call("approval.list", json!({})).unwrap();
+            let mut n = Client::connect(&nsock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&ntok).unwrap();
+            let narrator = (rpc_code(n.call("org.view", json!({}))), rpc_code(n.call("org.action", json!({"action": "remove", "name": "plat"}))));
+            (view, add, update, remove, refused, narrator, pending)
+        })
+        .await;
+        assert_eq!((view["bundles"][0]["id"].as_str(), view["goals"][0]["id"].as_str(), view["unavailable"][0].as_str()), (Some("acme/plat"), Some("G-acme-01"), Some("rollback")));
+        let tail = format!("--workspace {} --home {}", ws_name, f.engine.ws.home.display());
+        assert_eq!((add["ok"].as_bool(), add["output"].as_str()), (Some(true), Some(format!("bundle add /srv/bundles/acme {}", tail).as_str())));
+        assert_eq!(update["output"].as_str(), Some(format!("bundle add /x {}", tail).as_str()), "an update adds again from the recorded source directory");
+        assert_eq!(remove["output"].as_str(), Some(format!("bundle remove acme/plat {}", tail).as_str()));
+        assert_eq!(refused, vec![Some(code::INVALID_PARAMS); 7], "{:?}", refused);
+        assert_eq!(narrator, (Some(code::FORBIDDEN), Some(code::FORBIDDEN)), "the narrator reads nothing of the organization and changes nothing");
+        assert_eq!(pending, json!([]), "no action raises an approval card");
+        assert_eq!(events_of(&f, "bundle.added").len(), 1, "the log learns of the added bundle without waiting for a task");
+        assert_eq!(f.model.requests().len(), 0, "no model call");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn the_narrator_scope_can_read_but_never_change_anything() {
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
@@ -996,7 +1112,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff"] {
@@ -1086,7 +1202,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1143,7 +1259,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
