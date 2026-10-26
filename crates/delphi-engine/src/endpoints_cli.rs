@@ -101,10 +101,17 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
         for ep in &targets {
             if ep.path == AccessPath::Harness {
                 let program = if ep.harness.as_deref() == Some("agy") { "agy" } else { "claude" };
-                let (cap, seat) = crate::capabilities::probe_harness_seat(&cfg, ep, program, now(), std::time::Duration::from_secs(10)).await;
+                let version = if program == "agy" { tokio::task::spawn_blocking(|| crate::capabilities::agy_version("agy")).await.ok().flatten() } else { None };
+                let (cap, seat, gate) = crate::capabilities::probe_harness_full(&cfg, ep, program, now(), std::time::Duration::from_secs(10), version).await;
                 // What the CLI said it can do goes where the daemon reads it, so the orchestrator knows before the first span.
                 if let Some(seat) = seat {
                     crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json")).record(seat);
+                }
+                // What the conformance probe found out about the gate, tied to the CLI's version: a span reads it to decide how far to trust the seat.
+                if let Some(gate) = gate {
+                    if let Err(e) = crate::capabilities::save_gate(&ws_dir.join("local/agy-gate.json"), &gate) {
+                        eprintln!("delphi endpoints: could not save the gate record: {}", e);
+                    }
                 }
                 print_row(&cap, cap.probed_at);
                 out.push(cap);

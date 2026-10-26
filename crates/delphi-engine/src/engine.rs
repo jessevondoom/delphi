@@ -64,6 +64,8 @@ pub struct Settings {
     pub build_attempts: u32,
     /// The Antigravity CLI to launch for an `agy` harness endpoint.
     pub agy_program: String,
+    /// Where the `agy` conformance record is read from, when not beside the inventory (tests).
+    pub agy_gate_file: Option<std::path::PathBuf>,
     /// Tokens (input, cache writes and output; not cache reads) one harness span may use before it is stopped.
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
@@ -122,6 +124,7 @@ impl Default for Settings {
             gh_program: "gh".into(),
             build_attempts: 3,
             agy_program: "agy".into(),
+            agy_gate_file: None,
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
             harness_claude: Default::default(),
