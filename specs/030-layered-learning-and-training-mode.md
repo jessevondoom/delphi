@@ -7,7 +7,7 @@ status: draft   # asked for by the operator on 2026-10-26; nothing here is built
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
-confidence: low   # a design built from a code and spec read plus public descriptions of Hermes Agent; no slice has been tried
+confidence: low   # a design built from a code and spec read plus public descriptions of `hermes-agent`; no slice has been tried
 source_mission: 2026-10-23-foundational-design
 tags: [spec, learning-loop, memory, skills, customization, training-mode, evaluation, draft]
 ---
@@ -62,7 +62,7 @@ Rules that follow:
 | **Custom skills** | by the normal skill loader for the roles they name | operator-authored, imported (`specs/019`), or drafted from experience (§3.3) | operator ratification of the draft; lint (`delphi check`) |
 | **Behavioral notes** (profile) | summarized ≤ 1 KB into the snapshot | `delphi customize profile`; or promoted from a staged note | operator-authored is `user_ratified`; promoted needs ratification |
 
-Staged notes are what Hermes's cheap capture buys, kept outside the prompt so they cannot poison it. A staged note carries the taint level of its source (`specs/001` §5): a note built from tool output or web content stays below `internal_empirical` and the promotion linter refuses it (`[H-004]`). A note derived from an operator correction in chat is `user_ratified` at the source but is still staged, not loaded.
+Staged notes are what `hermes-agent`'s cheap capture buys, kept outside the prompt so they cannot poison it. A staged note carries the taint level of its source (`specs/001` §5): a note built from tool output or web content stays below `internal_empirical` and the promotion linter refuses it (`[H-004]`). A note derived from an operator correction in chat is `user_ratified` at the source but is still staged, not loaded.
 
 ### 3.2 Capture triggers (deterministic; no model call to decide)
 The daemon writes a staged note, with the event range it came from, when:
@@ -73,7 +73,7 @@ The daemon writes a staged note, with the event range it came from, when:
 5. an `--optimistic` provisional decision is rejected at review (`specs/015`);
 6. a task needed five or more tool calls and passed its gates on the first attempt (a skill-candidate trigger only, §3.3).
 
-A nudge pass (Hermes's periodic "what should be persisted") is deliberately **not** in the first slices: triggers 1–5 are events the daemon already sees, and a model-driven nudge is the part most open to self-generated noise. It can be added later as a core change proven in training mode.
+A nudge pass (`hermes-agent`'s periodic "what should be persisted") is deliberately **not** in the first slices: triggers 1–5 are events the daemon already sees, and a model-driven nudge is the part most open to self-generated noise. It can be added later as a core change proven in training mode.
 
 ### 3.3 Skill candidates
 When trigger 6 fires, or at `/retro` for a cluster of similar staged notes, the Orchestrator may draft a skill into `operator/skills/.staged/<name>/` with the `lesson-promotion`-style proposal wrapper. The draft must pass the same checks as an imported skill (`specs/019` §3: name rules, 200-character description, schemas, authorized roles, no `scripts/` unless the operator opts in) plus a **trigger test** (the draft's description must retrieve it on the task it came from, using the `dev/skill_trigger_eval.py` method). Ratification moves it out of `.staged/`. Tainted sources cannot produce a candidate.
@@ -201,7 +201,7 @@ Total about **182 h**. Critical path for the operator layer: L0 → L1 → L2 �
 - Model-graded rubrics are noisy; deterministic checks carry the weight, and the grader has its own calibration set.
 - Exposure randomization is a real experiment only on tasks with a comparable type; with few tasks it will not conclude anything.
 - Training mode finds regressions and tests candidate changes; it cannot prove a change generalizes to operators whose work differs from the fixtures. Harvest (§4.7) narrows that gap and does not close it.
-- Hermes-style self-written skills and cheap capture are borrowed ideas whose claimed benefits come mostly from the project's own descriptions; the A/B in §4.4 is how we find out whether they help here.
+- `hermes-agent`-style self-written skills and cheap capture are borrowed ideas whose claimed benefits come mostly from the project's own descriptions; the A/B in §4.4 is how we find out whether they help here.
 
 ## 10. Verification Plan
 1. **Event Completeness Test (AC-1).** Run three scripted tasks; assert each has `snapshot.loaded` and one outcome event naming the same rule IDs the snapshot builder used.
