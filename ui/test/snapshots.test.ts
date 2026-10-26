@@ -49,7 +49,7 @@ test('research panels over the chat', () => {
 });
 
 test('the Observer: every view at 100x30, and two narrow', () => {
-  const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, diff: null, live: {}, connected: true });
+  const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true });
   for (const view of VIEWS) {
     const r = snapshot(`observe-${view}`, observeFrame(om(view), 100, 30));
     assert.ok(r.ok, r.message);

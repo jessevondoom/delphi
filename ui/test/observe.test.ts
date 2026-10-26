@@ -28,7 +28,7 @@ function sample(): OState {
   s.builds = [{ task_id: 't_1', branch: 'delphi/t_1', attempts: ['attempt 1: red'], sha: 'abc1234', gates: [{ name: 'tests', state: 'green', detail: '12 passed' }, { name: 'audit', state: 'red', detail: '1 finding' }], findings: [['P1', 'unchecked unwrap']], flaky: true, merge: '' }];
   return s;
 }
-const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st: sample(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, diff: null, live: {}, connected: true, ...over });
+const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st: sample(), view, pick: 0, scroll: 0, selNode: 1, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true, ...over });
 
 test('every view fits the window exactly, with no boxes and no money-free surprises', () => {
   for (const view of VIEWS) for (const [w, h] of [[110, 34], [70, 20], [40, 12]] as const) {
@@ -47,7 +47,7 @@ test('the chrome: a badges-only strip, the title row right under it, a blank row
   assert.equal(l[2], '', 'one blank row');
   assert.match(l[3]!, /^ ▼ needs you/, 'an approval is waiting in the sample, so the slot is the band');
   assert.match(l.at(-2)!, /^─+$/);
-  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ○ ● ○ ○$/);
+  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ● ○ ○$/);
   const all = l.join('\n');
   assert.ok(!/\$\d/.test(all) && !/spend|\bcost\b/i.test(all), 'no money anywhere');
   assert.ok(!/ \/ |\?|mission 2026/.test(l.at(-1)!) && !all.includes('2026-10-24-ui'), 'no / or ? in the footer, no mission id');
@@ -57,8 +57,8 @@ test('the title row drops the version below 48 columns, the footer drops the arr
   const narrow = observeFrame(model('epic'), 40, 14).map(plain);
   assert.equal(narrow[1]!.trimEnd(), 'delphi · epic');
   assert.doesNotMatch(narrow.at(-1)!, /←/);
-  assert.match(narrow.at(-1)!, /○ ● ○ ○ ○ ○$/);
-  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ● ○ ○ ○ ○$/);
+  assert.match(narrow.at(-1)!, /○ ● ○ ○ ○$/);
+  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ● ○ ○ ○$/);
 });
 
 test('the attention slot is body row 1 of every view: "nothing needs you" or the band, with what and where', () => {
@@ -75,17 +75,18 @@ test('the attention slot is body row 1 of every view: "nothing needs you" or the
     assert.equal(stringWidth(row) <= w, true);
   }
   const ratify = sample(); ratify.councils[0]!.escalation = null; ratify.pending_proposals = 2;
-  assert.match(observeFrame(model('forge', { st: ratify }), 80, 24).map(plain)[3]!, /2 proposal\(s\) await \/ratify/);
+  assert.match(observeFrame(model('agents', { st: ratify }), 80, 24).map(plain)[3]!, /2 proposal\(s\) await \/ratify/);
   assert.match(observeFrame(model('council', { st: sample() }), 80, 24).map(plain)[3]!, /council t_2 needs a decision/, 'an escalated council');
 });
 
-test('views: six, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
-  assert.deepEqual([...VIEWS], ['council', 'epic', 'forge', 'agents', 'archives', 'thinking']);
+test('views: five, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
+  assert.deepEqual([...VIEWS], ['council', 'epic', 'agents', 'archives', 'thinking']);
   for (const gone of ['spend', 'dag', 'telemetry', '1', '4', '7']) assert.equal(parseView(gone), null, gone);
   assert.equal(stepView('council', -1), 'council');
   assert.equal(stepView('thinking', 1), 'thinking');
-  assert.equal(stepView('epic', 1), 'forge');
-  assert.equal(stepView('forge', -1), 'epic');
+  assert.equal(stepView('epic', 1), 'agents');
+  assert.equal(stepView('agents', -1), 'epic');
+  assert.equal(parseView('forge'), 'epic', 'the forge view became part of the epic pane');
 });
 
 test('mascots are seven columns in every state; the builder keeps its white crown', () => {
@@ -138,26 +139,11 @@ test('the blind seat is sealed: its live text is never shown', () => {
   assert.match(t, /sealed until all three answer/);
 });
 
-test('epic: a row per task with its state glyph, and the now/next/path narrative (the rail itself: epic-rail.test.ts)', () => {
+test('epic: threads of work with a a few lines each and the critical path (the pane itself: epic-threads.test.ts)', () => {
   const t = observeFrame(model('epic'), 110, 34).map(plain).join('\n');
-  assert.match(t, /\n ▶ athena\s/);
-  assert.match(t, /\n ✔ hephaestus\s/);
-  assert.match(t, /\n now {3}⟦•─•⟧ athena is working: Implement the deck router/);
-  assert.match(t, /\n next {2}nothing queued/);
-});
-
-test('forge: gates, attempts, findings, the flaky note and a coloured live diff', () => {
-  const diff = { available: true, stat: ' a.rs | 2 +-', diff: '@@ -1 +1 @@\n-old\n+new', untracked: ['b.rs'] };
-  const t = observeFrame(model('forge', { diff }), 110, 34).map(plain).join('\n');
-  assert.match(t, /build 1\/1 {2}t_1 {2}delphi\/t_1 · abc1234 · in progress/);
-  assert.match(t, /✔ tests\s+12 passed/);
-  assert.match(t, /✖ audit\s+1 finding/);
-  assert.match(t, /audit P1 unchecked unwrap/);
-  assert.match(t, /flaky/);
-  assert.match(t, /── diff ─/);
-  assert.match(t, /\?\? b\.rs/);
-  assert.match(t, /\n\+new/);
-  assert.match(observeFrame(model('forge', { diff: { available: false } }), 110, 34).map(plain).join('\n'), /no live worktree for this build/);
+  assert.match(t, /\n▌▼ Implement the deck router/, 'its build has a failing audit, so it needs you');
+  assert.match(t, /\n▌ {2}▶ athena wrapping up/);
+  assert.match(t, / ▌ critical path {2}Implement the deck router/);
 });
 
 test('archives: the hits of a search and where to search from', () => {

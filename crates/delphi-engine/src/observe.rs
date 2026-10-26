@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 32] = [
+pub const KINDS: [&str; 33] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -196,6 +196,18 @@ pub struct Build {
     pub merge: String,
 }
 
+/// A thread of work the orchestrator named (`thread.named`): a label and the tasks that belong to it. The narrator's
+/// epic pane groups by these; tasks no thread lists are grouped by what their requests say.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Thread {
+    pub id: String,
+    pub label: String,
+    pub tasks: Vec<String>,
+}
+
+const MAX_THREADS: usize = 40;
+const MAX_THREAD_TASKS: usize = 50;
+
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ObserverState {
     pub last_seq: u64,
@@ -204,6 +216,7 @@ pub struct ObserverState {
     pub tasks: BTreeMap<String, Task>,
     pub councils: Vec<Council>,
     pub builds: Vec<Build>,
+    pub threads: Vec<Thread>,
     pub pending_approvals: BTreeMap<String, String>,
     pub spent_usd: f64,
     pub tokens: Tokens,
@@ -310,6 +323,19 @@ impl ObserverState {
                 let prompt = sanitize(p["prompt"].as_str().unwrap_or("")).chars().take(300).collect::<String>();
                 self.say(format!("{} started ({}): {}", task, flow, prompt.chars().take(80).collect::<String>()));
                 self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new() });
+            }
+            "thread.named" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let (id, label) = (clip(&p["thread"], 60), clip(&p["label"], 80));
+                let tasks: Vec<String> = p["tasks"].as_array().map(|a| a.iter().map(|x| clip(x, 60)).filter(|x| !x.is_empty()).take(MAX_THREAD_TASKS).collect()).unwrap_or_default();
+                if !id.is_empty() && !label.is_empty() {
+                    let t = Thread { id: id.clone(), label, tasks };
+                    match self.threads.iter().position(|x| x.id == id) {
+                        Some(i) => self.threads[i] = t,
+                        None if self.threads.len() < MAX_THREADS => self.threads.push(t),
+                        None => {}
+                    }
+                }
             }
             "task.output" => {
                 if let Some(t) = self.tasks.get_mut(&task) {
@@ -631,13 +657,10 @@ impl ObserverState {
         out
     }
 
-    /// The view the Narrator should open on when none is asked for: a Council in progress, a build in
-    /// progress, else the Epic.
+    /// The view the Narrator should open on when none is asked for: a Council in progress, else the Epic.
     pub fn default_view(&self) -> &'static str {
         if self.councils.iter().any(|c| c.phase == "round 1" || c.phase == "round 2") {
             "council"
-        } else if self.builds.iter().any(|b| b.merge.is_empty() || b.merge == "approved") && self.tasks.values().any(|t| t.flow == "build" && t.status == "running") {
-            "forge"
         } else {
             "epic"
         }
@@ -876,6 +899,23 @@ mod tests {
     }
 
     #[test]
+    fn named_threads_are_kept_cleaned_and_replaced_by_id() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "thread.named", "t_1", "orchestrator", json!({"thread": "pricing", "label": "Pricing \x1b[31mtiers\x1b[0m\n for the kb", "tasks": ["t_1", "t_2", ""]})));
+        assert_eq!(st.threads, vec![Thread { id: "pricing".into(), label: "Pricing tiers for the kb".into(), tasks: vec!["t_1".into(), "t_2".into()] }]);
+        st.apply(&ev(2, "thread.named", "t_1", "orchestrator", json!({"thread": "pricing", "label": "Pricing", "tasks": ["t_1"]})));
+        assert_eq!((st.threads.len(), st.threads[0].label.as_str(), st.threads[0].tasks.len()), (1, "Pricing", 1), "the same id replaces, it does not add");
+        st.apply(&ev(3, "thread.named", "t_1", "orchestrator", json!({"thread": "", "label": "no id"})));
+        st.apply(&ev(4, "thread.named", "t_1", "orchestrator", json!({"thread": "x", "label": "  "})));
+        assert_eq!(st.threads.len(), 1, "a thread needs an id and a label");
+        for i in 0..60 {
+            st.apply(&ev(10 + i, "thread.named", "t_1", "orchestrator", json!({"thread": format!("th{}", i), "label": "l", "tasks": []})));
+        }
+        assert_eq!(st.threads.len(), MAX_THREADS, "bounded");
+        assert!(KINDS.contains(&"thread.named"));
+    }
+
+    #[test]
     fn a_council_is_followed_from_convening_to_its_verdict() {
         let mut st = ObserverState::new(&roles());
         st.apply(&ev(1, "council.started", "t_2", "", json!({"proposition": "Queue or cron?", "seats": [{"role": "architect", "family": "claude"}, {"role": "red-team", "family": "gemini"}], "homogeneous": false})));
@@ -899,7 +939,7 @@ mod tests {
         st.apply(&ev(4, "build.attempt", "t_3", "", json!({"attempt": 2, "tier": "frontier", "family": "claude", "homogeneous_retry": false})));
         st.apply(&ev(5, "gates.evaluated", "t_3", "", json!({"sha": "0123456789abcdef", "gates": [{"name": "tests", "state": "green", "detail": "ok"}, {"name": "operator", "state": "red", "detail": "waiting"}]})));
         st.apply(&ev(6, "audit.recorded", "t_3", "red-team", json!({"findings": [{"severity": "P2", "title": "naming"}]})));
-        assert_eq!(st.default_view(), "forge");
+        assert_eq!(st.default_view(), "epic", "a build in progress is part of the epic pane");
         st.apply(&ev(7, "merge.approved", "t_3", "", json!({"sha": "x"})));
         st.apply(&ev(8, "action.result", "t_3", "", json!({"action_id": "merge-abc", "ok": true})));
         let b = &st.builds[0];

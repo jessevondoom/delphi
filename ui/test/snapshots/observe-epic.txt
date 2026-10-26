@@ -3,14 +3,14 @@ delphi v0.5 · epic
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
-                      earlier                                 now                              later
- ▶ athena             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●═══════════════════════
- ✔ hephaestus            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┆
+ ▌ critical path  Implement the deck router                                             about 2 min
 
- now   ⟦•─•⟧ athena is working: Implement the deck router
- next  nothing queued
- path  athena  about 2 min
+▌▼ Implement the deck router                                                          ▰▰▰▱▱▱ 1 of 2
+▌  ✔ 1 step done
+▌  ▶ athena wrapping up 1:06
 
+ ▼ Table or file?                                                                     ▱▱▱▱▱▱ 0 of 1
+   ✖ council is split: table or file · needs you
 
 
 
@@ -27,4 +27,4 @@ delphi v0.5 · epic
 
                                                                                        pace  ▁▃▇▄█▂
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-1 running  ·  3500 tokens                                                        ← →  ·  ○ ● ○ ○ ○ ○
+1 running  ·  3500 tokens                                                          ← →  ·  ○ ● ○ ○ ○

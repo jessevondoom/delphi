@@ -9,4 +9,4 @@ delphi · archives
       three attempts
       then escalate
 ────────────────────────────────────────
-1 running  ·  14.2k tokens   ○ ○ ○ ○ ● ○
+1 running  ·  14.2k tokens     ○ ○ ○ ● ○

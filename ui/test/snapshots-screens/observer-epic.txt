@@ -3,12 +3,12 @@ delphi v0.5 · epic
 
  ✔ nothing needs you
 
-                      earlier                                 now                              later
- ▶ athena                                                     ━●════════════════════════════════════
+ ▌ critical path  Implement the deck router                                             about 3 min
 
- now   ⟦•─•⟧ athena is working: Implement the deck router
- next  nothing queued
- path  athena  about 3 min
+▌◐ Implement the deck router                                                          ▱▱▱▱▱▱ 0 of 1
+▌  ▶ athena wrapping up 0:01
+
+
 
 
 
@@ -27,4 +27,4 @@ delphi v0.5 · epic
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-1 running  ·  3500 tokens                                                        ← →  ·  ○ ● ○ ○ ○ ○
+1 running  ·  3500 tokens                                                          ← →  ·  ○ ● ○ ○ ○

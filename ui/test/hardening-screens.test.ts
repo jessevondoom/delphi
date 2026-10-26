@@ -75,7 +75,7 @@ function ostate(): OState {
 
 test('golden screens: the Observer views', () => {
   for (const view of VIEWS) {
-    const m: OModel = { info, pal: { dark: true }, st: ostate(), view, pick: 0, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, diff: null, live: {}, connected: true };
+    const m: OModel = { info, pal: { dark: true }, st: ostate(), view, pick: 0, scroll: 0, selNode: 0, search: { editing: false, query: '', hits: [], note: '' }, live: {}, connected: true };
     snap('observer-' + view, observeFrame(m, 100, 30));
   }
 });
@@ -98,7 +98,7 @@ test('fuzz: any window size and any text gives a screen of exactly h lines, none
     const lines = frame(m, w, h);
     assert.equal(lines.length, h, `seed 42 #${i} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= Math.max(w, 1) , `#${i} ${w}x${h}: ${JSON.stringify(plain(l)).slice(0, 80)}`);
-    for (const view of VIEWS) assert.equal(observeFrame({ info, pal: { dark: true }, st: ostate(), view, pick: 0, scroll: Math.floor(r() * 30), selNode: 0, search: { editing: false, query: typed, hits: [], note: '' }, diff: null, live: {}, connected: true }, w, h).length, h);
+    for (const view of VIEWS) assert.equal(observeFrame({ info, pal: { dark: true }, st: ostate(), view, pick: 0, scroll: Math.floor(r() * 30), selNode: 0, search: { editing: false, query: typed, hits: [], note: '' }, live: {}, connected: true }, w, h).length, h);
   }
 });
 
