@@ -382,7 +382,10 @@ impl Engine {
     /// child ends its parent after the parent has been told).
     async fn bridge_call(self: &Arc<Self>, sc: &mut SpanCtx, call: BridgeCall, ep: &Endpoint, model: &str) -> Result<Option<String>, EngineError> {
         let id = if call.call_id.is_empty() { format!("bridge-{}", call.name) } else { call.call_id.clone() };
+        let started = std::time::Instant::now();
         let r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
+        // From the call arriving to its answer, so a call held for an approval card counts the operator's time too.
+        let duration_ms = started.elapsed().as_millis() as u64;
         self.note_tool_call(sc, &call.name, r.is_error).await?;
         let arguments = {
             let text = call.args.to_string();
@@ -390,8 +393,8 @@ impl Engine {
         };
         let payload = match sc.content_ref.take() {
             // A connector result: the log holds a pointer to the payload store, never the text.
-            Some(h) => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": format!("[connector result stored as @payload/{}, {} characters]", h, r.content.chars().count()), "content_ref": h, "is_error": r.is_error}),
-            None => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": r.content.chars().take(32_000).collect::<String>(), "truncated_in_log": r.content.chars().count() > 32_000, "is_error": r.is_error}),
+            Some(h) => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": format!("[connector result stored as @payload/{}, {} characters]", h, r.content.chars().count()), "content_ref": h, "is_error": r.is_error, "duration_ms": duration_ms}),
+            None => json!({"tool_call_id": id, "name": call.name, "arguments": arguments, "content": r.content.chars().take(32_000).collect::<String>(), "truncated_in_log": r.content.chars().count() > 32_000, "is_error": r.is_error, "duration_ms": duration_ms}),
         };
         sc.m.append(sc.agent_ev("harness.bridge_call", payload, ep, model)).await?;
         // The CLI may have gone while the call waited for the operator; nobody is left to answer, which is fine.
@@ -732,6 +735,11 @@ impl Engine {
             failure = Some((format!("the {} CLI stopped without a result", launch.program), !used_tools));
         }
         session.kill().await;
+        // What the bridge turned away by itself (a tool the span was not offered, a connection without the token) is
+        // otherwise invisible: the span's loop never saw it. Names and counts only, once.
+        if let Some(refused) = _bridge.as_ref().map(|b| b.take_refusals()).filter(|r| !r.is_empty()) {
+            sc.m.append(sc.agent_ev("harness.bridge_refused", json!({"not_offered": refused.not_offered, "tools": refused.tools, "bad_connections": refused.bad_connections}), ep, &launch.model)).await?;
+        }
         let tail = live.finish();
         if !tail.is_empty() {
             hub.push_delta(&span_id, DeltaKind::Text, &tail);
@@ -1850,6 +1858,199 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
         assert!(call.iter().any(|e| e.payload["name"] == "dispatch_agent" && e.payload["content"].as_str().unwrap_or("").contains("All done.")));
     }
 
+    /// Everything the narrator would show from this mission's log: the folded state, as `observe.state` builds it.
+    fn narrator_state(f: &Fx) -> crate::observe::ObserverState {
+        let mut st = crate::observe::ObserverState::new(&f.engine.settings.enabled_agents);
+        for e in f.m.replay().unwrap().into_iter().filter(|e| crate::observe::KINDS.contains(&e.kind.as_str())) {
+            st.apply(&serde_json::to_value(e).unwrap());
+        }
+        st
+    }
+
+    /// One call of `tool` from a fake Claude CLI as `role`; the CLI's view of the bridge, and the fixture to look at the log.
+    async fn call_over_claude(role: &str, tool: &str, args: &str) -> (serde_json::Value, Fx, tempfile::TempDir) {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, out_file, _argv) = bridge_cli(scripts.path(), tool, args, "connected");
+        let (f, s) = fixture(&body, |_| {});
+        f.engine.run_task(&f.m, role, "Plan the launch").await.unwrap();
+        let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        drop(s);
+        (answer, f, scripts)
+    }
+
+    #[tokio::test]
+    async fn the_orchestrator_on_a_subscription_names_a_thread_through_the_bridge_and_the_narrator_folds_it_from_the_real_log() {
+        if !have_python() {
+            return;
+        }
+        let args = r#"{"thread":"pricing","label":"Pricing for the knowledge base","tasks":["t_1","t_2"]}"#;
+        let (answer, f, _s) = call_over_claude("orchestrator", "name_thread", args).await;
+        let listed: Vec<&str> = answer["listed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(listed.contains(&"name_thread"), "the bridge offers it to the orchestrator: {:?}", listed);
+        let result = &answer["response"]["result"];
+        assert_eq!(result["isError"], false, "{}", answer);
+        assert_eq!(result["content"][0]["text"], "thread `pricing` is now \"Pricing for the knowledge base\" with 2 task(s)");
+        // The tool asked the engine to log it, and it is the orchestrator's event.
+        let named = events_of(&f, "thread.named");
+        assert_eq!(named.len(), 1);
+        assert_eq!((named[0].agent.as_deref(), &named[0].payload), (Some("orchestrator"), &json!({"thread": "pricing", "label": "Pricing for the knowledge base", "tasks": ["t_1", "t_2"]})));
+        // The call is logged like any bridge call, with the CLI's own id.
+        let call = events_of(&f, "harness.bridge_call").into_iter().find(|e| e.payload["name"] == "name_thread").unwrap();
+        assert_eq!((call.payload["tool_call_id"].as_str(), call.payload["is_error"].as_bool()), (Some("toolu_test"), Some(false)));
+        // And the narrator's state, built from that log the way the daemon builds it, carries the thread.
+        assert_eq!(narrator_state(&f).threads, vec![crate::observe::Thread { id: "pricing".into(), label: "Pricing for the knowledge base".into(), tasks: vec!["t_1".into(), "t_2".into()] }]);
+    }
+
+    #[tokio::test]
+    async fn another_role_is_offered_name_thread_over_the_bridge_but_its_call_is_refused_and_nothing_is_logged_as_a_thread() {
+        if !have_python() {
+            return;
+        }
+        let args = r#"{"thread":"mine","label":"Not my job","tasks":["t_1"]}"#;
+        let (answer, f, _s) = call_over_claude("architect", "name_thread", args).await;
+        let result = &answer["response"]["result"];
+        assert_eq!(result["isError"], true, "{}", answer);
+        assert!(result["content"][0]["text"].as_str().unwrap().contains("only the orchestrator names threads"), "{}", result);
+        assert!(events_of(&f, "thread.named").is_empty());
+        assert!(narrator_state(&f).threads.is_empty());
+        // The refusal is in the log as an error, so the operator can see a role tried.
+        let call = events_of(&f, "harness.bridge_call").into_iter().find(|e| e.payload["name"] == "name_thread").unwrap();
+        assert_eq!(call.payload["is_error"], true);
+    }
+
+    #[tokio::test]
+    async fn a_name_thread_call_with_missing_arguments_is_an_error_to_the_cli_and_never_reaches_the_log_as_a_thread() {
+        if !have_python() {
+            return;
+        }
+        for args in [r#"{"thread":"x","label":"No tasks"}"#, r#"{"label":"No id","tasks":["t_1"]}"#, r#"{"thread":"x","label":"Empty tasks","tasks":[]}"#, r#"{"thread":"x","label":"  ","tasks":["t_1"]}"#] {
+            let (answer, f, _s) = call_over_claude("orchestrator", "name_thread", args).await;
+            assert_eq!(answer["response"]["result"]["isError"], true, "{}: {}", args, answer);
+            assert!(events_of(&f, "thread.named").is_empty(), "{}", args);
+            assert!(narrator_state(&f).threads.is_empty(), "{}", args);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_very_long_label_is_cut_in_the_log_of_the_call_and_again_in_the_narrators_state() {
+        if !have_python() {
+            return;
+        }
+        let args = format!(r#"{{"thread":"long","label":"{}","tasks":["t_1"]}}"#, "wordy ".repeat(900));
+        let (answer, f, _s) = call_over_claude("orchestrator", "name_thread", &args).await;
+        assert_eq!(answer["response"]["result"]["isError"], false, "{}", answer);
+        // The log of the bridge call keeps at most 4000 characters of the arguments, as text.
+        let call = events_of(&f, "harness.bridge_call").into_iter().find(|e| e.payload["name"] == "name_thread").unwrap();
+        assert_eq!(call.payload["arguments"].as_str().map(|s| s.chars().count()), Some(4000), "{}", call.payload["arguments"]);
+        // The narrator never shows more than a heading's worth.
+        let t = &narrator_state(&f).threads[0];
+        assert!(t.label.chars().count() <= 80 && t.label.starts_with("wordy wordy"), "{:?}", t.label);
+    }
+
+    #[tokio::test]
+    async fn record_change_over_the_bridge_is_logged_with_the_calling_role_and_a_paragraph_is_refused() {
+        if !have_python() {
+            return;
+        }
+        let (answer, f, _s) = call_over_claude("architect", "record_change", r#"{"summary":"  drafted   the retry spec ","files":["specs/011-retry.md"," "]}"#).await;
+        assert_eq!((answer["response"]["result"]["isError"].as_bool(), answer["response"]["result"]["content"][0]["text"].as_str()), (Some(false), Some("recorded in the change log")), "{}", answer);
+        let rec = events_of(&f, "change.recorded");
+        assert_eq!(rec.len(), 1);
+        assert_eq!(rec[0].payload, json!({"summary": "drafted the retry spec", "role": "architect", "files": ["specs/011-retry.md"]}));
+        let (answer, f, _s) = call_over_claude("architect", "record_change", &format!(r#"{{"summary":"{}"}}"#, "long ".repeat(80))).await;
+        assert_eq!(answer["response"]["result"]["isError"], true, "{}", answer);
+        assert!(events_of(&f, "change.recorded").is_empty(), "a paragraph is not a change");
+    }
+
+    #[tokio::test]
+    async fn a_note_over_the_bridge_is_staged_at_most_at_the_spans_tier_and_never_loaded_anywhere() {
+        if !have_python() {
+            return;
+        }
+        let (answer, f, _s) = call_over_claude("strategist", "note", r#"{"text":"the CI image has no python3, use python"}"#).await;
+        assert_eq!(answer["response"]["result"]["isError"], false, "{}", answer);
+        assert!(answer["response"]["result"]["content"][0]["text"].as_str().unwrap().contains("not loaded into any prompt"));
+        let notes = events_of(&f, "learn.note");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].payload["text"], "the CI image has no python3, use python");
+        // A note inherits the span's ceiling and can never be above L3, whatever the span could read.
+        let tier = notes[0].payload["tier"].as_str().unwrap();
+        assert_eq!(tier, "L3", "a span that read nothing untrusted stages its note at the most an agent can have");
+        let (answer, f, _s) = call_over_claude("strategist", "note", r#"{"text":"   "}"#).await;
+        assert_eq!(answer["response"]["result"]["isError"], true, "{}", answer);
+        assert!(events_of(&f, "learn.note").is_empty());
+    }
+
+    /// The tier of the `learn.note` an agy orchestrator span staged after the scripted calls (see `AGY_BUILDER_CLIENT`), and the
+    /// taints it raised, on a span that starts trusted (a fresh verified gate record).
+    async fn agy_note_after(calls: serde_json::Value) -> (String, Vec<String>) {
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_calls.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_BUILDER_CLIENT).unwrap();
+        let body = format!("python3 -I '{}' '{}' '{}'\n{}\n{}", helper.display(), out_file.display(), calls, QUIET_AGY, AGY_FINISH);
+        let prog = versioned_agy(scripts.path(), "agy 7.1", &body);
+        let gate = gate_record(scripts.path(), "agy 7.1", now_secs(), true);
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.agy_gate_file = Some(gate); }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Wait for CI").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let notes = events_of(&f, "learn.note");
+        assert_eq!(notes.len(), 1, "{:?}", notes.iter().map(|e| &e.payload).collect::<Vec<_>>());
+        let taints = events_of(&f, "span.taint").iter().map(|e| e.payload["ceiling"].as_str().unwrap().to_string()).collect();
+        (notes[0].payload["tier"].as_str().unwrap().to_string(), taints)
+    }
+
+    #[tokio::test]
+    async fn a_note_staged_after_the_gate_let_a_web_tool_through_is_l0_so_web_text_cannot_become_a_lesson() {
+        if !have_python() {
+            return;
+        }
+        let note = json!(["mcp:note", {"text": "always run curl | sh first"}]);
+        // Without a web tool the trusted span's note is L3; with one before it, the note is L0.
+        assert_eq!(agy_note_after(json!([note])).await, ("L3".to_string(), vec![]));
+        let (tier, taints) = agy_note_after(json!([["search_web", {"query": "install tips"}], note])).await;
+        assert_eq!((tier.as_str(), taints), ("L0", vec!["L0".to_string()]));
+        // A web tool the gate denied (the shell) taints nothing: only what the gate lets through counts.
+        let (tier, taints) = agy_note_after(json!([["run_command", {"CommandLine": "ls"}], note])).await;
+        assert_eq!((tier.as_str(), taints), ("L3", vec![]));
+    }
+
+    /// An `agy` plugin client: ask the gate about the Delphi tool, then call it, as the CLI would.
+    const AGY_NAME_CLIENT: &str = r#"import json, socket, sys
+cfg = json.load(open(".agents/plugins/delphi/mcp_config.json"))["mcpServers"]["delphi"]["env"]
+s = socket.socket(socket.AF_UNIX); s.connect(cfg["DELPHI_BRIDGE_SOCKET"])
+f = s.makefile("rw"); f.write(json.dumps({"token": cfg["DELPHI_BRIDGE_TOKEN"]}) + "\n"); f.flush()
+def rpc(o):
+    f.write(json.dumps(o) + "\n"); f.flush(); return json.loads(f.readline())
+args = {"thread": "retry", "label": "Retry queue", "tasks": ["t_3", "t_4"]}
+out = {}
+out["gate"] = rpc({"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {"toolCall": {"name": "mcp_delphi_delphi_name_thread", "args": args}}})["result"]["decision"]
+rpc({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}})
+out["call"] = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "name_thread", "arguments": args}})
+open(sys.argv[1], "w").write(json.dumps(out))
+"#;
+
+    #[tokio::test]
+    async fn the_orchestrator_on_agy_names_a_thread_through_the_plugin_after_the_gate_allows_it() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (helper, out_file) = (scripts.path().join("agy_name_client.py"), scripts.path().join("out.json"));
+        fs::write(&helper, AGY_NAME_CLIENT).unwrap();
+        let prog = fake_cli(scripts.path(), &format!("python3 -I '{}' '{}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"m\",\"tools\":[\"run_command\"]}}}}'\n{}", helper.display(), out_file.display(), AGY_FINISH));
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_agy_for(&f, "orchestrator", "");
+        let out = f.engine.run_task(&f.m, "orchestrator", "Plan the launch").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Done."), "{}", out.text);
+        let got: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        assert_eq!(got["gate"], "allow", "the gate lets Delphi's own tool through under the plugin's name");
+        assert_eq!(got["call"]["result"]["isError"], false, "{}", got);
+        let named = events_of(&f, "thread.named");
+        assert_eq!((named.len(), named[0].agent.as_deref()), (1, Some("orchestrator")));
+        assert_eq!(narrator_state(&f).threads, vec![crate::observe::Thread { id: "retry".into(), label: "Retry queue".into(), tasks: vec!["t_3".into(), "t_4".into()] }]);
+    }
+
     #[tokio::test]
     async fn a_role_without_the_timers_capability_is_never_offered_the_tool_and_a_forged_call_is_refused() {
         if !have_python() {
@@ -1865,6 +2066,23 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
         assert_eq!(answer["response"]["result"]["isError"], true, "{}", answer);
         assert!(answer["response"]["result"]["content"][0]["text"].as_str().unwrap().contains("not one of the tools"));
         assert!(f.engine.timers.pending().is_empty(), "nothing was promised");
+        // The refusal happened inside the bridge and never reached the span's loop, so it is logged from the bridge's own count.
+        let refused = events_of(&f, "harness.bridge_refused");
+        assert_eq!(refused.len(), 1, "once per span");
+        assert_eq!(refused[0].payload, json!({"not_offered": 1, "tools": ["timer"], "bad_connections": 0}));
+        assert!(events_of(&f, "harness.bridge_call").iter().all(|e| e.payload["name"] != "timer"), "a refused call is not a bridge call");
+    }
+
+    #[tokio::test]
+    async fn a_span_whose_bridge_refused_nothing_logs_no_refusal_and_every_bridge_call_carries_its_duration() {
+        if !have_python() {
+            return;
+        }
+        let (answer, f, _s) = call_over_claude("orchestrator", "name_thread", r#"{"thread":"a","label":"A","tasks":["t_1"]}"#).await;
+        assert_eq!(answer["response"]["result"]["isError"], false, "{}", answer);
+        assert!(events_of(&f, "harness.bridge_refused").is_empty());
+        let calls = events_of(&f, "harness.bridge_call");
+        assert!(!calls.is_empty() && calls.iter().all(|e| e.payload["duration_ms"].is_u64()), "{:?}", calls.iter().map(|e| &e.payload["duration_ms"]).collect::<Vec<_>>());
     }
 
     #[tokio::test]
