@@ -66,6 +66,17 @@ impl BridgeRow {
     }
 }
 
+/// What one thread of work cost: the tokens its tasks used (input, cache, output and thinking, as the mission total counts them).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ThreadUse {
+    pub label: String,
+    pub tasks: u32,
+    pub tokens: u64,
+}
+
+/// The key under which tokens of tasks that sit in no named thread are counted.
+pub const UNTHREADED: &str = "(not in a named thread)";
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Report {
     pub by_model: BTreeMap<String, ModelRow>,
@@ -73,6 +84,8 @@ pub struct Report {
     pub total: ModelRow,
     pub threads: ThreadRow,
     pub bridge: BridgeRow,
+    /// Tokens by the thread id the orchestrator gave, newest naming winning; everything else under [`UNTHREADED`].
+    pub by_thread: BTreeMap<String, ThreadUse>,
 }
 
 #[derive(Default)]
@@ -89,16 +102,36 @@ struct Span {
 pub fn report(events: &[EventEnvelope]) -> Report {
     let mut spans: BTreeMap<String, Span> = BTreeMap::new();
     let mut r = Report::default();
-    let (mut tasks, mut in_threads) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let mut tasks = std::collections::BTreeSet::new();
+    let mut used: BTreeMap<String, u64> = BTreeMap::new();
+    // Who owns each task, by the newest `thread.named` to list it, and each thread's newest label.
+    let mut owner: BTreeMap<String, String> = BTreeMap::new();
+    let mut labels: BTreeMap<String, String> = BTreeMap::new();
     for e in events {
         // Counted whatever span they belong to, or none.
         match e.kind.as_str() {
+            "agent.usage" => {
+                if let Some(t) = e.task_id.clone().filter(|t| !t.is_empty()) {
+                    let n = |k: &str| e.payload[k].as_u64().unwrap_or(0);
+                    *used.entry(t).or_default() += n("input_tokens") + n("cache_read_tokens") + n("cache_write_tokens") + n("output_tokens") + n("thinking_tokens");
+                }
+            }
             "task.created" => {
                 if let Some(t) = e.task_id.clone().filter(|t| !t.is_empty()) {
                     tasks.insert(t);
                 }
             }
-            "thread.named" => in_threads.extend(e.payload["tasks"].as_array().into_iter().flatten().filter_map(|t| t.as_str()).map(String::from)),
+            "thread.named" => {
+                let list: Vec<String> = e.payload["tasks"].as_array().into_iter().flatten().filter_map(|t| t.as_str()).map(String::from).collect();
+                if let Some(id) = e.payload["thread"].as_str().filter(|i| !i.is_empty()) {
+                    // Naming a thread again replaces its tasks; a task another thread lists later is that thread's.
+                    owner.retain(|_, o| o != id);
+                    for t in list {
+                        owner.insert(t, id.to_string());
+                    }
+                    labels.insert(id.to_string(), e.payload["label"].as_str().unwrap_or(id).to_string());
+                }
+            }
             "harness.bridge_call" => {
                 r.bridge.calls += 1;
                 r.bridge.millis += e.payload["duration_ms"].as_u64().unwrap_or(0);
@@ -126,7 +159,17 @@ pub fn report(events: &[EventEnvelope]) -> Report {
         c.calls += 1;
         c.errors += failed as u32;
     }
-    r.threads = ThreadRow { tasks: tasks.len() as u32, named: tasks.intersection(&in_threads).count() as u32 };
+    r.threads = ThreadRow { tasks: tasks.len() as u32, named: tasks.iter().filter(|t| owner.contains_key(t.as_str())).count() as u32 };
+    // Tokens by thread. A task counts for one thread only, so the rows add up to the whole.
+    for (id, label) in &labels {
+        let mine: Vec<&String> = owner.iter().filter(|(_, o)| *o == id).map(|(t, _)| t).collect();
+        r.by_thread.insert(id.clone(), ThreadUse { label: label.clone(), tasks: mine.iter().filter(|t| tasks.contains(**t)).count() as u32, tokens: mine.iter().map(|t| used.get(*t).copied().unwrap_or(0)).sum() });
+    }
+    let loose: u64 = used.iter().filter(|(t, _)| !owner.contains_key(t.as_str())).map(|(_, n)| *n).sum();
+    let loose_tasks = tasks.iter().filter(|t| !owner.contains_key(t.as_str())).count() as u32;
+    if loose > 0 || (loose_tasks > 0 && !labels.is_empty()) {
+        r.by_thread.insert(UNTHREADED.to_string(), ThreadUse { label: UNTHREADED.to_string(), tasks: loose_tasks, tokens: loose });
+    }
     for s in spans.into_values().filter(|s| s.calls > 0) {
         let key = if s.model.is_empty() { "unknown".to_string() } else { s.model.clone() };
         for row in [r.by_model.entry(key).or_default(), &mut r.total] {
@@ -166,6 +209,7 @@ pub fn prometheus(stats: &BTreeMap<String, crate::observe::RoleTools>, r: &Repor
     family(&mut out, "delphi_runs_total", "Agent runs that made at least one tool call, by model.", by_model(|m| m.spans));
     family(&mut out, "delphi_runs_worked_total", "Runs that changed something (a write, an edit, a command), by model.", by_model(|m| m.worked));
     family(&mut out, "delphi_runs_recorded_total", "Runs that changed something and recorded a change, by model.", by_model(|m| m.recorded));
+    family(&mut out, "delphi_thread_tokens_total", "Tokens used by the tasks of each thread the orchestrator named (everything else under one label).", r.by_thread.iter().map(|(id, t)| (format!("thread=\"{}\"", label(id)), t.tokens)).collect());
     family(&mut out, "delphi_tasks_total", "Tasks started.", vec![(String::new(), r.threads.tasks as u64)]);
     family(&mut out, "delphi_tasks_in_named_threads_total", "Tasks that sit in a thread the orchestrator named (name_thread).", vec![(String::new(), r.threads.named as u64)]);
     family(&mut out, "delphi_bridge_calls_total", "Delphi tool calls made through the tool bridge by subscription CLIs.", vec![(String::new(), r.bridge.calls as u64)]);
@@ -188,6 +232,15 @@ pub fn render(r: &Report, scope: &str) -> String {
     }
     if r.threads.tasks > 0 {
         out.push_str(&format!("\nthread naming: tasks that sit in a thread the orchestrator named\n  tasks {}  named {}  rate {}\n", r.threads.tasks, r.threads.named, r.threads.rate().map(|p| format!("{}%", p)).unwrap_or_else(|| "-".into())));
+    }
+    if !r.by_thread.is_empty() {
+        let w = r.by_thread.values().map(|t| t.label.chars().count()).max().unwrap_or(6).max(6);
+        out.push_str("\ntokens by thread\n");
+        let mut rows: Vec<_> = r.by_thread.values().collect();
+        rows.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.label.cmp(&b.label)));
+        for t in rows {
+            out.push_str(&format!("  {:<w$}  {:>10}  {} task{}\n", t.label, t.tokens, t.tasks, if t.tasks == 1 { "" } else { "s" }, w = w));
+        }
     }
     if r.bridge.calls > 0 || r.bridge.refused > 0 || r.bridge.bad_connections > 0 {
         out.push_str(&format!("\ntool bridge\n  calls {}  average {} ms  refused {}  connections without the token {}\n", r.bridge.calls, r.bridge.average_ms().unwrap_or(0), r.bridge.refused, r.bridge.bad_connections));
@@ -281,6 +334,49 @@ mod tests {
         assert_eq!(report(&[]).threads, ThreadRow::default());
         // It is counted from the log alone, with or without spans: no tool call is needed.
         assert_eq!(report(&log).total.spans, 0);
+    }
+
+    fn usage(task: &str, input: u64, cache: u64, output: u64) -> EventEnvelope {
+        let mut e = EventEnvelope::new("m", "agent.usage", json!({"input_tokens": input, "cache_read_tokens": cache, "cache_write_tokens": 0, "output_tokens": output, "thinking_tokens": 0}));
+        e.task_id = Some(task.into());
+        e
+    }
+
+    #[test]
+    fn tokens_are_summed_by_the_thread_each_task_sits_in_and_the_rest_is_counted_apart_so_the_parts_add_up() {
+        let log = vec![
+            task("t_1"), task("t_2"), task("t_3"), task("t_4"),
+            usage("t_1", 100, 400, 50), usage("t_2", 10, 0, 5), usage("t_3", 1000, 0, 0), usage("t_4", 7, 0, 0),
+            usage("t_1", 1, 1, 1),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "retry", "label": "Retry queue", "tasks": ["t_1", "t_2"]})),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "docs", "label": "Docs", "tasks": ["t_3"]})),
+            // Renamed and given another task later: the newest naming wins, and t_2 moves out of 'retry' when 'docs' claims it.
+            EventEnvelope::new("m", "thread.named", json!({"thread": "docs", "label": "Operator docs", "tasks": ["t_3", "t_2"]})),
+        ];
+        let r = report(&log);
+        assert_eq!(r.by_thread["retry"], ThreadUse { label: "Retry queue".into(), tasks: 1, tokens: 553 });
+        assert_eq!(r.by_thread["docs"], ThreadUse { label: "Operator docs".into(), tasks: 2, tokens: 1015 });
+        assert_eq!(r.by_thread[UNTHREADED], ThreadUse { label: UNTHREADED.into(), tasks: 1, tokens: 7 });
+        assert_eq!(r.by_thread.values().map(|t| t.tokens).sum::<u64>(), 553 + 1015 + 7, "every token is in exactly one row");
+        // Nothing named and nothing used: no rows. Nothing named but tokens used: one row saying so.
+        assert!(report(&[task("t_1")]).by_thread.is_empty());
+        let r = report(&[task("t_1"), usage("t_1", 5, 0, 0)]);
+        assert_eq!(r.by_thread.keys().collect::<Vec<_>>(), [UNTHREADED]);
+    }
+
+    #[test]
+    fn tokens_by_thread_are_in_the_text_and_the_prometheus_text_with_escaped_labels() {
+        let log = vec![
+            task("t_1"), usage("t_1", 1200, 0, 300),
+            EventEnvelope::new("m", "thread.named", json!({"thread": "a \"b\"", "label": "Pricing", "tasks": ["t_1"]})),
+            ev("agent.usage", "s", Some("model-x"), json!({})), call("s", "read_file"),
+        ];
+        let r = report(&log);
+        let text = prometheus(&BTreeMap::new(), &r);
+        assert!(text.contains("delphi_thread_tokens_total{thread=\"a \\\"b\\\"\"} 1500\n"), "{}", text);
+        assert!(text.lines().all(|l| l.starts_with('#') || l.rsplit(' ').next().is_some_and(|n| n.parse::<u64>().is_ok())));
+        let t = render(&r, "mission m1");
+        assert!(t.contains("tokens by thread\n  Pricing") && t.contains("1500  1 task\n"), "{}", t);
     }
 
     #[test]

@@ -3,13 +3,13 @@ delphi v0.5 · epic
 
  ▼ needs you   council t_2 needs a decision                                   answer in the console
 
- ▌ critical path  Implement the deck router                                             about 2 min
+ ▌ critical path  Deck router                                                           about 2 min
 
-▌▼ Implement the deck router                                                          ▰▰▰▱▱▱ 1 of 2
+▌▼ Deck router                                                         9.2k tok 100%  ▰▰▰▱▱▱ 1 of 2
 ▌  ✔ 1 step done
 ▌  ▶ athena wrapping up 1:06
-
- ▼ Table or file?                                                                     ▱▱▱▱▱▱ 0 of 1
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+ ▼ Table or file                                                                      ▱▱▱▱▱▱ 0 of 1
    ✖ council is split: table or file · needs you
 
 
