@@ -213,7 +213,7 @@ fn tombstone(rng: &mut Rng) -> Record {
 
 /// The whole verifier on the serialized bytes, signed by the standard author.
 fn verify(r: &Record, bytes: &[u8]) -> Result<Validated, Reject> {
-    validate(r.kind(), &r.id, bytes)
+    validate_raw(&author(), r.kind(), &r.id, bytes)
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn everything_the_serializer_emits_validates_round_trips_and_has_one_spelling() 
             1 => endorsement(&mut rng),
             _ => tombstone(&mut rng),
         };
-        let bytes = match serialize::serialize(&r) {
+        let (r, bytes) = match serialize::seal(&r) {
             Ok(b) => b,
             // A generated record can exceed the 16 KiB file limit with many long pointers; that is a stated refusal.
             Err(SerializeError::TooLarge) => {
@@ -257,7 +257,7 @@ struct Defect {
 }
 
 fn base() -> Record {
-    memory(&mut Rng(0xb45e))
+    serialize::seal(&memory(&mut Rng(0xb45e))).unwrap().0
 }
 
 #[test]
