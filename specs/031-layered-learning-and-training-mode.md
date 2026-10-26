@@ -1,9 +1,9 @@
 ---
-id: spec-030-layered-learning-and-training-mode
-title: "030: Layered Learning, Cheap Capture, and Training Mode (draft)"
+id: spec-031-layered-learning-and-training-mode
+title: "031: Layered Learning, Cheap Capture, and Training Mode (draft)"
 author: architect
 timestamp: 2026-10-26T00:00:00Z
-status: draft   # asked for by the operator on 2026-10-26; nothing here is built or approved
+status: draft   # text merged on the operator's "go", 2026-10-26; OD-1..OD-6 were not answered one by one, so their recommendations are being built to and stay open to change
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -12,9 +12,9 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, learning-loop, memory, skills, customization, training-mode, evaluation, draft]
 ---
 
-# Spec 030: Layered Learning, Cheap Capture, and Training Mode
+# Spec 031: Layered Learning, Cheap Capture, and Training Mode
 
-> **Status: draft.** Amends nothing yet. It proposes changes to [`specs/004`](004-memory-and-coaching.md) §4–5 (the loop), [`specs/019`](019-skills-import-export.md) (skill origin), and adds one new capability, **training mode**, on top of `delphi run` ([`specs/016`](016-headless-run.md)) and the benchmark runner (`dev/bench/`, [`evaluation-plan-2026-10-25.md`](../missions/2026-10-23-foundational-design/evaluation-plan-2026-10-25.md)).
+> **Status: draft, text merged 2026-10-26 on the operator's "go".** The operator asked for the first steps to be built without answering OD-1..OD-6 individually; the recommendations in §8 are the working answers until they say otherwise. Amends nothing yet. It proposes changes to [`specs/004`](004-memory-and-coaching.md) §4–5 (the loop), [`specs/019`](019-skills-import-export.md) (skill origin), and adds one new capability, **training mode**, on top of `delphi run` ([`specs/016`](016-headless-run.md)) and the benchmark runner (`dev/bench/`, [`evaluation-plan-2026-10-25.md`](../missions/2026-10-23-foundational-design/evaluation-plan-2026-10-25.md)).
 
 ## 1. Scope & Objectives
 
@@ -182,6 +182,13 @@ Slice numbering `L0…L11`. Hours are rough. "Gate" means the slice waits on an 
 | **L11** Harvest (post-v1) | `delphi contribute` aggregates → case templates; operator → core promotion path | L9, Xenia/contribute work | 10 | |
 
 Total about **182 h**. Critical path for the operator layer: L0 → L1 → L2 → L4. Critical path for the core layer: L6 → L7 → L9 → L10. The two paths meet in the `learning-loop` suite, which is the first thing training mode should test.
+
+### 7.1 As built
+
+**L0 (evidence plumbing).**
+- Each span writes a `snapshot.loaded` event next to its `snapshot.trim` events. Its payload is `{"rules": [{"scope", "id"}]}`: the rules and lessons that made it into the snapshot after trimming, with scope `release`, `team`, `operator` or `workspace` for heuristics and `operator-lessons` or `workspace-lessons` for lessons. An ID is the first bracketed token of a `### ` heading; an unnumbered rule is identified by its title. Bundle rules appear under `team`, where they share the budget.
+- `delphi_engine::learn::task_records` folds a mission's events into one `TaskRecord` per task: outcome, rules carried, `build.attempt` count, denied cards, reverted provisional decisions and cost. `first_pass()` is done on attempt 1 with nothing denied or reverted. The record is derived and rebuildable, and nothing reads it yet (L4 will).
+- **AC-1 as built:** rules and lessons only. The engine does not load skills by name today (no skill-use event exists), so skill IDs wait for L3, which adds a `skill.used` event. The terminal outcome needed no new event; it comes from `task.completed`, `task.failed` and `task.cancelled`.
 
 **Suggested order of first merges:** L0, then L6 and L1 in parallel, then L2 and L7, then L3 and L4, then L9, L5, L8, L10. After L1 and L2, run the loop on real work for a few weeks before L3; the staged notes will show which triggers produce signal.
 

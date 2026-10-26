@@ -28,6 +28,7 @@ pub mod harness;
 pub mod harness_opts;
 pub mod harness_run;
 pub mod inventory;
+pub mod learn;
 pub mod embed;
 pub mod kb;
 pub mod kbserve;

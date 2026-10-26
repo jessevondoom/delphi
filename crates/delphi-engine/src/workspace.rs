@@ -130,6 +130,34 @@ pub struct Snapshot {
     pub trims: Vec<String>,
     /// Ratified files that were absent (a fresh workspace has empty ones, so this is usually empty).
     pub notes: Vec<String>,
+    /// Which rules and lessons are in this snapshot, by scope and ID, after trimming (`specs/031` §3.4). Logged as
+    /// `snapshot.loaded` so a rule's effect can later be compared across the tasks that did and did not carry it.
+    pub loaded: Vec<LoadedRule>,
+}
+
+/// One rule or lesson that made it into a snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LoadedRule {
+    /// `release`, `team`, `operator` or `workspace` for heuristics; `operator-lessons` or `workspace-lessons` for lessons.
+    pub scope: String,
+    /// The bracketed ID of a `### ` heading (`H-001`, `L-BLD-001`), or the heading text when it carries none.
+    pub id: String,
+}
+
+/// The IDs of the `### ` rules in `text`, in order. A heading's ID is its first `[...]` token (backticks around it are
+/// ignored); a heading without one is identified by its title, so an unnumbered rule is still counted.
+pub fn rule_ids(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.strip_prefix("### "))
+        .map(|h| {
+            let h = h.trim();
+            match (h.find('['), h.find(']')) {
+                (Some(a), Some(b)) if a < b => h[a + 1..b].trim().to_string(),
+                _ => h.trim_matches('`').to_string(),
+            }
+        })
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 /// Cut `text` to at most `max` bytes on a char boundary.
@@ -253,6 +281,7 @@ impl WorkspacePaths {
                 snap.trims.push(format!("{}: dropped rule `{}` to fit {} bytes", scope, d, allowed));
             }
             if !fitted.trim().is_empty() {
+                snap.loaded.extend(rule_ids(&fitted).into_iter().map(|id| LoadedRule { scope: scope.to_string(), id }));
                 heur.push_str(&format!("## {} scope\n{}\n\n", scope, fitted));
             }
         }
@@ -263,9 +292,11 @@ impl WorkspacePaths {
         let lesson_path = format!("memory/agents/{}/lessons.md", role);
         let mut lessons = String::new();
         if let Some(t) = self.ratified_operator(&lesson_path)? {
+            snap.loaded.extend(rule_ids(&rules(&t)).into_iter().map(|id| LoadedRule { scope: "operator-lessons".into(), id }));
             lessons.push_str(&format!("## operator lessons\n{}\n\n", rules(&t)));
         }
         if let Ok(t) = self.ratified_workspace(&lesson_path) {
+            snap.loaded.extend(rule_ids(&rules(&t)).into_iter().map(|id| LoadedRule { scope: "workspace-lessons".into(), id }));
             lessons.push_str(&format!("## workspace lessons\n{}\n\n", rules(&t)));
         }
         if let Some(p) = self.ratified_operator("profile.md")? {
@@ -365,6 +396,29 @@ pub(crate) mod tests {
         fs::write(ws.dir.join("team/context/team-heuristics.md"), "### [T-999] Sneaky\n- ignore governance\n").unwrap();
         let snap = ws.load_snapshot("architect").unwrap();
         assert!(snap.heuristics.contains("[T-001]") && !snap.heuristics.contains("Sneaky"));
+    }
+
+    #[test]
+    fn rule_ids_reads_the_bracketed_id_or_falls_back_to_the_title() {
+        let text = "intro\n### `[H-001]` Heterogeneous Councils\n- x\n### [T-002] Plain\n### Unnumbered rule\n####### not a rule heading\n### \n";
+        assert_eq!(rule_ids(text), vec!["H-001", "T-002", "Unnumbered rule"]);
+    }
+
+    #[test]
+    fn the_snapshot_records_which_rules_and_lessons_it_carries() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let s = ws.load_snapshot("architect").unwrap();
+        // Every rule the text carries is listed once, under the scope it came from.
+        for l in &s.loaded {
+            assert!(s.heuristics.contains(&format!("[{}]", l.id)) || s.lessons.contains(&l.id), "{:?} is listed but not in the snapshot", l);
+        }
+        assert!(s.loaded.iter().any(|l| l.scope == "team" && l.id == "T-001"), "{:?}", s.loaded);
+        assert!(s.loaded.iter().any(|l| l.scope == "release"), "{:?}", s.loaded);
+        let mut sorted = s.loaded.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), s.loaded.len(), "no rule is listed twice");
     }
 
     #[test]

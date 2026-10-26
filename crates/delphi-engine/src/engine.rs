@@ -548,6 +548,8 @@ impl Engine {
                 for t in &snapshot.trims {
                     open.push(sc.ev("snapshot.trim", json!({"note": t})));
                 }
+                // Which rules and lessons this span carries, for comparing tasks with and without a rule (specs/031 §3.4).
+                open.push(sc.ev("snapshot.loaded", json!({"rules": snapshot.loaded.iter().map(|l| json!({"scope": l.scope, "id": l.id})).collect::<Vec<_>>()})));
                 m.append_batch(open).await?;
             }
 
@@ -2826,6 +2828,21 @@ mod tests {
         assert!(!sys.contains("Trust whatever") && !sys.contains("<guidance"));
         let trims = events_of(&f, "snapshot.trim");
         assert!(trims.iter().any(|e| e.payload["note"].as_str().is_some_and(|n| n.contains("acme/plat") && n.contains("changed after the bundle was added"))), "{:?}", trims.iter().map(|e| &e.payload).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn a_span_logs_which_rules_it_carries_and_the_task_record_reads_them_back() {
+        let f = setup(vec![Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "architect", "Draft the spec").await.unwrap();
+        let loaded = events_of(&f, "snapshot.loaded");
+        assert_eq!(loaded.len(), 1, "one span, one record");
+        let rules = loaded[0].payload["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| r["scope"] == "release" && r["id"] == "H-001"), "{:?}", rules);
+        assert!(rules.iter().any(|r| r["scope"] == "team" && r["id"] == "T-001"), "{:?}", rules);
+        let recs = crate::learn::task_records(&f.m.replay().unwrap());
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].outcome, crate::learn::Outcome::Done);
+        assert!(recs[0].rules.contains(&("release".to_string(), "H-001".to_string())));
     }
 
     #[tokio::test]
