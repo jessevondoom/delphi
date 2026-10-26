@@ -28,6 +28,12 @@ pub struct Manifest {
     pub touches_roles: Vec<String>,
     pub touches_connectors: Vec<String>,
     pub keywords: Vec<String>,
+    /// `compat.delphi`: the semver requirement on the running program, if the bundle states one.
+    pub compat_delphi: Option<String>,
+    /// `overlays.depends_on`: `name@requirement`, bundles that must be added first.
+    pub depends_on: Vec<String>,
+    /// `overlays.supersedes`: bundle names this one replaces.
+    pub supersedes: Vec<String>,
 }
 
 const SECTIONS: [&str; 6] = ["knowledge", "skills", "agents", "behavior", "evals", "vectors"];
@@ -214,6 +220,7 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
             if semver::VersionReq::parse(&req).is_err() {
                 r.fail(4, "bundle.toml", format!("compat.delphi `{}` is not a semver requirement", req));
             }
+            m.compat_delphi = Some(req);
         }
         match c.get("bundle_schema") {
             None => {}
@@ -310,9 +317,11 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
         for d in strings(o, "depends_on", "overlays", r) {
             if !re.is_match(&d) || semver::VersionReq::parse(d.split_once('@').unwrap().1).is_err() {
                 r.fail(4, "bundle.toml", format!("overlays.depends_on: `{}` is not `name@<semver requirement>`", d));
+            } else {
+                m.depends_on.push(d);
             }
         }
-        let _ = strings(o, "supersedes", "overlays", r);
+        m.supersedes = strings(o, "supersedes", "overlays", r);
     }
     Some(m)
 }

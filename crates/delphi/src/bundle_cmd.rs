@@ -3,12 +3,12 @@
 //! Both read a directory and need no workspace and no model. `validate` changes nothing. The checks that live in the
 //! engine come to `delphi-bundle` through [`Real`], so that crate stays free of the engine.
 
-use crate::{frontmatter, seed, skills_cmd};
+use crate::{bundle_add, frontmatter, seed, skills_cmd};
 use delphi_bundle::{Host, Options, RoleScope};
 use serde_yaml::{Mapping, Value};
 use std::path::{Path, PathBuf};
 
-struct Real;
+pub(crate) struct Real;
 
 fn strings(fm: &Mapping, scope: &str, key: &str) -> Vec<String> {
     fm.get(Value::String(scope.into()))
@@ -48,12 +48,45 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// Flags that take a value, so the word after one is not a positional argument.
+const VALUE_FLAGS: [&str; 4] = ["--against", "--order", "--workspace", "--home"];
+
+fn positionals(args: &[String]) -> Vec<&String> {
+    args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
+}
+
+const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle add <dir> [--order N] [--yes] [--dry-run]\n       delphi bundle list | remove <name>   (add, list and remove take --workspace <name> --home <dir>)";
+
+/// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
+pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
+    let positional = positionals(args);
+    let flag_set = |f: &str| args.iter().any(|a| a == f);
+    match (positional.first().map(|s| s.as_str()), positional.get(1)) {
+        (Some("add"), Some(dir)) => {
+            let order = match flag(args, "--order").map(|o| o.parse::<i64>()) {
+                None => None,
+                Some(Ok(n)) => Some(n),
+                Some(Err(_)) => {
+                    eprintln!("delphi bundle: --order wants a whole number");
+                    return 2;
+                }
+            };
+            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes") }, &Real)
+        }
+        (Some("list"), _) => bundle_add::list(ws),
+        (Some("remove"), Some(name)) => bundle_add::remove(ws, name),
+        _ => {
+            eprintln!("{}", USAGE);
+            2
+        }
+    }
+}
+
 pub fn run(args: &[String]) -> i32 {
     // `args` is what follows `delphi bundle`, as for `delphi skills`.
-    let rest: Vec<&String> = args.iter().collect();
-    let positional: Vec<&String> = rest.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || rest[*i - 1].as_str() != "--against")).map(|(_, a)| *a).collect();
+    let positional = positionals(args);
     let usage = || {
-        eprintln!("usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]");
+        eprintln!("{}", USAGE);
         2
     };
     let (Some(sub), Some(dir)) = (positional.first(), positional.get(1)) else { return usage() };

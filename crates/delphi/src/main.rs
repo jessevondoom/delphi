@@ -1,6 +1,7 @@
 //! `delphi`: roadmap Step 1 commands (`specs/001`, `specs/006`).
 
 mod avatar;
+mod bundle_add;
 mod bundle_cmd;
 mod check;
 mod chat;
@@ -58,7 +59,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "relay", about: "send approval cards to your email or Telegram", synopsis: "  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]", detail: "Takes your replies too. Run it in a terminal or a tmux pane." },
     Cmd { group: "Set up", name: "skills", about: "agentskills.io skills in and out", synopsis: "  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role>\n    [--description \"…\"] [--workspace <name>] [--home <dir>]", detail: "An import is a pending proposal until you /ratify it." },
-    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. Exit codes: 0 pass · 1 failed · 2 usage." },
+    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle add <dir> [--order N] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> [--workspace <name>] [--home <dir>]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. add checks the bundle again here, prints what it brings, copies it\ninto the cache and makes its knowledge searchable (`delphi kb search --bundle org/name`); no model is called.\nExit codes: 0 pass · 1 failed · 2 usage." },
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
@@ -221,7 +222,7 @@ fn main() {
         Some("relay") => cmd_relay(&args),
         Some("decisions") => cmd_decisions(&args),
         Some("skills") => cmd_skills(&args),
-        Some("bundle") => bundle_cmd::run(&args),
+        Some("bundle") => cmd_bundle(&args),
         Some("hooks") => cmd_hooks(&args),
         Some("timers") => cmd_timers(&args),
         Some("daemon") => cmd_daemon(&args),
@@ -515,6 +516,27 @@ fn cmd_hooks(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     hooks_cmd::run(&home, &ws.dir)
+}
+
+/// `delphi bundle validate|manifest` read a directory; `add|list|remove` change one workspace (`bundle_cmd.rs`).
+fn cmd_bundle(args: &[String]) -> i32 {
+    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove")) {
+        let (home, ws) = match resolve_ws("bundle", args) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+        let mut rest = Vec::new();
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            if matches!(a.as_str(), "--workspace" | "--home") {
+                it.next();
+            } else {
+                rest.push(a.clone());
+            }
+        }
+        return bundle_cmd::run_in(&home, &ws.dir, &rest);
+    }
+    bundle_cmd::run(args)
 }
 
 /// `delphi skills check|export|import` (`skills_cmd.rs`). `check` reads one directory and needs no workspace.

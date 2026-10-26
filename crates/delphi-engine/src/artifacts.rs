@@ -859,7 +859,7 @@ mod tests {
         fs::write(r.join("proj/vendor/lib/x.js"), "vendored code\n").unwrap();
         fs::write(r.join("local/missions/m1/notes.md"), "---\nid: n\n---\nnotes\n").unwrap();
         let guard = Guard {
-            zones: Zones { local: r.join("local"), team: r.join("team"), base: r.join("base"), ratified: r.join("ratified"), worktree: Some(r.join("wt")), projects: vec![("app".into(), r.join("proj"))], payload: None },
+            zones: Zones { local: r.join("local"), team: r.join("team"), base: r.join("base"), ratified: r.join("ratified"), worktree: Some(r.join("wt")), projects: vec![("app".into(), r.join("proj"))], bundles: vec![], payload: None },
             role: "architect".into(),
             read_globs: vec!["*".into()],
             write_globs: write_globs.iter().map(|s| s.to_string()).collect(),
