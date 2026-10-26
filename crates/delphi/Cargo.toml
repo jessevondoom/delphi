@@ -14,6 +14,7 @@ delphi-engine = { path = "../delphi-engine" }
 delphi-adapter = { path = "../delphi-adapter" }
 delphi-xenia = { path = "../delphi-xenia" }
 delphi-bundle = { path = "../delphi-bundle" }
+semver = "1"
 toml_edit = "0.25"
 flate2 = "1"
 tar = "0.4"

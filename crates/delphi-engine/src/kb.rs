@@ -301,9 +301,40 @@ pub struct SourceFile {
     /// The `source_type` for a file whose frontmatter has none. Documents Delphi ships (`agents/`, `skills/`) are
     /// release-ratified, so they are trusted unless the file says otherwise; for everything else it is untrusted.
     pub default_source: &'static str,
+    /// Set for a file of an added bundle (`specs/024` §3.6): where it came from, for the breadcrumb and the ranking.
+    pub bundle: Option<BundleTag>,
+}
+
+/// An added bundle as the index sees it. The zone fixes the tier: a bundle's own `source_type` is a display copy and
+/// the install's add is the act that lifts it to `federated_verified` (`specs/024` §3.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleTag {
+    /// `org/name`.
+    pub id: String,
+    /// `acme/acme-platform@1.4.0 · unsigned`, with `· stale` past `review_by`.
+    pub label: String,
+    pub stale: bool,
 }
 
 const UNTRUSTED: &str = "external_untrusted";
+/// A fixed share of the fused score a stale bundle's result keeps (`specs/024` §4.6): lower, never hidden.
+const STALE_BUNDLE_FACTOR: f64 = 0.8;
+
+/// The Markdown of every active bundle's `knowledge/`, by logical path `bundles/<org>/<name>/knowledge/…`. The lock
+/// names the bundles and the cache holds the files; a removed bundle is simply not listed, so its documents leave the
+/// index at the next sync. `home` is derived from the workspace path (`<home>/workspaces/<name>`).
+fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
+    let Some(home) = ws.parent().and_then(Path::parent) else { return };
+    let Ok(lock) = delphi_core::bundles::read(ws) else { return };
+    let today = delphi_core::bundles::today();
+    for e in lock.bundle.iter().filter(|e| e.is_active() && delphi_core::bundles::plain_id(&e.org) && delphi_core::bundles::plain_id(&e.name)) {
+        let root = delphi_core::bundles::cache_dir(home, &e.org, &e.name, &e.hash).join("knowledge");
+        let tag = BundleTag { id: e.id(), label: e.label(&today), stale: e.is_stale(&today) };
+        let mut files = Vec::new();
+        md_files(&root, &format!("bundles/{}/{}/knowledge", e.org, e.name), "bundles", "federated_verified", &mut files);
+        out.extend(files.into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
+    }
+}
 
 fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, default_source: &'static str, out: &mut Vec<SourceFile>) {
     let Ok(rd) = std::fs::read_dir(root) else { return };
@@ -320,7 +351,7 @@ fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, default_sourc
         if ft.is_dir() {
             md_files(&e.path(), &rel, zone, default_source, out);
         } else if ft.is_file() && name.ends_with(".md") && e.metadata().map(|m| m.len() <= MAX_FILE_BYTES).unwrap_or(false) {
-            out.push(SourceFile { rel_path: rel, zone, path: e.path(), default_source });
+            out.push(SourceFile { rel_path: rel, zone, path: e.path(), default_source, bundle: None });
         }
     }
 }
@@ -336,7 +367,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
                 if e.file_type().map(|t| t.is_file()).unwrap_or(false) && n.ends_with(".md") {
-                    core.push(SourceFile { rel_path: n, zone: "core", path: e.path(), default_source: UNTRUSTED });
+                    core.push(SourceFile { rel_path: n, zone: "core", path: e.path(), default_source: UNTRUSTED, bundle: None });
                 }
             }
         }
@@ -348,6 +379,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     }
     md_files(&ws.join("local/missions"), "missions", "missions", UNTRUSTED, &mut all);
     md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);
+    bundle_files(ws, &mut all);
     // Later entries (team) override earlier ones (base) for the same logical path.
     let mut by_path: BTreeMap<String, SourceFile> = BTreeMap::new();
     for s in all {
@@ -427,12 +459,20 @@ impl Kb {
 
     /// `upsert` for a file whose frontmatter may not name its `source_type`: `default_source` stands in.
     pub fn upsert_from(&mut self, rel_path: &str, zone: &str, default_source: &str, text: &str, now: &str) -> Result<bool, KbError> {
+        self.upsert_with(rel_path, zone, default_source, None, text, now)
+    }
+
+    /// `upsert_from` for a file that may belong to an added bundle. A bundle file's tier is the zone's, whatever its
+    /// frontmatter says (that is a display copy, `specs/024` §3.2), and its breadcrumb names the bundle and how it was
+    /// signed. Such a file is always rewritten when its bytes were touched, so a new version's label is never stale.
+    pub fn upsert_with(&mut self, rel_path: &str, zone: &str, default_source: &str, bundle: Option<&BundleTag>, text: &str, now: &str) -> Result<bool, KbError> {
         let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
         let existing: Option<(i64, String)> = self.conn.query_row("SELECT doc_id, content_blake3 FROM kb_documents WHERE rel_path = ?1", [rel_path], |r| Ok((r.get(0)?, r.get(1)?))).ok();
-        if existing.as_ref().is_some_and(|(_, h)| *h == hash) {
+        if bundle.is_none() && existing.as_ref().is_some_and(|(_, h)| *h == hash) {
             return Ok(false);
         }
-        let source_type = frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string());
+        let source_type = if bundle.is_some() { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
+        let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
         let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), frontmatter_field(text, "status").unwrap_or_else(|| "active".into()));
         let tx = self.conn.transaction()?;
         if let Some((id, _)) = &existing {
@@ -443,7 +483,7 @@ impl Kb {
         let doc_id = tx.last_insert_rowid();
         for (i, c) in chunks_for(zone, text).into_iter().enumerate() {
             let ids = identifiers(&c.raw);
-            let ctx = format!("[File: {} | Lines: {}-{} | Section: {} | Source: {} | Status: {}]\n{}", rel_path, c.start_line, c.end_line, if c.heading_path.is_empty() { "(top)" } else { &c.heading_path }, source_type, status, c.raw);
+            let ctx = format!("[File: {} | Lines: {}-{} | Section: {} | Source: {} | Status: {}{}]\n{}", rel_path, c.start_line, c.end_line, if c.heading_path.is_empty() { "(top)" } else { &c.heading_path }, source_type, status, from, c.raw);
             tx.execute(
                 "INSERT INTO kb_chunks(doc_id, chunk_index, start_line, end_line, rel_path, heading_path, identifiers, raw_content, contextual_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![doc_id, i as i64, c.start_line as i64, c.end_line as i64, rel_path, c.heading_path, ids, c.raw, ctx],
@@ -506,7 +546,7 @@ impl Kb {
             };
             let text = String::from_utf8_lossy(&bytes);
             let existed = known.contains_key(&f.rel_path);
-            if self.upsert_from(&f.rel_path, f.zone, f.default_source, &text, now)? {
+            if self.upsert_with(&f.rel_path, f.zone, f.default_source, f.bundle.as_ref(), &text, now)? {
                 if existed {
                     rep.updated += 1;
                 } else {
@@ -521,6 +561,8 @@ impl Kb {
             self.remove(p)?;
             rep.removed += 1;
         }
+        let stale: std::collections::BTreeSet<&str> = files.iter().filter_map(|f| f.bundle.as_ref().filter(|b| b.stale).map(|b| b.id.as_str())).collect();
+        self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('stale_bundles', ?1)", [stale.into_iter().collect::<Vec<_>>().join(",")])?;
         Ok(rep)
     }
 
@@ -623,6 +665,18 @@ fn allowed_sql(opts: &SearchOpts) -> String {
             allowed.push_str(&format!(" AND (d.zone != 'memory' OR d.rel_path LIKE 'memory/agents/{}/%')", r));
         } else {
             allowed.push_str(" AND d.zone != 'memory'");
+        }
+    }
+    if opts.no_bundles {
+        allowed.push_str(" AND d.zone != 'bundles'");
+    }
+    if let Some(b) = &opts.bundle {
+        // `org` or `org/name`, plain ids only: anything else matches nothing, so it cannot widen the filter.
+        let parts: Vec<&str> = b.split('/').collect();
+        if parts.len() <= 2 && parts.iter().all(|p| delphi_core::bundles::plain_id(p)) {
+            allowed.push_str(&format!(" AND d.rel_path LIKE 'bundles/{}/%'", b));
+        } else {
+            allowed.push_str(" AND 1=0");
         }
     }
     allowed
@@ -906,6 +960,10 @@ pub struct SearchOpts {
     /// If the best reranker score is below this, nothing is returned: the reranker has read the best the search
     /// found and none of it answers the question. `None` uses the floor the reranker's package carries.
     pub rerank_floor: Option<f32>,
+    /// Only this added bundle (`org/name`), or only this org's bundles (`org`) (`specs/026` §6 AC-6).
+    pub bundle: Option<String>,
+    /// Leave added bundles out of the results.
+    pub no_bundles: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,7 +975,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false }
     }
 }
 
@@ -1040,6 +1098,16 @@ impl Kb {
             *score.entry(*id).or_default() += opts.vec_weight / (RRF_K + r as f64 + 1.0);
         }
         let mut order: Vec<(i64, f64)> = score.into_iter().collect();
+        // A stale bundle's results keep a fixed share of their score: lower, never hidden (`specs/024` §4.6).
+        let stale: Vec<String> = self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'stale_bundles'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.split(',').filter(|s| !s.is_empty()).map(|s| format!("bundles/{}/", s)).collect()).unwrap_or_default();
+        if !stale.is_empty() {
+            for (id, s) in order.iter_mut() {
+                let rel: Option<String> = self.conn.query_row("SELECT rel_path FROM kb_chunks WHERE chunk_id = ?1", [*id], |r| r.get(0)).ok();
+                if rel.is_some_and(|r| stale.iter().any(|p| r.starts_with(p.as_str()))) {
+                    *s *= STALE_BUNDLE_FACTOR;
+                }
+            }
+        }
         order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
         let mut best_rerank = None;
         if opts.legs == Legs::Hybrid && opts.rerank_weight > 0.0 {
@@ -1056,7 +1124,11 @@ impl Kb {
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)));
             let Ok((rel_path, a, b, heading_path, raw, blake3)) = row else { continue };
             let preview = raw.lines().filter(|l| !l.trim().is_empty()).take(3).map(|l| l.chars().take(160).collect::<String>()).collect::<Vec<_>>().join("\n");
-            hits.push(Hit { pointer: format!("{}#L{}-L{}", rel_path, a, b), rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s });
+            let pointer = match rel_path.strip_prefix("bundles/") {
+                Some(rest) => format!("@bundle/{}#L{}-L{}", rest, a, b), // the logical path an agent reads it by
+                None => format!("{}#L{}-L{}", rel_path, a, b),
+            };
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s });
         }
         Ok((hits, best_rerank))
     }
@@ -1176,6 +1248,13 @@ pub fn miss_counts(ws: &Path) -> (usize, usize) {
 
 // ── command line ────────────────────────────────────────────────────────────
 
+/// Bring the workspace's lexical index in line with its files, without running a model: what `delphi bundle add` and
+/// `remove` do so that the words of a bundle are searchable at once (`specs/024` §4.2 step 6).
+pub fn sync_workspace(ws: &Path) -> Result<IndexReport, KbError> {
+    let mut kb = Kb::open(&db_path(ws))?;
+    kb.sync_lexical(&sources(ws), &now())
+}
+
 fn db_path(ws: &Path) -> PathBuf {
     ws.join("local/state.db")
 }
@@ -1235,7 +1314,7 @@ fn eval_sources(docs: &Path) -> Vec<SourceFile> {
     if let Ok(rd) = std::fs::read_dir(docs) {
         let mut top: Vec<_> = rd.flatten().filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false) && e.file_name().to_string_lossy().ends_with(".md")).collect();
         top.sort_by_key(|e| e.file_name());
-        files.extend(top.into_iter().map(|e| SourceFile { rel_path: e.file_name().to_string_lossy().to_string(), zone: "core", path: e.path(), default_source: UNTRUSTED }));
+        files.extend(top.into_iter().map(|e| SourceFile { rel_path: e.file_name().to_string_lossy().to_string(), zone: "core", path: e.path(), default_source: UNTRUSTED, bundle: None }));
     }
     for (dir, zone) in [("context", "context"), ("specs", "specs"), ("missions", "missions"), ("memory", "memory")] {
         md_files(&docs.join(dir), dir, zone, UNTRUSTED, &mut files);
@@ -1530,9 +1609,10 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
             "search" => {
                 let query: Vec<&str> = args[1..].iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
                 let role = args.iter().position(|a| a == "--role").and_then(|i| args.get(i + 1)).cloned();
-                let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref()).collect();
+                let bundle = args.iter().position(|a| a == "--bundle" || a == "--org").and_then(|i| args.get(i + 1)).cloned();
+                let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--bundle <org/name> | --org <org> | --no-bundles]");
                     return Ok(2);
                 }
                 let mut kb = open()?;
@@ -1547,7 +1627,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -2207,12 +2287,105 @@ mod tests {
         let mut kb = Kb::open_in_memory().unwrap();
         let mut files = Vec::new();
         for f in ["REVIEW.md", "GOVERNANCE.md", "SPEC.md"] {
-            files.push(SourceFile { rel_path: f.into(), zone: "core", path: repo.join(f), default_source: UNTRUSTED });
+            files.push(SourceFile { rel_path: f.into(), zone: "core", path: repo.join(f), default_source: UNTRUSTED, bundle: None });
         }
         md_files(&repo.join("specs"), "specs", "specs", UNTRUSTED, &mut files);
         kb.sync(&files, "t").unwrap();
         kb.integrity_check().unwrap();
         let hits = kb.search("[REV-SEC-04]", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
         assert_eq!(hits[0].rel_path, "REVIEW.md", "{:?}", hits.iter().map(|h| &h.pointer).collect::<Vec<_>>());
+    }
+
+    // ── added bundles (specs/024 §3, §4.6; specs/026 AC-6) ──────────────────────
+
+    /// A home with one workspace `w` and the given bundles added: (org, name, hash, review_by, [(knowledge path, text)]).
+    type Added<'a> = (&'a str, &'a str, &'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    fn home_with_bundles(bundles: &[Added]) -> (tempfile::TempDir, PathBuf) {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        let mut lock = delphi_core::bundles::Lock::default();
+        for (org, name, hash, review_by, files) in bundles {
+            for (p, t) in *files {
+                let path = delphi_core::bundles::cache_dir(home.path(), org, name, hash).join("knowledge").join(p);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, t).unwrap();
+            }
+            lock.bundle.push(delphi_core::bundles::Entry {
+                org: org.to_string(),
+                name: name.to_string(),
+                version: "1.4.0".into(),
+                hash: hash.to_string(),
+                publisher_kid: "unsigned".into(),
+                provenance: "unsigned".into(),
+                source: delphi_core::bundles::Source { kind: "directory".into(), path: "/x".into() },
+                added_at: "2026-10-25T00:00:00Z".into(),
+                order: 10,
+                status: "active".into(),
+                review_by: review_by.to_string(),
+                title: "T".into(),
+                history: Vec::new(),
+            });
+        }
+        delphi_core::bundles::write(&ws, &lock).unwrap();
+        (home, ws)
+    }
+
+    const RUNBOOK: &str = "---\nid: acme/runbook\ntitle: Runbook\nsource_type: external_untrusted\n---\n# Rolling deploy\n\nShip the gizmo service one cluster at a time using the quokka procedure.\n";
+
+    #[test]
+    fn an_added_bundles_knowledge_is_indexed_at_tier_l2_whatever_its_frontmatter_says() {
+        let (_h, ws) = home_with_bundles(&[("acme", "plat", "blake3:aa", "2999-01-01", &[("runbooks/deploy.md", RUNBOOK)])]);
+        let files = sources(&ws);
+        let f = files.iter().find(|f| f.zone == "bundles").expect("the bundle's file is a source");
+        assert_eq!(f.rel_path, "bundles/acme/plat/knowledge/runbooks/deploy.md");
+        assert_eq!(f.default_source, "federated_verified");
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&files, "t").unwrap();
+        // the frontmatter claims external_untrusted; a bundle's own claim is a display copy, so default search finds it
+        let hits = kb.search("quokka procedure", &SearchOpts::default()).unwrap();
+        assert_eq!(hits.len(), 1, "{:?}", hits);
+        assert_eq!(hits[0].pointer, "@bundle/acme/plat/knowledge/runbooks/deploy.md#L6-L8", "an agent-readable logical path");
+        let (tier, ctx): (String, String) = kb.conn.query_row("SELECT d.source_type, c.contextual_text FROM kb_documents d JOIN kb_chunks c ON c.doc_id = d.doc_id", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(tier, "federated_verified");
+        assert!(ctx.contains("Bundle: acme/plat@1.4.0 · unsigned]"), "{}", ctx);
+    }
+
+    #[test]
+    fn bundle_filters_narrow_the_results_and_a_stale_bundle_ranks_lower_but_is_not_hidden() {
+        let fresh: &[(&str, &str)] = &[("a.md", "---\nid: a\n---\n# Deploy\n\nthe quokka procedure for deploys\n")];
+        let old: &[(&str, &str)] = &[("b.md", "---\nid: b\n---\n# Deploy\n\nthe quokka procedure for deploys\n")];
+        let (_h, ws) = home_with_bundles(&[("acme", "old", "blake3:bb", "2020-01-01", old), ("acme", "new", "blake3:cc", "2999-01-01", fresh), ("other", "x", "blake3:dd", "2999-01-01", fresh)]);
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&sources(&ws), "t").unwrap();
+        let all = kb.search("quokka procedure", &SearchOpts::default()).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all.last().unwrap().rel_path.contains("acme/old/"), "stale ranks last: {:?}", all.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
+        let only = |b: &str| SearchOpts { bundle: Some(b.into()), ..Default::default() };
+        assert_eq!(kb.search("quokka procedure", &only("acme/new")).unwrap().len(), 1);
+        assert_eq!(kb.search("quokka procedure", &only("acme")).unwrap().len(), 2, "an org filter");
+        assert!(kb.search("quokka procedure", &only("../x")).unwrap().is_empty(), "a filter that is not a plain id matches nothing");
+        assert!(kb.search("quokka procedure", &SearchOpts { no_bundles: true, ..Default::default() }).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_removed_bundle_leaves_the_index_and_the_next_sync_says_so() {
+        let (home, ws) = home_with_bundles(&[("acme", "plat", "blake3:aa", "2999-01-01", &[("a.md", RUNBOOK)])]);
+        let mut kb = Kb::open_in_memory().unwrap();
+        assert_eq!(kb.sync_lexical(&sources(&ws), "t").unwrap().added, 1);
+        let mut lock = delphi_core::bundles::read(&ws).unwrap();
+        lock.bundle[0].status = "removed".into();
+        delphi_core::bundles::write(&ws, &lock).unwrap();
+        let rep = kb.sync_lexical(&sources(&ws), "t").unwrap();
+        assert_eq!(rep.removed, 1);
+        assert!(kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().is_empty());
+        assert!(delphi_core::bundles::cache_dir(home.path(), "acme", "plat", "blake3:aa").is_dir(), "the cache stays until gc");
+    }
+
+    #[test]
+    fn a_workspace_with_no_lock_indexes_exactly_what_it_did_before() {
+        let d = tree(&[("team/context/index.md", "---\nsource_type: user_ratified\n---\n# T\n\nplain\n")]);
+        assert!(sources(d.path()).iter().all(|f| f.zone != "bundles" && f.bundle.is_none()));
     }
 }

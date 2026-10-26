@@ -48,6 +48,9 @@ pub struct Zones {
     pub worktree: Option<PathBuf>,
     /// Registered projects by name, read-only through `@project/<name>/**` (001-A2).
     pub projects: Vec<(String, PathBuf)>,
+    /// Added bundles by `org/name`, each the active hash's `knowledge/` directory, read-only through
+    /// `@bundle/<org>/<name>/knowledge/**` (`specs/024` §4.1). Nothing else of a bundle is reachable.
+    pub bundles: Vec<(String, PathBuf)>,
     /// The connector payload store, readable only as `@payload/<64 hex>` (`specs/010` §8.2).
     pub payload: Option<PathBuf>,
 }
@@ -147,6 +150,9 @@ fn never_writable(key: &str) -> Option<String> {
     if key.starts_with("@project/") {
         return Some("project repos are read-only (changes happen in @worktree)".into());
     }
+    if key.starts_with("@bundle/") {
+        return Some("added bundles are read-only (they change only by `delphi bundle add|update|remove`)".into());
+    }
     None
 }
 
@@ -213,6 +219,22 @@ impl Guard {
             let name = rest.split('/').next()?;
             let (_, root) = self.zones.projects.iter().find(|(n, _)| n.to_lowercase() == name)?;
             let inner = path.splitn(3, '/').nth(2)?.to_string();
+            return Some((root.clone(), inner));
+        }
+        if let Some(rest) = key.strip_prefix("@bundle/") {
+            // Read-only, and only a bundle's knowledge: skills, agents, behavior and vectors reach a prompt as
+            // what they are (a skill, a guidance block), never as files an agent can open (`specs/024` §4.1).
+            if access != Access::Read {
+                return None;
+            }
+            let mut seg = rest.split('/');
+            let (org, name, section) = (seg.next()?, seg.next()?, seg.next()?);
+            if section != "knowledge" {
+                return None;
+            }
+            let id = format!("{}/{}", org, name);
+            let (_, root) = self.zones.bundles.iter().find(|(n, _)| *n == id)?;
+            let inner = path.splitn(5, '/').nth(4).unwrap_or("").to_string();
             return Some((root.clone(), inner));
         }
         // Reads of protected files come from their ratified copies. The only writable protected
@@ -533,9 +555,13 @@ mod tests {
     fn setup() -> (tempfile::TempDir, Guard) {
         let t = tempfile::tempdir().unwrap();
         let ws = t.path();
-        for d in ["local/missions/m1/councils/.barrier", "local/memory/agents/red-team", "team/context", "base/agents/builder", "ratified/memory/agents/builder", "wt/src", "proj/src"] {
+        for d in ["local/missions/m1/councils/.barrier", "local/memory/agents/red-team", "team/context", "base/agents/builder", "ratified/memory/agents/builder", "wt/src", "proj/src", "cache/knowledge/runbooks", "cache/behavior", "cache/skills/s", "cache/vectors"] {
             fs::create_dir_all(ws.join(d)).unwrap();
         }
+        fs::write(ws.join("cache/knowledge/runbooks/deploy.md"), "deploy").unwrap();
+        fs::write(ws.join("cache/behavior/goals.md"), "goals").unwrap();
+        fs::write(ws.join("cache/skills/s/SKILL.md"), "skill").unwrap();
+        fs::write(ws.join("cache/vectors/index.json"), "{}").unwrap();
         fs::write(ws.join("local/missions/m1/events.jsonl"), "{}").unwrap();
         fs::write(ws.join("local/missions/m1/notes.md"), "n").unwrap();
         fs::write(ws.join("local/missions/m1/councils/.barrier/r1.md"), "stance").unwrap();
@@ -557,6 +583,7 @@ mod tests {
                 ratified: ws.join("ratified"),
                 worktree: Some(ws.join("wt")),
                 projects: vec![("app".into(), ws.join("proj"))],
+                bundles: vec![("acme/a".into(), ws.join("cache/knowledge"))],
                 payload: Some(ws.join("payloads")),
             },
             role: "builder".into(),
@@ -743,6 +770,30 @@ mod tests {
         assert!(g.check("@project/app/src/main.rs", Access::Read).unwrap().file.is_some());
         assert!(matches!(g.check("@project/app/src/main.rs", Access::Write), Err(Denied::NeverWritable(_))));
         assert_eq!(g.check("@project/app/.git/config", Access::Read).unwrap_err(), Denied::GitSegment);
+    }
+
+    // specs/024 AC-9: a bundle's knowledge is readable, read-only; every other directory of it is denied.
+    #[test]
+    fn a_bundle_is_reachable_only_as_read_only_knowledge() {
+        let (t, g) = setup();
+        let k = g.check("@bundle/acme/a/knowledge/runbooks/deploy.md", Access::Read).unwrap();
+        assert!(k.file.is_some());
+        let names = |v: Vec<DirEntry>| v.into_iter().map(|e| e.name).collect::<Vec<_>>();
+        assert_eq!(names(g.list("@bundle/acme/a/knowledge").unwrap()), vec!["runbooks"]);
+        assert_eq!(names(g.list("@bundle/acme/a/knowledge/runbooks").unwrap()), vec!["deploy.md"]);
+        for p in ["behavior/goals.md", "skills/s/SKILL.md", "agents/x.md", "vectors/index.json", ".delphi-bundle/files.json", "bundle.toml"] {
+            assert!(g.check(&format!("@bundle/acme/a/{}", p), Access::Read).is_err(), "{} must be denied", p);
+        }
+        assert!(g.list("@bundle/acme/a").is_err() && g.list("@bundle/acme").is_err() && g.list("@bundle").is_err(), "no listing above knowledge/");
+        assert!(g.check("@bundle/acme/other/knowledge/x.md", Access::Read).is_err(), "a bundle that is not added");
+        assert!(g.check("@bundle/acme/a/knowledge/../behavior/goals.md", Access::Read).is_err(), "no traversal out of knowledge/");
+        assert!(matches!(g.check("@bundle/acme/a/knowledge/runbooks/deploy.md", Access::Write), Err(Denied::NeverWritable(_))));
+        assert!(matches!(g.write_atomic("@bundle/acme/a/knowledge/new.md", b"x"), Err(Denied::NeverWritable(_))));
+        // a symlink planted inside knowledge/ is never followed
+        std::os::unix::fs::symlink("../behavior/goals.md", t.path().join("cache/knowledge/link.md")).unwrap();
+        assert!(g.check("@bundle/acme/a/knowledge/link.md", Access::Read).is_err());
+        // the lock is daemon state under local/, which agents never read
+        assert!(matches!(g.check("local/bundles.lock", Access::Read), Err(Denied::NeverReadable(_))));
     }
 
     #[test]

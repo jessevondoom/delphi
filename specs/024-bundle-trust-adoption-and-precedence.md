@@ -242,5 +242,15 @@ Each slice is one PR, pickable by a separate session, in the order below. "Touch
 
 Merge sequencing: B2 first (it is what everything else loads from); B4 and B6 may proceed in parallel from B2; B6's archive is a prerequisite of `specs/027` B8 (store) and `specs/025` B7's marketplace fetch.
 
+### 10.1 As built (slice B2)
+`Implements-Spec: specs/024-bundle-trust-adoption-and-precedence.md` (AC-3 knowledge part, AC-4, AC-6, AC-9, AC-10 staleness). `delphi bundle add <dir> [--order N] [--yes] [--dry-run]`, `list` and `remove <name>` run in the CLI process against one workspace; `delphi kb search` gained `--bundle <org/name>`, `--org <org>` and `--no-bundles`; `delphi doctor` gained check 12. Where the code differs from, or settles, the text above:
+- **No daemon RPC, no `bundle.*` events and no `provenance.stamp` events yet.** The code has no workspace-level event log (events are per mission), the index does not read stamps, and the CLI has no precedent for writing events. The tier is fixed by the zone instead: files of the `bundles` zone are indexed as `federated_verified` whatever their frontmatter says (that field is a display copy, `specs/023` §4.2), recorded in `local/bundles.lock`, and a removed bundle drops out of the index at the next sync, which has the effect §4.5 asks of revoking the stamps. The stamps with reason `bundle-add:<hash>` for **behavior** files, and the events, arrive with B4, which needs the daemon.
+- **The cache and lock live in `delphi-core::bundles`** (shared by the CLI, the index and the path guard). `local/bundles.lock` is written atomically under an advisory lock; a corrupt one is an error, never an empty lock.
+- **`@bundle/<org>/<name>/knowledge/**`** is a path-guard root (`Zones.bundles`, one entry per active bundle, resolved from the lock to the active hash's `knowledge/`). Reads only; every other directory of a bundle, any listing above `knowledge/`, a bundle that is not added and any write are denied; symlinks are never followed. Search hits for a bundle carry the `@bundle/…#L…` pointer, the logical path an agent reads them by. The index's own `rel_path` is `bundles/<org>/<name>/knowledge/…`.
+- **Staleness ranks, it does not hide:** a result from a bundle past its `review_by` keeps 80% of its fused score (`STALE_BUNDLE_FACTOR`). The "added, not matched" penalty for `applies_to` is not built (it needs the workspace's projects in the index); it arrives with the org-context slice (B5).
+- **Provenance is always `unsigned`** until B6 verifies signatures; a `sig.json` is kept in the cache but never reported as verified.
+- **`--yes`** removes bundles named in `overlays.supersedes`; without it they are kept and the summary says so. Collisions (§7.1) compare structured ids across the other active bundles' cache entries; collisions with the team's own files are not checked yet.
+- **Vectors are not used yet** (B3): `add` indexes words only and says so; `delphi kb index` still embeds.
+
 ## 11. Open Questions
 B-6 (person scope) in `specs/022` §7. Everything else in this spec is decided (OD-1, OD-3) or proposed and recommended.

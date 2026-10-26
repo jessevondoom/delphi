@@ -16,12 +16,20 @@ mod manifest;
 mod relax;
 mod scan;
 mod skills;
+mod summary;
 mod tree;
 mod vectors;
 
 pub use files::{BUNDLE_HASH_PREFIX, build_files_json, bundle_hash};
 pub use manifest::{plugin_json, Manifest};
 pub use relax::no_relaxation;
+pub use summary::{inspect, Inspected, Summary};
+
+/// The structured ids a bundle directory promises to keep stable (knowledge, skills, agents, goals, perspectives),
+/// each prefixed by its kind. Two added bundles must not share one (`specs/024` §7.1).
+pub fn ids_of(dir: &Path) -> std::collections::BTreeSet<String> {
+    ids::collect(&Tree::open(dir))
+}
 pub use tree::Tree;
 
 use std::collections::{BTreeMap, HashSet};

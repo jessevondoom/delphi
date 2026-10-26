@@ -390,7 +390,7 @@ impl Engine {
             }
         }
         Guard {
-            zones: Zones { local: ws.join("local"), team: ws.join("team"), base: ws.join("base"), ratified: ws.join("local/ratified"), worktree: None, projects: self.projects.clone(), payload: Some(ws.join("payloads")) },
+            zones: Zones { local: ws.join("local"), team: ws.join("team"), base: ws.join("base"), ratified: ws.join("local/ratified"), worktree: None, projects: self.projects.clone(), bundles: delphi_core::bundles::active_roots(&self.ws.home, ws), payload: Some(ws.join("payloads")) },
             role: manifest.id.clone(),
             read_globs: manifest.read.clone(),
             write_globs: manifest.write.clone(),

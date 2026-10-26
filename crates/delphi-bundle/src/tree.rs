@@ -33,6 +33,11 @@ pub struct Tree {
 }
 
 impl Tree {
+    /// The regular files of the directory, as step 1 sees them (problems are `validate`'s to report, not this).
+    pub fn open(dir: &Path) -> Tree {
+        scan(dir, &mut Report::default())
+    }
+
     pub fn get(&self, path: &str) -> Option<&Entry> {
         self.entries.binary_search_by(|e| e.path.as_str().cmp(path)).ok().map(|i| &self.entries[i])
     }

@@ -777,6 +777,7 @@ dependencies = [
  "ratatui",
  "regex",
  "reqwest",
+ "semver",
  "serde",
  "serde_derive",
  "serde_json",
