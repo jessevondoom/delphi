@@ -1,0 +1,43 @@
+# Abstracts of the studies. `delphi train seal --case research/lions-mane-claim` fills in the hashes.
+
+[[source]]
+id = "mori-2008"
+url = "https://doi.org/10.1248/bpb.31.1727"
+retrieved = "2026-10-26"
+note = "Cell and mouse study: Hericium extract promotes NGF expression (Biol Pharm Bull 2008); abstract from Europe PMC"
+blake3 = "c219f578038420b1c48a29e803a2e0ac3b4bed82df2641927f799b9c65a3970c"
+
+[[source]]
+id = "mori-2009"
+url = "https://doi.org/10.1002/ptr.2634"
+retrieved = "2026-10-26"
+note = "Small double-blind placebo-controlled trial in mild cognitive impairment (Phytother Res 2009); abstract from Europe PMC"
+blake3 = "657c2f513567ce354a2dcb8023074567ef28e5e4acece585a73b51621649723f"
+
+[[source]]
+id = "saitsu-2019"
+url = "https://doi.org/10.2220/biomedres.40.125"
+retrieved = "2026-10-26"
+note = "Randomized double-blind trial, supplement for 12 weeks (Biomed Res 2019); abstract from Europe PMC"
+blake3 = "2c855284ec99473a3b0c4d2d6e245306a68e0cfbe2a669ff3e06940bcde899ed"
+
+[[source]]
+id = "review-2025"
+url = "https://doi.org/10.3390/nu17081307"
+retrieved = "2026-10-26"
+note = "Narrative review (Nutrients 2025); abstract from Europe PMC"
+blake3 = "c38b38c2da17816b0cdf59c76b4cb784bdc18b0f14c706e5862625a43ff9223a"
+
+[[source]]
+id = "pilot-2026"
+url = "https://doi.org/10.3390/nu18193177"
+retrieved = "2026-10-26"
+note = "Small pilot in healthy adults (Nutrients 2026); abstract from Europe PMC"
+blake3 = "5a8e546b802c41a323310905a757f0194bedab4bb12e5e3c2d69972fc90eaa1c"
+
+[[source]]
+id = "rct-2026"
+url = "https://doi.org/10.64898/2026.04.13.26350781"
+retrieved = "2026-10-26"
+note = "Randomized trial, medRxiv preprint (not peer reviewed), 2026; abstract from Europe PMC"
+blake3 = "295953367c487ae7e5d25c1bdfa66d7c1dd88c8eb984f9930febd2dcb1d34d91"

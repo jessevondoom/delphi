@@ -1,0 +1,18 @@
+# Judgement calls for R5 (specs/037 section 4): not facts. `draft_view` is the assistant's starting point and is never shown to a
+# judge. Write your own judgement in `operator_view`; only that reaches a judge, and as a view, not a fact.
+
+[[insight]]
+id = "should-i-take-it"
+question = "Given this evidence, what is a sensible position for an ordinary adult deciding whether to try lion's mane?"
+draft_view = "Assistant's draft, to be overwritten: the human evidence is thin and mixed; no safety signal in the trials, but also no demonstration of benefit for healthy people, and nothing that supports treating a cognitive condition with it. Trying it is low-stakes if expectations are realistic and a doctor is consulted about interactions; skipping it loses little. It should not replace care for memory problems."
+operator_view = ""
+considerations = ["matches the strength of the recommendation to the strength of the evidence", "mentions costs and expectations, not only efficacy", "does not drift into medical advice"]
+acceptable = "Anywhere from 'reasonable to try with caveats' to 'not worth it yet' is defensible if it follows from the evidence."
+
+[[insight]]
+id = "weight-of-a-preprint"
+question = "How much should a 2026 preprint RCT count against a 2009 peer-reviewed trial and a 2026 null pilot?"
+draft_view = "Assistant's draft, to be overwritten: it is the largest human trial of the set and points the same modest way, but it has not been peer reviewed, outcomes were self-assessed and remote, and the product (fruiting body plus mycelium) differs between studies; treat it as a reason to run bigger trials, not a settlement."
+operator_view = ""
+considerations = ["sample size, design and peer-review status", "differences in product and outcome measures"]
+acceptable = "Any weighting that gives reasons; ignoring review status is not."

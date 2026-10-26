@@ -2248,6 +2248,26 @@ echo "$answer" > '{answer_file}'
     }
 
     #[tokio::test]
+    async fn the_orchestrator_is_reminded_to_name_threads_once_two_tasks_sit_in_none_and_stops_being_reminded_when_it_has() {
+        use crate::model::Step;
+        let name_all = json!({"thread": "launch", "label": "Launch plan", "tasks": ["t_0001", "t_0002", "t_0003", "t_0004"]});
+        let f = crate::testkit::setup(vec![Step::text("ok"), Step::text("ok"), Step::text("ok"), Step::tool("n1", "name_thread", name_all), Step::text("named"), Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Plan the launch").await.unwrap(); // one task: nothing to say yet
+        f.engine.run_task(&f.m, "orchestrator", "Compare vendors").await.unwrap(); // two tasks, in no thread
+        f.engine.run_task(&f.m, "architect", "Sketch the schema").await.unwrap(); // a role that cannot name threads is not asked to
+        f.engine.run_task(&f.m, "orchestrator", "Draft the pricing").await.unwrap(); // four tasks; it names them all in this span
+        f.engine.run_task(&f.m, "orchestrator", "Write the memo").await.unwrap(); // one new task is under the bar
+        let bodies: Vec<String> = f.model.requests().iter().map(|r| r.body.to_string()).collect();
+        assert_eq!(bodies.len(), 6);
+        let has = |i: usize| bodies[i].contains("Not in a named thread (the text after each id");
+        assert_eq!([has(0), has(1), has(2), has(3), has(4), has(5)], [false, true, false, true, true, false]);
+        // It names the tasks and says they are data; a span is told only what the log shows.
+        assert!(bodies[1].contains("t_0001: Plan the launch") && bodies[1].contains("t_0002: Compare vendors") && bodies[1].contains("name_thread"), "{}", &bodies[1][bodies[1].len().saturating_sub(1800)..]);
+        assert!(!bodies[1].contains("Threads you have already named"), "nothing is named yet");
+        assert_eq!(events_of(&f, "thread.named").len(), 1);
+    }
+
+    #[tokio::test]
     async fn the_orchestrator_is_shown_what_every_model_path_can_do_and_other_roles_are_not() {
         let f = crate::testkit::setup(vec![crate::model::Step::text("ok"), crate::model::Step::text("ok")], 5.0, |_| {});
         use_harness_profile(&f, "[harness.claude]\napprovals = \"delegate\"\n");

@@ -289,6 +289,15 @@ pub fn ratify_spec(ws_dir: &Path, name: &str, text: &str) -> Result<(), String> 
 
 /// The longest a home path may be for the daemon's sockets to bind: they live at `<home>/run/<12 hex>.narrator.sock`, and a Unix
 /// socket path is limited to about 104 bytes (macOS) and 108 (Linux). The first live run failed on exactly this.
+/// The Amber cards a headless build may allow: the merge gates' test commands. Red cards and merges can never be allowed.
+///
+/// A Claude or agy seat's own shell commands arrive as `harness_bash` cards whose pattern is the program name, so the policy
+/// allows a conservative set of programs: building and testing (`cargo`), reading (`git`, `ls`, `cat`, `grep`, `head`...),
+/// and `timeout`, which the Builder wraps its test runs in. Anything else stays denied. These run unsandboxed as the
+/// operator, in a throwaway worktree of a repository with no remote; `timeout` can wrap any command, so tighten the list
+/// with `--policy <file>` if that is not acceptable on a given machine.
+pub const DEFAULT_POLICY: &str = "# Written by `delphi train run` for builder cases (see dev/bench/arms-example/policy.toml).\n[[allow]]\ntool = \"gate_command\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash cargo\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash timeout\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash git\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash ls\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash pwd\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash cat\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash head\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash tail\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash grep\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash rg\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash find\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash wc\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash which\"\n\n[[allow]]\ntool = \"harness_bash\"\npattern = \"harness_bash echo\"\n";
+
 pub const MAX_HOME_PATH: usize = 100 - "/run/".len() - "e36f9b156d7d.narrator.sock".len();
 
 /// Refuse a home whose socket path would not fit, with the fix, instead of a daemon that dies before it is ready.
@@ -443,8 +452,12 @@ pub struct Config {
     pub allow_unvalidated: bool,
     /// The repository code cases are harvested from (their base commit is exported from it).
     pub source_repo: PathBuf,
-    /// A card policy for headless runs (`--on-card policy:<file>`); without one every Amber card is denied.
+    /// A card policy for headless runs (`--on-card policy:<file>`); without one every Amber card is denied. A build needs one
+    /// (its merge gates run commands); [`DEFAULT_POLICY`] is written into the work directory when a builder case is run
+    /// and none is given.
     pub policy: Option<PathBuf>,
+    /// `--permissions` for a build (`accept-edits` lets the Builder edit its worktree without a card per file).
+    pub permissions: String,
 }
 
 /// Run `child` to completion or kill it at `deadline`; output goes to files so a full pipe never blocks it.
@@ -517,6 +530,9 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     let mut cmd = Command::new(&cfg.delphi_bin);
     let on_card = cfg.policy.as_ref().map_or("deny".to_string(), |p| format!("policy:{}", p.display()));
     cmd.args(["run", &input, "--json", "--on-card", &on_card, "--workspace", &cfg.workspace, "--home"]).arg(&home).args(["--budget", &format!("{:.2}", case.max_cost_usd), "--timeout", &format!("{}s", case.timeout_secs)]);
+    if case.role == "builder" {
+        cmd.args(["--permissions", &cfg.permissions]);
+    }
     cmd.current_dir(&repo).env_remove("DELPHI_HOME").env_remove("DELPHI_WORKSPACE");
     for (k, v) in &cfg.env {
         cmd.env(k, v);
@@ -730,7 +746,16 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: {}", e);
         return 2;
     }
-    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from) };
+    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from), permissions: flag(args, "--permissions").unwrap_or_else(|| "accept-edits".into()) };
+    let mut cfg = cfg;
+    if cfg.policy.is_none() && cases.iter().any(|c| c.role == "builder") {
+        let p = work.join("policy.toml");
+        if let Err(e) = fs::write(&p, DEFAULT_POLICY) {
+            eprintln!("delphi train run: cannot write {}: {}", p.display(), e);
+            return 2;
+        }
+        cfg.policy = Some(p);
+    }
     let (rows, skipped) = run_all(&cfg, cases);
     let out_path = flag(args, "--out").map(PathBuf::from).unwrap_or_else(|| work.join("rows.jsonl"));
     let lines: String = rows.iter().map(|r| r.to_json().to_string() + "\n").collect();
@@ -803,7 +828,7 @@ mod tests {
     }
 
     fn cfg(root: &Path, canned: &Path, arms: Vec<Arm>, budget: f64) -> Config {
-        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None }
+        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None, permissions: "accept-edits".into() }
     }
 
     fn baseline() -> Arm {
@@ -1099,8 +1124,22 @@ mod tests {
         assert!(lock::read(&ws.join("local/ratified.lock")).unwrap().files["specs/train-hc.md"] == lock::hash(spec.as_bytes()));
         let args = fs::read_to_string(run.join("args.txt")).unwrap();
         assert!(args.contains("/build Implement @specs/train-hc.md"), "{}", args);
+        // A build edits its worktree without a card per file; the default policy (`DEFAULT_POLICY`) allows only gate commands.
+        assert!(args.contains("--permissions accept-edits"), "{}", args);
+        assert!(Policy_allows_only_gates(DEFAULT_POLICY));
         // The agent's own tests were replaced by the withheld ones for grading, not before.
         assert!(fs::read_to_string(run.join("repo/src/lib.rs")).unwrap().contains("HIDDEN-MARK"));
+    }
+
+    /// The default policy: the merge gates' commands, and a short list of programs a Builder's own shell may run. Amber only.
+    #[allow(non_snake_case)]
+    fn Policy_allows_only_gates(text: &str) -> bool {
+        let v: toml::Value = toml::from_str(text).unwrap();
+        let rules = v["allow"].as_array().unwrap();
+        let bash: Vec<&str> = rules.iter().filter(|r| r["tool"].as_str() == Some("harness_bash")).filter_map(|r| r["pattern"].as_str()).collect();
+        rules.iter().all(|r| matches!(r["tool"].as_str(), Some("gate_command") | Some("harness_bash"))) && bash.contains(&"harness_bash cargo") && bash.contains(&"harness_bash git")
+            && !bash.iter().any(|p| ["rm", "curl", "sh", "bash", "python3", "mv", "chmod", "sudo", "ssh"].iter().any(|bad| *p == format!("harness_bash {}", bad)))
+            && crate::run::Policy::parse(text).is_ok()
     }
 
     #[test]

@@ -1,0 +1,106 @@
+# Checklist for the LiveWire strategy briefing, from the Q2 2026 press release in sources.toml.
+# A pattern is a lower bound: a correct answer worded unexpectedly is missed (specs/037 section 4).
+
+[[fact]]
+id = "revenue-q2"
+claim = "LiveWire consolidated revenue was $9.1 million in Q2 2026, up 55% from $5.9 million"
+source = "livewire-q2-2026"
+quote = "Consolidated revenue increased 55% in the second quarter of 2026 compared to same period prior year"
+any = ['\$\s?9\.1\s?(m|million)', '\b55\s?(%|percent)']
+
+[[fact]]
+id = "net-loss"
+claim = "The consolidated net loss was $18.2 million, against $18.8 million a year earlier"
+source = "livewire-q2-2026"
+quote = "consolidated net loss was $18.2 million for the second quarter 2026 as compared to $18.8 million in the same period prior year"
+any = ['\$\s?18\.2\s?(m|million)']
+number = { value = 18.2, tol = 0.05 }
+
+[[fact]]
+id = "em-units"
+claim = "Electric motorcycle units were 267, against 55 a year earlier (up 386%)"
+source = "livewire-q2-2026"
+quote = "Electric Motorcycle unit sales increased by 386% compared to the prior year same quarter"
+any = ['\b267\b', '\b386\s?%']
+
+[[fact]]
+id = "em-revenue"
+claim = "Electric motorcycle segment revenue was $3.6 million against $0.8 million"
+source = "livewire-q2-2026"
+quote = "Revenue $3.6 $0.8 333%"
+any = ['\$\s?3\.6\s?(m|million)']
+number = { value = 3.6, tol = 0.05 }
+
+[[fact]]
+id = "em-oploss"
+claim = "The electric motorcycle segment lost $18.0 million at the operating line, flat on the year"
+source = "livewire-q2-2026"
+quote = "Operating Loss ($18.0) ($18.0) —%"
+any = ['\$\s?18(\.0)?\s?(m|million)', 'operating loss']
+
+[[fact]]
+id = "stacyc"
+claim = "STACYC (electric balance bikes) sold 5,223 units for $5.5 million of revenue and roughly broke even at the operating line"
+source = "livewire-q2-2026"
+quote = "STACYC unit sales increased by 7% compared to the prior year same quarter"
+any = ['stacyc']
+
+[[fact]]
+id = "cash-use"
+claim = "Net cash used by operating activities was $26.4 million in the quarter, 18% better than a year earlier"
+source = "livewire-q2-2026"
+quote = "Net cash used by operating activities ($26.4) ($32.4) 18%"
+any = ['\$\s?26\.4\s?(m|million)', 'cash (used|burn)']
+
+[[fact]]
+id = "market-share"
+claim = "LiveWire held 76% of the US electric motorcycle 50+ kW on-road segment year to date"
+source = "livewire-q2-2026"
+quote = "market share of 76% in the U.S. electric motorcycle 50+ kilowatt on-road EV segment"
+any = ['\b76\s?(%|percent)']
+
+[[fact]]
+id = "s4-honcho"
+claim = "Production of the S4 Honcho, a more accessible platform, began, with first units due at retail later in the summer"
+source = "livewire-q2-2026"
+quote = "Commenced production of the S4 Honcho"
+any = ['s4 honcho']
+
+[[fact]]
+id = "dust"
+claim = "LiveWire completed the acquisition of Dust Motorcycles (electric off-road) in May 2026"
+source = "livewire-q2-2026"
+quote = "Completed the acquisition of Dust Motorcycles"
+any = ['\bdust\b']
+weight = 0.5
+
+[[fact]]
+id = "adj-ebitda"
+claim = "Adjusted EBITDA was a loss of $15.1 million"
+source = "livewire-q2-2026"
+quote = "Adjusted EBITDA was $15.1 million for the second quarter 2026 as compared to $15.7 million"
+any = ['\$\s?15\.1\s?(m|million)', 'adjusted ebitda']
+weight = 0.5
+
+[[fact]]
+id = "related-party"
+claim = "Related-party interest expense rose by $1.5 million: the company relies on related-party financing"
+source = "livewire-q2-2026"
+quote = "related party interest expense"
+any = ['related[- ]party']
+weight = 0.5
+
+[[fact]]
+id = "guidance"
+claim = "Full-year 2026 guidance was reiterated"
+source = "livewire-q2-2026"
+quote = "the Company reiterates its full-year guidance"
+any = ['guidance']
+weight = 0.5
+
+[[fact]]
+id = "rev-per-unit"
+claim = "Derived: electric motorcycle revenue per unit is about $13.5 thousand ($3.6 million over 267 units), far below any plausible cost to build one at this scale: the unit economics are the issue"
+source = "livewire-q2-2026"
+quote = "Motorcycle Units 267 55 386% Revenue $3.6 $0.8 333%"
+any = ['\$?\s?13[.,]\d\s?(k|thousand)', '13,\d{3}\b', '\$13\.\d\s?k']
