@@ -238,6 +238,36 @@ fn read_of(rows: &[XeniaRow], nonce: &str, now_unix: i64) -> QuarantineRead {
     out
 }
 
+/// The publish gate's "similar records already in the store" (X7's `SimilarRecords`) over this index: the hybrid search
+/// across the zone (agent and quarantine views, hidden records left out). Titles are already sanitized in the index;
+/// the gate bounds them again. An empty or unreadable index gives an empty list.
+pub struct KbSimilar<'a>(pub &'a Kb);
+
+impl delphi_core::xenia_publish::SimilarRecords for KbSimilar<'_> {
+    fn similar(&self, q: &delphi_core::xenia_publish::SimilarQuery<'_>, limit: usize) -> Vec<delphi_core::xenia_publish::SimilarHit> {
+        let query = format!("{} {} {}", q.title, q.summary, q.tags.join(" "));
+        let mut scored: Vec<(String, f64)> = Vec::new();
+        for opts in [SearchOpts::xenia_agent(10), SearchOpts::xenia_quarantine(10)] {
+            for h in self.0.search(&query, &opts).unwrap_or_default() {
+                if !scored.iter().any(|(p, _)| *p == h.rel_path) {
+                    scored.push((h.rel_path, h.score));
+                }
+            }
+        }
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let paths: Vec<String> = scored.iter().map(|(p, _)| p.clone()).collect();
+        let rows = self.0.xenia_rows(&paths).unwrap_or_default();
+        scored
+            .iter()
+            .filter_map(|(p, score)| {
+                let r = rows.iter().find(|r| r.rel_path == *p).filter(|r| r.hidden.is_none())?;
+                Some(delphi_core::xenia_publish::SimilarHit { id: r.id.clone(), title: r.title.clone(), tier: r.tier.clone(), score: *score as f32 })
+            })
+            .take(limit)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 #[path = "xenia_read_tests.rs"]
 pub(crate) mod tests;

@@ -384,3 +384,19 @@ fn stamps_become_provenance_events_that_rebuild_the_index_and_an_unstamped_xenia
     assert_eq!(idx.lookup(Zone::Xenia, &s.path, &"0".repeat(64)), None);
     assert_eq!(idx.tier_of(Zone::Xenia, &s.path, &"0".repeat(64), &OriginRules::with_defaults(), true), Tier::L0);
 }
+
+#[test]
+fn the_publish_gate_finds_similar_records_in_the_index_and_not_hidden_ones() {
+    use delphi_core::xenia_publish::{SimilarQuery, SimilarRecords};
+    let kb = kb_with(&[
+        im(0, "Retry budget", "How many retries the payment client makes.", "Body.", XT::L2, None),
+        im(1, "Retry jitter", "How the payment client spaces retries.", "Body.", XT::L1, None),
+        im(2, "Retry cap", "A retry cap of the payment client that was withdrawn.", "Body.", XT::L0, Some("contested")),
+    ]);
+    let tags = vec!["payments".to_string()];
+    let hits = KbSimilar(&kb).similar(&SimilarQuery { title: "Retry policy", summary: "retry payment client", tags: &tags }, 5);
+    let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    assert!(ids.contains(&u(0).as_str()) && ids.contains(&u(1).as_str()) && !ids.contains(&u(2).as_str()), "{ids:?}");
+    assert_eq!(hits.iter().find(|h| h.id == u(0)).unwrap().tier, "L2");
+    assert!(KbSimilar(&Kb::open_in_memory().unwrap()).similar(&SimilarQuery { title: "x", summary: "y", tags: &[] }, 5).is_empty());
+}
