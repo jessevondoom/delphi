@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 42] = [
+pub const KINDS: [&str; 43] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
+    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -480,13 +480,14 @@ impl ObserverState {
                     }
                 }
             }
-            "bundle.added" | "bundle.updated" | "bundle.removed" => {
+            "bundle.added" | "bundle.updated" | "bundle.rolled_back" | "bundle.removed" => {
                 let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
                 let id = format!("{}/{}", clip(&p["org"], 60), clip(&p["name"], 60));
                 let version = clip(&p["version"], 30);
                 let what = match kind {
                     "bundle.added" => "added",
                     "bundle.updated" => "updated",
+                    "bundle.rolled_back" => "rolled back",
                     _ => "removed",
                 };
                 self.say(format!("bundle {}{} {}", id, if version.is_empty() { String::new() } else { format!("@{}", version) }, what));

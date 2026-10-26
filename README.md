@@ -82,7 +82,7 @@ Taint is computed, not declared: every span carries the lowest trust tier of any
 
 ### Org bundles and sharing
 
-An org bundle is a directory an organization publishes so every install starts from the same knowledge, skills, agents and stated goals; it is a superset of a Claude Code plugin ([`specs/022`](specs/022-xenia-sharing-overview.md) to [`027`](specs/027-bundle-authoring-distribution-and-evaluation.md)). Today `delphi bundle validate <dir>` and `delphi bundle manifest <dir>` check a bundle (the `delphi-bundle` crate; a golden bundle lives in `dev/bundles/acme-platform` and is checked in CI), and `delphi bundle add <dir>` re-checks it, prints what it brings, copies it into `~/.delphi/bundles` and makes its knowledge searchable (`delphi kb search <words> --bundle org/name`; no model is called). A vector cache a bundle ships is used only if it matches your embedder and passes a local spot check (`add --no-vectors` skips it); the rest are embedded in the background, `bundle list` shows how far along they are, and until then results from the bundle say `(lexical only: vectors N% ready)`. `bundle list` and `bundle remove` complete the set ([`specs/024`](specs/024-bundle-trust-adoption-and-precedence.md)). The spec you are about to approve lists the goals and decisions of your bundles that it cites and that no longer stand (advice only; [`specs/026`](specs/026-team-alignment-and-strategist-integration.md)). Signing and `bundle serve` are later slices (B6 to B12). Xenia, the signed org-level memory store ([`specs/011`](specs/011-xenia-trust-model.md), [`012`](specs/012-xenia-record-schema.md)), has its verification code in `crates/delphi-xenia` and `delphi xenia whoami`; the store itself is not built.
+An org bundle is a directory an organization publishes so every install starts from the same knowledge, skills, agents and stated goals; it is a superset of a Claude Code plugin ([`specs/022`](specs/022-xenia-sharing-overview.md) to [`027`](specs/027-bundle-authoring-distribution-and-evaluation.md)). Today `delphi bundle validate <dir>` and `delphi bundle manifest <dir>` check a bundle (the `delphi-bundle` crate; a golden bundle lives in `dev/bundles/acme-platform` and is checked in CI), and `delphi bundle add <dir or file.xbundle>` re-checks it (verifying a signature, if any, and the publisher's continuity), prints what it brings, copies it into `~/.delphi/bundles` and makes its knowledge searchable (`delphi kb search <words> --bundle org/name`; no model is called). A vector cache a bundle ships is used only if it matches your embedder and passes a local spot check (`add --no-vectors` skips it); the rest are embedded in the background, `bundle list` shows how far along they are, and until then results from the bundle say `(lexical only: vectors N% ready)`. `bundle list`, `remove`, `update`, `rollback` and `gc` complete the set; a publisher runs `bundle sign` (at a terminal) and `bundle package` (a reproducible `.xbundle`) ([`specs/024`](specs/024-bundle-trust-adoption-and-precedence.md)). The spec you are about to approve lists the goals and decisions of your bundles that it cites and that no longer stand (advice only; [`specs/026`](specs/026-team-alignment-and-strategist-integration.md)). `bundle serve` is a later slice (B12). Xenia, the signed org-level memory store ([`specs/011`](specs/011-xenia-trust-model.md), [`012`](specs/012-xenia-record-schema.md)), has its verification code in `crates/delphi-xenia` and `delphi xenia whoami`; the store itself is not built.
 
 ### Learning without memory poisoning
 
@@ -145,7 +145,7 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `/decisions`, `/merge <task>` | review an optimistic build's decisions; rerun the gates and merge card |
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
-| `/org` | the added org bundles, their goals, perspectives and open items; add, update or remove a bundle (no approval card: your key is the decision) |
+| `/org` | the added org bundles, their goals, perspectives and open items; add, update, roll back or remove a bundle (no approval card: your key is the decision) |
 | `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
 | `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | after a daemon restart; the current and past missions; housekeeping |
 
@@ -158,7 +158,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Group | Commands |
 | :-- | :-- |
 | Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
-| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle validate\|manifest\|add\|list\|remove` · `hooks` |
+| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle validate\|manifest\|sign\|package\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
 | Maintain | `update` · `xenia whoami` · `help` |
@@ -235,7 +235,7 @@ This is an early project built mostly by its own agents under one operator. The 
 - Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
 
 **Specified, not built**
-- Bundle signing and trust levels, `package --vectors`, `bundle serve`, team alignment (slices B6 to B12; adding a bundle from a directory, B2, and the adopter side of vectors, B3, are built); the Xenia store itself (011/012) and the Librarian role (013).
+- `package --vectors`, `bundle serve`, team alignment (slices B7 to B12; adding, signing, archives, update and rollback, B2 and B6, and the adopter side of vectors, B3, are built); the Xenia store itself (011/012) and the Librarian role (013).
 - Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
 - Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
 

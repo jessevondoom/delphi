@@ -27,7 +27,7 @@ pub struct Entry {
     pub hash: String,
     /// The pinned publisher key, or `unsigned` (`specs/024` §2.4).
     pub publisher_kid: String,
-    /// `unsigned` until B6 verifies signatures (`specs/024` §2.2).
+    /// `unsigned`, `signed` or `known-publisher` for a directory or archive bundle (`specs/024` §2.2).
     pub provenance: String,
     pub source: Source,
     pub added_at: String,
@@ -47,7 +47,7 @@ pub struct Entry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
-    /// `directory` | `archive` | `xenia` | `marketplace`; only `directory` exists so far.
+    /// `directory` | `archive` | `xenia` | `marketplace`; `directory` and `archive` exist so far.
     pub kind: String,
     pub path: String,
 }
@@ -59,6 +59,31 @@ pub struct Past {
     pub version: String,
     pub from: String,
     pub to: String,
+    /// The publisher key and provenance level this version had, so that a rollback restores them (empty in a lock written
+    /// before slice B6; the rollback then works them out from the cached tree).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub publisher_kid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provenance: String,
+    /// `gc` removed this version's tree from the cache: it can no longer be rolled back to (`specs/024` §4.4).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+    /// `rollback` when it was a rollback that replaced this version (the newest entry then says the current hash is an
+    /// earlier one, and the log records `bundle.rolled_back` rather than `bundle.updated`); empty for an update.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub left_by: String,
+}
+
+impl Past {
+    /// This entry as the version a bundle had before it was replaced at `to`.
+    pub fn of(e: &Entry, to: &str) -> Past {
+        Past { hash: e.hash.clone(), version: e.version.clone(), from: e.added_at.clone(), to: to.to_string(), publisher_kid: e.publisher_kid.clone(), provenance: e.provenance.clone(), gone: false, left_by: String::new() }
+    }
+
+    /// The short form of the hash for lines a person reads.
+    pub fn short(&self) -> String {
+        self.hash.trim_start_matches("blake3:").chars().take(12).collect()
+    }
 }
 
 impl Entry {
@@ -166,7 +191,7 @@ mod tests {
             review_by: "2027-01-31".into(),
             title: "T".into(),
             skill_roles: BTreeMap::new(),
-            history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into() }],
+            history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into(), publisher_kid: String::new(), provenance: String::new(), gone: false, left_by: String::new() }],
         }
     }
 

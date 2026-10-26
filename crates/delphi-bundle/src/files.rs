@@ -107,17 +107,42 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, r: &mut Report) {
     r.bundle_hash = Some(bundle_hash(&raw));
 }
 
+/// Step 6 (`specs/023` §10, `specs/024` §2.1): a `sig.json` must verify, strictly, over this bundle's `org`, `name`,
+/// `version` and the bytes of `files.json`, and its key must be `publisher.did`. No `sig.json` is not a failure.
 pub fn check_signature(tree: &Tree, m: Option<&Manifest>, r: &mut Report) {
-    if tree.get(".delphi-bundle/sig.json").is_none() {
-        r.note(6, "", "unsigned");
+    const SIG: &str = ".delphi-bundle/sig.json";
+    let Some(entry) = tree.get(SIG) else {
+        // Signing is recommended whenever a publisher says who they are (`specs/024` §2.4).
+        if m.is_some_and(|m| m.publisher_did.is_some()) {
+            r.note(6, "", "unsigned: publisher.did is set, so `delphi bundle sign` is recommended");
+        } else {
+            r.note(6, "", "unsigned");
+        }
         return;
+    };
+    let Some(m) = m else { return r.fail(6, SIG, "present but bundle.toml could not be read, so it cannot be verified") };
+    if entry.bytes > delphi_xenia::bundle_sig::MAX_SIG_BYTES as u64 {
+        return r.fail(6, SIG, "over 1 KiB");
     }
-    if m.is_some_and(|m| m.publisher_did.is_none()) {
-        r.fail(6, ".delphi-bundle/sig.json", "present but publisher.did is not set in bundle.toml");
+    let (Some(files_json), Some(sig_bytes)) = (tree.read(FILES_JSON), tree.read(SIG)) else {
+        return r.fail(6, SIG, "present but there is no files.json to verify it against");
+    };
+    // A flipped byte in any file is a step 5 failure; a signed bundle also fails here, because what was signed is the
+    // manifest that no longer describes this tree (`specs/024` AC-1: each fails at the signature step).
+    if r.fails.iter().any(|f| f.step == 5) {
+        r.fail(6, SIG, "the tree does not match the signed manifest (see step 5)");
     }
-    if tree.get(FILES_JSON).is_none() {
-        r.fail(6, ".delphi-bundle/sig.json", "present but there is no files.json to sign");
+    match delphi_xenia::bundle_sig::verify(&m.org, &m.name, &m.version, &files_json, &sig_bytes) {
+        Err(e) => r.fail(6, SIG, format!("does not verify under `{}/{}@{}`: {}", m.org, m.name, m.version, e)),
+        Ok(car) => match m.publisher_did.as_deref() {
+            None => r.fail(6, SIG, "present but publisher.did is not set in bundle.toml"),
+            Some(did) if did != car.kid => r.fail(6, SIG, "signed by a key other than publisher.did"),
+            Some(_) => {
+                r.note(6, SIG, format!("signed by {} at {}", car.kid, car.signed_at));
+                if r.fails.iter().all(|f| f.step != 5 && f.step != 6) {
+                    r.signer = Some(car.kid);
+                }
+            }
+        },
     }
-    // The verification itself (specs/024 §2.1) arrives with slice B6. Until then a signature is never reported as verified.
-    r.warn(6, ".delphi-bundle/sig.json", "present but not verified by this build (signature verification is slice B6); treat the bundle as unsigned");
 }

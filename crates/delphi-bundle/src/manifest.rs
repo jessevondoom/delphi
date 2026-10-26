@@ -22,6 +22,8 @@ pub struct Manifest {
     pub publisher_name: String,
     pub publisher_contact: Option<String>,
     pub publisher_did: Option<String>,
+    /// `publisher.predecessors`: earlier keys of this publisher, for continuity across a key change (`specs/024` §2.3).
+    pub publisher_predecessors: Vec<String>,
     pub sections: BTreeMap<String, bool>,
     /// `[agents.<name>] role`: the host role of each bundle agent.
     pub agents: BTreeMap<String, String>,
@@ -245,6 +247,8 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
             for d in strings(p, "predecessors", "publisher", r) {
                 if !d.starts_with("did:key:z") {
                     r.fail(4, "bundle.toml", format!("publisher.predecessors: `{}` is not a did:key", d));
+                } else {
+                    m.publisher_predecessors.push(d);
                 }
             }
         }
