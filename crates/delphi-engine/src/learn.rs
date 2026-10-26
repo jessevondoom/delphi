@@ -82,6 +82,62 @@ pub fn task_records(events: &[EventEnvelope]) -> Vec<TaskRecord> {
 
 // ── L1: the staging tier (`specs/031` §3.1, §3.2) ───────────────────────────────────────────────────────────────
 
+/// A staged note that has not been dropped, read back from a mission's log. Derived: delete nothing, rebuild any time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveNote {
+    pub mission: String,
+    pub id: String,
+    pub trigger: String,
+    pub summary: String,
+    pub tier: String,
+    pub task_id: Option<String>,
+    pub role: Option<String>,
+    pub timestamp: String,
+    pub event_seqs: Vec<u64>,
+}
+
+impl LiveNote {
+    /// `<mission>/<id>`: what `delphi learn show` and `drop` take.
+    pub fn reference(&self) -> String {
+        format!("{}/{}", self.mission, self.id)
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "trigger": self.trigger, "summary": self.summary, "tier": self.tier,
+                           "task_id": self.task_id, "role": self.role, "at": self.timestamp, "event_seqs": self.event_seqs})
+    }
+}
+
+/// The notes of one mission that are still live, oldest first: every `learn.staged` minus every `learn.dropped`.
+pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
+    let mut notes: Vec<LiveNote> = Vec::new();
+    for e in events {
+        match e.kind.as_str() {
+            "learn.staged" => {
+                let Some(id) = e.payload["id"].as_str() else { continue };
+                notes.push(LiveNote {
+                    mission: mission.to_string(),
+                    id: id.to_string(),
+                    trigger: e.payload["trigger"].as_str().unwrap_or("").to_string(),
+                    summary: e.payload["summary"].as_str().unwrap_or("").to_string(),
+                    tier: e.payload["tier"].as_str().unwrap_or("L0").to_string(),
+                    task_id: e.task_id.clone(),
+                    role: e.agent.clone(),
+                    timestamp: e.timestamp.clone(),
+                    event_seqs: e.payload["event_seqs"].as_array().into_iter().flatten().filter_map(|v| v.as_u64()).collect(),
+                });
+            }
+            "learn.dropped" => {
+                if let Some(id) = e.payload["id"].as_str() {
+                    notes.retain(|n| n.id != id);
+                }
+            }
+            _ => {}
+        }
+    }
+    notes
+}
+
 /// The five capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5), by the name a note and
 /// `[learning] triggers` use.
 pub const TRIGGERS: [&str; 5] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision"];
@@ -441,7 +497,7 @@ mod tests {
     #[test]
     fn a_correction_needs_an_earlier_task_and_an_explicit_cue() {
         let first = at(1, Some("t1"), "task.created", json!({"prompt": "no, wait, do it for me"}));
-        assert!(stage(&[first.clone()]).is_empty(), "nothing before it to correct");
+        assert!(stage(std::slice::from_ref(&first)).is_empty(), "nothing before it to correct");
         let n = stage(&[first, at(9, Some("t2"), "task.created", json!({"prompt": "No, use the existing helper instead"}))]);
         assert_eq!(n.len(), 1);
         assert_eq!((n[0].trigger, n[0].tier), ("correction", Tier::L5));

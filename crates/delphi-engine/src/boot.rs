@@ -104,6 +104,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     }
     s.harness_claude = crate::harness_opts::parse(root, crate::harness::Cli::Claude).0;
     s.harness_agy = crate::harness_opts::parse(root, crate::harness::Cli::Agy).0;
+    s.learning = crate::learn::LearningSettings::parse(root).0;
     if let Some(v) = root.get("harness").and_then(|h| h.get("connector_settle_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.connector_settle = Duration::from_secs(v as u64);
     }
@@ -286,6 +287,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
     let (timers, timer_notice) = crate::timers::TimerStore::open(&ws_dir.join("local/timers.json"));
     notices.extend(timer_notice);
     notices.extend(crate::harness_opts::problems(&root));
+    notices.extend(crate::learn::LearningSettings::parse(&root).1);
     // A hook left out for being malformed is Delphi less strict than the operator meant: say so on attach.
     notices.extend(crate::hooks::parse(&root).1.into_iter().map(|p| format!("hooks: {}", p)));
     let pool = Arc::new(crate::pool::Pool::open(Some(ws_dir.join("local/pool-state.json")), cfg.get().routing.tuning.clone(), crate::pool::system_clock()));

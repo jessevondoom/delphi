@@ -75,6 +75,8 @@ pub struct Settings {
     /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
+    /// `[learning]`: what the daemon stages for the operator to review (`specs/031` §3.6).
+    pub learning: crate::learn::LearningSettings,
     /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
     pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
@@ -132,6 +134,7 @@ impl Default for Settings {
             harness_idle: Duration::from_secs(300),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
+            learning: Default::default(),
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
             council_seat_timeout: Duration::from_secs(600),
@@ -3121,6 +3124,21 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].outcome, crate::learn::Outcome::Done);
         assert!(recs[0].rules.contains(&("release".to_string(), "H-001".to_string())));
+    }
+
+    #[tokio::test]
+    async fn staged_notes_are_never_sent_to_a_model() {
+        // `specs/031` §5.1: capture writes to the log; nothing reads it back into a prompt, a snapshot or a handoff.
+        let canary = "STAGED-CANARY-77c1";
+        let f = setup(vec![Step::text("ok"), Step::text("ok"), Step::text("ok")], 5.0, |_| {});
+        f.m.append(EventEnvelope::new(&f.m.id, "learn.staged", json!({"id": "n1", "trigger": "denied_card", "summary": canary, "event_seqs": [1], "tier": "L5"}))).await.unwrap();
+        f.engine.run_task(&f.m, "architect", "Draft the spec").await.unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "plan it").await.unwrap();
+        let reqs = f.model.requests();
+        assert!(!reqs.is_empty());
+        assert!(reqs.iter().all(|r| !r.body.to_string().contains(canary)), "a staged note reached a model request");
+        let snapshot_events: Vec<String> = events_of(&f, "snapshot.loaded").iter().chain(events_of(&f, "snapshot.trim").iter()).map(|e| e.payload.to_string()).collect();
+        assert!(snapshot_events.iter().all(|p| !p.contains(canary)));
     }
 
     #[tokio::test]

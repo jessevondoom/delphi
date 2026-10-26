@@ -18,6 +18,7 @@ mod hooks_cmd;
 mod lint;
 mod missions;
 mod changelog;
+mod learn_cmd;
 mod toolreport;
 mod needs;
 mod xenia_cmd;
@@ -73,6 +74,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. Counts only; needs no terminal." },
+    Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
@@ -225,6 +227,7 @@ fn main() {
         Some("missions") => cmd_missions(&args),
         Some("changelog") => cmd_changelog(&args),
         Some("tools") => cmd_tools(&args),
+        Some("learn") => cmd_learn(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -809,6 +812,14 @@ fn cmd_changelog(args: &[String]) -> i32 {
 fn cmd_tools(args: &[String]) -> i32 {
     match resolve_ws("tools", args) {
         Ok((_home, ws)) => toolreport::cli(&ws.dir, &toolreport::Options { mission: flag(args, "--mission"), all: args.iter().any(|a| a == "--all"), json: args.iter().any(|a| a == "--json") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi learn list|show|drop`: the notes the daemon staged from what happened (see `learn_cmd.rs`).
+fn cmd_learn(args: &[String]) -> i32 {
+    match resolve_ws("learn", args) {
+        Ok((_home, ws)) => learn_cmd::cli(&ws.dir, args, &learn_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }
