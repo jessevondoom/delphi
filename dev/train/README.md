@@ -2,12 +2,21 @@
 
 Cases that test Delphi's own behavior, for the maintainers (`specs/031` §4). `delphi train validate` checks every case in
 `suites/`; `delphi train plan --budget-usd N` lists the cases a run would use and the most it could cost. Neither runs
-anything. Running the cases, baseline against candidate, is the next slice (L6b).
+anything. `delphi train run` runs them, baseline against an optional candidate overlay, and **spends money**.
 
 ```sh
 delphi train validate
 delphi train plan --suite orchestration --budget-usd 5
+# a template home is a copy of a home whose model access you ratified once; never your real home
+delphi train run --suite orchestration --budget-usd 5 --template-home ~/delphi-train-template --work-dir /tmp/train-1 --seeds 3
+# candidate: a directory of changed ratified files, laid out as the workspace's logical paths
+delphi train run --budget-usd 10 --template-home ~/delphi-train-template --work-dir /tmp/train-2 --overlay ./candidate --seeds 3
 ```
+
+An overlay directory holds protected files at their logical paths (`agents/builder/AGENT.md`, `context/heuristics.md`, ...).
+The runner writes them, with their hashes, into the temp copy of the home only. Each run lives under the work directory
+(`001-baseline-<case>-s1/` with its `home/`, `repo/`, `stdout.txt`); `rows.jsonl` has one row per run. The report says
+"no evidence" unless there are at least three seeds per arm and the arms separate completely.
 
 ## A case
 
@@ -25,5 +34,6 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 
 ## Status
 
-The two seed cases were written from the specs and have not been run on a live daemon. Treat their checks as hypotheses
+The two seed cases were written from the specs and have not been run on a live daemon (the runner itself is tested with a
+fake `delphi` script only). Treat their checks as hypotheses
 until a run confirms them. Keep holdout cases out of anything an author seat can read.

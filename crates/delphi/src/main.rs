@@ -3,6 +3,8 @@
 mod avatar;
 mod bundle_add;
 mod bundle_cmd;
+mod bundle_life;
+mod bundle_pack;
 mod check;
 mod chat;
 mod console;
@@ -19,6 +21,7 @@ mod lint;
 mod missions;
 mod changelog;
 mod learn_cmd;
+mod train_run;
 mod toolreport;
 mod needs;
 mod xenia_cmd;
@@ -63,12 +66,12 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "connectors", about: "the connectors that are configured, logged in and pinned", synopsis: "  delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "relay", about: "send approval cards to your email or Telegram", synopsis: "  delphi relay [check|totp-enroll|totp-check <code>] [--workspace <name>] [--home <dir>]", detail: "Takes your replies too. Run it in a terminal or a tmux pane." },
     Cmd { group: "Set up", name: "skills", about: "agentskills.io skills in and out", synopsis: "  delphi skills check <dir> | export <name> [--out <dir>] | import <dir> --agents <role,role>\n    [--description \"…\"] [--workspace <name>] [--home <dir>]", detail: "An import is a pending proposal until you /ratify it." },
-    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle add <dir> [--order N] [--yes] [--dry-run] [--no-vectors] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> [--workspace <name>] [--home <dir>]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. add checks the bundle again here, prints what it brings, copies it\ninto the cache and makes its knowledge searchable (`delphi kb search --bundle org/name`); no model is called to add. Vectors\nit ships are used only if they match this install's embedder and pass a local spot check (--no-vectors skips them); the\nrest are embedded in the background, and `list` shows how far along they are.\nExit codes: 0 pass · 1 failed · 2 usage." },
+    Cmd { group: "Set up", name: "bundle", about: "check an org bundle: knowledge, skills and behavior to share", synopsis: "  delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n  delphi bundle manifest <dir> [--claude]\n  delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n  delphi bundle package <dir> [-o <file.xbundle>]\n  delphi bundle add <dir or file.xbundle> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]\n  delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]", detail: "validate reads the directory and changes nothing. manifest writes .delphi-bundle/files.json (and with --claude\n.claude-plugin/plugin.json) and prints the bundle hash. sign (a terminal only) signs the manifest with this install's xenia key; package writes a reproducible .xbundle archive.\nadd takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its\nknowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from\nthe recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the\ncache. No model is called to add. Vectors it ships are used only if they match this install's embedder and pass a local spot check\n(--no-vectors skips them); the rest are embedded in the background, and `list` shows how far along they are.\nExit codes: 0 pass · 1 failed · 2 usage." },
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--staged]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|pulse|timeline|tools|archives|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
@@ -81,7 +84,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
-    Cmd { group: "Maintain", name: "train", about: "training mode: check and price the cases that test Delphi's own behavior", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
+    Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir>] [--case <id>] [--seeds <n>] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
     Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]", detail: "" },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
@@ -532,7 +535,7 @@ fn cmd_hooks(args: &[String]) -> i32 {
 
 /// `delphi bundle validate|manifest` read a directory; `add|list|remove` change one workspace (`bundle_cmd.rs`).
 fn cmd_bundle(args: &[String]) -> i32 {
-    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove")) {
+    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove" | "update" | "rollback" | "gc")) {
         let (home, ws) = match resolve_ws("bundle", args) {
             Ok(v) => v,
             Err(code) => return code,

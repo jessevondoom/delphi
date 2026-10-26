@@ -1,7 +1,7 @@
 //! Signing domains and strict Ed25519 verification (spec 012 §3, spec 011 §3.4 step 2, threat T20).
 //!
 //! **A signature is over a [`Domain`], never over free text.** A `Domain` can only be built by one of the
-//! three constructors below, each of which validates every field (a newline in `org` would shift the fields
+//! four constructors below, each of which validates every field (a newline in `org` would shift the fields
 //! of the signed string) and takes `org`, `store`, `kind`, `id` and `kid` from the *verifier's* own
 //! configuration and the file's path, never from the record. That is what makes a record copied to another
 //! store, renamed, or presented under another key fail verification, and it means no code path can ask the
@@ -62,6 +62,32 @@ impl Domain {
             return Err(Error::BadField("hash"));
         }
         Ok(Domain(format!("xenia-fresh/1\n{org}\n{store}\n{file_hash}")))
+    }
+
+    /// `xenia-bundle/1\n<org>\n<name>\n<version>\n<kid>\n<hash of files.json>\n<signed_at>` (specs/024 §2.1). The org, name
+    /// and version come from the verifier's reading of `bundle.toml`, so a signed bundle renamed, re-versioned, moved or
+    /// presented under another key fails. A bundle has no store, so unlike the record domain there is no `store` field.
+    pub fn bundle(org: &str, name: &str, version: &str, kid: &str, file_hash: &str, signed_at: &str) -> Result<Domain> {
+        if !is_slug(org, 32) {
+            return Err(Error::BadField("org"));
+        }
+        if !is_slug(name, 48) {
+            return Err(Error::BadField("name"));
+        }
+        // A semver version, spelled with the characters semver allows: nothing that could carry a newline.
+        if version.is_empty() || version.len() > 64 || !version.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+')) {
+            return Err(Error::BadField("version"));
+        }
+        if !did::is_valid(kid) {
+            return Err(Error::BadField("kid is not a did:key"));
+        }
+        if !hash::is_valid(file_hash) {
+            return Err(Error::BadField("hash"));
+        }
+        if !is_utc_timestamp(signed_at) {
+            return Err(Error::BadField("signed_at"));
+        }
+        Ok(Domain(format!("xenia-bundle/1\n{org}\n{name}\n{version}\n{kid}\n{file_hash}\n{signed_at}")))
     }
 }
 

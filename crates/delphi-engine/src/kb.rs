@@ -392,6 +392,8 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     }
     md_files(&ws.join("local/missions"), "missions", "missions", UNTRUSTED, &mut all);
     md_files(&ws.join("local/memory/agents"), "memory/agents", "memory", UNTRUSTED, &mut all);
+    // Staged notes (`learn::project_staged` writes them): each file names its own source_type from its tier.
+    md_files(&ws.join("local/staged"), "staged", "staged", UNTRUSTED, &mut all);
     bundle_files(ws, &mut all);
     // Later entries (team) override earlier ones (base) for the same logical path.
     let mut by_path: BTreeMap<String, SourceFile> = BTreeMap::new();
@@ -543,6 +545,7 @@ impl Kb {
     /// found by their modification time and size, not read), and vectors the release shipped are applied. No model
     /// is run; chunks that still lack a vector are embedded by `embed_pending`, which callers start in the background.
     pub fn refresh(&mut self, ws: &Path, now: &str) -> Result<IndexReport, KbError> {
+        crate::learn::project_staged(ws);
         let rep = self.sync_lexical(&sources(ws), now)?;
         if self.embedder.is_some() {
             self.apply_seed_vectors()?;
@@ -723,6 +726,9 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     }
     if opts.no_bundles {
         allowed.push_str(" AND d.zone != 'bundles'");
+    }
+    if !opts.include_staged {
+        allowed.push_str(" AND d.zone != 'staged'");
     }
     if let Some(b) = &opts.bundle {
         // `org` or `org/name`, plain ids only: anything else matches nothing, so it cannot widen the filter.
@@ -1036,6 +1042,9 @@ pub struct SearchOpts {
     pub bundle: Option<String>,
     /// Leave added bundles out of the results.
     pub no_bundles: bool,
+    /// Include zone `staged`: notes the daemon captured from what happened (`specs/031` §3.1). Off by default, so an
+    /// ordinary search never mixes unreviewed candidate lessons into its answer.
+    pub include_staged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1047,7 +1056,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false }
     }
 }
 
@@ -1335,6 +1344,7 @@ pub fn miss_counts(ws: &Path) -> (usize, usize) {
 /// `remove` do so that the words of a bundle are searchable at once (`specs/024` §4.2 step 6).
 pub fn sync_workspace(ws: &Path) -> Result<IndexReport, KbError> {
     let mut kb = Kb::open(&db_path(ws))?;
+    crate::learn::project_staged(ws);
     kb.sync_lexical(&sources(ws), &now())
 }
 
@@ -1717,7 +1727,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     }
                 }
                 let legs = if args.iter().any(|a| a == "--lexical") { Legs::LexicalOnly } else { Legs::Hybrid };
-                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), ..Default::default() };
+                let mut opts = SearchOpts { role, include_untrusted: args.iter().any(|a| a == "--untrusted"), legs, bundle, no_bundles: args.iter().any(|a| a == "--no-bundles"), include_staged: args.iter().any(|a| a == "--staged"), ..Default::default() };
                 if args.iter().any(|a| a == "--no-rerank") {
                     opts.rerank_weight = 0.0;
                 }
@@ -2498,6 +2508,54 @@ mod tests {
         assert_eq!(rep.removed, 1);
         assert!(kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().is_empty());
         assert!(delphi_core::bundles::cache_dir(home.path(), "acme", "plat", "blake3:aa").is_dir(), "the cache stays until gc");
+    }
+
+    /// A workspace dir with one mission log holding `events`.
+    fn staged_ws(events: Vec<delphi_core::event::EventEnvelope>) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let mut log = delphi_core::log::EventLog::open(&d.path().join("local/missions/m1"), delphi_core::log::LogOptions::default()).unwrap();
+        for e in events {
+            log.append(e).unwrap();
+        }
+        d
+    }
+
+    fn staged_event(id: &str, tier: &str, summary: &str) -> delphi_core::event::EventEnvelope {
+        let mut e = delphi_core::event::EventEnvelope::new("m1", "learn.staged", serde_json::json!({"id": id, "trigger": "denied_card", "summary": summary, "event_seqs": [1], "tier": tier}));
+        e.task_id = Some("t_0001".into());
+        e
+    }
+
+    #[test]
+    fn staged_notes_are_a_zone_that_only_an_explicit_search_sees_and_taint_still_applies() {
+        let d = staged_ws(vec![staged_event("n3", "L5", "never touch the quokka lockfile"), staged_event("n4", "L0", "quokka text from the web")]);
+        crate::learn::project_staged(d.path());
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&sources(d.path()), "t").unwrap();
+        let q = |o: SearchOpts| kb.search("quokka", &SearchOpts { legs: Legs::LexicalOnly, ..o }).unwrap().into_iter().map(|h| h.rel_path).collect::<Vec<_>>();
+        assert!(q(SearchOpts::default()).is_empty(), "an ordinary search never returns staged notes");
+        assert_eq!(q(SearchOpts { include_staged: true, ..Default::default() }), vec!["staged/m1/n3.md"], "the web-tainted note stays out of a trusted search");
+        let all = q(SearchOpts { include_staged: true, include_untrusted: true, ..Default::default() });
+        assert_eq!(all.len(), 2, "{:?}", all);
+        let doc = std::fs::read_to_string(d.path().join("local/staged/m1/n3.md")).unwrap();
+        assert!(doc.contains("denied_card") && doc.contains("tier L5") && doc.contains("not ratified"), "{}", doc);
+    }
+
+    #[test]
+    fn a_dropped_note_leaves_the_zone_at_the_next_projection() {
+        let d = staged_ws(vec![staged_event("n3", "L5", "never touch the quokka lockfile")]);
+        crate::learn::project_staged(d.path());
+        assert!(d.path().join("local/staged/m1/n3.md").is_file());
+        // Appending a drop changes the log after the projection stamp, so the mission is read again.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut log = delphi_core::log::EventLog::open(&d.path().join("local/missions/m1"), delphi_core::log::LogOptions::default()).unwrap();
+        log.append(delphi_core::event::EventEnvelope::new("m1", "learn.dropped", serde_json::json!({"id": "n3", "reason": "operator"}))).unwrap();
+        drop(log);
+        crate::learn::project_staged(d.path());
+        assert!(!d.path().join("local/staged/m1/n3.md").exists());
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&sources(d.path()), "t").unwrap();
+        assert!(kb.search("quokka", &SearchOpts { include_staged: true, include_untrusted: true, legs: Legs::LexicalOnly, ..Default::default() }).unwrap().is_empty());
     }
 
     #[test]

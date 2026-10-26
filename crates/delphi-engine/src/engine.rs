@@ -3126,7 +3126,7 @@ mod tests {
     #[tokio::test]
     async fn a_mission_is_told_once_of_each_bundle_with_stamps_and_again_when_it_changes_or_goes() {
         use crate::bundle_load::tests::{add_bundle, guidance_files, refs};
-        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c"), Step::text("d")], 5.0, |_| {});
+        let f = setup(vec![Step::text("a"), Step::text("b"), Step::text("c"), Step::text("c2"), Step::text("d")], 5.0, |_| {});
         let mut files = guidance_files("architect", "Cite decisions by number.");
         files.push(("knowledge/index.md".into(), "---\nid: i\n---\n# Index\n".into()));
         let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &refs(&files));
@@ -3147,6 +3147,17 @@ mod tests {
         f.engine.run_task(&f.m, "architect", "three").await.unwrap();
         let upd = events_of(&f, "bundle.updated");
         assert_eq!((upd.len(), upd[0].payload["from_hash"].as_str()), (1, Some(old.as_str())));
+        // a rollback leaves the version it replaced marked at the head of the history: `rolled_back`, never `updated`
+        lock.bundle[0].hash = old.clone();
+        let mut left = delphi_core::bundles::Past::of(&lock.bundle[0], "t");
+        left.hash = "blake3:00".into();
+        left.left_by = "rollback".into();
+        lock.bundle[0].history.insert(0, left);
+        delphi_core::bundles::write(&f.engine.ws.dir, &lock).unwrap();
+        f.engine.run_task(&f.m, "architect", "three and a half").await.unwrap();
+        let back = events_of(&f, "bundle.rolled_back");
+        assert_eq!((back.len(), back[0].payload["from_hash"].as_str(), back[0].payload["hash"].as_str()), (1, Some("blake3:00"), Some(old.as_str())));
+        assert_eq!(events_of(&f, "bundle.updated").len(), 1, "the rollback is not an update");
         lock.bundle[0].status = "removed".into();
         delphi_core::bundles::write(&f.engine.ws.dir, &lock).unwrap();
         f.engine.run_task(&f.m, "architect", "four").await.unwrap();

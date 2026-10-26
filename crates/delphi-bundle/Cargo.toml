@@ -11,6 +11,10 @@ publish = false
 # Everything here is already in the workspace's dependency tree. This crate must not depend on delphi-engine, so it can be
 # fuzzed alone like delphi-docs (specs/023 §14); the engine-bound checks arrive through the `Host` trait.
 delphi-core = { path = "../delphi-core" }
+# A leaf crate (crypto and serde only), so the signature step of `validate` needs no engine either.
+delphi-xenia = { path = "../delphi-xenia" }
+# The archive writer (`archive.rs`); already in the workspace through `delphi`. The reader is hand-written: it must see raw headers.
+tar = { version = "0.4", default-features = false }
 serde_json = "1.0"
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 toml = "1.1"

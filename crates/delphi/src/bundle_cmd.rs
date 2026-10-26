@@ -3,7 +3,7 @@
 //! Both read a directory and need no workspace and no model. `validate` changes nothing. The checks that live in the
 //! engine come to `delphi-bundle` through [`Real`], so that crate stays free of the engine.
 
-use crate::{bundle_add, frontmatter, seed, skills_cmd};
+use crate::{bundle_add, bundle_life, bundle_pack, frontmatter, home, seed, skills_cmd, xenia_cmd};
 use delphi_bundle::{Host, Options, RoleScope};
 use serde_yaml::{Mapping, Value};
 use std::path::{Path, PathBuf};
@@ -53,13 +53,13 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 /// Flags that take a value, so the word after one is not a positional argument.
-const VALUE_FLAGS: [&str; 5] = ["--against", "--order", "--workspace", "--home", "--skill-roles"];
+const VALUE_FLAGS: [&str; 7] = ["--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o"];
 
 fn positionals(args: &[String]) -> Vec<&String> {
-    args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
+    args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle add <dir> [--order N] [--skill-roles <skill>=<roles>] [--yes] [--dry-run] [--no-vectors]\n       delphi bundle list | remove <name>   (add, list and remove take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package]\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>]\n       delphi bundle add <dir or file.xbundle> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -83,8 +83,18 @@ pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 };
                 skill_roles.insert(skill.to_string(), roles.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect());
             }
-            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { skill_roles, order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes"), no_vectors: flag_set("--no-vectors"), embed_in_background: true }, &Real)
+            bundle_add::add(home, ws, Path::new(dir.as_str()), &bundle_add::AddOpts { skill_roles, order, dry_run: flag_set("--dry-run"), yes: flag_set("--yes"), replace_publisher: flag_set("--replace-publisher"), no_vectors: flag_set("--no-vectors"), embed_in_background: true }, &Real)
         }
+        (Some("update"), name) => bundle_life::update(home, ws, name.map(|s| s.as_str()), true, &Real),
+        (Some("rollback"), Some(name)) => {
+            let to = flag(args, "--to");
+            if to.as_deref().is_some_and(|t| bundle_life::hash_prefix(t).is_none()) {
+                eprintln!("delphi bundle: --to wants a bundle hash: at least 8 hex digits");
+                return 2;
+            }
+            bundle_life::rollback(home, ws, name, to.as_deref(), true, &Real)
+        }
+        (Some("gc"), _) => bundle_life::gc(home, ws),
         (Some("list"), _) => bundle_add::list(home, ws),
         (Some("remove"), Some(name)) => bundle_add::remove(ws, name),
         _ => {
@@ -111,6 +121,11 @@ pub fn run(args: &[String]) -> i32 {
     let claude = args.iter().any(|a| a == "--claude");
     match sub.as_str() {
         "validate" => validate(&dir, claude, args),
+        "sign" => {
+            let h = home::delphi_home(flag(args, "--home").as_deref());
+            bundle_pack::sign(&dir, &xenia_cmd::key_path(&h), flag(args, "--against").map(PathBuf::from), &Real, &bundle_pack::tty_confirm)
+        }
+        "package" => bundle_pack::package(&dir, flag(args, "-o").as_deref().map(Path::new), &Real),
         "manifest" => match delphi_bundle::write_manifest(&dir, claude, &Real) {
             Ok(hash) => {
                 println!("wrote .delphi-bundle/files.json{}\nbundle hash {}", if claude { " and .claude-plugin/plugin.json" } else { "" }, hash);
