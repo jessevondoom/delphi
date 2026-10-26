@@ -52,6 +52,11 @@ pub struct Settings {
     pub conversation_tokens: usize,
     /// `[session] summary`: whether a finished session gets a model-written summary in the central log (`specs/030` §4.3).
     pub session_summary: crate::summary::SummaryMode,
+    /// `[routing] checkpoint_model`: whether the weaker model writes two short summaries into a save-point (`specs/035` D-11). The part built
+    /// from the log is always written.
+    pub checkpoint_model: bool,
+    /// How long each of those summaries may take (`[routing] checkpoint_wait_sec`). Resilience over speed: the default is generous.
+    pub checkpoint_wait: Duration,
     /// Output budget per call, raised to leave room above the thinking budget.
     pub max_tokens: u64,
     pub max_dispatch_depth: u32,
@@ -123,6 +128,8 @@ impl Default for Settings {
             approval_park_max: Duration::ZERO,
             conversation_tokens: crate::session::DEFAULT_CONVERSATION_TOKENS,
             session_summary: crate::summary::SummaryMode::Off,
+            checkpoint_model: true,
+            checkpoint_wait: Duration::from_secs(120),
             max_tokens: 8192,
             max_dispatch_depth: 2,
             mission_budget_usd: 5.0,
@@ -923,18 +930,28 @@ impl Engine {
                     // consent to run sonnet instead of opus is not consent to run sonnet instead of a 1M-token model.
                     let pair = (from.clone(), to.clone());
                     let (confirmed, declined) = self.degraded_decisions(m, &sc.task_id, &pair);
+                    // Save first, silently, before anyone is asked (`specs/035` D-11): the point of checking down is that no work is lost.
+                    let saved = self.save_point(sc, Some(key), target, why, lost, history, turn_index).await;
+                    let saved_note = match &saved {
+                        Some(p) => format!("Your work is saved for resumption ({}). ", p),
+                        None => "A save-point could not be written. ".to_string(),
+                    };
                     // `[access] on_weaker` (`specs/035` D-4): `never` runs nothing weaker; `finish` lets a task that is already under way (this
                     // span has made a model turn) carry on without a card. A task the operator already declined stays declined.
                     use delphi_adapter::config::OnWeaker;
                     if cfg.access.on_weaker == OnWeaker::Never && !confirmed {
                         *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the operator's policy runs nothing weaker", from, why) });
-                        return Ok(Err(Escalate(format!("{}{}: {} is unavailable ({}) and [access] on_weaker = \"never\" does not allow running on the weaker {}", EXHAUSTED, note, from, why, to))));
+                        return Ok(Err(Escalate(format!("{}{}: {} is unavailable ({}) and [access] on_weaker = \"never\" does not allow running on the weaker {}; {}", EXHAUSTED, note, from, why, to, saved_note.trim()))));
                     }
-                    let by_policy = cfg.access.on_weaker == OnWeaker::Finish && turn_index > 1 && !confirmed && !declined;
+                    // Optimistic mode continues without a card, carefully (D-13): the save-point is written, the switch is logged, and the task's
+                    // writes ask (below). `finish` does the same for a task that is already under way.
+                    let optimistic = self.broker.mode() == crate::approval::Mode::Optimistic;
+                    let by_policy = (optimistic || (cfg.access.on_weaker == OnWeaker::Finish && turn_index > 1)) && !confirmed && !declined;
                     let mut ok = confirmed || by_policy;
                     if !confirmed && !declined && !by_policy {
-                        let summary = self.secrets.redact(&format!("{} is unavailable ({}). Run this task on {} instead? It has {}.", from, why, to, lost.join(" and ")));
-                        let detail = json!({"target": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "unavailable": self.secrets.redact(why), "lost": lost});
+                        let careful = if self.broker.mode() == crate::approval::Mode::Default { "" } else { " While it runs there, its edits will ask for your approval whatever the permission mode." };
+                        let summary = self.secrets.redact(&format!("{} is unavailable ({}). {}Run this task on {} instead? It has {}.{}", from, why, saved_note, to, lost.join(" and "), careful));
+                        let detail = json!({"target": {"endpoint_id": target.endpoint_id, "model_id": target.model_id}, "substitute": {"endpoint_id": key.endpoint_id, "model_id": key.model_id}, "unavailable": self.secrets.redact(why), "lost": lost, "saved": saved});
                         m.append(sc.ev("model.degraded_confirm", json!({"state": "asked", "detail": detail}))).await?;
                         let who = Asker { m: &sc.m, task_id: &sc.task_id, span_id: &sc.span_id, role: &sc.role };
                         let answer = self.ask_resolution(&who, ApprovalTier::Amber, "model", &format!("{}->{}", target.model_id, key.model_id), &summary, &detail, Some(self.settings.degrade_wait)).await?;
@@ -960,11 +977,18 @@ impl Engine {
                         *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("waiting for {} ({}); the weaker {} was declined", from, why, to) });
                         return Ok(Err(Escalate(format!("{}{}: the operator declined the weaker model {} (it has {}); {} is unavailable ({})", EXHAUSTED, note, to, lost.join(" and "), from, why))));
                     }
-                    let agreed = if by_policy { "to finish the task under way, as [access] on_weaker = \"finish\" allows" } else { "confirmed by the operator" };
+                    let agreed = if by_policy && optimistic { "continued automatically in optimistic mode, after the work was saved" } else if by_policy { "to finish the task under way, as [access] on_weaker = \"finish\" allows" } else { "confirmed by the operator" };
+                    // On a weaker model nothing is approved by the permission mode: each write asks.
+                    self.broker.mark_degraded(&sc.task_id);
                     (key.clone(), Some((target.clone(), format!("{}; {}, with {}", why, agreed, lost.join(" and ")))))
                 }
                 Route::NoModel { .. } if cfg.pool_entries().is_empty() => return Ok(Err(Escalate(NO_MODEL.to_string()))),
-                Route::NoModel { back_at, .. } => {
+                Route::NoModel { back_at, target, .. } => {
+                    // Nothing usable at all: the task waits. Its work is saved first all the same, from the log and the span's history, which
+                    // need no model (`specs/035` D-11).
+                    if let Some(target) = target {
+                        let _ = self.save_point(sc, None, target, &route.explain(now), &[], history, turn_index).await;
+                    }
                     *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: route.explain(now) });
                     return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now)))));
                 }
@@ -1104,6 +1128,55 @@ impl Engine {
     }
 
     /// What the operator already decided about this target being replaced by this substitute, for this task: `(confirmed, declined)`. The
+    /// Write the save-point for a task about to move to a weaker model (`specs/035` D-11) and return its path relative to the workspace.
+    /// Built from the log and the span's history without a model; the weaker model, `key`, adds two short summaries when it answers in
+    /// time and the task read nothing untrusted. Once per task and pair, also across a restart. `None` only if the file cannot be written.
+    #[allow(clippy::too_many_arguments)]
+    async fn save_point(&self, sc: &SpanCtx, key: Option<&delphi_adapter::config::PoolKey>, target: &delphi_adapter::config::PoolKey, why: &str, lost: &[String], history: &[Turn], turn_index: u32) -> Option<String> {
+        let m = &sc.m;
+        let events = m.replay().ok()?;
+        let (from, to) = (format!("{}/{}", target.endpoint_id, target.model_id), key.map(|k| format!("{}/{}", k.endpoint_id, k.model_id)).unwrap_or_default());
+        // One per task, pair and turn: asked again on the same turn it is the same moment; a later exhaustion is a new one.
+        if let Some(p) = events.iter().find(|e| e.kind == "checkpoint.saved" && e.task_id.as_deref() == Some(sc.task_id.as_str()) && e.payload["target"] == from && e.payload["substitute"] == to && e.payload["turn_index"] == turn_index).and_then(|e| e.payload["path"].as_str()) {
+            return Some(p.to_string());
+        }
+        let prompt = events.iter().find(|e| e.kind == "task.created" && e.task_id.as_deref() == Some(sc.task_id.as_str())).and_then(|e| e.payload["prompt"].as_str()).unwrap_or("").to_string();
+        let tainted = sc.span.ceiling() < delphi_core::provenance::Tier::L3;
+        let facts = crate::checkpoint::Facts {
+            mission_id: m.id.clone(),
+            task_id: sc.task_id.clone(),
+            role: sc.role.clone(),
+            prompt,
+            turn_index,
+            target: from.clone(),
+            substitute: to.clone(),
+            why: self.secrets.redact(why),
+            lost: lost.to_vec(),
+            tainted,
+            at: delphi_core::time::format_unix_millis((self.clock_unix)(), 0),
+        };
+        let (_, session) = crate::session::current(&events);
+        let mut parts = crate::checkpoint::ModelParts::default();
+        if let (Some(key), true) = (key, self.settings.checkpoint_model && !tainted) {
+            let wait = self.settings.checkpoint_wait;
+            let work = crate::checkpoint::work_contract(&facts.prompt, &crate::checkpoint::work_lines(history));
+            parts.work = tokio::time::timeout(wait, self.one_shot(key, &work, 500)).await.ok().flatten().map(|w| crate::summary::clean_to(&w.text, 900));
+            let record = crate::summary::record_of(session);
+            if !record.is_empty() {
+                parts.chat = tokio::time::timeout(wait, self.one_shot(key, &crate::summary::session_contract(&record), 400)).await.ok().flatten().map(|w| w.text);
+            }
+        }
+        let text = self.secrets.redact(&crate::checkpoint::note(&facts, history, &events, session, &parts));
+        let dir = m.dir.join("checkpoints");
+        std::fs::create_dir_all(&dir).ok()?;
+        let n = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) + 1;
+        let name = format!("{:03}-{}.md", n, sc.task_id);
+        std::fs::write(dir.join(&name), text).ok()?;
+        let rel = format!("local/missions/{}/checkpoints/{}", m.id, name);
+        let _ = m.append(sc.ev("checkpoint.saved", json!({"path": rel, "target": from, "substitute": to, "model_written": parts.work.is_some() || parts.chat.is_some(), "tainted": tainted, "turn_index": turn_index}))).await;
+        Some(rel)
+    }
+
     /// decisions live in the mission's log (`model.degraded_confirm`), so after a daemon restart in the same
     /// session (the same mission) a resumed task is not asked again. A new mission starts with no decisions.
     fn degraded_decisions(&self, m: &MissionState, task_id: &str, pair: &(String, String)) -> (bool, bool) {
@@ -2119,7 +2192,7 @@ mod tests {
         let text = crate::testkit::CONFIG
             .replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
             .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"direct\"] }")
-            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"gem\"]");
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"gem\"]\nfailover_prefers = \"capability\"");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
     }
 
@@ -2270,6 +2343,147 @@ mod tests {
         assert_eq!(f.model.requests().iter().map(|r| r.model_id.clone()).collect::<Vec<_>>(), vec!["opus-x"]);
     }
 
+    /// Opus is up on `direct` for the first turn and has nowhere else to go when it runs out: the next model down is Sonnet, same family.
+    fn opus_only_on_direct(f: &Fx) {
+        f.engine.pool.record_exhausted("backup", "opus-x", &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600), raw: String::new() });
+    }
+
+    fn checkpoint_text(f: &Fx, rel: &str) -> String {
+        std::fs::read_to_string(f.engine.ws.dir.join(rel)).unwrap_or_else(|e| panic!("{}: {}", rel, e))
+    }
+
+    // specs/035 D-9, D-11, D-12 (AC-9, AC-11): the next model down in the family writes the save-point first, silently; only then is the
+    // operator asked, and the card says where the work is saved.
+    #[tokio::test]
+    async fn the_weaker_model_saves_the_work_before_the_operator_is_asked_and_the_card_says_where() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("They are partway through reading lib.rs."), Step::text("The operator asked what lib.rs defines."), Step::text("It defines needle.")], 5.0, |s| s.checkpoint_model = true);
+        opus_only_on_direct(&f);
+        let task = spawn_task(&f, "architect", "What does @project/app/src/lib.rs define?");
+        let card = wait_for_card(&f).await;
+        // Saved first: the event is in the log before the card, and the weaker model (Sonnet, the same family) wrote the summaries.
+        let kinds: Vec<String> = f.m.replay().unwrap().into_iter().map(|e| e.kind).collect();
+        let (saved_at, asked_at) = (kinds.iter().position(|k| k == "checkpoint.saved").expect("saved"), kinds.iter().position(|k| k == "approval.requested").expect("asked"));
+        assert!(saved_at < asked_at, "saved before asked: {:?}", kinds);
+        let reqs = f.model.requests();
+        assert_eq!(reqs.iter().map(|r| r.model_id.as_str()).collect::<Vec<_>>(), vec!["opus-x", "opus-x", "sonnet-x", "sonnet-x"], "the two summaries were asked of the weaker model");
+        let rel = events_of(&f, "checkpoint.saved")[0].payload["path"].as_str().unwrap().to_string();
+        assert!(card.summary.contains(&format!("Your work is saved for resumption ({})", rel)) && card.summary.contains("direct/sonnet-x"), "{}", card.summary);
+        let note = checkpoint_text(&f, &rel);
+        for want in ["They are partway through reading lib.rs.", "The operator asked what lib.rs defines.", "tier workhorse instead of frontier", "read_file ×1", "What does @project/app/src/lib.rs define?", "written by direct/sonnet-x"] {
+            assert!(note.contains(want), "missing `{}`:\n{}", want, note);
+        }
+        // Accepting goes on from the same history on the weaker model.
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "It defines needle."));
+        assert_eq!(events_of(&f, "checkpoint.saved").len(), 1, "once per task and pair, however many turns follow");
+    }
+
+    // specs/035 AC-12: the save-point exists even if the weaker model cannot write a word.
+    #[tokio::test]
+    async fn the_save_point_exists_even_when_the_weaker_model_fails_to_write_its_summaries() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::Fail("boom"), Step::Fail("boom"), Step::text("Done.")], 5.0, |s| s.checkpoint_model = true);
+        opus_only_on_direct(&f);
+        let task = spawn_task(&f, "architect", "What does @project/app/src/lib.rs define?");
+        let card = wait_for_card(&f).await;
+        let rel = events_of(&f, "checkpoint.saved")[0].payload["path"].as_str().unwrap().to_string();
+        let note = checkpoint_text(&f, &rel);
+        assert!(note.contains("no model summary") && note.contains("read_file ×1") && note.contains("tier workhorse instead of frontier"), "{}", note);
+        assert_eq!(events_of(&f, "checkpoint.saved")[0].payload["model_written"], false);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "wait".into() }, "console-1").unwrap();
+        task.abort();
+    }
+
+    // specs/035 D-11: when nothing at all is usable the task parks, and its work is saved first (no model can write, so only the part from the log).
+    #[tokio::test]
+    async fn when_no_model_is_usable_the_task_parks_with_a_save_point_built_from_the_log() {
+        let f = setup(vec![Step::text("Never reached.")], 5.0, |s| {
+            s.checkpoint_model = true;
+            s.park_max = None;
+        });
+        let reset = f.now.load(std::sync::atomic::Ordering::SeqCst) + 3600;
+        for ep in ["direct", "backup"] {
+            for model in ["opus-x", "sonnet-x", "haiku-x"] {
+                f.engine.pool.record_exhausted(ep, model, &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+            }
+        }
+        let task = spawn_task(&f, "architect", "Plan the change");
+        wait_for_event(&f, "task.blocked").await;
+        let saved = events_of(&f, "checkpoint.saved");
+        assert_eq!(saved.len(), 1, "saved once, however often the parked task looks again");
+        assert_eq!(saved[0].payload["substitute"], "");
+        let note = checkpoint_text(&f, saved[0].payload["path"].as_str().unwrap());
+        assert!(note.contains("no other model is usable right now") && note.contains("Plan the change") && note.contains("no model was usable"), "{}", note);
+        assert!(f.model.requests().is_empty());
+        task.abort();
+    }
+
+    // specs/035 AC-12: a task that read untrusted content gets no model-written text in its save-point.
+    #[tokio::test]
+    async fn a_task_that_read_untrusted_content_gets_a_save_point_with_no_model_written_text() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::Exhaust, Step::text("MUST NOT BE ASKED"), Step::text("Done.")], 5.0, |s| s.checkpoint_model = true);
+        opus_only_on_direct(&f);
+        let task = spawn_task(&f, "architect", "Read the vendored file");
+        let card = wait_for_card(&f).await;
+        assert_eq!(f.model.requests().len(), 2, "no summary was asked of any model");
+        let rel = events_of(&f, "checkpoint.saved")[0].payload["path"].as_str().unwrap().to_string();
+        let note = checkpoint_text(&f, &rel);
+        assert!(note.contains("read untrusted content") && !note.contains("MUST NOT BE ASKED"), "{}", note);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    // specs/035 AC-13: `never` still saves; nothing weaker runs and nobody is asked.
+    #[tokio::test]
+    async fn with_on_weaker_never_the_work_is_still_saved_for_resumption() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("One."), Step::text("Two."), Step::text("Done on the primary.")], 5.0, |s| {
+            s.checkpoint_model = true;
+            s.park_max = None;
+        });
+        on_weaker(&f, "never");
+        opus_only_on_direct(&f);
+        let task = spawn_task(&f, "architect", "What does @project/app/src/lib.rs define?");
+        wait_for_event(&f, "task.blocked").await;
+        assert_eq!(events_of(&f, "checkpoint.saved").len(), 1, "saved although nothing weaker will run");
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"));
+        task.abort();
+    }
+
+    // specs/035 D-13 (AC-13): optimistic mode goes on without a card, after saving; the task's writes ask from then on, and say why it went on.
+    #[tokio::test]
+    async fn in_optimistic_mode_the_task_continues_after_saving_without_a_card_and_says_so() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Where it stood."), Step::text("The chat."), Step::text("Finished on the weaker model.")], 5.0, |s| s.checkpoint_model = true);
+        f.engine.broker.set_mode(crate::approval::Mode::Optimistic);
+        opus_only_on_direct(&f);
+        let out = f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Finished on the weaker model."));
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "model"), "no card in optimistic mode");
+        let kinds: Vec<String> = f.m.replay().unwrap().into_iter().map(|e| e.kind).collect();
+        let (saved, promoted) = (kinds.iter().position(|k| k == "checkpoint.saved").unwrap(), kinds.iter().position(|k| k == "model.promoted").unwrap());
+        assert!(saved < promoted, "saved before the weaker model took the work: {:?}", kinds);
+        let why = events_of(&f, "model.promoted")[0].payload["reason"].as_str().unwrap().to_string();
+        assert!(why.contains("optimistic mode") && why.contains("after the work was saved"), "{}", why);
+    }
+
+    // The same, caught while it runs: until the task ends the permission mode approves nothing for it.
+    #[tokio::test]
+    async fn while_a_task_runs_on_the_weaker_model_the_permission_mode_approves_nothing_for_it() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Where it stood."), Step::text("The chat."), Step::Hang], 5.0, |s| s.checkpoint_model = true);
+        f.engine.broker.set_mode(crate::approval::Mode::Optimistic);
+        opus_only_on_direct(&f);
+        let task = spawn_task(&f, "architect", "What does @project/app/src/lib.rs define?");
+        wait_for_event(&f, "checkpoint.saved").await;
+        for _ in 0..200 {
+            if f.engine.broker.is_degraded("t_0001") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(f.engine.broker.is_degraded("t_0001"), "marked once it moved to the weaker model");
+        assert!(!f.engine.broker.is_degraded("t_0002"));
+        task.abort();
+    }
+
     // specs/002 §4.1 test 6a, the other half: declining does not stop the task, it waits for the target.
     #[tokio::test]
     async fn declining_a_weaker_substitute_parks_the_task_until_the_target_returns() {
@@ -2411,7 +2625,7 @@ mod tests {
         let f = setup(vec![Step::Exhaust, Step::Throttle, Step::text("Served by the third.")], 5.0, |_| {});
         let text = crate::testkit::CONFIG
             .replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
-            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]\nfailover_prefers = \"capability\"");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
         let out = f.engine.run_task(&f.m, "architect", "Plan").await.unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Served by the third."), "{}", out.text);

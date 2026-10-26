@@ -321,6 +321,18 @@ pub struct Access {
     /// What to do when only a weaker or reduced model is left (`specs/035` D-4).
     #[serde(default)]
     pub on_weaker: OnWeaker,
+    /// The order of stand-ins (`specs/035` D-9): `family` stays in the model's lineage and goes down a step at a time before it
+    /// looks elsewhere; `capability` takes an equal-tier model of any lineage before a lesser one in the family.
+    #[serde(default)]
+    pub failover_prefers: FailoverPrefers,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FailoverPrefers {
+    #[default]
+    Family,
+    Capability,
 }
 
 /// `[access] on_weaker`: `ask` puts a card to the operator; `finish` lets a task already under way carry on without one;
@@ -359,6 +371,10 @@ pub struct CatalogEntry {
     /// when the endpoint is `cost_model = "local"`.
     #[serde(default)]
     pub reduced: Option<bool>,
+    /// The lineage the model belongs to when that is not its endpoint's family: a Claude model served from Gemini's own pool is
+    /// `lineage = "claude"` (`specs/035` D-10). Unset: the endpoint's family.
+    #[serde(default)]
+    pub lineage: Option<String>,
 }
 
 fn yes() -> bool {
@@ -875,6 +891,11 @@ impl Config {
             return usize::MAX;
         }
         self.access.failover.len() + self.endpoints.iter().position(|e| e.family == family).unwrap_or(usize::MAX / 2 - 1)
+    }
+
+    /// The lineage of a pool pair: the catalog's `lineage`, else the endpoint's family (`specs/035` D-10).
+    pub fn lineage_of(&self, key: &PoolKey) -> String {
+        self.catalog_entry(&key.model_id).and_then(|c| c.lineage.clone()).unwrap_or_else(|| key.family.clone())
     }
 
     /// Is this model reduced (`specs/035` D-3): marked so in the catalog, or served by a local endpoint?

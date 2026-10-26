@@ -41,6 +41,11 @@ test('nothing is shown when every model is up, and a hostile reason cannot widen
   for (const l of failover(model(st), 60)) assert.ok(plain(l).length <= 62, String(plain(l).length));
 });
 
+test('a save-point is announced in the chat, so an operator who is not asked still knows where the work is', () => {
+  const s = fold(initial(0), { method: 'event', params: { type: 'checkpoint.saved', payload: { path: 'local/missions/m/checkpoints/001-t_0003.md\x1b[2J' } } }, 1);
+  assert.equal(s.blocks[0]!.text, 'the work so far is saved for resumption: local/missions/m/checkpoints/001-t_0003.md');
+});
+
 test('a task that moves to another model is said once in the chat', () => {
   const s = fold(initial(0), { method: 'event', params: { type: 'model.promoted', payload: { from: { endpoint_id: 'direct', model_id: 'opus-x' }, to: { endpoint_id: 'ollama', model_id: 'gemma4' }, reason: 'x' } } }, 1);
   assert.equal(s.blocks.length, 1);

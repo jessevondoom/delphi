@@ -2300,8 +2300,20 @@ fn live_claude_runs_out_and_the_task_finishes_on_a_local_model_after_the_operato
     c.type_keys("Name two programming languages at random, in one short sentence.");
     std::thread::sleep(Duration::from_millis(150));
     c.type_keys("\r");
-    c.wait_for("approval needed");
-    c.expect_visible("reduced local model");
+    // The weaker model writes the save-point first, silently (two short summaries from the real local model), and only then is the
+    // operator asked: that takes minutes, not seconds.
+    let card_deadline = Instant::now() + Duration::from_secs(900);
+    while !c.visible().contains("approval needed") {
+        assert!(!c.visible().contains("Stopped:"), "the task stopped before asking:\n{}", c.visible());
+        assert!(Instant::now() < card_deadline, "no card in 900 s:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    c.expect_visible("saved for resumption");
+    c.expect_visible("less sure with tools");
+    let checkpoints = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path().join("checkpoints");
+    let note = std::fs::read_dir(&checkpoints).expect("a save-point exists before the answer").filter_map(|f| f.ok()).map(|f| std::fs::read_to_string(f.path()).unwrap()).next().expect("one save-point");
+    println!("=== THE SAVE-POINT, written by the local model before the card ===\n{}", note);
+    assert!(note.contains("Save-point for") && note.contains("billing error") && note.contains("ollama/"), "{}", note);
     println!("=== THE CARD: Claude is out; the stand-in is local and reduced, so the operator is asked ===\n{}", c.visible());
     assert!(c.visible().contains("ollama/gemma4") || c.visible().contains("ollama/"), "the stand-in is the local model, not a lesser model on the account that is out:\n{}", c.visible());
     assert!(!c.visible().contains("mock/sonnet-t") && !c.visible().contains("mock/haiku-t"), "{}", c.visible());

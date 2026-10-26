@@ -1115,7 +1115,14 @@ mod tests {
         svc.begin_session(&f.m, "new").await.unwrap();
         let summary = summary_of(&f, "s_0000").await.expect("the summary reached the central log");
         assert_eq!(summary, "They chose Postgres for the claim loop. Next: write the retry ladder.");
-        assert!(events_of(&f, "session.summarized").len() == 1);
+        // The line reaches the log just before the event is appended; wait for both.
+        for _ in 0..100 {
+            if !events_of(&f, "session.summarized").is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(events_of(&f, "session.summarized").len(), 1);
         let asked = f.model.requests()[2].body.to_string();
         assert!(asked.contains("RECORD") && asked.contains("list two queue options") && asked.contains("Option one is Redis"), "the summariser is shown the record: {}", asked);
         assert_eq!(f.model.requests()[2].model_id, "haiku-x", "the cheapest tier of the primary family");
