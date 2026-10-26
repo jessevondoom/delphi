@@ -46,7 +46,19 @@ pub fn validate(kind: Kind, id: &str, bytes: &[u8]) -> Result<Validated, Reject>
     validate_signed_by(&who, kind, id, bytes)
 }
 
+/// Like [`validate`], after setting the text's `content_hash` to the real one, so that a test which edits a
+/// field is judged on that edit and not on the hash it left stale (the hash check has its own tests, which use
+/// [`validate_raw`]).
 pub fn validate_signed_by(who: &Identity, kind: Kind, id: &str, bytes: &[u8]) -> Result<Validated, Reject> {
+    let sealed = match std::str::from_utf8(bytes) {
+        Ok(t) if t.contains("  content_hash: \"") && delphi_xenia::redaction::content_hash(bytes).is_some() => seal(t.to_string()).into_bytes(),
+        _ => bytes.to_vec(),
+    };
+    validate_raw(who, kind, id, &sealed)
+}
+
+/// The pipeline on exactly these bytes.
+pub fn validate_raw(who: &Identity, kind: Kind, id: &str, bytes: &[u8]) -> Result<Validated, Reject> {
     validate_record(pinned(), &path(kind, id), bytes, &sidecar_for(who, kind, id, bytes), &|_| Ok(()))
 }
 
@@ -54,8 +66,18 @@ pub fn memory_text() -> String {
     memory_with_author(&author().did())
 }
 
+/// Set the `redaction.content_hash` line to the real recipe hash of the text's own body and pointers, as the
+/// publish gate does; fixtures are written with a placeholder and sealed here.
+pub fn seal(text: String) -> String {
+    let real = delphi_xenia::redaction::content_hash(text.as_bytes()).expect("fixture has frontmatter");
+    let key = "  content_hash: \"";
+    let from = text.find(key).expect("fixture has a content_hash") + key.len();
+    let len = text[from..].find('"').unwrap();
+    format!("{}{}{}", &text[..from], real, &text[from + len..])
+}
+
 pub fn memory_with_author(did: &str) -> String {
-    format!(
+    seal(format!(
         "---
 xenia: 1
 id: {ID}
@@ -107,11 +129,11 @@ verified_by: test
 Handlers must dedupe on the event id.
 ",
         hash::of(b"scanned")
-    )
+    ))
 }
 
 pub fn endorsement_text() -> String {
-    format!(
+    seal(format!(
         "---
 xenia: 1
 id: {OTHER_ID}
@@ -148,11 +170,11 @@ checked: [target-open, summary-matches]
         author().did(),
         hash::of(b"scanned"),
         hash::of(b"the target bytes")
-    )
+    ))
 }
 
 pub fn tombstone_text() -> String {
-    format!(
+    seal(format!(
         "---
 xenia: 1
 id: {OTHER_ID}
@@ -187,7 +209,7 @@ note: Written against API version 2019.
 ",
         author().did(),
         hash::of(b"scanned")
-    )
+    ))
 }
 
 /// Replace exactly one occurrence, panicking if the fixture drifted, so a mutation can never silently no-op.
