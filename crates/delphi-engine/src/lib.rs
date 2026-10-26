@@ -46,6 +46,7 @@ pub mod learn;
 pub mod embed;
 pub mod kb;
 pub mod kbserve;
+pub mod xenia_read;
 pub mod vecext;
 pub mod mission;
 pub mod models_cli;

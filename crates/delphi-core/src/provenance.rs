@@ -88,6 +88,9 @@ pub enum Zone {
     Worktree,
     /// An added org bundle (`@bundle/<org>/<name>/…`): federated content the operator chose to add (`specs/024` §3).
     Bundle,
+    /// A Xenia record in the knowledge-base zone (`specs/011` §5, milestone X6). Its tier is computed by the daemon on
+    /// every sync and stamped per content hash; with no stamp it is the lowest tier, never a default of the zone.
+    Xenia,
 }
 
 impl Zone {
@@ -99,6 +102,7 @@ impl Zone {
             Zone::Project => "project",
             Zone::Worktree => "worktree",
             Zone::Bundle => "bundle",
+            Zone::Xenia => "xenia",
         }
     }
 }
@@ -134,6 +138,8 @@ pub fn origin_default(zone: Zone, path: &str, rules: &OriginRules, clean_at_base
         }
         // The operator's add lifts a bundle to the tier `team/` content has; never higher without a per-file act.
         Zone::Team | Zone::Bundle => Tier::L2,
+        // No stamp for this exact content: the record was not computed here, so it is not trusted.
+        Zone::Xenia => Tier::L0,
         Zone::Local | Zone::Worktree => Tier::L3,
     }
 }
