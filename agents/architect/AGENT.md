@@ -6,7 +6,7 @@ cognitive_profile: deep-reasoning
 default_access_scope:
   read: ["*"]
   write: ["specs/**", "missions/**/specs/**", "missions/**/research/**"]  # v1 also covers discovery (D-07, specs/003 §2)
-  execute: ["mermaid-validator", "schema-validator"]
+  execute: ["mermaid-validator", "schema-validator", "org-context"]
 authorized_skills:
   - repo-cartography
   - ast-code-search

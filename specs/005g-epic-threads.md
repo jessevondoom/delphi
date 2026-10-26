@@ -92,7 +92,7 @@ In that frame the retry queue is the busiest thing on screen but is *not* what t
 - No new key is bound; `delphi observe --once` prints the overview.
 
 ## 6. The forge view is removed (done)
-`forge` is gone from the views (five remain: council, epic, agents, archives, thinking), the footer dots, `delphi observe` and `/observe`, the live-diff polling, and `--once`. `forge` and `diffs` still parse, as aliases of `epic`, so an old habit or script lands somewhere sensible. The daemon's `observe.diff` RPC is left in place and unused; deleting it is a later cleanup.
+`forge` is gone from the views (five remain: council, epic, agents, archives, and `changes` in place of `thinking`, per `specs/032`), the footer dots, `delphi observe` and `/observe`, the live-diff polling, and `--once`. `forge` and `diffs` still parse, as aliases of `epic`, so an old habit or script lands somewhere sensible. The daemon's `observe.diff` RPC is left in place and unused; deleting it is a later cleanup.
 
 ## 7. Decisions (operator, 2026-10-25)
 - **The live diff is dropped.** Not shown anywhere in the window.

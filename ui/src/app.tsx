@@ -8,6 +8,7 @@ import * as C from './composer.ts';
 import { lookup } from './commands.ts';
 import { completions, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
+import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
@@ -34,7 +35,7 @@ const listTeamDir = (info: Info): ListDir => (rel) => {
 };
 
 export function exportMarkdown(s: State, info: Info, mission: string): string {
-  const out = [`---\nid: export-${mission}\ntitle: "Conversation export"\nauthor: operator\ntimestamp: ${new Date().toISOString()}\nsource_type: internal_generated\nconfidence: medium\nstatus: active\nsource_mission: ${mission}\ntags: [export]\n---\n`];
+  const out = [exportHead(mission)];
   for (const b of s.blocks) {
     if (b.kind === 'user') out.push(`**You** · ${new Date(b.at).toISOString()}\n\n${b.text}\n`);
     else if (b.kind === 'reply') out.push(`**${info.roles[b.role ?? '']?.name ?? b.role}** (${b.role}) · ${new Date(b.at).toISOString()}\n\n${b.text}\n`);
@@ -191,14 +192,28 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         .catch((e) => note('could not start a new session: ' + (e?.message ?? JSON.stringify(e)), 'error'));
       return;
     }
+    if (name === '/context') {
+      cmd.call('session.context', { mission_id: mission })
+        .then((r: any) => note(contextReport(r, line.slice(name.length).trim() === 'full')))
+        .catch((e) => note('could not read the context: ' + (e?.message ?? JSON.stringify(e)), 'error'));
+      return;
+    }
     if (name === '/export') {
-      try {
-        const dir = join(info.workspace, 'local/missions', mission, 'exports');
-        mkdirSync(dir, { recursive: true });
-        const file = join(dir, `conversation-${Date.now()}.md`);
-        writeFileSync(file, exportMarkdown(stateRef.current, info, mission));
-        note(`exported to ${file.replace(info.workspace + '/', '')}`, 'ok');
-      } catch (e: any) { note('could not export: ' + e.message, 'error'); }
+      // The screen is the current session; `/export all` is the whole mission, a section per session, from the daemon's log.
+      const all = line.slice(name.length).trim() === 'all';
+      const write = (text: string, stem: string) => {
+        try {
+          const dir = join(info.workspace, 'local/missions', mission, 'exports');
+          mkdirSync(dir, { recursive: true });
+          const file = join(dir, `${stem}-${Date.now()}.md`);
+          writeFileSync(file, text);
+          note(`exported to ${file.replace(info.workspace + '/', '')}`, 'ok');
+        } catch (e: any) { note('could not export: ' + e.message, 'error'); }
+      };
+      if (!all) { write(exportMarkdown(stateRef.current, info, mission), 'conversation'); return; }
+      cmd.call('observe.snapshot', { mission_id: mission })
+        .then((r: any) => write(exportAll(r?.events ?? [], info, mission), 'mission'))
+        .catch((e) => note('could not export: ' + (e?.message ?? JSON.stringify(e)), 'error'));
       return;
     }
     if (name === '/search') { const q = line.slice(name.length).trim(); openPanel(P.openSearch(q)); if (q) doSearch(q); return; }

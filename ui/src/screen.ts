@@ -71,7 +71,8 @@ const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('a
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
   const pending = Object.keys(m.state.approvals).length;
-  const left = [T.dim(`${k} tokens`), modeLabel(m.mode), m.noModel ? T.dim('no model') : '', pending ? T.dim(`${pending} waiting`) : ''].filter(Boolean).join(T.dim(SEP));
+  const asks = m.state.blocks.filter((b) => b.kind === 'user').length;
+  const left = [T.dim(`${k} tokens`), modeLabel(m.mode), m.state.session ? T.dim(`session ${m.state.session} · ${asks} ask${asks === 1 ? '' : 's'}`) : '', m.noModel ? T.dim('no model') : '', pending ? T.dim(`${pending} waiting`) : ''].filter(Boolean).join(T.dim(SEP));
   return T.spread(left, nav(m.deck, w), w);
 }
 

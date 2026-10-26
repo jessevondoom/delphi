@@ -147,6 +147,83 @@ test('drawing: every state fits the window, shows what it should, and has no box
   assert.match(text(states[4]![1]), /3 links · tab to focus/);
 });
 
+test('matches are marked in bold, with stems, and nothing else changes in the text', async () => {
+  const chalk = (await import('chalk')).default, T = await import('../src/theme.ts');
+  const saved = T.currentCapabilities(), level = chalk.level;
+  T.useCapabilities({ color: 'truecolor', attributes: true });
+  try {
+    const out = A.emphasize('The council escalates a deadlock to the operator', 'how does the council escalate a deadlock');
+    assert.equal(plain(out), 'The council escalates a deadlock to the operator');
+    const bold = [...out.matchAll(/\x1b\[1m([^\x1b]+)\x1b\[22m/g)].map((m) => m[1]);
+    assert.deepEqual(bold, ['council', 'escalates', 'deadlock']);
+    assert.equal(A.emphasize('nothing to mark here', ''), 'nothing to mark here');
+    assert.equal(plain(A.emphasize('a.b (c) [d]', 'a.b (c) [d]')), 'a.b (c) [d]', 'a query with regex characters is safe');
+    assert.deepEqual(A.terms('How does the retry-ladder escalate?'), ['retry-ladder', 'escalate']);
+  } finally { T.useCapabilities(saved); chalk.level = level; }
+});
+
+test('a result says when its provenance is not the usual', () => {
+  assert.equal(A.caveat({ trust: 'internal_generated', status: 'active' }), '');
+  assert.equal(A.caveat({ trust: 'external_untrusted', status: 'active' }), 'untrusted');
+  assert.equal(A.caveat({ trust: 'federated_peer', status: 'superseded' }), 'untrusted · inactive');
+  const a = A.gotHits(type(shelf(), 'zebra'), 'zebra', { results: [{ path: 'specs/web.md', collection: 'specs', trust: 'external_untrusted', status: 'active', heading: '', preview: 'zebra from the web' }], took_ms: 10, mode: 'lexical' });
+  assert.match(A.view(a, 100, 27, { dark: true }).map(plain).join('\n'), /specs · untrusted/);
+});
+
+test('tab cycles the collection searched, and a search in progress is run again in it', () => {
+  let a = type(shelf(), 'retry');
+  assert.equal(a.scope, null);
+  const first = A.key(a, k('tab'), W, H);
+  assert.equal(first.a.scope, 'specs');
+  assert.equal(first.action.t, 'none', 'nothing searched yet, so nothing to rerun');
+  assert.equal(A.key(first.a, k('tab'), W, H).a.scope, 'context');
+  assert.equal(A.key(A.key(first.a, k('tab'), W, H).a, k('tab'), W, H).a.scope, null, 'back to all');
+  assert.equal(A.key(a, k('shift-tab'), W, H).a.scope, 'context', 'the other way round');
+  const searched = A.gotHits(first.a, 'retry', { results: [{ path: 'specs/a.md', collection: 'specs', trust: 'x', heading: '', preview: '' }] });
+  const again = A.key(searched, k('tab'), W, H);
+  assert.deepEqual([again.a.scope, again.action], ['context', { t: 'search', q: 'retry' }]);
+  assert.match(A.view({ ...first.a, q: '' }, 100, 27, { dark: true }).map(plain).join('\n'), /in: specs/);
+});
+
+test('ctrl+t switches between every document and trusted ones only, and asks for a reload', () => {
+  const a = shelf();
+  const t = A.key(a, { t: 'ctrl', c: 't' }, W, H);
+  assert.deepEqual([t.a.trustedOnly, t.action, A.trustParam(t.a)], [true, { t: 'reload' }, '&trusted_only=1']);
+  const back = A.key(t.a, { t: 'ctrl', c: 't' }, W, H);
+  assert.deepEqual([back.a.trustedOnly, A.trustParam(back.a)], [false, '']);
+  assert.match(A.view(t.a, 100, 27, { dark: true }).map(plain).join('\n'), /trusted only/);
+});
+
+test('up and down in the box recall earlier queries, newest first, and back to an empty box', () => {
+  let a = A.emptyArch();
+  for (const q of ['alpha', 'beta', 'beta', 'gamma']) { a = type({ ...a, q: '' }, q); a = A.key(a, k('enter'), W, H).a; }
+  assert.deepEqual(a.history, ['alpha', 'beta', 'gamma'], 'a repeat is not recorded twice');
+  a = { ...a, q: '', hits: [], searched: null, focus: 'box' };
+  a = A.key(a, k('up'), W, H).a;
+  assert.equal(a.q, 'gamma');
+  a = A.key(a, k('up'), W, H).a;
+  assert.equal(a.q, 'beta');
+  a = A.key(A.key(a, k('up'), W, H).a, k('up'), W, H).a;
+  assert.equal(a.q, 'alpha', 'stops at the oldest');
+  a = A.key(a, k('down'), W, H).a;
+  assert.equal(a.q, 'beta');
+  a = A.key(A.key(a, k('down'), W, H).a, k('down'), W, H).a;
+  assert.deepEqual([a.q, a.hist], ['', null], 'past the newest is the empty box');
+  const typed = type({ ...A.emptyArch(), history: ['old'] }, 'new');
+  assert.equal(A.key(typed, k('up'), W, H).a.q, 'new', 'up does not replace what is being typed');
+  assert.equal(A.key({ ...A.emptyArch(), history: ['old'], hist: 0, q: 'old' }, { t: 'text', s: 'x' }, W, H).a.hist, null, 'typing ends recall');
+});
+
+test('a search asks for thirty results and says so when it gets them', () => {
+  const many = Array.from({ length: A.RESULTS }, (_, i) => ({ path: `specs/${i}.md`, collection: 'specs', trust: 'x', heading: '', preview: 'p' }));
+  const a = A.gotHits(type(shelf(), 'x'), 'x', { results: many, took_ms: 5, mode: 'hybrid' });
+  assert.equal(a.hits.length, 30);
+  assert.match(A.view(a, 100, 27, { dark: true }).map(plain).join('\n'), /top 30 results/);
+  const down = Array.from({ length: 29 }, () => k('down')).reduce((acc, e) => A.key(acc, e, W, H).a, a);
+  assert.equal(down.sel, 29);
+  assert.match(A.view(down, 100, 27, { dark: true }).map(plain).join('\n'), /specs\/29\.md/, 'the list scrolls to the last result');
+});
+
 test('the search box is a closed rectangle, empty or full, wherever the cursor is', () => {
   for (const q of ['', 'a', 'a rather long query '.repeat(8)]) for (const focus of ['box', 'list'] as const) {
     const rows = A.view({ ...A.emptyArch(), q, focus }, 100, 27, { dark: true }).map(plain).filter((l) => /[╭╮╰╯│]/.test(l));

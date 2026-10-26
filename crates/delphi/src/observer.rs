@@ -14,29 +14,35 @@ use ratatui::{
 /// The narrator's views, in order (`specs/005e` §9.2). There is no spend view: the narrator shows no money.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
+    Dashboard,
     Council,
     Epic,
     Agents,
     Archives,
+    Changes,
 }
 
 impl View {
     /// The name `delphi-ui --observe` and `delphi observe` take.
     pub fn name(self) -> &'static str {
         match self {
+            View::Dashboard => "dashboard",
             View::Council => "council",
             View::Epic => "epic",
             View::Agents => "agents",
             View::Archives => "archives",
+            View::Changes => "changes",
         }
     }
 
     pub fn parse(s: &str) -> Option<View> {
         match s.to_lowercase().as_str() {
+            "dashboard" | "now" | "ops" | "monitor" => Some(View::Dashboard),
             "council" | "chamber" => Some(View::Council),
             "epic" | "forge" | "diffs" => Some(View::Epic), // the forge view folded into the epic pane (`005g`)
             "agents" | "roster" => Some(View::Agents),
             "archives" | "kb" => Some(View::Archives),
+            "changes" | "changelog" | "log" | "thinking" | "reasoning" => Some(View::Changes), // the reasoning pane was dropped for the change log
             _ => None,
         }
     }

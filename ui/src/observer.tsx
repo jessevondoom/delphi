@@ -26,7 +26,6 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   const [scroll, setScroll] = useState(0);
   const [selNode, setSelNode] = useState(0);
   const [live, setLive] = useState<Record<string, string>>({});
-  const [think, setThink] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(true);
   const still = useMemo(() => stillMotion(), []);
   const [now, setNow] = useState(Date.now());
@@ -57,17 +56,19 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   // The knowledge window reads through `kb.get`, the read-only knowledge API on the narrator socket (spec 028 §6a).
   const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
   const enc = encodeURIComponent;
-  const loadShelf = () => Promise.all([kb('/v1/collections'), kb('/v1/documents?limit=6'), kb('/v1/health')])
+  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(R.current.arch).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(R.current.arch)}`), kb('/v1/health')])
     .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
     .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
   useEffect(() => { if (view === 'archives' && !R.current.arch.shelf) void loadShelf(); }, [view, connected]);
   const run = (act: A.Action) => {
     const fail = (msg: string) => setArch((a) => A.withNote(a, msg));
-    if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
-    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    const a0 = R.current.arch, tp = A.trustParam(a0);
+    if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) run({ t: 'search', q: a0.q.trim() }); else if (a0.browse) run({ t: 'browse', name: a0.browse }); }
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
     else if (act.t === 'open') {
       const t = act.target;
-      kb(`/v1/doc?path=${enc(t.path)}`).then((r) => setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')))).catch(() => fail('could not open it'));
+      kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')))).catch(() => fail('could not open it'));
     } else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
@@ -89,14 +90,9 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
           for (const [id, v] of Object.entries<any>(spans)) if (v?.text) next[id] = ((next[id] ?? '') + v.text).slice(-6000);
           return next;
         });
-        setThink((cur) => {
-          const next = { ...cur };
-          for (const [id, v] of Object.entries<any>(spans)) if (v?.thinking) next[id] = ((next[id] ?? '') + v.thinking).slice(-4000);
-          return next;
-        });
       } else if (n.method === 'event') {
         timer ??= setTimeout(() => { timer = null; void load(); }, 300);
-        if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) { setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; }); setThink((cur) => { const { [n.params.payload.node_id]: _y, ...rest } = cur; return rest; }); }
+        if (n.params?.type === 'dag.node.state' && ['done', 'failed', 'escalated'].includes(n.params?.payload?.state)) { setLive((cur) => { const { [n.params.payload.node_id]: _x, ...rest } = cur; return rest; }); }
       } else if (n.method === 'resync_required') void load();
     };
     ev.on('notification', onNote);
@@ -133,7 +129,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, connected, think, now, still };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, live, connected, now, still };
   const lines = observeFrame(model, size.w, size.h);
   const shown = useSelection(term, lines);
   return (

@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 34] = [
+pub const KINDS: [&str; 35] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -151,6 +151,20 @@ pub struct SessionRow {
 
 const MAX_SESSIONS: usize = 20;
 
+/// One line of the change log (`change.recorded`): what an agent says it finished, in its own plain words, with the
+/// session it happened in and when. Results only; nothing of the reasoning behind them is ever recorded.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Change {
+    pub session: String,
+    pub at_ms: u64,
+    pub role: String,
+    pub task: String,
+    pub summary: String,
+    pub files: Vec<String>,
+}
+
+const MAX_CHANGES: usize = 200;
+
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Seat {
     pub role: String,
@@ -230,6 +244,8 @@ pub struct ObserverState {
     pub councils: Vec<Council>,
     pub builds: Vec<Build>,
     pub threads: Vec<Thread>,
+    /// The change log, oldest first (the newest 200).
+    pub changes: Vec<Change>,
     /// The console sessions of the mission, oldest first (the newest 20); the last is the current one.
     pub sessions: Vec<SessionRow>,
     pub pending_approvals: BTreeMap<String, String>,
@@ -352,6 +368,18 @@ impl ObserverState {
                         self.sessions.remove(0);
                     }
                     self.say(format!("session {} began ({})", id, clip(&p["reason"], 20)));
+                }
+            }
+            "change.recorded" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let summary = clip(&p["summary"], 300);
+                if !summary.is_empty() {
+                    let files = p["files"].as_array().map(|a| a.iter().map(|x| clip(x, 120)).filter(|x| !x.is_empty()).take(20).collect()).unwrap_or_default();
+                    let session = self.sessions.last().map(|s| s.id.clone()).unwrap_or_default();
+                    self.changes.push(Change { session, at_ms: ts_ms(e), role: if role.is_empty() { clip(&p["role"], 40) } else { role.clone() }, task: task.clone(), summary, files });
+                    if self.changes.len() > MAX_CHANGES {
+                        self.changes.remove(0);
+                    }
                 }
             }
             "thread.named" => {
@@ -692,7 +720,7 @@ impl ObserverState {
         if self.councils.iter().any(|c| c.phase == "round 1" || c.phase == "round 2") {
             "council"
         } else {
-            "epic"
+            "dashboard"
         }
     }
 }
@@ -929,6 +957,23 @@ mod tests {
     }
 
     #[test]
+    fn recorded_changes_are_kept_by_session_cleaned_and_bounded() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "change.recorded", "t_1", "builder", json!({"summary": "reworked the \x1b[31mpermission\x1b[0m model\n to be less intrusive", "role": "builder", "files": ["a.rs", ""]})));
+        st.apply(&ev(2, "session.started", "", "", json!({"session_id": "s_0002", "reason": "new"})));
+        st.apply(&ev(3, "change.recorded", "t_2", "", json!({"summary": "removed ratify requirements", "role": "writer"})));
+        st.apply(&ev(4, "change.recorded", "t_2", "writer", json!({"summary": "   "})));
+        assert_eq!(st.changes.len(), 2, "an empty summary is not a change");
+        assert_eq!((st.changes[0].summary.as_str(), st.changes[0].role.as_str(), st.changes[0].files.as_slice()), ("reworked the permission model to be less intrusive", "builder", &["a.rs".to_string()][..]));
+        assert_eq!((st.changes[0].session.as_str(), st.changes[1].session.as_str(), st.changes[1].role.as_str()), ("", "s_0002", "writer"), "the session is the newest one begun, and the payload names the role when the envelope does not");
+        for i in 0..250 {
+            st.apply(&ev(10 + i, "change.recorded", "t_1", "builder", json!({"summary": format!("c{}", i)})));
+        }
+        assert_eq!((st.changes.len(), st.changes.last().unwrap().summary.as_str()), (MAX_CHANGES, "c249"), "bounded, newest kept");
+        assert!(KINDS.contains(&"change.recorded"));
+    }
+
+    #[test]
     fn named_threads_are_kept_cleaned_and_replaced_by_id() {
         let mut st = ObserverState::new(&roles());
         st.apply(&ev(1, "thread.named", "t_1", "orchestrator", json!({"thread": "pricing", "label": "Pricing \x1b[31mtiers\x1b[0m\n for the kb", "tasks": ["t_1", "t_2", ""]})));
@@ -957,7 +1002,7 @@ mod tests {
         st.apply(&ev(5, "council.verdict", "t_2", "", json!({"path": "missions/m/councils/001-x.md", "escalated": "2 unresolved P0 finding(s)", "unresolved": [{"severity": "P0", "seat": "red-team", "title": "t"}], "options": [{"label": "PROCEED", "seats": ["architect", "red-team"]}]})));
         let c = &st.councils[0];
         assert_eq!((c.phase.as_str(), c.stances[0].text.as_str(), c.critiques[0].findings.len(), c.unresolved.len(), c.options[0].1.len()), ("escalated", "Queue.", 1, 1, 2));
-        assert_eq!(st.default_view(), "epic", "a finished council no longer pulls the view");
+        assert_eq!(st.default_view(), "dashboard", "a finished council no longer pulls the view");
     }
 
     #[test]
@@ -969,7 +1014,7 @@ mod tests {
         st.apply(&ev(4, "build.attempt", "t_3", "", json!({"attempt": 2, "tier": "frontier", "family": "claude", "homogeneous_retry": false})));
         st.apply(&ev(5, "gates.evaluated", "t_3", "", json!({"sha": "0123456789abcdef", "gates": [{"name": "tests", "state": "green", "detail": "ok"}, {"name": "operator", "state": "red", "detail": "waiting"}]})));
         st.apply(&ev(6, "audit.recorded", "t_3", "red-team", json!({"findings": [{"severity": "P2", "title": "naming"}]})));
-        assert_eq!(st.default_view(), "epic", "a build in progress is part of the epic pane");
+        assert_eq!(st.default_view(), "dashboard", "a build in progress is on the dashboard, and in the epic pane");
         st.apply(&ev(7, "merge.approved", "t_3", "", json!({"sha": "x"})));
         st.apply(&ev(8, "action.result", "t_3", "", json!({"action_id": "merge-abc", "ok": true})));
         let b = &st.builds[0];
