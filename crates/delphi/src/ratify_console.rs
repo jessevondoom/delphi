@@ -40,7 +40,9 @@ pub fn format_list(items: &[Value]) -> String {
 
 pub fn format_show(p: &Value) -> String {
     let diff = p["diff"].as_str().unwrap_or("");
-    format!("{} — {}\n{}", p["id"].as_str().unwrap_or("?"), p["summary"].as_str().unwrap_or(""), if diff.is_empty() { "(no diff for this kind of change)\n".to_string() } else { diff.to_string() })
+    let alignment: Vec<&str> = p["alignment"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).take(20).collect()).unwrap_or_default();
+    let notes = if alignment.is_empty() { String::new() } else { format!("\nAlignment (advice, never blocks your decision):\n{}", alignment.iter().map(|l| format!("  {}", l)).collect::<Vec<_>>().join("\n")) };
+    format!("{} — {}{}\n{}", p["id"].as_str().unwrap_or("?"), p["summary"].as_str().unwrap_or(""), notes, if diff.is_empty() { "(no diff for this kind of change)\n".to_string() } else { diff.to_string() })
 }
 
 fn rpc_error(e: &ClientError) -> String {

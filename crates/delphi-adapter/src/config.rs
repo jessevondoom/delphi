@@ -78,6 +78,11 @@ impl Endpoint {
     pub fn is_metered_by_subscription(&self) -> bool {
         self.path == AccessPath::Harness || self.cost_model.as_deref() == Some("subscription")
     }
+
+    /// A model running on this machine (`cost_model = "local"`): it costs nothing, so it needs no prices to be reserved against.
+    pub fn is_local(&self) -> bool {
+        self.cost_model.as_deref() == Some("local")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

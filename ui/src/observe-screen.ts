@@ -9,35 +9,41 @@ import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 import { epicThreads } from './epic-threads.ts';
 import { dashboard, needs } from './dashboard.ts';
 import * as A from './archives.ts';
+import { pulse, timeline, toolsBoard } from './monitors.ts';
+import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark, type Paint } from './meters.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
-export type RoleTools = { calls: number; errors: number; last: string; by_tool: Record<string, { calls: number; errors: number }> };
+export type RoleTools = { calls: number; errors: number; last: string; streak?: { tool: string; n: number; failed: number }; by_tool: Record<string, { calls: number; errors: number }> };
 export type OState = {
   agents: Record<string, AgentRow>;
   nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
   tasks: Record<string, { id: string; flow: string; prompt: string; status: string; output?: string; session?: string }>;
   /** The console sessions of the mission, oldest first; the last is the current one (`specs/030`). Work from every session stays on the screen while it runs. */
   sessions?: { id: string; reason: string; started_ms: number; turns: number }[];
-  councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][] }[];
+  councils: { task_id: string; proposition: string; seats: { role: string; family: string }[]; homogeneous: boolean; phase: string; stances: { role: string; answered: boolean; text: string }[]; critiques: { role: string; recommendation: string; concur: boolean | null; findings: [string, string][] }[]; escalation: string | null; path: string; unresolved: [string, string, string][]; options: [string, string[]][]; lenses?: [string, string][]; lens_note?: string }[];
   builds: { task_id: string; branch: string; attempts: string[]; sha: string; gates: { name: string; state: string; detail: string }[]; findings: [string, string][]; flaky: boolean; merge: string }[];
   spent_usd: number; tokens: Tokens; retries: number; narrative: string[]; series: number[]; pace: number[];
   /** The orchestrator's own grouping of tasks into threads, when it sends one; otherwise the window groups by what the tasks say. */
   threads?: { id: string; label: string; tasks: string[] }[];
   /** Tool use per role over the whole mission: counts and names only (`observe::tool_stats`). */
   tools?: Record<string, RoleTools>;
+  /** The most tokens one subscription-CLI span may use before Delphi stops it (`harness_token_cap`). */
+  token_cap?: number;
+  /** Which models report their work: per model, the runs that did work and the ones that recorded a change (`toolreport.rs`). */
+  adoption?: { by_model: Record<string, { spans: number; calls: number; errors: number; worked: number; recorded: number }>; total: { spans: number; calls: number; errors: number; worked: number; recorded: number } };
   /** What agents recorded as finished (`record_change`), oldest first: their own plain words, never their reasoning. */
   changes?: { session: string; at_ms: number; role: string; task: string; summary: string; files: string[] }[];
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
 /** The views, in order (`005e` §9.2; the dashboard is `specs/030`; `changes` is `specs/032`). The narrator shows no money, so there is no spend view. */
-export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'archives', 'changes'] as const;
+export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'archives', 'changes'] as const;
 export type View = (typeof VIEWS)[number];
 /** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
 export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
 export const parseView =(s: string): View | null => {
-  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
+  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', pulse: 'pulse', meters: 'pulse', timeline: 'timeline', tools: 'tools', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -48,6 +54,11 @@ export type OModel = {
   live: Record<string, string>; connected: boolean;
   /** A running span's token total so far, from the live frames: a subscription CLI logs its usage only when it ends. In memory, never saved. */
   liveTokens?: Record<string, number>;
+  /** When each span was last heard from (a frame or an event), in ms, and when this window first looked: a running agent silent for a while is flagged. In memory. */
+  lastSeen?: Record<string, number>;
+  /** Tokens per sample for each running role, oldest first (the `pulse` pane's sparklines). In memory, never saved. */
+  pulse?: Record<string, number[]>;
+  since?: number;
   /** The clock for badge animation, and whether animation is off (`DELPHI_REDUCE_MOTION`, `NO_COLOR`); the strip is static without them. */
   now?: number; still?: boolean;
 };
@@ -59,17 +70,9 @@ export const emptyState = (): OState => ({
 
 const ORDER = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
 const ordered = (st: OState) => Object.values(st.agents).sort((a, b) => (ORDER.indexOf(a.role) + 99) % 99 - (ORDER.indexOf(b.role) + 99) % 99);
-const kilo = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const tokTotal = (t: Tokens) => t.input + t.cache_read + t.cache_write + t.output + t.thinking;
-const bar = (f: number, w: number) => { const n = Math.round(Math.min(1, Math.max(0, f)) * w); return '▓'.repeat(n) + '░'.repeat(Math.max(0, w - n)); };
-const spark = (v: number[], w: number) => {
-  const r = v.slice(-w), max = Math.max(0, ...r);
-  return max <= 0 ? '▁'.repeat(r.length) : r.map((x) => '▁▂▃▄▅▆▇█'[Math.round((x / max) * 7)]).join('');
-};
 const glyph = (s: string) => ({ done: '✔', green: '✔', merged: '✔', running: '●', escalated: '✖', failed: '✖', red: '✖', refused: '✖', 'waiting on you': '►', pending: '○', idle: '○' } as Record<string, string>)[s] ?? '·';
 const stateColor = (s: string): Paint => ({ done: T.ok, green: T.ok, merged: T.ok, running: T.accent, escalated: T.alert, failed: T.alert, red: T.alert, refused: T.alert, 'waiting on you': T.warn } as Record<string, Paint>)[s] ?? T.muted;
-type Paint = (s: string) => string;
-const colored = (s: string, paint: Paint) => paint(s);
 const clean = (s: string, n: number) => { const t = sanitize(s).replace(/\n/g, ' '); return [...t].length <= n ? t : [...t].slice(0, Math.max(0, n - 1)).join('') + '…'; };
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(4, w), { hard: true, trim: false }).split('\n');
 const rule = (m: OModel, w: number, title = '') => { const head = title ? `── ${title} ` : ''; return T.rule(m.pal)(head + '─'.repeat(Math.max(0, w - [...head].length))); };
@@ -167,7 +170,10 @@ function toolsLine(m: OModel, a: AgentRow): string {
   const unreported = !rec && a.state === 'running' && Object.keys(t.by_tool).some((k) => WORK_TOOLS.has(k));
   if (rec) parts.push(`✎ ${rec}`);
   const line = dim('  ·  ' + parts.join(' · ')) + (unreported ? colored(' · ✎ 0', T.warn) : '');
-  return line + (t.errors ? colored(` · ✗ ${t.errors}`, T.alert) : '') + (a.state === 'running' && t.last ? dim(` · → ${clean(t.last, 24)}`) : '');
+  // The same tool again and again, or failing again and again: going round in circles.
+  const sk = t.streak;
+  const loop = a.state === 'running' && sk && (sk.n >= LOOP_CALLS || sk.failed >= LOOP_FAILS) ? colored(` · ⟳ ${clean(sk.tool, 20)} ×${sk.n}${sk.failed >= LOOP_FAILS ? ` (${sk.failed} failed)` : ''}`, sk.failed >= LOOP_FAILS ? T.alert : T.warn) : '';
+  return line + (t.errors ? colored(` · ✗ ${t.errors}`, T.alert) : '') + (a.state === 'running' && t.last ? dim(` · → ${clean(t.last, 24)}`) : '') + loop;
 }
 
 /** The roster: a mascot per agent that is working, with its name, role, state in words, model, task and tokens. With none working, the orchestrator alone, and a line saying the system is idle. */
@@ -185,9 +191,9 @@ function agents(m: OModel, w: number, _h: number): string[] {
     const live = Object.values(m.st.nodes).filter((n) => n.role === a.role && n.state === 'running').reduce((t, n) => t + (m.liveTokens?.[n.id] ?? 0), 0);
     const total = logged + live;
     const meta = [
-      roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)),
+      roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' ? quietNote(m, a.role) : ''),
       text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : ''),
-      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + toolsLine(m, a),
+      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role) + toolsLine(m, a),
     ];
     // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
     mk.forEach((line, i) => {
@@ -300,7 +306,7 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
-  const fn = { dashboard, council, epic, agents, archives, changes }[m.view];
+  const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, archives, changes }[m.view];
   let body = fn(m, w, inner);
   if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
   body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));

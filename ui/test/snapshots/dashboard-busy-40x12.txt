@@ -9,4 +9,4 @@ delphi · dashboard
  session 2 (earlier, still running)
  ● daedalus  t_1  18:00  working  build
 ────────────────────────────────────────
-1 running  ·  14.2k tokens   ● ○ ○ ○ ○ ○
+1 running  ·  14.2k t… ● ○ ○ ○ ○ ○ ○ ○ ○

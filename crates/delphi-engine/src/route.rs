@@ -157,7 +157,7 @@ fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String>
     if req.min_context_tokens > 0 && ctx > 0 && ctx < req.min_context_tokens {
         return Some(format!("its context window ({} tokens) is smaller than the {} needed", ctx, req.min_context_tokens));
     }
-    if !ep.is_metered_by_subscription() && !cfg.catalog_entry(&key.model_id).is_some_and(|c| c.has_prices()) {
+    if !ep.is_metered_by_subscription() && !ep.is_local() && !cfg.catalog_entry(&key.model_id).is_some_and(|c| c.has_prices()) {
         return Some("it has no prices in the catalog, so a call cannot be reserved against the budget".into());
     }
     None
@@ -502,6 +502,20 @@ order = { claude = ["direct", "bedrock"] }
         match resolve_route(&c, &down(&c, &["gem-agy", "opus-x"]), NOW, &RouteRequest { prefer_family: Some("gemini".into()), ..req("red-team", "frontier") }) {
             Route::NoModel { ineligible, .. } => assert!(ineligible.iter().any(|(k, why)| k.model_id == "gem-pro" && why.contains("no prices")), "{:?}", ineligible),
             Route::Weaker { key, .. } | Route::Similar { key, .. } | Route::Target { key, .. } => assert_ne!(key.model_id, "gem-pro"),
+        }
+    }
+
+    // A live run caught this: `delphi setup` writes a `cost_model = "local"` endpoint with no prices, the config check accepts it
+    // ("a free local model needs no prices"), and the router refused it, so the Ollama fallback could never serve a call.
+    #[test]
+    fn a_free_local_model_is_chosen_without_prices_but_a_priceless_remote_one_is_not() {
+        let local = "[[endpoints]]\nid=\"ollama\"\nfamily=\"local\"\npath=\"gateway-compat\"\nbase_url=\"http://localhost:11434\"\ncredential=\"none\"\ncost_model=\"local\"\n[endpoints.models]\nworkhorse=\"qwen3:8b\"\n[models.catalog.\"qwen3:8b\"]\nmax_output_tokens = 8192\n[access]\nrole_family = { scribe = \"local\" }\nallowed_endpoints = [\"ollama\"]\n";
+        let c = Config::parse(local).unwrap();
+        assert_eq!(picked(&resolve_route(&c, &[], NOW, &req("scribe", "workhorse"))), "ollama/qwen3:8b");
+        let remote = Config::parse(&local.replace("cost_model=\"local\"\n", "").replace("credential=\"none\"", "credential=\"env:K\"").replace("http://localhost:11434", "https://gw.example.com")).unwrap();
+        match resolve_route(&remote, &[], NOW, &req("scribe", "workhorse")) {
+            Route::NoModel { ineligible, .. } => assert!(ineligible.iter().any(|(_, why)| why.contains("no prices")), "{:?}", ineligible),
+            other => panic!("a remote model with no prices must not be chosen: {:?}", other),
         }
     }
 

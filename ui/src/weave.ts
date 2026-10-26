@@ -182,7 +182,9 @@ export function weave(m: OModel, w: number, h: number): string[] {
   const v = tintCard(verdictCard(m, c, phase, pos, now.speaking).map((l) => ' ' + T.clip(l, vw - 2)), vw, tintFor(1)).map((l) => ' '.repeat(MARGIN) + l);
   const n = m.st.councils.length;
   const q = ' ' + dim('question') + '  ' + T.text(m.pal)(clean(c.proposition, Math.max(8, w - 12 - (n > 1 ? 10 : 0)))) + (n > 1 ? dim(`  (${Math.min(m.pick, n - 1) + 1} of ${n})`) : '');
-  const top = [T.clip(q, w), track(m, c, w, phase), ''];
+  // `/council --lenses`: who argues from which perspective, shown before the seats speak (`specs/026` §4, §7.2).
+  const lensRow = c.lenses?.length ? ' ' + dim('lenses') + '  ' + T.text(m.pal)(c.lenses.map(([role, id]) => `${T.roleName(role, m.info)} ${clean(id, 24)}`).join(' · ')) + (c.lens_note ? '  ' + dim(clean(c.lens_note, 60)) : '') : c.lens_note ? ' ' + dim(clean(c.lens_note, Math.max(8, w - 2))) : '';
+  const top = [T.clip(q, w), track(m, c, w, phase), ...(lensRow ? [T.clip(lensRow, w)] : []), ''];
   const rest = [...lower, '', ...v];
   const room = Math.max(1, h - top.length);
   let shown = rest;

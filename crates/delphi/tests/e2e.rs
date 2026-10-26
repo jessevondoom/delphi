@@ -1375,9 +1375,12 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
-    // Only the arrows change the view: Right to archives, Left twice back to epic. In the other views digits, Tab and q
-    // do nothing; in archives, the knowledge window, they are text for the search box.
-    o.type_keys("\x1b[C");
+    // Only the arrows change the view: Right to archives (pulse, timeline and tools lie between), Left back to epic. In the
+    // other views digits, Tab and q do nothing; in archives, the knowledge window, they are text for the search box.
+    for _ in 0..4 {
+        o.type_keys("\x1b[C");
+        std::thread::sleep(Duration::from_millis(120));
+    }
     o.wait_for("search what Delphi knows");
     o.wait_for("collections"); // the shelf: read through `kb.get` on the narrator socket
     o.type_keys("council");
@@ -1390,13 +1393,14 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
     o.type_keys("\x7f"); // backspace goes back to the results
     o.wait_for("enter open");
-    for _ in 0..2 {
+    for _ in 0..5 {
+        // archives to epic: tools, timeline, pulse and agents lie between them
         o.type_keys("\x1b[D");
         std::thread::sleep(Duration::from_millis(120));
     }
     o.wait_for("· epic");
     o.wait_for("settled"); // the threads view: the finished task is one settled line
-    for _ in 0..6 {
+    for _ in 0..9 {
         o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
         std::thread::sleep(Duration::from_millis(120));
     }
@@ -2080,4 +2084,184 @@ fn hooks_that_are_not_ratified_do_not_run_and_the_command_says_so() {
     assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stderr).contains("no observe hooks in the ratified [hooks] config"), "an edit to the file alone adds no hook: {}", String::from_utf8_lossy(&o.stderr));
     assert!(!log.exists());
+}
+
+/// Sessions (`specs/030`) through a real daemon and the real console: a follow-up is told the conversation so far, `/context`
+/// says so, `/new` empties the screen and the context (leaving a line about the session before), and `/export all` covers both.
+#[test]
+fn a_new_session_clears_the_screen_and_the_context_and_export_all_covers_both_sessions() {
+    let m = mock(vec![reply_text("Reply one."), reply_text("Reply two."), reply_text("Reply three.")]);
+    let e = setup(m.port);
+    let Some(launcher) = ui_launcher(e._t.path()) else { return };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 40, 120, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    let say = |c: &mut PtyConsole, text: &str| {
+        c.type_keys(text);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+    };
+    say(&mut c, "list two queue options");
+    c.wait_for("Reply one.");
+    c.wait_until_not_writing();
+    say(&mut c, "do the second one");
+    c.wait_for("Reply two.");
+    c.wait_until_not_writing();
+    {
+        let seen = m.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "two model calls so far");
+        assert!(!seen[0].body.to_string().contains("Conversation so far"), "the first task has nothing to be told");
+        let second = seen[1].body.to_string();
+        assert!(second.contains("Conversation so far") && second.contains("list two queue options") && second.contains("Reply one."), "the follow-up is told the session: {}", second);
+    }
+    say(&mut c, "/context");
+    c.wait_for("the next task is told");
+    c.expect_visible("4 messages");
+
+    // /clear is /new: the screen empties and the footer names the new session.
+    say(&mut c, "/clear");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while c.visible().contains("Reply one.") {
+        assert!(Instant::now() < deadline, "the old session is still on the screen:\n{}", c.visible());
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    c.expect_visible("session 1 · 0 asks");
+    say(&mut c, "what were we doing?");
+    c.wait_for("Reply three.");
+    c.wait_until_not_writing();
+    {
+        let seen = m.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        let third = seen[2].body.to_string();
+        assert!(!third.contains("Reply one.") && !third.contains("Reply two."), "the new session does not carry the old conversation: {}", third);
+        assert!(third.contains("Earlier session") && third.contains("list two queue options"), "but it is told in a line what the last one was about: {}", third);
+    }
+    let central = std::fs::read_to_string(e.home.join("sessions.jsonl")).expect("the ended session left a digest in the central log");
+    assert_eq!(central.lines().count(), 1, "{}", central);
+    assert!(central.contains("\"ended_by\":\"new\"") && central.contains("list two queue options"), "{}", central);
+
+    say(&mut c, "/export all");
+    c.wait_for("exported to");
+    let dir = std::fs::read_dir(e.ws.join("local/missions")).unwrap().next().unwrap().unwrap().path().join("exports");
+    let file = std::fs::read_dir(&dir).unwrap().filter_map(|f| f.ok()).map(|f| f.path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("mission-")).expect("the export file");
+    let md = std::fs::read_to_string(file).unwrap();
+    assert!(md.contains("## session 1 ·") && md.contains("list two queue options") && md.contains("what were we doing?") && md.contains("Reply two."), "{}", md);
+    assert_eq!(c.ctrl_c_out(), 0);
+    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
+}
+
+/// A live check of the conversation context (`specs/030`) against a real local model: `cargo test -p delphi --test e2e
+/// live_ -- --ignored --nocapture`. It needs Ollama at localhost:11434 with `ornith-1.5:9b` (or `DELPHI_LIVE_MODEL`).
+/// Nothing leaves the machine. It prints the screens; whether the model resolved "that one" is for a person to read.
+#[test]
+#[ignore = "needs a local Ollama model"]
+fn live_a_follow_up_resolves_against_the_session_and_a_new_session_does_not() {
+    let model = std::env::var("DELPHI_LIVE_MODEL").unwrap_or_else(|_| "ornith-1.5:9b".into());
+    ensure_daemon_binary();
+    let t = tempfile::Builder::new().prefix("dl").tempdir_in("/tmp").unwrap();
+    let home = t.path().join("h");
+    let proj = t.path().join("proj");
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::write(proj.join("src/lib.rs"), "pub fn needle() -> u32 { 42 }\n").unwrap();
+    for args in [vec!["init", "-q"], vec!["add", "."]] {
+        assert!(Command::new("git").arg("-C").arg(&proj).args(&args).stdout(Stdio::null()).status().unwrap().success());
+    }
+    assert!(Command::new("git").arg("-C").arg(&proj).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "base"]).stdout(Stdio::null()).status().unwrap().success());
+    run(&["init", "--non-interactive", "--home", home.to_str().unwrap(), "--workspace", "e2e", "--project", proj.to_str().unwrap()]);
+    let ws = home.join("workspaces/e2e");
+    let config = format!(
+        r#"
+[workspace]
+name = "e2e"
+projects = ["{proj}"]
+[theme]
+name = "greek"
+[[endpoints]]
+id = "ollama"
+family = "local"
+path = "gateway-compat"
+base_url = "http://localhost:11434"
+credential = "none"
+cost_model = "local"
+models = {{ fast = "{m}", workhorse = "{m}", frontier = "{m}" }}
+[models.catalog."{m}"]
+max_output_tokens = 2048
+[access]
+order = {{ local = ["ollama"] }}
+allowed_endpoints = ["ollama"]
+role_family = {{ orchestrator = "local", architect = "local", builder = "local", red-team = "local", strategist = "local" }}
+"#,
+        proj = proj.display(),
+        m = model
+    );
+    std::fs::write(ws.join("config.toml"), config).unwrap();
+    let _reap = common::DaemonReaper::new(&home);
+    let Some(launcher) = ui_launcher(t.path()) else { panic!("the UI launcher is needed (ui/node_modules)") };
+    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
+    let mut c = PtyConsole::start_env(&home, &["chat", "--workspace", "e2e"], 40, 120, &envs);
+    c.wait_for("← / ? →");
+    for line in ["/ratify", "/ratify apply 1"] {
+        c.type_keys(line);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
+    }
+    // A reply is done when `n` reply labels are on the screen and nothing is still being written. A task that stopped says why.
+    let wait_reply = |c: &mut PtyConsole, n: usize| {
+        let deadline = Instant::now() + Duration::from_secs(900);
+        loop {
+            if c.visible().contains("Stopped:") {
+                c.type_keys("/models");
+                std::thread::sleep(Duration::from_millis(150));
+                c.type_keys("\r");
+                std::thread::sleep(Duration::from_secs(2));
+                let mut log = String::new();
+                let mut stack = vec![ws.join("local/missions")];
+                while let Some(d) = stack.pop() {
+                    for f in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                        let path = f.path();
+                        if path.is_dir() { stack.push(path); continue; }
+                        if let Ok(text) = std::fs::read_to_string(&path) {
+                            log.push_str(&format!("[{}]\n", path.display()));
+                            for l in text.lines().filter(|l| !l.contains("agent.usage")) { log.push_str(&l.chars().take(300).collect::<String>()); log.push('\n'); }
+                        }
+                    }
+                }
+                panic!("the task stopped:\n{}\n--- events ---\n{}", c.visible(), log);
+            }
+            if c.visible().matches("Athena · ").count() >= n && !c.visible().contains("· writing") {
+                std::thread::sleep(Duration::from_secs(1));
+                return;
+            }
+            assert!(Instant::now() < deadline, "no reply {} in 900 s:\n{}", n, c.visible());
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    };
+    let say = |c: &mut PtyConsole, text: &str| {
+        c.type_keys(text);
+        std::thread::sleep(Duration::from_millis(150));
+        c.type_keys("\r");
+    };
+    say(&mut c, "Name two programming languages at random, in one short sentence.");
+    wait_reply(&mut c, 1);
+    say(&mut c, "Which of those two did you name first? Answer with the one word.");
+    wait_reply(&mut c, 2);
+    println!("=== ONE SESSION: the follow-up should name a language from the first reply ===\n{}", c.visible());
+    say(&mut c, "/context full");
+    c.wait_for("the next task is told");
+    println!("=== /context full ===\n{}", c.visible());
+    say(&mut c, "/new");
+    std::thread::sleep(Duration::from_secs(2));
+    say(&mut c, "Which of those two did you name first? Answer with the one word.");
+    wait_reply(&mut c, 1);
+    println!("=== AFTER /new: the same question has nothing to refer to ===\n{}", c.visible());
+    let central = std::fs::read_to_string(home.join("sessions.jsonl")).unwrap_or_default();
+    println!("=== central log ===\n{}", central);
+    assert_eq!(c.ctrl_c_out(), 0);
 }
