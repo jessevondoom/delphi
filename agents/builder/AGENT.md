@@ -3,6 +3,7 @@ id: builder
 title: "Builder"
 role: "Lead Engineer, Builder & Verification Specialist"
 cognitive_profile: code-craft
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["@worktree/**", "skills/custom/**/scripts/**"]  # host-executed files in the worktree are Red at merge (specs/008 §4)

@@ -3,6 +3,7 @@ id: red-team
 title: "Red-Team"
 role: "Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor"
 cognitive_profile: deep-reasoning
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**/councils/**", "missions/**/threat-models/**"]

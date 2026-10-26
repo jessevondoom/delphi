@@ -304,6 +304,8 @@ pub(crate) struct Escalate(pub(crate) String);
 
 /// Everything one span needs while it runs.
 pub(crate) struct SpanCtx {
+    /// The tier of the model that last served this span (`specs/035` D-16); what its events say, not what was asked for.
+    pub(crate) served_tier: Mutex<Option<String>>,
     pub(crate) m: Arc<MissionState>,
     pub(crate) task_id: String,
     pub(crate) span_id: String,
@@ -355,7 +357,7 @@ impl SpanCtx {
         let mut e = self.ev(kind, payload);
         e.endpoint_id = Some(ep.id.clone());
         e.access_path = Some(ep.path.as_str().to_string());
-        e.model_tier = Some(self.tier.clone());
+        e.model_tier = Some(self.served_tier.lock().unwrap().clone().unwrap_or_else(|| self.tier.clone()));
         e.model_id = Some(model_id.to_string());
         e.attempt = Some(1);
         e.mode = Some(if self.depth == 0 { "direct" } else { "dag" }.to_string());
@@ -382,9 +384,10 @@ fn run_command_def() -> ToolDef {
 fn dispatch_def() -> ToolDef {
     ToolDef {
         name: "dispatch_agent".into(),
-        description: "Hand a self-contained task to another enabled role (for example `architect` to draft a spec, `red-team` to audit one, `strategist` to check scope). Give an objective and pointers to the files it needs; do not paste file contents. Returns that role's final report.".into(),
+        description: "Hand a self-contained task to another enabled role (for example `architect` to draft a spec, `red-team` to audit one, `strategist` to check scope). Give an objective and pointers to the files it needs; do not paste file contents. Returns that role's final report. Every role starts on its default model (Sonnet-class or lower): raise `tier` to `frontier` only for a task that needs it, and say why in `tier_reason`; lower it to `fast` for a simple lookup.".into(),
         input_schema: json!({"type": "object", "required": ["role", "objective"], "properties": {
             "role": {"type": "string"}, "objective": {"type": "string"},
+            "tier": {"type": "string", "enum": ["fast", "workhorse", "frontier"]}, "tier_reason": {"type": "string"},
             "pointers": {"type": "array", "items": {"type": "object", "required": ["uri", "reason"], "properties": {"uri": {"type": "string"}, "reason": {"type": "string"}}}}}}),
     }
 }
@@ -579,11 +582,11 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| manifest.tier().to_string());
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default() };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default() };
 
             if fresh {
                 let mut open = vec![
-                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce, "bundle_agent": handoff.bundle_agent})),
+                    sc.ev("dag.node.added", json!({"node_id": span_id, "role": role, "parent": handoff.parent_span_id, "depth": depth, "ceiling": sc.span.ceiling().as_str(), "nonce": nonce, "bundle_agent": handoff.bundle_agent, "tier": sc.tier, "default_tier": sc.manifest.tier(), "tier_reason": handoff.routing_directive.tier_reason})),
                     sc.ev("handoff.sent", json!({"handoff": serde_json::to_value(&handoff).expect("handoff serializes")})),
                     sc.ev("dag.node.state", json!({"node_id": span_id, "state": "running"})),
                 ];
@@ -1004,6 +1007,7 @@ impl Engine {
             };
             let Some(ep) = cfg.endpoint(&key.endpoint_id) else { continue 'endpoints };
             let model_id = key.model_id.clone();
+            *sc.served_tier.lock().unwrap() = Some(crate::route::served_tier(&cfg, &key, &sc.tier));
             if route.homogeneous() && !std::mem::replace(&mut *sc.said_homogeneous.lock().unwrap(), true) {
                 m.append(sc.ev("model.homogeneous", json!({"avoided": sc.avoid_families, "used": {"endpoint_id": key.endpoint_id, "model_id": key.model_id, "family": key.family}}))).await?;
             }
@@ -1808,6 +1812,26 @@ impl Engine {
         child.parent_span_id = sc.span_id.clone();
         child.caller_agent = sc.role.clone();
         child.bundle_agent = bundle_agent;
+        // The orchestrator may raise or lower the role's model for this task (`specs/035` D-15). Raising above the role's default must say why.
+        if let Some(want) = args["tier"].as_str() {
+            let rank = |t: &str| match t {
+                "fast" => 0,
+                "workhorse" => 1,
+                _ => 2,
+            };
+            if !matches!(want, "fast" | "workhorse" | "frontier") {
+                return Ok((tool_result_error("`tier` must be fast, workhorse or frontier"), None));
+            }
+            let default = self.ws.load_manifest(role).map(|mf| mf.tier()).unwrap_or("workhorse");
+            let reason = crate::observe::sanitize(args["tier_reason"].as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ");
+            if rank(want) > rank(default) && reason.is_empty() {
+                return Ok((tool_result_error(format!("`{}` starts on {}; raising it to {} needs `tier_reason`: say what about this task needs more", role, default, want)), None));
+            }
+            if want != default {
+                child.routing_directive.model_tier = Some(want.to_string());
+                child.routing_directive.tier_reason = Some(reason.chars().take(200).collect()).filter(|r: &String| !r.is_empty());
+            }
+        }
         if let Err(e) = child.validate() {
             return Ok((tool_result_error(format!("invalid handoff: {}", e)), None));
         }
@@ -2255,7 +2279,7 @@ mod tests {
         let text = crate::testkit::CONFIG
             .replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
             .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [\"direct\"] }")
-            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"gem\"]\nfailover_prefers = \"capability\"");
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"gem\"]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
     }
 
@@ -2688,7 +2712,7 @@ mod tests {
         let f = setup(vec![Step::Exhaust, Step::Throttle, Step::text("Served by the third.")], 5.0, |_| {});
         let text = crate::testkit::CONFIG
             .replace("[access]", "[models.gemini]\nfast = \"gem-pro\"\nworkhorse = \"gem-pro\"\nfrontier = \"gem-pro\"\n[models.catalog.\"gem-pro\"]\nmax_output_tokens = 64000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
-            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]\nfailover_prefers = \"capability\"");
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
         let out = f.engine.run_task(&f.m, "architect", "Plan").await.unwrap();
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Served by the third."), "{}", out.text);
@@ -3104,6 +3128,57 @@ mod tests {
         assert_eq!(stamps[0].payload["tier"], "L0", "output of a tainted span is stamped at its ceiling");
         // The model was told the file is untrusted data.
         assert!(f.model.requests()[1].body["messages"].to_string().contains("untrusted data"));
+    }
+
+    // specs/035 D-15: raising a role above its default needs a reason; the request is recorded on the span's start.
+    #[tokio::test]
+    async fn raising_a_roles_model_needs_a_reason_and_is_recorded_with_it() {
+        // The builder starts on Sonnet-class (`workhorse`).
+        let f = setup(
+            vec![
+                Step::tool("d0", "dispatch_agent", json!({"role": "builder", "objective": "A hard refactor", "tier": "huge"})),
+                Step::tool("d1", "dispatch_agent", json!({"role": "builder", "objective": "A hard refactor", "tier": "frontier"})),
+                Step::tool("d2", "dispatch_agent", json!({"role": "builder", "objective": "A hard refactor", "tier": "frontier", "tier_reason": "it touches the claim loop's locking\x1b[2J"})),
+                Step::text("Noted."),
+                Step::text("All done."),
+            ],
+            5.0,
+            |s| s.approval_timeout = Duration::from_millis(300),
+        );
+        let _ = f.engine.run_task(&f.m, "orchestrator", "Raise it").await.unwrap();
+        let bodies: Vec<String> = f.model.requests().iter().map(|r| r.body.to_string()).collect();
+        assert!(bodies[1].contains("`tier` must be fast, workhorse or frontier"), "{}", bodies[1]);
+        assert!(bodies[2].contains("starts on workhorse; raising it to frontier needs `tier_reason`"), "the refusal says what to give: {}", bodies[2]);
+        let builders: Vec<EventEnvelope> = events_of(&f, "dag.node.added").into_iter().filter(|e| e.payload["role"] == "builder").collect();
+        assert_eq!(builders.len(), 1, "only the dispatch that gave a reason started a span");
+        let p = &builders[0].payload;
+        assert_eq!((p["tier"].as_str(), p["default_tier"].as_str(), p["tier_reason"].as_str()), (Some("frontier"), Some("workhorse"), Some("it touches the claim loop's locking")));
+    }
+
+    // specs/035 D-15: lowering a role's model needs no reason, and the child really runs on the model of that tier.
+    #[tokio::test]
+    async fn lowering_a_roles_model_for_a_task_needs_no_reason_and_the_child_runs_on_it() {
+        let f = setup(vec![Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Draft a plan", "tier": "fast"})), Step::text("Plan ready."), Step::text("All done.")], 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "orchestrator", "Plan").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "All done."));
+        assert_eq!(f.model.requests().iter().map(|r| r.model_id.as_str()).collect::<Vec<_>>(), vec!["opus-x", "haiku-x", "opus-x"], "the architect ran on the fast model");
+        let added = events_of(&f, "dag.node.added");
+        let p = &added[1].payload;
+        assert_eq!((p["tier"].as_str(), p["default_tier"].as_str(), p["tier_reason"].is_null()), (Some("fast"), Some("frontier"), true));
+    }
+
+    // specs/035 D-16: after a failover the events say the tier of the model that really served the call, so the panes can show it.
+    #[tokio::test]
+    async fn usage_events_carry_the_tier_of_the_model_that_served_the_call_not_the_one_asked_for() {
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::Exhaust, Step::text("Finished on the weaker model.")], 5.0, |_| {});
+        on_weaker(&f, "finish");
+        opus_only_on_direct(&f);
+        f.engine.run_task(&f.m, "architect", "What does @project/app/src/lib.rs define?").await.unwrap();
+        let usage: Vec<(String, String)> = events_of(&f, "agent.usage").iter().map(|e| (e.model_id.clone().unwrap_or_default(), e.model_tier.clone().unwrap_or_default())).collect();
+        assert_eq!(usage.first(), Some(&("opus-x".to_string(), "frontier".to_string())));
+        assert_eq!(usage.last(), Some(&("sonnet-x".to_string(), "workhorse".to_string())), "Sonnet served the last turn: {:?}", usage);
+        let added = &events_of(&f, "dag.node.added")[0].payload;
+        assert_eq!(added["tier"], "frontier", "what was asked for stays on the span's start");
     }
 
     #[tokio::test]
