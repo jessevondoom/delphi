@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 35] = [
+pub const KINDS: [&str; 39] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "org_context.built",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -455,6 +455,22 @@ impl ObserverState {
                         self.changes.remove(0);
                     }
                 }
+            }
+            "bundle.added" | "bundle.updated" | "bundle.removed" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let id = format!("{}/{}", clip(&p["org"], 60), clip(&p["name"], 60));
+                let version = clip(&p["version"], 30);
+                let what = match kind {
+                    "bundle.added" => "added",
+                    "bundle.updated" => "updated",
+                    _ => "removed",
+                };
+                self.say(format!("bundle {}{} {}", id, if version.is_empty() { String::new() } else { format!("@{}", version) }, what));
+            }
+            "org_context.built" => {
+                let n = |k: &str| p[k].as_u64().unwrap_or(0);
+                let trimmed = p["trimmed"].as_array().map(|a| a.len()).unwrap_or(0);
+                self.say(format!("org context built: {} bundle(s), {} bytes{}", n("bundles"), n("bytes"), if trimmed > 0 { format!(", {} trimmed", trimmed) } else { String::new() }));
             }
             "thread.named" => {
                 let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
@@ -1084,6 +1100,20 @@ mod tests {
         }
         assert_eq!((st.changes.len(), st.changes.last().unwrap().summary.as_str()), (MAX_CHANGES, "c249"), "bounded, newest kept");
         assert!(KINDS.contains(&"change.recorded"));
+    }
+
+    #[test]
+    fn bundle_and_org_context_events_become_clean_narrator_rows() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "bundle.added", "", "", json!({"org": "acme", "name": "platform\x1b[31m", "version": "1.4.0", "hash": "blake3:x"})));
+        st.apply(&ev(2, "bundle.updated", "", "", json!({"org": "acme", "name": "platform", "version": "1.5.0"})));
+        st.apply(&ev(3, "bundle.removed", "", "", json!({"org": "acme", "name": "platform"})));
+        st.apply(&ev(4, "org_context.built", "t_1", "orchestrator", json!({"bundles": 2, "bytes": 3100, "trimmed": ["acme/platform"], "notes": []})));
+        let rows: Vec<&str> = st.narrative.iter().map(|s| s.as_str()).collect();
+        assert_eq!(rows, vec!["bundle acme/platform@1.4.0 added", "bundle acme/platform@1.5.0 updated", "bundle acme/platform removed", "org context built: 2 bundle(s), 3100 bytes, 1 trimmed"]);
+        for k in ["bundle.added", "bundle.updated", "bundle.removed", "org_context.built"] {
+            assert!(KINDS.contains(&k));
+        }
     }
 
     #[test]
