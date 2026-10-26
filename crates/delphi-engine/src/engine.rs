@@ -3078,15 +3078,16 @@ mod tests {
         let f = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-park.md", "content": "x"})), Step::text("Understood.")], 5.0, |s| {
             // A card is re-raised only while `parked + timeout <= park_max`. The margin (350 ms before the first
             // re-raise) must outlast a loaded CI runner's timer jitter; at 60 ms / 200 ms it was 80 ms and the test
-            // saw a single ask on Ubuntu. Nominally the cards are asked at 0, 100, 200 and 300 ms, so 4 is the cap.
+            // saw a single ask on Ubuntu. Nominally the cards are asked at 0, 100, ... 700 ms, so 8 is the cap; timer
+            // jitter only ever stretches the waits, so it can lower the count, and two asks need 600 ms of slack.
             s.approval_timeout = Duration::from_millis(100);
-            s.approval_park_max = Duration::from_millis(450);
+            s.approval_park_max = Duration::from_millis(800);
         });
         let out = f.engine.run_task(&f.m, "architect", "Draft a spec").await.unwrap();
         assert_eq!(out.status, Status::Done);
         assert!(!f.root.join("workspaces/w/team/specs/009-park.md").exists());
         let asked = events_of(&f, "approval.requested").len();
-        assert!((2..=4).contains(&asked), "re-raised a few times and then stopped: {}", asked);
+        assert!((2..=8).contains(&asked), "re-raised a few times and then stopped: {}", asked);
         assert!(f.model.requests()[1].body["messages"].to_string().contains("timed out"), "the model is finally told it was denied");
         assert_eq!(events_of(&f, "approval.resolved").last().unwrap().payload["resolution"], "timed_out");
     }
