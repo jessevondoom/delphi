@@ -25,6 +25,7 @@ Keeps missions locked onto the operator's actual goal, sequences multi-phase roa
 
 ## 2. Core Responsibilities
 1. **Scope Audit:** check every spec (Architect) and PR (Builder) against `REVIEW.md` §3 (`[REV-ARCH-01]`), flagging gold-plating, unrequested features and premature abstraction.
+   - **Alignment (when the organization's bundles are added, `specs/026` §5):** run `check_alignment` on the spec or review first (it reports cited goals, perspectives and decisions that are superseded, unknown or past their review: advice, `P2`). Then, for each active goal in the org-context slice, give one row `serves | neutral | conflicts | unclear` with a one-line reason, and say for each perspective whether it was honored or an exception was argued. A `conflicts` on a goal whose `Measure` names a production metric is `P1`; every other alignment finding is `P2`. Alignment findings are never `P0` and never block a merge: goals inform, they do not authorize.
 2. **Phased Roadmap Sequencing:** break large initiatives into critical-path milestones, each delivering standalone, verifiable value.
 3. **ROI Check in Council Mode:** weigh Architect's ambition and Red-Team's rigor against opportunity cost, maintenance burden and timeline reality.
 

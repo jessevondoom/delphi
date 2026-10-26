@@ -5,7 +5,7 @@ import { decisions } from './decisions.ts';
 import { listMissions, renderMissions } from './missions.ts';
 import { openNarrator } from './narrator.ts';
 import type { Approval, State } from './fold.ts';
-import { roleName, type Info } from './theme.ts';
+import { roleName, sanitize, type Info } from './theme.ts';
 
 export type Ctx = {
   cmd: Rpc; mission: string; info: Info; state: () => State;
@@ -32,18 +32,19 @@ export function renderUsage(v: any): string {
   return lines.join('\n');
 }
 
-export function parseCouncil(args: string): { proposition: string; seats: string[]; author: string | null } | string {
-  const usage = '/council needs a proposition, for example `/council Should the retry queue be a table or a file?` (optional: --seats architect,strategist,red-team --author claude)';
+export function parseCouncil(args: string): { proposition: string; seats: string[]; author: string | null; lenses: boolean } | string {
+  const usage = '/council needs a proposition, for example `/council Should the retry queue be a table or a file?` (optional: --seats architect,strategist,red-team --author claude --lenses)';
   const words = args.split(/\s+/).filter(Boolean);
   const rest: string[] = [];
-  let seats: string[] = [], author: string | null = null;
+  let seats: string[] = [], author: string | null = null, lenses = false;
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
     if (w === '--seats' && rest.length === 0) { const v = words[++i]; if (!v) return usage; seats = v.split(',').filter(Boolean); }
     else if (w === '--author' && rest.length === 0) { const v = words[++i]; if (!v) return usage; author = v; }
+    else if (w === '--lenses' && rest.length === 0) lenses = true;
     else rest.push(w);
   }
-  return rest.length ? { proposition: rest.join(' '), seats, author } : usage;
+  return rest.length ? { proposition: rest.join(' '), seats, author, lenses } : usage;
 }
 
 /** `20m`, `90s`, `2h`, `1d` or bare seconds, in seconds. */
@@ -158,7 +159,7 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
     case 'council': {
       const p = parseCouncil(arg);
       if (typeof p === 'string') { ctx.post(p); return; }
-      const v = await call('council.start', { proposition: p.proposition, seats: p.seats, author_family: p.author });
+      const v = await call('council.start', { proposition: p.proposition, seats: p.seats, author_family: p.author, ...(p.lenses ? { lenses: true } : {}) });
       if (v) { ctx.post(`(${v.task_id ?? 'task'} council convened; the seats answer blind, then critique each other)`); ctx.started?.(); } return;
     }
     case 'ratify': { ctx.post(await ratify(ctx, rest)); return; }
@@ -193,6 +194,12 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
   }
 }
 
+/** What a spec cites that no longer stands, from the daemon's alignment pre-pass (`specs/026` §5): advice, one line each. */
+export function alignmentLines(p: { alignment?: unknown }): string {
+  const a = Array.isArray(p.alignment) ? p.alignment.filter((x): x is string => typeof x === 'string').slice(0, 20) : [];
+  return a.length ? '\nAlignment (advice, never blocks your decision):\n' + a.map((l) => '  ' + sanitize(l)).join('\n') : '';
+}
+
 async function ratify(ctx: Ctx, args: string[]): Promise<string> {
   const idx = (s?: string) => { const n = Number(s); return Number.isInteger(n) && n >= 1 ? n : null; };
   const act = args[0] ?? 'list';
@@ -200,7 +207,7 @@ async function ratify(ctx: Ctx, args: string[]): Promise<string> {
     if (act === 'list') {
       lastRatify = (await ctx.cmd.call('ratify.list', {})) ?? [];
       if (!lastRatify.length) return 'no pending proposals';
-      const rows = lastRatify.map((p, i) => `${String(i + 1).padStart(3)}. [${p.kind}]${p.kind === 'config-access' ? ' [RED]' : ''} ${p.summary}`);
+      const rows = lastRatify.map((p, i) => `${String(i + 1).padStart(3)}. [${p.kind}]${p.kind === 'config-access' ? ' [RED]' : ''} ${p.summary}${p.alignment?.length ? ` (${p.alignment.length} alignment note${p.alignment.length === 1 ? '' : 's'}: /ratify show ${i + 1})` : ''}`);
       return [`${lastRatify.length} pending proposal(s). Nothing below takes effect until you ratify it.`, ...rows, '/ratify show <n> · apply <n> · reject <n>'].join('\n');
     }
     if (!['show', 'apply', 'ratify', 'reject'].includes(act)) return `unknown /ratify action \`${act}\` (list, show, apply, reject)`;
@@ -209,7 +216,7 @@ async function ratify(ctx: Ctx, args: string[]): Promise<string> {
     if (!lastRatify.length) return `run /ratify first to list proposals (asked for #${n})`;
     const p = lastRatify[n - 1];
     if (!p) return `no proposal #${n}`;
-    if (act === 'show') return `${p.id} — ${p.summary}\n${p.diff || '(no diff for this kind of change)'}`;
+    if (act === 'show') return `${p.id} — ${p.summary}${alignmentLines(p)}\n${p.diff || '(no diff for this kind of change)'}`;
     const method = act === 'reject' ? 'ratify.reject' : 'ratify.apply';
     await ctx.cmd.call(method, { id: p.id, expected_blake3: p.live_blake3 ?? p.ratified_blake3 });
     if (p.live_blake3) lastRatify.splice(n - 1, 1);

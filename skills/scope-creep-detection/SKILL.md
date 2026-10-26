@@ -38,6 +38,13 @@ Good ideas outside the spec are still outside the spec.
 4. Separate **harmless** (a tiny rename in a touched line) from **expansion** (new behaviour, new files, new surface).
 5. For each expansion, recommend: remove, move to a follow-up, or amend the spec through its owner.
 6. Report the ratio: lines or files serving the spec versus not.
+7. If the organization's bundles are added (the `@runtime/org-context` slice is in your context), add an **Alignment** section after the scope audit: run `check_alignment` on the document first and list its findings as given, then a table with one row per active goal in the slice, in the slice's order:
+
+   | Goal | Verdict | Reason |
+   | :-- | :-- | :-- |
+   | `[G-acme-01]` | serves / neutral / conflicts / unclear | one line, citing the part of the document |
+
+   then one line per perspective: honored, or the exception argued. A `conflicts` on a goal whose `Measure` names a production metric is `P1`; every other alignment finding is `P2`. Never `P0`: alignment advises and blocks nothing.
 
 ## Done when
 Every out-of-scope item is listed with its location and a disposition, and the in-scope remainder maps to the criteria.

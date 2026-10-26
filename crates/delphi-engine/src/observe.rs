@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 39] = [
+pub const KINDS: [&str; 40] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "org_context.built",
+    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "change.recorded", "bundle.added", "bundle.updated", "bundle.removed", "org_context.built",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -202,6 +202,10 @@ pub struct Council {
     pub unresolved: Vec<(String, String, String)>,
     pub options: Vec<(String, Vec<String>)>,
     pub synthesis: String,
+    /// `--lenses`: the perspective each seat argues from, as (role, perspective id); empty without it.
+    pub lenses: Vec<(String, String)>,
+    /// What was said about the lenses when there were fewer than seats, or none.
+    pub lens_note: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -694,6 +698,15 @@ impl ObserverState {
                 let seats = p["seats"].as_array().map(|a| a.iter().map(|x| Seat { role: s(&x["role"]), family: s(&x["family"]) }).collect()).unwrap_or_default();
                 self.councils.push(Council { task_id: task.clone(), proposition: sanitize(p["proposition"].as_str().unwrap_or("")).chars().take(600).collect(), seats, homogeneous: p["homogeneous"] == true, phase: "round 1".into(), ..Default::default() });
                 self.say(format!("{}: council convened", task));
+            }
+            "council.lens_assigned" => {
+                let lenses: Vec<(String, String)> = p["assignments"].as_array().map(|a| a.iter().map(|x| (sanitize(&s(&x["role"])), sanitize(&s(&x["perspective"])).chars().take(40).collect())).collect()).unwrap_or_default();
+                let note = sanitize(p["note"].as_str().unwrap_or("")).chars().take(200).collect::<String>();
+                if let Some(c) = self.council_mut(&task) {
+                    c.lenses = lenses;
+                    c.lens_note = note;
+                }
+                self.say(format!("{}: seats were given lenses", task));
             }
             "council.barrier.released" => {
                 if let Some(c) = self.council_mut(&task) {
