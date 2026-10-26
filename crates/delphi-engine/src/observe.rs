@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 33] = [
+pub const KINDS: [&str; 34] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named",
+    "council.started", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -136,7 +136,20 @@ pub struct Task {
     /// `running`, `done`, `escalated`, `failed`.
     pub status: String,
     pub output: String,
+    /// The session it was asked in (`specs/030`); empty before the first `session.started`.
+    pub session: String,
 }
+
+/// A console session as the narrator groups work by it: how it began, when, and how many requests it has held.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct SessionRow {
+    pub id: String,
+    pub reason: String,
+    pub started_ms: u64,
+    pub turns: u32,
+}
+
+const MAX_SESSIONS: usize = 20;
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Seat {
@@ -217,6 +230,8 @@ pub struct ObserverState {
     pub councils: Vec<Council>,
     pub builds: Vec<Build>,
     pub threads: Vec<Thread>,
+    /// The console sessions of the mission, oldest first (the newest 20); the last is the current one.
+    pub sessions: Vec<SessionRow>,
     pub pending_approvals: BTreeMap<String, String>,
     pub spent_usd: f64,
     pub tokens: Tokens,
@@ -322,7 +337,22 @@ impl ObserverState {
                 let flow = p["flow"].as_str().or(p["target"].as_str()).unwrap_or("task").to_string();
                 let prompt = sanitize(p["prompt"].as_str().unwrap_or("")).chars().take(300).collect::<String>();
                 self.say(format!("{} started ({}): {}", task, flow, prompt.chars().take(80).collect::<String>()));
-                self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new() });
+                let session = self.sessions.last().map(|s| s.id.clone()).unwrap_or_default();
+                if let Some(s) = self.sessions.last_mut() {
+                    s.turns += 1;
+                }
+                self.tasks.insert(task.clone(), Task { id: task, flow, prompt, status: "running".into(), output: String::new(), session });
+            }
+            "session.started" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let id = clip(&p["session_id"], 40);
+                if !id.is_empty() {
+                    self.sessions.push(SessionRow { id: id.clone(), reason: clip(&p["reason"], 20), started_ms: ts_ms(e), turns: 0 });
+                    if self.sessions.len() > MAX_SESSIONS {
+                        self.sessions.remove(0);
+                    }
+                    self.say(format!("session {} began ({})", id, clip(&p["reason"], 20)));
+                }
             }
             "thread.named" => {
                 let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };

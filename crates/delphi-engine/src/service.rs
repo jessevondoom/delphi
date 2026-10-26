@@ -104,6 +104,10 @@ impl EngineService {
         }
         let e = &self.engine;
         let m = MissionState::open(&e.ws.dir.join("local/missions").join(id), id, e.hub.clone(), e.ledger.clone(), e.secrets.clone(), e.settings.mission_budget_usd).map_err(engine_err)?;
+        // The daemon has restarted since this mission was last open, so what was said before it is a past session (`specs/030`).
+        if let Err(e) = self.begin_session(&m, "restart").await {
+            self.notices.lock().unwrap().push(format!("could not start a session for {}: {}", id, e));
+        }
         // A mission with unfinished work is planned for recovery now; nothing resumes until the operator says so.
         if let Some(plan) = self.engine.recover_mission(&m).await.map_err(engine_err)? {
             self.recovery.lock().unwrap().insert(id.to_string(), PlanState { plan: Arc::new(plan), resumed: Default::default() });
@@ -693,11 +697,45 @@ impl EngineService {
         }
     }
 
+    /// End the mission's current session and begin the next (`specs/030`): the one that ends leaves a digest in the central
+    /// log, the new one is announced in the mission log so every client starts from the same place. Returns the new id, or the
+    /// current one if nothing has been said since it began and the daemon has just restarted.
+    async fn begin_session(&self, m: &Arc<MissionState>, reason: &str) -> Result<String, EngineError> {
+        let events = m.replay()?;
+        let (id, session) = crate::session::current(&events);
+        let said = crate::session::has_turns(session);
+        if reason == "restart" && (events.is_empty() || !said && events.iter().any(|e| e.kind == "session.started")) {
+            return Ok(id); // nothing to close, and a session is already open
+        }
+        if said {
+            let workspace = self.engine.ws.dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if let Some(d) = crate::session::digest(&m.id, &workspace, &id, reason, session) {
+                let secrets = self.engine.secrets.clone();
+                if let Err(e) = crate::session::append_central(&self.engine.ws.home, &d, &|s| secrets.redact(s)) {
+                    self.notices.lock().unwrap().push(format!("could not write the session digest: {}", e));
+                }
+            }
+        }
+        let next = crate::session::next_id(&events);
+        m.append(EventEnvelope::new(&m.id, "session.started", json!({"session_id": next, "reason": reason, "previous": id}))).await?;
+        Ok(next)
+    }
+
+    /// `session.new`: the operator starts afresh. The console clears when it sees `session.started`; the model is told
+    /// nothing of what came before, except a few lines about earlier sessions.
+    async fn session_new(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let id = self.begin_session(&m, "new").await.map_err(engine_err)?;
+        Ok(json!({"session_id": id, "mission_id": m.id}))
+    }
+
     async fn snapshot(&self, p: Value) -> RpcOutcome {
         let m = self.mission(p["mission_id"].as_str()).await?;
         let running: Vec<Value> = self.running.lock().unwrap().iter().map(|(id, r)| json!({"task_id": id, "target": r.target, "prompt": r.prompt, "seconds": r.started.elapsed().as_secs()})).collect();
         Ok(json!({
             "mission_id": m.id,
+            "session": m.replay().map(|e| crate::session::current(&e).0).unwrap_or_default(),
             "budget": Self::budget_json(&m),
             "mode": self.engine.broker.mode().as_str(),
             "pending_approvals": self.pending_json(),
@@ -735,6 +773,7 @@ impl Extension for ServiceExt {
                     Ok(json!({"paused": true}))
                 })(),
                 "task.submit" => svc.task_submit(params, ctx).await,
+                "session.new" => svc.session_new(params, ctx).await,
                 "task.cancel" => svc.task_cancel(params, ctx).await,
                 "timer.list" => Ok(svc.timers_json()),
                 "timer.set" => svc.timer_set(params, ctx).await,
@@ -867,6 +906,56 @@ mod tests {
         assert_eq!(budget["reserved_usd"].as_f64().unwrap(), 0.0);
     }
 
+    fn central_lines(f: &Fx) -> Vec<Value> {
+        fs::read_to_string(crate::session::log_path(&f.engine.ws.home)).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+
+    // specs/030 AC-2, AC-4: a follow-up is told what was said in the session; after `/new` it is not, except for a line about the one before.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_follow_up_is_told_the_session_so_far_and_a_new_session_starts_clean_with_a_digest_in_the_central_log() {
+        let f = setup(vec![Step::text("Option one is Redis, option two is Postgres."), Step::text("Going with Postgres."), Step::text("Nothing earlier here.")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        f.engine.run_task(&f.m, "orchestrator", "list two queue options").await.unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "do the second one").await.unwrap();
+        let reqs = f.model.requests();
+        assert!(!reqs[0].body.to_string().contains("Conversation so far"), "the first task has nothing to be told");
+        let second = reqs[1].body.to_string();
+        assert!(second.contains("Conversation so far") && second.contains("list two queue options") && second.contains("option two is Postgres"), "{}", second);
+
+        let id = svc.begin_session(&f.m, "new").await.unwrap();
+        assert_eq!(id, "s_0001");
+        f.engine.run_task(&f.m, "orchestrator", "what were we doing?").await.unwrap();
+        let third = f.model.requests()[2].body.to_string();
+        assert!(!third.contains("option two is Postgres"), "the new session does not carry the old conversation: {}", third);
+        assert!(third.contains("Earlier session") && third.contains("list two queue options"), "but it is told in a line what the last one was about: {}", third);
+
+        let lines = central_lines(&f);
+        assert_eq!(lines.len(), 1, "{:?}", lines);
+        assert_eq!((lines[0]["session_id"].as_str(), lines[0]["ended_by"].as_str(), lines[0]["turns"].as_u64()), (Some("s_0000"), Some("new"), Some(2)));
+        assert_eq!(events_of(&f, "session.started").len(), 1);
+        assert_eq!(svc.begin_session(&f.m, "new").await.unwrap(), "s_0002", "a session with nothing in it is still closed, and leaves no digest");
+        assert_eq!(central_lines(&f).len(), 2, "the third task's session had one ask");
+    }
+
+    // specs/030 D-1: a restart ends the session; a restart with nothing said does not pile up empty sessions.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restart_ends_the_session_once_and_only_when_something_was_said() {
+        let f = setup(vec![Step::text("An answer.")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "a question").await.unwrap();
+        let f = f.restart(vec![Step::text("Another.")]);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        assert_eq!(svc.begin_session(&f.m, "restart").await.unwrap(), "s_0001");
+        assert_eq!(central_lines(&f)[0]["ended_by"], "restart");
+        assert_eq!(svc.begin_session(&f.m, "restart").await.unwrap(), "s_0001", "a second restart with nothing said starts nothing");
+        assert_eq!(events_of(&f, "session.started").len(), 1);
+        assert_eq!(central_lines(&f).len(), 1);
+        f.engine.run_task(&f.m, "orchestrator", "after the restart").await.unwrap();
+        let body = f.model.requests()[0].body.to_string();
+        assert!(!body.contains("An answer.") && body.contains("Earlier session"), "{}", body);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn the_narrator_scope_can_read_but_never_change_anything() {
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
@@ -876,7 +965,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("kb.index", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff"] {
@@ -966,7 +1055,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "approval.resolve", "budget.set", "permissions.set", "mission.open", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "kb.index", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1023,7 +1112,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "kb.index", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "observe.diff", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

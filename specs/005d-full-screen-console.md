@@ -54,7 +54,7 @@ Alternate screen, no boxes, hairlines only (`skills/tui-design`).
 | `Ctrl+Z` | suspend; `fg` returns and redraws |
 | `Ctrl+C` | leave (the daemon keeps running) |
 
-A message sent while a task runs is **queued** and goes out when the task finishes; stopping drops the queue. Commands: `/help /clear /quit /build /council /usage /budget /permissions /ratify /resume /pause /mission /observe /y /a /n /d /search /sources /pin /notes /connectors /export /mouse`. The wheel can be left to the terminal (`--no-mouse`, `/mouse`) so text can be selected.
+A message sent while a task runs is **queued** and goes out when the task finishes; stopping drops the queue. Commands: `/help /new` (`/clear` is its alias; a new session, `specs/030`) `/quit /build /council /usage /budget /permissions /ratify /resume /pause /mission /observe /y /a /n /d /search /sources /pin /notes /connectors /export /mouse`. The wheel can be left to the terminal (`--no-mouse`, `/mouse`) so text can be selected.
 
 ## 5. The Decision Inbox
 
