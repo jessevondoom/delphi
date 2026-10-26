@@ -4,6 +4,7 @@ An [Ink](https://github.com/vadimdemedes/ink) client of the daemon's JSON-RPC so
 
 ```
 ./try.sh          # fake daemon + the UI from source (Ctrl+C quits)
+dev/preview.sh    # the narrator's panes on an animated, simulated mission (see below)
 npm test          # unit tests: input parser, composer, event fold, the screen as data
 npm run typecheck
 npm run check-deps  # supply-chain gate: allowlist, exact pins, hashes, no install scripts
@@ -36,3 +37,21 @@ Written for **Terminal.app** first (256 colours, no kitty keyboard protocol), an
 | Suspend | `Ctrl+Z` returns the terminal, `fg` brings the console back and redraws |
 | Daemon restarts | the console says so, retries, re-attaches and rebuilds the conversation from the mission log |
 | Colour | follows the terminal (`NO_COLOR`, 256-colour terminals); dark or light, and the background colour the message tint is computed from, are asked of the terminal at start; without that answer (or under `NO_COLOR`) messages are drawn with a dim `│` rail instead of a fill |
+
+## Trying the narrator's panes
+
+**With no daemon and no model:** `ui/dev/preview.sh [pane] [--calm] [--seed N]` (or `npm run preview -- pulse`) starts a simulated mission and
+the real narrator against it. Arrows change the pane, up and down scroll, Ctrl+C quits. Panes: `dashboard council epic agents pulse timeline tools
+archives changes`. The mission never ends: the builder's token total climbs towards the cap, the scout's estimate grows and drops with each turn,
+changes are recorded every fifteen seconds, files are touched (sometimes by two roles), an approval is raised, left waiting and answered, and the
+builder runs the same command again and again. `--calm` leaves out the approval, the loop and the clash. `--seed` repeats a run. Silence (`quiet`,
+`in <tool>`) needs two minutes with no word from an agent, so wait that long on the agents or pulse pane to see it.
+
+**Static frames of the same mission:** `node --import tsx dev/sketch-panes.ts [pane] [width] [height] [--color]` prints them once.
+
+**Against a real daemon:** a dev build has all of it. `delphi update --dev`, then `delphi observe pulse` (or `timeline`, `tools`) in a second window
+while `delphi` runs a mission. Live meters need a subscription-CLI seat (token totals) or an API seat (estimates); the `✎ recorded` lines need an
+agent to call `record_change`; `delphi tools --all` shows how often they do.
+
+The simulator is `dev/preview-sim.ts` (pure, tested by `test/preview-sim.test.ts`) and `dev/preview-daemon.ts` (the socket).
+

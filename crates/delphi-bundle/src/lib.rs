@@ -11,11 +11,16 @@ pub mod archive;
 mod agents;
 mod behavior;
 pub mod changes;
+pub mod claude_plugin;
+pub mod export;
+pub mod import;
 mod files;
 mod frontmatter;
 mod ids;
 pub mod load;
+pub mod mcp_decl;
 mod manifest;
+pub mod marketplace;
 pub mod provenance;
 mod relax;
 pub mod redaction;
@@ -163,9 +168,8 @@ pub fn validate(dir: &Path, opts: &Options, host: &dyn Host) -> Report {
     behavior::check(&tree, m.as_ref(), host, &mut r);
     relax::check_knowledge(&tree, &mut r);
     vectors::check(&tree, m.as_ref(), host, &mut r);
-    if opts.claude {
-        manifest::check_claude(&tree, m.as_ref(), &mut r);
-    }
+    mcp_decl::check(&tree, &mut r);
+    claude_plugin::check(&tree, m.as_ref(), opts.claude, &mut r);
     manifest::check_evals(&tree, m.as_ref(), &mut r);
     if let Some(prev) = &opts.against {
         manifest::check_against(&tree, m.as_ref(), prev, host, &mut r);
@@ -200,5 +204,7 @@ pub fn write_manifest(dir: &Path, claude: bool, host: &dyn Host) -> Result<Strin
     Ok(files::bundle_hash(json.as_bytes()))
 }
 
+#[cfg(test)]
+mod compat_tests;
 #[cfg(test)]
 mod tests;
