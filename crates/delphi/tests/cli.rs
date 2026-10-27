@@ -178,3 +178,43 @@ fn the_classic_observer_is_gone_and_the_retired_spend_view_is_refused() {
     assert!(text(&o.stderr).contains("unknown view `spend`") || text(&o.stderr).contains("no workspace"), "{}", text(&o.stderr));
     assert!(!touched);
 }
+
+#[test]
+fn xenia_help_and_explain_are_offline_fixed_text_that_touch_nothing_and_honour_json() {
+    let (o, touched) = run(&["xenia", "help"]);
+    assert_eq!(o.status.code(), Some(0));
+    let t = text(&o.stdout);
+    assert!(t.contains("member") && t.contains("steward") && t.contains("admin") && t.contains("delphi xenia status") && t.contains("troubleshooting"), "{t}");
+    assert!(!touched, "help wrote to the home");
+
+    let (o, touched) = run(&["xenia", "help", "recovery"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(text(&o.stdout).contains("MAJORITY of the epoch's admins"));
+    assert!(!touched);
+
+    let (o, _) = run(&["xenia", "help", "recovery", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["topic"], "recovery");
+
+    let (o, _) = run(&["xenia", "help", "nope-not-a-topic"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o.stderr).contains("Topics:"));
+
+    let (o, touched) = run(&["xenia", "explain", "expired"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(text(&o.stdout).contains("What to do:") && text(&o.stdout).contains("admin refresh"), "{}", text(&o.stdout));
+    assert!(!touched);
+
+    let (o, _) = run(&["xenia", "explain", "--json", "refused: the approval is not for the bytes held"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["slug"], "approval-mismatch");
+
+    // Unknown text is not echoed, and the way on is named.
+    let (o, _) = run(&["xenia", "explain", "CANARY-secret-https://user:pw@evil.example/x"]);
+    assert_eq!(o.status.code(), Some(1));
+    let both = format!("{}{}", text(&o.stdout), text(&o.stderr));
+    assert!(both.contains("help troubleshooting") && !both.contains("CANARY") && !both.contains("evil"), "{both}");
+    let (o, _) = run(&["xenia", "explain", "--json", "CANARY-secret"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o.stdout).contains("\"found\": false") && !text(&o.stdout).contains("CANARY"));
+}

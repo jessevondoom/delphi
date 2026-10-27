@@ -559,12 +559,13 @@ pub(crate) fn check_xenia(home: &Path, now: i64, r: &mut Report) {
     for (store, st) in xenia_status::all(home, &delphi_core::xenia_sync::VerifyConfig::at(now)) {
         let loc = store.id();
         match st {
-            Err(e) => r.fail("13 xenia", loc, format!("the store cannot be read: {e}")),
+            Err(e) => r.fail("13 xenia", loc, format!("the store cannot be read: {e}. {}", delphi_core::xenia_help::what_to_do("store-unreadable").unwrap_or_default())),
             Ok(st) => {
                 for w in &st.warnings {
+                    let text = format!("{}. {}", w.text.trim_end_matches('.'), delphi_core::xenia_help::what_to_do(w.id).unwrap_or_default());
                     match w.severity {
-                        Severity::Fail => r.fail("13 xenia", loc.clone(), w.text.clone()),
-                        Severity::Warn => r.warn("13 xenia", loc.clone(), w.text.clone()),
+                        Severity::Fail => r.fail("13 xenia", loc.clone(), text),
+                        Severity::Warn => r.warn("13 xenia", loc.clone(), text),
                     }
                 }
                 if st.warnings.is_empty() {

@@ -290,7 +290,7 @@ Exit codes: 0 ok · 1 problems · 2 usage · 3 over budget.
 the org's shared, signed memory store: join, sync, status, publish, endorse.
 .PP
 .nf
-  delphi xenia whoami
+  delphi xenia whoami | help [topic] | explain <slug or message>   [\-\-json]
   delphi xenia join <url> \-\-org <o> \-\-store <s> \-\-admin <fingerprint> \-\-head <epoch>:<hash> [\-\-allow\-local]
   delphi xenia sync [\-\-auto\-update\-bundles] | status [\-\-store <org>/<store>] [\-\-json]
   delphi xenia publish <file> \-\-title <t> \-\-summary <s> \-\-promoted [\-\-tags a,b] [\-\-review\-by <date>]
@@ -299,7 +299,7 @@ the org's shared, signed memory store: join, sync, status, publish, endorse.
   delphi xenia republish \-\-old <did>   [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .PP
-Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet.
+Commands that sign show the exact bytes and want the card's code typed at a terminal. Start: `delphi xenia help`.
 .SS delphi docs
 print the command reference or a man page.
 .PP

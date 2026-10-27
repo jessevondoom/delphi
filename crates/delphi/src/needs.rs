@@ -73,7 +73,7 @@ fn xenia_evidence(home: Option<&Path>, now: i64) -> (String, Option<bool>) {
     let Some(home) = home else { return ("no store is joined on this install".to_string(), Some(false)) };
     let stores = delphi_core::xenia_status::all(home, &delphi_core::xenia_sync::VerifyConfig::at(now));
     if stores.is_empty() {
-        return ("no store is joined on this install (`delphi xenia join`)".to_string(), Some(false));
+        return ("no store is joined on this install; next step: `delphi xenia help getting-started`".to_string(), Some(false));
     }
     let mut lines = Vec::new();
     let mut used = false;
@@ -87,7 +87,8 @@ fn xenia_evidence(home: Option<&Path>, now: i64) -> (String, Option<bool>) {
             Err(e) => lines.push(format!("{}: cannot be read ({})", r.id(), e)),
         }
     }
-    (lines.join("; "), Some(used))
+    let step = if used { "in use; `delphi xenia status` says what needs doing" } else { "not yet in real use: members and a steward's endorsement come first (`delphi xenia help publishing`, `delphi xenia help endorsing`)" };
+    (format!("{}; next step: {step}", lines.join("; ")), Some(used))
 }
 
 pub fn report_in(ws: &Path, home: Option<&Path>) -> Vec<Item> {

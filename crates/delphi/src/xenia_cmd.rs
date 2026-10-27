@@ -35,6 +35,8 @@ const USAGE: &str = "usage:
   delphi xenia endorse <id> [--scope a,b] [--note <n>]       delphi xenia dispute <id> --note <n>
   delphi xenia withdraw <id> --reason <r> [--note <n>]       delphi xenia restore <id> [--note <n>]
   delphi xenia retract <id>                                   delphi xenia republish --old <did>
+  delphi xenia help [topic] [--json]
+  delphi xenia explain <slug or pasted message> [--json]
     [--workspace <name>] [--home <dir>]";
 
 /// Flags that take no value.
@@ -87,6 +89,8 @@ pub(crate) fn run_with(args: &[String], approver: &mut dyn Approver) -> i32 {
         "join" => join(&home, &parsed),
         "sync" => sync(&home, &parsed),
         "status" => status(&home, &parsed),
+        "help" => help(&parsed),
+        "explain" => explain(&parsed),
         // A bundle is published from a signed directory, not from a promoted file (specs/027 §4.3, slice B8).
         "publish" if parsed.opts.contains_key("bundle") => publish_bundle(&home, &parsed, approver),
         w if Action::WORDS.contains(&w) => act(&home, w, &parsed, approver),
@@ -231,6 +235,11 @@ fn sync(home: &Path, p: &Parsed) -> i32 {
         }
         _ => {
             eprintln!("{}: the head was REFUSED ({slug}) and nothing was applied; `delphi xenia status` says why. {}", r.id(), if detail["count"].is_number() { format!("{} path(s) affected.", detail["count"]) } else { String::new() });
+            for s in [Some(slug), detail["reason"].as_str()].into_iter().flatten() {
+                if let Some(t) = delphi_core::xenia_help::what_to_do(s) {
+                    eprintln!("  {t}");
+                }
+            }
             1
         }
     };
@@ -390,8 +399,49 @@ fn act(home: &Path, word: &str, p: &Parsed, approver: &mut dyn Approver) -> i32 
             eprintln!("delphi xenia {word}: cancelled; nothing was signed or sent");
             1
         }
-        Err(e) => fail(format!("{e} [{}]; nothing was sent", e.reason())),
+        Err(e) => {
+            let code = fail(format!("{e} [{}]; nothing was sent", e.reason()));
+            if let Some(t) = delphi_core::xenia_help::what_to_do(e.reason()) {
+                eprintln!("  {t}");
+            }
+            code
+        }
     }
+}
+
+/// `delphi xenia help [topic]`: fixed text from the catalog, offline, no model. Touches no state.
+fn help(p: &Parsed) -> i32 {
+    use delphi_core::xenia_help as h;
+    let json = p.opts.contains_key("json");
+    match p.positional.first() {
+        None if json => println!("{}", serde_json::json!({"orientation": h::orientation(), "topics": h::TOPICS.iter().map(|t| serde_json::json!({"name": t.name, "title": t.title})).collect::<Vec<_>>()})),
+        None => print!("{}", h::orientation()),
+        Some(name) => match h::topic(name) {
+            Some(t) if json => println!("{}", serde_json::json!({"topic": t.name, "title": t.title, "body": t.body})),
+            Some(t) => println!("{}\n\n{}", t.title, t.body),
+            None => {
+                eprintln!("delphi xenia help: no topic `{}`\n{}", name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect::<String>(), h::topic_list());
+                return 2;
+            }
+        },
+    }
+    0
+}
+
+/// `delphi xenia explain <slug or pasted message>`. Prints the catalog entry only; the pasted text is never echoed.
+fn explain(p: &Parsed) -> i32 {
+    use delphi_core::xenia_help as h;
+    if p.positional.is_empty() {
+        eprintln!("delphi xenia explain needs a slug (as `delphi xenia status` shows it) or the text of a message\n{USAGE}");
+        return 2;
+    }
+    let found = h::find(&p.positional.join(" "));
+    if p.opts.contains_key("json") {
+        println!("{}", serde_json::to_string_pretty(&found.map(h::entry_json).unwrap_or_else(|| serde_json::json!({"found": false}))).unwrap_or_default());
+    } else {
+        print!("{}", found.map(h::render_entry).unwrap_or_else(|| h::explain("")));
+    }
+    if found.is_some() { 0 } else { 1 }
 }
 
 // ---------------------------------------------------------------------------------------------------------
