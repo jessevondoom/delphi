@@ -405,7 +405,7 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
         // roster's successor chain continues from it. A key the bundle's own manifest merely claims to succeed does not count.
         // The grant is looked at before this add changes the lock, and survives every change of content.
         let signed = kid != provenance::UNSIGNED;
-        let grant = lock.trusted_source.iter().position(|t| signed && t.origin == origin && (t.kid == kid || store_chain.iter().any(|p| *p == t.kid)));
+        let grant = lock.trusted_source.iter().position(|t| signed && t.origin == origin && (t.kid == kid || store_chain.contains(&t.kid)));
         let had_grant = existing.as_ref().is_some_and(|ex| lock.trusted_source.iter().any(|t| t.origin == bundles::origin_of(&ex.source) && t.kid == ex.publisher_kid));
         if let Some(g) = grant {
             if lock.trusted_source[g].kid != kid {

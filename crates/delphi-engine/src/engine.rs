@@ -3773,7 +3773,7 @@ mod tests {
         let files = vec![("knowledge/index.md".to_string(), "---\nid: i\n---\n# Index\n".to_string())];
         let e = add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &refs(&files));
         f.engine.run_task(&f.m, "architect", "one").await.unwrap();
-        let tier_of = |f: &Fx| events_of(f, "provenance.stamp").into_iter().filter(|s| s.payload["path"] == "acme/plat/knowledge/index.md").last().map(|s| (s.payload["tier"].as_str().unwrap().to_string(), s.payload["reason"].as_str().unwrap().to_string())).unwrap();
+        let tier_of = |f: &Fx| events_of(f, "provenance.stamp").into_iter().rfind(|s| s.payload["path"] == "acme/plat/knowledge/index.md").map(|s| (s.payload["tier"].as_str().unwrap().to_string(), s.payload["reason"].as_str().unwrap().to_string())).unwrap();
         assert_eq!(tier_of(&f), ("L2".to_string(), format!("bundle-add:{}", e.hash)));
         raise_plat(&f);
         f.engine.run_task(&f.m, "architect", "two").await.unwrap();

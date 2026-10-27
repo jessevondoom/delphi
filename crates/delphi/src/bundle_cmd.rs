@@ -103,8 +103,8 @@ pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 /// Flags that take a value, so the word after one is not a positional argument.
-const VALUE_FLAGS: [&str; 31] = [
-    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name", "--bundle", "--from-xenia", "--url", "--pin", "--id", "--tags", "--review-by",
+const VALUE_FLAGS: [&str; 33] = [
+    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name", "--bundle", "--from-xenia", "--url", "--pin", "--id", "--tags", "--review-by", "--level", "--trust",
 ];
 
 /// Value flags of `connectors map` (`bundle_connect.rs`).
