@@ -140,6 +140,7 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
     };
     let now = delphi_core::time::now_rfc3339();
     let (id, wanted) = (e.id(), target.hash.clone());
+    let inert = crate::bundle_connect::inert_servers(&dest);
     let done = bundles::update(ws, |lock| {
         let e = lock.bundle.iter_mut().find(|x| x.id() == id && x.is_active()).ok_or("the bundle was removed meanwhile")?;
         let pos = e.history.iter().position(|p| p.hash == wanted).ok_or("the history changed meanwhile")?;
@@ -155,6 +156,7 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
         e.review_by = m.review_by.clone();
         e.title = m.title.clone();
         e.added_at = now.clone();
+        e.inert_servers = inert.clone();
         Ok(from)
     });
     let from = match done {

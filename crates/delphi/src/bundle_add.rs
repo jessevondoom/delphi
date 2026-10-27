@@ -10,6 +10,7 @@
 use delphi_bundle::provenance::{self, Continuity, Level};
 use delphi_bundle::{Host, Inspected, Options};
 use delphi_core::bundles::{self, Entry, Past, Source};
+use crate::bundle_connect::inert_servers;
 use std::path::{Path, PathBuf};
 
 pub struct AddOpts {
@@ -289,6 +290,7 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
     // 5. The summary, non-blocking.
     let prov_line = provenance::describe(level, &m.publisher_name, signer.as_deref(), existing.as_ref().map(|e| e.version.as_str()), &opened.path);
     print_summary(&i, &m, &hash, &opened.path, &prov_line, matches!(mode, Mode::Update(_)));
+    crate::bundle_connect::print_inert(&m.org, &m.name, &dir);
     for s in &superseded {
         println!("  supersedes {} ({})", s.id(), if o.yes { "will be removed" } else { "kept; pass --yes to remove it" });
     }
@@ -324,6 +326,7 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
     let skill_roles = o.skill_roles.clone();
     let removed: Vec<String> = if o.yes { superseded.iter().map(|e| e.id()).collect() } else { Vec::new() };
     let kid = signer.clone().unwrap_or_else(|| provenance::UNSIGNED.to_string());
+    let inert = inert_servers(&dest);
     let applied = bundles::update(ws, |lock| {
         for e in lock.bundle.iter_mut().filter(|e| removed.contains(&e.id())) {
             e.status = "removed".into();
@@ -344,6 +347,7 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
             title: m.title.clone(),
             skill_roles: skill_roles.clone(),
             history: Vec::new(),
+            inert_servers: inert.clone(),
         };
         match lock.bundle.iter_mut().find(|e| e.org == m.org && e.name == m.name) {
             Some(e) => {
@@ -433,6 +437,9 @@ pub fn list(home: &Path, ws: &Path) -> i32 {
     for e in shown {
         let vectors = status.get(&e.id()).map(|s| format!("  vectors {}", s.label())).unwrap_or_default();
         println!("{:<28} {:<10} {:<16} order {:<4} {}{}{}", e.id(), e.version, e.provenance, e.order, short(&e.hash), vectors, if e.is_stale(&today) { format!("  STALE (review by {})", e.review_by) } else { String::new() });
+        for l in crate::bundle_connect::describe(ws, e) {
+            println!("    MCP server {}", l);
+        }
     }
     0
 }
@@ -443,16 +450,25 @@ pub fn remove(ws: &Path, name: &str) -> i32 {
         match ids.len() {
             0 => Err(format!("no added bundle named `{}`", name)),
             1 => {
-                lock.bundle.iter_mut().filter(|e| e.id() == ids[0]).for_each(|e| e.status = "removed".into());
-                Ok(ids[0].clone())
+                let mut notes = Vec::new();
+                for e in lock.bundle.iter_mut().filter(|e| e.id() == ids[0]) {
+                    e.status = "removed".into();
+                    // The inert records go with the entry; a mapped connector is in the catalog and stays (specs/025 §4.1).
+                    notes.extend(crate::bundle_connect::removal_note(ws, e));
+                    e.inert_servers.clear();
+                }
+                Ok((ids[0].clone(), notes))
             }
             _ => Err(format!("`{}` is ambiguous ({}); use org/name", name, ids.join(", "))),
         }
     });
-    let id = match found {
-        Ok(id) => id,
+    let (id, notes) = match found {
+        Ok(v) => v,
         Err(e) => return fail(e),
     };
+    for n in notes {
+        println!("  note: {}", n);
+    }
     match delphi_engine::kb::sync_workspace(ws) {
         Ok(r) => println!("removed {}: {} documents left the index; the cache entry stays until `delphi bundle gc`", id, r.removed),
         Err(e) => return fail(format!("removed, but the index could not be updated: {} (run `delphi kb index`)", e)),

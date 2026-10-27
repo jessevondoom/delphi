@@ -493,6 +493,7 @@ impl Engine {
         if target == "builder" {
             // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
             handoff.implements_spec = handoff.context_pointers.iter().find(|p| p.uri.starts_with("specs/") && p.uri.ends_with(".md")).map(|p| p.uri.clone());
+            handoff.add_agents_md(&self.projects);
         }
         handoff.validate().map_err(EngineError::Invalid)?;
         if !self.settings.enabled_agents.iter().any(|a| a == target) {

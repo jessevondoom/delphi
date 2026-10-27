@@ -4,6 +4,7 @@ mod avatar;
 mod bundle_add;
 mod bundle_cmd;
 mod bundle_compat;
+mod bundle_connect;
 mod bundle_init;
 mod bundle_fetch;
 mod bundle_life;
@@ -596,7 +597,7 @@ fn cmd_bundle(args: &[String]) -> i32 {
         run_args.extend(["--task".to_string(), task.trim().to_string()]);
         return cmd_run(&run_args);
     }
-    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove" | "update" | "rollback" | "gc" | "export" | "serve" | "report")) {
+    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove" | "update" | "rollback" | "gc" | "export" | "serve" | "report" | "connectors")) {
         let (home, ws) = match resolve_ws("bundle", args) {
             Ok(v) => v,
             Err(code) => return code,
