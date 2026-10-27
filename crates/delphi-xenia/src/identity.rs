@@ -92,7 +92,8 @@ impl Identity {
         Ok(Identity::from_seed(seed))
     }
 
-    fn store_new(&self, path: &Path) -> Result<()> {
+    /// Write this key to a new file; an existing file is never replaced.
+    pub fn store_new(&self, path: &Path) -> Result<()> {
         let dir = path.parent().ok_or(Error::Key("key path has no directory"))?;
         fs::create_dir_all(dir).map_err(|e| Error::Io(e.to_string()))?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| Error::Io(e.to_string()))?;

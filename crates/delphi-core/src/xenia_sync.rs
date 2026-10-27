@@ -381,6 +381,37 @@ impl Store {
         Ok(freshness::assess_after(&self.org, &self.store, statement_files(&snap), &roster, cfg.now, &cfg.policy, sticky.freshness_mark.as_ref()).state)
     }
 
+    /// The roster chain at the accepted head, verified against the pins. `Ok(None)` when nothing has been accepted.
+    pub fn accepted_roster(&self) -> Result<Option<VerifiedRoster>> {
+        let pins = self.load_pins()?;
+        let Some(head) = self.load_sticky()?.accepted_head else { return Ok(None) };
+        let files = epoch_files(&self.roster_snapshot(&head)?);
+        if files.is_empty() {
+            return Err(Error::BadField("the accepted head has no roster"));
+        }
+        pins.verify(&files).map(Some).map_err(rerr)
+    }
+
+    /// `delphi xenia join` (spec 011 §3.3): fetch the store, verify the roster chain it serves against what the
+    /// operator typed (the admin's fingerprint and the epoch/hash pair), and write the pins. Refuses a store that
+    /// is already joined. The fetched objects stay in the clone, but nothing is accepted: the first verified sync
+    /// does that.
+    pub fn join(&self, req: &pins::JoinRequest) -> Result<Pins> {
+        if pins::load(&self.pin_storage()).map_err(rerr)?.is_some() {
+            return Err(rerr(RosterError::AlreadyPinned));
+        }
+        let head = match self.fetch()? {
+            Fetch::Advanced { head, .. } | Fetch::UpToDate { head } => head,
+            Fetch::NonFastForward(_) => return Err(Error::BadField("the store's history is not a fast-forward of what was fetched")),
+            Fetch::Refused(r) => return Err(Error::BadField(r.reason())),
+            Fetch::Unavailable(m) => return Err(Error::Io(format!("cannot reach the store: {m}"))),
+        };
+        let files = epoch_files(&self.roster_snapshot(&head)?);
+        let joined = pins::join(&self.pin_storage(), req, &files).map(|(p, _)| p).map_err(rerr);
+        self.discard_fetched(false);
+        joined
+    }
+
     /// Fetch and verify. See the module docs for the order of checks and what each failure leaves behind.
     pub fn sync_verified(&self, cfg: &VerifyConfig) -> Result<VerifiedSync> {
         let lock = self.paths.root.join(".lock");

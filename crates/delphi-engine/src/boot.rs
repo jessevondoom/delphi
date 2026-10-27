@@ -317,6 +317,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         exec: Arc::new(crate::exec::ExecEnv::new(ws_dir, crate::exec::ExecConfig::from_root(&root, &std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()), delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
         bundle_seen: Default::default(),
+        xenia_seen: Default::default(),
         org_cache: Default::default(),
         schemas: Default::default(),
         connectors,

@@ -18,6 +18,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "service_xenia.rs"]
+mod service_xenia;
+
 struct Running {
     target: String,
     prompt: String,
@@ -38,6 +41,8 @@ pub struct EngineService {
     recovery: Mutex<HashMap<String, PlanState>>,
     /// The `delphi` binary that `org.action` runs (`bundle add|remove`); this process when unset.
     bundle_exe: Mutex<Option<std::path::PathBuf>>,
+    /// Xenia approval cards waiting for the operator's answer, by their short code (`service_xenia.rs`).
+    attest: Mutex<HashMap<String, service_xenia::Parked>>,
 }
 
 struct PlanState {
@@ -82,7 +87,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -1104,6 +1109,9 @@ impl Extension for ServiceExt {
                 "observe.state" => svc.observe_state(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
                 "xenia.quarantine" => svc.xenia_quarantine(params, ctx).await,
+                "xenia.status" => svc.xenia_status(params, ctx).await,
+                "xenia.attest.prepare" => svc.xenia_attest_prepare(params, ctx).await,
+                "xenia.attest.decide" => svc.xenia_attest_decide(params, ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
@@ -1456,6 +1464,64 @@ mod tests {
         assert!(!body.contains("An answer.") && body.contains("Earlier session"), "{}", body);
     }
 
+    // specs/011 §7.3 and plan X9: the steward's card in the console. `prepare` shows the exact bytes and sends nothing; only a
+    // `decide` that quotes the card's code signs; a wrong code, a cancel and a narrator all leave the host where it was.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_attestation_card_signs_only_what_it_showed_and_only_for_the_console() {
+        use delphi_core::xenia_fixture as xf;
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let tmp = tempfile::tempdir().unwrap();
+        let fx0 = xf::Fx::with_cast(tmp.path());
+        let m = xf::records::memory_with(&fx0.id("mia"), &xf::u(0), 1, "active", "v", "payments", "internal_empirical");
+        let (fx, _) = xf::Fx::installed_on(fx0, &[&m]);
+        // The daemon's own home gets the store (joined at the same roster) and the member's key.
+        let store = delphi_core::xenia_store::Store::open(&f.engine.ws.home, "acme", "acme-main", &fx.remote.url(), true).unwrap();
+        fx.join_store(&store);
+        assert!(matches!(store.sync_verified(&xf::cfg()).unwrap(), delphi_core::xenia_sync::VerifiedSync::Accepted { .. }));
+        fx.id("erin").store_new(&f.engine.ws.home.join("xenia").join("identity.key")).unwrap();
+        let before = fx.remote.host_head();
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let id = xf::u(0);
+        let (status, card, wrong, cancelled, unacknowledged, signed, narrator) = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&tok).unwrap();
+            let status = c.call("xenia.status", json!({})).unwrap();
+            let args = json!({"action": "dispute", "target": id, "options": {"note": "the retry window is wrong"}});
+            let card = c.call("xenia.attest.prepare", args.clone()).unwrap();
+            let code = card["code"].as_str().unwrap().to_string();
+            let wrong = rpc_code(c.call("xenia.attest.decide", json!({"code": "000000000000", "decision": "sign"})));
+            let cancelled = c.call("xenia.attest.decide", json!({"code": code, "decision": "cancel"})).unwrap();
+            let again = c.call("xenia.attest.prepare", args).unwrap();
+            // A card with flags is not consumed by a yes that did not acknowledge them; the same card can still be signed.
+            let unacknowledged = if again["flags"].as_u64().unwrap_or(0) > 0 { rpc_code(c.call("xenia.attest.decide", json!({"code": again["code"], "decision": "sign"}))) } else { Some(code::INVALID_PARAMS) };
+            let signed = c.call("xenia.attest.decide", json!({"code": again["code"], "decision": "sign", "flags_acknowledged": true, "mission_id": "m1"})).unwrap();
+            let mut n = Client::connect(&nsock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&ntok).unwrap();
+            let narrator: Vec<_> = ["xenia.status", "xenia.attest.prepare", "xenia.attest.decide"].iter().map(|m| rpc_code(n.call(m, json!({"action": "dispute", "code": "x", "decision": "sign"})))).collect();
+            (status, card, wrong, cancelled, unacknowledged, signed, narrator)
+        })
+        .await;
+        assert!(status["stores"][0]["text"].as_str().unwrap().contains("acme/acme-main"), "{status}");
+        assert_eq!(card["ok"], true, "{card}");
+        let text = card["card"].as_str().unwrap();
+        assert!(text.contains("the retry window is wrong") && text.contains(card["code"].as_str().unwrap()), "{text}");
+        assert_eq!(wrong, Some(code::INVALID_PARAMS), "a code that is not on the screen signs nothing");
+        assert_eq!((cancelled["ok"].clone(), cancelled["reason"].as_str()), (json!(false), Some("denied")));
+        assert_eq!(unacknowledged, Some(code::INVALID_PARAMS));
+        assert_eq!(signed["ok"], true, "{signed}");
+        assert_ne!(fx.remote.host_head(), before, "the signed card reached the host");
+        assert_eq!(narrator, vec![Some(code::FORBIDDEN); 3]);
+        // The journal says what happened, and the mission's log was told without a model turn.
+        let journal = delphi_core::xenia_status::read_journal(&store);
+        assert_eq!(journal.iter().filter(|e| e.kind == "publish").map(|e| e.outcome.as_str()).collect::<Vec<_>>(), vec!["denied", "published"]);
+        let told = events_of(&f, "xenia.published");
+        assert!(told.iter().any(|e| e.payload["outcome"] == "published" && e.payload["action"] == "dispute"), "{told:?}");
+        assert_eq!(f.model.requests().len(), 0);
+    }
+
     // specs/026 AC-7: `/org` reads the view and each action is the operator's explicit act: it runs the bundle command,
     // returns what it printed, raises no card, and the log learns of the change at once.
     #[tokio::test(flavor = "multi_thread")]
@@ -1510,7 +1576,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {
@@ -1600,7 +1666,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1657,7 +1723,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

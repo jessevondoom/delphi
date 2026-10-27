@@ -140,6 +140,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         exec: Arc::new(crate::exec::ExecEnv::new(&ws_dir_for_exec, exec_cfg, delphi_sandbox::Sandbox::detect().ok())),
         injected: Default::default(),
         bundle_seen: Default::default(),
+        xenia_seen: Default::default(),
         org_cache: Default::default(),
         schemas: Default::default(),
         pool,

@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 44] = [
+pub const KINDS: [&str; 47] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
+    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built", "xenia.synced", "xenia.alert", "xenia.published",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -678,6 +678,24 @@ impl ObserverState {
                     self.say(format!("bundle {} shipped vectors failed verification; embedding locally", id));
                 } else {
                     self.say(format!("bundle {} vectors {}% ready", id, p["percent"].as_u64().unwrap_or(0).min(100)));
+                }
+            }
+            "xenia.synced" | "xenia.alert" | "xenia.published" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let n = |k: &str| p[k].as_u64().unwrap_or(0);
+                let id = format!("{}/{}", clip(&p["org"], 40), clip(&p["store"], 40));
+                match kind {
+                    "xenia.synced" => {
+                        let fresh = clip(&p["freshness"], 30);
+                        let used = p["life_used_pct"].as_u64().map(|u| format!("; statement {}% used", u.min(100))).unwrap_or_default();
+                        let state = if fresh == "fresh" || fresh.is_empty() { String::new() } else { format!("; statement {} (no endorsement counts)", fresh) };
+                        self.say(format!("xenia {} synced: {} new, {} replaced, {} quarantined{}{}", id, n("added"), n("superseded"), n("quarantined"), used, state));
+                    }
+                    "xenia.alert" => {
+                        let count = if n("count") > 0 { format!(" ({} path(s))", n("count")) } else { String::new() };
+                        self.say(format!("xenia {} ALERT: {}{}", id, clip(&p["reason"], 40), count));
+                    }
+                    _ => self.say(format!("xenia {} {}: {}", id, clip(&p["action"], 20), clip(&p["outcome"], 40))),
                 }
             }
             "org_context.built" => {
@@ -1463,6 +1481,28 @@ mod tests {
         let rows: Vec<&str> = st.narrative.iter().map(|s| s.as_str()).collect();
         assert_eq!(rows, vec!["bundle acme/platform@1.4.0 added", "bundle acme/platform@1.5.0 updated", "bundle acme/platform removed", "org context built: 2 bundle(s), 3100 bytes, 1 trimmed"]);
         for k in ["bundle.added", "bundle.updated", "bundle.removed", "org_context.built"] {
+            assert!(KINDS.contains(&k));
+        }
+    }
+
+    #[test]
+    fn xenia_events_become_clean_narrator_rows() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "xenia.synced", "", "", json!({"org": "acme", "store": "main\x1b[31m", "added": 3, "superseded": 1, "quarantined": 2, "freshness": "fresh", "life_used_pct": 57})));
+        st.apply(&ev(2, "xenia.synced", "", "", json!({"org": "acme", "store": "main", "added": 0, "freshness": "expired"})));
+        st.apply(&ev(3, "xenia.alert", "", "", json!({"org": "acme", "store": "main", "reason": "tampering", "count": 2})));
+        st.apply(&ev(4, "xenia.published", "", "", json!({"org": "acme", "store": "main", "action": "endorse", "outcome": "published"})));
+        let rows: Vec<&str> = st.narrative.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            rows,
+            vec![
+                "xenia acme/main synced: 3 new, 1 replaced, 2 quarantined; statement 57% used",
+                "xenia acme/main synced: 0 new, 0 replaced, 0 quarantined; statement expired (no endorsement counts)",
+                "xenia acme/main ALERT: tampering (2 path(s))",
+                "xenia acme/main endorse: published",
+            ]
+        );
+        for k in ["xenia.synced", "xenia.alert", "xenia.published"] {
             assert!(KINDS.contains(&k));
         }
     }

@@ -30,8 +30,8 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 008 Ambient watch and rewind | yes | no (HITL tiers only) | n/a | watches and `/rewind` (Step 6, gated) |
 | 009 Model access and auth | yes | yes (keychain, env, command, aws, gcloud-adc, oauth2, probing) | **live Gemini OAuth unverified** | operator's Google OAuth client; `oauth2.rs` device-code and refresh fixes |
 | 010 Connectors and tool access (+010-A1) | yes | slice 1 (catalog, `rmcp`, pins, pipeline, `delphi connectors`) | **never run against Google, Slack or Zoom** | first live Drive read; formatters, promotion card (§5.3), harness bridge; Slack and Zoom (need admin steps) |
-| 011 Xenia trust model | yes (text, by "ratify all") | no | n/a | post-v1; build waits for the core (D-29) |
-| 012 Xenia record schema | yes (text, by "ratify all") | no | n/a | same; Phase 1 is kinds `memory`, `endorsement`, `tombstone` |
+| 011 Xenia trust model | yes (text, by "ratify all") | no | n/a | Phase 1 build: X0-X7 merged, X9 (status, doctor, needs, events, approval card) built, PR open; X8 admin ops in parallel; X10-X11 open (plan: xenia-phase-1-plan.md) |
+| 012 Xenia record schema | yes (text, by "ratify all") | no | n/a | same; Phase 1 is kinds `memory`, `endorsement`, `tombstone`; built through X7 |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
 | 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155) | no | n/a | B0: apply the 022 §5 amendments; then the slices below |
 | 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25) | no | n/a | B1 |
