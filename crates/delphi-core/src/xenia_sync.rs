@@ -245,7 +245,7 @@ struct Inspected {
     quarantined: Vec<(String, &'static str)>,
 }
 
-fn epoch_files(snap: &Snapshot) -> Vec<EpochFile> {
+pub(crate) fn epoch_files(snap: &Snapshot) -> Vec<EpochFile> {
     let mut v = Vec::new();
     for n in 1..=MAX_EPOCHS as u64 {
         let (Some(j), Some(s)) = (snap.files.get(&roster_epoch(n)), snap.files.get(&roster_epoch_sigs(n))) else { break };
@@ -261,12 +261,12 @@ fn advance_mark(next: &mut StickyState, assessment: &Assessment) {
     }
 }
 
-fn statement_files(snap: &Snapshot) -> Option<(&[u8], &[u8])> {
+pub(crate) fn statement_files(snap: &Snapshot) -> Option<(&[u8], &[u8])> {
     Some((snap.files.get(FRESHNESS)?.as_slice(), snap.files.get(FRESHNESS_SIGS)?.as_slice()))
 }
 
 impl Store {
-    fn load_pins(&self) -> Result<Pins> {
+    pub(crate) fn load_pins(&self) -> Result<Pins> {
         let p = pins::load(&self.pin_storage()).map_err(rerr)?.ok_or(Error::BadField("this store has not been joined (no pins)"))?;
         if p.org() != self.org || p.store() != self.store {
             return Err(Error::BadField("the pins belong to another store"));
@@ -340,7 +340,7 @@ impl Store {
 
     /// Only the roster and the freshness files of `head`: all the freshness judgement needs, so judging an
     /// unchanged store against the clock does not read a single record.
-    fn roster_snapshot(&self, head: &str) -> Result<Snapshot> {
+    pub(crate) fn roster_snapshot(&self, head: &str) -> Result<Snapshot> {
         let src = GitSource::new(self);
         let n = src.epoch_in_tree(head)?.min(MAX_EPOCHS as u64);
         let mut paths = vec![FRESHNESS.to_string(), FRESHNESS_SIGS.to_string()];
