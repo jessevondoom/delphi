@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/handoff-envelope.schema.json",
+  "title": "Delphi handoff envelope",
+  "description": "The typed contract between a calling and a target agent (specs/001 §4; crates/delphi-engine/src/handoff.rs). Excluding `conversation`, it may not exceed 8000 bytes serialised: pass pointers, not content.",
+  "type": "object",
+  "required": ["handoff_id", "mission_id", "parent_span_id", "caller_agent", "target_agent", "objective", "expected_output"],
+  "properties": {
+    "handoff_id": { "type": "string", "minLength": 1 },
+    "mission_id": { "type": "string", "minLength": 1 },
+    "parent_span_id": { "type": "string", "description": "`operator` for a root handoff." },
+    "caller_agent": { "type": "string", "minLength": 1, "description": "A canonical role ID, or `operator`." },
+    "target_agent": { "type": "string", "minLength": 1 },
+    "objective": { "type": "string", "minLength": 1 },
+    "implements_spec": { "type": "string" },
+    "context_pointers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["uri", "reason"],
+        "properties": {
+          "uri": { "type": "string", "minLength": 1, "description": "Workspace-relative logical path, optionally `#Lstart-Lend`." },
+          "heading": { "type": "string" },
+          "blake3": { "type": "string" },
+          "reason": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "constraints": { "type": "array", "items": { "type": "string" } },
+    "expected_output": {
+      "type": "object",
+      "required": ["artifact_type"],
+      "properties": {
+        "artifact_type": { "type": "string" },
+        "required_fields": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "routing_directive": {
+      "type": "object",
+      "properties": {
+        "model_tier": { "enum": ["fast", "workhorse", "frontier"], "description": "Tiers, never model IDs." },
+        "model_family": { "type": "string", "description": "`claude` (default) or `gemini`; failover never crosses families." },
+        "tier_reason": { "type": "string" },
+        "thinking_budget_tokens": { "type": "integer", "minimum": 0 },
+        "attempt_number": { "type": "integer", "minimum": 0 },
+        "avoid_families": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "bundle_agent": { "type": "string", "description": "`org/name:agent`, when the span runs a bundle agent." },
+    "conversation": { "type": "string", "description": "The session's conversation so far (specs/030): context, not instruction." },
+    "distill": { "type": "string", "description": "Staging directory of a bundle `distill` span (specs/027 §2.3)." }
+  },
+  "additionalProperties": true
+}

@@ -1707,6 +1707,9 @@ impl Engine {
                 _ => self.broker.resolved_by(&id).unwrap_or_else(|| "console".to_string()),
             };
             who.m.append(ev("approval.resolved", resolution.event_payload(&id, &by))).await?;
+            if matches!(resolution, Resolution::Approved { .. }) {
+                crate::bundle_cited::emit(who.m, who.task_id, "approval").await?;
+            }
             // Away mode: the timed-out card stays denied (its id is dead, so a late answer cannot revive it), but
             // the task waits on a fresh card instead of being told no, until the park window is used up.
             if matches!(resolution, Resolution::TimedOut) && !self.settings.approval_park_max.is_zero() {
@@ -3729,6 +3732,30 @@ mod tests {
         assert!(result.contains("quokka procedure") && result.contains("L2"), "{}", result);
         assert!(!result.contains("L5"), "a bundle's own source_type is a display copy");
         assert!(f.model.requests()[2].body["messages"].to_string().contains("denied"), "bundles are read-only to agents");
+    }
+
+    // specs/027 §7.3: a bundle file in a task's context plus an accepted card is a `bundle.cited`; an accepted card without one is not.
+    #[tokio::test]
+    async fn bundle_cited_is_written_when_a_bundle_file_was_read_and_a_card_is_then_approved() {
+        use crate::bundle_load::tests::add_bundle;
+        let f = setup(vec![Step::tool("r1", "read_file", json!({"path": "@bundle/acme/plat/knowledge/a.md"})), Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New spec\nbody"})), Step::text("Drafted.")], 5.0, |_| {});
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("knowledge/a.md", "---\nid: a\n---\n# A\n\nThe quokka procedure.\n")]);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let card = wait_for_card(&f).await;
+        assert!(events_of(&f, "bundle.cited").is_empty(), "nothing is accepted yet");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        let cited = events_of(&f, "bundle.cited");
+        assert_eq!(cited.len(), 1);
+        assert_eq!((cited[0].payload["org"].as_str(), cited[0].payload["name"].as_str(), cited[0].payload["accepted_by"].as_str()), (Some("acme"), Some("plat"), Some("approval")));
+        assert_eq!(cited[0].payload["files"], json!(["knowledge/a.md"]));
+        assert!(!cited[0].payload.to_string().contains("quokka"), "names, never text");
+        let g = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New spec\nbody"})), Step::text("Drafted.")], 5.0, |_| {});
+        let task = { let e = g.engine.clone(); let m = g.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let card = wait_for_card(&g).await;
+        g.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(events_of(&g, "bundle.cited").is_empty(), "accepted, but no bundle was in context");
     }
 
     // specs/026 AC-1..3: the roles that plan and review are told the organization's goals once, in the user channel at

@@ -604,8 +604,14 @@ fn evals_section_needs_ten_questions_and_two_controls() {
     fails_with(&r, 14, "1 questions");
     fails_with(&r, 14, "1 off-topic controls");
     let t = bundle();
-    put(&t, "evals/delphi/prereg/one.md", "# Hypothesis\nx\n");
-    fails_with(&check(&t), 14, "`Metric` heading");
+    put(&t, "evals/delphi/prereg/one.md", "# Hypotheses\nx\n");
+    let r = check(&t);
+    fails_with(&r, 14, "`Thresholds` heading");
+    fails_with(&r, 14, "`Exclusions and stopping` heading");
+    assert!(!r.fails.iter().any(|f| f.msg.contains("`Hypotheses` heading")), "the one heading present is not reported");
+    let t = bundle();
+    put(&t, "evals/delphi/prereg/full.md", &crate::PREREG_HEADINGS.iter().map(|h| format!("## {}\nx\n", h)).collect::<String>());
+    assert!(check(&t).passed(), "a file with all nine headings passes");
 }
 
 #[test]

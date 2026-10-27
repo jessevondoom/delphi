@@ -51,3 +51,4 @@ delphi-xenia = { path = "../delphi-xenia", features = ["test-support"] }
 vt100 = "0.15"
 serde_json = "1.0"
 tempfile = "3.8"
+jsonschema = { version = "0.30", default-features = false }

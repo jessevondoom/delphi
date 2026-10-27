@@ -27,6 +27,8 @@ pub struct Summary {
     pub rules: usize,
     pub policy_entries: usize,
     pub vector_caches: Vec<String>,
+    /// The text of `.delphi-bundle/eval.json` when the publisher recorded one (`specs/027` §7.1); shown, never trusted.
+    pub eval_record: Option<String>,
 }
 
 /// A validated look at a bundle directory: the report, the identity the install computes, and the summary.
@@ -110,5 +112,6 @@ fn summarize(tree: &Tree, m: Option<&Manifest>, host: &dyn Host) -> Summary {
     if let Some(idx) = tree.text("vectors/index.json").and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
         s.vector_caches = idx["caches"].as_array().map(|a| a.iter().filter_map(|c| c["model_id"].as_str().map(String::from)).collect()).unwrap_or_default();
     }
+    s.eval_record = tree.text(".delphi-bundle/eval.json").filter(|t| t.len() <= 4096);
     s
 }

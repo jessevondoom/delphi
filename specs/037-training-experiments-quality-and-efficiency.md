@@ -3,7 +3,7 @@ id: spec-037-training-experiments-quality-and-efficiency
 title: "037: Training Experiments: Quality and Efficiency Across Models and Teams (draft)"
 author: architect
 timestamp: 2026-10-26T18:00:00Z
-status: draft   # asked for by the operator on 2026-10-26; the pilot budget (80 engineering hours) and the nine-task suite were agreed in conversation; everything else is a proposal until the pilot says otherwise
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); pilot budget (80 engineering hours) and the nine-task suite as agreed in conversation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

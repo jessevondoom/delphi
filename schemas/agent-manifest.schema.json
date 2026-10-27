@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/agent-manifest.schema.json",
+  "title": "Delphi AGENT.md frontmatter",
+  "description": "The YAML frontmatter of agents/<role>/AGENT.md parsed to JSON (specs/001 §2). Behavior comes only from this file and GOVERNANCE.md, never from a theme.",
+  "type": "object",
+  "required": ["id", "title", "role", "cognitive_profile", "default_tier", "default_access_scope", "authorized_skills", "memory_scope", "max_turn_budget"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Canonical role ID." },
+    "title": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "minLength": 1 },
+    "cognitive_profile": { "type": "string", "minLength": 1 },
+    "default_tier": { "enum": ["fast", "workhorse", "frontier"] },
+    "default_access_scope": {
+      "type": "object",
+      "required": ["read", "write", "execute"],
+      "properties": {
+        "read": { "type": "array", "items": { "type": "string" } },
+        "write": { "type": "array", "items": { "type": "string" } },
+        "execute": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "authorized_skills": { "type": "array", "items": { "type": "string" } },
+    "memory_scope": { "type": "string" },
+    "max_turn_budget": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": true
+}

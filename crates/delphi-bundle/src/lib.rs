@@ -26,13 +26,15 @@ mod relax;
 pub mod redaction;
 pub mod scan;
 mod skills;
+mod prereg;
 pub mod source_check;
 mod summary;
 mod tree;
 mod vectors;
 
 pub use files::{BUNDLE_HASH_PREFIX, build_files_json, bundle_hash};
-pub use manifest::{plugin_json, Manifest};
+pub use manifest::{plugin_json, prereg_missing, Manifest, PREREG_HEADINGS};
+pub use prereg::{digest as prereg_digest, pin as prereg_pin, section as prereg_section};
 pub use relax::{no_relaxation, no_relaxation_doc};
 pub use summary::{inspect, Inspected, Summary};
 
