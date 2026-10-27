@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 44] = [
+pub const KINDS: [&str; 49] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built",
+    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built", "xenia.sync_accepted", "xenia.sync_refused", "xenia.freshness_stale", "xenia.tier_changed", "xenia.quarantine_changed",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -679,6 +679,26 @@ impl ObserverState {
                 } else {
                     self.say(format!("bundle {} vectors {}% ready", id, p["percent"].as_u64().unwrap_or(0).min(100)));
                 }
+            }
+            // Xenia (plan X9b): slugs and counts only; the payload never holds store text, and what is shown is cleaned anyway.
+            "xenia.sync_accepted" | "xenia.sync_refused" | "xenia.freshness_stale" | "xenia.tier_changed" | "xenia.quarantine_changed" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let n = |k: &str| p[k].as_u64().unwrap_or(0);
+                let id = format!("{}/{}", clip(&p["org"], 40), clip(&p["store"], 40));
+                let line = match kind {
+                    "xenia.sync_accepted" => format!("xenia {}: sync accepted (head {})", id, clip(&p["head"], 12)),
+                    "xenia.sync_refused" => {
+                        let affected = if n("findings") > 0 { format!(", {} path(s)", n("findings")) } else { String::new() };
+                        format!("xenia {}: sync refused: {} ({}){}", id, clip(&p["outcome"], 24), clip(&p["reason"], 40), affected)
+                    }
+                    "xenia.freshness_stale" => format!("xenia {}: freshness statement stale ({}); no endorsement counts", id, clip(&p["reason"], 40)),
+                    "xenia.tier_changed" => {
+                        let was = if p["from"].is_object() { format!(" (was L2 {}, L1 {}, L0 {})", p["from"]["l2"].as_u64().unwrap_or(0), p["from"]["l1"].as_u64().unwrap_or(0), p["from"]["l0"].as_u64().unwrap_or(0)) } else { String::new() };
+                        format!("xenia {}: records now L2 {}, L1 {}, L0 {}{}", id, n("l2"), n("l1"), n("l0"), was)
+                    }
+                    _ => format!("xenia {}: {} file(s) quarantined (was {})", id, n("count"), n("from")),
+                };
+                self.say(line);
             }
             "org_context.built" => {
                 let n = |k: &str| p[k].as_u64().unwrap_or(0);
@@ -1451,6 +1471,35 @@ mod tests {
         }
         assert_eq!((st.changes.len(), st.changes.last().unwrap().summary.as_str()), (MAX_CHANGES, "c249"), "bounded, newest kept");
         assert!(KINDS.contains(&"change.recorded"));
+    }
+
+    #[test]
+    fn xenia_events_become_clean_narrator_rows_and_hostile_text_in_a_payload_is_inert() {
+        let mut st = ObserverState::new(&roles());
+        st.apply(&ev(1, "xenia.sync_accepted", "", "", json!({"org": "acme", "store": "main", "head": "0123456789abcdef", "at": 1})));
+        st.apply(&ev(2, "xenia.sync_refused", "", "", json!({"org": "acme", "store": "main", "outcome": "tampering", "reason": "path-deleted", "findings": 2, "at": 2})));
+        st.apply(&ev(3, "xenia.freshness_stale", "", "", json!({"org": "acme", "store": "main", "reason": "expired"})));
+        st.apply(&ev(4, "xenia.tier_changed", "", "", json!({"org": "acme", "store": "main", "l2": 0, "l1": 3, "l0": 1, "hidden": 0, "from": {"l2": 3, "l1": 0, "l0": 1, "hidden": 0}})));
+        st.apply(&ev(5, "xenia.tier_changed", "", "", json!({"org": "acme", "store": "main", "l2": 1, "l1": 0, "l0": 0, "hidden": 0, "from": null})));
+        st.apply(&ev(6, "xenia.quarantine_changed", "", "", json!({"org": "acme", "store": "main", "count": 7, "from": 2})));
+        // Even a payload an attacker managed to fill with escapes, bidi and markup renders as plain text on one line.
+        st.apply(&ev(7, "xenia.sync_refused", "", "", json!({"org": "ac\x1b[31mme\x1b]0;pwned\x07", "store": "\u{202e}main\nsecond", "outcome": "<b>x</b>", "reason": "[a](http://evil.example)", "findings": 0})));
+        let rows: Vec<&str> = st.narrative.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            rows[..6],
+            [
+                "xenia acme/main: sync accepted (head 0123456789ab)",
+                "xenia acme/main: sync refused: tampering (path-deleted), 2 path(s)",
+                "xenia acme/main: freshness statement stale (expired); no endorsement counts",
+                "xenia acme/main: records now L2 0, L1 3, L0 1 (was L2 3, L1 0, L0 1)",
+                "xenia acme/main: records now L2 1, L1 0, L0 0",
+                "xenia acme/main: 7 file(s) quarantined (was 2)",
+            ]
+        );
+        assert!(!rows[6].chars().any(|c| (c.is_control()) || c == '\u{202e}'), "{:?}", rows[6]);
+        for k in ["xenia.sync_accepted", "xenia.sync_refused", "xenia.freshness_stale", "xenia.tier_changed", "xenia.quarantine_changed"] {
+            assert!(KINDS.contains(&k), "{k}");
+        }
     }
 
     #[test]

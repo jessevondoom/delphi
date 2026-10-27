@@ -466,6 +466,7 @@ impl Engine {
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         self.reconcile_bundles(m).await?;
+        self.reconcile_xenia(m).await?;
         let operator_task = parent.is_none();
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         // What the operator and the team have said in this session, so a follow-up has something to follow (`specs/030`).

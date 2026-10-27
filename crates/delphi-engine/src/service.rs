@@ -724,6 +724,17 @@ impl EngineService {
         Ok(json!({"entries": read.entries, "ids": read.ids, "lowest_tier": read.lowest.map(|t| t.as_str())}))
     }
 
+    /// `xenia.status` and `xenia.pending` (plan X9b): the read-only Xenia surfaces for the console. Local files only, no
+    /// network, no model; `xenia.pending` lists what a steward has to review and never approves anything.
+    async fn xenia_read(&self, pending: bool, ctx: &CallContext) -> RpcOutcome {
+        need_console(ctx)?;
+        let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
+        let now = delphi_core::xenia_index::unix_of(&self.engine.now()).unwrap_or(0);
+        tokio::task::spawn_blocking(move || if pending { crate::xenia_surface::pending_value(&home, &ws, now) } else { crate::xenia_surface::status_value(&home, now) })
+            .await
+            .map_err(|e| err(-32000, e.to_string()))
+    }
+
     /// `org.view` (`specs/026` §7.1): the added bundles, goals, perspectives and open items. A read, and no model call.
     fn org_view(&self, ctx: &CallContext) -> RpcOutcome {
         need_console(ctx)?;
@@ -1104,6 +1115,8 @@ impl Extension for ServiceExt {
                 "observe.state" => svc.observe_state(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
                 "xenia.quarantine" => svc.xenia_quarantine(params, ctx).await,
+                "xenia.status" => svc.xenia_read(false, &ctx).await,
+                "xenia.pending" => svc.xenia_read(true, &ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
@@ -1510,7 +1523,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.pending", json!({})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {
@@ -1600,7 +1613,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "xenia.status", "xenia.pending", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1657,7 +1670,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "xenia.status", "xenia.pending", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

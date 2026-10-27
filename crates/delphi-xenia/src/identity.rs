@@ -92,6 +92,12 @@ impl Identity {
         Ok(Identity::from_seed(seed))
     }
 
+    /// Write this key as an install's key file (tests of other crates that need a particular key as "this install").
+    #[cfg(feature = "test-support")]
+    pub fn save_new_for_tests(&self, path: &Path) {
+        self.store_new(path).expect("write the test key");
+    }
+
     fn store_new(&self, path: &Path) -> Result<()> {
         let dir = path.parent().ok_or(Error::Key("key path has no directory"))?;
         fs::create_dir_all(dir).map_err(|e| Error::Io(e.to_string()))?;

@@ -395,6 +395,26 @@ impl Store {
         Ok(s)
     }
 
+    /// Open a store this install already has, **creating nothing** (the read-only surfaces: `status`, `doctor`, the
+    /// console). The store's clone must exist; the URL is a placeholder because a surface never fetches. A directory
+    /// that is a symlink, or a clone that is not a git repository, is refused.
+    pub fn open_existing(home: &Path, org: &str, store: &str) -> Result<Store> {
+        let paths = StorePaths::new(home, org, store)?;
+        for d in [&paths.root, &paths.clone] {
+            match fs::symlink_metadata(d) {
+                Ok(m) if m.file_type().is_dir() => {}
+                Ok(_) => return Err(Error::Key("a store directory is a symlink or not a directory")),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Error::BadField("this store has not been joined")),
+                Err(e) => return Err(io(e)),
+            }
+        }
+        if !paths.clone.join("HEAD").is_file() || !paths.clone.join("objects").is_dir() {
+            return Err(Error::Key("the clone directory is not a git repository"));
+        }
+        let url = StoreUrl { scheme: Scheme::File, url: "file:///nonexistent-read-only-surface".to_string() };
+        Ok(Store { org: org.to_string(), store: store.to_string(), paths, url, branch: "main".into(), caps: Caps::default() })
+    }
+
     pub fn with_caps(mut self, caps: Caps) -> Store {
         self.caps = caps;
         self

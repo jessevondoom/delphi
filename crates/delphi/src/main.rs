@@ -36,6 +36,7 @@ mod sessions_cmd;
 mod toolreport;
 mod needs;
 mod xenia_cmd;
+mod xenia_status_cmd;
 mod observer;
 mod ratify_console;
 mod relay;
@@ -100,7 +101,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
     Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--resume] [--pace-window <0-1>] [--allow-sleep] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
-    Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]", detail: "" },
+    Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]\n  delphi xenia status [--json] [--home <dir>]", detail: "status is read-only and offline: the accepted head, roster, how fresh the admins' statement is, records by tier, quarantined files (by reason), contested records, the last sync outcome and any rewrite waiting for you. It never changes state and never calls a model." },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
 
@@ -766,7 +767,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
 }
 
 fn cmd_needs(args: &[String]) -> i32 {
-    let (_home, ws) = match resolve_ws("needs", args) {
+    let (home, ws) = match resolve_ws("needs", args) {
         Ok(v) => v,
         Err(code) => return code,
     };
@@ -781,7 +782,7 @@ fn cmd_needs(args: &[String]) -> i32 {
     }
     match rest.first().map(String::as_str) {
         None => {
-            print!("{}", needs::render(&needs::report(&ws.dir)));
+            print!("{}", needs::render(&needs::report_in(&ws.dir, Some(&home))));
             0
         }
         Some("add") if rest.len() >= 2 => match needs::add(&ws.dir, &rest[1], &rest[2..].join(" ")) {

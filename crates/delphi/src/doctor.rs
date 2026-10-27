@@ -164,6 +164,11 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 12. Added org bundles (specs/024 §4.6): the lock, the cache entry it points at, review dates.
     check_bundles(ws, home, &mut r);
 
+    // 13. Xenia stores (specs/011 §3.2, §3.5, §4.1): admins, freshness, state files, reachability. Offline, read-only.
+    for c in crate::xenia_status_cmd::doctor_checks(home, crate::xenia_status_cmd::now_secs()) {
+        r.push(c.level, "13 xenia", c.location, c.message);
+    }
+
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);

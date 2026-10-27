@@ -149,6 +149,7 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
 | `/org` | the added org bundles, their goals, perspectives and open items; add, update, roll back or remove a bundle (no approval card: your key is the decision) |
+| `/xenia` | the org shared-memory store, read-only: freshness, quarantine, contested records, and the records waiting for your endorsement (you approve in a terminal, never here) |
 | `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
 | `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | after a daemon restart; the current and past missions; housekeeping |
 
@@ -164,7 +165,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle init\|validate [--report]\|distill\|manifest\|sign\|package [--vectors]\|import\|export\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
-| Maintain | `update` · `xenia whoami` · `help` |
+| Maintain | `update` · `xenia whoami` · `xenia status` · `help` |
 
 `delphi run` is for scripts and CI: it answers cards by a written policy (never Red, never a merge), stops at "ready to merge", and exits 0 ok, 1 gates failed, 2 a card was denied, 3 budget, 4 infrastructure ([`specs/016`](specs/016-headless-run.md)). `delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane because the daemon issues tokens only to processes with a controlling tty. `delphi observe --once` prints one frame as text and works without a terminal.
 

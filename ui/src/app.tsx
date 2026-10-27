@@ -16,6 +16,7 @@ import * as P from './panel.ts';
 import * as A from './archives.ts';
 import { openExternal } from './external.ts';
 import * as O from './org.ts';
+import * as X from './xenia.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
 import { anchorBack, bodyHeight, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
@@ -223,6 +224,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     if (name === '/sources') { openPanel(P.openSources()); return; }
     if (name === '/notes') { openPanel(P.openNotes(readNotes(info, mission))); return; }
     if (name === '/org') { openPanel(P.openOrg()); loadOrg(); return; }
+    if (name === '/xenia') { openPanel(P.openXenia()); loadXenia(); return; }
     if (name === '/pin') {
       const arg = line.slice(name.length).trim();
       const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
@@ -272,6 +274,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const loadOrg = () => {
     cmd.call('org.view', {}).then((view: any) => onOrg((cur) => ({ ...cur, view, error: '' })))
       .catch((e) => onOrg((cur) => ({ ...cur, error: String(e?.message ?? JSON.stringify(e)) })));
+  };
+  // The Xenia panel (plan X9b): two reads, `xenia.status` and `xenia.pending`. Nothing it shows can be acted on from here.
+  const loadXenia = () => {
+    const onX = (f: (cur: X.XeniaPanel) => X.XeniaPanel) => { const cur = panelRef.current; if (cur?.kind === 'xenia') openPanel(f(cur)); };
+    Promise.all([cmd.call('xenia.status', {}), cmd.call('xenia.pending', {})])
+      .then(([status, pending]: any[]) => onX((cur) => ({ ...cur, view: X.viewOf(status, pending), error: '' })))
+      .catch((e) => onX((cur) => ({ ...cur, error: String(e?.message ?? JSON.stringify(e)) })));
   };
   const runOrg = (body: { action: O.Verb; path?: string; name?: string }) => {
     const target = body.action === 'add' ? O.resolveDir(body.path ?? '', info.cwd, process.env.HOME) : body.name ?? '';
@@ -339,6 +348,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         panelRef.current = next; setPanel(next);
         if (action.t === 'close') openPanel(null);
         else if (action.t === 'search') doSearch(action.q);
+        else if (action.t === 'xenia') loadXenia();
         else if (action.t === 'org') { if (action.action.t === 'run') runOrg(action.action.body); else loadOrg(); }
         else if (action.t === 'load') { const cur = panelRef.current; if (cur && (cur.kind === 'search' || cur.kind === 'sources')) openPanel({ ...cur, lines: previewOf(info, action.path) }); }
         else if (action.t === 'insert') { openPanel(null); upd((c) => C.insert(c, action.text)); }

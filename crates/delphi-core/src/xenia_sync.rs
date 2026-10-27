@@ -384,7 +384,12 @@ impl Store {
     /// Fetch and verify. See the module docs for the order of checks and what each failure leaves behind.
     pub fn sync_verified(&self, cfg: &VerifyConfig) -> Result<VerifiedSync> {
         let lock = self.paths.root.join(".lock");
-        crate::lock::with_lock(&lock, || self.sync_verified_locked(cfg)).map_err(io)?
+        let result = crate::lock::with_lock(&lock, || self.sync_verified_locked(cfg)).map_err(io)?;
+        // The read-only surfaces (`status`, `doctor`, the console) show how the last sync ended; best effort.
+        if let Ok(out) = &result {
+            crate::xenia_status::note_sync(self, out, cfg.now);
+        }
+        result
     }
 
     fn sync_verified_locked(&self, cfg: &VerifyConfig) -> Result<VerifiedSync> {

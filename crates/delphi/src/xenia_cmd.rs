@@ -15,12 +15,13 @@ pub fn run(args: &[String]) -> i32 {
     let home = home::delphi_home(home_flag);
     match args.first().map(String::as_str) {
         Some("whoami") => whoami(&home),
+        Some("status") => crate::xenia_status_cmd::run(&home, &args[1..]),
         Some(other) if !other.starts_with("--") => {
             eprintln!("delphi xenia {other}: not built yet (Phase 1 milestone X1 provides `whoami` only)");
             2
         }
         _ => {
-            eprintln!("usage: delphi xenia whoami [--home <dir>]");
+            eprintln!("usage: delphi xenia whoami [--home <dir>]\n       delphi xenia status [--json] [--home <dir>]");
             2
         }
     }

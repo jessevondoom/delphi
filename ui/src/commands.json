@@ -8,6 +8,7 @@
   { "name": "/pin", "desc": "Keep the last reply, or the text you give, in the mission notebook", "ink": true, "rust": false, "local": true },
   { "name": "/notes", "desc": "Read the mission notebook", "ink": true, "rust": false, "local": true },
   { "name": "/org", "desc": "The organization's bundles, goals, perspectives and open items; add, update or remove a bundle (no approval: your key is the decision)", "ink": true, "rust": false, "local": true },
+  { "name": "/xenia", "desc": "The organization's shared memory: freshness, quarantine, contested records, and what waits for your endorsement (read-only; approval is in the terminal)", "ink": true, "rust": false, "local": true },
   { "name": "/connectors", "desc": "Which connectors are configured, logged in and pinned", "ink": true, "rust": false, "local": true },
   { "name": "/mouse", "desc": "Turn mouse reporting on or off (off hands text selection back to the terminal; on, drag to select and copy)", "ink": true, "rust": false, "local": true },
   { "name": "/quit", "aliases": ["/exit", "/q"], "desc": "Leave the console; the daemon keeps running", "ink": true, "rust": true, "local": true },

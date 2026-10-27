@@ -25,7 +25,7 @@ pub struct Item {
     pub recorded: Vec<String>,
 }
 
-const ITEMS: [(&str, &str, &str); 9] = [
+const ITEMS: [(&str, &str, &str); 10] = [
     ("retro", "the /retro coaching pass and rule scores (specs/004 §4)", "at least 10 finished tasks to learn from"),
     ("diff3", "automatic three-way merge in `delphi update` (specs/006 §4)", "at least 3 customized files set aside by an update"),
     ("sync", "`delphi sync` for a shared team repo (specs/007 Plane 3)", "the team/ directory is a git repo with a remote"),
@@ -35,6 +35,7 @@ const ITEMS: [(&str, &str, &str); 9] = [
     ("openai", "a direct OpenAI API driver", "a recorded need"),
     ("resume", "resuming a subscription CLI's own session", "a recorded need"),
     ("gemini-builder", "a Gemini Builder, if `gemini --acp` returns", "a recorded need"),
+    ("xenia", "something waits on you in an org store (specs/011 §4.1, §7.3)", "a freshness statement near expiry (admin), a rewritten head awaiting approval, or records awaiting your endorsement (steward)"),
 ];
 
 pub fn item_ids() -> Vec<&'static str> {
@@ -67,6 +68,11 @@ fn team_has_remote(ws: &Path) -> bool {
 }
 
 pub fn report(ws: &Path) -> Vec<Item> {
+    report_in(ws, None)
+}
+
+/// [`report`], plus the item that reads the operator's home (`xenia`: what waits on this operator in a joined org store).
+pub fn report_in(ws: &Path, home: Option<&Path>) -> Vec<Item> {
     let recorded = lines(&ws.join("local/needs.jsonl"));
     let conflicts = lines(&ws.join("local/update-conflicts.jsonl")).len();
     let tasks = finished_tasks(ws);
@@ -77,6 +83,13 @@ pub fn report(ws: &Path) -> Vec<Item> {
             let (evidence, met) = match *id {
                 "retro" => (format!("{} finished task(s)", tasks), Some(tasks >= RETRO_TASKS)),
                 "diff3" => (format!("{} customized file(s) set aside so far", conflicts), Some(conflicts >= DIFF3_CONFLICTS)),
+                "xenia" => match home {
+                    Some(h) => {
+                        let (evidence, waiting) = crate::xenia_status_cmd::needs_evidence(h, crate::xenia_status_cmd::now_secs());
+                        (evidence, Some(waiting))
+                    }
+                    None => ("no home to look in".to_string(), Some(false)),
+                },
                 "sync" => (if team_has_remote(ws) { "team/ has a git remote".to_string() } else { "team/ has no git remote (single operator)".to_string() }, Some(team_has_remote(ws))),
                 _ => ("nothing is measured for this one".to_string(), None),
             };
