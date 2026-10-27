@@ -88,6 +88,7 @@ fn fewer_than_three_admins_is_a_warning_and_three_is_not() {
     assert_eq!(st.roster.as_ref().unwrap().admins, 2);
     let w = st.warnings.iter().find(|w| w.id == "few-admins").expect("warned");
     assert!(w.text.contains("only 2 admin"), "{}", w.text);
+    assert!(render(&st, now()).contains("what to do: Add admins: `delphi xenia help being-an-admin`."));
     let tmp3 = tempfile::tempdir().unwrap();
     let (fx3, _) = Fx::installed(tmp3.path(), &[]);
     assert!(read(&fx3, &cfg()).warnings.iter().all(|w| w.id != "few-admins"));
@@ -109,7 +110,8 @@ fn a_statement_past_half_its_life_warns_and_a_lapsed_one_says_no_endorsement_cou
     let lapsed = read(&fx, &VerifyConfig::at(now() + 8 * DAY));
     assert_eq!(lapsed.freshness.as_ref().unwrap().state, "expired");
     assert!(lapsed.warnings.iter().any(|w| w.id == "stale" && w.text.contains("no endorsement counts")));
-    assert!(render(&lapsed, now() + 8 * DAY).contains("STALE"));
+    let shown = render(&lapsed, now() + 8 * DAY);
+    assert!(shown.contains("STALE") && shown.contains("what to do: Ask an admin to run `delphi xenia admin refresh`"), "{shown}");
 }
 
 #[test]
@@ -134,6 +136,10 @@ fn a_sync_is_journalled_and_tampering_stays_visible_in_status() {
     assert_eq!(st.l1, 1, "what the install had stays in force");
     let text = render(&st, now());
     assert!(text.contains("Tampering found") && text.contains(&m0.path), "{text}");
+    // Under the failure, what to do; and the reason word is explained in the catalog's own words.
+    assert!(text.contains("what to do: Do not retry. Tell an admin what `delphi xenia status` shows"), "{text}");
+    assert!(text.contains("What the words above mean") && text.contains("deleted: A file that was in the store is gone."), "{text}");
+    assert!(to_json(&st)["warnings"][0]["help"]["next"].is_string());
     // The finding stays on the next sync too (the deletion is in the history now); only a newer clean sync clears it.
     assert!(matches!(sync_and_record(&fx.store, &cfg()).unwrap(), VerifiedSync::Tampering { .. }));
     assert_eq!(read(&fx, &cfg()).tampering.len(), 1);

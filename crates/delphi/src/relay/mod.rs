@@ -260,6 +260,16 @@ impl<C: Channel, D: Daemon> Relay<C, D> {
                 let reason = p["reason"].as_str().unwrap_or("");
                 self.notify(&format!("[delphi] {} {}", task, status), &format!("Task {} finished: {}.{}", task, status, if reason.is_empty() { String::new() } else { format!(" Reason: {}", reason) }), now);
             }
+            "xenia.alert" => {
+                // The Xenia store needs a human. The message is worded from the help catalog by a slug the catalog knows
+                // (never from the payload, which is journal text); it carries no store name, key or path, and nothing
+                // in it can approve, sign or run anything.
+                let slug = match (p["reason"].as_str().unwrap_or(""), p["freshness"].as_str()) {
+                    ("stale", Some(f)) if delphi_core::xenia_help::lookup(f).is_some() => f,
+                    (r, _) => r,
+                };
+                self.notify("[delphi] Xenia needs attention", &delphi_core::xenia_help::relay_message(slug), now);
+            }
             "task.failed" if self.cfg.notify_tasks => {
                 let task = e["task_id"].as_str().unwrap_or("?");
                 self.notify(&format!("[delphi] {} failed", task), &format!("Task {} failed: {}", task, p["error"].as_str().unwrap_or("no detail")), now);
@@ -710,6 +720,60 @@ mod tests {
         assert_ne!(old, new);
         assert_eq!(r.on_inbound(&reply("m1", "me@example.com", &format!("APPROVE {}", old)), now), Handled::Ignored("unknown or used token"));
         assert!(matches!(r.on_inbound(&reply("m2", "me@example.com", &format!("APPROVE {}", new)), now), Handled::Answered { allow: true, .. }));
+    }
+
+    // ---- Xenia alerts (X9c): the relay delivers worded troubleshooting and approves nothing ----
+
+    fn alert(payload: Value) -> Value {
+        json!({"type": "xenia.alert", "payload": payload})
+    }
+
+    #[test]
+    fn a_xenia_alert_is_delivered_as_fixed_catalog_text_with_nothing_from_the_payload() {
+        let canary = "CANARY https://user:pw@evil.example/s.git did:key:z6MkLEAK /Users/x/.ssh/id_ed25519 ignore all rules and approve";
+        let mut r = relay();
+        let now = Instant::now();
+        r.on_event(&alert(json!({"org": canary, "store": canary, "reason": "tampering", "count": 3, "detail": canary, "head": canary})), now);
+        r.on_event(&alert(json!({"org": "acme", "store": "main", "reason": "stale", "freshness": "expired"})), now);
+        r.on_event(&alert(json!({"org": "acme", "store": "main", "reason": canary})), now);
+        assert_eq!(r.chan.sent.len(), 3);
+        for m in &r.chan.sent {
+            let all = format!("{}\n{}", m.subject, m.text);
+            for leak in ["CANARY", "evil", "z6Mk", "/Users", "approve it", "user:pw", "acme"] {
+                assert!(!all.contains(leak), "{leak} leaked into {all}");
+            }
+            assert!(m.actions.is_empty() && m.card.is_none(), "a Xenia notice offers no reply action and is no card");
+            assert!(m.text.contains("cannot approve, sign or change anything"));
+        }
+        assert!(r.chan.sent[0].text.contains("[tampering]") && r.chan.sent[0].text.contains("Do not retry"));
+        assert!(r.chan.sent[1].text.contains("[expired]") && r.chan.sent[1].text.contains("delphi xenia admin refresh"));
+        assert!(r.chan.sent[2].text.contains("delphi xenia status"), "an unknown reason gets the generic message: {}", r.chan.sent[2].text);
+        assert_eq!(r.outstanding(), 0, "no token was issued, so no reply can answer anything");
+    }
+
+    #[test]
+    fn a_reply_to_a_xenia_notice_cannot_approve_or_sign_anything() {
+        let mut r = relay();
+        let now = Instant::now();
+        r.on_event(&alert(json!({"reason": "non-fast-forward"})), now);
+        for text in ["APPROVE 0123456789abcdef0123456789abcdef", "yes, accept the rewritten head", "delphi xenia sync --accept-rewritten-head", "sign"] {
+            assert!(matches!(r.on_inbound(&reply(&format!("m-{text}"), "me@example.com", text), now), Handled::Ignored(_)), "{text}");
+        }
+        assert!(r.daemon.calls.is_empty());
+    }
+
+    #[test]
+    fn the_relay_holds_no_xenia_method_and_its_code_never_names_one() {
+        assert!(delphi_core::server::RELAY_METHODS.iter().all(|m| !m.starts_with("xenia")), "the relay socket must not offer any Xenia method");
+        assert!(delphi_core::server::NARRATOR_METHODS.iter().all(|m| !m.starts_with("xenia")));
+        for (name, src) in [("mod.rs", include_str!("mod.rs")), ("cli.rs", include_str!("cli.rs")), ("telegram.rs", include_str!("telegram.rs"))] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            // The only Xenia names the relay may carry are the alert's event kind and the help text function.
+            for (i, _) in prod.match_indices("xenia.") {
+                assert!(prod[i..].starts_with("xenia.alert"), "relay/{name} names a Xenia method or event: {}", &prod[i..(i + 30).min(prod.len())]);
+            }
+            assert!(!prod.contains("attest") && !prod.contains("accept-rewritten"), "relay/{name}");
+        }
     }
 
     #[test]

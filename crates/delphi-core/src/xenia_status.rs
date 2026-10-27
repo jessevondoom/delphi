@@ -404,6 +404,20 @@ pub fn render(st: &Status, now: i64) -> String {
         o.push_str("\nWarnings:\n");
         for w in &st.warnings {
             o.push_str(&format!("  {} {}\n", if w.severity == Severity::Fail { "FAIL" } else { "warn" }, w.text));
+            if let Some(t) = crate::xenia_help::what_to_do(w.id) {
+                o.push_str(&format!("       {t}\n"));
+            }
+        }
+    }
+    // What each reason word above means, in the words `delphi xenia explain` uses (fixed text, never the store's).
+    let mut words: Vec<&str> = st.hidden.iter().map(|(_, h)| *h).chain(st.quarantine.iter().map(|(_, h)| *h)).chain(st.tampering.iter().map(|(_, r)| r.as_str())).collect();
+    words.sort_unstable();
+    words.dedup();
+    let known: Vec<_> = words.iter().filter_map(|w| crate::xenia_help::lookup(w)).take(12).collect();
+    if !known.is_empty() {
+        o.push_str("\nWhat the words above mean (`delphi xenia explain <word>` for more):\n");
+        for x in known {
+            o.push_str(&format!("  {}: {} {}\n", x.slug, x.meaning, x.next));
         }
     }
     o
@@ -421,7 +435,7 @@ pub fn to_json(st: &Status) -> Value {
         "quarantine": st.quarantine.iter().map(|(p, h)| json!([p, h])).collect::<Vec<_>>(),
         "tampering": st.tampering.iter().map(|(p, h)| json!([p, h])).collect::<Vec<_>>(),
         "last_sync": st.last_sync.as_ref().map(|e| json!({"outcome": e.outcome, "at": e.at})),
-        "warnings": st.warnings.iter().map(|w| json!({"id": w.id, "fail": w.severity == Severity::Fail, "text": w.text})).collect::<Vec<_>>(),
+        "warnings": st.warnings.iter().map(|w| json!({"id": w.id, "fail": w.severity == Severity::Fail, "text": w.text, "help": crate::xenia_help::lookup(w.id).map(crate::xenia_help::entry_json)})).collect::<Vec<_>>(),
     })
 }
 
