@@ -1080,10 +1080,10 @@ fn a_long_reply_is_pinned_at_its_label_row_and_space_pages_and_enter_jumps_to_th
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }
 
-/// `specs/005e` §8: the left deck is a ticker. When a span ends it leaves the running zone and one `✔ finished` entry
-/// joins the history; the chat never shows that chip.
+/// The left deck is the knowledge window (it was the activity ticker; that log lives in the Observer). A finished span
+/// never leaves a `✔ finished` chip in the chat, and the deck beside the chat is the knowledge base.
 #[test]
-fn a_finished_span_becomes_a_history_entry_in_the_activity_deck_and_never_shows_in_the_chat() {
+fn the_left_deck_is_the_knowledge_window_and_a_finished_span_never_shows_in_the_chat() {
     let m = mock(vec![reply_text("Done and dusted.")]);
     let e = setup(m.port);
     let Some(wrapper) = ui_launcher(e._t.path()) else { return };
@@ -1101,10 +1101,10 @@ fn a_finished_span_becomes_a_history_entry_in_the_activity_deck_and_never_shows_
     c.type_keys("\r");
     c.wait_for("Done and dusted.");
     assert!(!c.visible().contains("finished"), "the chat never shows the chip:\n{}", c.visible());
-    c.type_keys("\x1b[1;2D"); // Shift+Left: the activity deck
-    c.wait_for("✔ finished");
+    c.type_keys("\x1b[1;2D"); // Shift+Left: the knowledge deck
+    c.wait_for("· knowledge");
     let deck = c.visible();
-    assert!(deck.contains("· activity") && deck.contains(r#"answered "Say something.""#), "one history entry says what was answered:\n{}", deck);
+    assert!(deck.contains("type to search the knowledge base") && !deck.contains("✔ finished"), "the deck is the knowledge window, not the ticker:\n{}", deck);
     c.type_keys("\x1b[1;2C"); // back to the chat
     std::thread::sleep(Duration::from_millis(300));
     assert!(!c.visible().contains("✔ finished"), "{}", c.visible());

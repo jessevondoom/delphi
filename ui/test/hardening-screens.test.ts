@@ -57,7 +57,6 @@ test('golden screens: the chat, the menu, the inbox in both modes, the stream an
   snap('inbox-focus', frame(model({ state: withCards, deck: 2, now: T0 + 5000, inbox: { ...newInbox(0), mode: 'focus' } }), 100, 30));
   let act = fold(initial(T0), { method: 'event', params: { type: 'dag.node.added', payload: { node_id: 'n_1', role: 'architect', depth: 0 } } }, T0);
   act = fold(act, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'Weighing a table against a file.', text: 'Use a table.' } } } }, T0 + 1);
-  snap('left-deck-stream', frame(model({ state: act, deck: 0 }), 100, 30));
   snap('panel-search', frame(model({ panel: { ...(P.openSearch('retry') as any), editing: false, hits: [{ pointer: 'specs/003-collaboration-and-council.md#ladder', heading: 'Retry ladder', preview: 'three attempts, then escalate to the operator' }], lines: ['# Collaboration', '', 'A council has three rounds.'] } }), 100, 30));
   snap('slash-menu', frame(model({ composer: C.insert(C.empty(), '/b'), menu: { items: [{ label: '/build', desc: 'A Builder task', insert: '/build' }, { label: '/budget', desc: 'Cost ceiling', insert: '/budget' }], sel: 0 } }), 100, 30));
 });

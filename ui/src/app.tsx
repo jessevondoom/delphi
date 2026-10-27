@@ -13,6 +13,8 @@ import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
+import * as A from './archives.ts';
+import { openExternal } from './external.ts';
 import * as O from './org.ts';
 import { pin, previewOf, readNotes } from './research.ts';
 import { execFile } from 'node:child_process';
@@ -21,7 +23,7 @@ import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
 import type { Ev } from './input.ts';
-import { useSelection } from './select.ts';
+import { copyToClipboard, useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info, Pal, Rgb } from './theme.ts';
@@ -56,7 +58,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const [composer, setComposer] = useState(() => C.empty());
   const [deck, setDeck] = useState<0 | 1 | 2>(1);
   const [back, setBack] = useState(0);
-  const [activityBack, setActivityBack] = useState(0);
+  const [arch, setArchState] = useState<A.Arch>(A.emptyArch());
   const [help, setHelp] = useState(false);
   const [sel, setSel] = useState(0);
   const [expandTools, setExpandTools] = useState(false);
@@ -165,9 +167,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     }
   }, [running]);
 
-  /** Scroll the deck that is showing: the chat and the activity deck each keep their own place. Reaching the end resumes following. */
+  /** Scroll the chat. Reaching the end resumes following. */
   const scroll = (by: number) => {
-    if (deckRef.current === 0) { setActivityBack((b) => Math.max(0, b + by)); return; }
     const next = Math.max(0, backRef.current + by);
     if (next === 0) anchorRef.current = null;
     backRef.current = next;
@@ -244,6 +245,30 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     // A command may have changed what the workspace can run on (`/ratify apply`), so ask again afterwards.
     void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note }).then(checkModels);
   };
+
+  // The left deck is the knowledge window (`archives.ts`), reading through `kb.get` as the narrator's does. The ref moves
+  // at once, not when React gets to the update: text and Enter can arrive in one read.
+  const archRef = useRef(arch);
+  archRef.current = arch;
+  const setArch = (f: (a: A.Arch) => A.Arch) => { const n = f(archRef.current); archRef.current = n; setArchState(n); };
+  const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
+  const enc = encodeURIComponent;
+  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(archRef.current).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(archRef.current)}`), kb('/v1/health')])
+    .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
+    .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
+  const runKb = (act: A.Action) => {
+    const fail = (msg: string) => setArch((a) => A.withNote(a, msg));
+    const a0 = archRef.current, tp = A.trustParam(a0);
+    if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) runKb({ t: 'search', q: a0.q.trim() }); else if (a0.browse) runKb({ t: 'browse', name: a0.browse }); }
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    else if (act.t === 'open') {
+      const t = act.target;
+      kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, sizeRef.current.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')))).catch(() => fail('could not open it'));
+    } else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
+    else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
+  };
+  useEffect(() => { if (deck === 0 && !archRef.current.shelf) void loadShelf(); }, [deck]);
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
   // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs
@@ -324,6 +349,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         else if (action.t === 'insert') { openPanel(null); upd((c) => C.insert(c, action.text)); }
         else if (action.t === 'pin') { try { pin(info, mission, action.from, action.text); note('pinned to the mission notebook (/notes)', 'ok'); openPanel({ ...(panelRef.current as P.Panel), flash: 'pinned to the mission notebook (/notes)' }); } catch (er: any) { openPanel({ ...(panelRef.current as P.Panel), flash: 'could not pin: ' + er.message }); } }
         return;
+      }
+
+      // On the left deck the keyboard belongs to the knowledge window; ← → (and shift+← →) it leaves to the deck keys.
+      if (deckRef.current === 0 && !(e.t === 'ctrl' && e.c === 'c') && e.t !== 'bg') {
+        const r = A.key(archRef.current, e, sizeRef.current.w, Math.max(1, sizeRef.current.h - 7));
+        if (r.used) { setArch(() => r.a); runKb(r.action); return; }
       }
 
       // On the right deck the keyboard belongs to the inbox (an explicit focus change), never the prompt.
@@ -451,8 +482,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, still, now, back, activityBack, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, activityBack, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const model: Model = { ...base, still, now, back, arch, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>
