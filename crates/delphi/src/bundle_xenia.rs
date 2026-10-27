@@ -41,7 +41,7 @@ pub fn cfg_now() -> VerifyConfig {
     #[cfg(test)]
     {
         // A fixture's freshness statement is only fresh around its own date; the xenia command tests pin the clock.
-        let t = crate::xenia_cmd::TEST_NOW.load(std::sync::atomic::Ordering::Relaxed);
+        let t = crate::xenia_cmd::TEST_NOW.with(|c| c.get());
         if t != 0 {
             return VerifyConfig::at(t);
         }

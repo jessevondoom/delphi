@@ -16,6 +16,9 @@ pub const KEEP_HASHES: usize = 3;
 pub struct Lock {
     #[serde(default)]
     pub bundle: Vec<Entry>,
+    /// Origins the operator deemed trusted sources (`specs/024` §3.8).
+    #[serde(default, rename = "trusted_source", skip_serializing_if = "Vec::is_empty")]
+    pub trusted_source: Vec<TrustedSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +51,68 @@ pub struct Entry {
     /// listed, launched or offered to a role. Replaced with the bundle's declarations on every add and update.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inert_servers: Vec<InertServer>,
+    /// The operator's raise of this bundle's knowledge tier (`specs/024` §3.7): `user_ratified`, or empty for the default
+    /// (`federated_verified`). INSTALL-OWNED: it lives only here, in `local/bundles.lock`, never in the bundle tree or
+    /// anything a bundle ships, and no manifest or frontmatter key can set it. It counts only while `trust_hash` and
+    /// `trust_kid` are still the bundle's `hash` and `publisher_kid` (see [`Entry::raised`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trust: String,
+    /// The bundle hash and publisher key the operator raised the tier for.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trust_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trust_kid: String,
+    /// Every raise, lowering and reset, newest first, so that the lock history says what happened to the tier.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trust_log: Vec<TrustChange>,
 }
+
+/// One change to a bundle's raised tier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustChange {
+    pub at: String,
+    /// `user_ratified` (raised) or `default` (lowered or reset).
+    pub level: String,
+    pub hash: String,
+    /// `at-add`, `cli`, `console`, `trusted-source`, `update`, `rollback`, `remove`, `source-revoked`.
+    pub by: String,
+}
+
+/// An origin the operator deemed a trusted source (`specs/024` §3.8): later versions fetched from this same origin and
+/// signed by this same publisher key (or a successor the store's roster names) keep the bundle validated at `level`
+/// without a new confirmation. Install-owned, in the lock, per origin and publisher key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedSource {
+    /// [`origin_of`]: `xenia:<org>/<store>` or `<kind>:<path>`.
+    pub origin: String,
+    pub kid: String,
+    /// `user_ratified` or `default` (citable as validated, the tier every bundle has).
+    pub level: String,
+    pub granted_at: String,
+    /// Bundles whose tier this origin raised, for the log: `org/name`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_to: Vec<String>,
+}
+
+/// The identity of where a bundle is fetched from: a store is `xenia:<org>/<store>` (not the record or revision), anything
+/// else is its kind and the recorded path or repository URL.
+pub fn origin_of(s: &Source) -> String {
+    if s.kind == "xenia" {
+        let rest = s.path.strip_prefix("xenia:").unwrap_or(&s.path);
+        let mut it = rest.split('/');
+        return format!("xenia:{}/{}", it.next().unwrap_or(""), it.next().unwrap_or(""));
+    }
+    // A marketplace source is recorded as `<repo>#<name>@<commit>`: the commit changes with every version and is not the origin.
+    let path = if s.kind == "marketplace" { s.path.split('#').next().unwrap_or(&s.path) } else { s.path.as_str() };
+    format!("{}:{}", s.kind, path)
+}
+
+/// The raised level's name, as written in the lock and on the command line.
+pub const RATIFIED: &str = "user_ratified";
+/// The tier every added bundle's knowledge has unless the operator raises it.
+pub const DEFAULT_TIER: &str = "federated_verified";
+/// What a bundle's documents are called wherever they are cited or their trust is described to a model.
+pub const VALIDATED_LABEL: &str = "validated bundle source";
 
 /// One declared server, as far as the lock keeps it: its name and transport, the `url` of an `http` one and the `command`
 /// of a `stdio` one (shown to the operator, never run), and the *names* of its headers and env entries. A value is never
@@ -123,9 +187,51 @@ impl Entry {
         !self.review_by.is_empty() && self.review_by.as_str() < today
     }
 
-    /// `acme/acme-platform@1.4.0 · unsigned`, the breadcrumb's bundle label (`specs/024` §3.6).
+    /// Is the operator's raise in force? Only for the very hash and publisher key it was made for, so that any change to
+    /// either (an update, a rollback, a replaced publisher, an edited lock) puts the bundle back at the default.
+    pub fn raised(&self) -> bool {
+        self.trust == RATIFIED && !self.hash.is_empty() && self.trust_hash == self.hash && self.trust_kid == self.publisher_kid
+    }
+
+    /// The knowledge tier now in force: `user_ratified` when raised, else `federated_verified`. Never read from the bundle.
+    pub fn tier_name(&self) -> &'static str {
+        if self.raised() { RATIFIED } else { DEFAULT_TIER }
+    }
+
+    /// `acme/acme-platform@1.4.0 · unsigned · validated bundle source`, the breadcrumb's bundle label (`specs/024` §3.6):
+    /// the bundle, how it was signed, that its documents are validated sources, and a raise if the operator made one.
     pub fn label(&self, today: &str) -> String {
-        format!("{}@{} · {}{}", self.id(), self.version, self.provenance, if self.is_stale(today) { " · stale" } else { "" })
+        format!("{}@{} · {} · {}{}{}", self.id(), self.version, self.provenance, VALIDATED_LABEL, if self.raised() { " · ratified by the operator" } else { "" }, if self.is_stale(today) { " · stale" } else { "" })
+    }
+
+    /// Drop the raise and say so in the log. Returns whether there was one on record.
+    pub fn reset_trust(&mut self, at: &str, by: &str) -> bool {
+        let had = !self.trust.is_empty();
+        if had {
+            self.trust_log.insert(0, TrustChange { at: at.into(), level: "default".into(), hash: self.hash.clone(), by: by.into() });
+            self.trust_log.truncate(20);
+        }
+        self.trust.clear();
+        self.trust_hash.clear();
+        self.trust_kid.clear();
+        had
+    }
+
+    /// Raise the knowledge tier for the current hash and publisher key.
+    pub fn raise_trust(&mut self, at: &str, by: &str) {
+        self.trust = RATIFIED.into();
+        self.trust_hash = self.hash.clone();
+        self.trust_kid = self.publisher_kid.clone();
+        self.trust_log.insert(0, TrustChange { at: at.into(), level: RATIFIED.into(), hash: self.hash.clone(), by: by.into() });
+        self.trust_log.truncate(20);
+    }
+
+    /// Who last raised it, if the raise is in force (`trusted-source` for an automatic one).
+    pub fn raised_by(&self) -> Option<&str> {
+        if !self.raised() {
+            return None;
+        }
+        self.trust_log.iter().find(|c| c.level == RATIFIED).map(|c| c.by.as_str())
     }
 }
 
@@ -216,6 +322,10 @@ mod tests {
             skill_roles: BTreeMap::new(),
             history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into(), publisher_kid: String::new(), provenance: String::new(), gone: false, left_by: String::new() }],
             inert_servers: Vec::new(),
+            trust: String::new(),
+            trust_hash: String::new(),
+            trust_kid: String::new(),
+            trust_log: Vec::new(),
         }
     }
 
@@ -223,7 +333,7 @@ mod tests {
     fn the_lock_round_trips_and_a_missing_one_is_empty_but_a_corrupt_one_is_an_error() {
         let t = tempfile::tempdir().unwrap();
         assert_eq!(read(t.path()).unwrap(), Lock::default());
-        let lock = Lock { bundle: vec![entry("a"), entry("b")] };
+        let lock = Lock { bundle: vec![entry("a"), entry("b")], ..Default::default() };
         write(t.path(), &lock).unwrap();
         assert_eq!(read(t.path()).unwrap(), lock);
         std::fs::write(lock_path(t.path()), "bundle = 3 [").unwrap();
@@ -242,8 +352,53 @@ mod tests {
     fn staleness_is_computed_from_review_by_and_shown_in_the_label() {
         let e = entry("a");
         assert!(!e.is_stale("2027-01-31") && e.is_stale("2027-02-01"));
-        assert_eq!(e.label("2026-10-25"), "acme/a@1.0.0 · unsigned");
+        assert_eq!(e.label("2026-10-25"), "acme/a@1.0.0 · unsigned · validated bundle source");
         assert!(e.label("2028-01-01").ends_with("· stale"));
+    }
+
+    #[test]
+    fn a_raise_counts_only_for_the_hash_and_publisher_it_was_made_for() {
+        let mut e = entry("a");
+        assert_eq!(e.tier_name(), "federated_verified");
+        e.raise_trust("t", "cli");
+        assert!(e.raised() && e.tier_name() == "user_ratified" && e.raised_by() == Some("cli"));
+        assert!(e.label("2026-10-25").contains("ratified by the operator"));
+        let mut moved = e.clone();
+        moved.hash = "blake3:cd".into();
+        assert!(!moved.raised(), "a different hash is not the raised one");
+        let mut rekeyed = e.clone();
+        rekeyed.publisher_kid = "other".into();
+        assert!(!rekeyed.raised(), "a different publisher is not the raised one");
+        let mut forged = entry("a");
+        forged.trust = "user_ratified".into();
+        assert!(!forged.raised(), "a bare trust field without the binding is nothing");
+        assert!(e.reset_trust("t2", "update") && !e.raised() && e.trust_log.len() == 2 && !e.reset_trust("t3", "update"));
+    }
+
+    #[test]
+    fn the_raise_and_the_trusted_sources_survive_a_round_trip_and_an_old_lock_without_them_still_reads() {
+        let t = tempfile::tempdir().unwrap();
+        let mut e = entry("a");
+        e.raise_trust("t", "cli");
+        let ts = TrustedSource { origin: "xenia:acme/main".into(), kid: "did:key:z".into(), level: RATIFIED.into(), granted_at: "t".into(), applied_to: vec![] };
+        write(t.path(), &Lock { bundle: vec![e.clone()], trusted_source: vec![ts.clone()] }).unwrap();
+        let back = read(t.path()).unwrap();
+        assert!(back.bundle[0].raised() && back.trusted_source == vec![ts]);
+        // A lock written by a release that knew none of this reads as the default tier: a Delphi update neither adds nor drops a raise.
+        std::fs::write(lock_path(t.path()), "[[bundle]]\norg = \"acme\"\nname = \"a\"\nversion = \"1\"\nhash = \"blake3:ab\"\npublisher_kid = \"unsigned\"\nprovenance = \"unsigned\"\nadded_at = \"t\"\norder = 1\nstatus = \"active\"\nreview_by = \"\"\ntitle = \"T\"\n[bundle.source]\nkind = \"directory\"\npath = \"/x\"\n").unwrap();
+        let old = read(t.path()).unwrap();
+        assert!(!old.bundle[0].raised() && old.trusted_source.is_empty());
+    }
+
+    #[test]
+    fn a_store_origin_is_the_org_and_store_not_the_record_and_anything_else_is_kind_and_path() {
+        let s = |k: &str, p: &str| Source { kind: k.into(), path: p.into() };
+        assert_eq!(origin_of(&s("xenia", "xenia:acme/main/rec-1@3")), "xenia:acme/main");
+        assert_eq!(origin_of(&s("xenia", "xenia:acme/main/rec-2@9")), "xenia:acme/main");
+        assert_ne!(origin_of(&s("xenia", "xenia:acme/other/rec-1@3")), "xenia:acme/main");
+        assert_eq!(origin_of(&s("marketplace", "https://github.com/acme/b#plat@abc123")), "marketplace:https://github.com/acme/b");
+        assert_eq!(origin_of(&s("marketplace", "https://github.com/acme/b#plat@def456")), origin_of(&s("marketplace", "https://github.com/acme/b#plat@abc123")), "a new commit is the same origin");
+        assert_ne!(origin_of(&s("marketplace", "https://github.com/evil/b#plat@abc123")), origin_of(&s("marketplace", "https://github.com/acme/b#plat@abc123")));
     }
 
     #[test]
@@ -253,7 +408,7 @@ mod tests {
         let (mut gone, mut removed) = (entry("gone"), entry("removed"));
         removed.status = "removed".into();
         gone.hash = "blake3:ff".into();
-        write(ws.path(), &Lock { bundle: vec![entry("a"), gone, removed.clone()] }).unwrap();
+        write(ws.path(), &Lock { bundle: vec![entry("a"), gone, removed.clone()], ..Default::default() }).unwrap();
         std::fs::create_dir_all(cache_dir(home.path(), "acme", "a", "blake3:ab").join("knowledge")).unwrap();
         std::fs::create_dir_all(cache_dir(home.path(), "acme", "removed", "blake3:ab").join("knowledge")).unwrap();
         let roots = active_roots(home.path(), ws.path());

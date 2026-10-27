@@ -133,6 +133,19 @@ pub enum Rotation {
     Compromised,
 }
 
+impl Rotation {
+    /// The kind a command line names with `--routine` / `--compromised`. Exactly one must be given: there is no
+    /// default, because the two have different consequences for every record the old key signed (spec 011 §8.1).
+    pub fn from_flags(routine: bool, compromised: bool) -> Result<Rotation, &'static str> {
+        match (routine, compromised) {
+            (true, false) => Ok(Rotation::Routine),
+            (false, true) => Ok(Rotation::Compromised),
+            (true, true) => Err("--routine and --compromised are opposites: name one"),
+            (false, false) => Err("a rotation needs --routine or --compromised (there is no default: a compromise voids what the old key signed)"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMember {
     pub did: String,

@@ -21,12 +21,12 @@ const view = (over: Partial<O.OrgView> = {}): O.OrgView => ({
   open: [], slice: { bytes: 900, cap: 4096, bundles: 1, trimmed: [] }, unavailable: ['map connector'], ...over,
 });
 const loaded = (v: O.OrgView = view()): O.OrgPanel => ({ ...O.openOrg(), view: v });
-const shown = (p: O.OrgPanel, w = 110) => O.lines(p, pal, w).map(plain).join('\n');
+const shown = (p: O.OrgPanel, w = 130) => O.lines(p, pal, w).map(plain).join('\n');
 
 test('the deck lists bundles with version, provenance, scope and freshness, and shows - for what is not known yet', () => {
   const s = shown(loaded(view({ bundles: [bundle(), bundle({ id: 'beta/ops', version: '0.3.0', stale: true, matched: false, review_by: '2026-01-01' })] })));
-  assert.match(s, /acme\/plat\s+1\.4\.0\s+unsigned\s+matched\s+fresh \(2999-01-01\)\s+-\s+-/);
-  assert.match(s, /beta\/ops\s+0\.3\.0\s+unsigned\s+unmatched\s+stale \(2026-01-01\)\s+-\s+-/, 'stale and unmatched are words, not only colour');
+  assert.match(s, /acme\/plat\s+1\.4\.0\s+unsigned\s+validated\s+matched\s+fresh \(2999-01-01\)\s+-\s+-/);
+  assert.match(s, /beta\/ops\s+0\.3\.0\s+unsigned\s+validated\s+unmatched\s+stale \(2026-01-01\)\s+-\s+-/, 'stale and unmatched are words, not only colour');
 });
 
 test('the vectors column shows how far the bundle is, as the daemon reports it', () => {
@@ -153,4 +153,35 @@ test('the console draws the deck over the chat area with its own key hint', () =
   assert.match(screen, /Organization/);
   assert.match(screen, /acme\/plat\s+1\.4\.0\s+unsigned/);
   assert.match(screen, /a add <dir>/);
+});
+
+test('the tier is a word in the deck: validated by default, ratified when raised, and a trusted source is named', () => {
+  const s = shown(loaded(view({ bundles: [bundle(), bundle({ id: 'beta/ops', tier: 'user_ratified', raised_by: 'console' }), bundle({ id: 'gamma/x', tier: 'user_ratified', source_trust: 'user_ratified' })] })), 140);
+  assert.match(s, /acme\/plat .*validated\s/);
+  assert.match(s, /beta\/ops .*ratified\s/);
+  assert.match(s, /gamma\/x .*ratified\*/);
+  assert.match(s, /validated bundle source/);
+});
+
+test('t raises only through a typed confirmation: the first enter asks the daemon for the card, and only the exact word sends the second call', () => {
+  let r = O.key(loaded(), text('t'));
+  assert.deepEqual([r.panel.asking, r.panel.input], ['trust', 'acme/plat']);
+  r = O.key(r.panel, key('enter'));
+  assert.deepEqual(r.action, { t: 'trust', body: { action: 'raise', name: 'acme/plat' } }, 'no confirm word yet');
+  // the app shows the daemon's card and the panel waits for the typed word
+  const waiting: O.OrgPanel = { ...r.panel, busy: false, asking: 'confirm', input: '', card: { body: { action: 'raise', name: 'acme/plat' }, text: 'Raise it.\nThis resets on update.', expect: 'acme/plat', what: 'the bundle name' } };
+  assert.match(O.view(waiting, pal, 100, 24).map(plain).join('\n'), /resets on update/);
+  let c = O.key({ ...waiting, input: 'acme/plat' }, key('enter'));
+  assert.deepEqual(c.action, { t: 'trust', body: { action: 'raise', name: 'acme/plat', confirm: 'acme/plat' } });
+  assert.equal(O.key(waiting, key('esc')).panel.asking, null, 'esc cancels and nothing is sent');
+});
+
+test('t <name> default lowers and s grants, ratifies or revokes a source', () => {
+  assert.deepEqual(O.trustBody('trust', 'acme/plat default'), { action: 'lower', name: 'acme/plat' });
+  assert.deepEqual(O.trustBody('source', 'acme/plat'), { action: 'grant', name: 'acme/plat', level: 'default' });
+  assert.deepEqual(O.trustBody('source', 'acme/plat ratified'), { action: 'grant', name: 'acme/plat', level: 'user_ratified' });
+  assert.deepEqual(O.trustBody('source', 'acme/plat revoke'), { action: 'revoke', name: 'acme/plat' });
+  assert.equal(O.trustBody('trust', '  '), null);
+  const r = O.key(loaded(), text('s'));
+  assert.equal(r.panel.asking, 'source');
 });

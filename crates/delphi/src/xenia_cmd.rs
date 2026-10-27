@@ -2,7 +2,7 @@
 //!
 //! Member commands (this milestone, X9): `whoami`, `join`, `sync`, `status`, and the six that publish through the
 //! gate: `publish`, `endorse`, `dispute`, `withdraw`, `restore`, `republish` (and `retract`, which withdraws one's own
-//! endorsement). Admin commands (`xenia admin ...`) are milestone X8 and are not here.
+//! endorsement). The admin family (`xenia admin ...`) is in `xenia_admin_cmd.rs` and shares `tty_confirm`.
 //!
 //! **Humans sign; agents don't.** Every command that signs shows the approval card (the exact bytes, the flags, the
 //! similar records) and then makes the operator type the card's short code on a terminal. With stdin or stdout not a
@@ -37,19 +37,18 @@ const USAGE: &str = "usage:
   delphi xenia retract <id>                                   delphi xenia republish --old <did>
   delphi xenia help [topic] [--json]
   delphi xenia explain <slug or pasted message> [--json]
-  delphi xenia admin init|add|remove|rotate|show|sign|publish|refresh ...   (terminal only; see `delphi help xenia`)
     [--workspace <name>] [--home <dir>]";
 
 /// Flags that take no value.
-const SWITCHES: [&str; 6] = ["--promoted", "--allow-local", "--json", "--auto-update-bundles", "--no-verify-tree", "--accept-rewritten-head"];
+const SWITCHES: [&str; 10] = ["--promoted", "--allow-local", "--json", "--auto-update-bundles", "--no-verify-tree", "--routine", "--compromised", "--for-cause", "--as-admin", "--accept-rewritten-head"];
 
 #[derive(Debug)]
-struct Parsed {
-    positional: Vec<String>,
-    opts: BTreeMap<String, String>,
+pub(crate) struct Parsed {
+    pub(crate) positional: Vec<String>,
+    pub(crate) opts: BTreeMap<String, String>,
 }
 
-fn parse(args: &[String]) -> Result<Parsed, String> {
+pub(crate) fn parse(args: &[String]) -> Result<Parsed, String> {
     let (mut positional, mut opts) = (Vec::new(), BTreeMap::new());
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -68,17 +67,23 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
 }
 
 pub fn run(args: &[String]) -> i32 {
-    run_with(args, &mut TtyApprover)
+    run_with_both(args, &mut TtyApprover, &mut crate::xenia_admin_cmd::TtyAdminApprover)
 }
 
-/// [`run`] with the approver injected, so tests can answer the card. The real one is [`TtyApprover`].
+/// [`run`] with the member approver injected, so tests can answer the card. The real one is [`TtyApprover`].
+#[cfg(test)]
 pub(crate) fn run_with(args: &[String], approver: &mut dyn Approver) -> i32 {
+    run_with_both(args, approver, &mut crate::xenia_admin_cmd::TtyAdminApprover)
+}
+
+/// Both approvers injected (the admin family asks an `AdminApprover`).
+pub(crate) fn run_with_both(args: &[String], approver: &mut dyn Approver, admin: &mut dyn delphi_core::xenia_admin::AdminApprover) -> i32 {
     let Some(word) = args.first().map(String::as_str) else {
         eprintln!("{USAGE}");
         return 2;
     };
     if word == "admin" {
-        return crate::xenia_admin_cmd::run_cli(&args[1..]);
+        return crate::xenia_admin_cmd::run(&args[1..], admin);
     }
     let parsed = match parse(&args[1..]) {
         Ok(p) => p,
@@ -105,14 +110,16 @@ pub(crate) fn run_with(args: &[String], approver: &mut dyn Approver) -> i32 {
     }
 }
 
-/// The clock the commands judge freshness by. Tests pin it (a fixture's statement is only fresh around its own date).
+// The clock the commands judge freshness by. Tests pin it (a fixture's statement is only fresh around its own date).
 #[cfg(test)]
-pub(crate) static TEST_NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+thread_local! {
+    pub(crate) static TEST_NOW: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     #[cfg(test)]
     {
-        let t = TEST_NOW.load(std::sync::atomic::Ordering::Relaxed);
+        let t = TEST_NOW.with(|c| c.get());
         if t != 0 {
             return t;
         }
@@ -137,7 +144,7 @@ fn open_kb(ws: &Option<home::Workspace>) -> Option<delphi_engine::kb::Kb> {
     db.is_file().then(|| delphi_engine::kb::Kb::open(&db).ok()).flatten()
 }
 
-fn pick(home: &Path, p: &Parsed) -> Result<(StoreRef, delphi_core::xenia_store::Store), String> {
+pub(crate) fn pick(home: &Path, p: &Parsed) -> Result<(StoreRef, delphi_core::xenia_store::Store), String> {
     let r = xenia_status::pick_store(home, p.opts.get("store").map(String::as_str))?;
     let s = xenia_status::open(home, &r).map_err(|e| e.to_string())?;
     Ok((r, s))
@@ -469,30 +476,31 @@ pub(crate) struct TtyApprover;
 
 impl Approver for TtyApprover {
     fn decide(&mut self, preview: &Preview) -> Decision {
-        let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
-        if !on_terminal {
-            eprintln!("signing is a human act: run this command in a terminal (it has no non-interactive mode)");
-            return Decision::Deny;
-        }
-        let code = xenia_action::code(preview);
-        print!("type the approval code ({code}) to sign, anything else cancels: ");
-        let ask = |prompt: &str| -> String {
-            use std::io::Write;
-            print!("{prompt}");
-            let _ = std::io::stdout().flush();
-            let mut line = String::new();
-            let _ = std::io::stdin().lock().read_line(&mut line);
-            line.trim().to_string()
-        };
-        if ask("") != code {
-            return Decision::Deny;
-        }
-        let ack = if preview.flags.is_empty() { true } else { ask(&format!("{} flag(s) above do not block; type `yes` to sign anyway: ", preview.flags.len())) == "yes" };
-        if !ack {
-            return Decision::Deny;
-        }
-        Decision::Approve(preview.approve(true))
+        if tty_confirm(&xenia_action::code(preview), preview.flags.len()) { Decision::Approve(preview.approve(true)) } else { Decision::Deny }
     }
+}
+
+/// The one place a human answers a signing card: a terminal on stdin AND stdout (so neither a pipe nor a redirect
+/// can stand in for the operator), the typed code, and, if the card carries flags, a typed `yes`. There is no flag,
+/// variable or file that answers.
+pub(crate) fn tty_confirm(code: &str, flags: usize) -> bool {
+    let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
+    if !on_terminal {
+        eprintln!("signing is a human act: run this command in a terminal (it has no non-interactive mode)");
+        return false;
+    }
+    let ask = |prompt: &str| -> String {
+        use std::io::Write;
+        print!("{prompt}");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut line);
+        line.trim().to_string()
+    };
+    if ask(&format!("type the approval code ({code}) to sign, anything else cancels: ")) != code {
+        return false;
+    }
+    flags == 0 || ask(&format!("{flags} warning(s) above do not block; type `yes` to sign anyway: ")) == "yes"
 }
 
 #[cfg(test)]
@@ -540,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_runs_without_a_joined_store_and_admin_commands_are_not_here() {
+    fn nothing_runs_without_a_joined_store() {
         let d = tempfile::tempdir().unwrap();
         let h = d.path().to_str().unwrap();
         let mut no = Answers { yes: false, seen: 0 };
@@ -554,7 +562,7 @@ mod tests {
 
     /// A store on disk, joined through the command and synced through it.
     fn joined(tmp: &Path) -> (Fx, String) {
-        TEST_NOW.store(now(), std::sync::atomic::Ordering::Relaxed);
+        TEST_NOW.with(|c| c.set(now()));
         let fx0 = Fx::with_cast(tmp);
         let mia = fx0.id("mia");
         let m = delphi_core::xenia_fixture::records::memory_with(&mia, &u(0), 1, "active", "v", "rust", "internal_empirical");

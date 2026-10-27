@@ -215,13 +215,13 @@ fn terminal_command(action: &str, p: &Value, store: &str) -> String {
     match action {
         "sign" | "publish" => format!("delphi xenia admin {action} {n} --store {store}"),
         "refresh" => format!("delphi xenia admin refresh --store {store}"),
-        "init" => "delphi xenia admin init draft --org <org> --store <store> --founder did=<did>,person=<person>,handle=<handle>,role=admin --out <file>".into(),
+        "init" => "delphi xenia admin genesis draft --org <org> --store <store> --founder <did>,<person>,<handle>,admin --out <file>".into(),
         "accept-rewritten-head" => format!("delphi xenia sync --accept-rewritten-head --store {store}"),
-        "rotate" => format!("delphi xenia admin rotate {} {} --routine|--compromised --store {store}", safe(&op["old_did"], "<old-did>"), safe(&op["new_did"], "<new-did>")),
+        "rotate" => format!("delphi xenia admin rotate {} --to {} --routine|--compromised --store {store}", safe(&op["old_did"], "<old-did>"), safe(&op["new_did"], "<new-did>")),
         _ => match op["kind"].as_str() {
             Some("remove") => format!("delphi xenia admin remove {}{} --store {store}", safe(&op["did"], "<did>"), if op["for_cause"].as_bool() == Some(true) { " --for-cause" } else { "" }),
-            Some("rotate") => format!("delphi xenia admin rotate {} {} --routine|--compromised --store {store}", safe(&op["old_did"], "<old-did>"), safe(&op["new_did"], "<new-did>")),
-            _ => format!("delphi xenia admin add {} --person {} --handle {}{} --store {store}", safe(&op["did"], "<did>"), safe(&op["person"], "<person>"), safe(&op["handle"], "<handle>"), if op["admin"].as_bool() == Some(true) { " --admin" } else { "" }),
+            Some("rotate") => format!("delphi xenia admin rotate {} --to {} --routine|--compromised --store {store}", safe(&op["old_did"], "<old-did>"), safe(&op["new_did"], "<new-did>")),
+            _ => format!("delphi xenia admin add {} --person {} --handle {}{} --store {store}", safe(&op["did"], "<did>"), safe(&op["person"], "<person>"), safe(&op["handle"], "<handle>"), if op["admin"].as_bool() == Some(true) { " --as-admin" } else { "" }),
         },
     }
 }

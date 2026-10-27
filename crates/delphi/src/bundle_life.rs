@@ -149,6 +149,7 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
     let (id, wanted) = (e.id(), target.hash.clone());
     let inert = crate::bundle_connect::inert_servers(&dest);
     let done = bundles::update(ws, |lock| {
+        let grants = lock.trusted_source.clone();
         let e = lock.bundle.iter_mut().find(|x| x.id() == id && x.is_active()).ok_or("the bundle was removed meanwhile")?;
         let pos = e.history.iter().position(|p| p.hash == wanted).ok_or("the history changed meanwhile")?;
         let from = e.clone();
@@ -164,9 +165,18 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
         e.title = m.title.clone();
         e.added_at = now.clone();
         e.inert_servers = inert.clone();
-        Ok(from)
+        // A one-off raise belonged to the version it was made for: a rollback ends it. A trusted source's grant does not end:
+        // the earlier version came from the same origin and the same key, so it is raised again.
+        let origin = bundles::origin_of(&e.source);
+        let granted = e.publisher_kid != provenance::UNSIGNED && grants.iter().any(|t| t.origin == origin && t.kid == e.publisher_kid && t.level == bundles::RATIFIED);
+        let was_one_off = from.raised() && from.raised_by() != Some("trusted-source");
+        e.reset_trust(&now, "rollback");
+        if granted {
+            e.raise_trust(&now, "trusted-source");
+        }
+        Ok((from, was_one_off && !granted))
     });
-    let from = match done {
+    let (from, reset_note) = match done {
         Ok(f) => f,
         Err(err) => return fail(err),
     };
@@ -174,6 +184,10 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
         Ok(r) => println!("rolled {} back: {} ({}) -> {} ({}); knowledge follows the lock now ({} documents added, {} updated, {} removed), prompt content from the next task", id, from.version, short(&from.hash), m.version, short(&wanted), r.added, r.updated, r.removed),
         Err(err) => return fail(format!("rolled back, but the index could not be updated: {} (run `delphi kb index`)", err)),
     }
+    if reset_note {
+        println!("trust: your raise of {} to user_ratified applied to the version you rolled back from and is reset: it is at the default tier (validated bundle source); confirm again with `delphi bundle trust {}`", id, id);
+    }
+    bundle_add::print_tier(ws, &e.org, &e.name);
     // The older tree's vector verdict (beside it in the cache) still stands, so its shipped vectors apply again at once;
     // anything without a vector is embedded as after an add.
     let o = AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false, no_vectors: false, embed_in_background: background };
@@ -742,5 +756,220 @@ mod tests {
         for bad in ["", "abc", "ABCDEF12", "--yes", "abcdefg1", "../../etc", &"a".repeat(65)] {
             assert!(hash_prefix(bad).is_none(), "{bad}");
         }
+    }
+
+    // ── trust: the raise and the trusted source (`specs/024` §3.7, §3.8) ───────────────────────────────────────────
+
+    use delphi_core::bundle_trust::{self, Req};
+
+    fn raise(f: &Fx) {
+        bundle_trust::apply(&f.ws, &Req::Raise { name: "acme-platform".into() }, "cli").unwrap();
+    }
+
+    fn grant(f: &Fx, level: &str) {
+        bundle_trust::apply(&f.ws, &Req::Grant { target: "acme-platform".into(), level: level.into() }, "cli").unwrap();
+    }
+
+    fn doc_tier(f: &Fx) -> String {
+        let kb = delphi_engine::kb::Kb::open(&f.ws.join("local/state.db")).unwrap();
+        kb.document("bundles/acme/acme-platform/knowledge/glossary.md", &delphi_engine::kb::SearchOpts::default()).unwrap().expect("indexed").source_type
+    }
+
+    fn release(f: &Fx, a: &(PathBuf, Identity), version: &str) {
+        set_version(f.src.path(), version);
+        assert_eq!(publish(f.src.path(), &a.0), 0);
+    }
+
+    #[test]
+    fn a_one_off_raise_ends_on_an_update_that_changes_the_hash_and_on_rollback_and_the_index_follows() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        assert_eq!(doc_tier(&f), "federated_verified");
+        raise(&f);
+        delphi_engine::kb::sync_workspace(&f.ws).unwrap();
+        assert!(lock(&f).bundle[0].raised());
+        assert_eq!(doc_tier(&f), "user_ratified", "the index follows the lock without the file changing");
+        // an update with a new hash: back at the default, the lock log says why
+        release(&f, &a, "1.5.0");
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0);
+        let e = &lock(&f).bundle[0];
+        assert!(!e.raised() && e.trust.is_empty(), "{e:?}");
+        assert_eq!((e.trust_log[0].level.as_str(), e.trust_log[0].by.as_str()), ("default", "update"));
+        assert_eq!(doc_tier(&f), "federated_verified");
+        // raise again, then roll back: reset again
+        raise(&f);
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 0);
+        let e = &lock(&f).bundle[0];
+        assert!(!e.raised(), "rollback resets a one-off raise");
+        assert_eq!(e.trust_log[0].by, "rollback");
+        assert_eq!(doc_tier(&f), "federated_verified");
+        // an explicit lowering is just as final
+        raise(&f);
+        bundle_trust::apply(&f.ws, &Req::Lower { name: "acme-platform".into() }, "cli").unwrap();
+        assert!(!lock(&f).bundle[0].raised());
+        // removing the bundle drops the raise, and adding it again does not bring it back
+        raise(&f);
+        assert_eq!(bundle_add::remove(&f.ws, "acme-platform"), 0);
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0);
+        assert!(!lock(&f).bundle[0].raised());
+    }
+
+    #[test]
+    fn a_trusted_source_keeps_its_tier_through_several_content_changes_and_a_rollback_until_it_is_revoked() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        grant(&f, "user_ratified");
+        let hash0 = lock(&f).bundle[0].hash.clone();
+        assert_eq!(lock(&f).bundle[0].raised_by(), Some("trusted-source"));
+        for v in ["1.5.0", "1.6.0", "1.7.0"] {
+            release(&f, &a, v);
+            assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0, "{v}");
+            let e = &lock(&f).bundle[0];
+            assert!(e.raised() && e.raised_by() == Some("trusted-source"), "{v}: {e:?}");
+            assert_ne!(e.hash, hash0);
+        }
+        assert_eq!(doc_tier(&f), "user_ratified");
+        // a rollback to an earlier version from the same source keeps the grant
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 0);
+        assert!(lock(&f).bundle[0].raised(), "same origin, same key: the grant holds");
+        // revoking ends it, at once
+        bundle_trust::apply(&f.ws, &Req::Revoke { target: "acme-platform".into() }, "cli").unwrap();
+        assert!(!lock(&f).bundle[0].raised() && lock(&f).trusted_source.is_empty());
+        release(&f, &a, "1.8.0");
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0);
+        assert!(!lock(&f).bundle[0].raised());
+    }
+
+    #[test]
+    fn a_default_level_source_grant_raises_nothing_and_a_failed_update_leaves_the_grant_and_the_bundle_alone() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        grant(&f, "default");
+        release(&f, &a, "1.5.0");
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0);
+        assert!(!lock(&f).bundle[0].raised() && lock(&f).trusted_source.len() == 1);
+        // a source that was granted at user_ratified, then an update whose tree was altered after signing: refused, nothing moves
+        grant(&f, "user_ratified");
+        release(&f, &a, "1.6.0");
+        fs::write(f.src.path().join("README.md"), fs::read_to_string(f.src.path().join("README.md")).unwrap() + "tampered\n").unwrap();
+        let before = fs::read(f.ws.join("local/bundles.lock")).unwrap();
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 1);
+        assert_eq!(fs::read(f.ws.join("local/bundles.lock")).unwrap(), before, "the lock is byte-for-byte as it was: still raised, still granted");
+        assert!(lock(&f).bundle[0].raised() && lock(&f).trusted_source.len() == 1);
+    }
+
+    #[test]
+    fn a_trusted_source_does_not_cover_another_origin_another_key_an_unsigned_update_or_a_claimed_successor() {
+        let f = fx();
+        let (a, b) = (key(&f, "a"), key(&f, "b"));
+        first_signed(&f, &a);
+        grant(&f, "user_ratified");
+        let origin = bundles::origin_of(&lock(&f).bundle[0].source);
+        // same key, a different origin: a copy of the tree elsewhere
+        release(&f, &a, "1.5.0");
+        let elsewhere = tempfile::tempdir().unwrap();
+        copy(f.src.path(), elsewhere.path());
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, elsewhere.path(), &opts(), &Real), 0);
+        let e = lock(&f).bundle[0].clone();
+        assert!(!e.raised(), "same key, other origin: default tier");
+        assert_ne!(bundles::origin_of(&e.source), origin);
+        assert_eq!(lock(&f).trusted_source[0].origin, origin, "the grant itself is untouched");
+        // back at the original origin and key: it applies again
+        release(&f, &a, "1.6.0");
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0);
+        assert!(lock(&f).bundle[0].raised());
+        // same origin, a different key, even with the old key named as its predecessor in its own manifest: not covered
+        set_version(f.src.path(), "1.7.0");
+        publisher(f.src.path(), &b.1.did(), &[a.1.did().as_str()]);
+        assert_eq!(publish(f.src.path(), &b.0), 0);
+        assert_eq!(update(f.home.path(), &f.ws, Some("acme-platform"), false, &Real), 0, "the manifest's claim makes it an update");
+        let e = lock(&f).bundle[0].clone();
+        assert_eq!(e.publisher_kid, b.1.did());
+        assert!(!e.raised(), "a successor the bundle merely claims is not enough");
+        // an unsigned version of the same origin: needs --replace-publisher and is at the default tier
+        let unsigned = tempfile::tempdir().unwrap();
+        copy(&golden(), unsigned.path());
+        set_version(unsigned.path(), "1.9.0");
+        delphi_bundle::write_manifest(unsigned.path(), true, &Real).unwrap();
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, unsigned.path(), &opts(), &Real), 1);
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, unsigned.path(), &AddOpts { replace_publisher: true, ..opts() }, &Real), 0);
+        let e = lock(&f).bundle[0].clone();
+        assert!(!e.raised() && e.publisher_kid == "unsigned");
+    }
+
+    #[test]
+    fn a_bundle_cannot_carry_its_own_trust_a_claimed_tier_a_lock_or_a_trust_file() {
+        let f = fx();
+        let a = key(&f, "a");
+        publisher(f.src.path(), &a.1.did(), &[]);
+        // the documents claim the highest tier in their frontmatter
+        let g = f.src.path().join("knowledge/glossary.md");
+        fs::write(&g, format!("---\nsource_type: user_ratified\ntrust: user_ratified\n---\n{}", fs::read_to_string(&g).unwrap())).unwrap();
+        // and the tree ships a lock, a state file and a trust file with a raise and a trusted source in them
+        let forged = "[[bundle]]\norg = \"acme\"\nname = \"acme-platform\"\ntrust = \"user_ratified\"\n[[trusted_source]]\norigin = \"directory:/\"\nkid = \"x\"\nlevel = \"user_ratified\"\ngranted_at = \"t\"\n";
+        for p in ["bundles.lock", "local/bundles.lock", "trust.toml", ".delphi-bundle/bundles.lock", "knowledge/bundles.lock.md"] {
+            let path = f.src.path().join(p);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, forged).unwrap();
+        }
+        // a `trust` table in bundle.toml is refused outright by the manifest check (specs/023 §3.1), so it never gets signed
+        let clean_toml = fs::read_to_string(f.src.path().join("bundle.toml")).unwrap();
+        toml_edit(f.src.path(), |t| t + "\n[trust]\nlevel = \"user_ratified\"\n");
+        assert!(delphi_bundle::write_manifest(f.src.path(), true, &Real).unwrap_err().to_string().contains("trust"));
+        fs::write(f.src.path().join("bundle.toml"), clean_toml).unwrap();
+        delphi_bundle::write_manifest(f.src.path(), true, &Real).unwrap();
+        let _ = bundle_pack::sign(f.src.path(), &a.0, None, &Real, &|_: &Challenge| Ok(true));
+        // whether the validator accepts the tree or refuses it, the install's tier is the default and no source is trusted
+        let rc = bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real);
+        let l = lock(&f);
+        assert!(l.trusted_source.is_empty() && l.bundle.iter().all(|e| !e.raised() && e.trust.is_empty()), "rc {rc}: {l:?}");
+        if rc == 0 {
+            assert_eq!(doc_tier(&f), "federated_verified", "frontmatter is a display copy");
+        }
+        // and the cache copy of the install's own lock is not where the install reads it from
+        assert!(!f.ws.join("local/bundles.lock").to_string_lossy().contains("cache"));
+    }
+
+    #[test]
+    fn a_tampered_lock_does_not_raise_a_bundle_that_changed_under_it() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        raise(&f);
+        // the lock is edited so that the hash is another one but the raise stays: the binding no longer holds
+        let text = fs::read_to_string(f.ws.join("local/bundles.lock")).unwrap();
+        let h = lock(&f).bundle[0].hash.clone();
+        let edited = text.replacen(&format!("hash = \"{}\"", h), "hash = \"blake3:0000000000000000000000000000000000000000000000000000000000000000\"", 1);
+        assert_ne!(edited, text);
+        fs::write(f.ws.join("local/bundles.lock"), edited).unwrap();
+        assert!(!lock(&f).bundle[0].raised());
+        // a lock with a bare `trust` line and no binding raises nothing either
+        let bare = text.replace("trust_hash = ", "x_hash = ");
+        fs::write(f.ws.join("local/bundles.lock"), bare).unwrap();
+        assert!(!lock(&f).bundle[0].raised());
+    }
+
+    #[test]
+    fn a_delphi_release_never_touches_the_lock_or_the_trust_in_it() {
+        // `delphi update` replaces the release's own files; the lock is workspace state under local/. Nothing in the self-updater
+        // or the release code names the bundle lock, the cache or the trust fields, so a new Delphi version cannot reset them.
+        for file in ["selfupdate.rs", "update.rs", "release.rs"] {
+            let src = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src").join(file)).unwrap();
+            for word in ["bundles.lock", "bundles::", "trust_hash", "trusted_source", "reset_trust"] {
+                assert!(!src.contains(word), "{file} mentions {word}");
+            }
+        }
+        // and a lock written now still reads, with its raise and its sources, after the lock format gains fields later (unknown keys)
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        raise(&f);
+        grant(&f, "user_ratified");
+        let text = fs::read_to_string(f.ws.join("local/bundles.lock")).unwrap();
+        fs::write(f.ws.join("local/bundles.lock"), format!("{text}\n").replacen("[[bundle]]", "[[bundle]]\nfuture_field = 1", 1)).unwrap();
+        assert!(lock(&f).bundle[0].raised() && lock(&f).trusted_source.len() == 1);
     }
 }

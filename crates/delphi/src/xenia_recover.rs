@@ -11,7 +11,7 @@
 //! **back in time** cannot be recovered (its older tree cannot contain a statement about a later head) and the command
 //! says so.
 
-use crate::xenia_admin_approve::{confirm_typed, tame, Terminal};
+use crate::xenia_terminal::{confirm_typed, tame, Terminal};
 use delphi_core::xenia_action::escape;
 use delphi_core::xenia_status::{self, StoreRef};
 use delphi_core::xenia_store::{Divergence, Store};
@@ -40,7 +40,7 @@ fn short(s: &str) -> String {
 }
 
 pub fn run(r: &StoreRef, store: &Store, cfg: &VerifyConfig, outcome: &VerifiedSync) -> i32 {
-    let mut term = crate::xenia_admin_approve::StdTerminal::new(crate::xenia_admin_cmd::inside_an_agent_seat(), crate::xenia_admin_cmd::fresh_code);
+    let mut term = crate::xenia_terminal::StdTerminal::new(crate::xenia_terminal::inside_an_agent_seat());
     let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
     recover_with(r, store, cfg, outcome, &mut term, &mut out, &mut err)
 }
@@ -116,3 +116,7 @@ pub fn recover_with(r: &StoreRef, store: &Store, cfg: &VerifyConfig, outcome: &V
         }
     }
 }
+
+#[cfg(test)]
+#[path = "xenia_recover_tests.rs"]
+mod tests;

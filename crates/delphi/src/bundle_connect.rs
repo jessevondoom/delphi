@@ -98,6 +98,10 @@ fn blank_entry() -> Entry {
         skill_roles: Default::default(),
         history: Vec::new(),
         inert_servers: Vec::new(),
+        trust: String::new(),
+        trust_hash: String::new(),
+        trust_kid: String::new(),
+        trust_log: Vec::new(),
     }
 }
 

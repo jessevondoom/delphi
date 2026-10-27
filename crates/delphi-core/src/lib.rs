@@ -7,6 +7,7 @@
 //! * [`budget`]: pre-dispatch reservations and the halt-on-ceiling rule (`specs/003` §3.2).
 
 pub mod budget;
+pub mod bundle_trust;
 pub mod bundles;
 pub mod client;
 pub mod event;
@@ -32,6 +33,7 @@ pub mod xenia_testkit;
 pub mod xenia_action;
 pub mod xenia_admin_console;
 pub mod xenia_admin;
+pub mod xenia_admin_card;
 pub mod xenia_bundle;
 pub mod xenia_index;
 pub mod xenia_ingress;

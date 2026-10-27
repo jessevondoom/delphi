@@ -91,7 +91,7 @@ Your duties:
 
 ```
 
-Admin subcommands are listed by `delphi xenia admin`. They need your key and a terminal; a relay or an agent cannot run them.
+Admin subcommands: `add`, `remove`, `rotate` (with `--routine` or `--compromised`), `show <n>`, `sign <n>`, `publish <n>`, `refresh` and `genesis draft|sign|publish`; `delphi xenia admin` lists them. They need your key and a terminal; a relay or an agent cannot run them.
 
 ## The genesis ceremony: creating a store with three admins
 
@@ -118,7 +118,10 @@ The ceremony:
 
 ```
 
-Then each admin puts a reminder in their calendar to refresh every week. Admin subcommand names: `delphi xenia admin`.
+The commands, in order: `delphi xenia admin genesis draft --org <o> --store <s> --founder <did>,<person>,<handle>,admin ... --out draft.json` (one `--founder` per person); each founder `delphi xenia admin genesis sign draft.json --org <o> --store <s> --out <name>.sig.json`; then `delphi xenia admin genesis publish draft.json --url <url> --org <o> --store <s> --sig a.sig.json --sig b.sig.json --sig c.sig.json`.
+
+
+Then each admin puts a reminder in their calendar to refresh every week (`delphi xenia admin refresh`).
 
 ## Rotating a key: routine or compromised
 
