@@ -129,7 +129,7 @@ fn the_size_cap_rotates_and_keeps_the_newest_files_only() {
     let dir = log_dir(d.path());
     let mut names: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| !n.ends_with(".lock")).collect();
     names.sort();
-    assert_eq!(names, vec![format!("{FILE}"), format!("{FILE}.1"), format!("{FILE}.2")]);
+    assert_eq!(names, vec![FILE.to_string(), format!("{FILE}.1"), format!("{FILE}.2")]);
     let total: u64 = names.iter().map(|n| fs::metadata(dir.join(n)).unwrap().len()).sum();
     assert!(total <= 3 * 2048 + 1024, "total {total} exceeds the cap");
     let recs = lines(d.path());
@@ -155,12 +155,8 @@ fn an_unwritable_directory_drops_the_record_silently_and_counts_it() {
     // The log directory path is a regular file, so nothing can be created under it.
     fs::write(log_dir(d.path()), b"not a directory").unwrap();
     let l = logger(d.path(), Level::Error, DEFAULT_MAX_BYTES, 3);
-    let ran = (|| {
-        l.log(Level::Error, "cli", "e", "e", &json!({}), &[], None);
-        l.log(Level::Error, "cli", "e", "e", &json!({}), &[], None);
-        "the operation went on"
-    })();
-    assert_eq!(ran, "the operation went on");
+    l.log(Level::Error, "cli", "e", "e", &json!({}), &[], None);
+    l.log(Level::Error, "cli", "e", "e", &json!({}), &[], None);
     assert_eq!(l.pending_drops(), 2);
     // Once the path is usable, the next record reports what was lost.
     fs::remove_file(log_dir(d.path())).unwrap();
@@ -328,7 +324,7 @@ fn the_canary_goes_through_every_component_level_and_context_key_and_none_of_it_
             let line = l.render(level, comp, &dirty, &dirty, &ctx, &[dirty.clone(), dirty.clone()], Some(&dirty));
             assert_clean(&line);
             assert!(!line.contains(&home.display().to_string()), "the home path survived: {line}");
-            l.log(level, comp, &dirty, &dirty, &ctx, &[dirty.clone()], Some(&dirty));
+            l.log(level, comp, &dirty, &dirty, &ctx, std::slice::from_ref(&dirty), Some(&dirty));
         }
     }
     let on_disk = fs::read_to_string(log_dir(&home).join(FILE)).unwrap();

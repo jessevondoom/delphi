@@ -196,11 +196,8 @@ pub fn event_summaries(mission_dir: &Path, n: usize, home: &Path) -> Result<Stri
         let mut payload = serde_json::Map::new();
         if let Some(o) = e.payload.as_object() {
             for k in EVENT_KEYS {
-                match o.get(*k) {
-                    Some(v @ (Value::String(_) | Value::Number(_) | Value::Bool(_))) => {
-                        payload.insert((*k).into(), v.clone());
-                    }
-                    _ => {}
+                if let Some(v @ (Value::String(_) | Value::Number(_) | Value::Bool(_))) = o.get(*k) {
+                    payload.insert((*k).into(), v.clone());
                 }
             }
         }
