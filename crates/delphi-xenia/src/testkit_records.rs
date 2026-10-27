@@ -223,6 +223,10 @@ pub struct BundleSpec {
     pub status: String,
     /// The lines under `tree:` (each indented two spaces).
     pub tree: String,
+    /// The text of `touches.roles` and `touches.connectors` (YAML flow lists) and of `compat.delphi`.
+    pub roles: String,
+    pub connectors: String,
+    pub compat: String,
 }
 
 /// A valid tree block: `https` git pointer to the repository root, pinned by this tree id.
@@ -240,6 +244,9 @@ impl BundleSpec {
             ceiling: "internal_empirical".into(),
             status: "active".into(),
             tree: tree_block("https://git.acme.example/platform/bundle.git#.", "git-tree", "0123456789abcdef0123456789abcdef01234567"),
+            roles: "[\"strategist\", \"builder\"]".into(),
+            connectors: "[\"slack\"]".into(),
+            compat: ">=0.3.0".into(),
         }
     }
 }
@@ -248,8 +255,8 @@ impl BundleSpec {
 pub fn bundle(who: &Identity, id: &str, rev: u64, spec: &BundleSpec) -> SignedRecord {
     let mut t = common_with(id, "bundle", rev, who, &spec.status, &spec.tags, &spec.ceiling);
     t.push_str(&format!(
-        "supersedes: null\nevidence: []\nrelated: []\nbody_kind: none\nbundle_name: \"{}\"\nbundle_version: \"{}\"\nbundle_hash: \"{}\"\ntree:\n{}touches:\n  roles: [\"strategist\", \"builder\"]\n  connectors: [\"slack\"]\ncompat:\n  delphi: \">=0.3.0\"\n  bundle_schema: 1\n---\n",
-        spec.name, spec.version, spec.bundle_hash, spec.tree
+        "supersedes: null\nevidence: []\nrelated: []\nbody_kind: none\nbundle_name: \"{}\"\nbundle_version: \"{}\"\nbundle_hash: \"{}\"\ntree:\n{}touches:\n  roles: {}\n  connectors: {}\ncompat:\n  delphi: \"{}\"\n  bundle_schema: 1\n---\n",
+        spec.name, spec.version, spec.bundle_hash, spec.tree, spec.roles, spec.connectors, spec.compat
     ));
     sign_record(who, Kind::Bundle, id, t.into_bytes())
 }

@@ -27,7 +27,8 @@ pub struct Entry {
     pub hash: String,
     /// The pinned publisher key, or `unsigned` (`specs/024` §2.4).
     pub publisher_kid: String,
-    /// `unsigned`, `signed` or `known-publisher` for a directory or archive bundle (`specs/024` §2.2).
+    /// `unsigned`, `signed` or `known-publisher` for a directory or archive bundle; `endorsed` or `member-signed` for a
+    /// store bundle (`specs/024` §2.2).
     pub provenance: String,
     pub source: Source,
     pub added_at: String,
@@ -47,7 +48,8 @@ pub struct Entry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
-    /// `directory` | `archive` | `xenia` | `marketplace`; `directory` and `archive` exist so far.
+    /// `directory` | `archive` | `xenia` | `marketplace`. For `xenia` the path is `xenia:<org>/<store>/<record id>@<rev>`
+    /// (`xenia_bundle::source_path`).
     pub kind: String,
     pub path: String,
 }

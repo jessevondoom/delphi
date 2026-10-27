@@ -292,10 +292,35 @@ impl BundleDraft {
 }
 
 #[cfg(test)]
+#[path = "xenia_bundle_tests.rs"]
+mod gate_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const ID: &str = "01JBX3Q8T2M9Z4K7WYH5N6D0RA";
+
+    #[test]
+    fn a_publishers_rotated_key_continues_the_old_one_and_nobody_else_does() {
+        use delphi_xenia::testkit::TestOrg;
+        let mut t = TestOrg::three_admins();
+        t.advance(&["alice", "bob"], |t, spec| t.rotate(spec, "dave", "dave_new", false));
+        let roster = t.verify().unwrap();
+        let (dave, new, erin) = (t.did("dave"), t.did("dave_new"), t.did("erin"));
+        // The new key may sign the tree, and so may the old one (a bundle signed before the rotation); it continues the old.
+        let (ok, before) = relatives(&roster, &new);
+        assert!(ok.contains(&dave) && ok.contains(&new) && !ok.contains(&erin), "{ok:?}");
+        assert_eq!(before, vec![dave.clone()]);
+        // The old (retired) key continues nobody; its chain still names the new one.
+        let (ok, before) = relatives(&roster, &dave);
+        assert!(ok.contains(&new) && before.is_empty());
+        // A plain member's chain is only itself.
+        assert_eq!(relatives(&roster, &erin).0, vec![erin.clone()]);
+        // A stranger is in nobody's chain.
+        let stranger = delphi_xenia::testkit::key(99).did();
+        assert!(!relatives(&roster, &new).0.contains(&stranger));
+    }
 
     #[test]
     fn source_paths_round_trip_and_nothing_else_parses() {

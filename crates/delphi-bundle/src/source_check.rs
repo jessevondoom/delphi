@@ -93,6 +93,49 @@ fn from_archive(file: &Path) -> Result<Seen, String> {
     Ok(Seen { files_json: files_json.ok_or("the archive has no .delphi-bundle/files.json")?, manifest: manifest.ok_or("the archive has no bundle.toml")?, signed })
 }
 
+/// [`check`] for a caller that knows the install's home, so that a bundle added from a xenia store can be looked at too: the
+/// store's last **verified** state is read from disk (the accepted head; no network, no sync), so a newer revision shows
+/// once a sync has brought it in, never before.
+pub fn check_in(home: &Path, source_kind: &str, source_path: &str, locked_hash: &str, pinned: &str) -> Check {
+    if source_kind == "xenia" { check_store(home, source_path, locked_hash, pinned) } else { check(source_kind, source_path, locked_hash, pinned) }
+}
+
+fn check_store(home: &Path, source_path: &str, locked_hash: &str, pinned: &str) -> Check {
+    use delphi_core::xenia_bundle as xb;
+    let Some((org, store_name, id, rev)) = xb::parse_source_path(source_path) else { return Check::Unknown("the recorded store source is damaged".into()) };
+    if !home.join("xenia").join(&org).join(&store_name).join("state/pins.toml").is_file() {
+        return Check::Unknown(format!("the store {}/{} is not joined on this install", org, store_name));
+    }
+    let store = match xb::open_joined(home, &org, &store_name, false) {
+        Ok(s) => s,
+        Err(e) => return Check::Unknown(e),
+    };
+    let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+    let set = match xb::BundleSet::offline(&store, &delphi_core::xenia_sync::VerifyConfig::at(now)) {
+        Ok(s) => s,
+        Err(e) => return Check::Unknown(format!("the store's last verified state cannot be read ({})", e)),
+    };
+    let Some(b) = set.find(&id) else { return Check::Unknown("the store no longer has the record this bundle came from".into()) };
+    if let Some(why) = b.hidden {
+        return Check::Unknown(format!("the store withdrew the record this bundle came from ({})", why));
+    }
+    if b.rev <= rev && b.bundle_hash == locked_hash {
+        return Check::UpToDate;
+    }
+    // A revision below the one this install has is a replay, not an update.
+    if b.rev < rev {
+        return Check::Unknown("the store serves an older revision than this install has".into());
+    }
+    let publisher = if pinned == crate::provenance::UNSIGNED {
+        Publisher::NoContinuity
+    } else if b.signer_dids.iter().any(|d| d == pinned) || b.predecessors.iter().any(|d| d == pinned) {
+        Publisher::Same
+    } else {
+        Publisher::Changed
+    };
+    Check::Available { version: b.version.clone(), hash: b.bundle_hash.clone(), publisher }
+}
+
 /// Look at the source of a locked bundle. `locked_hash` and `pinned` are the lock's `hash` and `publisher_kid`.
 pub fn check(source_kind: &str, source_path: &str, locked_hash: &str, pinned: &str) -> Check {
     let path = Path::new(source_path);

@@ -69,6 +69,13 @@ pub fn update(home: &Path, ws: &Path, name: Option<&str>, background: bool, host
     }
     let mut code = 0;
     for e in targets {
+        if e.source.kind == "xenia" {
+            // A store source: sync, find the record, apply its current revision (`bundle_xenia`).
+            if crate::bundle_xenia::update_entry(home, ws, e, background, host) != 0 {
+                code = 1;
+            }
+            continue;
+        }
         if !matches!(e.source.kind.as_str(), "directory" | "archive") {
             eprintln!("delphi bundle: {} came from a {} source, which this build cannot fetch from", e.id(), e.source.kind);
             code = 1;

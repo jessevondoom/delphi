@@ -564,7 +564,7 @@ fn check_bundles(ws: &Workspace, home: &Path, r: &mut Report) {
         }
         // A newer version at the bundle's source (`specs/024` §3.5). Information: it is applied only by `delphi bundle update`.
         // A source that cannot be looked at (moved, a store) says nothing here; `/org` shows why.
-        let check = delphi_bundle::source_check::check(&e.source.kind, &e.source.path, &e.hash, &e.publisher_kid);
+        let check = delphi_bundle::source_check::check_in(home, &e.source.kind, &e.source.path, &e.hash, &e.publisher_kid);
         if let Some(line) = check.line() {
             r.warn("12 bundles", e.id(), format!("update available: {} -> {} at {}; `delphi bundle update {}` applies it", e.version, line, e.source.path, e.name));
         }
