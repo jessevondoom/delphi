@@ -556,6 +556,15 @@ fn delphi_xenia_now() -> i64 {
 /// store is joined.
 pub(crate) fn check_xenia(home: &Path, now: i64, r: &mut Report) {
     use delphi_core::xenia_status::{self, Severity};
+    if !xenia_status::list_stores(home).is_empty() {
+        let on = delphi_core::xenia_admin_console::console_admin_enabled(home);
+        r.push(
+            Level::Ok,
+            "13 xenia",
+            "console admin",
+            if on { "console admin signing is ON ($DELPHI_HOME/operator/xenia.toml): the console may sign roster proposals that touch no admin, one card at a time, 5 an hour; admin changes stay in the terminal" } else { "console admin signing is off (the default); roster signing happens in a terminal. To allow the limited console form, set `[xenia] console_admin = true` in $DELPHI_HOME/operator/xenia.toml" }.to_string(),
+        );
+    }
     for (store, st) in xenia_status::all(home, &delphi_core::xenia_sync::VerifyConfig::at(now)) {
         let loc = store.id();
         match st {

@@ -34,6 +34,7 @@ const USAGE: &str = "usage:
   delphi xenia endorse <id> [--scope a,b] [--note <n>]       delphi xenia dispute <id> --note <n>
   delphi xenia withdraw <id> --reason <r> [--note <n>]       delphi xenia restore <id> [--note <n>]
   delphi xenia retract <id>                                   delphi xenia republish --old <did>
+  delphi xenia admin init|add|remove|rotate|show|sign|publish|refresh ...   (terminal only; see `delphi help xenia`)
     [--workspace <name>] [--home <dir>]";
 
 /// Flags that take no value.
@@ -73,6 +74,9 @@ pub(crate) fn run_with(args: &[String], approver: &mut dyn Approver) -> i32 {
         eprintln!("{USAGE}");
         return 2;
     };
+    if word == "admin" {
+        return crate::xenia_admin_cmd::run_cli(&args[1..]);
+    }
     let parsed = match parse(&args[1..]) {
         Ok(p) => p,
         Err(e) => {
@@ -87,10 +91,6 @@ pub(crate) fn run_with(args: &[String], approver: &mut dyn Approver) -> i32 {
         "sync" => sync(&home, &parsed),
         "status" => status(&home, &parsed),
         w if Action::WORDS.contains(&w) => act(&home, w, &parsed, approver),
-        "admin" => {
-            eprintln!("delphi xenia admin: not built yet (Phase 1 milestone X8)");
-            2
-        }
         other => {
             eprintln!("delphi xenia {other}: not a command\n{USAGE}");
             2

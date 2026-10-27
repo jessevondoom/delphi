@@ -360,9 +360,11 @@ The org's shared, signed memory store: join, sync, status, publish, endorse.
   delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]
   delphi xenia endorse|dispute|retract|withdraw|restore <id> [--scope a,b] [--note <n>] [--reason <r>]
   delphi xenia republish --old <did>   [--workspace <name>] [--home <dir>]
+  delphi xenia admin init|add|remove|rotate --routine|--compromised|show|sign|publish <n>|refresh   (terminal)
 ```
 
-Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet.
+Commands that sign show the exact bytes and want the card's code typed at a terminal; admin commands also take --store and --json.
+The console may sign a roster proposal that touches no admin, only if [xenia] console_admin = true in operator/xenia.toml.
 
 ### `delphi docs`
 

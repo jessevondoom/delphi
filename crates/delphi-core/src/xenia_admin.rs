@@ -783,6 +783,22 @@ impl<'a> Admin<'a> {
         Ok(self.report(&l, q))
     }
 
+    /// The verified head epoch and the epoch proposal `n` would make, parsed and judged by the verifier's rules. Typed
+    /// input for the console's classification (`xenia_admin_console::classify`).
+    pub fn proposal_epochs(&self, n: u64) -> Result<(Epoch, Epoch), AdminError> {
+        let head = self.verified_head()?;
+        let l = self.load_proposal(&head, n)?;
+        Ok((l.roster.head().epoch.clone(), l.epoch))
+    }
+
+    /// The verified head epoch and the epoch `op` would make. Nothing is pushed.
+    pub fn operation_epochs(&self, op: &Operation) -> Result<(Epoch, Epoch), AdminError> {
+        let head = self.verified_head()?;
+        let (roster, _chain, _snap, _pins) = self.head_roster(&head)?;
+        let built = admin::build_next(&roster.head().epoch, roster.head_hash(), op, &self.now_ts(), &self.policy)?;
+        Ok((roster.head().epoch.clone(), built.epoch))
+    }
+
     /// `admin sign <n>`: validate the proposal, then preview the diff and the exact bytes.
     pub fn prepare_sign(&self, signer: &Identity, n: u64) -> Result<Prepared<EpochSigPayload>, AdminError> {
         let head = self.verified_head()?;

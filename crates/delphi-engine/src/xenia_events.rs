@@ -75,6 +75,7 @@ pub(crate) fn events_for(mission: &str, org: &str, store: &str, e: &Entry) -> Ve
             out.push(ev("xenia.alert", base(json!({"reason": e.outcome, "count": e.detail["count"], "detail": e.detail["reason"]}))));
         }
         ("publish", _) => out.push(ev("xenia.published", base(json!({"action": e.detail["action"], "outcome": e.outcome, "commit": e.head})))),
+        ("admin", _) => out.push(ev("xenia.admin", base(json!({"outcome": e.outcome, "proposal": e.detail["proposal"], "via": e.detail["via"], "commit": e.head})))),
         _ => {}
     }
     out

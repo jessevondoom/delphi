@@ -134,6 +134,11 @@ fn append(store: &Store, kind: &str, outcome: &str, head: Option<String>, detail
     })?
 }
 
+/// Record an outcome a command produced (the admin operations write `admin` entries). Slugs, commits and counts only.
+pub fn record(store: &Store, kind: &str, outcome: &str, head: Option<String>, detail: Value, now: i64) -> std::io::Result<()> {
+    append(store, kind, outcome, head, detail, now)
+}
+
 fn freshness_fields(f: &FreshnessState) -> Value {
     match f {
         FreshnessState::Fresh { life_used_pct, age_secs, .. } => json!({"freshness": "fresh", "life_used_pct": life_used_pct, "age_secs": age_secs}),
