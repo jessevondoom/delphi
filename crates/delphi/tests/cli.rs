@@ -38,7 +38,7 @@ fn help_is_stdout_exit_zero_and_touches_nothing() {
 
 #[test]
 fn every_command_answers_help_with_only_its_own_usage() {
-    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "observe", "narrator", "daemon", "xenia", "endpoints", "status", "missions", "changelog", "tools", "skills", "hooks"] {
+    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "observe", "narrator", "daemon", "xenia", "endpoints", "status", "missions", "changelog", "tools", "skills", "hooks", "capabilities"] {
         for flag in ["--help", "-h"] {
             let (o, touched) = run(&[cmd, flag]);
             assert_eq!(o.status.code(), Some(0), "{} {}", cmd, flag);
