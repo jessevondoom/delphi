@@ -62,6 +62,25 @@ wrote a starting view (never shown to any judge), and **only the `operator_view`
 fact**. That is how the study tests the jury on judgement and not only on recall: reward reasoning toward your view or a
 well-argued alternative, penalize unsupported certainty.
 
+### Your own judgements
+
+Each pack ships **baseline** views in `truth/views.toml` (one `insight-id = "text"` per question), so a run has a calibrated
+default before you have written anything. A judge sees a baseline labelled as a default the operator has not set. It sits
+outside the verification stamp, so it can change without making the pack stale. Per question, the first of these wins:
+
+1. your **views file**, `$DELPHI_TRAIN_VIEWS` or else `<home>/train/views.toml` (`~/.delphi/train/views.toml`), one table per case;
+2. `operator_view` in the pack's `truth/insights.toml`;
+3. the pack's baseline.
+
+```toml
+# ~/.delphi/train/views.toml
+["research/motogp-2027-regs"]
+who-benefits = "My own view, in my words."
+weight-of-sources = ""            # an empty string withdraws the question: no judge sees it
+```
+
+`delphi train verify` says how many questions are running on a baseline, and `truth-sheet` shows which.
+
 ## Which models can I use right now?
 
 ```sh

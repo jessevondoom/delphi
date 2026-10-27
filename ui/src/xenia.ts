@@ -70,5 +70,6 @@ export function cardText(r: any): string {
 /** `xenia.attest.decide`: what happened. */
 export function resultText(r: any): string {
   if (r?.ok) return `${sanitize(String(r.action ?? 'published'))}: ${(r.files ?? []).length} file(s) in commit ${sanitize(String(r.commit ?? '')).slice(0, 12)}${r.already_there ? ' (the store already held exactly these bytes)' : ''}. Other installs accept it at their next sync.`;
-  return `${r?.reason === 'denied' ? 'cancelled' : 'not published'}: ${sanitize(String(r?.message ?? r?.reason ?? 'refused'))}`;
+  const help = typeof r?.help === 'string' && r.help ? `\n  ${sanitize(r.help)}` : '';
+  return `${r?.reason === 'denied' ? 'cancelled' : 'not published'}: ${sanitize(String(r?.message ?? r?.reason ?? 'refused'))}${help}`;
 }
