@@ -184,6 +184,7 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
                     return Ok(a);
                 }
                 if Instant::now() >= deadline {
+                    crate::elog::error("daemon", "launch_lock_timeout", "another launcher holds the workspace lock but no daemon answered", serde_json::json!({"phase": "launch", "kind": "timeout"}));
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "another launcher holds the workspace lock but no daemon answered").into());
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -239,6 +240,8 @@ fn connect_or_spawn_once(opts: &SpawnOptions) -> Result<Attached, ClientError> {
     let reply = match read_ready(&mut ready_r, Instant::now() + READY_TIMEOUT) {
         Ok(r) => r,
         Err(e) => {
+            // The daemon's own startup failure: what the CLI saw and the tail of the per-daemon file (redacted by the log).
+            crate::elog::error("daemon", "daemon_start_failed", &e.to_string(), serde_json::json!({"phase": "launch", "kind": format!("{:?}", e.kind()), "stderr_tail": tail(&l.log)}));
             let _ = child.kill();
             let _ = child.wait();
             return Err(io::Error::new(e.kind(), format!("{} — daemon log:\n{}", e, tail(&l.log))).into());

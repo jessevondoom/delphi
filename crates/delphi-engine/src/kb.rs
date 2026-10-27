@@ -1321,7 +1321,10 @@ impl Kb {
             Err(e) => {
                 // Search carries on with the order it has, but a reranker that never works must not go unnoticed.
                 static REPORTED: std::sync::Once = std::sync::Once::new();
-                REPORTED.call_once(|| eprintln!("delphi kb: the reranker failed and is being skipped: {}", e));
+                REPORTED.call_once(|| {
+                    eprintln!("delphi kb: the reranker failed and is being skipped: {}", e);
+                    delphi_core::elog::warn("engine", "kb_reranker_failed", &e.to_string(), serde_json::json!({"phase": "search"}));
+                });
                 return Ok(None);
             }
         };
@@ -1434,7 +1437,10 @@ pub(crate) fn now() -> String {
 pub fn attach_default(home: &Path, kb: &mut Kb) -> Result<bool, KbError> {
     match embed::open_default_reranker(Some(home)) {
         Ok(r) => kb.attach_reranker(r),
-        Err(e) => eprintln!("delphi kb: the reranking model is not used: {}", e),
+        Err(e) => {
+            eprintln!("delphi kb: the reranking model is not used: {}", e);
+            delphi_core::elog::warn("engine", "kb_reranker_unavailable", &e.to_string(), serde_json::json!({"phase": "open"}));
+        }
     }
     match embed::open_default(Some(home)) {
         Ok(Some(e)) => {
@@ -1444,6 +1450,7 @@ pub fn attach_default(home: &Path, kb: &mut Kb) -> Result<bool, KbError> {
         Ok(None) => Ok(false),
         Err(e) => {
             eprintln!("delphi kb: the embedding model is not used: {}", e);
+            delphi_core::elog::warn("engine", "kb_embedder_unavailable", &e.to_string(), serde_json::json!({"phase": "open"}));
             Ok(false)
         }
     }

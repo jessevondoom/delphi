@@ -117,6 +117,12 @@ pub fn read_journal(store: &Store) -> Vec<Entry> {
 }
 
 fn append(store: &Store, kind: &str, outcome: &str, head: Option<String>, detail: Value, now: i64) -> std::io::Result<()> {
+    // Mirror the journal in the central error log (`specs/039`): the slug only, as the journal keeps it, never record text.
+    match outcome {
+        "up-to-date" | "accepted" | "published" | "already-there" => {}
+        "tampering" | "rejected" => crate::elog::error("xenia", &format!("xenia_{}", outcome), "the store's sync was not accepted", serde_json::json!({"kind": kind, "reason": outcome})),
+        _ => crate::elog::warn("xenia", &format!("xenia_{}", outcome), "a xenia operation did not complete", serde_json::json!({"kind": kind, "reason": outcome})),
+    }
     let lock = store.paths.root.join(".journal.lock");
     crate::lock::with_lock(&lock, || {
         let mut entries = read_journal(store);

@@ -9,6 +9,8 @@ import { initial } from './fold.ts';
 import { emptyArch } from './archives.ts';
 import { Activity, title } from './title.ts';
 import { loadHistory } from './attach.ts';
+import { ErrorBoundary } from './boundary.tsx';
+import { initElog, watchProcess, logCrash, error as elogError } from './elog.ts';
 import { capabilities, envTheme, useCapabilities, type Info, type Rgb } from './theme.ts';
 
 declare const BUILD_VERSION: string | undefined; // set by the release build (bun --define); absent when run from source
@@ -42,6 +44,9 @@ function readInfo(): Info {
 }
 
 const info = readInfo();
+// The central error log (`specs/039`): the same file as the daemon's. Logging never changes how the console ends.
+initElog({ home: info.home, component: 'ui', version: VERSION });
+watchProcess();
 const observeAt = process.argv.indexOf('--observe');
 if (VERSION !== 'dev' && VERSION !== info.version) {
   // Exit code 3 tells `delphi chat` to use the inline console instead.
@@ -66,6 +71,7 @@ if (observeAt >= 0) {
       console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
       process.exit(0);
     } catch (e: any) {
+      elogError('daemon_unreachable', 'cannot read the daemon', { phase: 'observe-once' });
       console.error('delphi observe: cannot read the daemon: ' + String(e?.message ?? JSON.stringify(e)));
       process.exit(1);
     }
@@ -80,18 +86,20 @@ if (observeAt >= 0) {
     cmd.keepAlive(async () => { await cmd.attachAsNarrator(); });
     ev.keepAlive(async () => { await ev.attachAsNarrator(); await ev.call('events.subscribe', {}); });
   } catch (e: any) {
+    elogError('daemon_unreachable', 'cannot attach to the daemon', { phase: 'observe' });
     console.error('delphi observe: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
     process.exit(1);
   }
   const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.env.DELPHI_NO_MOUSE });
   term.start();
   const { dark, forced } = await detectDark(term);
-  const app = render(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} />, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
-  term.on('resume', () => { app.clear(); app.rerender(<Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} />); });
+  const app = render(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} /></ErrorBoundary>, { stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false, interactive: Boolean(process.stdout.isTTY) });
+  term.on('resume', () => { app.clear(); app.rerender(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} /></ErrorBoundary>); });
   try {
     await app.waitUntilExit();
   } catch (e) { // a render error: leave the alternate screen first so the message stays readable
     term.stop();
+    logCrash('console_stopped', e, { view: 'observer' });
     console.error('delphi observe: the Observer stopped on an error:', e);
     cmd.close(); ev.close();
     process.exit(1);
@@ -113,6 +121,7 @@ try {
   ev.keepAlive(async () => { await ev.attachAsConsole(); await ev.call('events.subscribe', {}); });
   history = await loadHistory(cmd, mission);
 } catch (e: any) {
+  elogError('daemon_unreachable', 'cannot attach to the daemon', { phase: 'console' });
   console.error('delphi-ui: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
   process.exit(1);
 }
@@ -128,15 +137,16 @@ const retitle = () => term.setTitle(title(info.version, busy));
 ev.on('notification', (n: any) => { if (busy.feed(n)) retitle(); });
 ev.on('reconnected', () => { busy.reset(); retitle(); });
 retitle();
-const app = render(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} />, {
+const app = render(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} /></ErrorBoundary>, {
   stdin: new PassThrough() as any, exitOnCtrlC: false, patchConsole: false,
   interactive: Boolean(process.stdout.isTTY), // a CI environment variable must not switch Ink to its print-once mode
 });
-term.on('resume', () => { app.clear(); app.rerender(<App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} />); });
+term.on('resume', () => { app.clear(); app.rerender(<ErrorBoundary><App cmd={cmd} ev={ev} term={term} info={info} mission={mission} dark={dark} bg={bg} themeForced={forced} history={history} /></ErrorBoundary>); });
 try {
   await app.waitUntilExit();
 } catch (e) { // a render error: leave the alternate screen first so the message stays readable
   term.stop();
+  logCrash('console_stopped', e, { view: 'console' });
   console.error('delphi-ui: the console stopped on an error:', e);
   cmd.close(); ev.close();
   process.exit(1);
