@@ -455,7 +455,10 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
                 // here (and the operator is told); a trusted source's grant is applied again below.
                 let mut old = e.clone();
                 let one_off = old.raised() && old.raised_by() != Some("trusted-source") && source_level.is_none();
-                if (old.hash != hash || old.publisher_kid != kid) && old.raised() {
+                // X10 fix: a raise made BY a trusted source ends too when no grant covers this add (another origin or key), even when the
+                // bytes and the key are the same as before; before, an identical copy from elsewhere kept the source's raise.
+                let lost_source = old.raised_by() == Some("trusted-source") && source_level.is_none();
+                if (old.hash != hash || old.publisher_kid != kid || lost_source) && old.raised() {
                     old.reset_trust(&now, "update");
                     if one_off {
                         trust_notes.push(format!("your raise of {} to user_ratified applied to the previous version only and is reset: this version is at the default tier (validated bundle source); confirm again with `delphi bundle trust {}/{}`", old.id(), m.org, m.name));

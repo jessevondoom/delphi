@@ -1294,3 +1294,95 @@ fn xenia_recovery_drill() {
     say("re-pin to the new genesis", format!("fresh scratch install joined by the new fingerprint and synced to {}", short(&c2)));
     say("drill", "PASSED");
 }
+
+// --- X10 gaps: a squash before the statement, and two installs that never saw the same epoch 3 -------------------
+
+/// X6 known weakness 3, as a test of the limit. An admin squashes the whole history into one orphan commit that no longer holds a
+/// tombstone, then signs an ordinary (single-admin) statement for it. An install that already holds the old history sees a
+/// force-push and refuses it. An install that has never synced cannot tell: the signed `store_head` is the root of what it
+/// trusts, and a squash made before the statement leaves no older revisions to compare with. The controls are that admins sign
+/// only a head they have walked (`admin refresh`) and that existing installs keep their sticky state; this test pins what is
+/// and is not detected.
+#[test]
+fn a_store_squashed_before_the_statement_is_refused_by_an_install_that_has_the_history_and_is_not_noticed_by_one_that_does_not() {
+    let fx0 = Fx::standard();
+    let alice = fx0.id("alice");
+    let note = rk::memory(&alice, A, 1, "active", "note");
+    let tomb = rk::tombstone(&alice, T, 1, A, "withdraw");
+    let (fx, c1) = Fx::installed(&[&note, &tomb]);
+    let c2 = fx.store.accepted_head().unwrap().unwrap();
+    // The squash: one orphan commit with the tombstone gone, then one admin's ordinary statement for it.
+    fx.remote.git(&["checkout", "--quiet", "--orphan", "squashed"]);
+    fx.drop_record(&tomb);
+    let root = fx.commit("squashed history");
+    let head = fx.fresh(&root, &["alice"]);
+    assert_ne!(root, c1);
+    // The install that holds the old history: refused as a force-push, nothing applied.
+    assert!(matches!(fx.sync(), VerifiedSync::NonFastForward(_)));
+    assert_stuck(&fx, &c2);
+    // The install that never synced: accepts it. The deleted tombstone is not in its view and nothing flags that it ever existed.
+    let fresh = fx.fresh_install("newcomer");
+    let r = fresh.sync_verified(&cfg()).unwrap();
+    assert_eq!(accepted(&r).0, head, "{r:?}");
+    let sticky = fresh.load_sticky().unwrap();
+    assert!(!sticky.paths.contains_key(&tomb.path) && sticky.paths.contains_key(&note.path));
+    // The limit, stated: nothing in the newcomer's state records the squashed revision, so a squash made before a statement is
+    // caught only by installs that held the history, and by admins not signing a head they did not walk.
+}
+
+/// By design (spec 011 section 3.3): the pin handed out at join is the control, because nothing else can tell two valid chains
+/// apart. Two installs that never synced are each first served a different, validly signed epoch 3 (2-of-3 each, by different
+/// pairs). Each accepts the first it sees and then refuses the other; they disagree until a human compares epoch hashes.
+#[test]
+fn two_never_synced_installs_given_different_valid_epoch_threes_diverge_and_the_join_pin_is_the_control() {
+    let mut fx = Fx::standard();
+    let mut base = fx.org.clone();
+    base.advance(&["alice", "bob"], |t, s| {
+        let d = t.who("hank");
+        s.members.push(MemberSpec::new(&d, "hank"));
+    });
+    let mut x = base.clone();
+    x.advance(&["alice", "bob"], |t, s| {
+        let f = t.who("frank");
+        s.members.push(MemberSpec::new(&f, "frank"));
+    });
+    let mut y = base.clone();
+    y.advance(&["alice", "carol"], |t, s| {
+        let g = t.who("gina");
+        s.members.push(MemberSpec::new(&g, "gina"));
+    });
+    assert_ne!(x.head_pair().1, y.head_pair().1, "two different, validly signed epoch 3s");
+    // Both installs joined at epoch 1 and have never synced.
+    let (a, b) = (fx.fresh_install("a"), fx.fresh_install("b"));
+    let serve = |fx: &mut Fx, org: &TestOrg| {
+        fx.org = org.clone();
+        fx.roster();
+        let c = fx.commit("roster");
+        fx.fresh(&c, &["alice"]);
+    };
+    let head_of = |s: &Store| pins::load(&s.pin_storage()).unwrap().unwrap().head().0;
+    serve(&mut fx, &x);
+    let first = a.sync_verified(&cfg()).unwrap();
+    assert!(matches!(first, VerifiedSync::Accepted { .. }), "{first:?}");
+    serve(&mut fx, &y);
+    // The one that already took X refuses Y; the one that never synced takes Y.
+    assert_eq!(rejected(&a.sync_verified(&cfg()).unwrap()), delphi_xenia::roster::RosterError::PinMismatch { epoch: 3 }.reason());
+    assert!(matches!(b.sync_verified(&cfg()).unwrap(), VerifiedSync::Accepted { .. }));
+    assert_eq!((head_of(&a), head_of(&b)), (3, 3));
+    let (pa, pb) = (pins::load(&a.pin_storage()).unwrap().unwrap(), pins::load(&b.pin_storage()).unwrap().unwrap());
+    assert_ne!(pa.epoch_hash(3), pb.epoch_hash(3), "the installs now disagree about epoch 3, and each sticks to its own");
+    assert_eq!(pa.epoch_hash(3), Some(x.head_pair().1.as_str()));
+    assert_eq!(pb.epoch_hash(3), Some(y.head_pair().1.as_str()));
+    // Flip the host back to X: now b refuses. Neither install is ever moved by the host.
+    serve(&mut fx, &x);
+    assert_eq!(rejected(&b.sync_verified(&cfg()).unwrap()), delphi_xenia::roster::RosterError::PinMismatch { epoch: 3 }.reason());
+    // The control: a join that names the epoch-3 pair a human compared refuses the chain that does not match it.
+    let req = |other: &TestOrg| JoinRequest { url: fx.remote.url(), admin_fingerprint: x.fingerprint("alice"), head_epoch: 3, head_hash: other.head_pair().1 };
+    let fresh_home = |n: &str| {
+        let h = fx.tmp.path().join(n);
+        std::fs::create_dir_all(&h).unwrap();
+        Store::open(&h, "acme", "acme-main", &fx.remote.url(), true).unwrap()
+    };
+    assert!(pins::join(&fresh_home("j1").pin_storage(), &req(&y), &x.files).is_err(), "the pin for Y against chain X: refused");
+    assert!(pins::join(&fresh_home("j2").pin_storage(), &req(&x), &x.files).is_ok());
+}

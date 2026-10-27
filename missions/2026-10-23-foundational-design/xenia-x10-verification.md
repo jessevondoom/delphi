@@ -104,12 +104,12 @@ What the drill does not do: it calls `plan_rewrite` and `accept_rewritten_head` 
 ## Gaps found (honest list)
 
 1. The independent red-team sweep is not done (the Builder is not independent). The checklist is the hand-off.
-2. ~~`sync --accept-rewritten-head` is not wired into the CLI and no admin command authors a `rewrite_of` statement.~~ **Closed by X9a (the flag) and X10a (the authoring command `delphi xenia admin rewrite propose|show|sign|publish`).** Gate 7 is now met both by the library drill and by a command-level test. A recovery on a real store has not been run; that is the operator's.
+2. ~~No admin command authors a `rewrite_of` statement~~ **Closed by X10a** (`delphi xenia admin rewrite propose|show|sign|publish`); the flag `sync --accept-rewritten-head` was wired by X9a (#252). Gate 7 is now met both by the library drill and by a command-level test (`xenia_admin_cmd::tests::a_force_pushed_store_is_recovered_through_propose_sign_publish_and_the_installs_accept`). A recovery on a real store has not been run; that is the operator's.
 3. No OS-level network-denied run for the no-fetch tests (011.23, 012.11): a loopback-listener test and a source scan stand in.
 4. 012.20 (same results on every platform) is not tested across platforms.
 5. No differential test against a second implementation of the verifier; there is none.
 6. R3 (history-walk cost) was to be measured in X10 and is not: sync still walks from the signed `store_head` every time.
-7. A store that an admin squashed before signing the statement cannot be told from one that never had the old revisions (X6 known weakness 3).
+7. A store that an admin squashed before signing the statement cannot be told from one that never had the old revisions (X6 known weakness 3). **Follow-up:** the limit is pinned by a test (it is not closed).
 8. Windows is not exercised.
-9. The two-never-synced-installs divergence case (each first served a different valid epoch 3) is by design and untested.
-10. `local/bundles.lock` being unwritable by agents has no test that names it (checklist section 11).
+9. The two-never-synced-installs divergence case (each first served a different valid epoch 3) is by design. **Follow-up:** now tested.
+10. `local/bundles.lock` being unwritable by agents had no test that names it. **Follow-up:** three named tests, and a source scan (checklist section 11); reading #251's update path also found and fixed one bug (see the checklist).

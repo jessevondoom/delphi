@@ -595,6 +595,14 @@ mod tests {
         assert_eq!(xenia_status::read_journal(&xenia_status::open(&home, &r).unwrap()).len(), 1);
         // A second join of the same store is refused and nothing changes.
         assert_ne!(run_with(&a(&["join", "/nowhere", "--org", "acme", "--store", "acme-main", "--admin", &"a".repeat(64), "--head", "1:blake3:00", "--home", &h]), &mut no), 0);
+        // X10 (spec 011 section 8.4, re-pin): even a join with every correct value is refused over existing pins, and the pins
+        // file is byte-for-byte as it was. Re-pinning is a fresh install (a new home), never an overwrite.
+        let pins_path = xenia_status::open(&home, &r).unwrap().paths.state.join("pins.toml");
+        let before = std::fs::read(&pins_path).unwrap();
+        let (epoch, hash) = _fx.org.head_pair();
+        let code = run_with(&a(&["join", &_fx.remote.url(), "--org", "acme", "--store", "acme-main", "--admin", &_fx.org.fingerprint("alice"), "--head", &format!("{epoch}:{hash}"), "--allow-local", "--home", &h]), &mut no);
+        assert_eq!(code, 1);
+        assert_eq!(std::fs::read(&pins_path).unwrap(), before);
     }
 
     #[test]
