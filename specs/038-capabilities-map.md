@@ -43,9 +43,21 @@ delphi capabilities --ask        also ask claude and agy's models (spends a requ
 delphi capabilities --json       the snapshot as JSON
 ```
 
+## Config files and projects
+
+- `agy` and `gemini` list commands are free text whose entry format has not been seen (only the empty case), so they are kept as
+  raw lines. The servers are also read from the documented config files, `~/.gemini/config/mcp_config.json` (agy) and
+  `~/.gemini/settings.json` (gemini), as `disk` items. Only the name and where it points (a URL without its query, or the command
+  alone) are kept, never `env`, `headers` or `args`, which can hold secrets.
+- A CLI that crashes yet exits 0 (gemini does, on a broken install) is recorded as a note with its error, not as an empty list.
+- Projects add their own `.mcp.json`, `.claude/skills`, `.agents/skills`, `.gemini/skills` and `.claude/agents`. A refresh scans
+  each `--project <dir>`, the git root of the working directory, and every project a workspace in the home registers; projects
+  from earlier refreshes stay while their directory exists.
+
 ## Not done
 
-- Per-workspace views (project `.mcp.json`, `.claude/` in a project) and routing from the map.
-- Parsing for `agy` and `gemini` lists beyond one item per line: their output format with entries has not been seen on this
-  machine (only the empty case), so non-empty output is kept as raw lines.
-- The map does not feed the orchestrator's plan yet; `specs/020`'s inventory still does that.
+- Routing from the map. The map does not feed the orchestrator's plan; `specs/020`'s inventory still does that.
+- Plugin-packaged MCP servers for agy (`plugins/<name>/mcp_config.json`) and user-scope servers in `~/.claude.json` are not read
+  from disk; the CLI's own list covers claude's, and agy has no plugins installed here to test against.
+- The detached start from `delphi update` and `delphi setup` is covered by tests of the command it runs and of when it starts, but
+  not run end to end: `update` refuses a release list that is not https, and `setup` makes real calls.

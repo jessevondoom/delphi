@@ -54,6 +54,17 @@ pub struct Snapshot {
     pub taken_unix: i64,
     pub delphi_version: String,
     pub clis: Vec<CliEntry>,
+    /// What projects add on top: their `.mcp.json`, skills and agents. Kept across refreshes.
+    #[serde(default)]
+    pub projects: Vec<ProjectEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ProjectEntry {
+    pub path: String,
+    pub mcp: Vec<Item>,
+    pub skills: Vec<Item>,
+    pub agents: Vec<Item>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +191,35 @@ pub fn parse_plain_list(out: &str) -> Vec<Item> {
         .collect()
 }
 
+/// An `mcpServers` map from a config file (`~/.gemini/config/mcp_config.json`, `~/.gemini/settings.json`, a project `.mcp.json`).
+/// Keeps the name and where it points (a URL without its query, or the command alone); never `env`, `headers` or `args`, which can
+/// carry secrets.
+pub fn parse_mcp_config(text: &str) -> Vec<Item> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return vec![] };
+    let Some(map) = v["mcpServers"].as_object() else { return vec![] };
+    map.iter()
+        .map(|(name, c)| {
+            let detail = match (c["url"].as_str().or_else(|| c["httpUrl"].as_str()), c["command"].as_str()) {
+                (Some(u), _) => u.split(['?', '#']).next().unwrap_or(u).to_string(),
+                (None, Some(cmd)) => cmd.to_string(),
+                _ => String::new(),
+            };
+            let off = if c["disabled"] == true || c["enabled"] == false { " · disabled" } else { "" };
+            item(name, format!("{detail}{off}"), "disk")
+        })
+        .collect()
+}
+
+/// Add the servers a config file names that the CLI's own list did not.
+fn add_config(into: &mut Vec<Item>, file: &Path) {
+    let Ok(text) = std::fs::read_to_string(file) else { return };
+    for i in parse_mcp_config(&text) {
+        if !into.iter().any(|x| x.name == i.name) {
+            into.push(i);
+        }
+    }
+}
+
 /// Directories under `root` (down to `depth`) that hold a `SKILL.md`; the detail is the frontmatter `description`.
 pub fn scan_skills(root: &Path, depth: usize, out: &mut Vec<Item>) {
     let Ok(rd) = std::fs::read_dir(root) else { return };
@@ -215,6 +255,11 @@ fn scan_agents(dir: &Path) -> Vec<Item> {
 /// Run a list command; on a failure, note why and return nothing.
 fn listed(r: &dyn Runner, e: &mut CliEntry, args: &[&str]) -> Option<String> {
     match r.run(&e.cli, args, PROBE_LIMIT) {
+        // gemini crashes on a broken install and still exits 0, with the trace on stderr and nothing on stdout.
+        Ran::Done { code: 0, out, err } if out.trim().is_empty() && !err.trim().is_empty() => {
+            e.notes.push(format!("`{} {}` printed only an error: {}", e.cli, args.join(" "), first_line(&err)));
+            None
+        }
         Ran::Done { code: 0, out, .. } => Some(out),
         Ran::Done { code, err, out } => {
             let why = if err.trim().is_empty() { first_line(&out) } else { first_line(&err) };
@@ -253,6 +298,7 @@ fn discover_claude(r: &dyn Runner, user: &Path) -> CliEntry {
 fn discover_agy(r: &dyn Runner, user: &Path) -> CliEntry {
     let Some(mut e) = entry(r, "agy") else { return CliEntry { cli: "agy".into(), ..Default::default() } };
     e.mcp = listed(r, &mut e, &["mcp", "list"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
+    add_config(&mut e.mcp, &user.join(".gemini/config/mcp_config.json"));
     e.plugins = listed(r, &mut e, &["plugin", "list"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
     e.agents = listed(r, &mut e, &["agents"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
     e.models = listed(r, &mut e, &["models"]).map(|o| parse_tab_models(&o)).unwrap_or_default();
@@ -262,9 +308,10 @@ fn discover_agy(r: &dyn Runner, user: &Path) -> CliEntry {
     e
 }
 
-fn discover_gemini(r: &dyn Runner) -> CliEntry {
+fn discover_gemini(r: &dyn Runner, user: &Path) -> CliEntry {
     let Some(mut e) = entry(r, "gemini") else { return CliEntry { cli: "gemini".into(), ..Default::default() } };
     e.mcp = listed(r, &mut e, &["mcp", "list"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
+    add_config(&mut e.mcp, &user.join(".gemini/settings.json"));
     e.extensions = listed(r, &mut e, &["extensions", "list"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
     e
 }
@@ -290,11 +337,28 @@ fn ask(r: &dyn Runner, e: &mut CliEntry) {
 }
 
 pub fn collect(r: &dyn Runner, user_home: &Path, now: i64, with_ask: bool) -> Snapshot {
-    let mut clis = vec![discover_claude(r, user_home), discover_agy(r, user_home), discover_gemini(r), discover_ollama(r)];
+    let mut clis = vec![discover_claude(r, user_home), discover_agy(r, user_home), discover_gemini(r, user_home), discover_ollama(r)];
     if with_ask {
         clis.iter_mut().filter(|c| c.installed).for_each(|c| ask(r, c));
     }
-    Snapshot { schema: 1, taken_unix: now, delphi_version: env!("CARGO_PKG_VERSION").into(), clis }
+    Snapshot { schema: 1, taken_unix: now, delphi_version: env!("CARGO_PKG_VERSION").into(), clis, projects: vec![] }
+}
+
+/// What one project directory adds. Files only; nothing is run in it.
+pub fn scan_project(dir: &Path) -> ProjectEntry {
+    let mut p = ProjectEntry { path: dir.display().to_string(), ..Default::default() };
+    add_config(&mut p.mcp, &dir.join(".mcp.json"));
+    for sub in [".claude/skills", ".agents/skills", ".gemini/skills"] {
+        scan_skills(&dir.join(sub), 2, &mut p.skills);
+    }
+    p.agents = scan_agents(&dir.join(".claude/agents"));
+    p
+}
+
+/// The projects of a new snapshot: the ones just scanned, then those of the last snapshot that still exist and were not rescanned.
+fn merge_projects(scanned: Vec<ProjectEntry>, before: Option<&Snapshot>) -> Vec<ProjectEntry> {
+    let kept = before.into_iter().flat_map(|b| b.projects.iter()).filter(|p| Path::new(&p.path).is_dir() && !scanned.iter().any(|s| s.path == p.path)).cloned();
+    scanned.iter().cloned().chain(kept).collect()
 }
 
 pub fn path(home: &Path) -> PathBuf {
@@ -350,17 +414,47 @@ pub fn render(s: &Snapshot, now: i64) -> String {
         }
         c.notes.iter().for_each(|n| o.push_str(&format!("  ! {n}\n")));
     }
+    for p in s.projects.iter().filter(|p| !(p.mcp.is_empty() && p.skills.is_empty() && p.agents.is_empty())) {
+        o.push_str(&format!("\nproject {}\n", p.path));
+        for (label, items) in [("connector", &p.mcp), ("skill", &p.skills), ("agent", &p.agents)] {
+            for i in items {
+                o.push_str(&format!("    {label}: {}{}\n", i.name, if i.detail.is_empty() { String::new() } else { format!("  {}", i.detail) }));
+            }
+        }
+    }
     o.push_str("\nBuilt-in tools of a CLI are not listed by any command; `delphi capabilities --ask` asks the model, and that answer is unverified.\n");
     o
 }
 
-/// Start a refresh as a detached process, so setup and update do not wait for the CLIs. Skipped when a snapshot is only seconds old
-/// or `DELPHI_NO_BACKGROUND_PROBE` is set (tests set it). `exe` is the program to run: after an update, the new one.
-pub fn refresh_in_background(exe: &Path, home: &Path) {
-    if std::env::var_os("DELPHI_NO_BACKGROUND_PROBE").is_some() || load(home).is_some_and(|s| now_unix() - s.taken_unix < FRESH_SECS) {
-        return;
+/// The project directories to scan: each `--project <dir>`, the git root of the working directory, and every project a workspace in
+/// this home registers.
+fn project_dirs(args: &[String], home: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = args.windows(2).filter(|w| w[0] == "--project").map(|w| PathBuf::from(&w[1])).collect();
+    dirs.extend(std::env::current_dir().ok().and_then(|c| crate::home::git_root(&c)));
+    if let Ok(rd) = std::fs::read_dir(home.join("workspaces")) {
+        let mut ws: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        ws.sort();
+        dirs.extend(ws.iter().flat_map(|w| crate::home::projects(w)));
     }
-    let _ = Command::new(exe).args(["capabilities", "--refresh", "--quiet", "--home"]).arg(home).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let mut seen = vec![];
+    dirs.retain(|d| d.is_dir() && !seen.contains(d) && { seen.push(d.clone()); true });
+    dirs
+}
+
+/// The detached refresh: the program `exe` (after an update, the new one) run as `capabilities --refresh --quiet`.
+fn background_command(exe: &Path, home: &Path) -> Command {
+    let mut c = Command::new(exe);
+    c.args(["capabilities", "--refresh", "--quiet", "--home"]).arg(home).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    c
+}
+
+/// Start a refresh as a detached process, so setup and update do not wait for the CLIs. Skipped when a snapshot is only seconds old
+/// or `DELPHI_NO_BACKGROUND_PROBE` is set. Returns whether one was started.
+pub fn refresh_in_background(exe: &Path, home: &Path) -> bool {
+    if std::env::var_os("DELPHI_NO_BACKGROUND_PROBE").is_some() || load(home).is_some_and(|s| now_unix() - s.taken_unix < FRESH_SECS) {
+        return false;
+    }
+    background_command(exe, home).spawn().is_ok()
 }
 
 /// `delphi capabilities [--refresh] [--ask] [--json] [--quiet]`.
@@ -368,10 +462,12 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
     let has = |n: &str| args.iter().any(|a| a == n);
     let user = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let existing = load(home);
-    let snap = match existing {
-        Some(s) if !has("--refresh") && !has("--ask") => s,
+    let snap = match &existing {
+        Some(s) if !has("--refresh") && !has("--ask") => s.clone(),
         _ => {
-            let s = collect(&RealRunner, &user, now_unix(), has("--ask"));
+            let mut s = collect(&RealRunner, &user, now_unix(), has("--ask"));
+            let scanned = project_dirs(args, home).iter().map(|d| scan_project(d)).collect();
+            s.projects = merge_projects(scanned, existing.as_ref());
             if let Err(e) = save(home, &s) {
                 eprintln!("delphi capabilities: cannot write {}: {e}", path(home).display());
                 return 1;
@@ -493,11 +589,78 @@ mod tests {
     fn the_snapshot_round_trips_and_a_bad_file_is_none() {
         let t = tempfile::tempdir().unwrap();
         assert!(load(t.path()).is_none());
-        let s = Snapshot { schema: 1, taken_unix: 5, delphi_version: "x".into(), clis: vec![CliEntry { cli: "agy".into(), installed: true, ..Default::default() }] };
+        let s = Snapshot { schema: 1, taken_unix: 5, delphi_version: "x".into(), clis: vec![CliEntry { cli: "agy".into(), installed: true, ..Default::default() }], projects: vec![ProjectEntry { path: "/p".into(), ..Default::default() }] };
         save(t.path(), &s).unwrap();
         assert_eq!(load(t.path()), Some(s));
         std::fs::write(path(t.path()), "not json").unwrap();
         assert!(load(t.path()).is_none());
+    }
+
+    #[test]
+    fn a_cli_that_crashes_but_exits_zero_is_a_note_not_an_empty_list() {
+        let mut f = Fake { on_path: vec!["gemini"], ..Default::default() };
+        f.answers.insert("gemini --version".into(), done("0.63.0\n"));
+        f.answers.insert("gemini mcp list".into(), Ran::Done { code: 0, out: String::new(), err: "innerError Error: Cannot find module 'pty.node'\n".into() });
+        let home = tempfile::tempdir().unwrap();
+        let g = &collect(&f, home.path(), 1, false).clis[2];
+        assert!(g.mcp.is_empty());
+        assert!(g.notes.iter().any(|n| n.contains("printed only an error") && n.contains("pty.node")), "{:?}", g.notes);
+    }
+
+    #[test]
+    fn config_files_give_names_and_targets_but_never_secrets() {
+        let v = parse_mcp_config(
+            r#"{"mcpServers":{"a":{"url":"https://h/mcp?token=SECRET","headers":{"Authorization":"Bearer SECRET"}},
+                "b":{"command":"npx","args":["-y","x","--key=SECRET"],"env":{"K":"SECRET"}},"c":{"command":"x","disabled":true}}}"#,
+        );
+        assert_eq!(v.iter().map(|i| (i.name.as_str(), i.detail.as_str())).collect::<Vec<_>>(), vec![("a", "https://h/mcp"), ("b", "npx"), ("c", "x · disabled")]);
+        assert!(!format!("{v:?}").contains("SECRET"));
+        assert!(parse_mcp_config("").is_empty() && parse_mcp_config("{}").is_empty());
+    }
+
+    #[test]
+    fn agy_servers_come_from_its_config_file_when_the_list_is_free_text() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".gemini/config")).unwrap();
+        std::fs::write(home.path().join(".gemini/config/mcp_config.json"), r#"{"mcpServers":{"fs":{"command":"npx"}}}"#).unwrap();
+        let mut f = Fake { on_path: vec!["agy"], ..Default::default() };
+        f.answers.insert("agy mcp list".into(), done("No MCP servers configured.\n"));
+        let a = &collect(&f, home.path(), 1, false).clis[1];
+        assert_eq!(a.mcp, vec![item("fs", "npx", "disk")]);
+    }
+
+    #[test]
+    fn a_project_adds_its_connectors_skills_and_agents_and_old_projects_are_kept() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join(".mcp.json"), r#"{"mcpServers":{"db":{"url":"http://x"}}}"#).unwrap();
+        std::fs::create_dir_all(t.path().join(".claude/skills/lint")).unwrap();
+        std::fs::write(t.path().join(".claude/skills/lint/SKILL.md"), "description: Lint it\n").unwrap();
+        std::fs::create_dir_all(t.path().join(".claude/agents")).unwrap();
+        std::fs::write(t.path().join(".claude/agents/reviewer.md"), "x").unwrap();
+        let p = scan_project(t.path());
+        assert_eq!((p.mcp[0].name.as_str(), p.skills[0].name.as_str(), p.agents[0].name.as_str()), ("db", "lint", "reviewer"));
+        let gone = ProjectEntry { path: "/no/such/dir".into(), ..Default::default() };
+        let kept = ProjectEntry { path: t.path().join(".claude").display().to_string(), ..Default::default() };
+        let before = Snapshot { projects: vec![gone, kept.clone(), ProjectEntry { path: p.path.clone(), ..Default::default() }], ..Default::default() };
+        let merged = merge_projects(vec![p.clone()], Some(&before));
+        assert_eq!(merged, vec![p, kept], "rescanned replaces, a vanished directory drops, the rest stays");
+    }
+
+    #[test]
+    fn the_background_start_runs_the_given_program_with_the_refresh_arguments() {
+        let c = background_command(Path::new("/new/delphi"), Path::new("/h"));
+        assert_eq!(c.get_program(), "/new/delphi");
+        assert_eq!(c.get_args().map(|a| a.to_string_lossy().to_string()).collect::<Vec<_>>(), ["capabilities", "--refresh", "--quiet", "--home", "/h"]);
+    }
+
+    #[test]
+    fn a_background_start_happens_unless_the_snapshot_is_seconds_old() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(refresh_in_background(Path::new("/usr/bin/true"), t.path()), "no snapshot: started");
+        save(t.path(), &Snapshot { taken_unix: now_unix(), ..Default::default() }).unwrap();
+        assert!(!refresh_in_background(Path::new("/usr/bin/true"), t.path()), "a fresh snapshot: not started");
+        save(t.path(), &Snapshot { taken_unix: now_unix() - 3600, ..Default::default() }).unwrap();
+        assert!(refresh_in_background(Path::new("/usr/bin/true"), t.path()), "an old one: started");
     }
 
     #[test]
