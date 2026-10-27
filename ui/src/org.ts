@@ -10,7 +10,7 @@ import * as T from './theme.ts';
 export type OrgBundle = {
   id: string; title: string; version: string; provenance: string; order: number; review_by: string;
   stale: boolean; matched: boolean; source: { kind: string; path: string };
-  /** `null` until something can say (an update check against the recorded source is not built) */
+  /** the newer version and the publisher state when the recorded source holds another hash (`1.5.0 (same publisher)`); `null` when none, or when the source cannot be looked at */
   update_available: string | boolean | null;
   /** how far the bundle's vectors are, e.g. `42%` or `100% (shipped, verified)`; `null` from a daemon that predates slice B3 */
   vectors: string | null;
@@ -125,10 +125,10 @@ export function lines(p: OrgPanel, pal: T.Pal, w: number): string[] {
   if (!v.bundles.length) row(T.dim('none added. `a` adds a bundle from a directory; `delphi bundle add <dir>` does the same from a shell'));
   else {
     const idW = Math.min(30, Math.max(8, ...v.bundles.map((b) => T.width(clean(b.id)))));
-    out.push('  ' + T.dim(T.clip(`${fit('bundle', idW)}  ${fit('version', 9)}  ${fit('provenance', 10)}  ${fit('scope', 9)}  ${fit('review', 18)}  ${fit('update', 6)}  vectors`, w - 4)));
+    out.push('  ' + T.dim(T.clip(`${fit('bundle', idW)}  ${fit('version', 9)}  ${fit('provenance', 10)}  ${fit('scope', 9)}  ${fit('review', 18)}  ${fit('update', 8)}  vectors`, w - 4)));
     for (const b of v.bundles) {
       const review = b.stale ? T.warn(fit(`stale (${clean(b.review_by)})`, 18)) : fit(`fresh (${clean(b.review_by)})`, 18);
-      row(`${fit(clean(b.id), idW)}  ${fit(clean(b.version), 9)}  ${fit(clean(b.provenance), 10)}  ${fit(b.matched ? 'matched' : 'unmatched', 9)}  ${review}  ${fit(b.update_available === null || b.update_available === false ? '-' : clean(b.update_available === true ? 'yes' : b.update_available), 6)}  ${b.vectors === null ? '-' : clean(b.vectors)}`);
+      row(`${fit(clean(b.id), idW)}  ${fit(clean(b.version), 9)}  ${fit(clean(b.provenance), 10)}  ${fit(b.matched ? 'matched' : 'unmatched', 9)}  ${review}  ${fit(b.update_available === null || b.update_available === false ? '-' : clean(b.update_available === true ? 'yes' : b.update_available.split(' ')[0]!), 8)}  ${b.vectors === null ? '-' : clean(b.vectors)}`);
     }
   }
   head('Goals', v.goals.length);

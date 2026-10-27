@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/config.schema.json",
+  "title": "Delphi workspace config.toml",
+  "description": "Validate config.toml parsed to JSON. Shape and enumerations only: `delphi doctor` is authoritative and also checks credentials, ratification and cross-references. Sections the code reads but that this schema leaves open (session, relay, away, optimistic, learning, hooks) are declared as plain objects. [[endpoints]], [access], [auth.*], [connectors.*], [harness.*] and [exec] are ratified: a change is a Red-tier proposal. API keys never appear here. The annotated template is crates/delphi/config.example.toml.",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "projects": { "type": "array", "items": { "type": "string" }, "description": "Project repos the workspace operates on; `~/` is expanded." },
+        "untrusted_paths": { "type": "array", "items": { "type": "string" }, "description": "Globs whose tracked files read as external_untrusted." },
+        "isolated": { "type": "boolean", "description": "True: nothing is ever promoted out of this workspace." }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "properties": {
+        "identifiers": { "type": "array", "items": { "type": "string" } },
+        "default_mode": { "enum": ["orchestrator", "council"] }
+      }
+    },
+    "theme": { "type": "object", "properties": { "name": { "type": "string" } } },
+    "tui": {
+      "type": "object",
+      "properties": {
+        "auto_spawn_narrator": { "type": "boolean" },
+        "frame_rate_hz": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "`[models.<family>]` maps tier to model ID; `[models.catalog.\"<id>\"]` holds per-model limits and prices.",
+      "properties": { "catalog": { "type": "object", "additionalProperties": { "$ref": "#/$defs/catalogEntry" } } },
+      "additionalProperties": { "$ref": "#/$defs/tierMap" }
+    },
+    "agents": { "type": "object", "properties": { "enabled": { "type": "array", "items": { "type": "string" } } } },
+    "events": { "type": "object", "properties": { "thinking_retention_days": { "type": "integer", "minimum": 0 } } },
+    "routing": {
+      "type": "object",
+      "properties": {
+        "enable_dynamic_scaling": { "type": "boolean" },
+        "cross_provider_builder_critic": { "type": "boolean" },
+        "max_attempts_per_node": { "type": "integer", "minimum": 1 },
+        "max_parallel_agents": { "type": "integer", "minimum": 1 },
+        "degrade_prompt_secs": { "type": "integer", "minimum": 0 },
+        "max_park_secs": { "type": "integer", "minimum": 0 },
+        "pool": {
+          "type": "object",
+          "properties": {
+            "order": { "type": "array", "items": { "type": "string" } },
+            "throttle_attempts": { "type": "integer", "minimum": 1 },
+            "throttle_window_secs": { "type": "integer", "minimum": 0 },
+            "reprobe_first_secs": { "type": "integer", "minimum": 0 },
+            "reprobe_max_secs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "targets": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Role to target model ID." }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "mission_budget_usd": { "type": "number", "minimum": 0 },
+        "council_budget_usd": { "type": "number", "minimum": 0 },
+        "on_budget_exhausted": { "type": "string" },
+        "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hitl": { "type": "object", "properties": { "approval_timeout_sec": { "type": "integer", "minimum": 1, "description": "Unanswered approvals resolve to deny." } } },
+    "exec": {
+      "type": "object",
+      "properties": {
+        "sandbox": { "enum": ["off", "prefer", "required"] },
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "deny": { "type": "array", "items": { "type": "string" } },
+        "test_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 1." },
+        "check_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 2." }
+      }
+    },
+    "update": { "type": "object", "properties": { "require_signed": { "type": "boolean" } } },
+    "rag": {
+      "type": "object",
+      "properties": {
+        "engine": { "type": "string" },
+        "max_pointer_results": { "type": "integer", "minimum": 1 },
+        "exclude_untrusted_by_default": { "type": "boolean" }
+      }
+    },
+    "federation": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "transport": { "enum": ["tailscale", "ssh-uds", "mdns"] },
+        "default_peer_trust_ceiling": { "type": "string" }
+      }
+    },
+    "endpoints": { "type": "array", "items": { "$ref": "#/$defs/endpoint" } },
+    "access": {
+      "type": "object",
+      "properties": {
+        "order": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } }, "description": "Family to endpoint IDs, in preference order." },
+        "allowed_endpoints": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "auth": { "type": "object", "additionalProperties": { "$ref": "#/$defs/authBlock" } },
+    "connectors": { "type": "object", "additionalProperties": { "$ref": "#/$defs/connector" } },
+    "harness": {
+      "type": "object",
+      "description": "`[harness.claude]` and `[harness.agy]` narrow the subscription-CLI defaults; scalar keys on `[harness]` itself (for example connector_settle_secs, subscription_budget_tokens) apply to all.",
+      "properties": {
+        "connector_settle_secs": { "type": "integer", "minimum": 0 },
+        "subscription_budget_tokens": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": { "$ref": "#/$defs/harnessProfile" }
+    },
+    "session": { "type": "object" },
+    "relay": { "type": "object" },
+    "away": { "type": "object" },
+    "optimistic": { "type": "object" },
+    "learning": { "type": "object" },
+    "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "tierMap": {
+      "type": "object",
+      "properties": {
+        "fast": { "type": "string" },
+        "workhorse": { "type": "string" },
+        "frontier": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "catalogEntry": {
+      "type": "object",
+      "properties": {
+        "max_output_tokens": { "type": "integer", "minimum": 1 },
+        "min_thinking_budget": { "type": "integer", "minimum": 0 },
+        "max_thinking_budget": { "type": "integer", "minimum": 0 },
+        "context_tokens": { "type": "integer", "minimum": 1 },
+        "thinking_in_max_tokens": { "type": "boolean" },
+        "input_usd_per_mtok": { "type": "number", "minimum": 0 },
+        "cache_read_usd_per_mtok": { "type": "number", "minimum": 0 },
+        "cache_write_usd_per_mtok": { "type": "number", "minimum": 0 },
+        "output_usd_per_mtok": { "type": "number", "minimum": 0 }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "required": ["id", "family", "path", "credential"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "family": { "type": "string", "minLength": 1 },
+        "path": { "enum": ["api", "cloud", "gateway-native", "gateway-compat", "harness"] },
+        "platform": { "type": "string" },
+        "region": { "type": "string" },
+        "project": { "type": "string" },
+        "base_url": { "type": "string" },
+        "credential": { "type": "string", "description": "A credential reference (for example `aws:work-sso`), or `none` for a loopback base_url. Never a secret." },
+        "models": { "$ref": "#/$defs/tierMap" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "cost_model": { "type": "string", "description": "`subscription` or `local`." },
+        "harness": { "type": "string", "description": "`claude` (default) or `agy`." },
+        "betas": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "authBlock": {
+      "type": "object",
+      "required": ["flow", "client_id"],
+      "properties": {
+        "flow": { "enum": ["device_code", "client_credentials", "loopback_pkce"] },
+        "issuer": { "type": "string" },
+        "token_url": { "type": "string" },
+        "device_authorization_url": { "type": "string" },
+        "authorization_url": { "type": "string" },
+        "client_id": { "type": "string" },
+        "scopes": { "type": "array", "items": { "type": "string" } },
+        "audience": { "type": "string" },
+        "client_secret": { "type": "string", "description": "A reference such as `keychain:google-client-secret`, never the secret." },
+        "redirect_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "authorization_params": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "connector": {
+      "type": "object",
+      "required": ["url", "hosts", "roles", "tools"],
+      "properties": {
+        "transport": { "type": "string" },
+        "url": { "type": "string" },
+        "login": { "type": "string" },
+        "account": { "type": "string" },
+        "hosts": { "type": "array", "items": { "type": "string" } },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "tools": { "type": "object", "additionalProperties": { "enum": ["read", "draft", "write"] } },
+        "max_arg_chars": { "type": "integer", "minimum": 1 },
+        "first_use": { "enum": ["ask", "allow"] },
+        "calls_per_minute": { "type": "integer", "minimum": 1 },
+        "max_result_chars": { "type": "integer", "minimum": 1 },
+        "identity": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "harnessProfile": {
+      "type": "object",
+      "description": "Unknown keys are refused by the program.",
+      "properties": {
+        "bridge": { "type": "boolean" },
+        "approvals": { "enum": ["delegate", "delphi"] },
+        "native_tools": { "type": "array", "items": { "type": "string" } },
+        "claudeai_connectors": { "type": "boolean" },
+        "connector_reads": { "type": "array", "items": { "type": "string" } },
+        "env_allow": { "type": "array", "items": { "type": "string" } },
+        "profile": { "type": "string" },
+        "effort": {}, "json_schema": {}, "session": {}, "add_dirs": {}, "sandbox": {}, "print_timeout_secs": {},
+        "max_turns": {}, "max_budget_usd": {}, "fallback_models": {}, "partial_messages": {}, "agents": {}, "settings": {}, "mode": {}
+      },
+      "additionalProperties": false
+    }
+  }
+}

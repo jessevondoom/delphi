@@ -282,7 +282,7 @@ reason = "Production infrastructure."
 tool = "slack.post_message"
 roles = ["*"]
 ```
-Accepted keys: `deny_commands`, `red_paths`, `connector_denied`, `require_card` (a pattern that upgrades a Green read to Amber). **Refused keys:** `allow`, `allow_commands`, `green`, `auto_approve`, `permission_mode`, `env`, anything containing "allow". A policy can only make Delphi ask more or refuse more; D-21 is enforced by the schema. Policies apply on add as daemon-owned deny rules, not as text any agent sees.
+Accepted keys: `deny_commands`, `red_paths`, `connector_denied`, `require_card` (a regular expression over the path of a read that upgrades a Green read to Amber; enforced since `specs/024` §10.5). **Refused keys:** `allow`, `allow_commands`, `green`, `auto_approve`, `permission_mode`, `env`, anything containing "allow". A policy can only make Delphi ask more or refuse more; D-21 is enforced by the schema. Policies apply on add as daemon-owned deny rules, not as text any agent sees.
 
 ---
 

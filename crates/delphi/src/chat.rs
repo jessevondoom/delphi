@@ -129,11 +129,29 @@ pub fn parse_input(line: &str) -> Input {
     if let Some(rest) = line.strip_prefix('@') {
         // `@architect do the thing` routes to a role; `@project/x/y` alone is a path mention in a prompt.
         let (first, text) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        // `@acme-platform:reviewer` (or `@acme/platform:reviewer`) runs a bundle's agent as its host role.
+        if let Some(t) = bundle_target(first) {
+            if !text.trim().is_empty() {
+                return Input::Prompt { target: Some(t), text: text.trim().to_string() };
+            }
+        }
         if !first.contains('/') && !first.is_empty() && !text.trim().is_empty() {
             return Input::Prompt { target: Some(first.to_string()), text: text.trim().to_string() };
         }
     }
     Input::Prompt { target: None, text: line.to_string() }
+}
+
+/// `<bundle>:<agent>` or `<org>/<bundle>:<agent>` as the daemon's `bundle:` target; anything that looks like a path
+/// mention (`specs/x.md:12`) or has odd characters is not one.
+pub fn bundle_target(word: &str) -> Option<String> {
+    let (b, a) = word.split_once(':')?;
+    let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let ok = match b.split_once('/') {
+        Some((org, name)) => plain(org) && plain(name) && !["specs", "project", "bundle", "runtime", "team", "missions"].contains(&org),
+        None => plain(b),
+    };
+    (ok && plain(a)).then(|| format!("bundle:{}:{}", b, a))
 }
 
 fn parse_council(args: &str) -> Input {
@@ -1192,6 +1210,9 @@ mod tests {
         assert_eq!(parse_input("/d"), Input::Answer(Decision::View));
         assert!(matches!(parse_input("/launch-missiles"), Input::Unknown(m) if m.contains("/help")));
         assert_eq!(parse_input("explain the ladder"), Input::Prompt { target: None, text: "explain the ladder".into() });
+        assert_eq!(parse_input("@acme-plat:reviewer look at this"), Input::Prompt { target: Some("bundle:acme-plat:reviewer".into()), text: "look at this".into() });
+        assert_eq!(parse_input("@acme/plat:reviewer look"), Input::Prompt { target: Some("bundle:acme/plat:reviewer".into()), text: "look".into() });
+        assert_eq!(parse_input("@specs/a.md:12 what"), Input::Prompt { target: None, text: "@specs/a.md:12 what".into() }, "a line reference is not a bundle agent");
         assert_eq!(parse_input("@architect draft a spec for X"), Input::Prompt { target: Some("architect".into()), text: "draft a spec for X".into() });
         // A path mention is not a role route.
         assert_eq!(parse_input("@project/app/src/lib.rs what does this do"), Input::Prompt { target: None, text: "@project/app/src/lib.rs what does this do".into() });
