@@ -148,7 +148,7 @@ Drill:
   1. Run `delphi xenia status` to see which signed files were deleted or reverted.
   2. Tell the admins. They must find out who rewrote the history and why (a force-push by someone with write access? a restored backup? an attack?).
   3. If the rewrite is legitimate, a MAJORITY of the epoch's admins (counted per person) sign a freshness statement for the new head that names the rewritten head it replaces. One admin cannot do this alone.
-  4. Each install's operator is shown every signed file that was deleted or reverted and confirms with `delphi xenia sync --accept-rewritten-head`. Only the files you approve are replaced; everything else you have stays. In this build the library is complete but the command is not yet wired into the CLI: until it is, a rewritten store stays refused (safe), and the fallback is to join the rebuilt store afresh.
+  4. Each install's operator is shown every signed file that was deleted or reverted and confirms with `delphi xenia sync --accept-rewritten-head`. Only the files you approve are replaced; everything else you have stays. It is a terminal-only command: it first runs an ordinary sync, does nothing unless the admins' statement is authentic, and then needs a person at a terminal to type the commit and the number of files listed. A host that went back in time (an older view than you hold) cannot be recovered this way.
   5. If a majority of admins is compromised, or the roster is deadlocked, the org rebuilds from a new genesis and everyone re-joins with the new fingerprint, over a channel that is not the store.
 
 Do not accept a rewrite just to make a warning go away."#,

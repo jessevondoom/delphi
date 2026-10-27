@@ -41,6 +41,8 @@ mod sessions_cmd;
 mod toolreport;
 mod needs;
 mod xenia_admin_cmd;
+mod xenia_recover;
+mod xenia_terminal;
 mod xenia_cmd;
 mod observer;
 mod ratify_console;

@@ -43,6 +43,8 @@ pub struct EngineService {
     bundle_exe: Mutex<Option<std::path::PathBuf>>,
     /// Xenia approval cards waiting for the operator's answer, by their short code (`service_xenia.rs`).
     attest: Mutex<HashMap<String, service_xenia::Parked>>,
+    /// The one console admin card waiting for an answer (`service_xenia.rs`, `xenia_admin_console.rs`).
+    admin_card: Mutex<Option<service_xenia::ParkedAdmin>>,
 }
 
 struct PlanState {
@@ -87,7 +89,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -1160,6 +1162,8 @@ impl Extension for ServiceExt {
                 "xenia.status" => svc.xenia_status(params, ctx).await,
                 "xenia.attest.prepare" => svc.xenia_attest_prepare(params, ctx).await,
                 "xenia.attest.decide" => svc.xenia_attest_decide(params, ctx).await,
+                "xenia.admin.prepare" => svc.xenia_admin_prepare(params, ctx).await,
+                "xenia.admin.decide" => svc.xenia_admin_decide(params, ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
@@ -1571,6 +1575,179 @@ mod tests {
         assert_eq!(f.model.requests().len(), 0);
     }
 
+    // Operator decision (plan X9a): limited admin signing from the console. Only a diff that touches no admin may be answered
+    // here; the switch is off by default; one card at a time; the code and the proposal number are both typed; a proposal that
+    // moved is refused; a narrator or relay is refused by name; and no model runs anywhere in it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn console_admin_signs_only_diffs_that_touch_no_admin_and_only_with_the_switch_the_code_and_the_number() {
+        use delphi_core::xenia_admin::{Admin, AdminApprover, AdminDecision, AdminPreview};
+        use delphi_core::xenia_fixture as xf;
+        struct Yes;
+        impl AdminApprover for Yes {
+            fn decide(&mut self, p: &AdminPreview) -> AdminDecision {
+                AdminDecision::Approve(p.approve(true))
+            }
+        }
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let tmp = tempfile::tempdir().unwrap();
+        let (fx, _) = xf::Fx::installed(tmp.path(), &[]);
+        let home = f.engine.ws.home.clone();
+        let store = delphi_core::xenia_store::Store::open(&home, "acme", "acme-main", &fx.remote.url(), true).unwrap();
+        fx.join_store(&store);
+        assert!(matches!(store.sync_verified(&xf::cfg()).unwrap(), delphi_core::xenia_sync::VerifiedSync::Accepted { .. }));
+        fx.id("alice").store_new(&home.join("xenia").join("identity.key")).unwrap();
+        let (bob, newcomer) = (fx.id("bob"), delphi_core::xenia_admin_console::Identity::generate().unwrap().did());
+        let before = fx.remote.host_head();
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok, rsock, rtok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        let home2 = home.clone();
+        let (alice, nc, dave) = (fx.id("alice"), newcomer.clone(), fx.id("dave").did());
+        let store_for_bob = delphi_core::xenia_store::Store::open(&home, "acme", "acme-main", &fx.remote.url(), true).unwrap();
+        let r = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(90))).unwrap();
+            c.hello(&tok).unwrap();
+            let add = |did: &str, admin: bool| json!({"action": "propose", "op": {"kind": "add", "did": did, "person": "zed", "handle": "zed", "admin": admin, "areas": ["*"]}});
+            // The switch is off by default.
+            let off = c.call("xenia.admin.prepare", add(&nc, false)).unwrap();
+            std::fs::create_dir_all(home2.join("operator")).unwrap();
+            std::fs::write(home2.join("operator/xenia.toml"), "[xenia]\nconsole_admin = true\n").unwrap();
+            // Narrator and relay are refused by name.
+            let mut n = Client::connect(&nsock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&ntok).unwrap();
+            let mut rl = Client::connect(&rsock).unwrap();
+            rl.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            rl.hello(&rtok).unwrap();
+            let refused: Vec<_> = ["xenia.admin.prepare", "xenia.admin.decide"].iter().flat_map(|m| [rpc_code(n.call(m, json!({"action": "refresh"}))), rpc_code(rl.call(m, json!({"action": "refresh"})))]).collect();
+            // Terminal-only: an admin, a rotation, genesis, a rewrite.
+            let admin_add = c.call("xenia.admin.prepare", add(&nc, true)).unwrap();
+            let rotate = c.call("xenia.admin.prepare", json!({"action": "propose", "op": {"kind": "rotate", "old_did": dave, "new_did": nc, "rotation": "routine"}})).unwrap();
+            let rotate_action = c.call("xenia.admin.prepare", json!({"action": "rotate"})).unwrap();
+            let init = c.call("xenia.admin.prepare", json!({"action": "init"})).unwrap();
+            let rewrite = c.call("xenia.admin.prepare", json!({"action": "accept-rewritten-head"})).unwrap();
+            // A plain member may be proposed.
+            let proposed = c.call("xenia.admin.prepare", add(&nc, false)).unwrap();
+            // A card for it; a second card is refused while the first waits.
+            let card = c.call("xenia.admin.prepare", json!({"action": "sign", "proposal": 2})).unwrap();
+            let second = c.call("xenia.admin.prepare", json!({"action": "sign", "proposal": 2})).unwrap();
+            let code = card["code"].as_str().unwrap_or("").to_string();
+            let wrong_code = rpc_code(c.call("xenia.admin.decide", json!({"code": "000000000000", "confirm": "2", "acknowledged": [], "decision": "sign"})));
+            let no_number = rpc_code(c.call("xenia.admin.decide", json!({"code": code, "acknowledged": card["flags"], "decision": "sign"})));
+            let wrong_number = rpc_code(c.call("xenia.admin.decide", json!({"code": code, "confirm": "3", "acknowledged": card["flags"], "decision": "sign"})));
+            // The card has a flag (a steward of every area): it must be named, exactly.
+            let unnamed = rpc_code(c.call("xenia.admin.decide", json!({"code": code, "confirm": "2", "acknowledged": [], "decision": "sign"})));
+            let misnamed = rpc_code(c.call("xenia.admin.decide", json!({"code": code, "confirm": "2", "acknowledged": ["adds-admin"], "decision": "sign"})));
+            let signed = c.call("xenia.admin.decide", json!({"code": code, "confirm": "2", "acknowledged": card["flags"], "decision": "sign", "mission_id": "m1"})).unwrap();
+            // Bob signs through the library, so the quorum is met; a publish card is then prepared ...
+            Admin::new(&store_for_bob, xf::cfg()).sign(&bob, 2, &mut Yes).unwrap();
+            let publish = c.call("xenia.admin.prepare", json!({"action": "publish", "proposal": 2})).unwrap();
+            // ... and the proposal moves under it: someone publishes epoch 2 first.
+            Admin::new(&store_for_bob, xf::cfg()).publish(&alice, 2, 7 * 86_400, &mut Yes).unwrap();
+            let stale = c.call("xenia.admin.decide", json!({"code": publish["code"], "confirm": "2", "acknowledged": publish["flags"], "decision": "sign", "mission_id": "m1"})).unwrap();
+            (off, refused, admin_add, rotate, rotate_action, init, rewrite, proposed, card, second, wrong_code, no_number, wrong_number, unnamed, misnamed, signed, publish, stale)
+        })
+        .await;
+        let (off, refused, admin_add, rotate, rotate_action, init, rewrite, proposed, card, second, wrong_code, no_number, wrong_number, unnamed, misnamed, signed, publish, stale) = r;
+        assert_eq!((off["ok"].clone(), off["reason"].as_str()), (json!(false), Some("switch-off")), "{off}");
+        assert!(off["message"].as_str().unwrap().contains("console_admin = true") && off["command"].as_str().unwrap().starts_with("delphi xenia admin add "), "{off}");
+        assert_eq!(refused, vec![Some(code::FORBIDDEN); 4]);
+        for (what, v, needle) in [("an admin", &admin_add, "--as-admin"), ("a rotation", &rotate, "admin rotate"), ("rotate", &rotate_action, "admin rotate"), ("genesis", &init, "admin genesis"), ("rewrite", &rewrite, "--accept-rewritten-head")] {
+            assert_eq!(v["reason"], "terminal-only", "{what}: {v}");
+            assert!(v["command"].as_str().unwrap().contains(needle) && v["message"].as_str().unwrap().contains("terminal"), "{what}: {v}");
+        }
+        assert_eq!(proposed["ok"], true, "{proposed}");
+        assert_eq!(proposed["proposal"], 2);
+        assert_eq!(card["ok"], true, "{card}");
+        let text = card["card"].as_str().unwrap();
+        assert!(text.contains("proposal 2") && text.contains("epoch hash") && text.contains("quorum") && text.contains(&newcomer), "{text}");
+        assert_eq!(card["confirm"], "2");
+        assert_eq!((second["ok"].clone(), second["reason"].as_str()), (json!(false), Some("pending-card")), "{second}");
+        assert!(second["message"].as_str().unwrap().contains("Finish or deny the pending card first"));
+        assert_eq!((wrong_code, no_number, wrong_number), (Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS)), "nothing was signed by a wrong code or number");
+        assert!(card["flags"].as_array().is_some_and(|f| !f.is_empty()), "a card with a flag: {card}");
+        assert_eq!((unnamed, misnamed), (Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS)), "flags are named exactly");
+        assert_eq!(signed["ok"], true, "{signed}");
+        assert_eq!(publish["ok"], true, "{publish}");
+        assert_eq!((stale["ok"].clone(), stale["reason"].as_str()), (json!(false), Some("stale")), "{stale}");
+        assert_ne!(fx.remote.host_head(), before);
+        // The journal says what happened (slugs only), and the log was told without a model turn.
+        let journal = delphi_core::xenia_status::read_journal(&store);
+        let admin: Vec<_> = journal.iter().filter(|e| e.kind == "admin").map(|e| e.outcome.as_str()).collect();
+        assert_eq!(admin, vec!["proposed", "signed", "stale"], "{journal:?}");
+        assert!(journal.iter().filter(|e| e.kind == "admin").all(|e| e.detail["via"] == "console" && !e.detail.to_string().contains("did:key")));
+        let told = events_of(&f, "xenia.admin");
+        assert!(told.iter().any(|e| e.payload["outcome"] == "signed" && e.payload["proposal"] == 2), "{told:?}");
+        assert_eq!(f.model.requests().len(), 0);
+    }
+
+    // A proposal written elsewhere (a terminal, another admin) that touches an admin is classified from its typed diff when
+    // the console is asked to sign it, whatever the console was asked to call it: terminal-only, no card.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn console_admin_refuses_to_sign_a_proposal_that_touches_an_admin_even_if_written_elsewhere() {
+        use delphi_core::xenia_admin::Admin;
+        use delphi_core::xenia_fixture as xf;
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let tmp = tempfile::tempdir().unwrap();
+        let (fx, _) = xf::Fx::installed(tmp.path(), &[]);
+        let home = f.engine.ws.home.clone();
+        let store = delphi_core::xenia_store::Store::open(&home, "acme", "acme-main", &fx.remote.url(), true).unwrap();
+        fx.join_store(&store);
+        assert!(matches!(store.sync_verified(&xf::cfg()).unwrap(), delphi_core::xenia_sync::VerifiedSync::Accepted { .. }));
+        fx.id("alice").store_new(&home.join("xenia").join("identity.key")).unwrap();
+        std::fs::create_dir_all(home.join("operator")).unwrap();
+        std::fs::write(home.join("operator/xenia.toml"), "[xenia]\nconsole_admin = true\n").unwrap();
+        let newcomer = delphi_core::xenia_admin_console::Identity::generate().unwrap().did();
+        let op = delphi_core::xenia_admin_console::Operation::Add(delphi_core::xenia_admin_console::NewMember { did: newcomer, person: "zed".into(), handle: "zed".into(), admin: true, steward_areas: vec![] });
+        Admin::new(&store, xf::cfg()).propose(op).unwrap();
+        let before = fx.remote.host_head();
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        let r = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&tok).unwrap();
+            c.call("xenia.admin.prepare", json!({"action": "sign", "proposal": 2})).unwrap()
+        })
+        .await;
+        assert_eq!((r["ok"].clone(), r["reason"].as_str()), (json!(false), Some("terminal-only")), "{r}");
+        assert!(r["command"].as_str().unwrap().contains("admin sign 2") && r["message"].as_str().unwrap().contains("terminal"), "{r}");
+        assert_eq!(fx.remote.host_head(), before, "nothing was signed or sent");
+        assert_eq!(f.model.requests().len(), 0);
+    }
+
+    // The rate limit counts console signatures in the journal, so a restart cannot reset it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn console_admin_stops_after_five_signatures_in_an_hour() {
+        use delphi_core::xenia_fixture as xf;
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let tmp = tempfile::tempdir().unwrap();
+        let (fx, _) = xf::Fx::installed(tmp.path(), &[]);
+        let home = f.engine.ws.home.clone();
+        let store = delphi_core::xenia_store::Store::open(&home, "acme", "acme-main", &fx.remote.url(), true).unwrap();
+        fx.join_store(&store);
+        assert!(matches!(store.sync_verified(&xf::cfg()).unwrap(), delphi_core::xenia_sync::VerifiedSync::Accepted { .. }));
+        fx.id("alice").store_new(&home.join("xenia").join("identity.key")).unwrap();
+        std::fs::create_dir_all(home.join("operator")).unwrap();
+        std::fs::write(home.join("operator/xenia.toml"), "[xenia]\nconsole_admin = true\n").unwrap();
+        let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap();
+        for _ in 0..5 {
+            delphi_core::xenia_status::record(&store, "admin", "signed", None, json!({"via": "console"}), now - 60).unwrap();
+        }
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        let r = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&tok).unwrap();
+            c.call("xenia.admin.prepare", json!({"action": "refresh"})).unwrap()
+        })
+        .await;
+        assert_eq!(r["reason"], "rate-limit", "{r}");
+        assert!(r["message"].as_str().unwrap().contains("terminal"), "{r}");
+        assert_eq!(f.model.requests().len(), 0);
+    }
+
     // specs/026 AC-7: `/org` reads the view and each action is the operator's explicit act: it runs the bundle command,
     // returns what it printed, raises no card, and the log learns of the change at once.
     #[tokio::test(flavor = "multi_thread")]
@@ -1661,7 +1838,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {

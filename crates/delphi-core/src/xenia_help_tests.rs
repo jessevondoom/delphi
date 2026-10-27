@@ -207,8 +207,9 @@ fn the_help_covers_the_topics_an_operator_needs_and_the_orientation_is_short() {
 
 #[test]
 fn recovery_says_the_truth_about_the_command_in_this_build() {
-    // The CLI does not wire `sync --accept-rewritten-head` yet; the help must not promise a working command.
-    assert!(topic("recovery").unwrap().body.contains("not yet wired into the CLI"));
+    // `sync --accept-rewritten-head` is wired (terminal only); the help must say what it needs and must not call it unbuilt.
+    let body = topic("recovery").unwrap().body;
+    assert!(body.contains("terminal-only") && body.contains("type the commit") && !body.contains("not yet wired"));
 }
 
 // ---- find / explain ------------------------------------------------------------------------------------------------

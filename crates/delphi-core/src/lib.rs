@@ -31,6 +31,7 @@ pub mod xenia_help;
 #[cfg(any(test, feature = "test-support"))]
 pub mod xenia_testkit;
 pub mod xenia_action;
+pub mod xenia_admin_console;
 pub mod xenia_admin;
 pub mod xenia_admin_card;
 pub mod xenia_bundle;

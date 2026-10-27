@@ -173,7 +173,7 @@ Drill:
   1. Run `delphi xenia status` to see which signed files were deleted or reverted.
   2. Tell the admins. They must find out who rewrote the history and why (a force-push by someone with write access? a restored backup? an attack?).
   3. If the rewrite is legitimate, a MAJORITY of the epoch's admins (counted per person) sign a freshness statement for the new head that names the rewritten head it replaces. One admin cannot do this alone.
-  4. Each install's operator is shown every signed file that was deleted or reverted and confirms with `delphi xenia sync --accept-rewritten-head`. Only the files you approve are replaced; everything else you have stays. In this build the library is complete but the command is not yet wired into the CLI: until it is, a rewritten store stays refused (safe), and the fallback is to join the rebuilt store afresh.
+  4. Each install's operator is shown every signed file that was deleted or reverted and confirms with `delphi xenia sync --accept-rewritten-head`. Only the files you approve are replaced; everything else you have stays. It is a terminal-only command: it first runs an ordinary sync, does nothing unless the admins' statement is authentic, and then needs a person at a terminal to type the commit and the number of files listed. A host that went back in time (an older view than you hold) cannot be recovered this way.
   5. If a majority of admins is compromised, or the roster is deadlocked, the org rebuilds from a new genesis and everyone re-joins with the new fingerprint, over a channel that is not the store.
 
 ```
@@ -397,6 +397,14 @@ The table is the catalog `delphi xenia explain <slug>` reads. "Who" is who can f
 | `proposal-changed` | The proposal changed after you reviewed it. | Review it again and sign. | an admin of your org's store |
 | `flags-not-acknowledged` | The preview raised flags and the approval did not say you read them. | Read the flags on the card and answer again acknowledging them. | you: it is on this machine |
 | `denied` | You said no. | Nothing to do. | you: it is on this machine |
+| `terminal-only` | The console will not sign this: it touches an admin, rotates a key, starts a store or accepts a rewritten history. | Run the terminal command the message names. | you: it is on this machine |
+| `switch-off` | Console admin signing is switched off (the default). | Set `[xenia] console_admin = true` in operator/xenia.toml, or run the command in a terminal. | you: it is on this machine |
+| `pending-card` | An admin card is already waiting for your answer. | Answer or deny the waiting card, or wait for it to expire, then ask again. | you: it is on this machine |
+| `rate-limit` | Five admin signatures were made from the console in the last hour. | Wait an hour, or sign in a terminal. | you: it is on this machine |
+| `not-interactive` | Nothing at a terminal answered: signing needs a person to type the code. | Run the command in a terminal and type the code when asked. | you: it is on this machine |
+| `challenge-failed` | What was typed did not match the code for these exact bytes. | Run the command again and type the code shown. | you: it is on this machine |
+| `flag-not-acknowledged` | A flag on the card was not acknowledged by typing its name. | Run the command again and type each flag's name. | you: it is on this machine |
+| `wrong-confirm` | The proposal number (or `refresh`) was not retyped correctly. | Ask for the card again and retype the number shown. | you: it is on this machine |
 | `approval-mismatch` | The approval was for other bytes than the ones held. | Start the action again and read the new card. | you: it is on this machine |
 | `wrong-key` | The key given is not the one the action was prepared for. | Start the action again. | you: it is on this machine |
 | `history-failed` | The history check found a problem, so no freshness statement was signed. | Run `delphi xenia status` and `delphi xenia help recovery`. Do not refresh until it is explained. | an admin of your org's store |
