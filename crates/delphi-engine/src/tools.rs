@@ -1368,6 +1368,24 @@ mod tests {
         assert!(run_tool(&mut readonly, "write_file", json!({"path": "missions/m1/x.md", "content": "x"})).content.contains("outside your role"));
     }
 
+    // X10 gap: the install-owned trust fields live in `local/bundles.lock`. Even a role whose globs allow everything cannot
+    // reach it through the tool registry, and the refused write leaves no file behind.
+    #[test]
+    fn no_tool_reads_or_writes_the_bundles_lock_even_with_every_glob() {
+        let mut f = fx(&["**", "local/**", "*"]);
+        let lock = f.root.join("local/bundles.lock");
+        std::fs::write(&lock, "[[bundle]]\ntrust = \"store-endorsed\"\n").unwrap();
+        for path in ["local/bundles.lock", "Local/Bundles.lock", "local//bundles.lock", "local/missions/../bundles.lock"] {
+            let w = run_tool(&mut f, "write_file", json!({"path": path, "content": "[[bundle]]\ntrust = \"trusted-source\"\n"}));
+            assert!(w.is_error, "{path} must not be writable: {}", w.content);
+            let r = run_tool(&mut f, "read_file", json!({"path": path}));
+            assert!(r.is_error && !r.content.contains("store-endorsed"), "{path} must not be readable: {}", r.content);
+        }
+        assert_eq!(std::fs::read_to_string(&lock).unwrap(), "[[bundle]]\ntrust = \"store-endorsed\"\n", "the lock is byte-for-byte as the install left it");
+        let listing = run_tool(&mut f, "list_dir", json!({"path": "local"}));
+        assert!(!listing.content.contains("bundles.lock"), "{}", listing.content);
+    }
+
     #[test]
     fn classification_decides_the_tier_before_anything_runs() {
         let read = classify("read_file", &json!({"path": "@project/app/a.rs"})).unwrap();
