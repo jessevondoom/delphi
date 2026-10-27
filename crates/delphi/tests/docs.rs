@@ -186,6 +186,37 @@ fn xenia_records_follow_the_record_schema() {
     tombstone["action"] = json!("withdraw");
     tombstone["reason"] = json!("mistake");
     must_pass("xenia-record.schema.json", "a tombstone", &tombstone);
+
+    let mut bundle = memory_record();
+    for k in ["memory_type", "applies_to", "verified_by", "review_by"] {
+        bundle.as_object_mut().unwrap().remove(k);
+    }
+    bundle["kind"] = json!("bundle");
+    bundle["bundle_name"] = json!("acme-platform");
+    bundle["bundle_version"] = json!("1.4.0");
+    bundle["bundle_hash"] = json!(format!("blake3:{}", "b".repeat(64)));
+    bundle["tree"] = json!({ "scheme": "git", "locator": "https://git.acme.example/platform/bundle.git#.", "pin": { "kind": "git-tree", "value": "0123456789abcdef0123456789abcdef01234567" }, "label": "The bundle tree", "content_type": "other" });
+    bundle["touches"] = json!({ "roles": ["strategist"], "connectors": ["slack"] });
+    bundle["compat"] = json!({ "delphi": ">=0.3.0", "bundle_schema": 1 });
+    must_pass("xenia-record.schema.json", "a bundle", &bundle);
+    for (what, edit) in [
+        ("a tree over ssh", ("locator", json!("ssh://git.acme.example/p.git#."))),
+        ("a tree pinned by a branch", ("pin", json!({ "kind": "git-tree", "value": "main" }))),
+        ("a tree that is not git", ("scheme", json!("https"))),
+    ] {
+        let mut bad = bundle.clone();
+        bad["tree"][edit.0] = edit.1;
+        must_fail("xenia-record.schema.json", what, &bad);
+    }
+    let mut bad = bundle.clone();
+    bad["touches"]["roles"] = json!(["overlord"]);
+    must_fail("xenia-record.schema.json", "an unknown role", &bad);
+    let mut bad = bundle.clone();
+    bad.as_object_mut().unwrap().remove("bundle_hash");
+    must_fail("xenia-record.schema.json", "a bundle without its hash", &bad);
+    let mut bad = bundle;
+    bad["memory_type"] = json!("gotcha");
+    must_fail("xenia-record.schema.json", "a bundle with a memory field", &bad);
 }
 
 #[test]

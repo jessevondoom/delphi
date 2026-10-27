@@ -270,7 +270,7 @@ pub fn view(ws: &WorkspacePaths, projects: &[(String, PathBuf)], today: &str) ->
         }
         // `update_available`: the new version and the publisher state when the source holds another hash, else null (also null
         // when the source cannot be looked at: `update_note` says why). `vectors` is how far the index has got.
-        let check = delphi_bundle::source_check::check(&e.source.kind, &e.source.path, &e.hash, &e.publisher_kid);
+        let check = delphi_bundle::source_check::check_in(&ws.home, &e.source.kind, &e.source.path, &e.hash, &e.publisher_kid);
         if let Some(line) = check.line() {
             open.push(format!("{} has an update available: {} (`u` applies it)", id, clean(&line)));
         }

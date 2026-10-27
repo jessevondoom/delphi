@@ -31,7 +31,7 @@ impl Fetcher for Fake {
     fn fetch(&self, url: &str, rev: Rev, subdir: Option<&str>, dest: &Path) -> Result<String, String> {
         let sha = match rev {
             Rev::Sha(s) => s.to_string(),
-            Rev::Head => SHA.to_string(),
+            Rev::Head | Rev::Tree(_) => SHA.to_string(),
         };
         self.calls.borrow_mut().push(format!("{} {} {:?}", url, sha, subdir));
         copy(&self.tree, dest);

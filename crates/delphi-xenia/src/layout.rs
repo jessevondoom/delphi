@@ -4,23 +4,31 @@
 
 use crate::{ulid, Error, Result};
 
-/// The Phase 1 kinds (spec 012 §5). Anything else is `unknown kind directory` and is quarantined.
+/// The record kinds: the Phase 1 three (spec 012 §5) and `bundle` (Phase 2, spec 027 §4.3; it supersedes the
+/// provisional `skill` kind). Anything else is `unknown kind directory` and is quarantined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Memory,
     Endorsement,
     Tombstone,
+    Bundle,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::Memory, Kind::Endorsement, Kind::Tombstone];
+    pub const ALL: [Kind; 4] = [Kind::Memory, Kind::Endorsement, Kind::Tombstone, Kind::Bundle];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Memory => "memory",
             Kind::Endorsement => "endorsement",
             Kind::Tombstone => "tombstone",
+            Kind::Bundle => "bundle",
         }
+    }
+
+    /// Kinds a steward can endorse and a tombstone can hide: the ones that carry content (`memory`, `bundle`).
+    pub fn is_target(self) -> bool {
+        matches!(self, Kind::Memory | Kind::Bundle)
     }
 
     pub fn parse(s: &str) -> Option<Kind> {

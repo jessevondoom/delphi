@@ -115,6 +115,28 @@ fn pointer_block(key: &str, items: &[Pointer], out: &mut String) -> Res<()> {
     Ok(())
 }
 
+/// One pointer as a map under `key` (the `bundle` kind's `tree`).
+fn pointer_map(key: &str, p: &Pointer, out: &mut String) -> Res<()> {
+    out.push_str(&format!("{key}:\n  scheme: {}\n  locator: {}\n  pin:\n    kind: {}\n", p.scheme.as_str(), q(&p.locator)?, p.pin.kind.as_str()));
+    if let Some(v) = &p.pin.value {
+        out.push_str(&format!("    value: {}\n", q(v)?));
+    }
+    if let Some(h) = &p.hash {
+        out.push_str(&format!("  hash: {}\n", q(h)?));
+    }
+    if let Some((a, b)) = p.range {
+        out.push_str(&format!("  range: \"L{a}-L{b}\"\n"));
+    }
+    out.push_str(&format!("  label: {}\n  content_type: {}\n", q(&p.label)?, p.content_type.as_str()));
+    if let Some(b) = p.bytes {
+        out.push_str(&format!("  bytes: {b}\n"));
+    }
+    if let Some(h) = &p.access_hint {
+        out.push_str(&format!("  access_hint: {}\n", q(h)?));
+    }
+    Ok(())
+}
+
 /// Write `r` as a record file. See the module docs for what is guaranteed about the result.
 pub fn serialize(r: &Record) -> Res<Vec<u8>> {
     let bytes = render(r)?.into_bytes();
@@ -174,6 +196,17 @@ fn render(r: &Record) -> Res<String> {
             if let Some(n) = &s.note {
                 t.push_str(&format!("note: {}\n", q(n)?));
             }
+        }
+        KindFields::Bundle(b) => {
+            t.push_str(&format!("bundle_name: {}\nbundle_version: {}\nbundle_hash: {}\n", q(&b.bundle_name)?, q(&b.bundle_version)?, q(&b.bundle_hash)?));
+            pointer_map("tree", &b.tree, &mut t)?;
+            let roles: Vec<&str> = b.touches_roles.iter().map(|r| r.as_str()).collect();
+            t.push_str(&format!("touches:\n  roles: {}\n  connectors: {}\n", list(&roles)?, list(&b.touches_connectors)?));
+            t.push_str("compat:\n");
+            if let Some(d) = &b.compat_delphi {
+                t.push_str(&format!("  delphi: {}\n", q(d)?));
+            }
+            t.push_str(&format!("  bundle_schema: {}\n", b.compat_schema));
         }
     }
     t.push_str("---\n");
