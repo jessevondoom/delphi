@@ -18,15 +18,26 @@ const DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const GH: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 
 fn nasty() -> String {
-    format!("key {SECRET_ANT} token {GH} did {DID} url https://user:pw@example.com/x?token=abc123 mail a.b@corp.example home /Users/someone/secret.txt \u{1b}[31mred\u{1b}[0m\nSECOND LINE \u{202e}rtl Bearer abcdefghijklmnop1234 {}", "A1b2".repeat(20))
+    format!("key {SECRET_ANT} token {GH} did {DID} url https://user:pw@example.com/x?token=abc123 internal https://admin:s3cretpw@internalhost/p did:web:corp.example.org:alice mail a.b@corp.example home /Users/someone/secret.txt \u{1b}[31mred\u{1b}[0m\nSECOND LINE \u{202e}rtl Bearer abcdefghijklmnop1234 {}", "A1b2".repeat(20))
 }
 
 fn assert_clean(text: &str) {
-    for needle in [SECRET_ANT, "AAAAAAAAAAAAAAAAAAAAAAAA", GH, DID, "user:pw", "token=abc123", "a.b@corp.example", "abcdefghijklmnop1234", "A1b2A1b2A1b2A1b2"] {
+    for needle in [SECRET_ANT, "AAAAAAAAAAAAAAAAAAAAAAAA", GH, DID, "user:pw", "admin:s3cretpw", "s3cretpw", "did:web", "alice", "token=abc123", "a.b@corp.example", "abcdefghijklmnop1234", "A1b2A1b2A1b2A1b2"] {
         assert!(!text.contains(needle), "leaked {needle:?} in {text}");
     }
-    assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "control or bidi character survived");
     assert_eq!(text.lines().count(), 1, "one record is one line");
+    // The decoded strings, not the JSON text: serde escapes an ESC as \u001b, so only decoding shows one that survived.
+    fn walk(v: &Value) {
+        match v {
+            Value::String(s) => assert!(!s.chars().any(|c| c.is_control() || matches!(c, '\u{202e}' | '\u{200b}')), "a control or bidi character survived in {s:?}"),
+            Value::Array(a) => a.iter().for_each(walk),
+            Value::Object(o) => o.values().for_each(walk),
+            _ => {}
+        }
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(text.trim_end()) {
+        walk(&v);
+    }
 }
 
 #[test]
