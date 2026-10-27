@@ -488,6 +488,46 @@ impl Store {
         .map_err(io)?
     }
 
+    /// The authoring side of the recovery (spec 011 §8.4): what the host serves now, judged for an **admin** who is
+    /// asked to attest it. The roster chain at the served head must verify against this install's pins and the tip
+    /// must pass the store's safety checks; the files an install holding this admin's head would be asked to
+    /// accept as lost are listed. Nothing is accepted or changed except the staging ref.
+    /// `Ok(Err(reason))` says why there is nothing to author (the host is a plain fast-forward, unreachable, older
+    /// than what this install holds, or refused).
+    pub fn rewrite_candidate(&self, cfg: &VerifyConfig) -> Result<std::result::Result<RewriteCandidate, &'static str>> {
+        let lock = self.paths.root.join(".lock");
+        crate::lock::with_lock(&lock, || self.candidate_locked(cfg)).map_err(io)?
+    }
+
+    fn candidate_locked(&self, cfg: &VerifyConfig) -> Result<std::result::Result<RewriteCandidate, &'static str>> {
+        let pins = self.load_pins()?;
+        let sticky = self.load_sticky()?;
+        let Some(accepted) = sticky.accepted_head.clone() else { return Ok(Err("nothing-accepted")) };
+        let (head, entries, kind) = match self.fetch_checked(Some(&accepted))? {
+            Fetch::UpToDate { .. } => return Ok(Err("nothing-to-recover")),
+            Fetch::Unavailable(_) => return Ok(Err("host-unavailable")),
+            Fetch::Refused(_) => return Ok(Err("fetch-refused")),
+            Fetch::Advanced { head, entries, .. } => (head, entries, None),
+            Fetch::NonFastForward(n) if n.kind == Divergence::Behind => return Ok(Err("host-is-behind")),
+            Fetch::NonFastForward(n) => match self.check_tip(&n.fetched)? {
+                Ok(entries) => (n.fetched, entries, Some(n.kind)),
+                Err(_) => return Ok(Err("tip-refused")),
+            },
+        };
+        let snapshot = self.read_snapshot(&head, &entries)?;
+        let ins = match self.inspect(&pins, cfg, &head, &snapshot, &sticky, false)? {
+            Ok(i) => i,
+            Err(reason) => return Ok(Err(reason)),
+        };
+        let changes = self.rewrite_changes(&accepted, &sticky, &ins, &snapshot);
+        let ev = sticky.evaluate(&ins.observed, &ins.invalid);
+        if kind.is_none() && ins.walk.is_empty() && ev.is_clean() {
+            // An ordinary fast-forward: `sync` accepts it, and nothing needs rewriting.
+            return Ok(Err("nothing-to-recover"));
+        }
+        Ok(Ok(RewriteCandidate { accepted, fetched: head, kind, roster: ins.roster, files: snapshot.files, changes, rule_findings: ins.walk.len() }))
+    }
+
     /// Accept the rewritten head: only with an admin-quorum statement that names the replaced head, and only if
     /// `approval` names exactly the paths [`Store::plan_rewrite`] lists for this very `fetched` commit.
     pub fn accept_rewritten_head(&self, cfg: &VerifyConfig, approval: &RewriteApproval) -> Result<RewriteOutcome> {
@@ -532,6 +572,22 @@ impl Store {
         if !ins.walk.is_empty() {
             return Ok(Planned::Refused("walk-violations", ins.walk));
         }
+        let changes = self.rewrite_changes(&accepted, &sticky, &ins, &snapshot);
+        let plan = RewritePlan {
+            accepted,
+            fetched: head.clone(),
+            kind,
+            replaced: replaced.clone(),
+            signing_people: auth.signing_people,
+            statement_expires_at: auth.statement.expires_at.clone(),
+            changes,
+        };
+        Ok(Planned::Plan(Box::new(PlanBundle { plan, ins, sticky, snapshot, pins })))
+    }
+
+    /// Every signed file the fetched head deletes, reverts, swaps, un-verifies or hands to another creator, judged
+    /// against the sticky state this install holds. The one list installs show and an admin's card shows.
+    fn rewrite_changes(&self, accepted: &str, sticky: &StickyState, ins: &Inspected, snapshot: &Snapshot) -> Vec<PlannedChange> {
         let ev = sticky.evaluate(&ins.observed, &ins.invalid);
         let mut changes: Vec<PlannedChange> = ev
             .refusals
@@ -552,7 +608,7 @@ impl Store {
             }
             let Some(new_md) = snapshot.files.get(path) else { continue };
             let sidecar_path = path.trim_end_matches(".md").to_string() + ".sig.json";
-            let (Some(new_car), Ok(old)) = (snapshot.files.get(&sidecar_path), src.read(&accepted, &[path.clone(), sidecar_path.clone()], 16 * 1024)) else { continue };
+            let (Some(new_car), Ok(old)) = (snapshot.files.get(&sidecar_path), src.read(accepted, &[path.clone(), sidecar_path.clone()], 16 * 1024)) else { continue };
             let (Blob::Bytes(old_md), Blob::Bytes(old_car)) = (&old[0], &old[1]) else { continue };
             if let (Ok(ov), Ok(nv)) = (walk::read_version(&ctx, path, old_md, old_car), walk::read_version(&ctx, path, new_md, new_car)) {
                 if ov.signer != nv.signer && !ins.roster.successor_chain(&ov.signer).contains(&nv.signer) {
@@ -562,16 +618,7 @@ impl Store {
         }
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         changes.dedup_by(|a, b| a.path == b.path);
-        let plan = RewritePlan {
-            accepted,
-            fetched: head.clone(),
-            kind,
-            replaced: replaced.clone(),
-            signing_people: auth.signing_people,
-            statement_expires_at: auth.statement.expires_at.clone(),
-            changes,
-        };
-        Ok(Planned::Plan(Box::new(PlanBundle { plan, ins, sticky, snapshot, pins })))
+        changes
     }
 
     fn accept_locked(&self, cfg: &VerifyConfig, approval: &RewriteApproval) -> Result<RewriteOutcome> {
@@ -640,6 +687,23 @@ pub struct PlannedChange {
     /// The hash this install stored, and the new head's (`None` when the file is gone).
     pub was: Option<String>,
     pub now: Option<String>,
+}
+
+/// The head the host serves, as an admin who is asked to attest it sees it. See [`Store::rewrite_candidate`].
+#[derive(Debug, Clone)]
+pub struct RewriteCandidate {
+    /// The head this install holds: the head a statement from this admin replaces.
+    pub accepted: String,
+    pub fetched: String,
+    /// `None` when the head is a fast-forward that breaks the store's rules.
+    pub kind: Option<Divergence>,
+    pub roster: VerifiedRoster,
+    /// Every file of the fetched head.
+    pub files: std::collections::BTreeMap<String, Vec<u8>>,
+    /// The signed files an install holding `accepted` would be asked to give up.
+    pub changes: Vec<PlannedChange>,
+    /// How many rule violations the walk from `accepted` found (expected for a rewrite; shown, not hidden).
+    pub rule_findings: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

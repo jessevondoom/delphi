@@ -437,6 +437,8 @@ pub enum Flag {
     FewAdmins,
     ChangesRoles,
     ChangesHandle,
+    /// The statement asks every install to accept a rewritten history (spec 011 §8.4).
+    RewritesHistory,
 }
 
 impl Flag {
@@ -451,6 +453,7 @@ impl Flag {
             Flag::FewAdmins => "few-admins",
             Flag::ChangesRoles => "changes-roles",
             Flag::ChangesHandle => "changes-handle",
+            Flag::RewritesHistory => "rewrites-history",
         }
     }
 
@@ -465,6 +468,7 @@ impl Flag {
             Flag::FewAdmins => "fewer than 3 admin people remain; losing one key would be hard to recover from",
             Flag::ChangesRoles => "an active member's roles change",
             Flag::ChangesHandle => "an active member's handle changes",
+            Flag::RewritesHistory => "this statement tells every install to drop the history it holds and accept the rewritten one; the files listed on this card are deleted, reverted or reassigned for them",
         }
     }
 }
@@ -686,21 +690,39 @@ pub fn assemble_sigs(org: &str, store: &str, n: u64, bytes: &[u8], prev: &Epoch,
 /// than that is ignored by every install. The output is read back by the verifier's parser before it is returned.
 #[allow(clippy::too_many_arguments)]
 pub fn build_statement(org: &str, store: &str, epoch: u64, epoch_hash: &str, store_head: &str, now: i64, validity_secs: i64, cap: &freshness::Policy) -> Result<Vec<u8>, Refusal> {
+    build_statement_inner(org, store, epoch, epoch_hash, store_head, None, now, validity_secs, cap)
+}
+
+/// The statement of a rewrite recovery (spec 011 §8.4): the same as [`build_statement`] plus `rewrite_of`, the head
+/// the admins replace. It needs a majority of the admin people to sign these exact bytes before any install counts it.
+#[allow(clippy::too_many_arguments)]
+pub fn build_rewrite_statement(org: &str, store: &str, epoch: u64, epoch_hash: &str, store_head: &str, rewrite_of: &str, now: i64, validity_secs: i64, cap: &freshness::Policy) -> Result<Vec<u8>, Refusal> {
+    if !crate::sticky::is_commit_id(rewrite_of) {
+        return Err(Refusal::BadInput("rewrite_of"));
+    }
+    build_statement_inner(org, store, epoch, epoch_hash, store_head, Some(rewrite_of), now, validity_secs, cap)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_statement_inner(org: &str, store: &str, epoch: u64, epoch_hash: &str, store_head: &str, rewrite_of: Option<&str>, now: i64, validity_secs: i64, cap: &freshness::Policy) -> Result<Vec<u8>, Refusal> {
     if validity_secs <= 0 {
         return Err(Refusal::Validity("validity must be positive"));
     }
     if validity_secs > cap.max_validity_secs {
         return Err(Refusal::Validity("validity is over the cap every install applies"));
     }
-    let v = json!({
+    let mut v = json!({
         "org": org, "store": store, "epoch": epoch, "epoch_hash": epoch_hash, "store_head": store_head,
         "issued_at": time::format_utc(now), "expires_at": time::format_utc(now + validity_secs),
     });
+    if let Some(r) = rewrite_of {
+        v.as_object_mut().expect("an object").insert("rewrite_of".into(), json!(r));
+    }
     let mut text = serde_json::to_string_pretty(&v).expect("serializes");
     text.push('\n');
     let bytes = text.into_bytes();
     let st = Statement::parse(&bytes).map_err(|_| Refusal::Validity("the statement does not parse"))?;
-    if st.org != org || st.store != store || st.epoch != epoch || st.epoch_hash != epoch_hash || st.store_head != store_head || st.issued != now || st.rewrite_of.is_some() {
+    if st.org != org || st.store != store || st.epoch != epoch || st.epoch_hash != epoch_hash || st.store_head != store_head || st.issued != now || st.rewrite_of.as_deref() != rewrite_of {
         return Err(Refusal::Validity("the statement does not read back as written"));
     }
     Ok(bytes)

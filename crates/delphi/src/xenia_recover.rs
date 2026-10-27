@@ -23,7 +23,7 @@ use std::io::Write;
 /// catalog can take them over. Every text says what to do next.
 pub fn explain(reason: &str) -> &'static str {
     match reason {
-        "no-valid-statement" | "statement-names-no-rewrite" => "rewrite-quorum-missing: no freshness statement signed by a majority of the admins says this history was rewritten on purpose. If the admins did rewrite it, ask them to publish a statement that names the replaced head (`rewrite_of`); if they did not, treat the store as tampered with and tell them. Nothing was changed.",
+        "no-valid-statement" | "statement-names-no-rewrite" => "rewrite-quorum-missing: no freshness statement signed by a majority of the admins says this history was rewritten on purpose. If the admins did rewrite it, ask a majority of them to author and publish that statement (`delphi xenia admin rewrite propose`, then `sign` by each, then `publish`); if they did not, treat the store as tampered with and tell them. Nothing was changed.",
         "statement-not-current" => "The admins' statement is expired or not current. Ask an admin to refresh it (`delphi xenia admin refresh`), then run this again. Nothing was changed.",
         "rewrite-of-is-not-our-head" => "The admins' statement replaces a different head than the one this install holds, so it does not cover this rewrite. Ask the admins which head they replaced. Nothing was changed.",
         "walk-violations" => "The rewritten history breaks the store's rules in ways the statement does not excuse (see the paths listed). Tell the admins; do not accept it. Nothing was changed.",

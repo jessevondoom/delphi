@@ -91,7 +91,7 @@ Your duties:
 
 ```
 
-Admin subcommands: `add`, `remove`, `rotate` (with `--routine` or `--compromised`), `show <n>`, `sign <n>`, `publish <n>`, `refresh` and `genesis draft|sign|publish`; `delphi xenia admin` lists them. They need your key and a terminal; a relay or an agent cannot run them.
+Admin subcommands: `add`, `remove`, `rotate` (with `--routine` or `--compromised`), `show <n>`, `sign <n>`, `publish <n>`, `refresh`, `rewrite propose|show|sign|publish` (the admins' side of a force-push recovery) and `genesis draft|sign|publish`; `delphi xenia admin` lists them. They need your key and a terminal; a relay or an agent cannot run them.
 
 ## The genesis ceremony: creating a store with three admins
 
@@ -172,7 +172,7 @@ Drill:
 ```text
   1. Run `delphi xenia status` to see which signed files were deleted or reverted.
   2. Tell the admins. They must find out who rewrote the history and why (a force-push by someone with write access? a restored backup? an attack?).
-  3. If the rewrite is legitimate, a MAJORITY of the epoch's admins (counted per person) sign a freshness statement for the new head that names the rewritten head it replaces. One admin cannot do this alone.
+  3. If the rewrite is legitimate, a MAJORITY of the epoch's admins (counted per person) sign a freshness statement for the new head that names the rewritten head it replaces. One admin cannot do this alone. The command is `delphi xenia admin rewrite`: one admin runs `propose` (it prints an id and writes the draft statement to a branch; nothing is signed), each admin of a majority runs `sign <id>` (a terminal card shows the rewritten head, the replaced head and every file installs will be asked to give up; you type the code and acknowledge the warning), and any admin runs `publish <id>` once the signatures are in. It works from the admin's own install, which must still hold the old history, and it refuses a non-admin, a single signature, a statement that is expired or names a head the admin does not hold, and a host that has moved since the proposal.
   4. Each install's operator is shown every signed file that was deleted or reverted and confirms with `delphi xenia sync --accept-rewritten-head`. Only the files you approve are replaced; everything else you have stays. It is a terminal-only command: it first runs an ordinary sync, does nothing unless the admins' statement is authentic, and then needs a person at a terminal to type the commit and the number of files listed. A host that went back in time (an older view than you hold) cannot be recovered this way.
   5. If a majority of admins is compromised, or the roster is deadlocked, the org rebuilds from a new genesis and everyone re-joins with the new fingerprint, over a channel that is not the store.
 
@@ -436,6 +436,12 @@ The table is the catalog `delphi xenia explain <slug>` reads. "Who" is who can f
 | `statement-names-no-rewrite` | The latest statement does not say which head it replaces. | Ask a majority of admins to sign a statement naming the replaced head. | an admin of your org's store |
 | `statement-not-current` | The statement approving the rewrite is not current. | Ask admins for a fresh statement. | an admin of your org's store |
 | `rewrite-of-is-not-our-head` | The statement replaces a different head than the one you hold. | Ask admins which head they replaced. | an admin of your org's store |
+| `rewrite-not-applicable` | There is no rewrite to author: the host serves an ordinary update, an older view or something that cannot be judged. | Run `delphi xenia sync`; if it is refused as a force-push, check `delphi xenia status` and try again. | an admin of your org's store |
+| `host-is-behind` | The host serves an older view than the one this install holds. | Ask the host's owner to restore the newer history, or wait. | an admin of your org's store |
+| `rewrite-proposal-not-found` | The host has no rewrite proposal with that id. | Run `delphi xenia admin rewrite propose` and use the id it prints. | an admin of your org's store |
+| `rewrite-proposal-exists` | That exact proposal is already on the host. | Use `delphi xenia admin rewrite show <id>`, or propose again a minute later. | an admin of your org's store |
+| `rewrite-head-moved` | The host no longer serves the head this proposal names, or the proposal is already published. | Run `delphi xenia admin rewrite propose` again. | an admin of your org's store |
+| `rewrite-statement-refused` | The proposed statement is malformed, for another store, expired, or does not match its id. | Do not sign it. Tell the admin who proposed it, and propose a fresh one. | an admin of your org's store |
 | `walk-violations` | Even after the rewrite, the history check found tampering. | Do not accept. Tell the admins. | an admin of your org's store |
 | `host-head-moved-since-approval` | The store changed after you approved the list of files. | Start recovery again and read the new list. | you: it is on this machine |
 | `approval-names-unlisted-path` | The approval names a file that was not on the list. | Start recovery again. | you: it is on this machine |

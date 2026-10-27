@@ -11,6 +11,8 @@
 //! admin sign <n>                                                               card, then sign proposal n
 //! admin publish <n> [--validity-days D]                                        card, then publish epoch n
 //! admin refresh [--validity-days D]                                            verify history, card, new statement
+//! admin rewrite propose [--validity-days D]                                    author a rewrite statement (rewrite_of)
+//! admin rewrite show <id> | sign <id> | publish <id>                           the same 2-of-3 flow, for a rewrite
 //! admin genesis draft|sign|publish ...                                         the founders' ceremony
 //! ```
 //!
@@ -35,6 +37,8 @@ const USAGE: &str = "usage:
   delphi xenia admin propose add|remove|rotate ...      (same as the three above)
   delphi xenia admin show <n>        delphi xenia admin sign <n>
   delphi xenia admin publish <n> [--validity-days D]     delphi xenia admin refresh [--validity-days D]
+  delphi xenia admin rewrite propose [--validity-days D]   delphi xenia admin rewrite show <id>
+  delphi xenia admin rewrite sign <id>                      delphi xenia admin rewrite publish <id>
   delphi xenia admin genesis draft --org <o> --store <s> --founder <did>,<person>,<handle>[,admin|member[,areas]]... [--out <file>]
   delphi xenia admin genesis sign <draft> --org <o> --store <s> [--out <file>]
   delphi xenia admin genesis publish <draft> --url <store-url> --org <o> --store <s> --sig <file>... [--allow-local] [--validity-days D]
@@ -105,6 +109,7 @@ pub(crate) fn run(args: &[String], approver: &mut dyn AdminApprover) -> i32 {
         "publish" => publish(&home, &p, approver),
         "refresh" => refresh(&home, &p, approver),
         "genesis" => genesis(&home, &p, &multi, approver),
+        "rewrite" => rewrite(&home, &p, approver),
         other => {
             eprintln!("delphi xenia admin {other}: not a command\n{USAGE}");
             2
@@ -262,6 +267,90 @@ fn refresh(home: &Path, p: &Parsed, approver: &mut dyn AdminApprover) -> i32 {
             0
         }
         Err(e) => fail("refresh", &e),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Rewrite recovery (spec 011 section 8.4): the authoring side of `sync --accept-rewritten-head`
+
+fn print_rewrite(r: &xenia_admin::RewriteReport) {
+    let v = &r.view;
+    println!("rewrite proposal {} on {} (statement expires {})", r.id, r.branch, inline(&r.expires_at));
+    println!("  rewritten head (store_head): {}", inline(&v.rewritten));
+    println!("  replaced head (rewrite_of):  {}", inline(&v.replaced));
+    println!("  {} signed file(s) an install holding the replaced head will be asked to give up; {} history-rule violation(s) between the heads", v.affected.len(), v.rule_findings);
+    for (why, path) in v.affected.iter().take(20) {
+        println!("    {:<24} {}", inline(why), inline(path));
+    }
+    if v.affected.len() > 20 {
+        println!("    ... and {} more", v.affected.len() - 20);
+    }
+    let q = &r.quorum;
+    println!("  signatures: {} of {} admin people needed{}", q.have, q.need, if q.people.is_empty() { String::new() } else { format!(" (signed: {})", q.people.iter().map(|x| inline(x)).collect::<Vec<_>>().join(", ")) });
+}
+
+/// `rewrite propose|show|sign|publish`. Every step is judged by the library against what the host serves now.
+fn rewrite(home: &Path, p: &Parsed, approver: &mut dyn AdminApprover) -> i32 {
+    let Some(step) = p.positional.first().map(String::as_str) else { return usage_err("rewrite", "propose, show, sign or publish") };
+    let id = || p.positional.get(1).cloned().ok_or_else(|| "needs the proposal id (printed by `rewrite propose`)".to_string());
+    let (_, store) = match pick(home, p) {
+        Ok(v) => v,
+        Err(e) => return usage_err("rewrite", &e),
+    };
+    let admin = Admin::new(&store, VerifyConfig::at(now_secs()));
+    let sub = format!("rewrite {step}");
+    match step {
+        "propose" => {
+            let (secs, id) = match (validity(p), key(home)) {
+                (Ok(s), Ok(k)) => (s, k),
+                (Err(m), _) | (_, Err(m)) => return usage_err(&sub, &m),
+            };
+            match admin.rewrite_propose(&id, secs) {
+                Ok(pr) => {
+                    println!("rewrite proposal {} written to branch {}; nothing is signed yet.", pr.report.id, pr.report.branch);
+                    print_rewrite(&pr.report);
+                    println!("Next: a majority of the admin people each run `delphi xenia admin rewrite sign {}`; then one runs `delphi xenia admin rewrite publish {}`. Installs then run `delphi xenia sync --accept-rewritten-head`.", pr.report.id, pr.report.id);
+                    0
+                }
+                Err(e) => fail(&sub, &e),
+            }
+        }
+        "show" => match id().map(|i| admin.rewrite_inspect(&i)) {
+            Ok(Ok(r)) => {
+                print_rewrite(&r);
+                0
+            }
+            Ok(Err(e)) => fail(&sub, &e),
+            Err(m) => usage_err(&sub, &m),
+        },
+        "sign" => {
+            let (id, k) = match (id(), key(home)) {
+                (Ok(i), Ok(k)) => (i, k),
+                (Err(m), _) | (_, Err(m)) => return usage_err(&sub, &m),
+            };
+            match admin.rewrite_sign(&k, &id, &mut Carded(approver)) {
+                Ok(d) => {
+                    println!("signature for rewrite proposal {id} {} (commit {}). When a majority of the admin people have signed, one runs `delphi xenia admin rewrite publish {id}`.", if d.already_there { "was already on the branch" } else { "pushed to the proposal branch" }, &d.commit[..d.commit.len().min(12)]);
+                    0
+                }
+                Err(e) => fail(&sub, &e),
+            }
+        }
+        "publish" => {
+            let (id, k) = match (id(), key(home)) {
+                (Ok(i), Ok(k)) => (i, k),
+                (Err(m), _) | (_, Err(m)) => return usage_err(&sub, &m),
+            };
+            match admin.rewrite_publish(&k, &id, &mut Carded(approver)) {
+                Ok(d) => {
+                    published("rewrite statement published", &d);
+                    println!("Installs run `delphi xenia sync --accept-rewritten-head`; each lists every affected path and its operator must accept.");
+                    0
+                }
+                Err(e) => fail(&sub, &e),
+            }
+        }
+        other => usage_err("rewrite", &format!("`{other}` is not propose, show, sign or publish")),
     }
 }
 
