@@ -572,7 +572,7 @@ impl Store {
 
     /// Count, size and total the objects a fetch added (everything reachable from `fetched` and not from
     /// `accepted`), without reading their content.
-    fn check_new_objects(&self, fetched: &str, accepted: Option<&str>) -> Result<Option<Refused>> {
+    pub(crate) fn check_new_objects(&self, fetched: &str, accepted: Option<&str>) -> Result<Option<Refused>> {
         let mut args = vec!["rev-list", "--objects", "--no-object-names", fetched];
         let not_acc = accepted.map(|a| format!("^{a}"));
         if let Some(n) = &not_acc {
