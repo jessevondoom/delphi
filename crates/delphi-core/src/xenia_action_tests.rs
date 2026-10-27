@@ -38,6 +38,22 @@ fn control_characters_are_shown_as_escapes_so_a_card_cannot_redraw_itself() {
 }
 
 #[test]
+fn every_line_of_the_card_shows_bidi_zero_width_and_tag_characters_as_escapes() {
+    // Found by the Flash red-team sweep: the one-line fields of the card (title, signer, found text, paths) replaced
+    // only control characters, while the file bytes went through `escape`. One definition of "hidden" now serves both.
+    let fx = Fx::new();
+    let p = fx.publisher(&NoIndex);
+    let prepared = p.prepare(&fx.key("erin"), vec![draft("A note", &["rust"]).into_item()]).unwrap();
+    let text = card("Publish \u{202e}live\u{2066}\u{200b}\u{feff}\u{e0041}", prepared.preview());
+    let first = text.lines().next().unwrap();
+    assert_eq!(first, "XENIA  Publish \\u{202e}live\\u{2066}\\u{200b}\\u{feff}\\u{e0041}");
+    for hidden in ['\u{202e}', '\u{2066}', '\u{200b}', '\u{feff}', '\u{e0041}'] {
+        assert!(is_hidden(hidden) && !text.contains(hidden), "{hidden:?} reaches the screen");
+    }
+    assert!(!is_hidden('a') && !is_hidden('é') && !is_hidden(' '), "ordinary text is left alone");
+}
+
+#[test]
 fn the_card_shows_every_signed_byte_and_a_short_code_that_the_digest_covers() {
     let fx = Fx::new();
     let p = fx.publisher(&NoIndex);

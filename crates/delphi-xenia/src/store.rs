@@ -397,8 +397,8 @@ pub fn classify_path(path: &str) -> Option<PathClass> {
     }
     if let Some(rest) = path.strip_prefix("records/") {
         if let Some((kind, file)) = rest.split_once('/') {
-            if Kind::parse(kind).is_some() && file.ends_with(".sig.json") {
-                let id = file.trim_end_matches(".sig.json");
+            if let (Some(_), Some(id)) = (Kind::parse(kind), file.strip_suffix(".sig.json")) {
+                // Once: `<id>.sig.json.sig.json` is not a sidecar of `<id>`, it is a name the layout does not know.
                 if crate::ulid::is_valid(id) {
                     return Some(PathClass::Sidecar);
                 }
@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(classify_path("roster/epochs/3.sigs.json"), Some(PathClass::EpochSigs));
         assert_eq!(classify_path("roster/freshness.json"), Some(PathClass::Freshness));
         assert_eq!(classify_path("roster/freshness.sigs.json"), Some(PathClass::FreshnessSigs));
-        for bad in ["roster/epochs/03.json", "roster/epochs/0.json", "roster/epochs/x.json", "roster/other.json", "records/skill/x.md", &format!("records/memory/{ID}.txt"), &format!("records/memory/{ID}.sig.json.bak"), "records/memory/nope.sig.json", "org.toml"] {
+        for bad in ["roster/epochs/03.json", "roster/epochs/0.json", "roster/epochs/x.json", "roster/other.json", "records/skill/x.md", &format!("records/memory/{ID}.txt"), &format!("records/memory/{ID}.sig.json.bak"), &format!("records/memory/{ID}.sig.json.sig.json"), "records/memory/nope.sig.json", "org.toml"] {
             assert_eq!(classify_path(bad), None, "{bad}");
         }
     }

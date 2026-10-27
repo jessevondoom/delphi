@@ -18,6 +18,7 @@
 //! every action is journaled and told to the Narrator; the switch `[xenia] console_admin` in
 //! `$DELPHI_HOME/operator/xenia.toml` (default off).
 
+use crate::xenia_action::is_hidden;
 use crate::xenia_admin::{Admin, AdminApprover, AdminDecision, AdminError, AdminPreview};
 use crate::xenia_store::Store;
 use crate::xenia_sync::VerifyConfig;
@@ -326,7 +327,17 @@ pub fn code(p: &AdminPreview) -> String {
 }
 
 fn one_line(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() { '?' } else { c }).collect()
+    let mut o = String::new();
+    for c in s.chars() {
+        if c.is_control() {
+            o.push('?');
+        } else if is_hidden(c) {
+            o.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            o.push(c);
+        }
+    }
+    o
 }
 
 /// What the operator must retype besides the code: the proposal number, or `refresh`.
@@ -347,7 +358,7 @@ pub fn card(kind: &Kind, p: &AdminPreview) -> String {
         o.push_str(&format!("built on store head {}\n", one_line(h)));
     }
     for c in &p.changes {
-        o.push_str(&format!("change: {} {} ({}, {}) {}\n", c.kind.slug(), c.did, one_line(&c.person), one_line(&c.handle), one_line(&c.detail)));
+        o.push_str(&format!("change: {} {} ({}, {}) {}\n", c.kind.slug(), one_line(&c.did), one_line(&c.person), one_line(&c.handle), one_line(&c.detail)));
     }
     if let Some(q) = &p.quorum {
         o.push_str(&format!("quorum: {} of {} people have signed ({}){}\n", q.have, q.need, one_line(&q.people.join(", ")), if q.met { ", met" } else { ", still needed" }));

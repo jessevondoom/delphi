@@ -173,8 +173,24 @@ impl Action {
     }
 }
 
+/// A character that changes how text reads without showing up as text: controls, bidirectional overrides and
+/// isolates, zero-width characters and tag characters. One definition for every line of a card.
+pub(crate) fn is_hidden(c: char) -> bool {
+    c.is_control() || ('\u{202a}'..='\u{202e}').contains(&c) || ('\u{2066}'..='\u{2069}').contains(&c) || ('\u{200b}'..='\u{200f}').contains(&c) || c == '\u{feff}' || ('\u{e0000}'..='\u{e007f}').contains(&c)
+}
+
 fn one_line(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() { ' ' } else { c }).take(200).collect()
+    let mut o = String::new();
+    for c in s.chars().take(200) {
+        if c.is_control() {
+            o.push(' ');
+        } else if is_hidden(c) {
+            o.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            o.push(c);
+        }
+    }
+    o
 }
 
 /// Text made safe to print on a terminal or into a console note: every control character except the newline is
@@ -185,7 +201,7 @@ pub fn escape(bytes: &[u8]) -> String {
         match c {
             '\n' => out.push('\n'),
             '\t' => out.push_str("    "),
-            c if c.is_control() || ('\u{202a}'..='\u{202e}').contains(&c) || ('\u{2066}'..='\u{2069}').contains(&c) || ('\u{200b}'..='\u{200f}').contains(&c) || ('\u{e0000}'..='\u{e007f}').contains(&c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c if is_hidden(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
             c => out.push(c),
         }
     }
@@ -210,7 +226,7 @@ pub fn card(title: &str, p: &Preview) -> String {
     o.push_str(&format!("XENIA  {}\n", one_line(title)));
     o.push_str(&format!("built on store head {}\n", &p.head[..p.head.len().min(12)]));
     for i in &p.items {
-        o.push_str(&format!("\n=== {} ({} rev {}, signed by {}) ===\n", i.path, i.kind.as_str(), i.rev, one_line(&i.signer)));
+        o.push_str(&format!("\n=== {} ({} rev {}, signed by {}) ===\n", one_line(&i.path), i.kind.as_str(), i.rev, one_line(&i.signer)));
         o.push_str(&escape(&i.bytes));
         if !i.bytes.ends_with(b"\n") {
             o.push('\n');

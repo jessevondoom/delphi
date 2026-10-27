@@ -69,6 +69,24 @@ fn resolve_source(lock: &Lock, target: &str) -> Result<(String, String), String>
     Ok((bundles::origin_of(&entry.source), entry.publisher_kid.clone()))
 }
 
+/// The (origin, key) pairs a revoke means. Granting needs an added bundle to anchor to, but a grant outlives the bundles it
+/// was made for (`bundle remove`), and it must stay revocable then: otherwise it would raise the next bundle added from
+/// the same origin and key with nothing to say how to end it. So when no bundle names the target, every grant recorded
+/// for exactly that origin is meant.
+fn resolve_revoke(lock: &Lock, target: &str) -> Result<Vec<(String, String)>, String> {
+    match resolve_source(lock, target) {
+        Ok(one) => Ok(vec![one]),
+        Err(why) => {
+            let held: Vec<(String, String)> = lock.trusted_source.iter().filter(|t| t.origin == target).map(|t| (t.origin.clone(), t.kid.clone())).collect();
+            if held.is_empty() {
+                Err(why)
+            } else {
+                Ok(held)
+            }
+        }
+    }
+}
+
 fn norm_level(level: &str) -> Result<&'static str, String> {
     match level {
         "user_ratified" | "ratified" => Ok(RATIFIED),
@@ -81,7 +99,7 @@ fn norm_level(level: &str) -> Result<&'static str, String> {
 pub fn prepare(lock: &Lock, req: &Req) -> Result<Option<Challenge>, String> {
     match req {
         Req::Lower { name } => find(lock, name).map(|_| None),
-        Req::Revoke { target } => resolve_source(lock, target).map(|_| None),
+        Req::Revoke { target } => resolve_revoke(lock, target).map(|_| None),
         Req::Raise { name } => {
             let e = find(lock, name)?;
             let text = format!(
@@ -173,11 +191,12 @@ pub fn apply(ws: &std::path::Path, req: &Req, by: &str) -> Result<String, String
             Ok(format!("{} is a trusted source at {}{}; updates from it keep that tier without asking (every check still runs)", origin, if level == RATIFIED { "user_ratified" } else { "the default tier (validated bundle source)" }, if applied.is_empty() { String::new() } else { format!("; raised now: {}", applied.join(", ")) }))
         }
         Req::Revoke { target } => {
-            let (origin, kid) = resolve_source(lock, target)?;
+            let pairs = resolve_revoke(lock, target)?;
+            let origin = pairs[0].0.clone();
             let before = lock.trusted_source.len();
-            lock.trusted_source.retain(|t| !(t.origin == origin && t.kid == kid));
+            lock.trusted_source.retain(|t| !pairs.iter().any(|(o, k)| t.origin == *o && t.kid == *k));
             let mut lowered = Vec::new();
-            for e in lock.bundle.iter_mut().filter(|e| e.is_active() && bundles::origin_of(&e.source) == origin && e.publisher_kid == kid && e.raised_by() == Some("trusted-source")) {
+            for e in lock.bundle.iter_mut().filter(|e| e.is_active() && e.raised_by() == Some("trusted-source") && pairs.iter().any(|(o, k)| bundles::origin_of(&e.source) == *o && e.publisher_kid == *k)) {
                 e.reset_trust(&now, "source-revoked");
                 lowered.push(e.id());
             }
@@ -271,6 +290,37 @@ mod tests {
         assert!(out.contains("no longer a trusted source"), "{}", out);
         let lock = bundles::read(ws.path()).unwrap();
         assert!(lock.trusted_source.is_empty() && !lock.bundle[0].raised());
+    }
+
+    // Found by the Flash red-team sweep: a revoke needed an added bundle to name the grant, so after `bundle remove` a grant
+    // stayed on the books with no way to end it, and raised the next bundle added from the same origin and key.
+    #[test]
+    fn a_grant_outlives_its_bundles_and_can_still_be_revoked_by_its_origin() {
+        let ws = ws_with(vec![entry("a", "did:key:zA", ("xenia", "xenia:acme/main/r1@2"))]);
+        apply(ws.path(), &Req::Grant { target: "xenia:acme/main".into(), level: "user_ratified".into() }, "cli").unwrap();
+        // the bundle is removed; the grant stays
+        bundles::update(ws.path(), |l| {
+            l.bundle[0].status = "removed".into();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(bundles::read(ws.path()).unwrap().trusted_source.len(), 1);
+        // by a bundle name there is nothing to resolve, but the origin names the grant exactly
+        assert!(prepare(&bundles::read(ws.path()).unwrap(), &Req::Revoke { target: "a".into() }).is_err());
+        assert!(prepare(&bundles::read(ws.path()).unwrap(), &Req::Revoke { target: "xenia:acme/main".into() }).unwrap().is_none(), "lowering needs no confirmation");
+        let out = apply(ws.path(), &Req::Revoke { target: "xenia:acme/main".into() }, "cli").unwrap();
+        assert!(out.contains("no longer a trusted source"), "{out}");
+        assert!(bundles::read(ws.path()).unwrap().trusted_source.is_empty());
+        // another origin is not matched by a near miss
+        let ws = ws_with(vec![entry("a", "did:key:zA", ("xenia", "xenia:acme/main/r1@2"))]);
+        apply(ws.path(), &Req::Grant { target: "xenia:acme/main".into(), level: "default".into() }, "cli").unwrap();
+        bundles::update(ws.path(), |l| {
+            l.bundle[0].status = "removed".into();
+            Ok(())
+        })
+        .unwrap();
+        assert!(apply(ws.path(), &Req::Revoke { target: "xenia:acme".into() }, "cli").is_err());
+        assert_eq!(bundles::read(ws.path()).unwrap().trusted_source.len(), 1, "the grant is still there");
     }
 
     #[test]

@@ -184,6 +184,17 @@ fn memory_fields_on_a_bundle_and_bundle_fields_on_a_memory_are_unknown_keys() {
 }
 
 #[test]
+fn a_bundle_trees_access_hint_gets_the_same_plain_text_screen_as_a_pointers() {
+    // Found by the Flash red-team sweep: `check_strings` screened the tree's label but not its `access_hint`, which
+    // pointers and evidence have always had screened. The hint is shown to the operator, so it is plain text.
+    let with_hint = |hint: &str| with_tree(format!("{}  access_hint: \"{hint}\"\n", tree_block("https://git.acme.example/platform/bundle.git#.", "git-tree", TREE)));
+    assert!(check(&with_hint("ask the platform team")).is_ok());
+    for hostile in ["see [the docs](https://evil.example/x)", "<b>trusted</b>", "a &amp; b"] {
+        assert_eq!(refused(&with_hint(hostile)), "bad-text", "{hostile}");
+    }
+}
+
+#[test]
 fn the_redaction_hash_covers_the_tree_pointer_so_a_swapped_locator_cannot_keep_a_passed_scan() {
     // Sign the genuine record, then change only the locator and keep the old (now false) content hash.
     let r = rk::bundle(&who(), ID, 1, &spec());

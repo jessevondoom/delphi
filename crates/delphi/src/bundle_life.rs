@@ -147,6 +147,8 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
     };
     let now = delphi_core::time::now_rfc3339();
     let (id, wanted) = (e.id(), target.hash.clone());
+    // The origin this version came from, as the lock recorded it when it was replaced; `None` for a lock older than that.
+    let target_origin = target.source.as_ref().map(bundles::origin_of);
     let inert = crate::bundle_connect::inert_servers(&dest);
     let done = bundles::update(ws, |lock| {
         let grants = lock.trusted_source.clone();
@@ -165,16 +167,17 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
         e.title = m.title.clone();
         e.added_at = now.clone();
         e.inert_servers = inert.clone();
-        // A one-off raise belonged to the version it was made for: a rollback ends it. A trusted source's grant does not end:
-        // the earlier version came from the same origin and the same key, so it is raised again.
-        let origin = bundles::origin_of(&e.source);
-        let granted = e.publisher_kid != provenance::UNSIGNED && grants.iter().any(|t| t.origin == origin && t.kid == e.publisher_kid && t.level == bundles::RATIFIED);
-        let was_one_off = from.raised() && from.raised_by() != Some("trusted-source");
+        // A one-off raise belonged to the version it was made for: a rollback ends it. A trusted source's grant does not
+        // end for a version of the same origin and the same key, which is raised again. The origin is the one the earlier
+        // version itself came from, not the one of the version being left: a copy of the same signed tree that arrived
+        // from elsewhere is not covered, and neither is a version whose origin the lock never recorded.
+        let granted = e.publisher_kid != provenance::UNSIGNED
+            && target_origin.as_deref().is_some_and(|origin| grants.iter().any(|t| t.origin == origin && t.kid == e.publisher_kid && t.level == bundles::RATIFIED));
         e.reset_trust(&now, "rollback");
         if granted {
             e.raise_trust(&now, "trusted-source");
         }
-        Ok((from, was_one_off && !granted))
+        Ok((from.clone(), from.raised() && !granted))
     });
     let (from, reset_note) = match done {
         Ok(f) => f,
@@ -921,6 +924,34 @@ mod tests {
         // Back from the granted origin with the same bytes: it applies again.
         assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0);
         assert!(lock(&f).bundle[0].raised());
+    }
+
+    // Found by the Flash red-team sweep: `rollback` judged a trusted source's grant by the origin of the version it was
+    // leaving, so rolling back to a copy that had arrived from elsewhere carried the grant along.
+    #[test]
+    fn a_rollback_judges_the_grant_by_the_origin_the_earlier_version_came_from() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        grant(&f, "user_ratified");
+        let granted_origin = bundles::origin_of(&lock(&f).bundle[0].source);
+        let hash0 = lock(&f).bundle[0].hash.clone();
+        // The same signed tree arrives from another origin: default tier, and the lock records that origin for it.
+        let elsewhere = tempfile::tempdir().unwrap();
+        copy(f.src.path(), elsewhere.path());
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, elsewhere.path(), &opts(), &Real), 0);
+        assert!(!lock(&f).bundle[0].raised());
+        // A newer version from the granted origin is covered.
+        release(&f, &a, "1.5.0");
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0);
+        let e = lock(&f).bundle[0].clone();
+        assert!(e.raised() && bundles::origin_of(&e.source) == granted_origin, "{e:?}");
+        // Rolling back to the version that came from elsewhere does not carry the grant to it.
+        assert_eq!(rollback(f.home.path(), &f.ws, "acme-platform", None, false, &Real), 0);
+        let e = lock(&f).bundle[0].clone();
+        assert_eq!(e.hash, hash0, "it is the earlier version");
+        assert!(!e.raised(), "the earlier version came from another origin, so the grant does not cover it: {e:?}");
+        assert_eq!(lock(&f).trusted_source[0].origin, granted_origin, "the grant itself is untouched");
     }
 
     #[test]

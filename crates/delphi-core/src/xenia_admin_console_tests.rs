@@ -125,6 +125,14 @@ fn every_terminal_only_reason_has_its_own_message_that_names_a_next_step() {
 }
 
 #[test]
+fn every_field_the_console_card_prints_shows_hidden_characters_as_escapes() {
+    // Found by the Flash red-team sweep: only control characters were replaced, so a handle with a right-to-left
+    // override, a zero-width character or a tag character read differently on the card than it was.
+    assert_eq!(one_line("al\u{202e}ice\u{200b}\u{e0041}\u{1b}[2J"), "al\\u{202e}ice\\u{200b}\\u{e0041}?[2J");
+    assert_eq!(one_line("plain ASCII and é, ü and 日本"), "plain ASCII and é, ü and 日本");
+}
+
+#[test]
 fn the_rate_limit_counts_only_console_signatures_in_the_last_hour() {
     let now = 1_000_000;
     let e = vec![

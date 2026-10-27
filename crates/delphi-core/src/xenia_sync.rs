@@ -265,8 +265,13 @@ pub(crate) fn epoch_files(snap: &Snapshot) -> Vec<EpochFile> {
     v
 }
 
-/// Record the newest genuine statement's `issued_at`; a replay leaves the mark where it was.
+/// Record the newest genuine statement's `issued_at`; a replay leaves the mark where it was, and so does a statement
+/// dated ahead of this install's clock: its mark would make every later genuine statement a "replay" until the clock
+/// caught up (or for good, if the date was far ahead).
 fn advance_mark(next: &mut StickyState, assessment: &Assessment) {
+    if matches!(assessment.state, FreshnessState::Stale { reason: "issued-in-future" }) {
+        return;
+    }
     if let Some(a) = &assessment.authentic {
         next.freshness_mark = Some(a.advance(next.freshness_mark.as_ref()));
     }

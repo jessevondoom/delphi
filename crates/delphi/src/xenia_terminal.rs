@@ -69,7 +69,7 @@ pub fn tame(text: &str) -> String {
     for c in text.chars() {
         match c {
             '\n' => out.push('\n'),
-            c if c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') => {
+            c if c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}') => {
                 out.push_str(&format!("\\u{{{:04x}}}", c as u32));
             }
             c => out.push(c),
@@ -110,7 +110,8 @@ pub fn confirm_typed(term: &mut dyn Terminal, lines: &str, expect: &str, what: &
     if let Err(m) = term.interactive() {
         return Err(Why::NotInteractive(m));
     }
-    term.show(lines);
+    // Whatever the caller built, what reaches the screen is printable text: no escape sequence, no hidden reordering.
+    term.show(&tame(lines));
     match term.ask(&format!("\nto {what}, type {expect}; anything else cancels: ")) {
         Some(a) if a == expect => Ok(()),
         Some(_) => Err(Why::WrongChallenge),
