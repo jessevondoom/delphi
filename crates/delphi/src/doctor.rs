@@ -164,6 +164,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 12. Added org bundles (specs/024 §4.6): the lock, the cache entry it points at, review dates.
     check_bundles(ws, home, &mut r);
 
+    // 13. Joined Xenia stores (specs/011 §4.1): fewer than three admins, a freshness statement past half its life,
+    //     tampering found by the last sync, contested records. Offline: it reads what the last sync accepted.
+    check_xenia(home, delphi_xenia_now(), &mut r);
+
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
@@ -539,6 +543,34 @@ fn check_overrides(ws: &Workspace, home: &Path, r: &mut Report) {
             }
             for w in warns {
                 r.warn("3 overrides", path.clone(), w);
+            }
+        }
+    }
+}
+
+fn delphi_xenia_now() -> i64 {
+    delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0)
+}
+
+/// Check 13: one finding per warning of each joined store, or one line saying all is well. Nothing is printed when no
+/// store is joined.
+pub(crate) fn check_xenia(home: &Path, now: i64, r: &mut Report) {
+    use delphi_core::xenia_status::{self, Severity};
+    for (store, st) in xenia_status::all(home, &delphi_core::xenia_sync::VerifyConfig::at(now)) {
+        let loc = store.id();
+        match st {
+            Err(e) => r.fail("13 xenia", loc, format!("the store cannot be read: {e}")),
+            Ok(st) => {
+                for w in &st.warnings {
+                    match w.severity {
+                        Severity::Fail => r.fail("13 xenia", loc.clone(), w.text.clone()),
+                        Severity::Warn => r.warn("13 xenia", loc.clone(), w.text.clone()),
+                    }
+                }
+                if st.warnings.is_empty() {
+                    let f = st.freshness.as_ref();
+                    r.push(Level::Ok, "13 xenia", loc, format!("{} admin(s), statement {}% of its life used, nothing contested or quarantined by the last sync", st.roster.as_ref().map(|x| x.admins).unwrap_or(0), f.and_then(|f| f.life_used_pct).unwrap_or(0)));
+                }
             }
         }
     }
@@ -961,5 +993,72 @@ mod tests {
         let mut r = Report::default();
         check_harnesses(cfg, &run_out, false, &mut r);
         assert!(r.findings.iter().filter(|f| f.location == "c" || f.location == "a").all(|f| f.level == Level::Warn));
+    }
+
+    // specs/011 §4.1 and §3.2: check 13 reads the joined stores and speaks only in warnings it can back.
+    mod xenia {
+        use super::*;
+        use delphi_core::xenia_fixture::{now, Fx, DAY};
+        use delphi_xenia::testkit::{EpochSpec, MemberSpec, TestOrg};
+
+        fn two_admin_org() -> TestOrg {
+            let mut t = TestOrg::empty();
+            let (a, b, e) = (t.who("alice"), t.who("bob"), t.who("erin"));
+            let genesis = EpochSpec { org: delphi_xenia::testkit::ORG.into(), store: delphi_xenia::testkit::STORE.into(), epoch: 1, prev_hash: None, members: vec![MemberSpec::new(&a, "alice").admin(), MemberSpec::new(&b, "bob").admin(), MemberSpec::new(&e, "erin")] };
+            t.push_signed(genesis, &["alice", "bob"]);
+            t
+        }
+
+        fn levels(home: &Path, at: i64) -> Vec<(Level, String)> {
+            let mut r = Report::default();
+            check_xenia(home, at, &mut r);
+            r.findings.iter().map(|f| (f.level, f.message.clone())).collect()
+        }
+
+        #[test]
+        fn no_joined_store_says_nothing() {
+            let t = tempfile::tempdir().unwrap();
+            assert!(levels(t.path(), now()).is_empty());
+        }
+
+        #[test]
+        fn a_healthy_store_is_one_ok_line_and_each_problem_is_its_own_warning() {
+            let t = tempfile::tempdir().unwrap();
+            let (fx, _) = Fx::installed(t.path(), &[]);
+            let home = fx.dir.join("home");
+            let ok = levels(&home, now());
+            assert_eq!(ok.len(), 1);
+            assert_eq!(ok[0].0, Level::Ok);
+            // Past half of the statement's life: a warning that says how much is used.
+            let aging = levels(&home, now() + 4 * DAY);
+            assert!(aging.iter().any(|(l, m)| *l == Level::Warn && m.contains("of its life is used")), "{aging:?}");
+            // Lapsed: no endorsement counts.
+            let lapsed = levels(&home, now() + 9 * DAY);
+            assert!(lapsed.iter().any(|(l, m)| *l == Level::Warn && m.contains("no endorsement counts")), "{lapsed:?}");
+        }
+
+        #[test]
+        fn fewer_than_three_admins_warns_and_does_not_fail() {
+            let t = tempfile::tempdir().unwrap();
+            let (fx, _) = Fx::installed_on(Fx::new(t.path(), two_admin_org()), &[]);
+            let found = levels(&fx.dir.join("home"), now());
+            assert!(found.iter().any(|(l, m)| *l == Level::Warn && m.contains("only 2 admin")), "{found:?}");
+            assert!(found.iter().all(|(l, _)| *l != Level::Fail));
+        }
+
+        #[test]
+        fn tampering_found_by_the_last_sync_is_a_failure() {
+            let t = tempfile::tempdir().unwrap();
+            let fx0 = Fx::with_cast(t.path());
+            let m = delphi_core::xenia_fixture::records::memory_with(&fx0.id("mia"), &delphi_core::xenia_fixture::u(0), 1, "active", "v", "rust", "internal_empirical");
+            let (fx, _) = Fx::installed_on(fx0, &[&m]);
+            fx.remote.remove(&m.path);
+            fx.commit("delete");
+            let home = fx.dir.join("home");
+            let store = delphi_core::xenia_status::open(&home, &delphi_core::xenia_status::list_stores(&home)[0]).unwrap();
+            delphi_core::xenia_status::sync_and_record(&store, &delphi_core::xenia_sync::VerifyConfig::at(now())).unwrap();
+            let found = levels(&home, now());
+            assert!(found.iter().any(|(l, m)| *l == Level::Fail && m.contains("refused the store's head")), "{found:?}");
+        }
     }
 }

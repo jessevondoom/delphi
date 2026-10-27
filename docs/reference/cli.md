@@ -351,11 +351,18 @@ Exit codes: 0 ok · 1 problems · 2 usage · 3 over budget.
 
 ### `delphi xenia`
 
-Who this install is, for sharing.
+The org's shared, signed memory store: join, sync, status, publish, endorse.
 
 ```
-  delphi xenia whoami [--home <dir>]
+  delphi xenia whoami
+  delphi xenia join <url> --org <o> --store <s> --admin <fingerprint> --head <epoch>:<hash> [--allow-local]
+  delphi xenia sync | status [--store <org>/<store>] [--json]
+  delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]
+  delphi xenia endorse|dispute|retract|withdraw|restore <id> [--scope a,b] [--note <n>] [--reason <r>]
+  delphi xenia republish --old <did>   [--workspace <name>] [--home <dir>]
 ```
+
+Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet.
 
 ### `delphi docs`
 

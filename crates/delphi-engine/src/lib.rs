@@ -16,6 +16,7 @@ pub mod bridge;
 pub mod bundle_cited;
 pub mod bundle_eval;
 pub mod bundle_events;
+pub mod xenia_events;
 pub mod bundle_vectors;
 pub mod align;
 pub mod align_run;

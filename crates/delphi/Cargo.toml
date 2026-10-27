@@ -45,6 +45,7 @@ embedded-model = ["delphi-engine/embedded-model"]
 
 [dev-dependencies]
 delphi-release = { path = "../delphi-release" }
+delphi-core = { path = "../delphi-core", features = ["test-support"] }
 vt100 = "0.15"
 serde_json = "1.0"
 tempfile = "3.8"
