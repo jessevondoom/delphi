@@ -107,9 +107,38 @@ impl ModelClient for HttpModelClient {
             let redact = self.redact.clone();
             match call_with_retry(&self.http, &req, self.idle_timeout, &self.retry, &*redact, on_event).await {
                 Ok(done) => Ok(done),
-                Err(e) => Err(map_call_error(e, now)),
+                Err(e) => {
+                    elog_provider(&endpoint.id, model_id, &e);
+                    Err(map_call_error(e, now))
+                }
             }
         })
+    }
+}
+
+/// A failed provider call in the central error log (`specs/039`): the endpoint, the model, the HTTP status and the kind of
+/// error. Never the provider's message or body. A spent quota or a throttle is a failover decision (warn); the rest are errors.
+fn elog_provider(endpoint: &str, model: &str, e: &CallError) {
+    use delphi_core::elog::{self, Level};
+    if !elog::enabled(Level::Warn) {
+        return;
+    }
+    let (slug, status, soft) = match e {
+        CallError::Auth { status, .. } => ("provider_auth", Some(*status), false),
+        CallError::RateLimited { .. } => ("provider_rate_limited", Some(429), true),
+        CallError::Exhausted(_) => ("provider_quota_exhausted", None, true),
+        CallError::Http { status, .. } => ("provider_http", Some(*status), false),
+        CallError::CrossOriginRedirect { .. } => ("provider_redirect_refused", None, false),
+        CallError::Unreachable(_) => ("provider_unreachable", None, true),
+        CallError::Transport(_) => ("provider_transport", None, false),
+        CallError::Stream(_) => ("provider_stream", None, false),
+    };
+    let ctx = serde_json::json!({"provider": endpoint, "model": model, "status": status, "error_type": slug});
+    let msg = format!("{} failed on endpoint {}", slug, endpoint);
+    if soft {
+        elog::warn("provider", slug, &msg, ctx);
+    } else {
+        elog::error("provider", slug, &msg, ctx);
     }
 }
 

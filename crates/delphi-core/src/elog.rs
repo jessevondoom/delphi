@@ -234,6 +234,23 @@ pub fn sanitize(input: &str, max: usize, home: Option<&Path>) -> String {
     truncate(s, max)
 }
 
+/// Sanitize every string in `v` in place (keys too), for anything that leaves the machine: a debug bundle re-runs the
+/// log's own rules over what it reads back, so a file edited by hand or written by an older build is still safe to share.
+pub fn sanitize_value(v: &mut Value, home: Option<&Path>) {
+    match v {
+        Value::String(s) => *s = sanitize(s, MAX_BACKTRACE, home),
+        Value::Array(a) => a.iter_mut().for_each(|x| sanitize_value(x, home)),
+        Value::Object(o) => {
+            let old = std::mem::take(o);
+            for (k, mut x) in old {
+                sanitize_value(&mut x, home);
+                o.insert(sanitize(&k, 80, home), x);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── the logger ────────────────────────────────────────────────────────────────────────────────────
 
 pub struct Logger {

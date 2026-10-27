@@ -67,6 +67,13 @@ fn err(code: i64, message: impl Into<String>) -> RpcError {
     RpcError { code, message: message.into(), data: None }
 }
 
+/// A task ended in an error: one record in the central error log (`specs/039`), beside the redacted `task.failed` event.
+fn elog_task_failed(mission: &str, task: &str, e: &dyn std::fmt::Display) {
+    if delphi_core::elog::enabled(delphi_core::elog::Level::Error) {
+        delphi_core::elog::error("engine", "task_failed", &e.to_string(), json!({"mission": mission, "task": task}));
+    }
+}
+
 fn need_console(ctx: &CallContext) -> Result<(), RpcError> {
     if ctx.scope == Scope::Console {
         Ok(())
@@ -162,6 +169,7 @@ impl EngineService {
             running.lock().unwrap().insert(tid.clone(), Running { target, prompt, started: Instant::now() });
             let h = tokio::spawn(async move {
                 if let Err(e) = engine.resume_task(&m2, &rec2, &tid2).await {
+                    elog_task_failed(&m2.id, &tid2, &e);
                     let mut ev = EventEnvelope::new(&m2.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                     ev.task_id = Some(tid2.clone());
                     let _ = m2.append(ev).await;
@@ -218,6 +226,7 @@ impl EngineService {
                 None => engine.run_task_with_id(&m, tid.clone(), &target, &prompt).await,
             };
             if let Err(e) = run {
+                elog_task_failed(&m.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
                 let _ = m.append(ev).await;
@@ -349,6 +358,7 @@ impl EngineService {
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
         let h = tokio::spawn(async move {
             if let Err(e) = engine.run_build(&m, tid.clone(), &prompt).await {
+                elog_task_failed(&m.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
                 let _ = m.append(ev).await;
@@ -453,6 +463,7 @@ impl EngineService {
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
         let h = tokio::spawn(async move {
             if let Err(e) = engine.run_council(&m, tid.clone(), &proposition, opts).await {
+                elog_task_failed(&m.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
                 let _ = m.append(ev).await;
@@ -482,6 +493,7 @@ impl EngineService {
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
         let h = tokio::spawn(async move {
             if let Err(e) = engine.run_distill(&m, tid.clone(), &req).await {
+                elog_task_failed(&m.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
                 let _ = m.append(ev).await;
@@ -1082,6 +1094,7 @@ impl EngineService {
                 match result {
                     Ok(Ok(out)) if out.status == crate::engine::Status::Done => continue,
                     Ok(Err(e)) => {
+                        elog_task_failed(&m.id, &tid, &e);
                         let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": svc.engine.secrets.redact(&e.to_string())}));
                         ev.task_id = Some(tid);
                         let _ = m.append(ev).await;

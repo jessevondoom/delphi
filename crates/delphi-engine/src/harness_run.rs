@@ -560,6 +560,7 @@ impl Engine {
         let mut metered = 0u64;
         let mut cap_alerted: Vec<u64> = Vec::new();
         let mut failure: Option<(String, bool)> = None;
+        let mut exit_code: Option<i32> = None;
         let mut exhaustion: Option<delphi_adapter::exhaust::Exhaustion> = None;
         let mut used_tools = false;
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
@@ -718,6 +719,7 @@ impl Engine {
                     session.close_input();
                 }
                 Event::Exit { code } => {
+                    exit_code = code;
                     if result.is_none() && failure.is_none() {
                         failure = Some((
                             match code {
@@ -815,6 +817,16 @@ impl Engine {
             }
         }
         if let Some((reason, retryable)) = failure {
+            // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
+            // A spent quota is a decision (warn), anything else an error.
+            if delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
+                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail(), "reason": if retryable { "retryable" } else { "final" }});
+                if exhaustion.is_some() {
+                    delphi_core::elog::warn("harness", "harness_exhausted", &reason, ctx);
+                } else {
+                    delphi_core::elog::error("harness", "harness_failed", &reason, ctx);
+                }
+            }
             sc.m.append_batch(batch).await?;
             return Ok(Err(HarnessErr { reason, retryable }));
         }

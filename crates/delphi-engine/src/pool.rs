@@ -255,6 +255,7 @@ impl Pool {
 
     /// A call (or the classifier) says the quota is used up.
     pub fn record_exhausted(&self, endpoint_id: &str, model_id: &str, x: &Exhaustion) {
+        delphi_core::elog::warn("provider", "quota_exhausted", &x.reason, serde_json::json!({"provider": endpoint_id, "model": model_id, "retry_after_s": x.reset_at}));
         let t = self.tuning.clone();
         self.with(|m, now| {
             let e = m.entry((endpoint_id.to_string(), model_id.to_string())).or_insert_with(|| Entry::fresh(endpoint_id, model_id, now));

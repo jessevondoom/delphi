@@ -734,6 +734,10 @@ impl Engine {
                             Some((content, is_error)) => tools::ToolResult { content, is_error }, // already persisted before the interruption
                             None => {
                                 let r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
+                                if r.is_error {
+                                    // The tool and the span, never the result text: a refusal or a failed command is routine for an agent, so warn.
+                                    delphi_core::elog::warn("tool", "tool_failed", "a tool call returned an error", json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "tool": name, "role": sc.role, "kind": "is_error"}));
+                                }
                                 self.note_tool_call(&mut sc, &name, r.is_error).await?;
                                 // Durable before the next tool runs (or waits for an approval): a crash must not re-run a finished side effect.
                                 let payload = match sc.content_ref.take() {

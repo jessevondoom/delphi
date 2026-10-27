@@ -505,7 +505,12 @@ pub struct Session {
     rx: mpsc::Receiver<Event>,
     pgid: i32,
     exited: bool,
+    /// The last few KB of the CLI's stderr, kept only while the error log is on (`specs/039`); the CLI's stderr is otherwise discarded.
+    stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
 }
+
+/// How much of a CLI's stderr the error log can ever see.
+const STDERR_KEEP: usize = 4096;
 
 impl Session {
     /// Start the CLI and send the first user turn.
@@ -517,11 +522,32 @@ impl Session {
         }
         let std_cmd = plain_command(Limits { cpu_secs: None, max_file_bytes: None, max_open_files: Some(4096) }, &env, &l.program, args(l));
         let mut cmd = tokio::process::Command::from(std_cmd);
-        cmd.current_dir(&l.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        cmd.current_dir(&l.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(if delphi_core::elog::enabled(delphi_core::elog::Level::Error) { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start `{}`: {}", l.program, e))?;
         let pgid = child.id().unwrap_or(0) as i32;
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
+        // A bounded tail only: a CLI that talks forever on stderr costs a 4 KB buffer, not the disk.
+        let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        if let Some(mut se) = child.stderr.take() {
+            let keep = stderr_tail.clone();
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut chunk = [0u8; 2048];
+                while let Ok(n) = se.read(&mut chunk).await {
+                    if n == 0 {
+                        break;
+                    }
+                    if let Ok(mut t) = keep.lock() {
+                        t.extend_from_slice(&chunk[..n]);
+                        if t.len() > STDERR_KEEP {
+                            let cut = t.len() - STDERR_KEEP;
+                            t.drain(..cut);
+                        }
+                    }
+                }
+            });
+        }
         let first = first_turn(l);
         let cli = l.cli;
         let (tx, mut rx) = mpsc::channel(256);
@@ -548,7 +574,12 @@ impl Session {
         }
         stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
-        Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false })
+        Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false, stderr_tail })
+    }
+
+    /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
+    pub fn stderr_tail(&self) -> String {
+        self.stderr_tail.lock().map(|t| String::from_utf8_lossy(&t).into_owned()).unwrap_or_default()
     }
 
     /// The next event; after the process ends, one [`Event::Exit`] and then `None`.
