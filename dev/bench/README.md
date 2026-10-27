@@ -18,6 +18,23 @@ A Delphi arm needs a **template home**: a `DELPHI_HOME` with one workspace (name
 
 The run ends at "ready to merge" on a branch; the runner checks out that commit and grades it. `policy.toml` lists the cards a headless arm may allow (Amber only; Red and merges can never be allowed).
 
+## A3b and T8: does the organization's bundle reach the work? (`specs/027` §7.2)
+Arm **A3b** is a Delphi arm with `"bundle": "<dir>"` and `"paired_with": "<its A3 arm>"` (`arms-example/a3b-delphi-bundle.json`). Each run gets its own copy of the template home; the runner adds a **stripped copy** of the bundle to it (no `evals/`, so the hidden rubric cannot be read as `@bundle/…`; no signature; `delphi bundle manifest` is re-run) and counts the `bundle.cited` events the run wrote (`bundle_cited`).
+
+Task set **T8** is a bundle's `evals/delphi/tasks/*.md`: frontmatter (`id`, `repo`, `base`, `set: pilot|confirmatory`, optional `timeout`), `## Prompt` (all an arm sees) and `## Rubric` (hidden; only its sha256 reaches the rows). The protocol, enforced by the runner:
+```sh
+# 1. pilot: the `set: pilot` tasks only (at least 8, disjoint from the confirmatory ones), 2 runs each, A3 and A3b
+python3 -I dev/bench/bench.py run --pilot --tasks <bundle>/evals/delphi/tasks --arms arms/ --out results-pilot.jsonl
+# 2. write the pre-registration (nine headings), commit it, pin it:  delphi bundle prereg check prereg-<bundle>-<date>.md
+#    and record the printed blake3 in specs/027 §7.2. `## Task set` and `## Rubric` carry `delphi bundle prereg digest <tasks dir>` / `<rubric + grader prompt>`.
+# 3. confirmatory: refused unless the file is whole, unchanged since the pin (only `## Deviations` may change) and names those digests
+python3 -I dev/bench/bench.py run --tasks <bundle>/evals/delphi/tasks --arms arms/ --out results.jsonl \
+    --prereg missions/<mission>/bench/prereg-<bundle>-<date>.md --prereg-pin blake3:<hex> --rubric <rubric dir>
+```
+Rows add `stage` (`pilot` or `confirmatory`), `task_set`, `bundle`, `bundle_hash`, `bundle_cited`, `rubric_sha256`, `graded` (always `null` here: the blind grader, from a model family not in the arm, fills it in later) and, for a confirmatory run, `prereg` and `prereg_pin`. A pilot's file name must contain `pilot`. blake3 comes from the `delphi` binary (`--delphi`), the same build that computes the pin.
+
+Not built: the grader itself (rubric grading by a blind model family), McNemar and the bootstrap interval of the analysis plan, and a live run (no paid run has been made).
+
 ## Known gaps (also in the evaluation plan)
 - **The spec step has no operator proxy yet.** `/build` against an issue text with no ratified spec works only for changes small enough for the bounded exemption (two files, 100 lines); a larger change stops at gate 3 ("No Spec, No Build"). That is a fair measurement of friction and an unfair one of capability. Deciding how to stand in for the operator here is an open decision.
 - **The network is not restricted.** Run where egress is limited to the model endpoints.

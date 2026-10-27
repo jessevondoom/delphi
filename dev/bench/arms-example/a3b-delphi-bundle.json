@@ -1,0 +1,11 @@
+{
+  "name": "a3b-delphi-bundle",
+  "kind": "delphi",
+  "template_home": "/path/to/a/ratified/bench-home",
+  "workspace": "bench",
+  "input": "/build {prompt}",
+  "flags": ["--permissions", "accept-edits", "--budget", "5", "--on-card", "policy:{policy}"],
+  "timeout": 1800,
+  "bundle": "/path/to/the/organizations/bundle",
+  "paired_with": "a3-delphi"
+}
