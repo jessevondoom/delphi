@@ -166,11 +166,29 @@ pub struct TombstoneFields {
     pub note: Option<String>,
 }
 
+/// The `bundle` kind (spec 027 §4.3): a pointer to an organization bundle's tree and the claims a verifier can
+/// check against the fetched tree. Every field is the publisher's word until `delphi bundle add` recomputes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleFields {
+    pub bundle_name: String,
+    pub bundle_version: String,
+    /// `blake3:` of the bundle's `files.json` (spec 023 §3.4): the identity across transports.
+    pub bundle_hash: String,
+    /// A git pointer to the tree, pinned by `git-tree` or `git-commit` (spec 012 S-4).
+    pub tree: Pointer,
+    /// What the bundle says it touches, for a person deciding to add it. Recomputed from the fetched tree at add.
+    pub touches_roles: Vec<Role>,
+    pub touches_connectors: Vec<String>,
+    pub compat_delphi: Option<String>,
+    pub compat_schema: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KindFields {
     Memory(MemoryFields),
     Endorsement(EndorsementFields),
     Tombstone(TombstoneFields),
+    Bundle(BundleFields),
 }
 
 /// A parsed record. Every field is the author's claim; none is trusted by being here.
@@ -211,6 +229,7 @@ impl Record {
             KindFields::Memory(_) => Kind::Memory,
             KindFields::Endorsement(_) => Kind::Endorsement,
             KindFields::Tombstone(_) => Kind::Tombstone,
+            KindFields::Bundle(_) => Kind::Bundle,
         }
     }
 
@@ -224,7 +243,7 @@ impl Record {
         if !ulid::is_valid(&id) {
             return Err(bad("id", "not a ULID"));
         }
-        let kind = Kind::parse(&m.req_str("kind")?).ok_or(bad("kind", "not memory, endorsement or tombstone"))?;
+        let kind = Kind::parse(&m.req_str("kind")?).ok_or(bad("kind", "not memory, endorsement, tombstone or bundle"))?;
         let rev = m.req_int("rev")?;
         if !(1..=MAX_REV).contains(&rev) {
             return Err(bad("rev", "out of range"));
@@ -276,6 +295,7 @@ impl Record {
             }
             Kind::Endorsement => KindFields::Endorsement(endorsement_fields(&mut m)?),
             Kind::Tombstone => KindFields::Tombstone(tombstone_fields(&mut m)?),
+            Kind::Bundle => KindFields::Bundle(bundle_fields(&mut m)?),
         };
         m.finish().map_err(|_| bad("record", "unknown key"))?;
         Ok(Record {
@@ -416,6 +436,80 @@ fn endorsement_fields(m: &mut Map) -> Result<EndorsementFields, Bad> {
     Ok(EndorsementFields { target_id, target_rev, target_hash, verdict, scope, note, checked })
 }
 
+/// `MAJOR.MINOR.PATCH` with an optional `-prerelease`; no leading zeros in the numbers, no build metadata.
+pub fn is_bundle_version(v: &str) -> bool {
+    if v.is_empty() || v.len() > MAX_BUNDLE_VERSION_CHARS {
+        return false;
+    }
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (v, None),
+    };
+    let nums: Vec<&str> = core.split('.').collect();
+    let num_ok = |n: &&str| !n.is_empty() && n.len() <= 9 && n.bytes().all(|b| b.is_ascii_digit()) && (n.len() == 1 || !n.starts_with('0'));
+    nums.len() == 3 && nums.iter().all(num_ok) && pre.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')))
+}
+
+fn bundle_fields(m: &mut Map) -> Result<BundleFields, Bad> {
+    let bundle_name = m.req_str("bundle_name")?;
+    if !is_slug(&bundle_name, MAX_BUNDLE_NAME_CHARS) {
+        return Err(bad("bundle_name", "not [a-z0-9-]{1,48}"));
+    }
+    let bundle_version = m.req_str("bundle_version")?;
+    if !is_bundle_version(&bundle_version) {
+        return Err(bad("bundle_version", "not MAJOR.MINOR.PATCH"));
+    }
+    let bundle_hash = m.req_str("bundle_hash")?;
+    if !hash::is_valid(&bundle_hash) {
+        return Err(bad("bundle_hash", "not blake3:<64 lowercase hex>"));
+    }
+    let tree = Pointer::from_map(m.req_map("tree")?)?;
+    let mut t = m.req_map("touches")?;
+    let roles = t
+        .req_list("roles")?
+        .iter()
+        .map(|r| pick(r, Role::TABLE).ok_or(bad("touches.roles", "not a canonical role id")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let connectors = slug_list(t.req_list("connectors")?, "touches.connectors", MAX_TAG_LEN)?;
+    t.finish().map_err(|_| bad("touches", "unknown key"))?;
+    let touches_roles = no_duplicates(roles, "touches.roles")?;
+    let mut c = m.req_map("compat")?;
+    let compat_delphi = c.opt_str("delphi")?;
+    let compat_schema = c.req_int("bundle_schema")?;
+    c.finish().map_err(|_| bad("compat", "unknown key"))?;
+    if compat_schema != 1 {
+        return Err(bad("compat.bundle_schema", "this client reads bundle schema 1"));
+    }
+    if let Some(d) = &compat_delphi {
+        let ok = !d.is_empty() && d.len() <= MAX_COMPAT_CHARS && d.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'<' | b'>' | b'=' | b'^' | b'~' | b'*' | b',' | b' ' | b'-' | b'+'));
+        if !ok {
+            return Err(bad("compat.delphi", "not a version requirement"));
+        }
+    }
+    Ok(BundleFields { bundle_name, bundle_version, bundle_hash, tree, touches_roles, touches_connectors: connectors, compat_delphi, compat_schema })
+}
+
+/// What a bundle's `tree` pointer may be (spec 012 S-4, spec 027 §4.3): a git pointer over `https` (the only
+/// transport the fetch allows) pinned by a full object id, with `#.` meaning the repository root. The ordinary
+/// pointer rules apply to everything else, so a bad host, credential or traversal is refused here exactly as in a
+/// `pointers` entry.
+pub fn check_bundle_tree(p: &Pointer) -> Result<(), Bad> {
+    if p.scheme != crate::pointer::Scheme::Git || !p.locator.starts_with("https://") {
+        return Err(bad("tree", "a bundle tree is a git pointer over https"));
+    }
+    if !matches!(p.pin.kind, crate::pointer::PinKind::GitTree | crate::pointer::PinKind::GitCommit) {
+        return Err(bad("tree.pin", "a bundle tree is pinned by git-tree or git-commit"));
+    }
+    if p.range.is_some() || p.hash.is_some() || p.bytes.is_some() {
+        return Err(bad("tree", "a bundle tree has no range, hash or size"));
+    }
+    let mut q = p.clone();
+    if let Some(root) = q.locator.strip_suffix("#.") {
+        q.locator = format!("{root}#x");
+    }
+    q.check_publishable()
+}
+
 fn tombstone_fields(m: &mut Map) -> Result<TombstoneFields, Bad> {
     let target = m.req_str("target")?;
     if !ulid::is_valid(&target) {
@@ -495,6 +589,9 @@ pub fn check_parsed(pinned: Pinned<'_>, at: &crate::layout::RecordPath, car: &Si
     for p in record.pointers.iter().chain(&record.evidence) {
         p.check_publishable().map_err(Reject::Pointer)?;
     }
+    if let KindFields::Bundle(b) = &record.kind_fields {
+        check_bundle_tree(&b.tree).map_err(Reject::Pointer)?;
+    }
     check_dates(&record)?;
     // Last on purpose: a record that is wrong in a specific way (a bad pointer, a bad date) is reported for that,
     // and the hash is the final statement that the scanned text is the text in the file.
@@ -526,7 +623,7 @@ pub fn check_cross(r: &Record, pinned: Pinned<'_>, at: &crate::layout::RecordPat
         || match &r.kind_fields {
             KindFields::Endorsement(e) => e.target_id == own,
             KindFields::Tombstone(t) => t.target == own,
-            KindFields::Memory(_) => false,
+            KindFields::Memory(_) | KindFields::Bundle(_) => false,
         };
     if refers_to_self {
         return Err(Reject::Mismatch("a record refers to itself"));
@@ -595,6 +692,12 @@ pub fn check_strings(r: &Record) -> Result<(), Reject> {
                 plain_text(s, "applies_to").map_err(t)?;
             }
         }
+        KindFields::Bundle(b) => {
+            plain_text(&b.tree.label, "label").map_err(t)?;
+            if let Some(d) = &b.compat_delphi {
+                plain_text(d, "compat.delphi").map_err(t)?;
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -632,6 +735,12 @@ pub fn check_counts(r: &Record) -> Result<(), Reject> {
             over(e.note.as_deref().map_or(0, |n| n.chars().count()), MAX_ENDORSEMENT_NOTE_CHARS, "note")?;
         }
         KindFields::Tombstone(t) => over(t.note.as_deref().map_or(0, |n| n.chars().count()), MAX_TOMBSTONE_NOTE_CHARS, "note")?,
+        KindFields::Bundle(b) => {
+            over(b.touches_roles.len(), MAX_TOUCHES, "touches.roles")?;
+            over(b.touches_connectors.len(), MAX_TOUCHES, "touches.connectors")?;
+            over(b.tree.label.chars().count(), MAX_LABEL_CHARS, "label")?;
+            over(b.tree.access_hint.as_deref().map_or(0, |h| h.chars().count()), MAX_ACCESS_HINT_CHARS, "access_hint")?;
+        }
     }
     Ok(())
 }

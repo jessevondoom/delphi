@@ -211,3 +211,52 @@ pub fn tombstone_with(who: &Identity, id: &str, rev: u64, target: &str, action: 
     t.push_str(&format!("body_kind: none\ntarget: {target}\naction: {action}\nreason: {reason}\nnote: A test tombstone.\n---\n"));
     sign_record(who, Kind::Tombstone, id, t.into_bytes())
 }
+
+/// The knobs of a test `bundle` record. Everything is plain text so any attack is one string replacement.
+#[derive(Debug, Clone)]
+pub struct BundleSpec {
+    pub name: String,
+    pub version: String,
+    pub bundle_hash: String,
+    pub tags: String,
+    pub ceiling: String,
+    pub status: String,
+    /// The lines under `tree:` (each indented two spaces).
+    pub tree: String,
+    /// The text of `touches.roles` and `touches.connectors` (YAML flow lists) and of `compat.delphi`.
+    pub roles: String,
+    pub connectors: String,
+    pub compat: String,
+}
+
+/// A valid tree block: `https` git pointer to the repository root, pinned by this tree id.
+pub fn tree_block(locator: &str, pin_kind: &str, pin: &str) -> String {
+    format!("  scheme: git\n  locator: \"{locator}\"\n  pin:\n    kind: {pin_kind}\n    value: \"{pin}\"\n  label: The bundle tree\n  content_type: other\n")
+}
+
+impl BundleSpec {
+    pub fn new(name: &str, version: &str, bundle_hash: &str) -> BundleSpec {
+        BundleSpec {
+            name: name.into(),
+            version: version.into(),
+            bundle_hash: bundle_hash.into(),
+            tags: "payments".into(),
+            ceiling: "internal_empirical".into(),
+            status: "active".into(),
+            tree: tree_block("https://git.acme.example/platform/bundle.git#.", "git-tree", "0123456789abcdef0123456789abcdef01234567"),
+            roles: "[\"strategist\", \"builder\"]".into(),
+            connectors: "[\"slack\"]".into(),
+            compat: ">=0.3.0".into(),
+        }
+    }
+}
+
+/// A valid `bundle` record (spec 027 §4.3) at `rev`.
+pub fn bundle(who: &Identity, id: &str, rev: u64, spec: &BundleSpec) -> SignedRecord {
+    let mut t = common_with(id, "bundle", rev, who, &spec.status, &spec.tags, &spec.ceiling);
+    t.push_str(&format!(
+        "supersedes: null\nevidence: []\nrelated: []\nbody_kind: none\nbundle_name: \"{}\"\nbundle_version: \"{}\"\nbundle_hash: \"{}\"\ntree:\n{}touches:\n  roles: {}\n  connectors: {}\ncompat:\n  delphi: \"{}\"\n  bundle_schema: 1\n---\n",
+        spec.name, spec.version, spec.bundle_hash, spec.tree, spec.roles, spec.connectors, spec.compat
+    ));
+    sign_record(who, Kind::Bundle, id, t.into_bytes())
+}

@@ -30,6 +30,7 @@ pub mod xenia_fixture;
 pub mod xenia_testkit;
 pub mod xenia_action;
 pub mod xenia_admin;
+pub mod xenia_bundle;
 pub mod xenia_index;
 pub mod xenia_ingress;
 pub mod xenia_member;

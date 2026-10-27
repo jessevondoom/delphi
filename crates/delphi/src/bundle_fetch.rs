@@ -15,9 +15,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Which commit to fetch: the marketplace file's repository is read at its head; a bundle only ever by full sha.
+/// `Tree` is a xenia bundle record's `git-tree` pin (`specs/027` §4.3): git cannot ask a server for a tree, so the
+/// remote's head is fetched and the tree at the requested directory must be exactly this object id, or nothing is read.
 pub enum Rev<'a> {
     Head,
     Sha(&'a str),
+    Tree(&'a str),
 }
 
 /// The seam: tests stand a local repository in for the network. `subdir` limits the tree to one directory, whose
@@ -173,7 +176,14 @@ impl Fetcher for GitFetcher {
         let scratch = bundle_add::new_incoming(&self.home)?;
         let (repo, empty_home) = (scratch.join("repo"), scratch.join("home"));
         let result = std::fs::create_dir_all(&repo).and_then(|_| std::fs::create_dir_all(&empty_home)).map_err(|e| e.to_string()).and_then(|_| self.fetch_in(&repo, url, rev, subdir, dest));
-        let _ = std::fs::remove_dir_all(&scratch);
+        // A fetch that was stopped for its size has children (`index-pack`) that are still winding down and may write into the
+        // scratch directory for a moment after their parent was killed, so removing it is retried until it is gone.
+        for _ in 0..100 {
+            if std::fs::remove_dir_all(&scratch).is_ok() || !scratch.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         result
     }
 }
@@ -184,7 +194,7 @@ impl GitFetcher {
         init.args(["init", "--bare", "-q", "."]);
         run(init, "init", 4096, None)?;
         let want = match rev {
-            Rev::Head => "HEAD".to_string(),
+            Rev::Head | Rev::Tree(_) => "HEAD".to_string(),
             Rev::Sha(s) => s.to_string(),
         };
         let mut fetch = self.git(repo);
@@ -197,6 +207,19 @@ impl GitFetcher {
             // The server may hand over anything for a name; only the exact pinned commit is accepted.
             if commit != s {
                 return Err(format!("the repository returned commit {} for the pinned {}; refused", commit, s));
+            }
+        }
+        if let Rev::Tree(want_tree) = rev {
+            // The pin is on the directory the bundle lives in (the repository root for `#.`), not on the commit.
+            let spec = match subdir {
+                Some(d) => format!("{}:{}", commit, d.trim_matches('/')),
+                None => format!("{}^{{tree}}", commit),
+            };
+            let mut rt = self.git(repo);
+            rt.args(["rev-parse", "--verify", &spec]);
+            let got = String::from_utf8_lossy(&run(rt, "rev-parse", 256, None)?).trim().to_string();
+            if got != want_tree {
+                return Err(format!("the repository's tree is {} but the record pins {}; refused (the pinned tree must be at the remote's head)", got, want_tree));
             }
         }
         let mut ls = self.git(repo);

@@ -1,6 +1,7 @@
 //! Provenance levels and publisher continuity (`specs/024` §2.2, §2.3). Pure: a decision from what the lock pinned and what
-//! the new version's signature says. The levels that need a xenia store (`endorsed`, `member-signed`) are not reachable
-//! from a directory or an archive and arrive with the store (`specs/027` slice B8).
+//! the new version's signature says. The two levels that need a xenia store (`endorsed`, `member-signed`) are not
+//! reachable from a directory or an archive: [`continuity`] never returns them, and `delphi bundle add --from-xenia`
+//! sets them from the store's computed standing (`specs/027` §4.3, slice B8), never from anything in the bundle.
 
 /// What the lock has pinned for a bundle that is already added: the publisher's key, or `unsigned`.
 pub const UNSIGNED: &str = "unsigned";
@@ -14,6 +15,10 @@ pub enum Level {
     Signed,
     /// A valid signature by the pinned publisher, or by a key the new manifest names as that publisher's successor.
     KnownPublisher,
+    /// Came through a xenia store and a steward of another person endorsed exactly this revision (`specs/024` §2.2).
+    Endorsed,
+    /// Came through a xenia store; the publisher is an active member; no endorsement counts.
+    MemberSigned,
 }
 
 impl Level {
@@ -22,6 +27,18 @@ impl Level {
             Level::Unsigned => "unsigned",
             Level::Signed => "signed",
             Level::KnownPublisher => "known-publisher",
+            Level::Endorsed => "endorsed",
+            Level::MemberSigned => "member-signed",
+        }
+    }
+
+    /// The level a store's computed standing gives (`BundleLevel::as_str` of `delphi-xenia`), or `None` for `hidden`
+    /// and anything else.
+    pub fn of_store(level: &str) -> Option<Level> {
+        match level {
+            "endorsed" => Some(Level::Endorsed),
+            "member-signed" => Some(Level::MemberSigned),
+            _ => None,
         }
     }
 }
@@ -81,6 +98,19 @@ pub fn describe(level: Level, publisher: &str, signer: Option<&str>, previous: O
         Level::Unsigned => format!("UNSIGNED, added from {}", source),
         Level::Signed => format!("signed by {}, first time seen", signer.map(short_kid).unwrap_or_default()),
         Level::KnownPublisher => format!("signed by {}, same publisher as {}", publisher, previous.unwrap_or("the version before")),
+        // A store bundle is described by `describe_store`, which has the store and the stewards; this is the fallback.
+        Level::Endorsed => format!("endorsed, added from {}", source),
+        Level::MemberSigned => format!("signed by {}, member of the store, not endorsed", publisher),
+    }
+}
+
+/// The add summary's line for a store bundle (`specs/024` §2.2): `endorsed by <handles> (store <store>)` or
+/// `signed by <handle>, member of <store>, not endorsed`, with the reason a stale store lost its endorsements.
+pub fn describe_store(level: Level, publisher_handle: &str, store: &str, endorsers: &[String], store_stale: bool) -> String {
+    match level {
+        Level::Endorsed => format!("endorsed by {} (store {})", endorsers.join(", "), store),
+        _ if store_stale => format!("signed by {}, member of {}, not endorsed (store stale: no endorsement counts now)", publisher_handle, store),
+        _ => format!("signed by {}, member of {}, not endorsed", publisher_handle, store),
     }
 }
 

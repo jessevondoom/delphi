@@ -714,3 +714,118 @@ fn two_different_files_for_one_path_are_refused_not_picked_between() {
     // The same file listed twice is one file.
     assert!(w.run(&[&a, &a], &fresh()).memories.contains_key(&a.id));
 }
+
+// --- the `bundle` kind is endorsed and hidden by the same rules (spec 027 §4.3) ---------------------------------
+
+fn bundle_of(w: &W, who: &str, id: usize, rev: u64, version: &str, tags: &str) -> SignedRecord {
+    let mut spec = rk::BundleSpec::new("acme-platform", version, &crate::hash::of(version.as_bytes()));
+    spec.tags = tags.into();
+    rk::bundle(&w.key(who), &u(id), rev, &spec)
+}
+
+#[test]
+fn a_bundle_is_member_signed_until_a_steward_of_another_person_endorses_exactly_those_bytes() {
+    let w = W::new();
+    let b = bundle_of(&w, "mia", 0, 1, "1.4.0", "payments");
+    let c = w.run(&[&b], &fresh());
+    assert_eq!(c.bundle_level(&b.id), Some(BundleLevel::MemberSigned));
+    assert_eq!(BundleLevel::MemberSigned.as_str(), "member-signed");
+    let e = w.end("sam", 1, &b, 1, "endorse");
+    let c = w.run(&[&b, &e], &fresh());
+    assert_eq!(c.bundle_level(&b.id), Some(BundleLevel::Endorsed));
+    assert_eq!(persons(&mem_state(&c, &b).endorsed_by), vec!["sam"]);
+    assert_eq!(outcome(&c, &e), &Outcome::Effective);
+    // An unknown id has no level.
+    assert_eq!(c.bundle_level(&u(9)), None);
+}
+
+#[test]
+fn an_endorsement_of_an_older_revision_does_not_carry_to_a_replayed_or_updated_one() {
+    let w = W::new();
+    let v1 = bundle_of(&w, "mia", 0, 1, "1.4.0", "payments");
+    let e = w.end("sam", 1, &v1, 1, "endorse");
+    assert_eq!(w.run(&[&v1, &e], &fresh()).bundle_level(&v1.id), Some(BundleLevel::Endorsed));
+    // The publisher moves on to rev 2 (new bytes): the old endorsement names rev 1 and the old hash.
+    let v2 = bundle_of(&w, "mia", 0, 2, "1.5.0", "payments");
+    let c = w.run(&[&v2, &e], &fresh());
+    assert_eq!(c.bundle_level(&v2.id), Some(BundleLevel::MemberSigned));
+    assert_eq!(no_effect(&c, &e), "target-rev-mismatch");
+    // Same rev, other bytes (a swapped tree under an endorsed number): the hash binds.
+    let swapped = bundle_of(&w, "mia", 0, 1, "1.4.1", "payments");
+    let c = w.run(&[&swapped, &e], &fresh());
+    assert_eq!(c.bundle_level(&swapped.id), Some(BundleLevel::MemberSigned));
+    assert_eq!(no_effect(&c, &e), "hash-mismatch");
+}
+
+#[test]
+fn nobody_endorses_their_own_bundle_and_a_stale_store_endorses_nothing() {
+    let w = W::new();
+    // sam is a steward of payments and the publisher: neither sam's other DID nor sam counts.
+    let b = bundle_of(&w, "sam", 0, 1, "1.4.0", "payments");
+    let own = w.end("sam2", 1, &b, 1, "endorse");
+    let c = w.run(&[&b, &own], &fresh());
+    assert_eq!(c.bundle_level(&b.id), Some(BundleLevel::MemberSigned));
+    assert_eq!(no_effect(&c, &own), "self-endorsement");
+    // A real endorsement under a stale statement is withheld: the level falls back, the record is still visible.
+    let b = bundle_of(&w, "mia", 0, 1, "1.4.0", "payments");
+    let e = w.end("sam", 1, &b, 1, "endorse");
+    let c = w.run(&[&b, &e], &stale());
+    assert_eq!(c.bundle_level(&b.id), Some(BundleLevel::MemberSigned));
+    assert_eq!(persons(&mem_state(&c, &b).withheld_by_staleness), vec!["sam"]);
+}
+
+#[test]
+fn a_steward_outside_the_bundles_tags_and_a_plain_member_cannot_endorse_it() {
+    let w = W::new();
+    let b = bundle_of(&w, "mia", 0, 1, "1.4.0", "payments");
+    for (who, eid, why) in [("erin", 1, "endorsement-not-steward"), ("rus", 2, "outside-areas")] {
+        let e = w.end(who, eid, &b, 1, "endorse");
+        let c = w.run(&[&b, &e], &fresh());
+        assert_eq!(quarantined(&c, &e), why, "{who}");
+        assert_eq!(c.bundle_level(&b.id), Some(BundleLevel::MemberSigned));
+    }
+}
+
+#[test]
+fn a_covering_steward_or_the_author_can_hide_a_bundle_and_nobody_else_can() {
+    let w = W::new();
+    let b = bundle_of(&w, "mia", 0, 1, "1.4.0", "payments");
+    let e = w.end("sam", 9, &b, 1, "endorse");
+    // The author withdraws.
+    let own = w.tomb("mia", 2, 0, "withdraw", "mistake");
+    assert_eq!(w.run(&[&b, &e, &own], &fresh()).bundle_level(&b.id), Some(BundleLevel::Hidden));
+    // A steward whose areas cover the tags withdraws.
+    let steward = w.tomb("sue", 3, 0, "withdraw", "sensitive");
+    assert_eq!(w.run(&[&b, &steward], &fresh()).bundle_level(&b.id), Some(BundleLevel::Hidden));
+    // A steward of another area and a plain member have no say.
+    for (who, tid) in [("rus", 4), ("erin", 5)] {
+        let t = w.tomb(who, tid, 0, "withdraw", "mistake");
+        let c = w.run(&[&b, &t], &fresh());
+        assert_eq!(quarantined(&c, &t), "tombstone-not-author-or-covering-steward", "{who}");
+        assert_eq!(c.bundle_level(&b.id), Some(BundleLevel::MemberSigned));
+    }
+    // An author-set status hides it as well, and an endorsement does not undo that.
+    let mut spec = rk::BundleSpec::new("acme-platform", "1.4.0", &crate::hash::of(b"x"));
+    spec.status = "withdrawn".into();
+    let gone = rk::bundle(&w.key("mia"), &u(0), 1, &spec);
+    let e = w.end("sam", 1, &gone, 1, "endorse");
+    let c = w.run(&[&gone, &e], &fresh());
+    assert_eq!(c.bundle_level(&gone.id), Some(BundleLevel::Hidden));
+    assert_eq!(no_effect(&c, &e), "target-hidden");
+}
+
+#[test]
+fn a_bundle_and_a_memory_cannot_share_an_id_and_a_non_member_publishes_nothing() {
+    let w = W::new();
+    let b = bundle_of(&w, "mia", 0, 1, "1.4.0", "payments");
+    let m = w.mem("mia", 0, 1);
+    let c = w.run(&[&b, &m], &fresh());
+    assert_eq!((quarantined(&c, &b), quarantined(&c, &m)), ("id-collision", "id-collision"));
+    assert_eq!(c.bundle_level(&b.id), None);
+    // A key the roster has never heard of.
+    let stranger = Identity::from_seed([99; 32]);
+    let theirs = rk::bundle(&stranger, &u(3), 1, &rk::BundleSpec::new("acme-platform", "1.4.0", &crate::hash::of(b"x")));
+    let c = w.run(&[&theirs], &fresh());
+    assert_eq!(quarantined(&c, &theirs), "not-a-member");
+    assert_eq!(c.bundle_level(&theirs.id), None);
+}

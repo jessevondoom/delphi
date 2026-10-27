@@ -8,7 +8,7 @@
   "properties": {
     "xenia": { "const": 1 },
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "ULID; equals the file name." },
-    "kind": { "enum": ["memory", "endorsement", "tombstone"], "description": "Equals the directory name." },
+    "kind": { "enum": ["memory", "endorsement", "tombstone", "bundle"], "description": "Equals the directory name." },
     "rev": { "type": "integer", "minimum": 1 },
     "org": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
     "store": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
@@ -62,7 +62,31 @@
     "note": { "type": "string", "maxLength": 300 },
     "checked": { "type": "array", "items": { "enum": ["target-open", "evidence-open", "summary-matches"] } },
     "action": { "enum": ["withdraw", "restore"] },
-    "reason": { "enum": ["superseded", "mistake", "sensitive", "departed", "other"] }
+    "reason": { "enum": ["superseded", "mistake", "sensitive", "departed", "other"] },
+
+    "bundle_name": { "type": "string", "pattern": "^[a-z0-9-]{1,48}$" },
+    "bundle_version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$", "maxLength": 32 },
+    "bundle_hash": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$", "description": "blake3 of the bundle's files.json: the identity across transports (specs/023 §3.4)." },
+    "tree": {
+      "allOf": [{ "$ref": "#/$defs/pointer" }],
+      "properties": { "scheme": { "const": "git" }, "locator": { "pattern": "^https://[^#]+#[^#]+$" }, "pin": { "properties": { "kind": { "enum": ["git-tree", "git-commit"] }, "value": { "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" } } } },
+      "description": "A git pointer over https to the bundle tree; `#.` is the repository root (specs/027 §4.3)."
+    },
+    "touches": {
+      "type": "object",
+      "required": ["roles", "connectors"],
+      "properties": {
+        "roles": { "type": "array", "maxItems": 16, "items": { "enum": ["operator", "orchestrator", "architect", "builder", "investigator", "scout", "strategist", "red-team", "writer", "integrator"] } },
+        "connectors": { "type": "array", "maxItems": 16, "items": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" } }
+      },
+      "additionalProperties": false
+    },
+    "compat": {
+      "type": "object",
+      "required": ["bundle_schema"],
+      "properties": { "delphi": { "type": "string", "maxLength": 64 }, "bundle_schema": { "const": 1 } },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false,
   "allOf": [
@@ -70,7 +94,7 @@
       "if": { "properties": { "kind": { "const": "memory" } } },
       "then": {
         "required": ["memory_type", "review_by"],
-        "not": { "anyOf": [{ "required": ["target"] }, { "required": ["target_hash"] }, { "required": ["verdict"] }, { "required": ["scope"] }, { "required": ["checked"] }, { "required": ["action"] }, { "required": ["reason"] }] }
+        "not": { "anyOf": [{ "required": ["bundle_name"] }, { "required": ["bundle_version"] }, { "required": ["bundle_hash"] }, { "required": ["tree"] }, { "required": ["touches"] }, { "required": ["compat"] }, { "required": ["target"] }, { "required": ["target_hash"] }, { "required": ["verdict"] }, { "required": ["scope"] }, { "required": ["checked"] }, { "required": ["action"] }, { "required": ["reason"] }] }
       }
     },
     {
@@ -78,7 +102,7 @@
       "then": {
         "required": ["target", "target_hash", "verdict"],
         "properties": { "target": { "pattern": "^[0-9A-HJKMNP-TV-Z]{26}@[1-9][0-9]*$" }, "note": { "maxLength": 300 } },
-        "not": { "anyOf": [{ "required": ["memory_type"] }, { "required": ["applies_to"] }, { "required": ["verified_by"] }, { "required": ["action"] }, { "required": ["reason"] }] }
+        "not": { "anyOf": [{ "required": ["bundle_name"] }, { "required": ["bundle_version"] }, { "required": ["bundle_hash"] }, { "required": ["tree"] }, { "required": ["touches"] }, { "required": ["compat"] }, { "required": ["memory_type"] }, { "required": ["applies_to"] }, { "required": ["verified_by"] }, { "required": ["action"] }, { "required": ["reason"] }] }
       }
     },
     {
@@ -90,7 +114,14 @@
       "then": {
         "required": ["target", "action", "reason"],
         "properties": { "target": { "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, "note": { "maxLength": 200 } },
-        "not": { "anyOf": [{ "required": ["memory_type"] }, { "required": ["applies_to"] }, { "required": ["verified_by"] }, { "required": ["target_hash"] }, { "required": ["verdict"] }, { "required": ["scope"] }, { "required": ["checked"] }] }
+        "not": { "anyOf": [{ "required": ["bundle_name"] }, { "required": ["bundle_version"] }, { "required": ["bundle_hash"] }, { "required": ["tree"] }, { "required": ["touches"] }, { "required": ["compat"] }, { "required": ["memory_type"] }, { "required": ["applies_to"] }, { "required": ["verified_by"] }, { "required": ["target_hash"] }, { "required": ["verdict"] }, { "required": ["scope"] }, { "required": ["checked"] }] }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "bundle" } } },
+      "then": {
+        "required": ["bundle_name", "bundle_version", "bundle_hash", "tree", "touches", "compat"],
+        "not": { "anyOf": [{ "required": ["memory_type"] }, { "required": ["applies_to"] }, { "required": ["verified_by"] }, { "required": ["target"] }, { "required": ["target_hash"] }, { "required": ["verdict"] }, { "required": ["scope"] }, { "required": ["checked"] }, { "required": ["action"] }, { "required": ["reason"] }] }
       }
     }
   ],

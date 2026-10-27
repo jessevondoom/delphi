@@ -60,7 +60,7 @@ pub fn read_version(ctx: &Ctx, path: &str, md: &[u8], sidecar: &[u8]) -> std::re
     let hide_only = match &rec.kind_fields {
         KindFields::Tombstone(t) => t.action == TombstoneAction::Withdraw,
         KindFields::Endorsement(e) => matches!(e.verdict, Verdict::Withdraw | Verdict::Dispute),
-        KindFields::Memory(_) => false,
+        KindFields::Memory(_) | KindFields::Bundle(_) => false,
     };
     if rec.rev == 0 {
         return Err("rev-is-zero");
