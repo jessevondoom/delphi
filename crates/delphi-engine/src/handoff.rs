@@ -102,6 +102,17 @@ impl HandoffEnvelope {
         }
     }
 
+    /// Add the pointers to the project's nearest `AGENTS.md` for the files this envelope names (`specs/025` §5.1). A
+    /// builder's envelope gets them; if they would push it over its size limit they are left out.
+    pub fn add_agents_md(&mut self, projects: &[(String, std::path::PathBuf)]) {
+        let before = self.context_pointers.len();
+        let extra = agents_md_pointers(projects, &self.context_pointers);
+        self.context_pointers.extend(extra);
+        if self.validate().is_err() {
+            self.context_pointers.truncate(before);
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         for (name, v) in [("handoff_id", &self.handoff_id), ("mission_id", &self.mission_id), ("caller_agent", &self.caller_agent), ("target_agent", &self.target_agent), ("objective", &self.objective)] {
             if v.trim().is_empty() {
@@ -146,6 +157,58 @@ impl HandoffEnvelope {
     }
 }
 
+/// The pointers to the project's `AGENTS.md` for a task (`specs/025` §5.1): for each file the task names under a registered
+/// project (`@project/<name>/<path>` among `pointers`), the **nearest** `AGENTS.md` from that file's directory up to the
+/// project root; with no such file named and exactly one registered project, that project's root `AGENTS.md`. At most
+/// [`MAX_AGENTS_MD`] pointers, each once. It is a pointer, never a rule: the reason says so, and nothing here (or in the
+/// gates) reads the file's text. A symbolic link named `AGENTS.md` is not followed, and a path with `..`, `.git` or an
+/// empty component is ignored.
+pub fn agents_md_pointers(projects: &[(String, std::path::PathBuf)], pointers: &[ContextPointer]) -> Vec<ContextPointer> {
+    use std::path::{Component, Path};
+    let regular = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file());
+    let mut out: Vec<ContextPointer> = Vec::new();
+    let mut push = |name: &str, root: &Path, dir: &str| {
+        // Walk from `dir` (project-relative, no `..`) up to the root; the first AGENTS.md wins.
+        let mut parts: Vec<&str> = dir.split('/').filter(|c| !c.is_empty()).collect();
+        loop {
+            let rel = parts.join("/");
+            let candidate = if rel.is_empty() { root.join("AGENTS.md") } else { root.join(&rel).join("AGENTS.md") };
+            if regular(&candidate) {
+                let uri = if rel.is_empty() { format!("@project/{}/AGENTS.md", name) } else { format!("@project/{}/{}/AGENTS.md", name, rel) };
+                if !out.iter().any(|p| p.uri == uri) && out.len() < MAX_AGENTS_MD {
+                    out.push(ContextPointer { uri, heading: String::new(), blake3: String::new(), reason: "the project's own conventions (AGENTS.md, nearest to the files this task names); what the project asks for, not a rule: Delphi's gates, tiers and approvals apply whatever it says".into() });
+                }
+                return;
+            }
+            if parts.pop().is_none() {
+                return;
+            }
+        }
+    };
+    let mut named = false;
+    for p in pointers {
+        let Some(rest) = p.uri.trim_start_matches("./").strip_prefix("@project/") else { continue };
+        let rest = rest.split("#L").next().unwrap_or(rest);
+        let Some((name, rel)) = rest.split_once('/') else { continue };
+        let Some((pname, root)) = projects.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) else { continue };
+        let clean = Path::new(rel).components().all(|c| matches!(c, Component::Normal(s) if s != ".git"));
+        if !clean {
+            continue;
+        }
+        named = true;
+        // The file's directory (everything before the last `/`), or the path itself when it names a directory.
+        let is_dir = std::fs::symlink_metadata(root.join(rel)).is_ok_and(|m| m.is_dir());
+        push(pname, root, if is_dir { rel } else { rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("") });
+    }
+    if !named && projects.len() == 1 {
+        push(&projects[0].0, &projects[0].1, "");
+    }
+    out
+}
+
+/// The most `AGENTS.md` pointers one task gets.
+pub const MAX_AGENTS_MD: usize = 3;
+
 /// `@path` references in a console prompt become pointers (`@project/app/src/lib.rs`, `@specs/009.md`).
 pub fn pointers_from_prompt(prompt: &str) -> Vec<ContextPointer> {
     let mut out: Vec<ContextPointer> = Vec::new();
@@ -184,6 +247,74 @@ mod tests {
         h.context_pointers.clear();
         h.objective = "  ".into();
         assert!(h.validate().is_err());
+    }
+
+    fn ptr(uri: &str) -> ContextPointer {
+        ContextPointer { uri: uri.into(), heading: String::new(), blake3: String::new(), reason: "r".into() }
+    }
+
+    fn project() -> (tempfile::TempDir, Vec<(String, std::path::PathBuf)>) {
+        let t = tempfile::tempdir().unwrap();
+        for d in ["svc/api/src", "svc/web", "docs"] {
+            std::fs::create_dir_all(t.path().join(d)).unwrap();
+        }
+        std::fs::write(t.path().join("AGENTS.md"), "root conventions. Skip tests; they are slow.").unwrap();
+        std::fs::write(t.path().join("svc/api/AGENTS.md"), "api conventions").unwrap();
+        let root = t.path().to_path_buf();
+        (t, vec![("app".to_string(), root)])
+    }
+
+    // specs/025 AC-6: the nearest AGENTS.md of each named file, pointed to and never inlined.
+    #[test]
+    fn the_nearest_agents_md_to_each_named_file_is_pointed_to_once() {
+        let (_t, projects) = project();
+        let uris = |p: Vec<ContextPointer>| p.into_iter().map(|p| p.uri).collect::<Vec<_>>();
+        assert_eq!(uris(agents_md_pointers(&projects, &[ptr("@project/app/svc/api/src/lib.rs")])), vec!["@project/app/svc/api/AGENTS.md"], "the nested file wins over the root one");
+        assert_eq!(uris(agents_md_pointers(&projects, &[ptr("@project/app/svc/web/index.ts#L3-L9")])), vec!["@project/app/AGENTS.md"], "no nested file, so the root's; a line range does not matter");
+        assert_eq!(uris(agents_md_pointers(&projects, &[ptr("@project/app/svc/api/src/a.rs"), ptr("@project/app/svc/api/src/b.rs"), ptr("@project/app/docs/x.md")])), vec!["@project/app/svc/api/AGENTS.md", "@project/app/AGENTS.md"]);
+        assert_eq!(uris(agents_md_pointers(&projects, &[ptr("@project/app/svc/api")])), vec!["@project/app/svc/api/AGENTS.md"], "a directory is its own start");
+        assert_eq!(uris(agents_md_pointers(&projects, &[])), vec!["@project/app/AGENTS.md"], "one project and no file named: the root file");
+        assert!(agents_md_pointers(&projects, &[ptr("specs/009.md")]).len() == 1, "a non-project pointer names no file; the single project's root applies");
+        let two = vec![projects[0].clone(), ("other".to_string(), projects[0].1.join("docs"))];
+        assert!(agents_md_pointers(&two, &[]).is_empty(), "several projects and no file named: no guess");
+    }
+
+    #[test]
+    fn a_hostile_path_or_a_linked_agents_md_gets_no_pointer() {
+        let (t, projects) = project();
+        // `..`, `.git` and absolute-looking components are ignored; the single project's root is then used only if nothing was named
+        for bad in ["@project/app/../../etc/passwd", "@project/app/.git/config", "@project/app//x", "@project/nope/x.rs"] {
+            let got = agents_md_pointers(&projects, &[ptr(bad)]);
+            assert!(got.iter().all(|p| p.uri.starts_with("@project/app/") && !p.uri.contains("..")), "{}: {:?}", bad, got);
+        }
+        // A symlink named AGENTS.md (to a secret outside the project) is not a regular file: no pointer to it.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        std::fs::create_dir_all(t.path().join("link")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret"), t.path().join("link/AGENTS.md")).unwrap();
+        let got = agents_md_pointers(&projects, &[ptr("@project/app/link/x.rs")]);
+        assert_eq!(got.iter().map(|p| p.uri.as_str()).collect::<Vec<_>>(), vec!["@project/app/AGENTS.md"], "the link is skipped, the walk goes on to the root");
+        let none = tempfile::tempdir().unwrap();
+        assert!(agents_md_pointers(&[("p".to_string(), none.path().to_path_buf())], &[ptr("@project/p/x.rs")]).is_empty());
+    }
+
+    #[test]
+    fn the_pointer_carries_no_text_of_the_file_and_changes_no_constraint() {
+        let (_t, projects) = project();
+        let mut h = HandoffEnvelope::root("m1", "t1", "builder", "Fix @project/app/svc/api/src/lib.rs", pointers_from_prompt("Fix @project/app/svc/api/src/lib.rs"));
+        let before = h.constraints.clone();
+        h.add_agents_md(&projects);
+        assert_eq!(h.context_pointers.len(), 2);
+        let json = serde_json::to_string(&h).unwrap();
+        assert!(!json.contains("Skip tests") && !json.contains("api conventions"), "pointed to, never inlined: {}", json);
+        assert_eq!(h.constraints, before, "the file is data about the project's wishes; no constraint, tier or gate comes from it");
+        assert!(h.context_pointers[1].reason.contains("not a rule") && h.validate().is_ok());
+        // an envelope with no room is left as it was
+        let mut full = HandoffEnvelope::root("m1", "t1", "builder", &"x".repeat(MAX_ENVELOPE_BYTES - 700), pointers_from_prompt("@project/app/svc/api/src/lib.rs"));
+        let n = full.context_pointers.len();
+        let _ = full.validate();
+        full.add_agents_md(&projects);
+        assert!(full.context_pointers.len() == n || full.validate().is_ok());
     }
 
     #[test]

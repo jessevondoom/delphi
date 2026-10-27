@@ -287,11 +287,18 @@ would use and the most it could cost, and refuses a budget below that. Neither r
 run SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with \-\-overlay) candidate, and prints pass rates.
 Exit codes: 0 ok · 1 problems · 2 usage · 3 over budget.
 .SS delphi xenia
-who this install is, for sharing.
+the org's shared, signed memory store: join, sync, status, publish, endorse.
 .PP
 .nf
-  delphi xenia whoami [\-\-home <dir>]
+  delphi xenia whoami
+  delphi xenia join <url> \-\-org <o> \-\-store <s> \-\-admin <fingerprint> \-\-head <epoch>:<hash> [\-\-allow\-local]
+  delphi xenia sync | status [\-\-store <org>/<store>] [\-\-json]
+  delphi xenia publish <file> \-\-title <t> \-\-summary <s> \-\-promoted [\-\-tags a,b] [\-\-review\-by <date>]
+  delphi xenia endorse|dispute|retract|withdraw|restore <id> [\-\-scope a,b] [\-\-note <n>] [\-\-reason <r>]
+  delphi xenia republish \-\-old <did>   [\-\-workspace <name>] [\-\-home <dir>]
 .fi
+.PP
+Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet.
 .SS delphi docs
 print the command reference or a man page.
 .PP

@@ -7,6 +7,7 @@
   { "name": "/sources", "desc": "Where the answers came from: files read and documents cited (also ctrl+s)", "ink": true, "rust": false, "local": true },
   { "name": "/pin", "desc": "Keep the last reply, or the text you give, in the mission notebook", "ink": true, "rust": false, "local": true },
   { "name": "/notes", "desc": "Read the mission notebook", "ink": true, "rust": false, "local": true },
+  { "name": "/xenia", "args": "[status | endorse|dispute|retract|withdraw|restore <id> | publish <file> | sign <code> | cancel <code>]", "desc": "The org store: its health, and the steward's approval card (the exact bytes to be signed; nothing is signed until you type the card's code back)", "ink": true, "rust": false, "local": false },
   { "name": "/org", "desc": "The organization's bundles, goals, perspectives and open items; add, update or remove a bundle (no approval: your key is the decision)", "ink": true, "rust": false, "local": true },
   { "name": "/connectors", "desc": "Which connectors are configured, logged in and pinned", "ink": true, "rust": false, "local": true },
   { "name": "/mouse", "desc": "Turn mouse reporting on or off (off hands text selection back to the terminal; on, drag to select and copy)", "ink": true, "rust": false, "local": true },

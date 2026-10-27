@@ -350,7 +350,29 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
         let mut files = Vec::new();
         md_files(&root, &format!("bundles/{}/{}/knowledge", e.org, e.name), "bundles", "federated_verified", &mut files);
         out.extend(files.into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
+        // A skill's `references/` (`specs/025` §3): text to retrieve, indexed under zone `skills` at the bundle's tier, and
+        // read only through `@bundle/<org>/<name>/skills/<skill>/references/**`; never inlined into a prompt.
+        let skills = delphi_core::bundles::cache_dir(home, &e.org, &e.name, &e.hash).join("skills");
+        out.extend(reference_files(&skills, &e.org, &e.name).into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
     }
+}
+
+/// The Markdown under `skills/<skill>/references/` of one cached bundle, by logical path
+/// `bundles/<org>/<name>/skills/<skill>/references/…`, zone `skills`.
+fn reference_files(skills: &Path, org: &str, name: &str) -> Vec<SourceFile> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(skills) else { return out };
+    let mut dirs: Vec<_> = rd.flatten().filter(|d| d.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink())).collect();
+    dirs.sort_by_key(|d| d.file_name());
+    for d in dirs {
+        let skill = d.file_name().to_string_lossy().to_string();
+        let refs = d.path().join("references");
+        if !skill.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') || !std::fs::symlink_metadata(&refs).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        md_files(&refs, &format!("bundles/{}/{}/skills/{}/references", org, name, skill), "skills", "federated_verified", &mut out);
+    }
+    out
 }
 
 pub(crate) fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, default_source: &'static str, out: &mut Vec<SourceFile>) {
@@ -732,7 +754,7 @@ fn allowed_sql(opts: &SearchOpts) -> String {
         }
     }
     if opts.no_bundles {
-        allowed.push_str(" AND d.zone != 'bundles'");
+        allowed.push_str(" AND d.zone != 'bundles' AND d.rel_path NOT LIKE 'bundles/%'");
     }
     if !opts.include_staged {
         allowed.push_str(" AND d.zone != 'staged'");
@@ -2485,6 +2507,7 @@ mod tests {
                 title: "T".into(),
                 skill_roles: Default::default(),
                 history: Vec::new(),
+                inert_servers: Vec::new(),
             });
         }
         delphi_core::bundles::write(&ws, &lock).unwrap();
@@ -2509,6 +2532,47 @@ mod tests {
         let (tier, ctx): (String, String) = kb.conn.query_row("SELECT d.source_type, c.contextual_text FROM kb_documents d JOIN kb_chunks c ON c.doc_id = d.doc_id", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(tier, "federated_verified");
         assert!(ctx.contains("Bundle: acme/plat@1.4.0 · unsigned]"), "{}", ctx);
+    }
+
+    // specs/025 AC-5: a skill's references/ is indexed under zone `skills` at the bundle's tier and found by its words, with
+    // a pointer an agent reads through `@bundle/`; SKILL.md, scripts and templates of the same skill are not indexed.
+    #[test]
+    fn a_skills_references_are_indexed_under_zone_skills_and_nothing_else_of_the_skill_is() {
+        let (h, ws) = home_with_bundles(&[("acme", "plat", "blake3:aa", "2999-01-01", &[("runbooks/deploy.md", RUNBOOK)])]);
+        let skill = delphi_core::bundles::cache_dir(h.path(), "acme", "plat", "blake3:aa").join("skills/deploy-helper");
+        for (p, t) in [
+            ("references/rollout.md", "---\ntitle: Rollout\nsource_type: user_ratified\n---\n# Rollout\n\nThe wombat checklist for cutting over a cluster.\n"),
+            ("references/deep/more.md", "# More\n\nA second wombat note.\n"),
+            ("references/notes.txt", "wombat in a text file"),
+            ("SKILL.md", "---\nname: deploy-helper\ndescription: x\n---\n# Skill\n\nwombat in the skill body\n"),
+            ("templates/t.md", "# T\n\nwombat template\n"),
+            ("scripts/run.md", "# S\n\nwombat script notes\n"),
+        ] {
+            std::fs::create_dir_all(skill.join(p).parent().unwrap()).unwrap();
+            std::fs::write(skill.join(p), t).unwrap();
+        }
+        // a linked references directory and a hidden file are never followed or indexed
+        std::os::unix::fs::symlink("../../../knowledge", skill.parent().unwrap().join("other-ref-target")).unwrap();
+        let sneaky = skill.parent().unwrap().join("sneaky");
+        std::fs::create_dir_all(&sneaky).unwrap();
+        std::os::unix::fs::symlink("../../../knowledge", sneaky.join("references")).unwrap();
+        std::fs::write(skill.join("references/.hidden.md"), "# H\n\nwombat hidden\n").unwrap();
+        let files = sources(&ws);
+        let refs: Vec<&str> = files.iter().filter(|f| f.zone == "skills").map(|f| f.rel_path.as_str()).collect();
+        assert_eq!(refs, vec!["bundles/acme/plat/skills/deploy-helper/references/deep/more.md", "bundles/acme/plat/skills/deploy-helper/references/rollout.md"]);
+        assert!(files.iter().filter(|f| f.zone == "skills").all(|f| f.default_source == "federated_verified" && f.bundle.is_some()), "the bundle's tier, whatever the file's frontmatter says");
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&files, "t").unwrap();
+        let hits = kb.search("wombat checklist", &SearchOpts::default()).unwrap();
+        assert_eq!(hits.first().map(|h| h.pointer.as_str()), Some("@bundle/acme/plat/skills/deploy-helper/references/rollout.md#L5-L7"), "{:?}", hits.iter().map(|h| &h.pointer).collect::<Vec<_>>());
+        assert!(hits.iter().all(|h| h.rel_path.contains("/references/")), "SKILL.md, templates and scripts are not indexed");
+        let (tier, zone): (String, String) = kb.conn.query_row("SELECT source_type, zone FROM kb_documents WHERE rel_path LIKE '%rollout.md'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((tier.as_str(), zone.as_str()), ("federated_verified", "skills"));
+        // the bundle filters cover them; --no-bundles leaves them out; the knowledge is untouched
+        let only = SearchOpts { bundle: Some("acme/plat".into()), ..Default::default() };
+        assert!(!kb.search("wombat checklist", &only).unwrap().is_empty());
+        assert!(kb.search("wombat checklist", &SearchOpts { no_bundles: true, ..Default::default() }).unwrap().is_empty());
+        assert!(!kb.search("quokka procedure", &SearchOpts::default()).unwrap().is_empty());
     }
 
     #[test]

@@ -232,6 +232,8 @@ pub struct Engine {
     pub(crate) injected: Mutex<HashMap<String, Vec<delphi_adapter::ipr::ContextSlice>>>,
     /// What each mission has been told about the added bundles (`bundle_events.rs`): mission id to bundle id to hash.
     pub(crate) bundle_seen: Mutex<HashMap<String, crate::bundle_events::Seen>>,
+    /// What each mission has been told about the joined Xenia stores (`xenia_events.rs`): mission id to store to journal seq.
+    pub(crate) xenia_seen: Mutex<HashMap<String, crate::xenia_events::Seen>>,
     /// The last org-context slice and the key it was built under (`org_context.rs`).
     pub(crate) org_cache: Mutex<Option<(String, crate::org_context::Built)>>,
     /// A JSON Schema a handoff's answer must match, by handoff id (`specs/021` §5). A CLI harness validates against it;
@@ -466,6 +468,7 @@ impl Engine {
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
         self.reconcile_bundles(m).await?;
+        self.reconcile_xenia(m).await?;
         let operator_task = parent.is_none();
         // `@<bundle>:<agent>` from the console arrives as `bundle:<bundle>:<agent>`: the span is the agent's host role's,
         // attributed to the bundle agent, exactly as when a role dispatches it (`specs/023` §5B).
@@ -493,6 +496,7 @@ impl Engine {
         if target == "builder" {
             // `@specs/011-x.md` in the prompt is the spec this build implements (`specs/003` §3.1.2).
             handoff.implements_spec = handoff.context_pointers.iter().find(|p| p.uri.starts_with("specs/") && p.uri.ends_with(".md")).map(|p| p.uri.clone());
+            handoff.add_agents_md(&self.projects);
         }
         handoff.validate().map_err(EngineError::Invalid)?;
         if !self.settings.enabled_agents.iter().any(|a| a == target) {

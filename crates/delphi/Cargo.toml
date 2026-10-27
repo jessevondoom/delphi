@@ -45,7 +45,6 @@ embedded-model = ["delphi-engine/embedded-model"]
 
 [dev-dependencies]
 delphi-release = { path = "../delphi-release" }
-# The store fixture (a signed org, a git remote standing in for the host) for the `bundle_xenia` tests.
 delphi-core = { path = "../delphi-core", features = ["test-support"] }
 delphi-xenia = { path = "../delphi-xenia", features = ["test-support"] }
 vt100 = "0.15"

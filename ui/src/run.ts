@@ -1,5 +1,6 @@
 // Slash commands: each is a call to the daemon's socket and a few lines of output. The same commands as
 // `delphi chat --inline`, ported so the full-screen console depends on nothing but the socket.
+import { cardText, parseXenia, resultText, statusText } from './xenia.ts';
 import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
 import { listMissions, renderMissions } from './missions.ts';
@@ -209,6 +210,16 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       return;
     }
     case 'decisions': { ctx.post(await decisions(ctx.cmd, ctx.mission, rest)); return; }
+    case 'xenia': {
+      // The org store: status, and the steward's card. The daemon builds the card and signs only on the code the operator types back.
+      const x = parseXenia(arg);
+      if (x.kind === 'usage') { ctx.post(x.message); return; }
+      if (x.kind === 'status') { const v = await call('xenia.status', x.store ? { store: x.store } : {}); if (v) ctx.post(statusText(v)); return; }
+      if (x.kind === 'prepare') { const v = await call('xenia.attest.prepare', x.params); if (v) ctx.post(cardText(v)); return; }
+      const v = await call('xenia.attest.decide', { code: x.code, decision: x.decision, ...(x.flags ? { flags_acknowledged: true } : {}) });
+      if (v) ctx.post(resultText(v));
+      return;
+    }
     case 'merge': {
       if (!rest[0]) { ctx.post('/merge needs the build\'s task id, for example `/merge t_0003`'); return; }
       const v = await call('build.merge', { task_id: rest[0] });

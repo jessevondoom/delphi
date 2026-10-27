@@ -60,7 +60,7 @@ pub fn import(dir: &Path, args: &[String]) -> i32 {
 }
 
 /// The active bundle `name` and its cached tree, checked to be the bytes `add` verified.
-fn cached(home: &Path, ws: &Path, name: &str) -> Result<(Entry, PathBuf), String> {
+pub(crate) fn cached(home: &Path, ws: &Path, name: &str) -> Result<(Entry, PathBuf), String> {
     let lock = bundles::read(ws)?;
     let mut hits = lock.bundle.iter().filter(|e| e.is_active() && (e.name == name || e.id() == name));
     let entry = hits.next().ok_or_else(|| format!("no bundle `{}` is added to this workspace (`delphi bundle list`)", name))?.clone();
