@@ -2,7 +2,7 @@
 delphi v0.5 · changes · session 2 · 2 asks · 1 from before
 
  ✔ nothing needs you
-
+ 1 link · tab to follow
 
 ── session s_0002 · 10:10 · now · 2 changes ────────────────────────────────────────────────────────
   10:42  daedalus  t_2

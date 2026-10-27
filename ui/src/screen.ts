@@ -12,6 +12,7 @@ import { kilo } from './meters.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
 import * as A from './archives.ts';
+import { describe as describeLink, paintFocus, scanLinks, type Link } from './links.ts';
 import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
@@ -33,6 +34,10 @@ export type Model = {
   still?: boolean;
   /** The knowledge window on the left deck (`archives.ts`); the app owns it and makes the `kb.get` calls. */
   arch?: A.Arch;
+  /** Link mode in the chat (`specs/029`, `ctrl+o`): the pointers and addresses in the transcript can be focused and followed. */
+  links?: { focus: number | null; note: string };
+  /** A document opened from a link; while one is open it takes the chat's body, and closing it returns to the transcript. */
+  reader?: A.Arch;
 };
 
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
@@ -283,6 +288,30 @@ export function replyAnchor(m: Model, w: number, dense = false): { id: 'live' | 
   return { id: reply.id, row: row + (ps[reply.part]![0] === '' ? 1 : 0) };
 }
 
+/** The transcript as one list of rows, and the links in it (found by their text, so rails and tinted blocks need no help). */
+export function chatLinks(m: Model, w: number, dense = false): { lines: string[]; links: Link[] } {
+  const lines = transcript(m, w, dense);
+  return { lines, links: scanLinks(lines) };
+}
+
+/** The scroll offset (rows hidden below the viewport) that shows transcript row `row`, changing `back` as little as it can. */
+export function backShowing(total: number, row: number, bodyH: number, back: number): number {
+  const top = total - bodyH - back;
+  if (row < top) return Math.max(0, total - bodyH - row);
+  if (row >= top + bodyH) return Math.max(0, total - row - 1);
+  return back;
+}
+
+/** The status row in link mode: the focused target and what the keys do. */
+function linkStatus(m: Model, w: number, links: Link[]): string {
+  const f = m.links?.focus == null ? undefined : links.find((l) => l.id === m.links!.focus);
+  if (m.links?.note) return T.clip(T.dim(m.links.note + ' · esc leaves link mode'), w);
+  if (!links.length) return T.dim('no links in the chat · esc leaves link mode');
+  if (!f) return T.clip(T.dim(`${links.length} link${links.length === 1 ? '' : 's'} · tab chooses · esc leaves link mode`), w);
+  const what = f.target.k === 'external' ? 'enter opens it in your browser' : 'enter reads it here · p pins it';
+  return T.clip(T.accent('link ') + T.text(m.pal)(describeLink(f.target)) + T.dim(` · ${what} · y copy · esc leaves`), w);
+}
+
 /** How many lines to hide below the viewport so that line `row` is the first one shown (0 while the rest still fits). */
 export const anchorBack = (total: number, row: number, bodyH: number): number => Math.max(0, total - row - bodyH);
 
@@ -306,7 +335,8 @@ const KEYS = [
   '↑ ↓    history             ctrl+r  search history      tab  complete',
   '← →    decks (empty prompt) · shift+← →  decks any time',
   'drag  select and copy text   double-click a word · triple-click a line',
-  'pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end',
+  'pgup pgdn / wheel  scroll  ctrl+t  tool details        ctrl+l  to end',
+  'ctrl+o  follow links (tab next · enter read here · p pin · esc leave)',
   '/  commands   @role …  one role   @specs/…  a file   ?  this help',
   'shift+tab  approval mode (default → accept edits → auto → optimistic)',
   'inbox:  y approve · n reject · a all amber · d payload · tab list/focus',
@@ -364,6 +394,7 @@ function promptOf(m: Model, w: number): string[] {
   const first = Math.max(0, Math.min(lay.cursorRow - promptRows + 1, lay.rows.length - promptRows));
   const prompt = lay.rows.slice(first, first + promptRows).map((r, i) =>
     (first + i === 0 ? T.dim('❯ ') : '  ') + T.text(m.pal)(r.before) + (r.at ? chalk.inverse(r.at) : '') + T.text(m.pal)(r.after));
+  if (m.links && m.deck === 1) { prompt.length = 0; prompt.push(T.dim('link mode: tab next · shift+tab previous · enter open · y copy · p pin · esc leave')); }
   if (m.deck === 0) { prompt.length = 0; prompt.push(T.dim('type to search the knowledge base · enter opens · tab narrows to a collection · ← → move between decks')); }
   if (m.deck === 2) { prompt.length = 0; prompt.push(T.dim(I.hint(m.inbox, I.cards(m.state).length))); }
   if (m.panel && m.deck === 1) { prompt.length = 0; prompt.push(T.dim(P.hint(m.panel))); }
@@ -383,15 +414,20 @@ export function frame(m: Model, w: number, h: number): string[] {
   const dense = h < 16; // a short window gives up the blank rows between messages
   const bodyH = bodyHeight(m, w, h);
   let body: string[];
+  let links: Link[] | null = null;
   if (m.deck !== 1) body = deckBody(m, w, bodyH);
+  else if (m.reader && m.reader.at >= 0) body = A.view(m.reader, w, bodyH, m.pal);
   else if (m.panel) body = P.view(m.panel, m.state.sources, m.pal, w, bodyH);
   else {
     const ps = parts(m, w, dense);
     const total = ps.reduce((n, p) => n + p.length, 0);
+    let flat: string[] | null = null;
+    if (m.links) { const all = ps.flat(); links = scanLinks(all); flat = paintFocus(all, links, m.links.focus); }
+    const slice = (a: number, b: number) => (flat ? flat.slice(a, b) : windowOf(ps, a, b));
     const maxBack = Math.max(0, total - bodyH);
     const back = Math.min(m.back, maxBack);
     const top = back === 0 && total <= bodyH; // what fits is read from its first line, as in `less`; what does not follows the end
-    body = top ? windowOf(ps, 0, bodyH) : windowOf(ps, Math.max(0, total - bodyH - back), total - back);
+    body = top ? slice(0, bodyH) : slice(Math.max(0, total - bodyH - back), total - back);
     if (top) while (body.length < bodyH) body.push('');
     while (body.length < bodyH) body.unshift('');
     if (m.help) body = [...helpOverlay(m, w), ...Array(bodyH).fill('')].slice(0, bodyH);
@@ -417,7 +453,7 @@ export function frame(m: Model, w: number, h: number): string[] {
       lines.slice(-Math.max(1, bodyH - 1)).forEach((l, i, a) => { body[bodyH - a.length + i] = T.clip(' ' + l, w); });
     }
   }
-  const out = [...head, ...(h < 16 ? [] : ['']), ...body.map((l) => T.clip(l, w)), statusRow(m, w), T.hairline(m.pal, w), ...prompt.map((l) => T.clip(l, w)), T.hairline(m.pal, w), footer(m, w)];
+  const out = [...head, ...(h < 16 ? [] : ['']), ...body.map((l) => T.clip(l, w)), links && m.links ? linkStatus(m, w, links) : statusRow(m, w), T.hairline(m.pal, w), ...prompt.map((l) => T.clip(l, w)), T.hairline(m.pal, w), footer(m, w)];
   while (out.length < h) out.push('');
   return out.slice(0, h);
 }

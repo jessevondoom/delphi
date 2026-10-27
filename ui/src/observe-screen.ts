@@ -11,6 +11,7 @@ import { dashboard, needs } from './dashboard.ts';
 import { joinColumns, leftWidth, TWO_COLUMNS_AT } from './columns.ts';
 import * as V from './tiers.ts';
 import * as A from './archives.ts';
+import { describe as describeLink, paintFocus, scanLinks, type Link } from './links.ts';
 import { pulse, timeline, toolsBoard } from './monitors.ts';
 import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark, type Paint } from './meters.ts';
 
@@ -63,6 +64,10 @@ export type OModel = {
   info: T.Info; pal: T.Pal; st: OState; view: View; pick: number; scroll: number; selNode: number;
   /** The knowledge window (`archives.ts`): the search box, the shelf, the results and the reader. */
   arch: A.Arch;
+  /** A document opened from a link in another view (`specs/029`): while one is open it takes the body, and closing it returns to the view. */
+  reader?: A.Arch;
+  /** Link focus in the change feed, and the last thing a link did (`opening…`, a failure). */
+  feed?: { focus: number | null; note: string };
   live: Record<string, string>; connected: boolean;
   /** A running span's token total so far, from the live frames: a subscription CLI logs its usage only when it ends. In memory, never saved. */
   liveTokens?: Record<string, number>;
@@ -242,6 +247,24 @@ const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHou
  * newest first so the latest is on screen without scrolling. Results only: the reasoning behind them is never shown.
  */
 function changes(m: OModel, w: number, _h: number): string[] {
+  const rows = changeRows(m, w);
+  return m.feed?.focus != null ? paintFocus(rows, scanLinks(rows), m.feed.focus) : rows;
+}
+
+/** The links in the change feed, as drawn at width `w`: the files and documents agents name once their work is recorded (`specs/029`, D-6). */
+export const feedLinks = (m: OModel, w: number): Link[] => scanLinks(changeRows(m, w));
+
+/** The feed's status row: the focused link's target, or what the keys do. Empty when the view has no links. */
+function feedStatus(m: OModel, w: number): string {
+  if (m.view !== 'changes') return '';
+  const links = feedLinks(m, w);
+  const f = m.feed?.focus == null ? undefined : links.find((l) => l.id === m.feed!.focus);
+  if (m.feed?.note) return dim(' ' + m.feed.note);
+  if (f) return dim(' ' + describeLink(f.target) + (f.target.k === 'external' ? '  (enter opens it in your browser)' : '  (enter reads it here)'));
+  return links.length ? dim(` ${links.length} link${links.length === 1 ? '' : 's'} · tab to follow`) : '';
+}
+
+function changeRows(m: OModel, w: number): string[] {
   const all = m.st.changes ?? [];
   if (!all.length) return ['', dim('  no changes recorded yet'), '', dim('  agents add a line here when they finish a piece of work: what changed, in plain words'), dim('  it is kept with the mission, so the chat summary and a pull request description can use it')];
   const sessions = m.st.sessions ?? [];
@@ -334,9 +357,10 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
   const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, archives, changes }[m.view];
+  if (m.reader && m.reader.at >= 0) return [...head, slot(m, w), '', ...A.view(m.reader, w, Math.max(1, bodyH - 2), m.pal), ...foot].slice(0, h).map((l) => T.clip(l, w));
   let body = m.view === 'agents' && w >= TWO_COLUMNS_AT ? agentsAndTools(m, w, inner) : fn(m, w, inner);
   if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
-  body = [slot(m, w), '', ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
+  body = [slot(m, w), feedStatus(m, w), ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);
 }
