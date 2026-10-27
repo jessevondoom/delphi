@@ -137,6 +137,9 @@ fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, shown: 
     if !s.vector_caches.is_empty() {
         println!("    vectors: caches for {} (used only if they match this install's embedder and pass a local spot check)", s.vector_caches.join(", "));
     }
+    if let Some(line) = s.eval_record.as_deref().and_then(delphi_engine::bundle_eval::summary_line) {
+        println!("    {}", line);
+    }
     if !m.touches_connectors.is_empty() {
         println!("    connectors: {} (inert until mapped)", m.touches_connectors.join(", "));
     }

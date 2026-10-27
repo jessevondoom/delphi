@@ -1,7 +1,9 @@
 // What the console does for research: where answers came from, a search of the knowledge base with a preview, and a
 // mission notebook. Pure helpers and small file operations; the panel (`panel.ts`) draws and the app wires them.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { copyText, type Target } from './links.ts';
 import type { Info } from './theme.ts';
 
 export type Source = { path: string; how: 'read' | 'cited'; roles: string[]; count: number; last: number };
@@ -61,4 +63,21 @@ export function pin(info: Info, mission: string, from: string, text: string, now
 
 export function readNotes(info: Info, mission: string): string {
   try { return readFileSync(notesPath(info, mission), 'utf8').replace(/^---[\s\S]*?---\n/, ''); } catch { return ''; }
+}
+
+/** The most passage lines a pin quotes; the pointer and hash cover the rest. */
+const QUOTE_LINES = 40;
+
+/**
+ * What a pin of a document or passage records: the pointer, a hash of the passage (of the whole document when no lines
+ * are cited) so a later look can tell whether it changed, and the passage itself for a pointer. `from` is the heading
+ * the notebook entry gets.
+ */
+export function passageOf(text: string, target: Extract<Target, { k: 'doc' | 'pointer' }>): { from: string; text: string } {
+  const pointer = copyText(target);
+  const all = text.split('\n');
+  const lines = target.k === 'pointer' ? all.slice(Math.max(0, target.from - 1), Math.max(target.from, target.to)) : all;
+  const hash = createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 12);
+  const quote = target.k === 'pointer' ? '\n\n' + lines.slice(0, QUOTE_LINES).map((l) => '> ' + l).join('\n') + (lines.length > QUOTE_LINES ? `\n> … (${lines.length - QUOTE_LINES} more lines)` : '') : '';
+  return { from: `read ${pointer}`, text: `${pointer}\nsha256:${hash}${quote}` };
 }

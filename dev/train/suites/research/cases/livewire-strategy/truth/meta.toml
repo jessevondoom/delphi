@@ -1,4 +1,6 @@
-# DRAFT: assembled on 2026-10-26 by the assistant that built the harness, not yet checked by the operator.
-# Verifying means reading each fact against the press release and then running `delphi train verify`.
 as_of = "2026-07-23"
 topic_notes = "Data as of LiveWire's Q2 2026 results (published 2026-07-23, after most models' training cutoffs, so recall will not help). The strategy itself is a judgement, not a fact: see insights.toml and rubric.md. Harley-Davidson's own figures and its stake in LiveWire are not in this pack (sec.gov would not serve them to an automated fetch); a good answer may use them if it cites them, and the operator may add them. A later-outcome ledger (score each arm's recommendation against what LiveWire and Harley actually do) is a planned follow-up, not built."
+
+verified_by = "jessevondoom"
+verified_on = "2026-10-26"
+verified_fingerprint = "53aa5c9122e10bc9fd1df010c2f68bf04ade529edd6350bfb1262dce3ca65815"

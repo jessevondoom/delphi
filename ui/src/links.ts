@@ -1,6 +1,7 @@
 // Links as data (spec 029 §3): what a link points at, where it sits in rendered text, and how a surface moves through
 // them. Pure: nothing here draws or reads a file. The Markdown renderer produces `Link`s (`renderMarkdownLinks`), the
 // reader and every surface that wants link focus consume them.
+import stringWidth from 'string-width';
 
 /** What a link points at. External targets are never fetched by Delphi: the system browser opens them on request. */
 export type Target =
@@ -85,4 +86,58 @@ export function stepFocus(links: Link[], cur: number | null, dir: 1 | -1): numbe
 /** The first link that is wholly or partly inside rows `[top, top + height)`: where focus starts after scrolling. */
 export function firstVisible(links: Link[], top: number, height: number): number | null {
   return links.find((l) => l.spans.some((s) => s.line >= top && s.line < top + height))?.id ?? null;
+}
+
+// ── links found in finished rows ────────────────────────────────────────────
+// The chat and the change feed are built from many pieces (rails, tinted blocks, tool rows). Rather than thread the
+// renderer through each, links are read off the finished rows by their text: a logical path or an `http(s)` address,
+// at the row and column it was drawn. A link a wrap split across two rows is not found.
+
+const URL_RE = /https?:\/\/[^\s<>"'`)\]]+/g;
+const MARKUP = /\x1b\[[0-9;]*m|\x1b\]8;;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const TOKENS = /\x1b\[[0-9;]*m|\x1b\]8;;[^\x07\x1b]*(?:\x07|\x1b\\)|[^\x1b]+|\x1b/g;
+
+/** The links in `lines`, in reading order, ids from 0. Pointers and addresses written as text; the rows may carry styling. */
+export function scanLinks(lines: string[]): Link[] {
+  const links: Link[] = [];
+  lines.forEach((line, row) => {
+    const plain = line.replace(MARKUP, '');
+    const found: { at: number; text: string; target: Target }[] = [];
+    for (const m of plain.matchAll(POINTER_RE)) { const target = parseTarget(m[0]); if (target) found.push({ at: m.index!, text: m[0], target }); }
+    for (const m of plain.matchAll(URL_RE)) {
+      const text = m[0].replace(/[.,;:!?]+$/, '');
+      const target = parseTarget(text);
+      if (target && !found.some((f) => m.index! < f.at + f.text.length && f.at < m.index! + text.length)) found.push({ at: m.index!, text, target });
+    }
+    for (const f of found.sort((a, b) => a.at - b.at)) {
+      links.push({ id: links.length, label: f.text, target: f.target, spans: [{ line: row, col: stringWidth(plain.slice(0, f.at)), width: stringWidth(f.text) }] });
+    }
+  });
+  return links;
+}
+
+/** `line` with the columns `[col, col + width)` drawn reversed, whatever styling is already there. */
+export function reverseSpan(line: string, col: number, width: number): string {
+  let out = '', at = 0, on = false;
+  const end = col + width;
+  for (const m of line.matchAll(TOKENS)) {
+    const tok = m[0];
+    if (tok.startsWith('\x1b')) { out += tok; continue; }
+    for (const ch of tok) {
+      if (!on && at >= col && at < end) { out += '\x1b[7m'; on = true; }
+      if (on && at >= end) { out += '\x1b[27m'; on = false; }
+      out += ch;
+      at += stringWidth(ch);
+    }
+  }
+  return on ? out + '\x1b[27m' : out;
+}
+
+/** `lines` with link `focus` drawn reversed. */
+export function paintFocus(lines: string[], links: Link[], focus: number | null): string[] {
+  const l = focus === null ? undefined : links.find((x) => x.id === focus);
+  if (!l) return lines;
+  const out = lines.slice();
+  for (const s of l.spans) if (out[s.line] !== undefined) out[s.line] = reverseSpan(out[s.line]!, s.col, s.width);
+  return out;
 }

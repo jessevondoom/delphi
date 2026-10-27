@@ -114,7 +114,7 @@ pub(crate) fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()) && !CONNECTOR_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--workspace <name>] [--home <dir>]\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--no-eval] [--workspace <name>] [--home <dir>]\n       delphi bundle prereg check <file> | digest <file or dir>\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle report <name>   (counts from the event logs: citations, alignment findings, trims, vectors; never text)\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -157,6 +157,7 @@ pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
             bundle_life::rollback(home, ws, name, to.as_deref(), true, &Real)
         }
         (Some("gc"), _) => bundle_life::gc(home, ws),
+        (Some("report"), Some(name)) => crate::bundle_report::report(home, ws, name),
         (Some("serve"), _) => {
             let only: Vec<String> = args.iter().enumerate().filter(|(_, a)| *a == "--bundle").filter_map(|(i, _)| args.get(i + 1).cloned()).collect();
             delphi_engine::bundle_serve::run(home, ws, &only)
@@ -177,6 +178,9 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("{}", USAGE);
         2
     };
+    if positional.first().map(|s| s.as_str()) == Some("prereg") {
+        return prereg(&positional[1..]);
+    }
     let (Some(sub), Some(dir)) = (positional.first(), positional.get(1)) else { return usage() };
     let dir = dir.to_string();
     let dir = PathBuf::from(dir.as_str());
@@ -224,6 +228,12 @@ pub fn run(args: &[String]) -> i32 {
                     }
                 }
             }
+            if !args.iter().any(|a| a == "--no-eval") {
+                let h = home::delphi_home(flag(args, "--home").as_deref());
+                if let Some(lines) = bundle_pack::record_eval(&dir, &h) {
+                    eprintln!("{}", lines);
+                }
+            }
             bundle_pack::package(&dir, flag(args, "-o").as_deref().map(Path::new), &*host)
         }
         "manifest" => match delphi_bundle::write_manifest(&dir, claude, &Real) {
@@ -237,6 +247,44 @@ pub fn run(args: &[String]) -> i32 {
             }
         },
         _ => usage(),
+    }
+}
+
+/// `delphi bundle prereg check <file>` prints the file's pin (`specs/027` §7.2) when it has all nine headings;
+/// `delphi bundle prereg digest <file or dir>` prints a blake3 digest for the `## Task set` and `## Rubric` sections. The
+/// bench runner (`dev/bench/bench.py`) calls both, so the hash it checks is the one this build computes.
+fn prereg(rest: &[&String]) -> i32 {
+    match (rest.first().map(|s| s.as_str()), rest.get(1)) {
+        (Some("check"), Some(file)) => {
+            let text = match std::fs::read_to_string(file.as_str()) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("delphi bundle: {}: {}", file, e);
+                    return 2;
+                }
+            };
+            let missing = delphi_bundle::prereg_missing(&text);
+            if !missing.is_empty() {
+                eprintln!("delphi bundle: {} lacks the required heading(s): {} (specs/027 §7.2)", file, missing.join(", "));
+                return 1;
+            }
+            println!("{}", delphi_bundle::prereg_pin(&text));
+            0
+        }
+        (Some("digest"), Some(path)) => match delphi_bundle::prereg_digest(Path::new(path.as_str())) {
+            Ok(d) => {
+                println!("{}", d);
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi bundle: {}", e);
+                2
+            }
+        },
+        _ => {
+            eprintln!("usage: delphi bundle prereg check <file> | digest <file or dir>");
+            2
+        }
     }
 }
 
@@ -443,6 +491,46 @@ mod tests {
         bundle_pack::add_vectors(t.path(), &Real, &Words, &mut |_, _| {}).unwrap();
         let again: serde_json::Value = serde_json::from_str(&fs::read_to_string(t.path().join("vectors/index.json")).unwrap()).unwrap();
         assert_eq!(again["caches"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn prereg_check_prints_the_pin_and_refuses_a_file_without_all_nine_headings() {
+        let t = tempfile::tempdir().unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let f = t.path().join("prereg.md");
+        fs::write(&f, "## Hypotheses\nx\n").unwrap();
+        assert_eq!(run(&args(&["prereg", "check", f.to_str().unwrap()])), 1);
+        let full: String = delphi_bundle::PREREG_HEADINGS.iter().map(|h| format!("## {}\nx\n", h)).collect();
+        fs::write(&f, &full).unwrap();
+        assert_eq!(run(&args(&["prereg", "check", f.to_str().unwrap()])), 0);
+        assert_eq!(run(&args(&["prereg", "check", "/nonexistent-prereg.md"])), 2);
+        assert_eq!(run(&args(&["prereg", "digest", t.path().to_str().unwrap()])), 0);
+        assert_eq!(run(&args(&["prereg"])), 2);
+    }
+
+    #[test]
+    fn package_records_the_retrieval_numbers_without_changing_the_bundle_hash_and_never_blocks() {
+        let home = tempfile::tempdir().unwrap();
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        delphi_bundle::write_manifest(t.path(), true, &Real).unwrap();
+        let hash_before = delphi_bundle::validate(t.path(), &Options { claude: true, packaging: true, ..Options::default() }, &Real).bundle_hash;
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let out = t.path().parent().unwrap().join("evalpack.xbundle");
+        let code = run(&args(&["package", t.path().to_str().unwrap(), "--home", home.path().to_str().unwrap(), "-o", out.to_str().unwrap()]));
+        assert_eq!(code, 0, "advisory: numbers below the thresholds would not block either");
+        let rec = fs::read_to_string(t.path().join(".delphi-bundle/eval.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rec).unwrap();
+        assert!(v["recall_at_10"].is_number() && v["mrr"].is_number() && v["mode"] == "lexical" && v["embedder"].is_null(), "{}", rec);
+        let hash_after = delphi_bundle::validate(t.path(), &Options { claude: true, packaging: true, ..Options::default() }, &Real).bundle_hash;
+        assert_eq!(hash_before, hash_after, "eval.json is not listed in files.json");
+        assert!(delphi_engine::bundle_eval::summary_line(&rec).unwrap().contains("publisher-reported"));
+        let inspected = delphi_bundle::inspect(t.path(), &Options { claude: true, ..Options::default() }, &Real);
+        assert_eq!(inspected.summary.eval_record.as_deref(), Some(rec.as_str()), "the add summary can show it");
+        // --no-eval leaves no record
+        fs::remove_file(t.path().join(".delphi-bundle/eval.json")).unwrap();
+        assert_eq!(run(&args(&["package", t.path().to_str().unwrap(), "--no-eval", "--home", home.path().to_str().unwrap(), "-o", out.to_str().unwrap()])), 0);
+        assert!(!t.path().join(".delphi-bundle/eval.json").exists());
     }
 
     #[test]

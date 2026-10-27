@@ -1416,7 +1416,7 @@ fn db_path(ws: &Path) -> PathBuf {
     ws.join("local/state.db")
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     format!("{}", secs)
 }
@@ -1580,7 +1580,7 @@ pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalRe
     Ok(rep)
 }
 
-fn print_eval(rep: &EvalReport) {
+pub(crate) fn print_eval(rep: &EvalReport) {
     println!("recall over {} question(s), top 10:", rep.cases);
     println!("  {:<8} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}", "ranking", "@1", "@3", "@5", "@10", "MRR", "ms/q");
     for (name, r) in &rep.per_mode {
@@ -1810,6 +1810,22 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
             }
             "eval" => {
                 // delphi kb eval [--docs <dir>] [--file <cases.json>] [--db <cache file>]
+                // delphi kb eval --bundle <dir> [--lexical]: the bundle's own questions against an index of only that bundle
+                // (`specs/027` §7.1). Advisory: a measured result exits 0 whatever the numbers.
+                if let Some(dir) = flag_value(args, "--bundle") {
+                    return Ok(match crate::bundle_eval::run(home, Path::new(&dir), args.iter().any(|a| a == "--lexical"), &mut |done, total| eprint!("\rembedding {}/{} chunks", done, total)) {
+                        Ok(r) => {
+                            eprintln!();
+                            print_eval(&r.report);
+                            println!("{}", crate::bundle_eval::verdict(&r.gate));
+                            0
+                        }
+                        Err(e) => {
+                            eprintln!("delphi kb eval --bundle: {}", e);
+                            2
+                        }
+                    });
+                }
                 let docs = PathBuf::from(flag_value(args, "--docs").unwrap_or_else(|| ".".into()));
                 let file = flag_value(args, "--file").map(PathBuf::from).unwrap_or_else(|| docs.join("dev/kb-eval.json"));
                 let text = std::fs::read_to_string(&file).map_err(|e| KbError::Io(format!("{}: {}", file.display(), e)))?;
@@ -1864,7 +1880,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
             }
             "model" => model_cmd(home, &args[1..]),
             _ => {
-                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] | serve | miss | eval | model | seed-export <out>");
+                eprintln!("usage: delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] | serve | miss | eval [--bundle <dir>] | model | seed-export <out>");
                 Ok(2)
             }
         }
