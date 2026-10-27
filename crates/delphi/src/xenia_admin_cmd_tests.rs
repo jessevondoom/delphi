@@ -229,7 +229,7 @@ fn rotate_needs_exactly_one_kind_and_changes_nothing_without_it() {
     assert_eq!(go(&["rotate", &old, "--to", &new, "--routine", "--compromised", "--home", &ha], &mut Say::no()), 2);
     assert_eq!(go(&["propose", "rotate", &old, "--to", &new, "--home", &ha], &mut Say::no()), 2);
     assert_eq!(w.refs(), before, "a refused command pushes nothing");
-    assert_eq!(delphi_xenia::admin::Rotation::from_flags(false, false).is_err(), true);
+    assert!(delphi_xenia::admin::Rotation::from_flags(false, false).is_err());
     assert_eq!(delphi_xenia::admin::Rotation::from_flags(true, false), Ok(Rotation::Routine));
     assert_eq!(delphi_xenia::admin::Rotation::from_flags(false, true), Ok(Rotation::Compromised));
     // The spelled-out form works with a kind.
