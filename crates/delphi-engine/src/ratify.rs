@@ -367,6 +367,51 @@ pub fn reject(home: &Path, ws_dir: &Path, id: &str, expected_blake3: &str) -> Re
     .map_err(io)?
 }
 
+/// Add one `[connectors.<name>]` entry to the live `config.toml` **and** to the ratified copy in the same step, for the
+/// operator's own command (`delphi bundle connectors map`, `specs/025` §4.1): the command, run on a terminal and
+/// confirmed by typing, is the approval of this one entry. Nothing else the live file holds is ratified by it: the new
+/// ratified copy is the old one plus this entry, so another unreviewed edit stays a pending proposal.
+///
+/// Refused when the name is taken in either copy, or when the ratified copy no longer matches its pin (something is
+/// wrong with the workspace and a person should look before more is added to it).
+pub fn add_connector(ws_dir: &Path, name: &str, entry: &toml::value::Table) -> Result<(), String> {
+    let (lock_path, ratified, guard) = (ws_dir.join("local/ratified.lock"), ws_dir.join("local/ratified").join(CONFIG_COPY), ws_dir.join("locks/ratify.lock"));
+    lock::with_lock(&guard, || -> Result<(), String> {
+        let mut lockfile = lock::read(&lock_path)?;
+        let old = read_text(&ratified);
+        if lockfile.files.get(CONFIG_KEY).map(String::as_str) != Some(hash(old.as_bytes()).as_str()) {
+            return Err("the ratified endpoint/access copy does not match its pin; review it with /ratify before adding to it".into());
+        }
+        let taken = |text: &str| toml::from_str::<toml::Value>(text).ok().and_then(|v| v.get("connectors").and_then(|c| c.get(name)).cloned()).is_some();
+        let live_path = ws_dir.join("config.toml");
+        let live = read_text(&live_path);
+        if taken(&old) || taken(&live) {
+            return Err(format!("a connector named `{}` already exists; remove it from config.toml and ratify that first", name));
+        }
+        let one = toml::to_string(&toml::Value::Table(std::iter::once(("connectors".to_string(), toml::Value::Table(std::iter::once((name.to_string(), toml::Value::Table(entry.clone()))).collect()))).collect())).map_err(|e| e.to_string())?;
+        // The live file gets the entry appended; the result must still parse, with the entry in it and nothing else changed.
+        let new_live = format!("{}{}\n# added by `delphi bundle connectors map`\n{}", live, if live.is_empty() || live.ends_with('\n') { "" } else { "\n" }, one);
+        let (before, after) = (toml::from_str::<toml::Value>(&live).map_err(|e| format!("config.toml does not parse: {}", e))?, toml::from_str::<toml::Value>(&new_live).map_err(|_| "config.toml has a `connectors` table in a form this command cannot extend; add the entry by hand".to_string())?);
+        let mut expect = before.clone();
+        let table = expect.as_table_mut().ok_or("config.toml is not a table")?;
+        table.entry("connectors").or_insert_with(|| toml::Value::Table(Default::default())).as_table_mut().ok_or("[connectors] is not a table")?.insert(name.to_string(), toml::Value::Table(entry.clone()));
+        if after != expect {
+            return Err("appending the entry would change something else in config.toml; add it by hand".into());
+        }
+        // The ratified copy: the old blocks plus the entry.
+        let mut blocks: toml::Value = toml::from_str(&old).map_err(|e| format!("the ratified copy does not parse: {}", e))?;
+        let bt = blocks.as_table_mut().ok_or("the ratified copy is not a table")?;
+        bt.entry("connectors").or_insert_with(|| toml::Value::Table(Default::default())).as_table_mut().ok_or("[connectors] is not a table in the ratified copy")?.insert(name.to_string(), toml::Value::Table(entry.clone()));
+        let new_blocks = access_blocks(&toml::to_string(&blocks).map_err(|e| e.to_string())?);
+        // Live first: an unratified entry has no effect, so a failure after this line leaves only a pending proposal.
+        lock::write_atomic(&live_path, new_live.as_bytes()).map_err(|e| format!("config.toml: {}", e))?;
+        lock::write_atomic(&ratified, new_blocks.as_bytes()).map_err(|e| format!("{}: {}", ratified.display(), e))?;
+        lockfile.files.insert(CONFIG_KEY.into(), hash(new_blocks.as_bytes()));
+        lock::write(&lock_path, &lockfile).map_err(|e| format!("{}: {}", lock_path.display(), e))
+    })
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

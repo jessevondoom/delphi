@@ -43,6 +43,27 @@ pub struct Entry {
     pub skill_roles: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub history: Vec<Past>,
+    /// The MCP servers the bundle declares (`.mcp.json`), recorded **inert** (`specs/025` §4.1): nothing here is connected,
+    /// listed, launched or offered to a role. Replaced with the bundle's declarations on every add and update.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inert_servers: Vec<InertServer>,
+}
+
+/// One declared server, as far as the lock keeps it: its name and transport, the `url` of an `http` one and the `command`
+/// of a `stdio` one (shown to the operator, never run), and the *names* of its headers and env entries. A value is never
+/// stored, so the lock cannot leak one.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct InertServer {
+    pub name: String,
+    pub transport: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +213,7 @@ mod tests {
             title: "T".into(),
             skill_roles: BTreeMap::new(),
             history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into(), publisher_kid: String::new(), provenance: String::new(), gone: false, left_by: String::new() }],
+            inert_servers: Vec::new(),
         }
     }
 

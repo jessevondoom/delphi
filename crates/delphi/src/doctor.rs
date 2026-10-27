@@ -691,6 +691,7 @@ mod tests {
             title: "T".into(),
             skill_roles: Default::default(),
             history: Vec::new(),
+            inert_servers: Vec::new(),
         };
         delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![entry.clone()] }).unwrap();
         let r = run(&home, &ws, &Options::default());

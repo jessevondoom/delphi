@@ -229,11 +229,22 @@ impl Guard {
             }
             let mut seg = rest.split('/');
             let (org, name, section) = (seg.next()?, seg.next()?, seg.next()?);
+            let id = format!("{}/{}", org, name);
+            let (_, root) = self.zones.bundles.iter().find(|(n, _)| *n == id)?;
+            if section == "skills" {
+                // A skill's `references/` is text to retrieve (`specs/025` §3): `skills/<skill>/references/**` and nothing
+                // else of `skills/` (no SKILL.md, no scripts, no templates).
+                let (skill, dir) = (seg.next()?, seg.next()?);
+                if skill.is_empty() || dir != "references" {
+                    return None;
+                }
+                let bundle_dir = root.parent()?;
+                let inner = path.splitn(4, '/').nth(3).unwrap_or("").to_string();
+                return Some((bundle_dir.to_path_buf(), inner));
+            }
             if section != "knowledge" {
                 return None;
             }
-            let id = format!("{}/{}", org, name);
-            let (_, root) = self.zones.bundles.iter().find(|(n, _)| *n == id)?;
             let inner = path.splitn(5, '/').nth(4).unwrap_or("").to_string();
             return Some((root.clone(), inner));
         }
@@ -794,6 +805,34 @@ mod tests {
         assert!(g.check("@bundle/acme/a/knowledge/link.md", Access::Read).is_err());
         // the lock is daemon state under local/, which agents never read
         assert!(matches!(g.check("local/bundles.lock", Access::Read), Err(Denied::NeverReadable(_))));
+    }
+
+    // specs/025 AC-5: a skill's references/ is readable text; the rest of the skill (SKILL.md, scripts, templates) is not.
+    #[test]
+    fn a_skills_references_are_readable_and_nothing_else_of_the_skill() {
+        let (t, g) = setup();
+        for d in ["cache/skills/s/references/deep", "cache/skills/s/scripts", "cache/skills/s/templates"] {
+            fs::create_dir_all(t.path().join(d)).unwrap();
+        }
+        fs::write(t.path().join("cache/skills/s/references/guide.md"), "guide").unwrap();
+        fs::write(t.path().join("cache/skills/s/references/deep/more.md"), "more").unwrap();
+        fs::write(t.path().join("cache/skills/s/scripts/run.sh"), "rm -rf /").unwrap();
+        fs::write(t.path().join("cache/skills/s/templates/t.md"), "t").unwrap();
+        assert!(g.check("@bundle/acme/a/skills/s/references/guide.md", Access::Read).unwrap().file.is_some());
+        assert!(g.check("@bundle/acme/a/skills/s/references/deep/more.md", Access::Read).unwrap().file.is_some());
+        assert_eq!(g.list("@bundle/acme/a/skills/s/references").unwrap().len(), 2);
+        for p in ["skills/s/SKILL.md", "skills/s/scripts/run.sh", "skills/s/templates/t.md", "skills/s", "skills", "skills/s/references/../SKILL.md", "skills/s/references/../scripts/run.sh", "skills//references/guide.md", "skills/../behavior/goals.md", "SKILLS/S/Scripts/run.sh"] {
+            assert!(g.check(&format!("@bundle/acme/a/{}", p), Access::Read).is_err(), "{} must be denied", p);
+        }
+        assert!(g.list("@bundle/acme/a/skills").is_err() && g.list("@bundle/acme/a/skills/s").is_err());
+        assert!(g.check("@bundle/acme/other/skills/s/references/guide.md", Access::Read).is_err(), "a bundle that is not added");
+        assert!(matches!(g.check("@bundle/acme/a/skills/s/references/guide.md", Access::Write), Err(Denied::NeverWritable(_))));
+        // a symlink planted in references/ is never followed, and neither is a linked references directory
+        symlink("../SKILL.md", t.path().join("cache/skills/s/references/link.md")).unwrap();
+        assert!(g.check("@bundle/acme/a/skills/s/references/link.md", Access::Read).is_err());
+        fs::create_dir_all(t.path().join("cache/skills/t")).unwrap();
+        symlink("../../behavior", t.path().join("cache/skills/t/references")).unwrap();
+        assert!(g.check("@bundle/acme/a/skills/t/references/goals.md", Access::Read).is_err());
     }
 
     #[test]

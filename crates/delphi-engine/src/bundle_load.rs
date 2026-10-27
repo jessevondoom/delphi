@@ -378,6 +378,7 @@ pub(crate) mod tests {
             title: "T".into(),
             skill_roles: BTreeMap::new(),
             history: Vec::new(),
+            inert_servers: Vec::new(),
         };
         let mut lock = bundles::read(&ws.dir).unwrap_or_default();
         lock.bundle.push(e.clone());

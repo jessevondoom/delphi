@@ -140,6 +140,7 @@ impl Engine {
             n += 1;
             let mut h = self.span_handoff(m, task_id, n, "builder", prompt, pointers_from_prompt(prompt));
             h.implements_spec = spec.clone();
+            h.add_agents_md(&self.projects);
             h.routing_directive.attempt_number = attempt;
             h.constraints.extend(diagnostics.iter().cloned());
             let mut family = base_family.clone();
