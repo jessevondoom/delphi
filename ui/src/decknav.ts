@@ -1,4 +1,4 @@
-// Moving between the three decks (left: activity and changes, centre: chat, right: decision inbox) with the arrow keys.
+// Moving between the three decks (left: knowledge base, centre: chat, right: decision inbox) with the arrow keys.
 import type { Ev } from './input.ts';
 
 export type Deck = 0 | 1 | 2;
