@@ -1,4 +1,6 @@
-# DRAFT: assembled from web sources on 2026-10-26 by the assistant that built the harness, not yet checked by the operator.
-# Verifying means reading each fact against its source and then adding verified_by and verified_on below.
 as_of = "2026-10-26"
 topic_notes = "The 2027 rules were announced in May 2024 and the tyre supplier in March 2025; later amendments after as_of are possible. Who the rules favor is a judgement, not a fact: no single truth is stored for it (see rubric.md)."
+
+verified_by = "jessevondoom"
+verified_on = "2026-10-26"
+verified_fingerprint = "4b74ef0d534a5414be91b67df4276718226466b0f68160e4bf29dea74611f0c2"

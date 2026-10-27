@@ -60,7 +60,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 
 Total about 188 h. Critical path B0 → B1 → B2 → B4 → B5 → B9; B3, B6, B7 branch from B2; B8 waits on the xenia plan; B12 last. Resolved questions (2026-10-25): B-1 yes; B-2 L2 for unsigned local bundles; B-3 guidance block loads on add, no ratification; B-7 scripts never executed; B-8 serve as MCP yes (B12); B-12 rollback from lock history, no cards; B-14 agent `distill` yes with staging and scan; B-15 retrieval gate frozen now, bench thresholds frozen after a pilot in a hash-pinned pre-registration, telemetry descriptive; B-16 ship vectors when the embedder is Delphi's default. Still proposed (recommendations stand, operator may revisit): B-4 (`bundle` kind supersedes `skill`), B-5 (transport order), B-6 (person scope later), B-9 (`--agents-md` path), B-10 (slice caps), B-11 (`summary`/`domain` in 001 §5), B-13 (lenses opt-in), B-17 (no default host role).
 
-## Layered learning and training mode (spec 031, draft, 2026-10-26)
+## Layered learning and training mode (spec 031, approved, 2026-10-26)
 
 Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbered from 030, which is console sessions). Decisions OD-1..OD-6 are in the spec.
 
@@ -83,7 +83,7 @@ The working plan for L1 and L6b is [`learning-build-plan-2026-10-26.md`](learnin
 
 Total about 182 h. Operator-layer path L0 → L1 → L2 → L4; core-layer path L6 → L7 → L9 → L10; they meet in the `learning-loop` suite.
 
-## Training experiments: quality and efficiency (spec 037, draft, 2026-10-26)
+## Training experiments: quality and efficiency (spec 037, approved, 2026-10-26)
 
 Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (operator review time and model dollars are separate; the dollar cap OD-T1 is open). Suite: C1-C3 from repo history, R1-R6 research and strategy with stored truth packs.
 

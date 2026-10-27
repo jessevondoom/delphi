@@ -3,7 +3,7 @@ id: spec-028-knowledge-window
 title: "028: The Knowledge Window (explorer in the archives pane)"
 author: architect
 timestamp: 2026-10-25T21:00:00Z
-status: draft   # decisions 1-3 given by the operator on 2026-10-25; the layout is a sketch and nothing here is built or approved
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); decisions 1-3 given 2026-10-25; the layout is a sketch and nothing is built yet
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

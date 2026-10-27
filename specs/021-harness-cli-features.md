@@ -3,7 +3,7 @@ id: spec-021-harness-cli-features
 title: "021: Harness CLI Features and API-Key Mode"
 author: architect
 timestamp: 2026-10-25T17:00:00Z
-status: draft   # not yet reviewed by the operator
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); the code is merged
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
