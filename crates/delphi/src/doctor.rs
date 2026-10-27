@@ -1047,6 +1047,21 @@ mod tests {
         }
 
         #[test]
+        fn loosened_or_damaged_pins_are_failures_that_name_the_file_and_never_a_panic() {
+            use std::os::unix::fs::PermissionsExt;
+            let t = tempfile::tempdir().unwrap();
+            let (fx, _) = Fx::installed(t.path(), &[]);
+            let home = fx.dir.join("home");
+            let pins = fx.store.paths.state.join("pins.toml");
+            std::fs::set_permissions(&pins, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let loose = levels(&home, now());
+            assert!(loose.iter().any(|(l, m)| *l == Level::Fail && m.starts_with("pins.toml is not a private regular file")), "{loose:?}");
+            std::fs::write(&pins, b"\xff garbage \x1b[2J").unwrap();
+            let bad = levels(&home, now());
+            assert!(bad.iter().any(|(l, m)| *l == Level::Fail && m.contains("pins.toml is damaged")), "{bad:?}");
+        }
+
+        #[test]
         fn fewer_than_three_admins_warns_and_does_not_fail() {
             let t = tempfile::tempdir().unwrap();
             let (fx, _) = Fx::installed_on(Fx::new(t.path(), two_admin_org()), &[]);
