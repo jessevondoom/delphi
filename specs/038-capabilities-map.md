@@ -3,7 +3,7 @@ id: spec-038-capabilities-map
 title: "038: Operator capabilities map"
 author: architect
 timestamp: 2026-10-26T20:00:00Z
-status: draft   # built (PR #232); awaiting the operator's approval. One follow-up is a decision for the operator (section 11)
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); built (PR #232)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

@@ -3,7 +3,7 @@ id: spec-029-links-and-inline-reader
 title: "029: Links and the Inline Reader (draft)"
 author: architect
 timestamp: 2026-10-25T22:00:00Z
-status: draft   # asked for by the operator on 2026-10-25; slices 1-4 are built (§8); the key bindings have not been tried by the operator
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); asked for 2026-10-25; slices 1-4 are built (§8); the key bindings have not been tried by the operator
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

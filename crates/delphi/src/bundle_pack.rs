@@ -159,6 +159,33 @@ pub fn add_vectors(dir: &Path, host: &dyn Host, model: &dyn delphi_engine::embed
     Ok(msg)
 }
 
+/// Run the bundle's retrieval questions (`specs/027` §7.1) and record the numbers in `.delphi-bundle/eval.json`. The record
+/// is not listed in `files.json`, so writing it changes neither the bundle hash nor a signature. Advisory: this returns
+/// the lines to print and never an error that blocks `package`. `None` when the bundle has no question file.
+pub fn record_eval(dir: &Path, home: &Path) -> Option<String> {
+    if !dir.join(delphi_engine::bundle_eval::QUESTIONS).is_file() {
+        return None;
+    }
+    let run = match delphi_engine::bundle_eval::run(home, dir, false, &mut |done, total| eprint!("\rembedding {}/{} chunks", done, total)) {
+        Ok(r) => r,
+        Err(e) => return Some(format!("warning: the retrieval gate could not be measured ({}); no eval record was written", e)),
+    };
+    eprintln!();
+    let record = run.gate.record(run.embedder.as_deref(), &delphi_core::bundles::today());
+    let path = dir.join(delphi_engine::bundle_eval::RECORD);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut out = delphi_engine::bundle_eval::verdict(&run.gate);
+    if let Err(e) = delphi_core::lock::write_atomic(&path, record.as_bytes()) {
+        out.push_str(&format!("\nwarning: {}: {}", path.display(), e));
+    }
+    if run.embedder.is_none() {
+        out.push_str("\nnote: no embedding model is installed, so these numbers are for words alone; the frozen thresholds assume the shipped models (`delphi kb model pack`)");
+    }
+    Some(out)
+}
+
 /// `delphi bundle package <dir> [-o file]`: refresh `files.json`, validate for distribution, write the archive.
 pub fn package(dir: &Path, out: Option<&Path>, host: &dyn Host) -> i32 {
     let claude = dir.join(".claude-plugin/plugin.json").is_file();

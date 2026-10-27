@@ -339,6 +339,7 @@ impl Engine {
         let mut e = delphi_core::event::EventEnvelope::new(&m.id, "merge.approved", json!({"sha": sha, "mode": verb}));
         e.task_id = Some(task_id.to_string());
         m.append(e).await?;
+        crate::bundle_cited::emit(m, task_id, "merge").await?;
         report.gates[4] = gates::approval(&sha, std::slice::from_ref(&sha));
 
         // Merging, or pushing and opening a pull request, is a side effect outside the daemon's own files:

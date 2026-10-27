@@ -383,15 +383,25 @@ pub fn check_evals(tree: &Tree, m: Option<&Manifest>, r: &mut Report) {
     if controls < 2 {
         r.fail(14, path, format!("{} off-topic controls (at least 2 questions with `\"expect\": null`)", controls));
     }
-    let headings = ["Hypothesis", "Metric", "Stopping rule"];
     for e in tree.under("evals/delphi/prereg/").filter(|e| e.path.ends_with(".md")) {
         let t = tree.text(&e.path).unwrap_or_default();
-        for h in headings {
-            if !t.lines().any(|l| l.starts_with('#') && l.trim_start_matches('#').trim().eq_ignore_ascii_case(h)) {
-                r.fail(14, &e.path, format!("pre-registration lacks a `{}` heading (specs/027 §6.2)", h));
-            }
+        for h in prereg_missing(&t) {
+            r.fail(14, &e.path, format!("pre-registration lacks a `{}` heading (specs/027 §7.2)", h));
         }
     }
+}
+
+/// The headings a pre-registration file must have (`specs/027` §7.2), in the order the protocol reads them.
+pub const PREREG_HEADINGS: [&str; 9] = ["Hypotheses", "Arms", "Task set", "Rubric", "Sample size and runs", "Thresholds", "Analysis plan", "Exclusions and stopping", "Deviations"];
+
+/// The required headings a pre-registration text does not have. A heading is a Markdown heading line of any level
+/// whose text is the name, ignoring case; `Deviations` may be empty at registration.
+pub fn prereg_missing(text: &str) -> Vec<&'static str> {
+    PREREG_HEADINGS
+        .iter()
+        .copied()
+        .filter(|h| !text.lines().any(|l| l.starts_with('#') && l.trim_start_matches('#').trim().eq_ignore_ascii_case(h)))
+        .collect()
 }
 
 // ── --against: the smallest honest version bump (specs/023 §9) ───────────────

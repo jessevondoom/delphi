@@ -3,7 +3,7 @@ id: spec-030-console-sessions-and-conversation-context
 title: "030: Console Sessions and Conversation Context"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: active   # decisions taken by the operator 2026-10-25; S1, S2 built, S3 and S5 partly (§8)
+status: approved   # decisions taken by the operator 2026-10-25; S1, S2 built, S3 and S5 partly (§8)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
