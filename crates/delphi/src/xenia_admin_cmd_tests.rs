@@ -426,12 +426,12 @@ fn the_daemon_and_the_tool_registry_reach_only_the_limited_admin_operations() {
     for write in [false, true] {
         for d in reg.defs(write) {
             names.push(d.name.clone());
-            if d.name != "xenia_search" {
+            if d.name != "xenia_search" && d.name != "xenia_help" {
                 assert!(!format!("{} {}", d.name, d.description).to_lowercase().contains("xenia"), "{} mentions Xenia", d.name);
             }
         }
     }
-    assert!(names.iter().filter(|n| n.contains("xenia")).all(|n| n == "xenia_search"));
+    assert!(names.iter().filter(|n| n.contains("xenia")).all(|n| n == "xenia_search" || n == "xenia_help"), "only the read-only search and the help text");
     for n in &names {
         for banned in ["sign", "publish", "endorse", "admin", "join", "withdraw", "roster", "tombstone", "dispute", "rotate", "propose", "genesis"] {
             assert!(!n.to_lowercase().contains(banned), "tool `{n}` looks like a Xenia write: {banned}");
