@@ -159,12 +159,16 @@ pub struct Past {
     /// earlier one, and the log records `bundle.rolled_back` rather than `bundle.updated`); empty for an update.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub left_by: String,
+    /// Where this version came from, so that a rollback judges a trusted source's grant by the origin the version had and
+    /// not by the origin of the version it replaces (`None` in a lock written before this field: then no grant applies).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
 }
 
 impl Past {
     /// This entry as the version a bundle had before it was replaced at `to`.
     pub fn of(e: &Entry, to: &str) -> Past {
-        Past { hash: e.hash.clone(), version: e.version.clone(), from: e.added_at.clone(), to: to.to_string(), publisher_kid: e.publisher_kid.clone(), provenance: e.provenance.clone(), gone: false, left_by: String::new() }
+        Past { hash: e.hash.clone(), version: e.version.clone(), from: e.added_at.clone(), to: to.to_string(), publisher_kid: e.publisher_kid.clone(), provenance: e.provenance.clone(), gone: false, left_by: String::new(), source: Some(e.source.clone()) }
     }
 
     /// The short form of the hash for lines a person reads.
@@ -320,7 +324,7 @@ mod tests {
             review_by: "2027-01-31".into(),
             title: "T".into(),
             skill_roles: BTreeMap::new(),
-            history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into(), publisher_kid: String::new(), provenance: String::new(), gone: false, left_by: String::new() }],
+            history: vec![Past { hash: "blake3:aa".into(), version: "0.9.0".into(), from: "a".into(), to: "b".into(), publisher_kid: String::new(), provenance: String::new(), gone: false, left_by: String::new(), source: None }],
             inert_servers: Vec::new(),
             trust: String::new(),
             trust_hash: String::new(),

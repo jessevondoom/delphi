@@ -694,6 +694,9 @@ pub fn check_strings(r: &Record) -> Result<(), Reject> {
         }
         KindFields::Bundle(b) => {
             plain_text(&b.tree.label, "label").map_err(t)?;
+            if let Some(h) = &b.tree.access_hint {
+                plain_text(h, "access_hint").map_err(t)?;
+            }
             if let Some(d) = &b.compat_delphi {
                 plain_text(d, "compat.delphi").map_err(t)?;
             }

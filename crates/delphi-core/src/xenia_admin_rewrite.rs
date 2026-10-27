@@ -296,7 +296,9 @@ impl Admin<'_> {
         let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
         if cand.fetched != st.store_head {
             // The very bytes may already be on top of the head we meant: then there is nothing left to do.
-            if cand.files.get(layout::FRESHNESS) == Some(&p.bytes) && self.store.is_ancestor(&st.store_head, &cand.fetched).map_err(xe)? {
+            // Both files, byte for byte: the statement alone without its signatures verifies for nobody.
+            let both = cand.files.get(layout::FRESHNESS) == Some(&p.bytes) && cand.files.get(layout::FRESHNESS_SIGS) == Some(&p.sigs_file);
+            if both && self.store.is_ancestor(&st.store_head, &cand.fetched).map_err(xe)? {
                 return Ok(Delivered { commit: cand.fetched.clone(), parent: st.store_head, paths, attempts: 1, already_there: true });
             }
             return Err(AdminError::RewriteHeadMoved);

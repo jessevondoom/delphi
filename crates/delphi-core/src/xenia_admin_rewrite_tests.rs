@@ -219,6 +219,33 @@ fn two_of_three_author_a_rewrite_that_an_install_accepts_after_listing_the_paths
 }
 
 #[test]
+fn a_publish_that_lost_the_race_is_already_there_only_if_both_statement_files_are_what_it_meant() {
+    // Found by the Flash red-team sweep: the "already on top of the head we meant" shortcut compared only
+    // `freshness.json`, so a host holding the statement with a missing or different signatures file counted as done.
+    let w = world();
+    let alice = w.id("alice");
+    let id = w.admin(&w.fx.store).rewrite_propose(&alice, 7 * fxt::DAY).unwrap().report.id;
+    w.admin(&w.fx.store).rewrite_sign(&alice, &id, &mut Say::yes()).unwrap();
+    w.admin(&w.bob).rewrite_sign(&w.id("bob"), &id, &mut Say::yes()).unwrap();
+
+    // carol prepares and signs her publish, but bob's identical publish lands first.
+    let carol = w.id("carol");
+    let prepared = w.admin(&w.carol).prepare_rewrite_publish(&carol, &id).unwrap();
+    let AdminDecision::Approve(approval) = Say::yes().decide(prepared.preview()) else { panic!("denied") };
+    let signed = prepared.sign(&approval, &carol).unwrap();
+    w.admin(&w.bob).rewrite_publish(&w.id("bob"), &id, &mut Say::yes()).unwrap();
+    // Control: both files are on the host exactly as carol meant them, so there is nothing left to do.
+    assert!(w.admin(&w.carol).deliver_rewrite_publish(&signed).unwrap().already_there);
+
+    // The same statement bytes with another signatures file on top of the host are not "done".
+    let a = w.admin(&w.carol);
+    let on_top = a.candidate().unwrap().fetched;
+    let hostile = a.commit_on(Some(&on_top), &[(layout::FRESHNESS_SIGS.to_string(), b"[]".to_vec())], "hostile signatures file").unwrap();
+    assert!(matches!(a.push(&hostile, &a.store.branch).unwrap(), Pushed::Yes));
+    assert_eq!(w.admin(&w.carol).deliver_rewrite_publish(&signed).unwrap_err(), AdminError::RewriteHeadMoved);
+}
+
+#[test]
 fn nobody_but_an_admin_can_take_any_step() {
     let w = world();
     let erin = w.id("erin");

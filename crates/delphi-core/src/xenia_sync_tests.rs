@@ -1079,6 +1079,27 @@ fn an_equal_issued_at_with_different_bytes_is_a_replay_and_identical_bytes_are_n
 }
 
 #[test]
+fn a_statement_issued_in_the_future_does_not_move_the_mark_and_lock_out_the_genuine_ones() {
+    // Found by the Flash red-team sweep: an authentic statement stays "authentic" when it is stale for being dated
+    // ahead of the install's clock, and the mark moved to its time, so every later genuine statement was a "replay".
+    let (fx, c1) = Fx::installed(&[]);
+    let mark = fx.sticky().freshness_mark.clone().expect("the accepted statement is recorded");
+    let ahead = FreshSpec::for_head(&fx.org, &c1, now() + 3600, 7 * DAY);
+    let c3 = fx.fresh_with(&ahead, &["alice"]);
+    let r = fx.sync();
+    assert_eq!(accepted(&r).0, c3);
+    assert_eq!(stale_reason(&r), "issued-in-future");
+    assert_eq!(fx.sticky().freshness_mark, Some(mark), "a statement from the future never moves the mark");
+    // The next statement, issued at the real time, is not locked out.
+    let genuine = FreshSpec::for_head(&fx.org, &c1, now() - 60, 7 * DAY);
+    let c4 = fx.fresh_with(&genuine, &["alice"]);
+    let r = fx.sync();
+    assert_eq!(accepted(&r).0, c4);
+    assert!(accepted(&r).1.endorsements_count(), "{:?}", accepted(&r).1);
+    assert_eq!(fx.sticky().freshness_mark.unwrap().issued, now() - 60);
+}
+
+#[test]
 fn a_fresh_install_has_no_mark_and_takes_the_latest_statement_it_is_given() {
     let (fx, c1) = Fx::installed(&[]);
     let old = FreshSpec::for_head(&fx.org, &c1, now() - 7200, 7 * DAY);

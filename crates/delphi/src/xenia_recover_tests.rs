@@ -145,6 +145,20 @@ fn a_process_started_by_an_agent_seat_is_never_a_person() {
 }
 
 #[test]
+fn the_typed_confirmation_shows_only_printable_text_whatever_the_caller_built() {
+    // Found by the Flash red-team sweep: `confirm_typed` printed the caller's lines as they came. Today they are
+    // hashes, a timestamp and escaped paths, but the gate for the typed acceptance must not depend on that.
+    let mut term = Term::script(vec![Ans::Text("accept abc 1")]);
+    let lines = "head \u{1b}[2J\u{1b}[Hall clear\nnew \u{202e}head\u{200b} \u{e0041}\n";
+    assert!(crate::xenia_terminal::confirm_typed(&mut term, lines, "accept abc 1", "accept it").is_ok());
+    for hidden in ['\u{1b}', '\u{202e}', '\u{200b}', '\u{e0041}'] {
+        assert!(!term.shown.contains(hidden), "{hidden:?} reached the screen: {:?}", term.shown);
+    }
+    assert!(term.shown.contains("\\u{001b}[2J") && term.shown.contains("\\u{202e}head") && term.shown.contains("\\u{e0041}"), "{:?}", term.shown);
+    assert_eq!(term.shown.lines().count(), 2, "the line breaks the caller wrote are kept");
+}
+
+#[test]
 fn a_quorum_statement_and_the_typed_commit_and_count_accept_the_rewrite_and_it_is_journaled() {
     let rw = rewritten(&["alice", "bob"]);
     let mut t = Term::honest();
