@@ -341,14 +341,12 @@ pub struct PublishPayload {
     epoch_hash: String,
     files: Vec<(String, Vec<u8>)>,
     statement: Vec<u8>,
-    store_head: String,
 }
 
 pub struct RefreshPayload {
     epoch: u64,
     epoch_hash: String,
     statement: Vec<u8>,
-    store_head: String,
 }
 
 pub struct GenesisPayload {
@@ -905,7 +903,7 @@ impl<'a> Admin<'a> {
             flags: rep.flags.clone(),
         };
         let parts = PreviewParts { changes: rep.changes, reminders: rep.reminders, quorum: Some(rep.quorum), ..Default::default() };
-        let payload = PublishPayload { n, epoch_hash: l.hash, files: vec![(epoch_path, l.bytes), (sigs_path, sigs_file)], statement, store_head: head };
+        let payload = PublishPayload { n, epoch_hash: l.hash, files: vec![(epoch_path, l.bytes), (sigs_path, sigs_file)], statement };
         Ok(make_prepared(held, parts, payload))
     }
 
@@ -985,7 +983,7 @@ impl<'a> Admin<'a> {
             flags: Vec::new(),
         };
         let parts = PreviewParts { walked, ..Default::default() };
-        Ok(make_prepared(held, parts, RefreshPayload { epoch: roster.head_epoch(), epoch_hash: roster.head_hash().to_string(), statement, store_head: head }))
+        Ok(make_prepared(held, parts, RefreshPayload { epoch: roster.head_epoch(), epoch_hash: roster.head_hash().to_string(), statement }))
     }
 
     pub fn refresh(&self, signer: &Identity, validity_secs: i64, approver: &mut dyn AdminApprover) -> Result<Delivered, AdminError> {

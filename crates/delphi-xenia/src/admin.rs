@@ -671,6 +671,7 @@ pub fn assemble_sigs(org: &str, store: &str, n: u64, bytes: &[u8], prev: &Epoch,
 /// The statement for the verified head: `epoch`/`epoch_hash` of the chain head, `store_head` the commit the admin
 /// verified. `validity_secs` must be positive and within the verifier's own cap, because a statement longer
 /// than that is ignored by every install. The output is read back by the verifier's parser before it is returned.
+#[allow(clippy::too_many_arguments)]
 pub fn build_statement(org: &str, store: &str, epoch: u64, epoch_hash: &str, store_head: &str, now: i64, validity_secs: i64, cap: &freshness::Policy) -> Result<Vec<u8>, Refusal> {
     if validity_secs <= 0 {
         return Err(Refusal::Validity("validity must be positive"));

@@ -15,7 +15,6 @@ use std::process::Command as StdCommand;
 
 const ORG: &str = "acme";
 const STORE: &str = "acme-main";
-const DAY: i64 = 24 * 3600;
 const REC: &str = "01JBX3Q8T2M9Z4K7WYH5N6D0RA";
 
 fn t0() -> i64 {
@@ -80,7 +79,7 @@ impl<F: FnMut(&AdminPreview) -> AdminDecision> AdminApprover for Closure<F> {
 }
 
 struct Fx {
-    tmp: tempfile::TempDir,
+    _tmp: tempfile::TempDir,
     remote: TestRemote,
     store: Store,
     tick: Cell<i64>,
@@ -106,8 +105,7 @@ fn genesis_fx(founders: Vec<NewMember>, signing: &[&str], statement_signer: &str
         sigs.push(signed.proposal_sig());
     }
     let out = admin.init_store(&draft, &sigs, &who(statement_signer), admin::DEFAULT_VALIDITY_SECS, &mut Yes::new())?;
-    drop(admin);
-    let fx = Fx { tmp, remote, store, tick: Cell::new(1), join: out.join };
+    let fx = Fx { _tmp: tmp, remote, store, tick: Cell::new(1), join: out.join };
     join_store(&fx.store, &fx.join.request()).unwrap();
     match fx.store.sync_verified(&fx.cfg()).unwrap() {
         VerifiedSync::Accepted { .. } => {}
