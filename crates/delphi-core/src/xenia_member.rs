@@ -67,11 +67,11 @@ fn shell(kind_fields: KindFields, title: String, summary: &str, tags: Vec<String
     }
 }
 
-/// The memory a command is about: it must be a verified `memory` record in force.
+/// The record a command is about: a verified `memory` or `bundle` record (the two kinds that carry content).
 fn target_memory<'v>(view: &'v StoreView, id: &str) -> Result<&'v VerifiedRecord, PublishError> {
     let v = view.record(id).ok_or_else(|| rule(format!("{id} is not in the store (sync first, or check the id)")))?;
-    if v.record().kind() != Kind::Memory {
-        return Err(rule(format!("{id} is not a memory record")));
+    if !v.record().kind().is_target() {
+        return Err(rule(format!("{id} is not a memory or bundle record")));
     }
     Ok(v)
 }
@@ -373,7 +373,7 @@ pub fn plan_resign(view: &StoreView, old_did: &str, new_did: &str) -> Result<Vec
     for r in mine {
         let rec = r.record();
         let keep = match &rec.kind_fields {
-            KindFields::Memory(_) => rec.status == AuthorStatus::Active && computed.memories.get(&rec.id).is_some_and(|m| !m.visibility.is_hidden()),
+            KindFields::Memory(_) | KindFields::Bundle(_) => rec.status == AuthorStatus::Active && computed.memories.get(&rec.id).is_some_and(|m| !m.visibility.is_hidden()),
             KindFields::Endorsement(e) => match e.verdict {
                 Verdict::Endorse => matches!(computed.outcome(Kind::Endorsement, &rec.id), Some(Outcome::Effective) | Some(Outcome::NoEffect("freshness-stale"))),
                 _ => matches!(computed.outcome(Kind::Endorsement, &rec.id), Some(Outcome::Effective)),
