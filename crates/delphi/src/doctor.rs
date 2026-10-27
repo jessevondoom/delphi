@@ -184,9 +184,30 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, "prefer") => r.warn("9 sandbox", "", "`[exec] sandbox = \"prefer\"` but no OS sandbox is available: commands run directly and ask for approval"),
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
     }
+    // 14. The central error log (specs/039): the effective level and where it came from, the file, its size and the drops.
+    check_error_log(home, &mut r);
+
     // Checks are pushed as they are cheap to run; show them in their numbered order.
     r.findings.sort_by_key(|f| f.check.split(' ').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
     r
+}
+
+/// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
+fn check_error_log(home: &Path, r: &mut Report) {
+    let st = delphi_core::elog::status(home);
+    let level = st.settings.level.as_str();
+    let size = if st.exists { format!("{} bytes in {} file(s)", st.bytes, st.rotated_files + 1) } else { "not created yet (nothing has been logged)".to_string() };
+    let msg = format!("level {} (from {}); {}; cap {} bytes x {} file(s); {} record(s) reported dropped", level, st.settings.source, size, st.settings.max_bytes, st.settings.files, st.dropped_reported);
+    let loc = st.path.display().to_string();
+    if st.settings.level == delphi_core::elog::Level::Off {
+        r.push(Level::Ok, "14 error-log", loc, format!("off ({}): errors are not recorded; `DELPHI_LOG=error` or `[logging] level` turns it on", msg));
+    } else if !st.writable {
+        r.warn("14 error-log", loc, format!("the log directory is not writable, so records are dropped: {}", msg));
+    } else if st.dropped_reported > 0 {
+        r.warn("14 error-log", loc, format!("records were dropped (disk full or the directory was unwritable at the time): {}", msg));
+    } else {
+        r.push(Level::Ok, "14 error-log", loc, msg);
+    }
 }
 
 /// (exit code, stdout) of a program, or `None` if it cannot be started.

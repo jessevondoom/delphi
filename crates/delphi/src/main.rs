@@ -27,6 +27,7 @@ mod home;
 mod host_caps;
 mod hooks_cmd;
 mod lint;
+mod logs_cmd;
 mod missions;
 mod changelog;
 mod learn_cmd;
@@ -101,6 +102,8 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "capabilities", about: "what each model CLI here can use: connectors, skills, models", synopsis: "  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--project <dir>]... [--home <dir>]", detail: "Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.\nSetup and update refresh it in the background. --ask also asks the claude and agy models what they can\nuse; that answer is shown apart and is not verified. Calls no model otherwise." },
+    Cmd { group: "Inspect", name: "logs", about: "the error log: what went wrong, with context", synopsis: "  delphi logs [--lines <n>] [--since 1h] [--level error|warn|debug] [--component <name>] [--mission <id>] [--json] [--follow] [--path] [--home <dir>]", detail: "Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the console: errors and panics by default, redacted, 10 MB x 3 files.\nDELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read-only and offline. --path prints the file's location.\nComponents: cli, daemon, engine, harness, provider, ui, xenia, relay, tool." },
+    Cmd { group: "Inspect", name: "debug", about: "pack a redacted slice of the log for sharing", synopsis: "  delphi debug bundle [--since 24h] [-o <file>] [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "Writes one .tar.gz (mode 0600, never over an existing file): the log slice, the `delphi doctor` report, version and OS, the config's key paths with values\nredacted, and the last events of the mission (types and short status fields only; no prompts, outputs or file contents). Prints what it included. Read-only and offline." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
@@ -122,6 +125,7 @@ const ENV: &[(&str, &str)] = &[
     ("NO_COLOR", "no colour at all; TERM=dumb also drops styling"),
     ("DELPHI_REDUCE_MOTION", "1 stops the badge animation"),
     ("DELPHI_NO_ONBOARD", "1 skips the first-run questions"),
+    ("DELPHI_LOG", "off, error (default), warn or debug: what the error log keeps (`delphi logs`)"),
 ];
 
 /// `delphi --help`: the commands by purpose, one sentence each, then the environment.
@@ -227,6 +231,7 @@ fn main() {
         None => args.clone(),
     };
     let args = rest;
+    start_error_log(cmd.as_deref(), &args);
     let code = match cmd.as_deref() {
         None if args.iter().any(|a| a == "--version") => {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
@@ -251,6 +256,8 @@ fn main() {
         Some("update") => cmd_update(&args),
         Some("init") => cmd_init(&args),
         Some("doctor") => cmd_doctor(&args),
+        Some("logs") => logs_cmd::logs(&args),
+        Some("debug") => logs_cmd::debug(&args),
         Some("status") => cmd_status(&args),
         Some("missions") => cmd_missions(&args),
         Some("changelog") => cmd_changelog(&args),
@@ -289,7 +296,46 @@ fn main() {
             2
         }
     };
+    log_exit(cmd.as_deref(), &args, code);
     exit(code);
+}
+
+/// Start the central error log (`specs/039`) for this process and install the panic hook. The commands that never touch
+/// the Delphi home (`lint`, `check`, `docs`, `completions`, `version`, `release`) log nothing; so do the daemon and its
+/// relays, which start their own (the daemon names its home itself).
+fn start_error_log(cmd: Option<&str>, args: &[String]) {
+    if matches!(cmd, Some("__core" | "__mcp-bridge" | "__agy-hook" | "lint" | "check" | "docs" | "completions" | "version" | "release" | "help")) || (cmd.is_none() && args.iter().any(|a| a == "--version")) {
+        delphi_core::elog::install_panic_hook("cli");
+        return;
+    }
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    delphi_core::elog::init(&home, "cli", env!("CARGO_PKG_VERSION"));
+    delphi_core::elog::install_panic_hook("cli");
+}
+
+/// A command that ends non-zero is one record: the command, the exit code and the SHAPE of its arguments (flag names and
+/// how many words), never their values. A report that found something (`doctor`, `lint`, `train`...) is a warning, not an error.
+fn log_exit(cmd: Option<&str>, args: &[String], code: i32) {
+    if code == 0 || !delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
+        return;
+    }
+    let name = cmd.unwrap_or("start");
+    let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--")).map(|a| a.split('=').next().unwrap_or("")).collect();
+    let words = args.iter().filter(|a| !a.starts_with('-')).count();
+    let shape = format!("{} word(s) {}", words, flags.join(" "));
+    let ctx = serde_json::json!({"command": name, "exit_code": code, "args_shape": shape});
+    let msg = format!("delphi {} exited with code {}", name, code);
+    let finding = code == 1 && matches!(name, "doctor" | "lint" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "decisions" | "xenia");
+    if code == 2 || finding {
+        delphi_core::elog::warn("cli", "cli_exit", &msg, ctx);
+    } else {
+        delphi_core::elog::error("cli", "cli_exit", &msg, ctx);
+    }
+}
+
+/// An error a command prints and then returns a code for: its text goes to the error log too (redacted there).
+fn log_cli_error(cmd: &str, text: &str) {
+    delphi_core::elog::error("cli", "cli_error", text, serde_json::json!({"command": cmd}));
 }
 
 /// Value of `--flag <value>` in `args`.
@@ -449,6 +495,7 @@ fn cmd_setup(args: &[String]) -> i32 {
             0
         }
         Err(e) => {
+            log_cli_error("setup", &format!("{:#}", e));
             eprintln!("delphi setup: {:#}", e);
             1
         }
@@ -487,6 +534,7 @@ fn cmd_init(args: &[String]) -> i32 {
             0
         }
         Err(e) => {
+            log_cli_error("init", &format!("{:#}", e));
             eprintln!("delphi init: {:#}", e);
             1
         }
@@ -802,6 +850,7 @@ fn cmd_needs(args: &[String]) -> i32 {
                 0
             }
             Err(e) => {
+                log_cli_error("needs", &format!("{:#}", e));
                 eprintln!("delphi needs: {:#}", e);
                 2
             }
@@ -845,6 +894,7 @@ fn cmd_start(args: &[String]) -> i32 {
     let ws = match start::preflight(&home, &cwd, flag(args, "--workspace"), interactive) {
         Ok(ws) => ws,
         Err(e) => {
+            log_cli_error("start", &format!("{:#}", e));
             eprintln!("delphi: {:#}", e);
             return 2;
         }
