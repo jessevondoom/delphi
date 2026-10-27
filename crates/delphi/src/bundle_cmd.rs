@@ -98,13 +98,13 @@ fn host_for(args: &[String]) -> Result<Box<dyn Host>, String> {
     Ok(Box::new(Scoped { identifiers: p.identifiers, handles: p.handles }))
 }
 
-fn flag(args: &[String], name: &str) -> Option<String> {
+pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
 /// Flags that take a value, so the word after one is not a positional argument.
-const VALUE_FLAGS: [&str; 25] = [
-    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name", "--bundle",
+const VALUE_FLAGS: [&str; 31] = [
+    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name", "--bundle", "--from-xenia", "--url", "--pin", "--id", "--tags", "--review-by",
 ];
 
 /// Value flags of `connectors map` (`bundle_connect.rs`).
@@ -114,13 +114,15 @@ pub(crate) fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()) && !CONNECTOR_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--no-eval] [--workspace <name>] [--home <dir>]\n       delphi bundle prereg check <file> | digest <file or dir>\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle report <name>   (counts from the event logs: citations, alignment findings, trims, vectors; never text)\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--no-eval] [--workspace <name>] [--home <dir>]\n       delphi bundle prereg check <file> | digest <file or dir>\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle report <name>   (counts from the event logs: citations, alignment findings, trims, vectors; never text)\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle add <record id> --from-xenia <org>/<store>   (a bundle published to a xenia store)\n       delphi bundle store <org>/<store> [--auto-update]   (list the store's bundles; update the ones added from it)\n       delphi bundle publish <dir> --to <org>/<store> --url <https git url> --pin <git-tree|git-commit>:<sha> [--subdir D] [--id <record>] [--tags a,b] [--review-by YYYY-MM-DD] [--no-verify-tree]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
     let positional = positionals(args);
     let flag_set = |f: &str| args.iter().any(|a| a == f);
     match (positional.first().map(|s| s.as_str()), positional.get(1)) {
+        (Some("add"), Some(id)) if flag(args, "--from-xenia").is_some() => crate::bundle_xenia::cli_add(home, ws, id, args),
+        (Some("store"), Some(which)) => crate::bundle_xenia::cli_store(home, ws, which, args),
         (Some("add"), Some(name)) if flag(args, "--from-marketplace").is_some() => {
             let repo = flag(args, "--from-marketplace").unwrap();
             let opts = bundle_add::AddOpts { skill_roles: Default::default(), order: flag(args, "--order").and_then(|o| o.parse().ok()), dry_run: flag_set("--dry-run"), yes: flag_set("--yes"), replace_publisher: flag_set("--replace-publisher"), no_vectors: flag_set("--no-vectors"), embed_in_background: true };
@@ -202,6 +204,7 @@ pub fn run(args: &[String]) -> i32 {
     match sub.as_str() {
         "validate" => validate(&dir, claude, args, &*host),
         "import" => crate::bundle_compat::import(&dir, args),
+        "publish" => crate::bundle_xenia::cli_publish(&dir, args, &*host),
         "sign" => {
             let h = home::delphi_home(flag(args, "--home").as_deref());
             bundle_pack::sign(&dir, &xenia_cmd::key_path(&h), flag(args, "--against").map(PathBuf::from), &*host, &bundle_pack::tty_confirm)

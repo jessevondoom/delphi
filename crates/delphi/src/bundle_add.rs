@@ -203,6 +203,33 @@ pub fn apply(home: &Path, ws: &Path, source: &Path, o: &AddOpts, mode: Mode, hos
 /// [`apply`] for a tree that is already in a staging directory under `.incoming/` (a marketplace fetch): the same checks
 /// and the same move into the cache. `expect_hash` is the bundle hash the locator claimed; a different one is refused.
 pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mode: Mode, host: &dyn Host, expect_hash: Option<&str>) -> i32 {
+    apply_via(home, ws, opened, o, mode, host, &Via { expect_hash, store: None })
+}
+
+/// A bundle that came through a xenia store (`specs/027` §4.3): what the store's verified record says it is, and how it
+/// stands. Everything in it was computed on this install from the verified store; nothing in the fetched tree can set it.
+pub(crate) struct StoreAdd<'a> {
+    pub bundle: &'a delphi_core::xenia_bundle::StoreBundle,
+    pub org: &'a str,
+    pub store: &'a str,
+    /// The freshness statement is current, so endorsements count (the add summary says so when it is not).
+    pub fresh: bool,
+}
+
+/// How the tree reached the add: the hash its locator claimed, and the store (if any) that vouches for it.
+pub(crate) struct Via<'a> {
+    pub expect_hash: Option<&'a str>,
+    pub store: Option<StoreAdd<'a>>,
+}
+
+/// `(a minus b, b minus a)` as sorted lists, for the two ways a record's `touches` can disagree with its tree.
+fn set_diff(a: &[String], b: &[String]) -> (Vec<String>, Vec<String>) {
+    let (sa, sb): (std::collections::BTreeSet<&String>, std::collections::BTreeSet<&String>) = (a.iter().collect(), b.iter().collect());
+    (sa.difference(&sb).map(|s| (*s).clone()).collect(), sb.difference(&sa).map(|s| (*s).clone()).collect())
+}
+
+pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mode: Mode, host: &dyn Host, via: &Via) -> i32 {
+    let expect_hash = via.expect_hash;
     let dir = opened.dir.clone();
     // 2. Every step of specs/023 §10 runs here, on this install: nothing trusts a publisher's "it passed".
     let i = delphi_bundle::inspect(&dir, &Options::default(), host);
@@ -222,6 +249,38 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
     }
     if let Some(want) = expect_hash.filter(|w| *w != hash) {
         return fail(format!("the marketplace entry says the bundle hash is {} but the fetched tree hashes to {}; nothing was added", short(want), short(&hash)));
+    }
+    // A bundle through a store is exactly what the verified record says it is: its hash (above), its identity, the claims a
+    // person decided on, and a signature by the member who published the record or a key that member's chain continues.
+    let mut store_level: Option<Level> = None;
+    let mut store_predecessors: Vec<String> = Vec::new();
+    if let Some(sa) = &via.store {
+        let b = sa.bundle;
+        if hash != b.bundle_hash {
+            return fail(format!("the fetched tree hashes to {} but the store record says {}: the tree is not the one that was published; nothing was added", short(&hash), short(&b.bundle_hash)));
+        }
+        if m.org != sa.org {
+            return fail(format!("the tree is for org `{}` but this store belongs to `{}`: a store's bundles live in its own org's namespace; nothing was added", m.org, sa.org));
+        }
+        if m.name != b.name || m.version != b.version {
+            return fail(format!("the tree is {}@{} but the store record says {}@{}; nothing was added", m.name, m.version, b.name, b.version));
+        }
+        let (extra_roles, missing_roles) = set_diff(&m.touches_roles, &b.roles);
+        let (extra_conn, missing_conn) = set_diff(&m.touches_connectors, &b.connectors);
+        if [&extra_roles, &missing_roles, &extra_conn, &missing_conn].iter().any(|d| !d.is_empty()) || m.compat_delphi != b.compat_delphi {
+            return fail("the store record's claims (roles and connectors it touches, the delphi version it needs) differ from the tree's own bundle.toml; the record was not published from this tree; nothing was added");
+        }
+        let Some(kid) = i.report.signer.as_deref() else {
+            return fail("a bundle through a store must be signed (`delphi bundle sign`) by the member who published it; this tree is unsigned; nothing was added");
+        };
+        if !b.signer_dids.iter().any(|d| d == kid) {
+            return fail(format!("the bundle is signed by {} which is neither the member who published the record ({}) nor a key in that member's chain; nothing was added", provenance::short_kid(kid), b.publisher_handle));
+        }
+        store_level = provenance::Level::of_store(b.level.as_str());
+        if store_level.is_none() {
+            return fail(format!("the store record is hidden ({}): it was withdrawn; nothing was added", b.hidden.unwrap_or("hidden")));
+        }
+        store_predecessors = b.predecessors.clone();
     }
     if let Mode::Update(id) = mode {
         if id != format!("{}/{}", m.org, m.name) {
@@ -243,10 +302,16 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
     // 3. The provenance level and publisher continuity (specs/024 §2.2, §2.3). A removed bundle pins nothing.
     let existing: Option<Entry> = lock.bundle.iter().find(|e| e.org == m.org && e.name == m.name && e.is_active()).cloned();
     let signer = i.report.signer.clone();
-    let level = match provenance::continuity(existing.as_ref().map(|e| e.publisher_kid.as_str()), signer.as_deref(), &m.publisher_predecessors) {
+    // For a store bundle the roster's `successor` chain continues a rotated key (`specs/024` §2.3), as the manifest's list does.
+    let mut predecessors = m.publisher_predecessors.clone();
+    predecessors.extend(store_predecessors);
+    let level = match provenance::continuity(existing.as_ref().map(|e| e.publisher_kid.as_str()), signer.as_deref(), &predecessors) {
         Continuity::Changed { old, new } => {
             if !o.replace_publisher {
-                return fail(provenance::changed_message(&old, &new, &opened.path));
+                return match &via.store {
+                    Some(sa) => fail(format!("publisher changed: {} -> {}, and the store's roster does not say the new key continues the old one; run `delphi bundle add --from-xenia {}/{} {} --replace-publisher` to accept the new publisher", old, new, sa.org, sa.store, sa.bundle.id)),
+                    None => fail(provenance::changed_message(&old, &new, &opened.path)),
+                };
             }
             println!("accepting the new publisher {} in place of {} (--replace-publisher)", new, old);
             if signer.is_some() { Level::Signed } else { Level::Unsigned }
@@ -259,6 +324,8 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
         }
         Continuity::FirstAdd(l) | Continuity::Same(l) => l,
     };
+    // A store bundle's level is the store's computed standing, never the continuity matrix's (`specs/024` §2.2).
+    let level = store_level.unwrap_or(level);
     // 4. Compatibility, dependencies and supersession.
     if let Some(req) = &m.compat_delphi {
         let running = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
@@ -288,7 +355,10 @@ pub(crate) fn apply_opened(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, 
         return 0;
     }
     // 5. The summary, non-blocking.
-    let prov_line = provenance::describe(level, &m.publisher_name, signer.as_deref(), existing.as_ref().map(|e| e.version.as_str()), &opened.path);
+    let prov_line = match &via.store {
+        Some(sa) => provenance::describe_store(level, &sa.bundle.publisher_handle, sa.store, &sa.bundle.endorsed_by, !sa.fresh),
+        None => provenance::describe(level, &m.publisher_name, signer.as_deref(), existing.as_ref().map(|e| e.version.as_str()), &opened.path),
+    };
     print_summary(&i, &m, &hash, &opened.path, &prov_line, matches!(mode, Mode::Update(_)));
     crate::bundle_connect::print_inert(&m.org, &m.name, &dir);
     for s in &superseded {

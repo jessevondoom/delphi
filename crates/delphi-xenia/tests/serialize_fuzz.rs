@@ -242,6 +242,7 @@ fn everything_the_serializer_emits_validates_round_trips_and_has_one_spelling() 
             Kind::Memory => 0,
             Kind::Endorsement => 1,
             Kind::Tombstone => 2,
+            Kind::Bundle => 2,
         }] += 1;
     }
     assert!(by_kind.iter().all(|n| *n > 300), "every kind is exercised: {by_kind:?}");

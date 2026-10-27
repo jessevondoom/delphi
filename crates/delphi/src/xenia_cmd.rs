@@ -28,9 +28,10 @@ pub fn key_path(home: &std::path::Path) -> PathBuf {
 const USAGE: &str = "usage:
   delphi xenia whoami
   delphi xenia join <store-url> --org <org> --store <store> --admin <fingerprint> --head <epoch>:<hash> [--allow-local]
-  delphi xenia sync [--store <org>/<store>]
+  delphi xenia sync [--store <org>/<store>] [--auto-update-bundles]
   delphi xenia status [--store <org>/<store>] [--json]
   delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--type finding|decision|gotcha|how-to] [--review-by YYYY-MM-DD]
+  delphi xenia publish --bundle <dir> --url <https git url> --pin <git-tree|git-commit>:<sha> [--subdir D] [--id <record>] [--tags a,b] [--review-by YYYY-MM-DD] [--no-verify-tree]
   delphi xenia endorse <id> [--scope a,b] [--note <n>]       delphi xenia dispute <id> --note <n>
   delphi xenia withdraw <id> --reason <r> [--note <n>]       delphi xenia restore <id> [--note <n>]
   delphi xenia retract <id>                                   delphi xenia republish --old <did>
@@ -39,7 +40,7 @@ const USAGE: &str = "usage:
     [--workspace <name>] [--home <dir>]";
 
 /// Flags that take no value.
-const SWITCHES: [&str; 3] = ["--promoted", "--allow-local", "--json"];
+const SWITCHES: [&str; 5] = ["--promoted", "--allow-local", "--json", "--auto-update-bundles", "--no-verify-tree"];
 
 #[derive(Debug)]
 struct Parsed {
@@ -90,6 +91,8 @@ pub(crate) fn run_with(args: &[String], approver: &mut dyn Approver) -> i32 {
         "status" => status(&home, &parsed),
         "help" => help(&parsed),
         "explain" => explain(&parsed),
+        // A bundle is published from a signed directory, not from a promoted file (specs/027 §4.3, slice B8).
+        "publish" if parsed.opts.contains_key("bundle") => publish_bundle(&home, &parsed, approver),
         w if Action::WORDS.contains(&w) => act(&home, w, &parsed, approver),
         "admin" => {
             eprintln!("delphi xenia admin: not built yet (Phase 1 milestone X8)");
@@ -217,7 +220,7 @@ fn sync(home: &Path, p: &Parsed) -> i32 {
         None => "; no search index to update (run it from a workspace with a knowledge base)".to_string(),
     };
     let (slug, _, detail) = xenia_status::sync_entry(&outcome);
-    match &outcome {
+    let code = match &outcome {
         VerifiedSync::Accepted { head, added, superseded, unchanged, quarantined, .. } => {
             println!("{}: accepted {}: {added} new, {superseded} replaced, {unchanged} unchanged, {} quarantined{indexed}", r.id(), &head[..head.len().min(12)], quarantined.len());
             0
@@ -239,7 +242,61 @@ fn sync(home: &Path, p: &Parsed) -> i32 {
             }
             1
         }
+    };
+    if code != 0 {
+        return code;
     }
+    sync_bundles(home, p, &store, &cfg, &ws)
+}
+
+/// After a verified sync (specs/027 §4.3): the bundles this workspace added from this store. Newer revisions are listed and the
+/// lock's levels follow the store's standing; with `--auto-update-bundles` the updates that cannot lower a level or change a
+/// publisher are applied. Nothing here runs without a workspace that has a bundle from this store.
+fn sync_bundles(home: &Path, p: &Parsed, store: &delphi_core::xenia_store::Store, cfg: &VerifyConfig, ws: &Option<home::Workspace>) -> i32 {
+    let auto = p.opts.contains_key("auto-update-bundles");
+    let Some(w) = ws else {
+        if auto {
+            eprintln!("delphi xenia sync: --auto-update-bundles needs a workspace (run it from a project, or pass --workspace)");
+            return 2;
+        }
+        return 0;
+    };
+    let Ok(lock) = delphi_core::bundles::read(&w.dir) else { return 0 };
+    if !lock.bundle.iter().any(|e| e.is_active() && e.source.kind == "xenia") {
+        return 0;
+    }
+    let set = match delphi_core::xenia_bundle::BundleSet::offline(store, cfg) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    match crate::bundle_xenia::sync_bundles_in(home, &w.dir, &set, auto, true, &crate::bundle_fetch::real_fetcher(home), &crate::bundle_cmd::Real) {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("delphi xenia sync: bundles: {e}");
+            1
+        }
+    }
+}
+
+/// `delphi xenia publish --bundle <dir> --url ... --pin ...` (specs/027 §4.3): the card and the typed code are the same as for
+/// every other command that signs.
+fn publish_bundle(home: &Path, p: &Parsed, approver: &mut dyn Approver) -> i32 {
+    let (r, store) = match pick(home, p) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("delphi xenia publish: {e}");
+            return 2;
+        }
+    };
+    let dir = PathBuf::from(&p.opts["bundle"]);
+    if !dir.is_dir() {
+        eprintln!("delphi xenia publish: {} is not a bundle directory", dir.display());
+        return 2;
+    }
+    let get = |name: &str| p.opts.get(name.trim_start_matches("--")).cloned();
+    let host = crate::bundle_cmd::Real;
+    let mut card = CardApprover { title: "Publish a bundle".into(), inner: approver };
+    crate::bundle_xenia::publish_cli(home, &store, &r.id(), &dir, &get, p.opts.contains_key("no-verify-tree"), &host, &mut card)
 }
 
 fn status(home: &Path, p: &Parsed) -> i32 {

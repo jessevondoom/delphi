@@ -36,6 +36,8 @@ pub mod testkit_records;
 pub mod time;
 pub mod ulid;
 pub mod walk;
+#[cfg(test)]
+mod bundle_tests;
 
 use std::fmt;
 

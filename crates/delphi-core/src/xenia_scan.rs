@@ -209,6 +209,20 @@ fn fields(r: &Record) -> Vec<(String, String, bool)> {
                 v.push(("note".into(), n.clone(), true));
             }
         }
+        KindFields::Bundle(b) => {
+            v.push(("bundle_name".into(), b.bundle_name.clone(), false));
+            v.push(("tree.locator".into(), b.tree.locator.clone(), false));
+            v.push(("tree.label".into(), b.tree.label.clone(), true));
+            if let Some(val) = &b.tree.pin.value {
+                v.push(("tree.pin".into(), val.clone(), false));
+            }
+            if let Some(h) = &b.tree.access_hint {
+                v.push(("tree.access_hint".into(), h.clone(), true));
+            }
+            for (i, c) in b.touches_connectors.iter().enumerate() {
+                v.push((format!("touches.connectors[{i}]"), c.clone(), false));
+            }
+        }
     }
     v
 }
