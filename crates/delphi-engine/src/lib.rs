@@ -51,6 +51,8 @@ pub mod embed;
 pub mod kb;
 pub mod kbserve;
 pub mod xenia_read;
+#[cfg(test)]
+mod xenia_scope_tests;
 pub mod vecext;
 pub mod mission;
 pub mod models_cli;
