@@ -78,6 +78,19 @@ Share the `.xbundle`, or the directory in a git repository. To publish through a
 delphi bundle export acme-platform --marketplace ./out --repo acme/plugins --sha <commit>
 ```
 
+## Share through your organization's store
+
+If your organization runs a xenia store (a signed, git-hosted store you have joined), a bundle can be published to it as a `bundle` record that points at a git tree. The record carries no files; it names the tree, its hash and what the bundle touches.
+
+```sh
+delphi bundle publish ./acme-platform --to acme/acme-main --url https://git.acme.example/platform/bundle.git --pin git-tree:<tree id>
+delphi bundle store acme/acme-main                    # what the store offers, at what level, and what you have
+delphi bundle add <record id> --from-xenia acme/acme-main
+delphi bundle update                                  # follows the record's newer revisions, forward only
+```
+
+`publish` needs a bundle you have signed with the key this install uses, shows you the exact record bytes and asks once (type the first eight characters of the digest). `add` checks the store first, fetches the tree under the same limits as a marketplace add (no links, no submodules, size caps), and refuses it unless it hashes to the record, is signed by the member who published the record, and belongs to your organization. The level it records is the store's: **endorsed** (a steward of another person endorsed these exact bytes, under a current freshness statement) or **member-signed**. It is information, never a gate. If the store's statement goes stale, `delphi bundle store acme/acme-main --auto-update` brings the lock's level down with it, and applies only the updates that keep the same publisher and do not lower the level.
+
 ## Move between Delphi and Claude Code plugins
 
 ```sh
@@ -90,4 +103,4 @@ delphi bundle export acme-platform --agents-md [file]   # a knowledge-only AGENT
 
 ## What is not built yet
 
-`bundle serve`, the evaluation runner (B8, B11) and distribution slice B12 are specified, not built; see the README's [Status and limitations](../../README.md#status-and-limitations).
+`bundle serve`, the evaluation runner (B11) and distribution slice B12 are specified, not built; see the README's [Status and limitations](../../README.md#status-and-limitations).
