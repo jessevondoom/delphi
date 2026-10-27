@@ -23,7 +23,7 @@ export type PanelAction =
   | { t: 'load'; path: string }        // fetch a preview for this logical path
   | { t: 'insert'; text: string }      // put this in the prompt (and close)
   | { t: 'pin'; from: string; text: string }
-  | { t: 'org'; action: Extract<Org.OrgAction, { t: 'run' | 'refresh' }> };  // the organization deck asks the app to call the daemon
+  | { t: 'org'; action: Extract<Org.OrgAction, { t: 'run' | 'refresh' | 'trust' }> };  // the organization deck asks the app to call the daemon
 
 export const openSearch = (q = ''): Panel => ({ kind: 'search', q, editing: !q, hits: [], sel: 0, note: '', lines: [] });
 export const openSources = (): Panel => ({ kind: 'sources', sel: 0, lines: [] });
@@ -37,7 +37,7 @@ export function key(p: Panel, e: Ev, src: Record<string, Source>): { panel: Pane
   const keep = (panel: Panel = p, action: PanelAction = { t: 'none' }) => ({ panel, action });
   if (p.kind === 'org') {
     const r = Org.key(p, e);
-    return { panel: r.panel, action: r.action.t === 'run' || r.action.t === 'refresh' ? { t: 'org', action: r.action } : r.action };
+    return { panel: r.panel, action: r.action.t === 'run' || r.action.t === 'refresh' || r.action.t === 'trust' ? { t: 'org', action: r.action } : r.action };
   }
   if (e.t === 'ctrl' && e.c === 'c') return keep(p, { t: 'close' });
   const k = e.t === 'key' ? e.k : e.t === 'text' ? e.s : '';

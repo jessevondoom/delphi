@@ -150,7 +150,7 @@ fn build(home: &Path, entries: &[Entry], today: &str, notes: &mut Vec<String>) -
         let b = &entries[d.bundle];
         let rel = format!("bundles/{}/{}/knowledge/{}", b.org, b.name, d.name);
         let tag = BundleTag { id: b.id(), label: b.label(today), stale: b.is_stale(today) };
-        kb.upsert_with(&rel, "bundles", "federated_verified", Some(&tag), &d.text, "0").map_err(|e| e.to_string())?;
+        kb.upsert_with(&rel, "bundles", b.tier_name(), Some(&tag), &d.text, "0").map_err(|e| e.to_string())?;
         // A document the index hides from an ordinary search (a draft, an inactive one) is not offered here either.
         if kb.document(&rel, &SearchOpts::default()).ok().flatten().is_some() {
             visible.push(d);

@@ -113,10 +113,12 @@ Check an org bundle: knowledge, skills and behavior to share.
   delphi bundle manifest <dir> [--claude]
   delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]
   delphi bundle package <dir> [-o <file.xbundle>] [--vectors]
-  delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]
+  delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--trust ratified] [--trust-source] [--workspace <name>] [--home <dir>]
   delphi bundle add <record id> --from-xenia <org>/<store> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]
   delphi bundle store <org>/<store> [--auto-update] [--workspace <name>] [--home <dir>]
   delphi bundle publish <dir> --to <org>/<store> --url <https git url> --pin <git-tree|git-commit>:<sha> [--subdir D] [--id <record>] [--tags a,b] [--review-by YYYY-MM-DD] [--no-verify-tree] [--home <dir>]
+  delphi bundle trust <bundle> --level user_ratified|default [--workspace <name>] [--home <dir>]
+  delphi bundle trust-source <bundle|origin> [--level user_ratified|default] [--revoke] [--workspace <name>] [--home <dir>]
   delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]
   delphi bundle serve [--bundle <org/name>]... [--workspace <name>] [--home <dir>]
 ```
@@ -126,6 +128,7 @@ secret, path, address and name the scan found, masked) to a file outside the bun
 allow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of the mission; it writes
 nothing into a bundle. package --vectors embeds the knowledge with the installed model into vectors/. manifest writes .delphi-bundle/files.json (and with --claude
 .claude-plugin/plugin.json) and prints the bundle hash. sign (a terminal only) signs the manifest with this install's xenia key; package writes a reproducible .xbundle archive.
+Every bundle document is a validated bundle source: agents and the Council may cite it, with its bundle and provenance level; it stays data, never instructions, and grants no permission. trust raises ONE bundle's knowledge to user_ratified for its current hash and publisher (`add --trust ratified` does it at install): it needs a terminal and you typing the bundle name (no --yes, no environment switch), and it resets when an update changes the hash or publisher, on rollback and on remove; --level default lowers it at any time. trust-source (`add --trust-source`) deems a source trusted: the same origin AND publisher key (or a roster successor of it), so later updates keep the tier you chose without a prompt while every check still runs; it needs the same typed confirmation (the origin), and --revoke ends it. A bundle can set neither.
 add takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its
 knowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from
 the recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the

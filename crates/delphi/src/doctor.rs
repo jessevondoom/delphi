@@ -731,8 +731,12 @@ mod tests {
             skill_roles: Default::default(),
             history: Vec::new(),
             inert_servers: Vec::new(),
+            trust: String::new(),
+            trust_hash: String::new(),
+            trust_kid: String::new(),
+            trust_log: Vec::new(),
         };
-        delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![entry.clone()] }).unwrap();
+        delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![entry.clone()], ..Default::default() }).unwrap();
         let r = run(&home, &ws, &Options::default());
         let f = r.findings.iter().find(|f| f.check == "12 bundles").expect("a finding");
         assert!(f.level == Level::Fail && f.message.contains("missing"), "{:?}", f);
@@ -746,7 +750,7 @@ mod tests {
         assert!(run(&home, &ws, &Options::default()).findings.iter().any(|f| f.check == "12 bundles" && f.level == Level::Fail && f.message.contains("no longer matches")));
         fs::write(cache.join(".delphi-bundle/files.json"), files_json).unwrap();
         let stale = delphi_core::bundles::Entry { review_by: "2020-01-01".into(), ..entry };
-        delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![stale] }).unwrap();
+        delphi_core::bundles::write(&ws.dir, &delphi_core::bundles::Lock { bundle: vec![stale], ..Default::default() }).unwrap();
         let r = run(&home, &ws, &Options::default());
         assert!(r.findings.iter().any(|f| f.check == "12 bundles" && f.level == Level::Warn && f.message.contains("past its review date")));
         assert_eq!(r.exit_code(), 0, "stale is a warning");

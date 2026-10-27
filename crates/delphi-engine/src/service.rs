@@ -810,6 +810,45 @@ impl EngineService {
         Ok(json!({"ok": ok, "code": out.status.code(), "output": output}))
     }
 
+    /// `org.trust` `{action: raise|lower|grant|revoke, name, level?, confirm?}` (`specs/024` §3.7, §3.8): the operator's
+    /// raise of a bundle's knowledge tier, or trust in a source. Console scope only, like the attestation card. Raising
+    /// and granting are two steps: without `confirm` the call returns the text to show and the word to type; with it, the
+    /// call applies the act only if the typed word is exactly that word. Lowering and revoking need no confirmation.
+    async fn org_trust(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        use delphi_core::bundle_trust::{self as trust, Req};
+        let name = p["name"].as_str().map(str::trim).unwrap_or("").to_string();
+        if name.is_empty() || name.len() > 4096 || name.starts_with('-') || name.contains('\0') {
+            return Err(err(code::INVALID_PARAMS, "`name` is required (and must not start with `-`)"));
+        }
+        let level = p["level"].as_str().unwrap_or("default").to_string();
+        let req = match p["action"].as_str().unwrap_or("") {
+            "raise" => Req::Raise { name },
+            "lower" => Req::Lower { name },
+            "grant" => Req::Grant { target: name, level },
+            "revoke" => Req::Revoke { target: name },
+            _ => return Err(err(code::INVALID_PARAMS, "`action` is raise, lower, grant or revoke")),
+        };
+        let ws = &self.engine.ws;
+        let lock = delphi_core::bundles::read(&ws.dir).map_err(|e| err(-32000, e))?;
+        if let Some(c) = trust::prepare(&lock, &req).map_err(|e| err(code::INVALID_PARAMS, e))? {
+            match p["confirm"].as_str() {
+                None => return Ok(json!({"ok": true, "needs_confirm": true, "text": c.text, "expect": c.expect, "what": c.what})),
+                Some(typed) if typed.trim() == c.expect => {}
+                Some(_) => return Ok(json!({"ok": false, "message": format!("that is not {}: nothing changed", c.what)})),
+            }
+        }
+        // The log is told of the bundle as it was first, so that the change is an event of its own.
+        if let Ok(m) = self.mission(p["mission_id"].as_str()).await {
+            let _ = self.engine.reconcile_bundles(&m).await;
+        }
+        let msg = trust::apply(&ws.dir, &req, "console").map_err(|e| err(code::INVALID_PARAMS, e))?;
+        if let Ok(m) = self.mission(p["mission_id"].as_str()).await {
+            let _ = self.engine.reconcile_bundles(&m).await;
+        }
+        Ok(json!({"ok": true, "message": msg}))
+    }
+
     fn ratify_list(&self) -> RpcOutcome {
         let ps = crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir);
         let today = self.engine.now()[..10].to_string();
@@ -1141,6 +1180,7 @@ impl Extension for ServiceExt {
                 "session.snapshot" => svc.snapshot(params).await,
                 "org.view" => svc.org_view(&ctx),
                 "org.action" => svc.org_action(params, ctx).await,
+                "org.trust" => svc.org_trust(params, ctx).await,
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
@@ -1576,6 +1616,42 @@ mod tests {
         assert_eq!(f.model.requests().len(), 0, "no model call");
     }
 
+    // specs/024 §3.7: the raise of a bundle's tier is the console's own act, in two steps, and nothing else reaches it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn org_trust_raises_only_for_the_console_after_the_bundle_name_is_typed_and_records_an_event() {
+        use crate::bundle_load::tests::{add_bundle, FM};
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let goals = format!("{}## [G-acme-01] Cut p99 checkout latency\n- **Horizon:** 2026-Q4 to 2999-Q1\n- **Measure:** p99 weekly\n- **Status:** active\n", FM);
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/goals.md", &goals), ("bundle.toml", "[bundle]\nschema = 1\n")]);
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let (card, wrong, done, view, narrator, bad) = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let card = c.call("org.trust", json!({"action": "raise", "name": "plat"})).unwrap();
+            let wrong = c.call("org.trust", json!({"action": "raise", "name": "plat", "confirm": "plat"})).unwrap();
+            let done = c.call("org.trust", json!({"action": "raise", "name": "plat", "confirm": "acme/plat"})).unwrap();
+            let view = c.call("org.view", json!({})).unwrap();
+            let bad = (rpc_code(c.call("org.trust", json!({"action": "raise", "name": "-x"}))), rpc_code(c.call("org.trust", json!({"action": "bogus", "name": "plat"}))), rpc_code(c.call("org.trust", json!({"action": "raise", "name": "nope"}))));
+            let mut n = Client::connect(&nsock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&ntok).unwrap();
+            let narrator = rpc_code(n.call("org.trust", json!({"action": "raise", "name": "plat", "confirm": "acme/plat"})));
+            (card, wrong, done, view, narrator, bad)
+        })
+        .await;
+        assert_eq!((card["needs_confirm"].as_bool(), card["expect"].as_str()), (Some(true), Some("acme/plat")));
+        assert!(card["text"].as_str().unwrap().contains("hash or publisher changes"));
+        assert_eq!(wrong["ok"].as_bool(), Some(false));
+        assert_eq!(done["ok"].as_bool(), Some(true), "{done}");
+        assert_eq!((view["bundles"][0]["tier"].as_str(), view["bundles"][0]["raised_by"].as_str()), (Some("user_ratified"), Some("console")));
+        assert_eq!(bad, (Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS)));
+        assert_eq!(narrator, Some(code::FORBIDDEN), "the narrator cannot reach it, even with the right word");
+        assert_eq!(events_of(&f, "bundle.trust_changed").len(), 1, "the log records the raise");
+        assert!(delphi_core::bundles::read(&f.engine.ws.dir).unwrap().bundle[0].raised());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn the_narrator_scope_can_read_but_never_change_anything() {
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
@@ -1585,7 +1661,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {

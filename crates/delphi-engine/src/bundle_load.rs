@@ -389,10 +389,14 @@ pub(crate) mod tests {
             skill_roles: BTreeMap::new(),
             history: Vec::new(),
             inert_servers: Vec::new(),
+            trust: String::new(),
+            trust_hash: String::new(),
+            trust_kid: String::new(),
+            trust_log: Vec::new(),
         };
         let mut lock = bundles::read(&ws.dir).unwrap_or_default();
         lock.bundle.push(e.clone());
-        bundles::write(&ws.dir, &Lock { bundle: lock.bundle }).unwrap();
+        bundles::write(&ws.dir, &Lock { bundle: lock.bundle, ..Default::default() }).unwrap();
         e
     }
 
@@ -553,7 +557,7 @@ pub(crate) mod tests {
         let mut e = add_bundle(&ws, "acme", "plat", 10, "2026-10-01", &refs(&g));
         assert!(!ws.load_snapshot("architect").unwrap().guidance.is_empty());
         e.status = "removed".into();
-        bundles::write(&ws.dir, &Lock { bundle: vec![e] }).unwrap();
+        bundles::write(&ws.dir, &Lock { bundle: vec![e], ..Default::default() }).unwrap();
         assert_eq!(ws.load_snapshot("architect").unwrap(), baseline);
     }
 
