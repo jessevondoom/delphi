@@ -109,6 +109,19 @@ R4-R6 truth packs join in the first study phase.
 | 6 Usage-gated (coaching, diff3, sync, watches, rewind) | deliberately not built; `delphi needs` reports every rule "not yet". Vectors and the reranker were pulled forward by the operator on 2026-10-24 (D-01) and are built |
 | 7 Deferred (federation 1 to 2, OpenAI driver) | not scheduled |
 
+## Agent registry, routing and role extensions (spec 040, **draft**, 2026-10-27)
+
+Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Nothing is built; no slice starts until the operator sets `approved`. Open decisions OD-1..OD-6 are in the spec (§12).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | report truncation of the 20-agent catalog | not started (needs approval) |
+| S1 | registry entry, `[domains]`, validation | not started |
+| S2 | index, `search_agent_registry`, `delphi route`, eval set | not started |
+| S3 | `[extends.<role>]`: skills, guidance, team | not started |
+| S4 | evidence run against the flat list; default-on decision | not started |
+| S5 | domain leads (spec 041) | only if the gate in §7 trips |
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
