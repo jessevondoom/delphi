@@ -143,6 +143,30 @@ fn the_quarantine_read_shows_l1_l0_and_hidden_records_with_bodies_and_taints_the
     assert!(quarantine_get(&kb, ORG, STORE, "nope", now()).unwrap().entries.is_empty());
 }
 
+// X10, spec 011 test 22: the gate that a span's ceiling feeds, end to end from the two reads.
+#[test]
+fn a_span_that_quarantine_reads_an_l1_record_is_gated_and_one_that_reads_an_l2_summary_is_not() {
+    use delphi_core::provenance::{gate, Action, Gate, Span};
+    let kb = kb_with(&[im(1, "Retry jitter", "How the payment client spaces retries.", "Jitter body.", XT::L1, None), im(2, "Retry budget", "How many retries the payment client makes.", "Budget body.", XT::L2, None)]);
+    // A span that reads the L1 record through the quarantine read.
+    let mut tainted = Span::root("s-l1");
+    quarantine_get(&kb, ORG, STORE, &u(1), now()).unwrap().observe(&mut tainted);
+    assert_eq!(tainted.ceiling(), delphi_core::provenance::Tier::L1);
+    assert_eq!(gate(tainted.ceiling(), Action::WorktreeWrite), Gate::Deny, "no worktree write after reading an unendorsed record");
+    assert_ne!(gate(tainted.ceiling(), Action::Outbound), Gate::Allow, "no call out either (Deny is stricter than the Red the spec allows)");
+    assert_eq!(gate(tainted.ceiling(), Action::DispatchAgent), Gate::Red, "a child would inherit the taint, so dispatch needs a Red approval");
+    // A span that reads only the L2 summary through the agent read keeps its ceiling at L2 and acts per its HITL tier.
+    let mut clean = Span::root("s-l2");
+    let r = agent_search(&kb, "retry payment client", 5, now()).unwrap();
+    assert_eq!(r.ids, vec![u(2)], "the agent read returns only the L2 record");
+    r.observe(&mut clean);
+    assert_eq!(clean.ceiling(), delphi_core::provenance::Tier::L2);
+    assert_eq!(gate(clean.ceiling(), Action::WorktreeWrite), Gate::Allow);
+    assert_eq!(gate(clean.ceiling(), Action::Outbound), Gate::Red, "calling out is still Red-tier");
+    // The taint cannot be laundered by a child span.
+    assert_eq!(tainted.child("s-l1-child").ceiling(), delphi_core::provenance::Tier::L1);
+}
+
 #[test]
 fn an_l2_whose_statement_lapsed_is_not_shown_to_an_agent_even_if_nothing_re_derived_the_zone() {
     let kb = kb_with(&[im(0, "Retry budget", "How many retries the payment client makes.", "Body.", XT::L2, None)]);

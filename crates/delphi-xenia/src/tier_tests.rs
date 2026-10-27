@@ -829,3 +829,26 @@ fn a_bundle_and_a_memory_cannot_share_an_id_and_a_non_member_publishes_nothing()
     assert_eq!(quarantined(&c, &theirs), "not-a-member");
     assert_eq!(c.bundle_level(&theirs.id), None);
 }
+
+// --- X10: the clause of spec 011 test 7 that had no test -------------------------------------------------------
+
+#[test]
+fn evidence_pointers_alone_change_no_tier() {
+    // A member's memory that carries `evidence` pointers is exactly as trusted as one that carries none: L1
+    // unendorsed, L2 only through a steward's endorsement of the exact bytes, never L2 on pointers alone.
+    let w = W::new();
+    let plain = w.mem("mia", 0, 1);
+    let text = String::from_utf8(plain.md.clone()).unwrap();
+    let evidence = "evidence:\n  - scheme: https\n    locator: \"https://docs.acme.example/proof\"\n    pin:\n      kind: none\n    label: Proof\n    content_type: text/plain\n";
+    assert!(text.contains("evidence: []\n"));
+    let with = rk::sign_record(&w.key("mia"), plain.kind, &plain.id, text.replace("evidence: []\n", evidence).into_bytes());
+    let c = w.run(&[&with], &fresh());
+    assert_eq!(outcome(&c, &with), &Outcome::Effective);
+    assert_eq!(mem_state(&c, &with).tier, Tier::L1, "evidence pointers do not lift a record");
+    assert!(mem_state(&c, &with).endorsed_by.is_empty());
+    let boasting = rk::sign_record(&w.key("mia"), plain.kind, &plain.id, text.replace("evidence: []\n", &evidence.replace("label: Proof", "label: Verified by the steward")).into_bytes());
+    assert_eq!(mem_state(&w.run(&[&boasting], &fresh()), &boasting).tier, Tier::L1);
+    // The endorsement is what lifts it, evidence or not.
+    let e = w.end("sam", 1, &with, 1, "endorse");
+    assert_eq!(mem_state(&w.run(&[&with, &e], &fresh()), &with).tier, Tier::L2);
+}
