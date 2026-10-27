@@ -58,6 +58,7 @@ pub mod pool;
 pub mod probe;
 pub mod provisional;
 pub mod provisional_run;
+pub mod hostmap;
 pub mod recovery;
 pub mod route;
 pub mod ratify;

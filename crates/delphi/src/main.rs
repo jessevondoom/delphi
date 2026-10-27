@@ -19,6 +19,7 @@ mod frontmatter {
     pub use delphi_engine::frontmatter::*;
 }
 mod home;
+mod host_caps;
 mod hooks_cmd;
 mod lint;
 mod missions;
@@ -91,6 +92,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
+    Cmd { group: "Inspect", name: "capabilities", about: "what each model CLI here can use: connectors, skills, models", synopsis: "  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--project <dir>]... [--home <dir>]", detail: "Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.\nSetup and update refresh it in the background. --ask also asks the claude and agy models what they can\nuse; that answer is shown apart and is not verified. Calls no model otherwise." },
     Cmd { group: "Inspect", name: "doctor", about: "check the workspace, its files and its models", synopsis: "  delphi doctor [--fix] [--workspace <name>] [--home <dir>] [--require-providers]", detail: "--fix asks before each repair and needs a terminal." },
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
@@ -244,6 +246,7 @@ fn main() {
         Some("changelog") => cmd_changelog(&args),
         Some("release") => release::cli(None),
         Some("sessions") => cmd_sessions(&args),
+        Some("capabilities") => host_caps::cli(&args, &home::delphi_home(flag(&args, "--home").as_deref())),
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
         Some("chat") => cmd_chat(&args),
@@ -387,6 +390,10 @@ fn cmd_update(args: &[String]) -> i32 {
             restart_daemons(&dest, &home, only.as_deref());
         }
     });
+    // The CLIs may have changed with the machine; map them again with the program just installed, without waiting.
+    if code == 0 && !has("--check") {
+        host_caps::refresh_in_background(&dest, &home);
+    }
     // No workspace yet is not a failure of the update, and neither is a rollback with nothing to restore there.
     if code != 0 || workspace_code == 2 || has("--rollback") { code } else { workspace_code }
 }
@@ -421,7 +428,14 @@ fn cmd_setup(args: &[String]) -> i32 {
         check: args.iter().any(|a| a == "--check"),
     };
     match setup::run(&mut setup::TerminalUi { auto: o.yes }, &setup::RealEnv, &o) {
-        Ok(_) => 0,
+        Ok(_) => {
+            if !o.check {
+                if let Ok(exe) = std::env::current_exe() {
+                    host_caps::refresh_in_background(&exe, &o.home);
+                }
+            }
+            0
+        }
         Err(e) => {
             eprintln!("delphi setup: {:#}", e);
             1
