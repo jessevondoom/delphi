@@ -86,7 +86,7 @@ Your duties:
   - Handle roster changes as proposals: one admin proposes (`delphi xenia admin propose ...`, an add, a removal or a rotation), each other admin reviews the preview and signs, and once enough have signed one admin publishes it. Read every preview: it lists the exact change and flags anything that adds an admin, widens a steward's areas, lets a key speak twice for one person, or voids someone's tombstones. You may refuse.
   - Never share your admin key, and run admin commands only at a terminal you control.
 
-Admin subcommands are listed by `delphi xenia admin`. They need your key and a terminal; a relay or an agent cannot run them."#,
+Admin subcommands: `add`, `remove`, `rotate` (with `--routine` or `--compromised`), `show <n>`, `sign <n>`, `publish <n>`, `refresh` and `genesis draft|sign|publish`; `delphi xenia admin` lists them. They need your key and a terminal; a relay or an agent cannot run them."#,
     },
     Topic {
         name: "genesis",
@@ -105,7 +105,9 @@ The ceremony:
   3. One founder collects the three signatures and pushes. The first commit holds the roster, the second the first freshness statement. The command prints a join line with the store address, the admin's fingerprint and `1:<hash>`.
   4. Each founder (and later every member) reads the fingerprint to the other over a call, runs the join line, then `delphi xenia sync` and `delphi xenia status`. Status should show epoch 1, 3 admins and a fresh statement.
 
-Then each admin puts a reminder in their calendar to refresh every week. Admin subcommand names: `delphi xenia admin`."#,
+The commands, in order: `delphi xenia admin genesis draft --org <o> --store <s> --founder <did>,<person>,<handle>,admin ... --out draft.json` (one `--founder` per person); each founder `delphi xenia admin genesis sign draft.json --org <o> --store <s> --out <name>.sig.json`; then `delphi xenia admin genesis publish draft.json --url <url> --org <o> --store <s> --sig a.sig.json --sig b.sig.json --sig c.sig.json`.
+
+Then each admin puts a reminder in their calendar to refresh every week (`delphi xenia admin refresh`)."#,
     },
     Topic {
         name: "rotating-keys",

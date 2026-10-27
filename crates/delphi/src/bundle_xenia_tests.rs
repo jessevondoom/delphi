@@ -681,7 +681,7 @@ fn argv(v: &[&str]) -> Vec<String> {
 
 /// The install's xenia key becomes the fixture member's, and the workspace exists as a command line finds it.
 fn as_member(s: &Site, who: &str) {
-    crate::xenia_cmd::TEST_NOW.store(xf::now(), std::sync::atomic::Ordering::Relaxed);
+    crate::xenia_cmd::TEST_NOW.with(|c| c.set(xf::now()));
     let key = crate::xenia_cmd::key_path(&s.home);
     let _ = fs::remove_file(&key);
     s.fx.id(who).store_new(&key).unwrap();
