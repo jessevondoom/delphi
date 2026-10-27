@@ -900,6 +900,29 @@ mod tests {
         assert!(!e.raised() && e.publisher_kid == "unsigned");
     }
 
+    // X10 review of #251: the grant is the same origin AND the same key. A byte-identical copy of the signed tree at another
+    // origin (so the hash and the key both match the raised entry) must not inherit a trusted source's raise.
+    #[test]
+    fn an_identical_copy_from_another_origin_does_not_inherit_a_trusted_sources_raise() {
+        let f = fx();
+        let a = key(&f, "a");
+        first_signed(&f, &a);
+        grant(&f, "user_ratified");
+        assert_eq!(lock(&f).bundle[0].raised_by(), Some("trusted-source"));
+        let origin = bundles::origin_of(&lock(&f).bundle[0].source);
+        let elsewhere = tempfile::tempdir().unwrap();
+        copy(f.src.path(), elsewhere.path());
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, elsewhere.path(), &opts(), &Real), 0);
+        let e = lock(&f).bundle[0].clone();
+        assert_ne!(bundles::origin_of(&e.source), origin, "the entry now points at the other origin");
+        assert!(!e.raised(), "same hash, same key, other origin: the grant does not cover it, so it is at the default tier: {e:?}");
+        assert_eq!(e.trust_log[0].by, "update");
+        assert_eq!(lock(&f).trusted_source[0].origin, origin, "the grant itself is untouched");
+        // Back from the granted origin with the same bytes: it applies again.
+        assert_eq!(bundle_add::add(f.home.path(), &f.ws, f.src.path(), &opts(), &Real), 0);
+        assert!(lock(&f).bundle[0].raised());
+    }
+
     #[test]
     fn a_bundle_cannot_carry_its_own_trust_a_claimed_tier_a_lock_or_a_trust_file() {
         let f = fx();

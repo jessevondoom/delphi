@@ -807,6 +807,23 @@ mod tests {
         assert!(matches!(g.check("local/bundles.lock", Access::Read), Err(Denied::NeverReadable(_))));
     }
 
+    // X10 gap: `local/bundles.lock` holds the install-owned trust fields (the store-endorsed level, the trusted-source
+    // grant). No agent may read or write it by any spelling, whatever its globs, and a write never creates it.
+    #[test]
+    fn bundles_lock_is_neither_readable_nor_writable_by_any_spelling() {
+        let (t, g) = setup();
+        for p in ["local/bundles.lock", "Local/Bundles.Lock", "local//bundles.lock", "./local/bundles.lock", "local/bundles.lock.lck", "local/./bundles.lock"] {
+            assert!(g.check(p, Access::Read).is_err(), "{p} must not be readable");
+            assert!(matches!(g.check(p, Access::Write), Err(Denied::NeverReadable(_)) | Err(Denied::NeverWritable(_))), "{p} must not be writable");
+            assert!(g.write_atomic(p, b"[[bundle]]\ntrust = \"trusted-source\"\n").is_err(), "{p}");
+        }
+        for p in ["local/x/../bundles.lock", "@worktree/../local/bundles.lock"] {
+            assert!(g.check(p, Access::Write).is_err(), "{p}");
+        }
+        assert!(never_writable("local/bundles.lock").is_some() && never_readable("local/bundles.lock", "builder").is_some());
+        assert!(!t.path().join("local/bundles.lock").exists(), "a refused write creates nothing");
+    }
+
     // specs/025 AC-5: a skill's references/ is readable text; the rest of the skill (SKILL.md, scripts, templates) is not.
     #[test]
     fn a_skills_references_are_readable_and_nothing_else_of_the_skill() {
