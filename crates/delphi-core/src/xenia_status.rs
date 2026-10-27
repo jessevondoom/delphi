@@ -305,7 +305,29 @@ pub fn status(store: &Store, r: &StoreRef, cfg: &VerifyConfig) -> delphi_xenia::
         st.quarantine = d.held_back.clone();
     }
     st.warnings.extend(warnings(&st));
+    st.warnings.extend(file_warnings(store));
     Ok(st)
+}
+
+/// Install state that other users can read or write (`pins.toml` is checked nowhere else; the sticky file is refused on
+/// load; the journal decides what `status` says about tampering). Pure file-system reads.
+fn file_warnings(store: &Store) -> Vec<Warning> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut w = Vec::new();
+    for (name, path) in [("pins.toml", store.paths.state.join("pins.toml")), ("journal.jsonl", journal_path(store))] {
+        if let Ok(m) = std::fs::symlink_metadata(&path) {
+            if !m.file_type().is_file() || m.permissions().mode() & 0o077 != 0 {
+                w.push(Warning { id: "state-permissions", severity: Severity::Fail, text: format!("{name} is not a private regular file (expected mode 0600, no symlink): `chmod 600` it, or join the store again") });
+            }
+        }
+    }
+    w
+}
+
+/// Store-controlled text for a terminal: sanitized, one line, short.
+fn shown(s: &str) -> String {
+    let t = crate::xenia_ingress::one_line(s);
+    if t.chars().count() > 120 { format!("{}…", t.chars().take(119).collect::<String>()) } else { t }
 }
 
 /// The warnings of spec 011 §4.1 (statement past half its life, stale), §3.2 (fewer than three admins), §4.2/§5.3
@@ -374,27 +396,27 @@ pub fn render(st: &Status, now: i64) -> String {
     }
     if !st.tampering.is_empty() {
         o.push_str("\nTampering found by the last sync (nothing was applied):\n");
-        for (p, why) in &st.tampering {
-            o.push_str(&format!("  {p}: {why}\n"));
+        for (p, why) in st.tampering.iter().take(50) {
+            o.push_str(&format!("  {}: {}\n", shown(p), shown(why)));
         }
     }
     if !st.contested.is_empty() {
         o.push_str("\nContested (hidden until the stewards who cover them agree):\n");
-        for id in &st.contested {
-            o.push_str(&format!("  {id}\n"));
+        for id in st.contested.iter().take(50) {
+            o.push_str(&format!("  {}\n", shown(id)));
         }
     }
     let others: Vec<_> = st.hidden.iter().filter(|(_, h)| *h != "contested").collect();
     if !others.is_empty() {
         o.push_str("\nHidden records:\n");
-        for (id, why) in others {
-            o.push_str(&format!("  {id}: {why}\n"));
+        for (id, why) in others.into_iter().take(50) {
+            o.push_str(&format!("  {}: {}\n", shown(id), why));
         }
     }
     if !st.quarantine.is_empty() {
         o.push_str("\nQuarantined (not in force, never loaded):\n");
         for (p, why) in st.quarantine.iter().take(50) {
-            o.push_str(&format!("  {p}: {why}\n"));
+            o.push_str(&format!("  {}: {}\n", shown(p), why));
         }
         if st.quarantine.len() > 50 {
             o.push_str(&format!("  ... and {} more\n", st.quarantine.len() - 50));
@@ -423,6 +445,9 @@ pub fn render(st: &Status, now: i64) -> String {
     o
 }
 
+/// Lists in the JSON are cut here; the `*_total` beside each says how many there are.
+pub const JSON_CAP: usize = 50;
+
 /// The same facts as JSON, for the console (`xenia.status`) and `--json`.
 pub fn to_json(st: &Status) -> Value {
     json!({
@@ -430,10 +455,10 @@ pub fn to_json(st: &Status) -> Value {
         "roster": st.roster.as_ref().map(|r| json!({"epoch": r.epoch, "admins": r.admins, "stewards": r.stewards, "members": r.members})),
         "freshness": st.freshness.as_ref().map(|f| json!({"state": f.state, "age_secs": f.age_secs, "life_used_pct": f.life_used_pct, "expires_at": f.expires_at})),
         "l2": st.l2, "l1": st.l1,
-        "hidden": st.hidden.iter().map(|(i, h)| json!([i, h])).collect::<Vec<_>>(),
-        "contested": st.contested,
-        "quarantine": st.quarantine.iter().map(|(p, h)| json!([p, h])).collect::<Vec<_>>(),
-        "tampering": st.tampering.iter().map(|(p, h)| json!([p, h])).collect::<Vec<_>>(),
+        "hidden": st.hidden.iter().take(JSON_CAP).map(|(i, h)| json!([shown(i), h])).collect::<Vec<_>>(), "hidden_total": st.hidden.len(),
+        "contested": st.contested.iter().take(JSON_CAP).map(|i| shown(i)).collect::<Vec<_>>(), "contested_total": st.contested.len(),
+        "quarantine": st.quarantine.iter().take(JSON_CAP).map(|(p, h)| json!([shown(p), h])).collect::<Vec<_>>(), "quarantine_total": st.quarantine.len(),
+        "tampering": st.tampering.iter().take(JSON_CAP).map(|(p, h)| json!([shown(p), shown(h)])).collect::<Vec<_>>(), "tampering_total": st.tampering.len(),
         "last_sync": st.last_sync.as_ref().map(|e| json!({"outcome": e.outcome, "at": e.at})),
         "warnings": st.warnings.iter().map(|w| json!({"id": w.id, "fail": w.severity == Severity::Fail, "text": w.text, "help": crate::xenia_help::lookup(w.id).map(crate::xenia_help::entry_json)})).collect::<Vec<_>>(),
     })
@@ -448,9 +473,33 @@ pub fn all(home: &Path, cfg: &VerifyConfig) -> Vec<(StoreRef, Result<Status, Str
             let s = open(home, &r).and_then(|store| status(&store, &r, cfg)).map_err(|e| e.to_string());
             (r, s)
         })
+        .chain(damaged_stores(home).into_iter().map(|r| (r, Err("pins.toml is damaged or belongs to another store; join the store again".to_string()))))
         .collect()
+}
+
+/// Slug-named store directories whose `pins.toml` exists but is not this store's valid pins: [`list_stores`] leaves them
+/// out, so without this `doctor` would say nothing about a store whose pins were damaged.
+pub fn damaged_stores(home: &Path) -> Vec<StoreRef> {
+    let good: Vec<String> = list_stores(home).iter().map(|r| r.id()).collect();
+    let mut out = Vec::new();
+    let Ok(orgs) = std::fs::read_dir(home.join("xenia")) else { return out };
+    for o in orgs.flatten().filter(|e| e.path().is_dir()) {
+        let org = o.file_name().to_string_lossy().into_owned();
+        let Ok(stores) = std::fs::read_dir(o.path()) else { continue };
+        for s in stores.flatten().filter(|e| e.path().is_dir()) {
+            let r = StoreRef { org: org.clone(), store: s.file_name().to_string_lossy().into_owned(), url: String::new() };
+            if is_slug(&r.org, 32) && is_slug(&r.store, 32) && s.path().join("state").join("pins.toml").exists() && !good.contains(&r.id()) {
+                out.push(r);
+            }
+        }
+    }
+    out.sort_by_key(|r| r.id());
+    out
 }
 
 #[cfg(test)]
 #[path = "xenia_status_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "xenia_status_hardening_tests.rs"]
+mod hardening_tests;
