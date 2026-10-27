@@ -165,7 +165,7 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle init\|validate [--report]\|distill\|manifest\|sign\|package [--vectors]\|import\|export\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
-| Inspect (more) | `changelog` · `sessions` · `tools` · `learn` · `release` |
+| Inspect (more) | `changelog` · `sessions` · `tools` · `learn` · `release` · `logs [--since 1h] [--level] [--component] [--mission] [--follow] [--json]` · `debug bundle [--since 24h] [-o file]` |
 | Maintain | `update` · `train validate\|plan\|run` · `xenia` · `docs cli\|man` · `completions bash\|zsh\|fish` · `help` |
 
 `delphi run` is for scripts and CI: it answers cards by a written policy (never Red, never a merge), stops at "ready to merge", and exits 0 ok, 1 gates failed, 2 a card was denied, 3 budget, 4 infrastructure ([`specs/016`](specs/016-headless-run.md)). `delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane because the daemon issues tokens only to processes with a controlling tty. `delphi observe --once` prints one frame as text and works without a terminal.

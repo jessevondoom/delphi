@@ -300,3 +300,29 @@ fn the_panic_hook_logs_then_runs_the_previous_hook() {
     assert!(recs[0]["message"].as_str().unwrap().contains("boom"));
     assert!(!fs::read_to_string(log_dir(d.path()).join(FILE)).unwrap().contains("BBBBBBBB"));
 }
+
+#[test]
+fn the_canary_goes_through_every_component_level_and_context_key_and_none_of_it_comes_out() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    let l = logger(&home, Level::Debug, DEFAULT_MAX_BYTES, 3);
+    let dirty = format!("{} {}", nasty(), home.display());
+    let mut ctx = Map::new();
+    for k in CONTEXT_KEYS {
+        ctx.insert((*k).to_string(), json!(dirty));
+    }
+    let ctx = Value::Object(ctx);
+    for comp in COMPONENTS {
+        for level in [Level::Error, Level::Warn, Level::Debug] {
+            let line = l.render(level, comp, &dirty, &dirty, &ctx, &[dirty.clone(), dirty.clone()], Some(&dirty));
+            assert_clean(&line);
+            assert!(!line.contains(&home.display().to_string()), "the home path survived: {line}");
+            l.log(level, comp, &dirty, &dirty, &ctx, &[dirty.clone()], Some(&dirty));
+        }
+    }
+    let on_disk = fs::read_to_string(log_dir(&home).join(FILE)).unwrap();
+    assert_eq!(on_disk.lines().count(), COMPONENTS.len() * 3);
+    for line in on_disk.lines() {
+        assert_clean(line);
+    }
+}

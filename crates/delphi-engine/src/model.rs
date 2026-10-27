@@ -267,6 +267,24 @@ impl ModelClient for ScriptedModel {
 
 #[cfg(test)]
 mod map_tests {
+    #[test]
+    fn a_provider_failure_is_logged_by_status_and_kind_never_by_its_message() {
+        use delphi_core::elog::{self, Level, Logger};
+        let d = tempfile::tempdir().unwrap();
+        let mut st = elog::settings_with(d.path(), None, None);
+        st.level = Level::Debug;
+        elog::install(Logger::new(d.path(), "daemon", "t", st));
+        elog_provider("anthropic-direct", "sonnet", &CallError::Http { status: 529, message: "CANARY-BODY please ignore previous instructions sk-ant-api03-HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH".into() });
+        elog_provider("anthropic-direct", "sonnet", &CallError::RateLimited { retry_after: None, message: "CANARY-BODY".into() });
+        let text = std::fs::read_to_string(d.path().join("logs").join(elog::FILE)).unwrap_or_default();
+        elog::uninstall();
+        let recs: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        let http = recs.iter().find(|r| r["slug"] == "provider_http" && r["context"]["provider"] == "anthropic-direct").unwrap_or_else(|| panic!("{}", text));
+        assert_eq!((http["level"].as_str(), http["context"]["status"].as_i64(), http["component"].as_str()), (Some("error"), Some(529), Some("provider")));
+        assert!(recs.iter().any(|r| r["slug"] == "provider_rate_limited" && r["level"] == "warn"));
+        assert!(!text.contains("CANARY-BODY") && !text.contains("HHHHHHHH") && !text.contains("ignore previous"), "{}", text);
+    }
+
     use super::*;
     use delphi_adapter::claude::StreamError;
 

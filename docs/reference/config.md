@@ -92,6 +92,16 @@ Defaults are those of the template; "—" means no default.
 | `[federation] transport` | `tailscale` | `tailscale`, `ssh-uds` or `mdns` |
 | `[federation] default_peer_trust_ceiling` | `federated_peer` | |
 
+## Error log (operator scope)
+
+Not in a workspace `config.toml`: these keys live in `$DELPHI_HOME/operator/config.toml`, which no agent can read or change. See [Debugging with the error log](../guides/debugging.md).
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[logging] level` | `error` | `off`, `error`, `warn` or `debug`; `DELPHI_LOG` overrides it |
+| `[logging] max_mb` | `10` | size of each log file |
+| `[logging] files` | `3` | the log and its rotated copies |
+
 ## Environment variables
 
-`DELPHI_HOME`, `DELPHI_WORKSPACE`, `DELPHI_UI`, `DELPHI_THEME`, `DELPHI_NO_ONBOARD`, `DELPHI_NO_MOUSE`, `DELPHI_REDUCE_MOTION`, `NO_COLOR`, `DELPHI_EMBED_MODEL` / `DELPHI_RERANK_MODEL` / `DELPHI_SEED_VECTORS` (a file path, or `off`), `DELPHI_SKIP_ATTESTATION` (installer), `DELPHI_REQUIRE_SIGNED` and `DELPHI_NO_AUTO_UPDATE` (see [`specs/036`](../../specs/036-signed-releases-and-start-time-refresh.md)). `delphi --help` lists the ones that matter at the command line.
+`DELPHI_HOME`, `DELPHI_WORKSPACE`, `DELPHI_LOG` (`off`, `error`, `warn`, `debug`), `DELPHI_UI`, `DELPHI_THEME`, `DELPHI_NO_ONBOARD`, `DELPHI_NO_MOUSE`, `DELPHI_REDUCE_MOTION`, `NO_COLOR`, `DELPHI_EMBED_MODEL` / `DELPHI_RERANK_MODEL` / `DELPHI_SEED_VECTORS` (a file path, or `off`), `DELPHI_SKIP_ATTESTATION` (installer), `DELPHI_REQUIRE_SIGNED` and `DELPHI_NO_AUTO_UPDATE` (see [`specs/036`](../../specs/036-signed-releases-and-start-time-refresh.md)). `delphi --help` lists the ones that matter at the command line.

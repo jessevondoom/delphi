@@ -2735,4 +2735,28 @@ mod tests {
         assert_eq!((rec["component"].as_str(), rec["context"]["kind"].as_i64()), (Some("daemon"), Some(code::INVALID_PARAMS)));
         assert!(!text.contains("CANARY-PARAMS") && !text.contains("EEEEEEEE"), "params must not reach the log at error level: {}", text);
     }
+
+    // specs/039: the error log is read from the file by the operator, never over the daemon's socket, so an agent that
+    // reaches a socket (or a hostile client) cannot read it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_rpc_method_returns_the_error_log() {
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let codes = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.hello(&tok).unwrap();
+            let mut n = Client::connect(&nsock).unwrap();
+            n.hello(&ntok).unwrap();
+            let mut out = vec![];
+            for m in ["logs.read", "logs.tail", "log.read", "elog.read", "errors.list", "debug.bundle", "debug.logs", "daemon.logs"] {
+                out.push((m, rpc_code(c.call(m, json!({"path": "logs/delphi.log.jsonl"}))), rpc_code(n.call(m, json!({"path": "logs/delphi.log.jsonl"})))));
+            }
+            out
+        })
+        .await;
+        for (m, console, narrator) in codes {
+            assert!(console.is_some() && narrator.is_some(), "{} must be refused on both sockets, got {:?} / {:?}", m, console, narrator);
+        }
+    }
 }

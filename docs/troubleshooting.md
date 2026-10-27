@@ -8,6 +8,8 @@ delphi doctor          # eight offline checks: ok / warn / fail / skipped
 delphi doctor --fix    # asks before each repair; needs a terminal
 ```
 
+Errors are also written, redacted, to a central log while you work: `delphi logs` shows the latest and `delphi debug bundle` packs a session for sharing; see [Debugging with the error log](guides/debugging.md).
+
 `delphi doctor --require-providers` also fails when no model access is usable, which suits scripts. Both commands accept `--workspace <name>` and `--home <dir>`.
 
 ## No model answers
