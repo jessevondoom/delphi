@@ -1,4 +1,6 @@
-# DRAFT: assembled on 2026-10-26 by the assistant that built the harness, not yet checked by the operator.
-# Verifying means reading each fact against its abstract and then running `delphi train verify`.
 as_of = "2026-10-26"
 topic_notes = "Evidence on lion's mane (Hericium erinaceus) and cognition: six abstracts spanning cell/mouse work (2008), two small trials (2009, 2019), a 2026 preprint RCT, a null 2026 pilot and a 2025 narrative review. It deliberately has no systematic review or meta-analysis (none turned up in Europe PMC's title search), so a good answer should say the human evidence is a handful of small trials. The 2026 items post-date most models' training. Not medical advice: the rubric rewards calibration, not a recommendation to take or avoid it."
+
+verified_by = "jessevondoom"
+verified_on = "2026-10-26"
+verified_fingerprint = "3da0e4237162d41fc98cc86d3384d6b477370a823faec88ef304e9cfdd98ce81"
