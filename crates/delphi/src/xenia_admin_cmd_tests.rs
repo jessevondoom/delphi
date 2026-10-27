@@ -382,3 +382,130 @@ fn removing_an_unknown_key_and_other_mistakes_are_refused() {
     assert_eq!(go(&["bogus"], &mut Say::no()), 2);
     assert_eq!(go(&[], &mut Say::no()), 2);
 }
+
+// --- X10: the 3-admin, 2-of-3 chain (spec 011 §1.4 gate 3) --------------------------------------------------------
+
+/// One epoch through the commands: `proposer` proposes, each of `signers` signs its card, `publisher` publishes, and
+/// every home in `then_sync` syncs. Ticks the clock before the statement is made.
+fn epoch(w: &mut World, n: &str, propose: &[&str], proposer: &str, signers: &[&str], publisher: &str, then_sync: &[&str]) {
+    w.tick();
+    let mut args: Vec<&str> = propose.to_vec();
+    args.extend(["--home", proposer]);
+    assert_eq!(go(&args, &mut Say::no()), 0, "propose {propose:?}");
+    for s in signers {
+        assert_eq!(go(&["sign", n, "--home", s], &mut Say::yes()), 0, "sign epoch {n}");
+    }
+    w.tick();
+    assert_eq!(go(&["publish", n, "--home", publisher], &mut Say::yes()), 0, "publish epoch {n}");
+    for h in then_sync {
+        sync(h);
+    }
+}
+
+fn host_grep(host_git_dir: &str, needle: &str) -> bool {
+    Command::new("git").arg("--git-dir").arg(host_git_dir).args(["grep", "-q", needle, "refs/heads/main", "--", "roster"]).status().unwrap().success()
+}
+
+fn copy_dir(from: &str, to: &str) {
+    assert!(Command::new("cp").args(["-R", from, to]).status().unwrap().success());
+}
+
+#[test]
+fn a_three_admin_two_of_three_chain_survives_a_fork_and_an_install_that_slept_through_four_epochs() {
+    let mut w = World::new();
+    let (ha, hb, hc, genesis_hash) = genesis(&mut w);
+    assert_eq!(roster_of(&hc).head_epoch(), 1);
+    let host = w.host();
+    let (dave, erin, frank, carol2) = (key(4).did(), key(6).did(), key(5).did(), key(13).did());
+
+    // Epoch 2: alice proposes dave (steward of rust); alice and bob sign; bob publishes. Carol is never asked.
+    epoch(&mut w, "2", &["add", &dave, "--person", "dave", "--handle", "dave", "--steward", "rust"], &ha, &[&ha, &hb], &hb, &[&ha, &hb]);
+    assert_eq!(roster_of(&ha).head_epoch(), 2);
+
+    // -- the fork. A second copy of the host stands for the rival history that another admin pair could build.
+    let host_b = w.file("host-b.git");
+    copy_dir(&host, &host_b);
+    let url_b = format!("file://{host_b}");
+
+    // Same host, same epoch number: alice's proposal takes the branch; bob's rival cannot even be written, and the first is untouched.
+    w.tick();
+    assert_eq!(go(&["add", &erin, "--person", "erin", "--handle", "erin", "--home", &ha], &mut Say::no()), 0);
+    let with_alice = w.refs();
+    assert_eq!(go(&["add", &frank, "--person", "frank", "--handle", "frank", "--home", &hb], &mut Say::no()), 1, "a second proposal for epoch 3 is refused");
+    assert_eq!(w.refs(), with_alice, "the rival wrote nothing");
+    for h in [&ha, &hb] {
+        assert_eq!(go(&["sign", "3", "--home", h], &mut Say::yes()), 0);
+    }
+    w.tick();
+    assert_eq!(go(&["publish", "3", "--home", &hb], &mut Say::yes()), 0);
+    // Publishing the same epoch again, or a signature collected for it, cannot move main: it is stale now.
+    let main_a = w.refs();
+    w.tick();
+    assert_eq!(go(&["publish", "3", "--home", &ha], &mut Say::yes()), 1, "epoch 3 is taken");
+    assert_eq!(w.refs(), main_a);
+    sync(&ha);
+    sync(&hb);
+    assert_eq!(roster_of(&hb).head_epoch(), 3);
+
+    // The rival history on the other host: alice and carol (a different pair) publish a different epoch 3, adding frank.
+    let (ha2, hc2) = (w.home("alice-b", 1), w.home("carol-b", 3));
+    for h in [&ha2, &hc2] {
+        let mut no = Say::no();
+        let fp = key(1).fingerprint();
+        let code = run_with_both(&a(&["join", &url_b, "--org", ORG, "--store", STORE, "--admin", &fp, "--head", &format!("1:{genesis_hash}"), "--allow-local", "--home", h]), &mut NoMember, &mut no);
+        assert_eq!(code, 0);
+        sync(h);
+        assert_eq!(roster_of(h).head_epoch(), 2, "the copy holds epochs 1 and 2 only");
+    }
+    epoch(&mut w, "3", &["add", &frank, "--person", "frank", "--handle", "frank"], &ha2, &[&ha2, &hc2], &hc2, &[&ha2, &hc2]);
+    assert_eq!(roster_of(&hc2).head_epoch(), 3);
+    assert!(roster_of(&hc2).head().epoch.member(&frank).is_some());
+
+    // Only one wins. An install that accepted the first epoch 3 is served the rival history: refused, state unchanged.
+    let aside = w.file("host-a-aside.git");
+    std::fs::rename(&host, &aside).unwrap();
+    copy_dir(&host_b, &host);
+    w.tick();
+    let code = run_with_both(&a(&["sync", "--home", &hb]), &mut NoMember, &mut Say::no());
+    assert_ne!(code, 0, "a forked epoch is refused");
+    let r = roster_of(&hb);
+    assert_eq!(r.head_epoch(), 3);
+    assert!(r.head().epoch.member(&erin).is_some() && r.head().epoch.member(&frank).is_none(), "the first epoch 3 still stands");
+    std::fs::remove_dir_all(&host).unwrap();
+    std::fs::rename(&aside, &host).unwrap();
+    // And the rival never reached main of the real host.
+    assert!(host_grep(&host, &erin) && !host_grep(&host, &frank));
+
+    // -- three more epochs while carol's install (pinned at epoch 1) is asleep.
+    epoch(&mut w, "4", &["rotate", &key(3).did(), "--to", &carol2, "--routine"], &ha, &[&ha, &hb], &ha, &[&ha, &hb]);
+    epoch(&mut w, "5", &["remove", &erin], &hb, &[&hb, &ha], &hb, &[&ha, &hb]);
+    assert_eq!(roster_of(&ha).head_epoch(), 5);
+    assert_eq!(roster_of(&hc).head_epoch(), 1, "the sleeper has not moved");
+
+    // Offline: the host is gone. The sync fails and changes nothing.
+    std::fs::rename(&host, &aside).unwrap();
+    w.tick();
+    // (The command reports "could not be reached" and exits 0 by design: being offline is not an alarm.)
+    assert_eq!(run_with_both(&a(&["sync", "--home", &hc]), &mut NoMember, &mut Say::no()), 0);
+    assert_eq!(roster_of(&hc).head_epoch(), 1);
+    std::fs::rename(&aside, &host).unwrap();
+
+    // Back online: the chain 1 -> 2 -> 3 -> 4 -> 5 verifies from its pin, and the statement for epoch 5 is fresh.
+    w.tick();
+    sync(&hc);
+    let r = roster_of(&hc);
+    assert_eq!(r.head_epoch(), 5);
+    let head = &r.head().epoch;
+    assert!(head.member(&dave).is_some_and(|m| m.is_active()));
+    assert!(head.member(&erin).is_some_and(|m| !m.is_active()), "erin was removed in epoch 5");
+    assert!(head.member(&frank).is_none(), "the rival's member exists in no accepted epoch");
+    assert!(head.member(&key(3).did()).is_some_and(|m| !m.is_active() && m.successor.as_deref() == Some(carol2.as_str())));
+    assert_eq!(run_with_both(&a(&["status", "--home", &hc]), &mut NoMember, &mut Say::no()), 0);
+
+    // A brand-new install given the pinned pair from the day of genesis joins and reaches epoch 5 the same way.
+    let hd = w.home("dana", 20);
+    let fp = key(1).fingerprint();
+    assert_eq!(run_with_both(&a(&["join", &w.url(), "--org", ORG, "--store", STORE, "--admin", &fp, "--head", &format!("1:{genesis_hash}"), "--allow-local", "--home", &hd]), &mut NoMember, &mut Say::no()), 0);
+    sync(&hd);
+    assert_eq!(roster_of(&hd).head_epoch(), 5);
+}

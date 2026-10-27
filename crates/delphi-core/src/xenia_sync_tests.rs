@@ -1161,3 +1161,136 @@ fn a_synced_snapshot_feeds_the_tier_computation_and_a_stale_statement_withdraws_
     let c = compute(&Inputs { roster: &roster, records: &records, freshness: &stale, prior_tags: &prior });
     assert_eq!(c.tier_of(A), Some(Tier::L1));
 }
+
+// --- X10: spec 011 test 23 / spec 012 test 11, the no-fetch half ------------------------------------------------
+
+#[test]
+fn a_pointer_is_never_fetched_a_listener_on_its_target_sees_no_connection() {
+    // The pointer names a live listener on loopback. A fetch would be a connection (or at least a name lookup that
+    // ends in one); a sync, the history walk and the read of the verified view must make none.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let alice = TestOrg::three_admins().key("alice");
+    let plain = rk::memory(&alice, A, 1, "active", "v");
+    let text = String::from_utf8(plain.md.clone()).unwrap();
+    let block = format!("pointers:\n  - scheme: https\n    locator: \"https://127.0.0.1:{port}/doc\"\n    pin:\n      kind: none\n    label: Doc\n    content_type: text/plain\n");
+    assert!(text.contains("pointers: []\n"));
+    let with_pointer = rk::sign_record(&alice, plain.kind, &plain.id, text.replace("pointers: []\n", &block).into_bytes());
+    let (fx, _) = Fx::installed(&[&with_pointer]);
+    assert!(matches!(fx.sync(), VerifiedSync::UpToDate { .. }));
+    let snap = fx.store.snapshot_of(&fx.store.accepted_head().unwrap().unwrap()).unwrap();
+    assert!(snap.files.keys().any(|p| p.ends_with(&format!("{A}.md"))), "premise: the record with the pointer was read");
+    match listener.accept() {
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        other => panic!("something connected to a pointer target: {other:?}"),
+    }
+}
+
+// --- X10: the live recovery drill of spec 011 §8.4 (spec 011 §1.4 gate 7) ----------------------------------------
+//
+// Run by hand: `cargo test -p delphi-core --lib xenia_recovery_drill -- --ignored --nocapture`. Everything is made
+// in temporary directories: a bare git "host", a working copy that force-pushes to it, generated identities, a
+// scratch install. No real store, key or home is read or written. The transcript is recorded in
+// `missions/2026-10-23-foundational-design/xenia-x10-verification.md`.
+
+fn say(step: &str, what: impl std::fmt::Display) {
+    println!("[drill] {step:<34} {what}");
+}
+
+#[test]
+#[ignore = "the manual recovery drill; prints a transcript (run with --ignored --nocapture)"]
+fn xenia_recovery_drill() {
+    let rw = rewritten_baseline();
+    let short = |h: &str| h.chars().take(10).collect::<String>();
+    say("scratch store", format!("{} (bare git host, 3 generated admins, 1 note, 2 tombstones)", rw.fx.remote.url().replace(env!("CARGO_MANIFEST_DIR"), "<repo>")));
+    say("install accepted", short(&rw.c2));
+
+    // 1. The host's operator force-pushes a rewrite that deletes a tombstone. Alice alone signs the replacement statement.
+    let r1 = rw.rewrite(|fx| fx.drop_record(&rw.tomb), &["alice"], &rw.c2);
+    say("host rewritten (1 admin signed)", format!("new head {}", short(&r1)));
+    let normal = rw.fx.sync();
+    assert!(matches!(normal, VerifiedSync::NonFastForward(_)), "{normal:?}");
+    say("ordinary sync", "REFUSED: force-pushed store (non-fast-forward); accepted head unchanged");
+    assert_stuck(&rw.fx, &rw.c2);
+    say("plan with one signer", format!("REFUSED: {}", rw.plan_refusal()));
+    assert_eq!(rw.plan_refusal(), "no-valid-statement");
+
+    // 2. A majority (two people) signs a statement that names the head it replaces; this one also deletes a second tombstone.
+    let r2 = rw.rewrite(|fx| {
+        fx.drop_record(&rw.tomb);
+        fx.drop_record(&rw.tomb2);
+    }, &["alice", "bob"], &rw.c2);
+    let plan = rw.plan();
+    say("plan with a 2-of-3 statement", format!("head {} replaces {}; {} people signed", short(&plan.fetched), short(&plan.replaced), plan.signing_people));
+    assert_eq!((plan.fetched.as_str(), plan.signing_people), (r2.as_str(), 2));
+    for c in &plan.changes {
+        say("  shown to the operator", format!("{} ({})", c.path, c.reason));
+    }
+    assert_eq!(plan.changes.len(), 4);
+
+    // 3. The operator approves only the first tombstone: nothing is applied.
+    let partial = RewriteApproval { fetched: plan.fetched.clone(), paths: [rw.tomb.path.clone(), rw.tomb.sidecar_path.clone()].into() };
+    let before = rw.fx.sticky();
+    let out = rw.fx.store.accept_rewritten_head(&cfg(), &partial).unwrap();
+    say("partial approval", format!("{out:?}").chars().take(110).collect::<String>());
+    assert!(matches!(out, RewriteOutcome::NotApproved { .. }));
+    assert_eq!(rw.fx.sticky(), before);
+    assert_stuck(&rw.fx, &rw.c2);
+
+    // 4. The operator reads the whole list and approves it.
+    let pins_before = std::fs::read(rw.fx.store.paths.state.join("pins.toml")).unwrap();
+    let out = rw.fx.store.accept_rewritten_head(&cfg(), &rw.approve(&plan)).unwrap();
+    say("full approval", format!("accepted {}", short(&r2)));
+    assert!(matches!(&out, RewriteOutcome::Accepted { head, replaced } if head == &r2 && replaced.len() == 4), "{out:?}");
+    let after = rw.fx.sticky();
+    let kept = before.paths.iter().filter(|(p, e)| after.paths.get(*p) == Some(*e)).count();
+    say("sticky entries", format!("{} before, {} after; {} survived byte for byte (the note and the roster epoch); the 4 approved paths were dropped; the 2 statement entries moved to the new statement", before.paths.len(), after.paths.len(), kept));
+    assert!(!after.paths.contains_key(&rw.tomb.path) && !after.paths.contains_key(&rw.tomb2.path));
+    assert!(after.paths.contains_key(&rw.note.path), "the note, which nobody approved touching, keeps its entry");
+    assert_eq!(std::fs::read(rw.fx.store.paths.state.join("pins.toml")).unwrap(), pins_before);
+    say("pinned epoch hashes", "unchanged (pins.toml identical)");
+    let log = std::fs::read_to_string(rw.fx.store.paths.state.join("rewrite-log.jsonl")).unwrap();
+    say("rewrite log", format!("{} lines, every replaced path with its reason", log.lines().count()));
+    assert!(matches!(rw.fx.sync(), VerifiedSync::UpToDate { .. }));
+    say("next ordinary sync", "up to date");
+
+    // 5. Break-glass re-pin: the roster itself is untrusted (a majority of admins compromised). A new genesis is made by new
+    //    founders; the operator's existing pins are never overwritten silently; re-pinning is a deliberate act out of band.
+    let mut t = TestOrg::empty();
+    for i in 0..20 {
+        t.who(&format!("pad{i}")); // test keys come from small seeds; skip past the ones the first org used
+    }
+    let (zoe, yan, xia) = (t.who("zoe"), t.who("yan"), t.who("xia"));
+    t.push_signed(
+        delphi_xenia::testkit::EpochSpec {
+            org: delphi_xenia::testkit::ORG.into(),
+            store: delphi_xenia::testkit::STORE.into(),
+            epoch: 1,
+            prev_hash: None,
+            members: vec![MemberSpec::new(&zoe, "zoe").admin(), MemberSpec::new(&yan, "yan").admin(), MemberSpec::new(&xia, "xia").admin()],
+        },
+        &["zoe", "yan", "xia"],
+    );
+    let fresh_fx = Fx::new(t);
+    let c1 = fresh_fx.commit("new genesis");
+    let c2 = fresh_fx.fresh(&c1, &["zoe"]);
+    let req = JoinRequest { url: fresh_fx.remote.url(), admin_fingerprint: fresh_fx.org.fingerprint("zoe"), head_epoch: fresh_fx.org.head_pair().0, head_hash: fresh_fx.org.head_pair().1 };
+    let err = pins::join(&rw.fx.store.pin_storage(), &req, &fresh_fx.org.files).unwrap_err();
+    say("join over existing pins", format!("REFUSED: {err:?}"));
+    assert_eq!(err, delphi_xenia::roster::RosterError::AlreadyPinned);
+    let open = |name: &str| {
+        let home = fresh_fx.tmp.path().join(name);
+        std::fs::create_dir_all(&home).unwrap();
+        Store::open(&home, "acme", "acme-main", &fresh_fx.remote.url(), true).unwrap()
+    };
+    let wrong = JoinRequest { admin_fingerprint: rw.fx.org.fingerprint("alice"), ..req.clone() };
+    assert!(pins::join(&open("wrong").pin_storage(), &wrong, &fresh_fx.org.files).is_err());
+    say("join with the old fingerprint", "REFUSED, no state written");
+    let repinned = open("repinned");
+    pins::join(&repinned.pin_storage(), &req, &fresh_fx.org.files).unwrap();
+    let r = repinned.sync_verified(&cfg()).unwrap();
+    assert_eq!(accepted(&r).0, c2);
+    say("re-pin to the new genesis", format!("fresh scratch install joined by the new fingerprint and synced to {}", short(&c2)));
+    say("drill", "PASSED");
+}
