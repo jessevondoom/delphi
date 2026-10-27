@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/event-envelope.schema.json",
+  "title": "Delphi event envelope",
+  "description": "One line of a mission's event log (specs/005 §2.2; crates/delphi-core/src/event.rs). Readers refuse any other major in `v` and ignore unknown fields. Every `agent.*` event carries the routing fields listed in the `then` branch.",
+  "type": "object",
+  "required": ["v", "seq", "timestamp", "mission_id", "type", "payload"],
+  "properties": {
+    "v": { "const": 1, "description": "Schema major." },
+    "seq": { "type": "integer", "minimum": 0, "description": "Assigned by the log on append." },
+    "timestamp": { "type": "string", "description": "Assigned by the log on append." },
+    "mission_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "span_id": { "type": "string" },
+    "parent_span_id": { "type": "string" },
+    "agent": { "type": "string", "description": "Canonical role ID, never a theme name." },
+    "endpoint_id": { "type": "string" },
+    "access_path": { "type": "string" },
+    "model_tier": { "type": "string" },
+    "model_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 0 },
+    "mode": { "type": "string" },
+    "round": { "type": "integer", "minimum": 0 },
+    "type": { "type": "string", "minLength": 1, "description": "Dotted event kind, for example `agent.usage`." },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": true,
+  "if": { "properties": { "type": { "type": "string", "pattern": "^agent\\." } }, "required": ["type"] },
+  "then": { "required": ["agent", "span_id", "task_id", "endpoint_id", "access_path", "model_tier", "model_id", "attempt"] }
+}

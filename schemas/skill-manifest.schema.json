@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/skill-manifest.schema.json",
+  "title": "Delphi SKILL.md frontmatter",
+  "description": "The YAML frontmatter of skills/<name>/SKILL.md parsed to JSON (specs/001 §3; the agentskills.io format plus Delphi's typed contract). `input_schema` and `output_schema` are themselves JSON Schemas.",
+  "type": "object",
+  "required": ["name", "description", "authorized_agents", "input_schema", "output_schema", "required_permissions"],
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "description": { "type": "string", "minLength": 1 },
+    "authorized_agents": { "type": "array", "items": { "type": "string" } },
+    "input_schema": { "type": "object" },
+    "output_schema": { "type": "object" },
+    "required_permissions": { "type": "array", "items": { "type": "string", "pattern": "^[a-z_]+:[a-z_]+$", "description": "For example `read:all`, `write:worktree`, `shell:scoped_scripts`." } }
+  },
+  "additionalProperties": true
+}
