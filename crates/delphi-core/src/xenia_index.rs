@@ -176,7 +176,7 @@ fn harvest(store: &Store, base: Option<&str>, head: &str) -> Result<Tags> {
         for parent in parents {
             for ch in src.changes(parent, &c.id)? {
                 let Some(PathClass::Record(rp)) = classify_path(&ch.path) else { continue };
-                if rp.kind != Kind::Memory || !ch.exists_now || !done.insert((c.id.clone(), ch.path.clone())) {
+                if !rp.kind.is_target() || !ch.exists_now || !done.insert((c.id.clone(), ch.path.clone())) {
                     continue;
                 }
                 let sidecar = rp.sidecar();
@@ -316,6 +316,9 @@ pub struct Derived {
     pub freshness: FreshnessState,
     /// Sorted by id.
     pub memories: Vec<IndexedMemory>,
+    /// The `bundle` records (spec 027 §4.3), sorted by id. Never indexed as notes: `delphi bundle add --from-xenia`
+    /// reads them (see [`crate::xenia_bundle`]).
+    pub bundles: Vec<crate::xenia_bundle::StoreBundle>,
     /// Records (any kind) that are not in force, with a fixed slug, for `status`. Never indexed.
     pub held_back: Vec<(String, &'static str)>,
     /// What the sanitizer removed across all text, for the report.
@@ -429,13 +432,13 @@ pub fn derive(store: &Store, cfg: &VerifyConfig) -> Result<Derived> {
     };
     // The tip itself always counts, whatever the walk found.
     let mut tip: Tags = Tags::new();
-    for r in verified.iter().filter(|r| r.record().kind() == Kind::Memory) {
+    for r in verified.iter().filter(|r| r.record().kind().is_target()) {
         tip.entry(r.record().id.clone()).or_default().entry(r.signer().to_string()).or_default().extend(r.record().tags.iter().cloned());
     }
     history.absorb(tip);
     history.through = head.clone();
     let mut prior: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for r in verified.iter().filter(|r| r.record().kind() == Kind::Memory) {
+    for r in verified.iter().filter(|r| r.record().kind().is_target()) {
         prior.insert(r.record().id.clone(), history.owner_union(&roster, &r.record().id, r.signer()));
     }
 
@@ -454,9 +457,17 @@ pub fn derive(store: &Store, cfg: &VerifyConfig) -> Result<Derived> {
     let by_id: BTreeMap<&str, &VerifiedRecord> = verified.iter().map(|r| (r.record().id.as_str(), r)).collect();
     let mut stripped = Stripped::default();
     let mut memories = Vec::new();
+    let mut bundles = Vec::new();
     for (id, st) in &computed.memories {
         let Some(vr) = by_id.get(id.as_str()) else { continue };
         let rec = vr.record();
+        // A `bundle` record is endorsed and hidden like a memory but is not a note: it is read through its own path.
+        if rec.kind() != Kind::Memory {
+            if let Some(b) = crate::xenia_bundle::store_bundle(&roster, vr, st) {
+                bundles.push(b);
+            }
+            continue;
+        }
         let (status, hidden) = match &st.visibility {
             Visibility::Visible => ("active", None),
             Visibility::Hidden(h) => ("superseded", Some(hidden_slug(h))),
@@ -506,7 +517,7 @@ pub fn derive(store: &Store, cfg: &VerifyConfig) -> Result<Derived> {
     }
     held.sort();
     held.dedup();
-    Ok(Derived { org: store.org.clone(), store: store.store.clone(), head, freshness: assessment.state, memories, held_back: held, stripped, history })
+    Ok(Derived { org: store.org.clone(), store: store.store.clone(), head, freshness: assessment.state, memories, bundles, held_back: held, stripped, history })
 }
 
 trait HiddenView {

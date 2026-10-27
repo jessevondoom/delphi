@@ -4,7 +4,7 @@
 //! **A pure function.** [`compute`] takes the records that already passed signature and structure
 //! ([`VerifiedRecord`], built only from a [`Validated`]), the verified roster, the freshness state and the tag
 //! history the caller keeps, and returns, for every record, an [`Outcome`], and for every `memory` its
-//! visibility and tier. No I/O, no clock (freshness was judged with `now` by `freshness::assess`), no
+//! visibility and tier (a `bundle` record is a target too, spec 027 §4.3; see [`Computed::memories`]). No I/O, no clock (freshness was judged with `now` by `freshness::assess`), no
 //! network, no dependence on the order of the input or on git commit order: everything is sorted and every tie
 //! has a stated rule that never reads a ULID, a timestamp or a `signed_at` for effect.
 //!
@@ -92,7 +92,7 @@ impl VerifiedRecord {
         match &self.record.kind_fields {
             KindFields::Tombstone(t) => t.action == TombstoneAction::Withdraw,
             KindFields::Endorsement(e) => matches!(e.verdict, Verdict::Withdraw | Verdict::Dispute),
-            KindFields::Memory(_) => false,
+            KindFields::Memory(_) | KindFields::Bundle(_) => false,
         }
     }
 }
@@ -214,9 +214,32 @@ impl MemoryState {
     }
 }
 
+/// How a store bundle stands (spec 024 §2.2). Provenance, never a gate: both visible levels index at L2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleLevel {
+    /// A steward other than the publisher's person endorsed exactly this revision's bytes.
+    Endorsed,
+    /// The publisher is an active member; no endorsement counts.
+    MemberSigned,
+    /// Withdrawn, superseded or tombstoned: not offered for add.
+    Hidden,
+}
+
+impl BundleLevel {
+    /// The word the lock records and `/org` shows.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BundleLevel::Endorsed => "endorsed",
+            BundleLevel::MemberSigned => "member-signed",
+            BundleLevel::Hidden => "hidden",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Computed {
-    /// By `id`.
+    /// By `id`: every endorsable record, so `memory` **and `bundle`** (check the record's kind before treating an
+    /// entry as a memory; `delphi_core::xenia_index` indexes only memories).
     pub memories: BTreeMap<String, MemoryState>,
     /// By record path (`records/<kind>/<id>.md`), for every input record.
     pub outcomes: BTreeMap<String, Outcome>,
@@ -225,6 +248,20 @@ pub struct Computed {
 impl Computed {
     pub fn tier_of(&self, id: &str) -> Option<Tier> {
         self.memories.get(id).map(|m| m.tier)
+    }
+
+    /// The provenance level of a bundle record (spec 024 §2.2): `Endorsed` only while a steward of another person's
+    /// endorsement counts under a current freshness statement (a stale store's endorsements are withheld, so it reads
+    /// `MemberSigned`), `Hidden` while a tombstone or its author's status hides it. `None` for an id that is not here.
+    pub fn bundle_level(&self, id: &str) -> Option<BundleLevel> {
+        let m = self.memories.get(id)?;
+        Some(if m.visibility.is_hidden() {
+            BundleLevel::Hidden
+        } else if !m.endorsed_by.is_empty() {
+            BundleLevel::Endorsed
+        } else {
+            BundleLevel::MemberSigned
+        })
     }
 
     pub fn outcome(&self, kind: Kind, id: &str) -> Option<&Outcome> {
@@ -336,7 +373,7 @@ pub fn compute(inp: &Inputs) -> Computed {
         match &r.record.kind_fields {
             KindFields::Endorsement(e) => groups.entry((1, r.signer.clone(), e.target_id.clone(), e.target_rev)).or_default().push(r),
             KindFields::Tombstone(t) => groups.entry((2, r.signer.clone(), t.target.clone(), 0)).or_default().push(r),
-            KindFields::Memory(_) => singles.push(r),
+            KindFields::Memory(_) | KindFields::Bundle(_) => singles.push(r),
         }
     }
     for (_, mut g) in groups {
@@ -351,7 +388,9 @@ pub fn compute(inp: &Inputs) -> Computed {
     }
     singles.sort_by_key(|r| r.path());
 
-    let memories: BTreeMap<&str, &VerifiedRecord> = singles.iter().filter(|r| r.record.kind() == Kind::Memory).map(|r| (r.record.id.as_str(), *r)).collect();
+    // Endorsement and tombstone targets: `memory` and `bundle` records (a bundle is endorsed and hidden by the same
+    // rules, over the same areas and tags; its state is read through [`Computed::bundle_level`]).
+    let memories: BTreeMap<&str, &VerifiedRecord> = singles.iter().filter(|r| r.record.kind().is_target()).map(|r| (r.record.id.as_str(), *r)).collect();
     let kind_of: BTreeMap<&str, Kind> = singles.iter().map(|r| (r.record.id.as_str(), r.record.kind())).collect();
 
     // Stage 4: tombstones.

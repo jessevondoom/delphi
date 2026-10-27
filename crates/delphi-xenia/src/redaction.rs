@@ -14,6 +14,10 @@
 //! evidence\n<decimal byte length>\n<the evidence region bytes>\n
 //! ```
 //!
+//! A `bundle` record (spec 027 §4.3) has a fourth region, its `tree` pointer (a locator is free text a scan reads
+//! too). It is appended as `tree\n<length>\n<bytes>\n` **only when the region is non-empty**, so the hash of
+//! every record of the Phase 1 kinds is exactly what it was.
+//!
 //! spelled `blake3:` plus 64 lowercase hex like every hash here. Every part is length-prefixed, so no body can
 //! imitate a region boundary, and the leading domain string keeps the hash from ever being mistaken for a record,
 //! roster or freshness hash.
@@ -40,6 +44,8 @@ pub struct Regions<'a> {
     pub pointers: &'a [u8],
     pub evidence: &'a [u8],
     pub body: &'a [u8],
+    /// A `bundle` record's `tree` pointer; empty for every other kind.
+    pub tree: &'a [u8],
 }
 
 /// Cut a record file into its scanned regions. `None` when the file does not have the frontmatter shape (the
@@ -47,7 +53,7 @@ pub struct Regions<'a> {
 pub fn regions(file: &[u8]) -> Option<Regions<'_>> {
     let rest = file.strip_prefix(b"---\n")?;
     let (mut pos, mut current): (usize, Option<&[u8]>) = (0, None);
-    let (mut ptr, mut ev): ((usize, usize), (usize, usize)) = ((0, 0), (0, 0));
+    let (mut ptr, mut ev, mut tr): ((usize, usize), (usize, usize), (usize, usize)) = ((0, 0), (0, 0), (0, 0));
     let body_at;
     loop {
         let nl = rest[pos..].iter().position(|b| *b == b'\n')?;
@@ -62,26 +68,31 @@ pub fn regions(file: &[u8]) -> Option<Regions<'_>> {
             match current {
                 Some(b"pointers") => ptr = (pos, end),
                 Some(b"evidence") => ev = (pos, end),
+                Some(b"tree") => tr = (pos, end),
                 _ => {}
             }
         } else {
             match current {
                 Some(b"pointers") => ptr.1 = end,
                 Some(b"evidence") => ev.1 = end,
+                Some(b"tree") => tr.1 = end,
                 _ => {}
             }
         }
         pos = end;
     }
-    Some(Regions { pointers: &rest[ptr.0..ptr.1], evidence: &rest[ev.0..ev.1], body: &rest[body_at..] })
+    Some(Regions { pointers: &rest[ptr.0..ptr.1], evidence: &rest[ev.0..ev.1], body: &rest[body_at..], tree: &rest[tr.0..tr.1] })
 }
 
 /// The recipe over already-cut parts.
 pub fn content_hash_of(r: &Regions<'_>) -> String {
-    let mut buf = Vec::with_capacity(r.body.len() + r.pointers.len() + r.evidence.len() + 96);
+    let mut buf = Vec::with_capacity(r.body.len() + r.pointers.len() + r.evidence.len() + r.tree.len() + 96);
     buf.extend_from_slice(DOMAIN.as_bytes());
     buf.push(b'\n');
-    for (name, bytes) in [("body", r.body), ("pointers", r.pointers), ("evidence", r.evidence)] {
+    for (name, bytes) in [("body", r.body), ("pointers", r.pointers), ("evidence", r.evidence), ("tree", r.tree)] {
+        if name == "tree" && bytes.is_empty() {
+            continue;
+        }
         buf.extend_from_slice(name.as_bytes());
         buf.push(b'\n');
         buf.extend_from_slice(bytes.len().to_string().as_bytes());
@@ -134,10 +145,10 @@ mod tests {
     #[test]
     fn parts_cannot_imitate_each_other() {
         // Moving a byte from the body into the evidence region changes the hash, because every part is length-prefixed.
-        let a = Regions { pointers: b"p", evidence: b"e", body: b"b" };
-        let b = Regions { pointers: b"p", evidence: b"", body: b"e\nb" };
+        let a = Regions { pointers: b"p", evidence: b"e", body: b"b", tree: b"" };
+        let b = Regions { pointers: b"p", evidence: b"", body: b"e\nb", tree: b"" };
         assert_ne!(content_hash_of(&a), content_hash_of(&b));
-        let c = Regions { pointers: b"pe", evidence: b"", body: b"b" };
+        let c = Regions { pointers: b"pe", evidence: b"", body: b"b", tree: b"" };
         assert_ne!(content_hash_of(&a), content_hash_of(&c));
     }
 

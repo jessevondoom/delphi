@@ -933,7 +933,7 @@ fn check_origin(item: &Item) -> Result<(), PublishError> {
             Ok(())
         }
         (Origin::Command, Kind::Memory) => Err(PublishError::WrongOrigin("a memory is published from promoted content, not typed into a command")),
-        (Origin::Content(_), _) => Err(PublishError::WrongOrigin("an endorsement or tombstone has no content source")),
+        (Origin::Content(_), _) => Err(PublishError::WrongOrigin("an endorsement, tombstone or bundle has no content source")),
         (Origin::Command, _) | (Origin::Resign, _) => Ok(()),
     }
 }

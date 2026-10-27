@@ -44,3 +44,9 @@ pub const MAX_KEYS_PER_MAP: usize = 40;
 pub const MAX_LIST_ITEMS: usize = 64;
 pub const MAX_SEQ_ITEMS: usize = 16;
 pub const MAX_KEY_LEN: usize = 32;
+
+// The `bundle` kind (spec 027 §4.3; not in spec: the spec names no bounds).
+pub const MAX_BUNDLE_NAME_CHARS: usize = 48;
+pub const MAX_BUNDLE_VERSION_CHARS: usize = 32;
+pub const MAX_TOUCHES: usize = 16;
+pub const MAX_COMPAT_CHARS: usize = 64;
