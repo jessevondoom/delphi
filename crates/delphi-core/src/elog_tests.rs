@@ -18,7 +18,7 @@ const DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const GH: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 
 fn nasty() -> String {
-    format!("key {SECRET_ANT} token {GH} did {DID} url https://user:pw@example.com/x?token=abc123 internal https://admin:s3cretpw@internalhost/p did:web:corp.example.org:alice mail a.b@corp.example home /Users/someone/secret.txt \u{1b}[31mred\u{1b}[0m\nSECOND LINE \u{202e}rtl Bearer abcdefghijklmnop1234 {}", "A1b2".repeat(20))
+    format!("key {SECRET_ANT} token {GH} did {DID} url https://user:pw@example.com/x?token=abc123 internal https://admin:s3cretpw@internalhost/p did:web:corp.example.org:alice mail a.b@corp.example home dir secret.txt \u{1b}[31mred\u{1b}[0m\nSECOND LINE \u{202e}rtl Bearer abcdefghijklmnop1234 {}", "A1b2".repeat(20))
 }
 
 fn assert_clean(text: &str) {

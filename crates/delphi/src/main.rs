@@ -125,7 +125,7 @@ const ENV: &[(&str, &str)] = &[
     ("NO_COLOR", "no colour at all; TERM=dumb also drops styling"),
     ("DELPHI_REDUCE_MOTION", "1 stops the badge animation"),
     ("DELPHI_NO_ONBOARD", "1 skips the first-run questions"),
-    ("DELPHI_LOG", "off, error (default), warn or debug: what the error log keeps (`delphi logs`)"),
+    ("DELPHI_LOG", "off, error (default), warn or debug: what `delphi logs` keeps"),
 ];
 
 /// `delphi --help`: the commands by purpose, one sentence each, then the environment.

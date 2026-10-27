@@ -3,7 +3,7 @@ id: spec-039-error-log
 title: "039: The central error log"
 author: architect
 timestamp: 2026-10-27T12:00:00Z
-status: proposed   # built in one pull request; awaiting the operator's approval
+status: draft   # built in one pull request; awaiting the operator's approval
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

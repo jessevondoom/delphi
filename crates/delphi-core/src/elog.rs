@@ -276,6 +276,7 @@ impl Logger {
     }
 
     /// Build the one-line record (without the newline). Pure: the tests use it for the canary.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(&self, level: Level, component: &str, slug: &str, message: &str, ctx: &Value, chain: &[String], backtrace: Option<&str>) -> String {
         let home = Some(self.home.as_path());
         let component = if COMPONENTS.contains(&component) { component } else { self.default_component.as_str() };
@@ -329,6 +330,7 @@ impl Logger {
     }
 
     /// Write one record if the level allows. Never fails, never panics, never prints.
+    #[allow(clippy::too_many_arguments)]
     pub fn log(&self, level: Level, component: &str, slug: &str, message: &str, ctx: &Value, chain: &[String], backtrace: Option<&str>) {
         if !self.enabled(level) {
             return;
