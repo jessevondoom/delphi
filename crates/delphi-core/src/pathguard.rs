@@ -104,7 +104,7 @@ fn is_ratified_kind(key: &str) -> bool {
 }
 
 /// Logical paths no agent may read (§2.2 + 001-A1): event log, Council barrier, daemon state,
-/// staged proposals, ratification and provenance state, other roles' memory, the operator home.
+/// the error log (`logs/`, `specs/039`: it holds hostile text echoed from tools and stores), staged proposals, ratification and provenance state, other roles' memory, the operator home.
 fn never_readable(key: &str, role: &str) -> Option<String> {
     // `missions/<id>/events…` is the whole segmented log: segments, rotation files and the writer lock.
     if key.ends_with("events.jsonl") || key.starts_with("missions/") && segments(key).nth(2) == Some("events") {
@@ -113,7 +113,7 @@ fn never_readable(key: &str, role: &str) -> Option<String> {
     if segments(key).any(|s| s == ".barrier") {
         return Some("Council barrier".into());
     }
-    for p in ["run/", "state.db", "local/", "proposals/", "operator/", "ratified", "provenance", "memory/operator/", "config.toml"] {
+    for p in ["run/", "state.db", "local/", "proposals/", "operator/", "ratified", "provenance", "memory/operator/", "config.toml", "logs/"] {
         if key.starts_with(p) {
             return Some(p.trim_end_matches('/').into());
         }
@@ -850,6 +850,36 @@ mod tests {
         fs::create_dir_all(t.path().join("cache/skills/t")).unwrap();
         symlink("../../behavior", t.path().join("cache/skills/t/references")).unwrap();
         assert!(g.check("@bundle/acme/a/skills/t/references/goals.md", Access::Read).is_err());
+    }
+
+    // specs/039: the central error log lives at `$DELPHI_HOME/logs/`, outside every zone, and no agent tool may reach it.
+    #[test]
+    fn the_error_log_is_unreachable_by_any_agent_tool() {
+        let (t, mut g) = setup();
+        let home = t.path();
+        fs::create_dir_all(home.join("logs")).unwrap();
+        fs::write(home.join("logs/delphi.log.jsonl"), "{\"slug\":\"x\"}\n").unwrap();
+        // Even a copy placed in the local zone is denied (the `local/` rule).
+        fs::create_dir_all(home.join("local/logs")).unwrap();
+        fs::write(home.join("local/logs/delphi.log.jsonl"), "x").unwrap();
+        symlink(home.join("logs"), home.join("wt/loglink")).unwrap();
+        symlink(home.join("logs/delphi.log.jsonl"), home.join("wt/filelink")).unwrap();
+        g.read_globs = vec!["*".into(), "**".into()];
+        g.write_globs = vec!["**".into(), "@worktree/**".into(), "missions/**".into()];
+        for spelling in [
+            "logs/delphi.log.jsonl", "LOGS/delphi.log.jsonl", "Logs/Delphi.Log.Jsonl", "./logs/delphi.log.jsonl", "logs//delphi.log.jsonl", "logs/./delphi.log.jsonl",
+            "logs/delphi.log.jsonl.1", "logs/delphi.log.jsonl.lock", "logs", "logs/", "local/logs/delphi.log.jsonl",
+            "../logs/delphi.log.jsonl", "@worktree/../logs/delphi.log.jsonl", "@project/app/../../logs/delphi.log.jsonl", "/tmp/anything/logs/delphi.log.jsonl", "~/.delphi/logs/delphi.log.jsonl",
+            "@worktree/loglink/delphi.log.jsonl", "@worktree/filelink", "@worktree/loglink",
+        ] {
+            assert!(g.check(spelling, Access::Read).is_err(), "`{}` must not be readable", spelling);
+            assert!(g.read_file(spelling, 100).is_err(), "`{}` must not be readable", spelling);
+            assert!(g.write_atomic(spelling, b"x").is_err(), "`{}` must not be writable", spelling);
+        }
+        assert!(matches!(g.list("logs"), Err(Denied::NeverReadable(_))));
+        assert!(matches!(g.list("LOGS"), Err(Denied::NeverReadable(_))));
+        assert!(g.list("@worktree/loglink").is_err());
+        assert_eq!(fs::read_to_string(home.join("logs/delphi.log.jsonl")).unwrap(), "{\"slug\":\"x\"}\n", "nothing was written");
     }
 
     #[test]
