@@ -662,3 +662,88 @@ fn the_store_listing_shows_levels_names_the_ambiguity_and_changes_nothing() {
     assert_eq!(list(&s.fx.store, &xf::cfg(), &s.ws), 0);
     assert_eq!(s.lock(), before);
 }
+
+struct Answer {
+    yes: bool,
+    seen: Vec<Preview>,
+}
+
+impl Approver for Answer {
+    fn decide(&mut self, p: &Preview) -> Decision {
+        self.seen.push(p.clone());
+        if self.yes { Decision::Approve(p.approve(true)) } else { Decision::Deny }
+    }
+}
+
+fn argv(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+/// The install's xenia key becomes the fixture member's, and the workspace exists as a command line finds it.
+fn as_member(s: &Site, who: &str) {
+    crate::xenia_cmd::TEST_NOW.store(xf::now(), std::sync::atomic::Ordering::Relaxed);
+    let key = crate::xenia_cmd::key_path(&s.home);
+    let _ = fs::remove_file(&key);
+    s.fx.id(who).store_new(&key).unwrap();
+    fs::write(s.ws.join("config.toml"), "").unwrap();
+}
+
+#[test]
+fn xenia_publish_bundle_shows_the_card_and_a_no_sends_nothing() {
+    let (_t, s) = Site::new();
+    as_member(&s, "mia");
+    let b = s.build("mia", "1.4.0", |_| {});
+    let h = s.home.to_str().unwrap();
+    let dir = b.dir.to_str().unwrap();
+    let pin = format!("git-tree:{}", b.tree);
+    let line = |extra: &[&str]| {
+        let mut v = vec!["publish", "--bundle", dir, "--url", URL, "--pin", pin.as_str(), "--no-verify-tree", "--tags", "payments", "--store", "acme/acme-main", "--home", h];
+        v.extend_from_slice(extra);
+        argv(&v)
+    };
+    let before = s.fx.remote.host_head();
+    let mut no = Answer { yes: false, seen: vec![] };
+    assert_ne!(crate::xenia_cmd::run_with(&line(&[]), &mut no), 0);
+    assert_eq!(no.seen.len(), 1, "the card was shown and answered no");
+    assert_eq!(s.fx.remote.host_head(), before, "a no sends nothing");
+    let mut yes = Answer { yes: true, seen: vec![] };
+    assert_eq!(crate::xenia_cmd::run_with(&line(&[]), &mut yes), 0);
+    assert_ne!(s.fx.remote.host_head(), before);
+    let shown = String::from_utf8(yes.seen[0].items[0].bytes.clone()).unwrap();
+    assert!(shown.contains("kind: bundle") && shown.contains(&b.hash), "{shown}");
+    // The store now holds it, member-signed.
+    s.fx.sync();
+    let set = BundleSet::offline(&s.fx.store, &xf::cfg()).unwrap();
+    assert_eq!((set.bundles.len(), set.bundles[0].name.as_str(), set.bundles[0].level), (1, "acme-platform", BundleLevel::MemberSigned));
+    // Not a directory, and a key that did not sign the bundle: refused before any card.
+    let mut none = Answer { yes: true, seen: vec![] };
+    assert_ne!(crate::xenia_cmd::run_with(&argv(&["publish", "--bundle", "/nonexistent", "--url", URL, "--pin", pin.as_str(), "--store", "acme/acme-main", "--home", h]), &mut none), 0);
+    as_member(&s, "wes");
+    assert_ne!(crate::xenia_cmd::run_with(&line(&["--id", &set.bundles[0].id]), &mut none), 0);
+    assert!(none.seen.is_empty(), "a refusal comes before there is anything to sign");
+}
+
+#[test]
+fn xenia_sync_keeps_the_locks_levels_true_and_the_auto_update_switch_needs_a_workspace() {
+    let (_t, s) = Site::new();
+    as_member(&s, "mia");
+    let b = s.build("mia", "1.4.0", |_| {});
+    let rec = s.record("mia", 1, 1, &b, "1.4.0", |_| {});
+    s.endorse("sam", 2, &rec, 1);
+    assert_eq!(s.add(&id(1), &opts()), 0);
+    assert_eq!(s.entry().provenance, "endorsed");
+    let h = s.home.to_str().unwrap();
+    let mut no = Answer { yes: false, seen: vec![] };
+    // The steward withdraws the endorsement: the store says member-signed, and the lock follows at the next sync.
+    // (A changed verdict is a higher revision of the steward's own record, not a second record: spec 012 §5.2.)
+    let w = rk::endorsement_with(&s.fx.id("sam"), &id(2), 2, &rec.id, 1, &rec.hash(), "withdraw", "payments");
+    s.fx.put_commit(&w, "withdraw endorsement");
+    s.refresh();
+    assert_eq!(crate::xenia_cmd::run_with(&argv(&["sync", "--store", "acme/acme-main", "--workspace", "w", "--home", h]), &mut no), 0);
+    assert_eq!(s.entry().provenance, "member-signed");
+    // The switch without a workspace is a usage error and changes nothing.
+    let before = s.lock();
+    let nowhere = argv(&["sync", "--store", "acme/acme-main", "--auto-update-bundles", "--workspace", "nope", "--home", h]);
+    assert_ne!(crate::xenia_cmd::run_with(&nowhere, &mut no), 0);
+    assert_eq!(s.lock(), before);
+}

@@ -38,6 +38,14 @@ fn fail(msg: impl AsRef<str>) -> i32 {
 
 /// The clock the verifier judges freshness at.
 pub fn cfg_now() -> VerifyConfig {
+    #[cfg(test)]
+    {
+        // A fixture's freshness statement is only fresh around its own date; the xenia command tests pin the clock.
+        let t = crate::xenia_cmd::TEST_NOW.load(std::sync::atomic::Ordering::Relaxed);
+        if t != 0 {
+            return VerifyConfig::at(t);
+        }
+    }
     VerifyConfig::at(delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0))
 }
 
@@ -164,7 +172,7 @@ pub fn update_with(home: &Path, ws: &Path, store: &Store, cfg: &VerifyConfig, en
 /// `bundle update` calls this for a store source: the store is opened from the install's own pins, the fetch is the real one.
 pub fn update_entry(home: &Path, ws: &Path, entry: &Entry, background: bool, host: &dyn Host) -> i32 {
     let Some((org, store_name, _, _)) = xenia_bundle::parse_source_path(&entry.source.path) else { return fail(format!("{}: the recorded store source is damaged", entry.id())) };
-    let store = match xenia_bundle::open_joined(home, &org, &store_name, false) {
+    let store = match xenia_bundle::open_joined(home, &org, &store_name) {
         Ok(s) => s,
         Err(e) => return fail(e),
     };
@@ -225,6 +233,12 @@ pub struct SyncReport {
 #[allow(clippy::too_many_arguments)]
 pub fn sync_bundles(home: &Path, ws: &Path, store: &Store, cfg: &VerifyConfig, auto: bool, background: bool, fetcher: &dyn Fetcher, host: &dyn Host) -> Result<SyncReport, String> {
     let set = load_set(store, cfg)?;
+    sync_bundles_in(home, ws, &set, auto, background, fetcher, host)
+}
+
+/// [`sync_bundles`] over a store state the caller has just verified (`delphi xenia sync` has synced already and does not fetch
+/// twice): `BundleSet::offline` is that state.
+pub fn sync_bundles_in(home: &Path, ws: &Path, set: &BundleSet, auto: bool, background: bool, fetcher: &dyn Fetcher, host: &dyn Host) -> Result<SyncReport, String> {
     let lock = bundles::read(ws)?;
     let mut report = SyncReport::default();
     let rank = |l: &str| match l {
@@ -244,6 +258,11 @@ pub fn sync_bundles(home: &Path, ws: &Path, store: &Store, cfg: &VerifyConfig, a
         };
         if let Some(why) = b.hidden {
             report.skipped.push((eid.clone(), format!("the store withdrew the record ({why}); the installed version stays")));
+            continue;
+        }
+        if b.rev < rev {
+            // The store serves an older revision than this install added: a host replaying an old state. Never an update.
+            report.skipped.push((eid, format!("the store serves revision {} but this install already has {} (a replay); nothing was changed", b.rev, rev)));
             continue;
         }
         let newer = b.rev > rev || b.bundle_hash != e.hash;
@@ -272,7 +291,7 @@ pub fn sync_bundles(home: &Path, ws: &Path, store: &Store, cfg: &VerifyConfig, a
         }
         let o = AddOpts { skill_roles: Default::default(), order: None, dry_run: false, yes: false, replace_publisher: false, no_vectors: false, embed_in_background: background };
         let eid_mode = e.id();
-        if fetch_and_apply(home, ws, &set, b, &o, Mode::Update(&eid_mode), fetcher, host) == 0 {
+        if fetch_and_apply(home, ws, set, b, &o, Mode::Update(&eid_mode), fetcher, host) == 0 {
             report.updated.push(eid);
         } else {
             report.skipped.push((eid, "the update did not apply (see the message above)".into()));
@@ -436,33 +455,14 @@ pub fn publish(home: &Path, store: &Store, cfg: &VerifyConfig, who: &Identity, a
     Ok((id, rev, published))
 }
 
-/// The terminal approver: shows what will be signed and takes the first eight characters of the preview digest. A terminal
-/// on both ends is required; the console's approval card (milestone X9) replaces this where the console is running.
-pub struct TtyApprover;
+/// The approver for a bundle publish: the same card and the same typed code as every other `xenia` command (X9), so that what
+/// the operator is shown and what they type back is one thing. A terminal on both ends is required.
+pub(crate) struct CardTty;
 
-impl Approver for TtyApprover {
+impl Approver for CardTty {
     fn decide(&mut self, p: &Preview) -> Decision {
-        let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
-        if !on_terminal {
-            eprintln!("publishing is a human act: run it in a terminal (there is no non-interactive mode)");
-            return Decision::Deny;
-        }
-        for it in &p.items {
-            println!("--- {} (rev {}, signed by {}) ---", it.path, it.rev, it.signer);
-            println!("{}", String::from_utf8_lossy(&it.bytes));
-        }
-        for f in &p.flags {
-            println!("flag: {} in {}: {}", f.class, f.field, f.found);
-        }
-        let expect: String = p.digest.trim_start_matches("blake3:").chars().take(8).collect();
-        print!("type {expect} to sign and publish exactly this, anything else cancels: ");
-        use std::io::{BufRead, Write};
-        let _ = std::io::stdout().flush();
-        let mut line = String::new();
-        if std::io::stdin().lock().read_line(&mut line).is_err() || line.trim() != expect {
-            return Decision::Deny;
-        }
-        Decision::Approve(p.approve(true))
+        println!("{}", delphi_core::xenia_action::card("Publish a bundle", p));
+        crate::xenia_cmd::TtyApprover.decide(p)
     }
 }
 
@@ -471,7 +471,7 @@ impl Approver for TtyApprover {
 
 fn open_named(home: &Path, which: &str) -> Result<Store, String> {
     let (org, store) = which.split_once('/').ok_or("name the store as <org>/<store>")?;
-    xenia_bundle::open_joined(home, org, store, false)
+    xenia_bundle::open_joined(home, org, store)
 }
 
 /// `delphi bundle add <record id> --from-xenia <org>/<store>`.
@@ -506,39 +506,47 @@ pub fn cli_store(home: &Path, ws: &Path, which: &str, args: &[String]) -> i32 {
 pub fn cli_publish(dir: &Path, args: &[String], host: &dyn Host) -> i32 {
     let flag = |n: &str| crate::bundle_cmd::flag(args, n);
     let home = crate::home::delphi_home(flag("--home").as_deref());
-    let (Some(to), Some(url), Some(pin)) = (flag("--to"), flag("--url"), flag("--pin")) else { return fail("publish needs --to <org>/<store>, --url <https git url> and --pin <git-tree|git-commit>:<sha>") };
+    let Some(to) = flag("--to") else { return fail("publish needs --to <org>/<store>") };
+    let store = match open_named(&home, &to) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    publish_cli(&home, &store, &to, dir, &flag, args.iter().any(|x| x == "--no-verify-tree"), host, &mut CardTty)
+}
+
+/// The publish command shared by `delphi bundle publish` and `delphi xenia publish --bundle`: `get` reads an option by its
+/// `--name`; the approver is the caller's.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_cli(home: &Path, store: &Store, store_name: &str, dir: &Path, get: &dyn Fn(&str) -> Option<String>, no_verify_tree: bool, host: &dyn Host, approver: &mut dyn Approver) -> i32 {
+    let (Some(url), Some(pin)) = (get("--url"), get("--pin")) else { return fail("publishing a bundle needs --url <https git url> and --pin <git-tree|git-commit>:<sha>") };
     let Some((kind, sha)) = pin.split_once(':') else { return fail("--pin wants git-tree:<sha> or git-commit:<sha>") };
     let pin_kind = match kind {
         "git-tree" => PinKind::GitTree,
         "git-commit" => PinKind::GitCommit,
         _ => return fail("--pin wants git-tree:<sha> or git-commit:<sha>"),
     };
-    let store = match open_named(&home, &to) {
-        Ok(s) => s,
-        Err(e) => return fail(e),
-    };
-    let who = match Identity::load(&crate::xenia_cmd::key_path(&home)) {
+    let who = match Identity::load(&crate::xenia_cmd::key_path(home)) {
         Ok(i) => i,
         Err(e) => return fail(format!("this install has no xenia key ({e}); run `delphi xenia whoami`")),
     };
     let a = PublishArgs {
         dir: dir.to_path_buf(),
         url,
-        subdir: flag("--subdir"),
+        subdir: get("--subdir"),
         pin_kind,
         pin: sha.to_string(),
-        id: flag("--id"),
-        tags: flag("--tags").map(|t| t.split(',').map(String::from).collect()),
+        id: get("--id"),
+        tags: get("--tags").map(|t| t.split(',').map(String::from).collect()),
         role: Role::Operator,
         ceiling: SourceCeiling::InternalGenerated,
-        review_by: flag("--review-by"),
+        review_by: get("--review-by"),
     };
-    let fetcher = crate::bundle_fetch::real_fetcher(&home);
-    let verify: Option<&dyn Fetcher> = if args.iter().any(|x| x == "--no-verify-tree") { None } else { Some(&fetcher) };
-    match publish(&home, &store, &cfg_now(), &who, &a, verify, host, &mut TtyApprover) {
+    let fetcher = crate::bundle_fetch::real_fetcher(home);
+    let verify: Option<&dyn Fetcher> = if no_verify_tree { None } else { Some(&fetcher) };
+    match publish(home, store, &cfg_now(), &who, &a, verify, host, approver) {
         Ok((id, rev, p)) => {
             println!("published {} revision {} ({} attempt{}){}", id, rev, p.attempts, if p.attempts == 1 { "" } else { "s" }, if p.already_there { ": the store already held exactly these bytes" } else { "" });
-            println!("a steward endorses it with `delphi xenia endorse {}`; members add it with `delphi bundle add {} --from-xenia {}`", id, id, to);
+            println!("a steward endorses it with `delphi xenia endorse {}`; members add it with `delphi bundle add {} --from-xenia {}`", id, id, store_name);
             0
         }
         Err(e) => fail(e),

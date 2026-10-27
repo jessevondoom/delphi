@@ -106,7 +106,7 @@ fn check_store(home: &Path, source_path: &str, locked_hash: &str, pinned: &str) 
     if !home.join("xenia").join(&org).join(&store_name).join("state/pins.toml").is_file() {
         return Check::Unknown(format!("the store {}/{} is not joined on this install", org, store_name));
     }
-    let store = match xb::open_joined(home, &org, &store_name, false) {
+    let store = match xb::open_joined(home, &org, &store_name) {
         Ok(s) => s,
         Err(e) => return Check::Unknown(e),
     };

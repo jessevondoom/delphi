@@ -257,7 +257,7 @@ This is an early project built mostly by its own agents under one operator. The 
 - Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
 
 **Specified, not built**
-- `bundle serve`, evaluation (slices B11, B12; the store transport, B8, is built as `bundle publish|store|add --from-xenia` (the `xenia`-spelled commands and archive tree pointers are not); authoring and `package --vectors`, B10, and alignment, B9, are built; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and vectors, B3, are built); the Librarian role (013); the Xenia member commands and a live store (X8 and a real run).
+- `bundle serve`, evaluation (slices B11, B12; the store transport, B8, is built as `bundle publish|store|add --from-xenia` (archive tree pointers are not); authoring and `package --vectors`, B10, and alignment, B9, are built; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and vectors, B3, are built); the Librarian role (013); the Xenia member commands and a live store (X8 and a real run).
 - Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
 - Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
 

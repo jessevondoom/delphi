@@ -194,14 +194,16 @@ pub fn sync(store: &Store, cfg: &VerifyConfig) -> Result<SyncNote, String> {
 }
 
 /// The store `org/store` this install joined: its URL comes from the pins the operator verified at join, never from a
-/// bundle, a lock or a record. `allow_file` admits local-path stores (tests, shared drives).
-pub fn open_joined(home: &Path, org: &str, store: &str, allow_file: bool) -> Result<Store, String> {
+/// bundle, a lock or a record. A local-path store (a shared drive) is admitted exactly as `delphi xenia` admits it: it is the
+/// URL the operator gave at join, with `--allow-local`.
+pub fn open_joined(home: &Path, org: &str, store: &str) -> Result<Store, String> {
     let paths = delphi_xenia::store::StorePaths::new(home, org, store).map_err(|e| e.to_string())?;
     let pins = delphi_xenia::pins::load(&delphi_xenia::pins::FilePinStorage::new(paths.state.join("pins.toml"))).map_err(|e| e.reason().to_string())?.ok_or_else(|| format!("{org}/{store} has not been joined on this install"))?;
     if pins.org() != org || pins.store() != store {
         return Err("the pins belong to another store".into());
     }
-    Store::open(home, org, store, pins.url(), allow_file).map_err(|e| e.to_string())
+    let url = pins.url();
+    Store::open(home, org, store, url, !(url.starts_with("https://") || url.starts_with("ssh://"))).map_err(|e| e.to_string())
 }
 
 /// Where a bundle added from a store records its source in the lock: `xenia:<org>/<store>/<record id>@<rev>`.

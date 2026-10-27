@@ -360,13 +360,14 @@ The org's shared, signed memory store: join, sync, status, publish, endorse.
 ```
   delphi xenia whoami
   delphi xenia join <url> --org <o> --store <s> --admin <fingerprint> --head <epoch>:<hash> [--allow-local]
-  delphi xenia sync | status [--store <org>/<store>] [--json]
+  delphi xenia sync [--auto-update-bundles] | status [--store <org>/<store>] [--json]
   delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]
+  delphi xenia publish --bundle <dir> --url <https git url> --pin <git-tree|git-commit>:<sha> [--subdir D] [--id <record>] [--tags a,b] [--no-verify-tree]
   delphi xenia endorse|dispute|retract|withdraw|restore <id> [--scope a,b] [--note <n>] [--reason <r>]
   delphi xenia republish --old <did>   [--workspace <name>] [--home <dir>]
 ```
 
-Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet.
+Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet. `publish --bundle` publishes a signed org bundle as a record that points at its git tree (see `delphi bundle publish`); `sync` lists newer revisions of the bundles you added from the store and keeps their levels true, and --auto-update-bundles applies the updates that keep the same publisher and cannot lower a level.
 
 ### `delphi docs`
 
