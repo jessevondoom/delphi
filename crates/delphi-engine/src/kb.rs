@@ -328,7 +328,7 @@ pub struct SourceFile {
 pub struct BundleTag {
     /// `org/name`.
     pub id: String,
-    /// `acme/acme-platform@1.4.0 · unsigned`, with `· stale` past `review_by`.
+    /// `acme/acme-platform@1.4.0 · unsigned · validated bundle source`, with `· stale` past `review_by`.
     pub label: String,
     pub stale: bool,
 }
@@ -348,18 +348,18 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
         let root = delphi_core::bundles::cache_dir(home, &e.org, &e.name, &e.hash).join("knowledge");
         let tag = BundleTag { id: e.id(), label: e.label(&today), stale: e.is_stale(&today) };
         let mut files = Vec::new();
-        md_files(&root, &format!("bundles/{}/{}/knowledge", e.org, e.name), "bundles", "federated_verified", &mut files);
+        md_files(&root, &format!("bundles/{}/{}/knowledge", e.org, e.name), "bundles", e.tier_name(), &mut files);
         out.extend(files.into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
         // A skill's `references/` (`specs/025` §3): text to retrieve, indexed under zone `skills` at the bundle's tier, and
         // read only through `@bundle/<org>/<name>/skills/<skill>/references/**`; never inlined into a prompt.
         let skills = delphi_core::bundles::cache_dir(home, &e.org, &e.name, &e.hash).join("skills");
-        out.extend(reference_files(&skills, &e.org, &e.name).into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
+        out.extend(reference_files(&skills, &e.org, &e.name, e.tier_name()).into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
     }
 }
 
 /// The Markdown under `skills/<skill>/references/` of one cached bundle, by logical path
 /// `bundles/<org>/<name>/skills/<skill>/references/…`, zone `skills`.
-fn reference_files(skills: &Path, org: &str, name: &str) -> Vec<SourceFile> {
+fn reference_files(skills: &Path, org: &str, name: &str, tier: &'static str) -> Vec<SourceFile> {
     let mut out = Vec::new();
     let Ok(rd) = std::fs::read_dir(skills) else { return out };
     let mut dirs: Vec<_> = rd.flatten().filter(|d| d.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink())).collect();
@@ -370,7 +370,7 @@ fn reference_files(skills: &Path, org: &str, name: &str) -> Vec<SourceFile> {
         if !skill.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') || !std::fs::symlink_metadata(&refs).is_ok_and(|m| m.is_dir()) {
             continue;
         }
-        md_files(&refs, &format!("bundles/{}/{}/skills/{}/references", org, name, skill), "skills", "federated_verified", &mut out);
+        md_files(&refs, &format!("bundles/{}/{}/skills/{}/references", org, name, skill), "skills", tier, &mut out);
     }
     out
 }
@@ -589,6 +589,13 @@ impl Kb {
             let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))))?;
             rows.flatten().collect()
         };
+        // A bundle file whose stored tier is not the tier the lock now gives it (the operator raised or lowered the bundle)
+        // is read again even though its bytes did not change.
+        let tiers: HashMap<String, String> = {
+            let mut st = self.conn.prepare("SELECT rel_path, source_type FROM kb_documents WHERE rel_path LIKE 'bundles/%'")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            rows.flatten().collect()
+        };
         let mut seen: HashMap<&str, ()> = HashMap::new();
         for f in files {
             let Ok(meta) = std::fs::metadata(&f.path) else { continue };
@@ -596,7 +603,8 @@ impl Kb {
             seen.insert(&f.rel_path, ());
             // A file with the modification time and size it had when it was indexed is not read again: this is
             // what lets every search check the whole tree. `kb reindex` reads everything regardless.
-            if stamp.0 != 0 && known.get(&f.rel_path) == Some(&stamp) {
+            let retiered = f.bundle.is_some() && tiers.get(&f.rel_path).is_some_and(|t| t != f.default_source);
+            if stamp.0 != 0 && known.get(&f.rel_path) == Some(&stamp) && !retiered {
                 rep.unchanged += 1;
                 continue;
             }
@@ -2508,6 +2516,10 @@ mod tests {
                 skill_roles: Default::default(),
                 history: Vec::new(),
                 inert_servers: Vec::new(),
+                trust: String::new(),
+                trust_hash: String::new(),
+                trust_kid: String::new(),
+                trust_log: Vec::new(),
             });
         }
         delphi_core::bundles::write(&ws, &lock).unwrap();
@@ -2531,7 +2543,7 @@ mod tests {
         assert_eq!(hits[0].pointer, "@bundle/acme/plat/knowledge/runbooks/deploy.md#L6-L8", "an agent-readable logical path");
         let (tier, ctx): (String, String) = kb.conn.query_row("SELECT d.source_type, c.contextual_text FROM kb_documents d JOIN kb_chunks c ON c.doc_id = d.doc_id", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(tier, "federated_verified");
-        assert!(ctx.contains("Bundle: acme/plat@1.4.0 · unsigned]"), "{}", ctx);
+        assert!(ctx.contains("Bundle: acme/plat@1.4.0 · unsigned · validated bundle source]"), "{}", ctx);
     }
 
     // specs/025 AC-5: a skill's references/ is indexed under zone `skills` at the bundle's tier and found by its words, with

@@ -14,6 +14,13 @@ export type OrgBundle = {
   update_available: string | boolean | null;
   /** how far the bundle's vectors are, e.g. `42%` or `100% (shipped, verified)`; `null` from a daemon that predates slice B3 */
   vectors: string | null;
+  /** the knowledge tier now in force (`federated_verified` = a validated bundle source, or `user_ratified` when you raised it); absent from a daemon that predates the raise */
+  tier?: string;
+  /** who raised it: `cli`, `console`, `at-add` or `trusted-source` */
+  raised_by?: string | null;
+  /** the level of the trusted source this bundle comes from (`user_ratified` or `default`), or `null` */
+  source_trust?: string | null;
+  origin?: string;
 };
 export type OrgGoal = { bundle: string; id: string; title: string; horizon: string; measure: string; status: string };
 export type OrgPerspective = { bundle: string; id: string; title: string; statement: string };
@@ -24,6 +31,11 @@ export type OrgView = {
 };
 
 export type Verb = 'add' | 'update' | 'rollback' | 'remove';
+/** What is being typed: a verb for the shell's commands, `trust` / `source` for the tier acts, `confirm` for their typed confirmation. */
+export type Ask = Verb | 'trust' | 'source' | 'confirm';
+/** `org.trust`: the operator's raise of a bundle's tier, or trust in a source (`specs/024` §3.7, §3.8). Raising asks twice: the card, then the typed word. */
+export type TrustBody = { action: 'raise' | 'lower' | 'grant' | 'revoke'; name: string; level?: string; confirm?: string };
+export type Card = { body: TrustBody; text: string; expect: string; what: string };
 export type OrgPanel = {
   kind: 'org';
   view: OrgView | null;
@@ -31,7 +43,9 @@ export type OrgPanel = {
   error: string;
   scroll: number;
   /** the verb being typed for, or `null` */
-  asking: Verb | null;
+  asking: Ask | null;
+  /** the confirmation card being answered */
+  card?: Card | null;
   input: string;
   busy: boolean;
   /** what the last action printed */
@@ -43,7 +57,17 @@ export type OrgAction =
   | { t: 'none' }
   | { t: 'close' }
   | { t: 'refresh' }
-  | { t: 'run'; body: { action: Verb; path?: string; name?: string; to?: string } };
+  | { t: 'run'; body: { action: Verb; path?: string; name?: string; to?: string } }
+  | { t: 'trust'; body: TrustBody };
+
+/** `t <bundle> [default]` and `s <bundle> [ratified|revoke]` as the `org.trust` call they mean. */
+export function trustBody(asking: 'trust' | 'source', typed: string): TrustBody | null {
+  const [name, word] = typed.trim().split(/\s+/);
+  if (!name) return null;
+  if (asking === 'trust') return word === 'default' ? { action: 'lower', name } : { action: 'raise', name };
+  if (word === 'revoke') return { action: 'revoke', name };
+  return { action: 'grant', name, level: word === 'ratified' || word === 'user_ratified' ? 'user_ratified' : 'default' };
+}
 
 export const openOrg = (): OrgPanel => ({ kind: 'org', view: null, error: '', scroll: 0, asking: null, input: '', busy: false, result: null });
 
@@ -65,16 +89,21 @@ export function key(p: OrgPanel, e: Ev): { panel: OrgPanel; action: OrgAction } 
   const k = e.t === 'key' ? e.k : e.t === 'text' ? e.s : '';
   if (p.asking) {
     if (p.busy) return keep();
-    if (k === 'esc') return keep({ ...p, asking: null, input: '' });
+    if (k === 'esc') return keep({ ...p, asking: null, input: '', card: null });
     if (e.t === 'text' && [...p.input].length < 400) return keep({ ...p, input: p.input + e.s.replace(/[\r\n]/g, '') });
     if (e.t === 'paste') return keep({ ...p, input: (p.input + e.s.replace(/\s*\n\s*/g, ' ')).slice(0, 400) });
     if (k === 'backspace') return keep({ ...p, input: [...p.input].slice(0, -1).join('') });
     if (k === 'enter') {
       const v = p.input.trim();
+      if (p.asking === 'confirm' && p.card) return keep({ ...p, asking: null, input: '', busy: true, flash: undefined }, { t: 'trust', body: { ...p.card.body, confirm: v } });
+      if (p.asking === 'trust' || p.asking === 'source') {
+        const body = trustBody(p.asking, v);
+        return body ? keep({ ...p, asking: null, input: '', busy: true, flash: undefined }, { t: 'trust', body }) : keep({ ...p, flash: 'type the name of an added bundle' });
+      }
       if (!v) return keep({ ...p, flash: p.asking === 'add' ? 'type the directory of the bundle' : 'type the name of an added bundle' });
       // rollback takes `name` or `name <hash>`: the second word is the version to go back to (default: the previous one)
       const [name, to] = v.split(/\s+/);
-      const body = p.asking === 'add' ? { action: 'add' as const, path: v } : p.asking === 'rollback' && to ? { action: 'rollback' as const, name: name!, to } : { action: p.asking, name: v };
+      const body = p.asking === 'add' ? { action: 'add' as const, path: v } : p.asking === 'rollback' && to ? { action: 'rollback' as const, name: name!, to } : { action: p.asking as Verb, name: v };
       return keep({ ...p, asking: null, input: '', busy: true, flash: undefined }, { t: 'run', body });
     }
     return keep();
@@ -91,16 +120,27 @@ export function key(p: OrgPanel, e: Ev): { panel: OrgPanel; action: OrgAction } 
     if (!p.view?.bundles.length) return keep({ ...p, flash: 'no bundle is added yet' });
     return keep({ ...p, asking: k === 'u' ? 'update' : k === 'r' ? 'rollback' : 'remove', input: onlyOne(p.view) });
   }
+  if (k === 't' || k === 's') {
+    if (!p.view?.bundles.length) return keep({ ...p, flash: 'no bundle is added yet' });
+    return keep({ ...p, asking: k === 't' ? 'trust' : 'source', input: onlyOne(p.view) });
+  }
   return keep();
 }
 
 export const hint = (p: OrgPanel): string =>
   p.flash ? p.flash
     : p.busy ? 'working…'
+      : p.asking === 'confirm' ? `type ${p.card?.what ?? 'the word shown'} to confirm · enter · esc cancel (nothing changes unless it matches)`
+      : p.asking === 'trust' ? 'type the bundle name to raise it to user_ratified, or `<name> default` to lower it · enter · esc cancel'
+      : p.asking === 'source' ? 'type the bundle name to trust its source, `<name> ratified` to trust it at user_ratified, or `<name> revoke` · enter · esc cancel'
       : p.asking === 'add' ? 'type the directory of the bundle · enter add · esc cancel'
         : p.asking === 'rollback' ? 'type the bundle name, and a version hash to go back to if not the previous one · enter rollback · esc cancel'
           : p.asking ? `type the name of the bundle to ${p.asking} · enter ${p.asking} · esc cancel`
-          : 'a add <dir> · u update <name> · x remove <name> · r rollback <name> · g reload · ↑↓ scroll · esc close';
+          : 'a add <dir> · u update <name> · x remove <name> · r rollback <name> · t trust <name> · s trust source · g reload · ↑↓ scroll · esc close';
+
+/** `validated` for the default tier, `ratified` when raised, `+ source` when its source is trusted. Words, not colour. */
+export const tierCell = (b: OrgBundle): string =>
+  (b.tier === 'user_ratified' ? 'ratified' : 'validated') + (b.source_trust ? '*' : '');
 
 /** A fixed-width cell: cut with an ellipsis, padded with spaces. */
 const pad = (s: string, n: number): string => s + ' '.repeat(Math.max(0, n - T.width(s)));
@@ -125,10 +165,10 @@ export function lines(p: OrgPanel, pal: T.Pal, w: number): string[] {
   if (!v.bundles.length) row(T.dim('none added. `a` adds a bundle from a directory; `delphi bundle add <dir>` does the same from a shell'));
   else {
     const idW = Math.min(30, Math.max(8, ...v.bundles.map((b) => T.width(clean(b.id)))));
-    out.push('  ' + T.dim(T.clip(`${fit('bundle', idW)}  ${fit('version', 9)}  ${fit('provenance', 10)}  ${fit('scope', 9)}  ${fit('review', 18)}  ${fit('update', 8)}  vectors`, w - 4)));
+    out.push('  ' + T.dim(T.clip(`${fit('bundle', idW)}  ${fit('version', 9)}  ${fit('provenance', 10)}  ${fit('tier', 10)}  ${fit('scope', 9)}  ${fit('review', 18)}  ${fit('update', 8)}  vectors`, w - 4)));
     for (const b of v.bundles) {
       const review = b.stale ? T.warn(fit(`stale (${clean(b.review_by)})`, 18)) : fit(`fresh (${clean(b.review_by)})`, 18);
-      row(`${fit(clean(b.id), idW)}  ${fit(clean(b.version), 9)}  ${fit(clean(b.provenance), 10)}  ${fit(b.matched ? 'matched' : 'unmatched', 9)}  ${review}  ${fit(b.update_available === null || b.update_available === false ? '-' : clean(b.update_available === true ? 'yes' : b.update_available.split(' ')[0]!), 8)}  ${b.vectors === null ? '-' : clean(b.vectors)}`);
+      row(`${fit(clean(b.id), idW)}  ${fit(clean(b.version), 9)}  ${fit(clean(b.provenance), 10)}  ${fit(tierCell(b), 10)}  ${fit(b.matched ? 'matched' : 'unmatched', 9)}  ${review}  ${fit(b.update_available === null || b.update_available === false ? '-' : clean(b.update_available === true ? 'yes' : b.update_available.split(' ')[0]!), 8)}  ${b.vectors === null ? '-' : clean(b.vectors)}`);
     }
   }
   head('Goals', v.goals.length);
@@ -149,6 +189,9 @@ export function lines(p: OrgPanel, pal: T.Pal, w: number): string[] {
   row('u  update <name>   add it again from where it came from (a new publisher key needs `delphi bundle add --replace-publisher`)');
   row('r  rollback <name> [hash]   go back to an earlier version still in the cache; no approval, the lock history is the record');
   row('x  remove <name>   take it out of the lock and the index');
+  row('t  trust <name>    raise one bundle to user_ratified for this version (typed confirmation); `<name> default` lowers it');
+  row('s  trust source <name>   trust its origin and publisher key for future updates (typed confirmation); `<name> revoke` ends it');
+  row(T.dim('tier * = its source is trusted. every bundle document is a validated bundle source and may be cited; it stays data, never instructions'));
   row('g  reload          read the organization again');
   row(T.dim(`not available yet: ${v.unavailable.map((u) => clean(u).replace('_', ' ')).join(', ')}. No action asks for an approval: you pressing the key is the decision.`));
   return out;
@@ -157,7 +200,8 @@ export function lines(p: OrgPanel, pal: T.Pal, w: number): string[] {
 /** The panel as exactly `h` lines. */
 export function view(p: OrgPanel, pal: T.Pal, w: number, h: number): string[] {
   const body = lines(p, pal, w);
-  const ask = p.asking ? ['', '  ' + T.link(p.asking === 'add' ? 'add directory› ' : `${p.asking} bundle› `) + T.text(pal)(p.input) + '▏'] : [];
+  const cardLines = p.asking === 'confirm' && p.card ? ['', ...p.card.text.split('\n').map((l) => '  ' + T.clip(clean(l), w - 4))] : [];
+  const ask = p.asking ? [...cardLines, '', '  ' + T.link(p.asking === 'add' ? 'add directory› ' : p.asking === 'confirm' ? 'confirm› ' : `${p.asking} bundle› `) + T.text(pal)(p.input) + '▏'] : [];
   const room = Math.max(1, h - ask.length);
   const scroll = Math.min(p.scroll, Math.max(0, body.length - room));
   const shown = [...body.slice(scroll, scroll + room), ...ask];

@@ -317,6 +317,17 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       .catch((e) => onOrg((cur) => ({ ...cur, busy: false, result: O.resultOf(body.action, target, { ok: false, output: String(e?.message ?? JSON.stringify(e)) }) })))
       .finally(loadOrg);
   };
+  // `org.trust` is the console's own act and asks twice: the first call returns the card (what the act does, and the word to
+  // type); the typed word goes in the second. An agent or the narrator has no way to this call.
+  const runTrust = (body: O.TrustBody) => {
+    cmd.call('org.trust', { mission_id: mission, ...body })
+      .then((r: any) => {
+        if (r?.needs_confirm) onOrg((cur) => ({ ...cur, busy: false, asking: 'confirm', input: '', card: { body, text: String(r.text ?? ''), expect: String(r.expect ?? ''), what: String(r.what ?? 'the word shown') } }));
+        else onOrg((cur) => ({ ...cur, busy: false, card: null, result: { title: `${r?.ok ? '' : 'did not '}${body.action} ${body.name}${r?.ok ? ': done' : ''}`, ok: !!r?.ok, lines: [String(r?.message ?? '(no output)')] } }));
+      })
+      .catch((e) => onOrg((cur) => ({ ...cur, busy: false, card: null, result: { title: `did not ${body.action} ${body.name}`, ok: false, lines: [String(e?.message ?? JSON.stringify(e))] } })))
+      .finally(loadOrg);
+  };
   const doSearch = (q: string) => {
     cmd.call('kb.search', { query: q }).then((r: any) => {
       const hits: P.Hit[] = (Array.isArray(r) ? r : r?.hits ?? []).map((h: any) => ({ pointer: String(h.pointer), heading: String(h.heading ?? ''), preview: String(h.preview ?? '') }));
@@ -376,7 +387,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         panelRef.current = next; setPanel(next);
         if (action.t === 'close') openPanel(null);
         else if (action.t === 'search') doSearch(action.q);
-        else if (action.t === 'org') { if (action.action.t === 'run') runOrg(action.action.body); else loadOrg(); }
+        else if (action.t === 'org') { if (action.action.t === 'run') runOrg(action.action.body); else if (action.action.t === 'trust') runTrust(action.action.body); else loadOrg(); }
         else if (action.t === 'load') { const cur = panelRef.current; if (cur && (cur.kind === 'search' || cur.kind === 'sources')) openPanel({ ...cur, lines: previewOf(info, action.path) }); }
         else if (action.t === 'insert') { openPanel(null); upd((c) => C.insert(c, action.text)); }
         else if (action.t === 'pin') { try { pin(info, mission, action.from, action.text); note('pinned to the mission notebook (/notes)', 'ok'); openPanel({ ...(panelRef.current as P.Panel), flash: 'pinned to the mission notebook (/notes)' }); } catch (er: any) { openPanel({ ...(panelRef.current as P.Panel), flash: 'could not pin: ' + er.message }); } }

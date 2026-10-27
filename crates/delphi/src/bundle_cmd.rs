@@ -114,10 +114,34 @@ pub(crate) fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()) && !CONNECTOR_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--no-eval] [--workspace <name>] [--home <dir>]\n       delphi bundle prereg check <file> | digest <file or dir>\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle report <name>   (counts from the event logs: citations, alignment findings, trims, vectors; never text)\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle add <record id> --from-xenia <org>/<store>   (a bundle published to a xenia store)\n       delphi bundle store <org>/<store> [--auto-update]   (list the store's bundles; update the ones added from it)\n       delphi bundle publish <dir> --to <org>/<store> --url <https git url> --pin <git-tree|git-commit>:<sha> [--subdir D] [--id <record>] [--tags a,b] [--review-by YYYY-MM-DD] [--no-verify-tree]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--no-eval] [--workspace <name>] [--home <dir>]\n       delphi bundle prereg check <file> | digest <file or dir>\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle report <name>   (counts from the event logs: citations, alignment findings, trims, vectors; never text)\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle add <record id> --from-xenia <org>/<store>   (a bundle published to a xenia store)\n       delphi bundle store <org>/<store> [--auto-update]   (list the store's bundles; update the ones added from it)\n       delphi bundle publish <dir> --to <org>/<store> --url <https git url> --pin <git-tree|git-commit>:<sha> [--subdir D] [--id <record>] [--tags a,b] [--review-by YYYY-MM-DD] [--no-verify-tree]\n       delphi bundle trust <bundle> --level user_ratified|default   (raising needs a terminal and the bundle name typed back)\n       delphi bundle trust-source <bundle|origin> [--level user_ratified|default] [--revoke]   (trust an origin and publisher key for future updates)\n       delphi bundle add ... [--trust ratified] [--trust-source]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
+    let positional = positionals(args);
+    // `--trust ratified` and `--trust-source` on an add are checked before anything is added, and confirmed after (`specs/024` §3.7).
+    if positional.first().map(|s| s.as_str()) == Some("add") && (args.iter().any(|a| a == "--trust" || a == "--trust-source")) {
+        let want = match crate::bundle_trust::at_add(args) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("delphi bundle: {}", e);
+                return 2;
+            }
+        };
+        let started = delphi_core::time::now_rfc3339();
+        let rc = dispatch(home, ws, args);
+        if rc != 0 || args.iter().any(|a| a == "--dry-run") {
+            return rc;
+        }
+        return match crate::bundle_trust::after_add(ws, &started, &want, &crate::bundle_trust::tty_confirm) {
+            0 => 0,
+            _ => 1,
+        };
+    }
+    dispatch(home, ws, args)
+}
+
+fn dispatch(home: &Path, ws: &Path, args: &[String]) -> i32 {
     let positional = positionals(args);
     let flag_set = |f: &str| args.iter().any(|a| a == f);
     match (positional.first().map(|s| s.as_str()), positional.get(1)) {
@@ -129,6 +153,8 @@ pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
             bundle_fetch::add_from_marketplace(home, ws, &repo, name, &opts, &bundle_fetch::real_fetcher(home), &Real)
         }
         (Some("connectors"), _) => crate::bundle_connect::run(home, ws, args),
+        (Some("trust"), _) => crate::bundle_trust::trust(ws, args, &positional, &crate::bundle_trust::tty_confirm),
+        (Some("trust-source"), _) => crate::bundle_trust::trust_source(ws, args, &positional, &crate::bundle_trust::tty_confirm),
         (Some("export"), Some(_)) => crate::bundle_compat::export(home, ws, &positional[1..].iter().map(|s| s.to_string()).collect::<Vec<_>>(), args),
         (Some("add"), Some(dir)) => {
             let order = match flag(args, "--order").map(|o| o.parse::<i64>()) {

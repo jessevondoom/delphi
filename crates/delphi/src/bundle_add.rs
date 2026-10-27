@@ -304,7 +304,7 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
     let signer = i.report.signer.clone();
     // For a store bundle the roster's `successor` chain continues a rotated key (`specs/024` §2.3), as the manifest's list does.
     let mut predecessors = m.publisher_predecessors.clone();
-    predecessors.extend(store_predecessors);
+    predecessors.extend(store_predecessors.iter().cloned());
     let level = match provenance::continuity(existing.as_ref().map(|e| e.publisher_kid.as_str()), signer.as_deref(), &predecessors) {
         Continuity::Changed { old, new } => {
             if !o.replace_publisher {
@@ -397,7 +397,25 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
     let removed: Vec<String> = if o.yes { superseded.iter().map(|e| e.id()).collect() } else { Vec::new() };
     let kid = signer.clone().unwrap_or_else(|| provenance::UNSIGNED.to_string());
     let inert = inert_servers(&dest);
+    let origin = bundles::origin_of(&source_rec);
+    let store_chain = store_predecessors;
+    let mut trust_notes: Vec<String> = Vec::new();
     let applied = bundles::update(ws, |lock| {
+        // A trusted source (`specs/024` §3.8): the same recorded origin AND the same publisher key, or, for a store, a key the
+        // roster's successor chain continues from it. A key the bundle's own manifest merely claims to succeed does not count.
+        // The grant is looked at before this add changes the lock, and survives every change of content.
+        let signed = kid != provenance::UNSIGNED;
+        let grant = lock.trusted_source.iter().position(|t| signed && t.origin == origin && (t.kid == kid || store_chain.iter().any(|p| *p == t.kid)));
+        let had_grant = existing.as_ref().is_some_and(|ex| lock.trusted_source.iter().any(|t| t.origin == bundles::origin_of(&ex.source) && t.kid == ex.publisher_kid));
+        if let Some(g) = grant {
+            if lock.trusted_source[g].kid != kid {
+                trust_notes.push(format!("the trusted source {} follows its publisher key to {} (the store's roster names it a successor)", origin, provenance::short_kid(&kid)));
+                lock.trusted_source[g].kid = kid.clone();
+            }
+        } else if had_grant {
+            trust_notes.push(format!("this version is NOT from the trusted source (origin {} and the same publisher key, or a roster successor of it, are both required): it is at the default tier; confirm again with `delphi bundle trust-source {}/{}` if you mean to trust it", origin, m.org, m.name));
+        }
+        let source_level = grant.map(|g| lock.trusted_source[g].level.clone());
         for e in lock.bundle.iter_mut().filter(|e| removed.contains(&e.id())) {
             e.status = "removed".into();
         }
@@ -418,6 +436,10 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
             skill_roles: skill_roles.clone(),
             history: Vec::new(),
             inert_servers: inert.clone(),
+            trust: String::new(),
+            trust_hash: String::new(),
+            trust_kid: String::new(),
+            trust_log: Vec::new(),
         };
         match lock.bundle.iter_mut().find(|e| e.org == m.org && e.name == m.name) {
             Some(e) => {
@@ -429,11 +451,32 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
                 history.retain(|p| p.hash != hash);
                 let order = o.order.unwrap_or(e.order);
                 let kept = if skill_roles.is_empty() { e.skill_roles.clone() } else { skill_roles.clone() };
-                *e = Entry { history, skill_roles: kept, ..fresh(order) };
+                // The trust log carries over. A one-off raise belonged to the hash and publisher it was made for, so it ends
+                // here (and the operator is told); a trusted source's grant is applied again below.
+                let mut old = e.clone();
+                let one_off = old.raised() && old.raised_by() != Some("trusted-source") && source_level.is_none();
+                if (old.hash != hash || old.publisher_kid != kid) && old.raised() {
+                    old.reset_trust(&now, "update");
+                    if one_off {
+                        trust_notes.push(format!("your raise of {} to user_ratified applied to the previous version only and is reset: this version is at the default tier (validated bundle source); confirm again with `delphi bundle trust {}/{}`", old.id(), m.org, m.name));
+                    }
+                } else if old.raised() {
+                    old.trust_hash = hash.clone();
+                }
+                *e = Entry { history, skill_roles: kept, trust: old.trust.clone(), trust_hash: old.trust_hash.clone(), trust_kid: old.trust_kid.clone(), trust_log: old.trust_log.clone(), ..fresh(order) };
+                if source_level.as_deref() == Some(bundles::RATIFIED) && !e.raised() {
+                    e.raise_trust(&now, "trusted-source");
+                    trust_notes.push(format!("{} is from a trusted source: its knowledge stays user_ratified", e.id()));
+                }
                 Ok("updated")
             }
             None => {
-                lock.bundle.push(fresh(o.order.unwrap_or(next_order)));
+                let mut e = fresh(o.order.unwrap_or(next_order));
+                if source_level.as_deref() == Some(bundles::RATIFIED) {
+                    e.raise_trust(&now, "trusted-source");
+                    trust_notes.push(format!("{} is from a trusted source: its knowledge is user_ratified", e.id()));
+                }
+                lock.bundle.push(e);
                 Ok("added")
             }
         }
@@ -449,6 +492,10 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
     for id in &removed {
         println!("removed superseded {}", id);
     }
+    for n in &trust_notes {
+        println!("trust: {}", n);
+    }
+    print_tier(ws, &m.org, &m.name);
     if let (Mode::Update(_), Some(old)) = (mode, &existing) {
         crate::bundle_life::print_update_notice(home, old, &m, &dest, &files_json, host);
     }
@@ -491,6 +538,22 @@ fn spawn_embedding(home: &Path, ws: &Path) -> bool {
     std::process::Command::new(exe).args(["kb", "index", "--home"]).arg(home).arg("--workspace").arg(name).stdin(null()).stdout(null()).stderr(null()).process_group(0).spawn().is_ok()
 }
 
+/// The add summary's trust line: the tier now in force and how it came about.
+pub(crate) fn print_tier(ws: &Path, org: &str, name: &str) {
+    let Ok(lock) = bundles::read(ws) else { return };
+    let Some(e) = lock.bundle.iter().find(|e| e.is_active() && e.org == org && e.name == name) else { return };
+    println!("knowledge tier: {}", tier_line(&lock, e));
+}
+
+/// `federated_verified (validated bundle source)`, with the raise and the trusted source when there are any.
+pub(crate) fn tier_line(lock: &bundles::Lock, e: &Entry) -> String {
+    let base = if e.raised() { format!("user_ratified (raised by you, {})", e.raised_by().unwrap_or("cli")) } else { format!("{} ({}; raise it with `delphi bundle trust {}`)", bundles::DEFAULT_TIER, bundles::VALIDATED_LABEL, e.id()) };
+    match delphi_core::bundle_trust::grant_for(lock, e) {
+        Some(t) => format!("{}; trusted source {} at {}", base, t.origin, t.level),
+        None => base,
+    }
+}
+
 pub fn list(home: &Path, ws: &Path) -> i32 {
     let lock = match bundles::read(ws) {
         Ok(l) => l,
@@ -507,6 +570,7 @@ pub fn list(home: &Path, ws: &Path) -> i32 {
     for e in shown {
         let vectors = status.get(&e.id()).map(|s| format!("  vectors {}", s.label())).unwrap_or_default();
         println!("{:<28} {:<10} {:<16} order {:<4} {}{}{}", e.id(), e.version, e.provenance, e.order, short(&e.hash), vectors, if e.is_stale(&today) { format!("  STALE (review by {})", e.review_by) } else { String::new() });
+        println!("    tier {}", tier_line(&lock, e));
         for l in crate::bundle_connect::describe(ws, e) {
             println!("    MCP server {}", l);
         }
@@ -523,6 +587,7 @@ pub fn remove(ws: &Path, name: &str) -> i32 {
                 let mut notes = Vec::new();
                 for e in lock.bundle.iter_mut().filter(|e| e.id() == ids[0]) {
                     e.status = "removed".into();
+                    e.reset_trust(&delphi_core::time::now_rfc3339(), "remove");
                     // The inert records go with the entry; a mapped connector is in the catalog and stays (specs/025 §4.1).
                     notes.extend(crate::bundle_connect::removal_note(ws, e));
                     e.inert_servers.clear();

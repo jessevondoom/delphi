@@ -9,6 +9,7 @@ mod bundle_init;
 mod bundle_fetch;
 mod bundle_life;
 mod bundle_pack;
+mod bundle_trust;
 mod bundle_xenia;
 mod bundle_report;
 mod check;

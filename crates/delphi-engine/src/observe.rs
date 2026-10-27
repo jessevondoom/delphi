@@ -12,9 +12,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 49] = [
+pub const KINDS: [&str; 50] = [
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
-    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built", "bundle.cited", "align.finding", "xenia.synced", "xenia.alert", "xenia.published",
+    "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.trust_changed", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built", "bundle.cited", "align.finding", "xenia.synced", "xenia.alert", "xenia.published",
 ];
 
 const NARRATIVE_CAP: usize = 300;
@@ -670,6 +670,12 @@ impl ObserverState {
                     _ => "removed",
                 };
                 self.say(format!("bundle {}{} {}", id, if version.is_empty() { String::new() } else { format!("@{}", version) }, what));
+            }
+            "bundle.trust_changed" => {
+                let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+                let id = format!("{}/{}", clip(&p["org"], 60), clip(&p["name"], 60));
+                let ratified = p["tier"].as_str() == Some("user_ratified");
+                self.say(format!("bundle {} knowledge tier {} ({})", id, if ratified { "raised to user_ratified" } else { "back at federated_verified" }, clip(&p["by"], 30)));
             }
             "bundle.vectors_progress" | "bundle.vectors_rejected" => {
                 let clip = |v: &Value, n: usize| -> String { sanitize(v.as_str().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
@@ -1491,7 +1497,7 @@ mod tests {
         st.apply(&ev(4, "org_context.built", "t_1", "orchestrator", json!({"bundles": 2, "bytes": 3100, "trimmed": ["acme/platform"], "notes": []})));
         let rows: Vec<&str> = st.narrative.iter().map(|s| s.as_str()).collect();
         assert_eq!(rows, vec!["bundle acme/platform@1.4.0 added", "bundle acme/platform@1.5.0 updated", "bundle acme/platform removed", "org context built: 2 bundle(s), 3100 bytes, 1 trimmed"]);
-        for k in ["bundle.added", "bundle.updated", "bundle.removed", "org_context.built", "bundle.cited", "align.finding"] {
+        for k in ["bundle.added", "bundle.trust_changed", "bundle.updated", "bundle.removed", "org_context.built", "bundle.cited", "align.finding"] {
             assert!(KINDS.contains(&k));
         }
     }
