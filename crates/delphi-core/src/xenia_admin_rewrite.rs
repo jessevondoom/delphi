@@ -291,13 +291,9 @@ impl Admin<'_> {
     pub fn deliver_rewrite_publish(&self, signed: &Signed<RewritePublishPayload>) -> Result<Delivered, AdminError> {
         let p = &signed.payload;
         let st = Statement::parse(&p.bytes).map_err(|_| AdminError::RewriteStatementRefused("malformed"))?;
-        let cand = self.candidate();
+        let cand = self.candidate()?;
         let files = vec![(layout::FRESHNESS.to_string(), p.bytes.clone()), (layout::FRESHNESS_SIGS.to_string(), p.sigs_file.clone())];
         let paths: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
-        let cand = match cand {
-            Ok(c) => c,
-            Err(e) => return Err(e),
-        };
         if cand.fetched != st.store_head {
             // The very bytes may already be on top of the head we meant: then there is nothing left to do.
             if cand.files.get(layout::FRESHNESS) == Some(&p.bytes) && self.store.is_ancestor(&st.store_head, &cand.fetched).map_err(xe)? {

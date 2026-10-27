@@ -96,6 +96,7 @@ fn refusal(s: &Store, at: VerifyConfig) -> &'static str {
 
 /// A statement a majority really signed, put on top of the host's head by hand: what an attacker with two stolen keys
 /// (or a replayed old file) could do, outside the command.
+#[allow(clippy::too_many_arguments)]
 fn host_statement(w: &World, org: &str, store: &str, store_head: &str, rewrite_of: &str, issued: i64, life: i64, signers: &[&str]) {
     let bytes = admin::build_rewrite_statement(org, store, 1, &w.fx.org.head_pair().1, store_head, rewrite_of, issued, life, &freshness::Policy { max_validity_secs: 3650 * 86400 }).unwrap();
     let domain = admin::statement_domain(org, store, &bytes).unwrap();
