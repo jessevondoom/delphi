@@ -305,6 +305,16 @@ pub struct NonFastForward {
     pub kind: Divergence,
 }
 
+/// What fetching a side branch (see [`Store::fetch_aux`]) found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AuxFetch {
+    /// The remote has no such branch.
+    Missing,
+    Tip(String),
+    Refused(Refused),
+    Unavailable(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fetch {
     UpToDate { head: String },
@@ -549,6 +559,66 @@ impl Store {
         }
     }
 
+    /// Fetch one other branch of the store (an admin's `roster-proposal/<n>`) into `local_ref`, under the same
+    /// hardened git, the same timeout and the same object caps as a sync (everything reachable from the fetched
+    /// commit and not from the accepted head is counted). Nothing is checked out and nothing is read from the tree
+    /// here; the caller reads named blobs by object id. A refused fetch removes the ref and its objects.
+    pub(crate) fn fetch_aux(&self, remote_branch: &str, local_ref: &str) -> Result<AuxFetch> {
+        if !valid_branch(remote_branch) || !local_ref.starts_with("refs/xenia/") || local_ref.contains("..") {
+            return Err(Error::BadField("branch name"));
+        }
+        let accepted = self.load_sticky()?.accepted_head;
+        let objects = self.paths.clone.join("objects");
+        let mut cmd = git_command(&self.paths, Some(self.url.scheme), Some(&self.paths.clone));
+        cmd.args(["fetch", "--quiet", "--force", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--no-auto-gc", "--no-auto-maintenance", "--no-show-forced-updates"]);
+        cmd.arg(&self.url.url).arg(format!("+refs/heads/{remote_branch}:{local_ref}"));
+        let drop_ref = |prune: bool| {
+            let _ = self.git_ok(&["update-ref", "-d", local_ref], 4096);
+            if prune {
+                let _ = self.git_ok(&["gc", "--prune=now", "--quiet"], 4096);
+            }
+        };
+        match run(cmd, None, 64 * 1024, Duration::from_secs(self.caps.fetch_timeout_secs), Some((&objects, self.caps.max_total_bytes))) {
+            Err(RunFail::DiskCap) | Err(RunFail::TooMuchOutput) => {
+                drop_ref(true);
+                return Ok(AuxFetch::Refused(Refused::TooLarge));
+            }
+            Err(RunFail::Timeout) => {
+                drop_ref(true);
+                return Ok(AuxFetch::Unavailable("the fetch timed out".into()));
+            }
+            Err(RunFail::Spawn(e)) => return Err(Error::Io(format!("cannot run git: {e}"))),
+            Ok(out) if out.code != 0 => {
+                drop_ref(false);
+                if out.stderr.contains("couldn't find remote ref") {
+                    return Ok(AuxFetch::Missing);
+                }
+                return Ok(AuxFetch::Unavailable(short(&out.stderr)));
+            }
+            Ok(_) => {}
+        }
+        let tip = match self.git_ok(&["rev-parse", "--verify", "--quiet", &format!("{local_ref}^{{commit}}")], 256) {
+            Ok(o) => String::from_utf8_lossy(&o).trim().to_string(),
+            Err(_) => {
+                drop_ref(true);
+                return Ok(AuxFetch::Refused(Refused::Malformed("the fetched head is not a commit")));
+            }
+        };
+        if !delphi_xenia::sticky::is_commit_id(&tip) {
+            drop_ref(true);
+            return Ok(AuxFetch::Refused(Refused::Malformed("the fetched head is not a commit id")));
+        }
+        if let Some(r) = self.check_new_objects(&tip, accepted.as_deref())? {
+            drop_ref(true);
+            return Ok(AuxFetch::Refused(r));
+        }
+        Ok(AuxFetch::Tip(tip))
+    }
+
+    pub(crate) fn drop_ref(&self, name: &str) {
+        let _ = self.git_ok(&["update-ref", "-d", name], 4096);
+    }
+
     /// The tip-tree rules for one commit: listable, no hostile entries, and a `.gitattributes` that keeps
     /// bytes exact. Also what rewrite recovery runs on a head that is not a fast-forward.
     pub(crate) fn check_tip(&self, commit: &str) -> Result<std::result::Result<Vec<TreeEntry>, Refused>> {
@@ -572,7 +642,7 @@ impl Store {
 
     /// Count, size and total the objects a fetch added (everything reachable from `fetched` and not from
     /// `accepted`), without reading their content.
-    fn check_new_objects(&self, fetched: &str, accepted: Option<&str>) -> Result<Option<Refused>> {
+    pub(crate) fn check_new_objects(&self, fetched: &str, accepted: Option<&str>) -> Result<Option<Refused>> {
         let mut args = vec!["rev-list", "--objects", "--no-object-names", fetched];
         let not_acc = accepted.map(|a| format!("^{a}"));
         if let Some(n) = &not_acc {

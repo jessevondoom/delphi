@@ -344,7 +344,7 @@ pub struct StoreView {
     pub computed: Computed,
 }
 
-fn epoch_files(files: &BTreeMap<String, Vec<u8>>) -> Vec<EpochFile> {
+pub(crate) fn epoch_files(files: &BTreeMap<String, Vec<u8>>) -> Vec<EpochFile> {
     let mut v = Vec::new();
     for n in 1..=delphi_xenia::roster::MAX_EPOCHS as u64 {
         let (Some(j), Some(s)) = (files.get(&delphi_xenia::layout::roster_epoch(n)), files.get(&delphi_xenia::layout::roster_epoch_sigs(n))) else { break };
@@ -794,19 +794,7 @@ impl<'a> Publisher<'a> {
     }
 
     fn git(&self, args: &[&str], env: &[(&str, &str)], stdin: Option<Vec<u8>>) -> Result<Vec<u8>, PublishError> {
-        let mut c: Command = git_command(&self.store.paths, None, Some(&self.store.paths.clone));
-        c.args(args);
-        for (k, v) in env {
-            c.env(k, v);
-        }
-        let out = run(c, stdin, 1 << 20, Duration::from_secs(60), None).map_err(|f| match f {
-            RunFail::Timeout => PublishError::Io(format!("git {} timed out", args.first().unwrap_or(&""))),
-            _ => PublishError::Io(format!("git {} failed", args.first().unwrap_or(&""))),
-        })?;
-        if out.code != 0 {
-            return Err(PublishError::Io(format!("git {} failed: {}", args.first().unwrap_or(&""), short(&out.stderr))));
-        }
-        Ok(out.stdout)
+        run_git(self.store, args, env, stdin)
     }
 
     /// A new commit on `head` that adds the signed files, built with git plumbing in the bare clone through a
@@ -891,23 +879,45 @@ impl<'a> Publisher<'a> {
     }
 
     fn push(&self, commit: &str) -> Result<PushOutcome, PublishError> {
-        let cmd = push_command(self.store, commit);
-        let out = run(cmd, None, 64 * 1024, Duration::from_secs(self.store.caps.fetch_timeout_secs.max(10)), None).map_err(|f| match f {
-            RunFail::Timeout => PublishError::Unavailable("the push timed out".into()),
-            _ => PublishError::Io("git push failed to run".into()),
-        })?;
-        if out.code == 0 {
-            return Ok(PushOutcome::Pushed);
-        }
-        let lower = out.stderr.to_lowercase();
-        if lower.contains("non-fast-forward") || lower.contains("fetch first") || lower.contains("[rejected]") && lower.contains("stale") {
-            return Ok(PushOutcome::NotFastForward);
-        }
-        Err(PublishError::PushRejected(short(&out.stderr)))
+        push_to(self.store, commit, &self.store.branch)
     }
 }
 
-enum PushOutcome {
+/// One git command in the store's bare clone through the hardened builder; `env` adds to the cleared environment.
+pub(crate) fn run_git(store: &Store, args: &[&str], env: &[(&str, &str)], stdin: Option<Vec<u8>>) -> Result<Vec<u8>, PublishError> {
+    let mut c: Command = git_command(&store.paths, None, Some(&store.paths.clone));
+    c.args(args);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let out = run(c, stdin, 1 << 20, Duration::from_secs(60), None).map_err(|f| match f {
+        RunFail::Timeout => PublishError::Io(format!("git {} timed out", args.first().unwrap_or(&""))),
+        _ => PublishError::Io(format!("git {} failed", args.first().unwrap_or(&""))),
+    })?;
+    if out.code != 0 {
+        return Err(PublishError::Io(format!("git {} failed: {}", args.first().unwrap_or(&""), short(&out.stderr))));
+    }
+    Ok(out.stdout)
+}
+
+/// Push `commit` to `refs/heads/<branch>` of the store's remote, as a fast-forward only.
+pub(crate) fn push_to(store: &Store, commit: &str, branch: &str) -> Result<PushOutcome, PublishError> {
+    let cmd = push_command_for(store, commit, branch);
+    let out = run(cmd, None, 64 * 1024, Duration::from_secs(store.caps.fetch_timeout_secs.max(10)), None).map_err(|f| match f {
+        RunFail::Timeout => PublishError::Unavailable("the push timed out".into()),
+        _ => PublishError::Io("git push failed to run".into()),
+    })?;
+    if out.code == 0 {
+        return Ok(PushOutcome::Pushed);
+    }
+    let lower = out.stderr.to_lowercase();
+    if lower.contains("non-fast-forward") || lower.contains("fetch first") || lower.contains("[rejected]") && lower.contains("stale") {
+        return Ok(PushOutcome::NotFastForward);
+    }
+    Err(PublishError::PushRejected(short(&out.stderr)))
+}
+
+pub(crate) enum PushOutcome {
     Pushed,
     NotFastForward,
 }
@@ -915,8 +925,14 @@ enum PushOutcome {
 /// The push command. An explicit `<commit>:refs/heads/<branch>` refspec, no `+`, no `--force`, no lease: the remote
 /// accepts it only as a fast-forward. Built in one place so a test can pin that.
 pub fn push_command(store: &Store, commit: &str) -> Command {
+    push_command_for(store, commit, &store.branch)
+}
+
+/// [`push_command`] for another branch (an admin's `roster-proposal/<n>`). The same refspec shape, so the same
+/// guarantees.
+pub fn push_command_for(store: &Store, commit: &str, branch: &str) -> Command {
     let mut c = git_command(&store.paths, Some(store.url.scheme), Some(&store.paths.clone));
-    c.args(["push", "--quiet", "--no-verify", "--no-recurse-submodules"]).arg(&store.url.url).arg(format!("{commit}:refs/heads/{}", store.branch));
+    c.args(["push", "--quiet", "--no-verify", "--no-recurse-submodules"]).arg(&store.url.url).arg(format!("{commit}:refs/heads/{branch}"));
     c
 }
 
