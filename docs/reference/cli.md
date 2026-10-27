@@ -367,7 +367,7 @@ The org's shared, signed memory store: join, sync, status, publish, endorse.
   delphi xenia republish --old <did>   [--workspace <name>] [--home <dir>]
 ```
 
-Signing wants a code typed at a terminal. Roster work: `delphi xenia admin init|add|remove|rotate|sign|publish|refresh`.
+Signing wants a code typed at a terminal. See also `xenia admin` and `sync --accept-rewritten-head`.
 
 ### `delphi docs`
 
