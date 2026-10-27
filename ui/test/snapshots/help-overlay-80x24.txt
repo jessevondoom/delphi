@@ -9,14 +9,14 @@ delphi v0.5 · /proj · chat
    ↑ ↓    history             ctrl+r  search history      tab  complete
    ← →    decks (empty prompt) · shift+← →  decks any time
    drag  select and copy text   double-click a word · triple-click a line
-   pgup pgdn / wheel  scroll  ctrl+o  tool details        ctrl+l  to end
+   pgup pgdn / wheel  scroll  ctrl+t  tool details        ctrl+l  to end
+   ctrl+o  follow links (tab next · enter read here · p pin · esc leave)
    /  commands   @role …  one role   @specs/…  a file   ?  this help
    shift+tab  approval mode (default → accept edits → auto → optimistic)
    inbox:  y approve · n reject · a all amber · d payload · tab list/focus
    ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)
 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-
 
 ────────────────────────────────────────────────────────────────────────────────
 ❯
