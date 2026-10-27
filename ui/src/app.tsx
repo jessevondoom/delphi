@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as C from './composer.ts';
 import { lookup } from './commands.ts';
-import { completions, enterAccepts, searchHistory, type Completion, type ListDir } from './complete.ts';
+import { bundleTarget, completions, enterAccepts, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
@@ -146,6 +146,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       const want = m[1]!.toLowerCase();
       target = Object.entries(info.roles).find(([id, r]) => id === want || r.name.toLowerCase() === want)?.[0];
       if (target) prompt = m[2]!;
+      else {
+        // `@bundle:agent` / `@org/bundle:agent`: a bundle's agent; the daemon checks the name and says if it is wrong.
+        const b = bundleTarget(m[1]!);
+        if (b) { target = b; prompt = m[2]!; }
+      }
     }
     setBack(0);
     anchorRef.current = null;
