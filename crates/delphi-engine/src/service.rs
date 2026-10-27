@@ -693,6 +693,37 @@ impl EngineService {
         Ok(json!({"added": rep.added, "updated": rep.updated, "removed": rep.removed, "unchanged": rep.unchanged}))
     }
 
+    /// `xenia.quarantine` (`specs/011` §5.3): the explicit read of org records an agent never gets (unendorsed, stale,
+    /// clamped, hidden), bodies included, for the operator. By `query`, or by `org`, `store` and `id`. Console only. It
+    /// answers with the lowest tier it returned so the caller can taint whatever span carries the text onward.
+    async fn xenia_quarantine(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let ws = self.engine.ws.dir.clone();
+        let (query, id) = (p["query"].as_str().map(String::from), p["id"].as_str().map(String::from));
+        let (org, store) = (p["org"].as_str().unwrap_or("").to_string(), p["store"].as_str().unwrap_or("").to_string());
+        let limit = p["limit"].as_u64().unwrap_or(10).clamp(1, 10) as usize;
+        if id.is_none() && query.as_deref().is_none_or(|q| q.trim().is_empty() || q.chars().count() > 500) {
+            return Err(err(code::INVALID_PARAMS, "give `query` (1 to 500 characters), or `org`, `store` and `id`"));
+        }
+        let now = delphi_core::xenia_index::unix_of(&self.engine.now()).unwrap_or(0);
+        let read = tokio::task::spawn_blocking(move || {
+            let db = ws.join("local/state.db");
+            if !db.is_file() {
+                return Ok(crate::xenia_read::QuarantineRead { entries: vec![], ids: vec![], lowest: None });
+            }
+            let kb = crate::kb::Kb::open(&db).map_err(|e| e.to_string())?;
+            match (id, query) {
+                (Some(id), _) => crate::xenia_read::quarantine_get(&kb, &org, &store, &id, now),
+                (None, Some(q)) => crate::xenia_read::quarantine_search(&kb, &q, limit, now),
+                _ => unreachable!("checked above"),
+            }
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|e: String| err(-32000, e))?;
+        Ok(json!({"entries": read.entries, "ids": read.ids, "lowest_tier": read.lowest.map(|t| t.as_str())}))
+    }
+
     /// `org.view` (`specs/026` §7.1): the added bundles, goals, perspectives and open items. A read, and no model call.
     fn org_view(&self, ctx: &CallContext) -> RpcOutcome {
         need_console(ctx)?;
@@ -1072,6 +1103,7 @@ impl Extension for ServiceExt {
                 "observe.snapshot" => svc.observe_snapshot(params).await,
                 "observe.state" => svc.observe_state(params).await,
                 "kb.index" => svc.kb_index(ctx).await,
+                "xenia.quarantine" => svc.xenia_quarantine(params, ctx).await,
                 "approval.list" => Ok(svc.pending_json()),
                 "approval.resolve" => svc.approval_resolve(params, ctx),
                 "approval.relay_resolve" => svc.approval_relay_resolve(params, ctx),
@@ -1478,7 +1510,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {
@@ -1568,7 +1600,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -1625,7 +1657,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "org.action", "org.view", "kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }

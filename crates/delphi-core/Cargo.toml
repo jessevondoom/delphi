@@ -24,7 +24,7 @@ delphi-xenia = { path = "../delphi-xenia" }
 
 [features]
 # Test-only: lets in-process tests skip the interactive-terminal check on token issuance.
-test-support = []
+test-support = ["delphi-xenia/test-support"]
 
 [dev-dependencies]
 delphi-core = { path = ".", features = ["test-support"] }
