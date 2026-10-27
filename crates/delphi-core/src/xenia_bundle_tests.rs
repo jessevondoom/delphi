@@ -86,7 +86,7 @@ fn a_secret_in_a_bundles_text_blocks_the_publish_before_any_preview_and_is_never
     let before = fx.host_head();
     for edit in [
         |d: &mut BundleDraft| d.title = "Platform sk-ant-abcdefghijklmnopqrstuvwxyz0123456789".into(),
-        |d: &mut BundleDraft| d.summary = "contact /Users/jessevondoom/secrets for access".into(),
+        |d: &mut BundleDraft| d.summary = format!("contact /{}/{}/notes for access", "Users", "alice"),
         |d: &mut BundleDraft| d.body = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n".into(),
     ] {
         let mut d = bdraft("acme-platform", &["payments"]);
