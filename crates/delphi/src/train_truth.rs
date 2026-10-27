@@ -37,8 +37,11 @@ pub struct Insight {
     pub question: String,
     /// A starting point written by whoever built the pack; flagged as a draft and never shown to a judge.
     pub draft_view: String,
-    /// The operator's judgement. Empty means not yet reviewed.
+    /// The judgement a judge is shown. Empty means none: the question is left out. It is the operator's own (their views
+    /// file, else `operator_view` in the pack), else the pack's baseline, in which case `baseline` is set.
     pub operator_view: String,
+    /// `operator_view` is the pack's baseline from `truth/views.toml`, not something the operator wrote or set.
+    pub baseline: bool,
     /// Factors a good answer weighs.
     pub considerations: Vec<String>,
     /// How much latitude: what other well-argued views are acceptable.
@@ -134,8 +137,31 @@ fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-/// Read and check `<case>/truth`. `at` names the case in problem lines.
+/// A views file, if there is one. A file that is absent is no views; one that is present but unreadable is a problem.
+fn views_table(path: &Path, at: &str, problems: &mut Problems) -> Option<toml::Table> {
+    if path.is_file() {
+        table(path, at, problems)
+    } else {
+        None
+    }
+}
+
+/// The operator's own judgements, which override a pack's baseline: `$DELPHI_TRAIN_VIEWS`, else `<home>/train/views.toml`.
+/// One table per case, keyed `suite/id`, each key an insight id; an empty string withdraws that question from the judges.
+pub fn operator_views_path() -> PathBuf {
+    match std::env::var("DELPHI_TRAIN_VIEWS") {
+        Ok(p) if !p.is_empty() => PathBuf::from(p),
+        _ => crate::home::delphi_home(None).join("train/views.toml"),
+    }
+}
+
+/// Read and check `<case>/truth`, with the operator's views from their usual place. `at` names the case in problem lines.
 pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
+    load_with(case_dir, at, &operator_views_path())
+}
+
+/// `load` with an explicit views file (which need not exist).
+pub fn load_with(case_dir: &Path, at: &str, views: &Path) -> Result<Truth, Problems> {
     let dir = case_dir.join("truth");
     let mut p: Problems = Vec::new();
     if !dir.is_dir() {
@@ -291,10 +317,27 @@ pub fn load(case_dir: &Path, at: &str) -> Result<Truth, Problems> {
                     question: question.into(),
                     draft_view: s(it, "draft_view").unwrap_or("").into(),
                     operator_view: s(it, "operator_view").unwrap_or("").into(),
+                    baseline: false,
                     considerations: it.get("considerations").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
                     acceptable: s(it, "acceptable").unwrap_or("").into(),
                 });
             }
+        }
+    }
+    // Baseline views (`truth/views.toml`, outside the stamp) fill a question the pack's own `operator_view` leaves empty; the
+    // operator's views file then overrides either, and an empty entry there withdraws the question.
+    let baselines = views_table(&dir.join("views.toml"), at, &mut p);
+    let overrides = views_table(views, at, &mut p).and_then(|t| t.get(at).and_then(|v| v.as_table()).cloned());
+    for i in &mut insights {
+        if i.operator_view.is_empty() {
+            if let Some(b) = baselines.as_ref().and_then(|t| s(t, &i.id)).filter(|b| !b.trim().is_empty()) {
+                i.operator_view = b.trim().into();
+                i.baseline = true;
+            }
+        }
+        if let Some(v) = overrides.as_ref().and_then(|t| t.get(&i.id)).and_then(|v| v.as_str()) {
+            i.operator_view = v.trim().into();
+            i.baseline = false;
         }
     }
     if !p.is_empty() {
@@ -420,7 +463,7 @@ pub fn review_sheet(case_id: &str, prompt: &str, t: &Truth) -> String {
         o.push_str("_This pack has none yet._ To add one, create `truth/insights.toml`:\n\n```toml\n[[insight]]\nid = \"short-id\"\nquestion = \"The call a good answer has to make.\"\noperator_view = \"\"        # your judgement, in your words\nconsiderations = [\"what a good answer weighs\"]\nacceptable = \"what other well-argued views are fine\"\n```\n\n");
     }
     for i in &t.insights {
-        o.push_str(&format!("### `{}`\n\n- **Question:** {}\n- **Assistant's draft view (not shown to any judge):** {}\n- **Your view:** {}\n", i.id, i.question, if i.draft_view.is_empty() { "—".to_string() } else { i.draft_view.clone() }, if i.operator_view.is_empty() { "_not written yet: set `operator_view` in `truth/insights.toml`_".to_string() } else { i.operator_view.clone() }));
+        o.push_str(&format!("### `{}`\n\n- **Question:** {}\n- **Assistant's draft view (not shown to any judge):** {}\n- **Your view:** {}\n", i.id, i.question, if i.draft_view.is_empty() { "—".to_string() } else { i.draft_view.clone() }, if i.operator_view.is_empty() { "_not written yet: set `operator_view` in `truth/insights.toml`, or an entry in your views file_".to_string() } else if i.baseline { format!("{} _(baseline from `truth/views.toml`; set your own in `{}` under [\"{}\"] to override)_", i.operator_view, operator_views_path().display(), case_id) } else { i.operator_view.clone() }));
         if !i.considerations.is_empty() {
             o.push_str(&format!("- **A good answer weighs:** {}\n", i.considerations.join("; ")));
         }
@@ -544,7 +587,15 @@ pub fn cli(sub: &str, args: &[String], root: &Path) -> i32 {
             match stamp_verified(dir, &by, &on) {
                 Ok(()) => {
                     let unreviewed = t.insights.iter().filter(|i| i.operator_view.is_empty()).count();
-                    println!("{} verified by {} on {}{}", id, by, on, if unreviewed > 0 { format!("; {} judgement question(s) still have no operator_view and will not reach a judge", unreviewed) } else { String::new() });
+                    let baseline = t.insights.iter().filter(|i| i.baseline).count();
+                    let mut note = String::new();
+                    if baseline > 0 {
+                        note.push_str(&format!("; {} judgement question(s) use the baseline view (override in {})", baseline, operator_views_path().display()));
+                    }
+                    if unreviewed > 0 {
+                        note.push_str(&format!("; {} judgement question(s) have no view and will not reach a judge", unreviewed));
+                    }
+                    println!("{} verified by {} on {}{}", id, by, on, note);
                     0
                 }
                 Err(e) => {
@@ -623,9 +674,10 @@ impl Truth {
         // without the operator's view is not shown: the assistant's draft is not evidence.
         let reviewed: Vec<&Insight> = self.insights.iter().filter(|i| !i.operator_view.is_empty()).collect();
         if !reviewed.is_empty() {
-            out.push_str("\nOpen questions, where the operator's own judgement is below. It is a view, not a fact: reward an answer that reasons well toward it or argues a different view that its facts support; penalize unsupported certainty either way.\n");
+            out.push_str("\nOpen questions, where a judgement is below (the operator's, or a baseline default where they have set none). It is a view, not a fact: reward an answer that reasons well toward it or argues a different view that its facts support; penalize unsupported certainty either way.\n");
             for i in reviewed {
-                out.push_str(&format!("- [{}] {}\n  Operator's judgement: {}\n", i.id, i.question, i.operator_view));
+                let who = if i.baseline { "Baseline judgement (a default the operator has not set for themselves)" } else { "Operator's judgement" };
+                out.push_str(&format!("- [{}] {}\n  {}: {}\n", i.id, i.question, who, i.operator_view));
                 if !i.considerations.is_empty() {
                     out.push_str(&format!("  A good answer weighs: {}\n", i.considerations.join("; ")));
                 }
@@ -815,6 +867,47 @@ pub mod tests {
         assert!(!b.contains("ASSISTANT-DRAFT-SECRET") && !b.contains("Who do the rules favor"), "an unreviewed question and the assistant's draft never reach a judge: {}", b);
         fs::write(dir.join("truth/insights.toml"), "[[insight]]\nid = \"x\"\n").unwrap();
         assert!(load(&dir, "r/q1").unwrap_err().join("\n").contains("needs a unique `id` and a `question`"));
+    }
+
+    #[test]
+    fn a_baseline_view_fills_a_gap_and_the_operators_views_file_overrides_it() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = case_with_pack(t.path());
+        let none = t.path().join("no-views.toml");
+        // INSIGHTS has `who-benefits` unset and `confidence` set by the operator in the pack.
+        fs::write(dir.join("truth/views.toml"), "who-benefits = \"Baseline: too early to say.\"\nconfidence = \"Baseline must not beat the pack.\"\n").unwrap();
+        let tr = load_with(&dir, "r/q1", &none).unwrap();
+        let by = |tr: &Truth, id: &str| tr.insights.iter().find(|i| i.id == id).cloned().unwrap();
+        assert!(by(&tr, "who-benefits").baseline && by(&tr, "who-benefits").operator_view == "Baseline: too early to say.");
+        assert!(!by(&tr, "confidence").baseline && by(&tr, "confidence").operator_view == "Not very; it is early.", "the pack's own view beats the baseline");
+        let b = tr.briefing();
+        assert!(b.contains("Baseline judgement (a default the operator has not set for themselves): Baseline: too early to say."), "{}", b);
+        assert!(b.contains("Operator's judgement: Not very; it is early."), "{}", b);
+        // The operator's file wins over both; an empty string withdraws the question.
+        let views = t.path().join("views.toml");
+        fs::write(&views, "[\"r/q1\"]\nwho-benefits = \"Mine.\"\nconfidence = \"\"\n[\"r/other\"]\nwho-benefits = \"Not this case.\"\n").unwrap();
+        let tr = load_with(&dir, "r/q1", &views).unwrap();
+        assert!(!by(&tr, "who-benefits").baseline && by(&tr, "who-benefits").operator_view == "Mine.");
+        assert!(by(&tr, "confidence").operator_view.is_empty());
+        let b = tr.briefing();
+        assert!(b.contains("Operator's judgement: Mine.") && !b.contains("Not very; it is early.") && !b.contains("Baseline"), "{}", b);
+        // Baselines sit outside the stamp: adding or changing one does not make a verified pack stale.
+        assert_eq!(load_with(&dir, "r/q1", &none).unwrap().fingerprint, { fs::remove_file(dir.join("truth/views.toml")).unwrap(); load_with(&dir, "r/q1", &none).unwrap().fingerprint });
+        // A views file that is not TOML is a problem, not silently ignored.
+        fs::write(&views, "not = [toml").unwrap();
+        assert!(load_with(&dir, "r/q1", &views).unwrap_err().join("\n").contains("not valid TOML"));
+    }
+
+    #[test]
+    fn every_committed_judgement_question_has_a_baseline() {
+        for id in ["research/lions-mane-claim", "research/livewire-strategy", "research/motogp-2027-regs", "research/mycorrhizal-networks", "research/phantom-paper"] {
+            let (suite, case) = id.split_once('/').unwrap();
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/train/suites").join(suite).join("cases").join(case);
+            let t = load_with(&dir, id, &dir.join("no-views.toml")).unwrap();
+            for i in &t.insights {
+                assert!(i.baseline && !i.operator_view.is_empty(), "{} / {} has no baseline view in truth/views.toml", id, i.id);
+            }
+        }
     }
 
     #[test]

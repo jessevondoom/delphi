@@ -1,0 +1,10 @@
+# Baseline judgements for this pack (specs/037 §4). A default, not the operator's own: it reaches a judge labelled as a
+# baseline, and only for a question the operator has set nothing for. To override one, put the same key under
+# ["research/livewire-strategy"] in the operator's views file (dev/train/README.md, "Your own judgements"); an empty string withdraws it.
+# This file is outside the verification stamp, so editing it does not make the pack stale.
+
+keep-funding = "Ring-fence it, with milestones and a stopping rule decided in advance. Unit growth is off a tiny base, the segment loses several times its revenue, and funding leans on related parties, so funding as it is buys time, not economics. Tie further support to evidence that the new model lowers cost per unit and raises volume, and say what result ends the support. Unconditional continuation and an unreasoned exit are both weak."
+
+what-would-change-my-mind = "Observable, dated triggers: cost per unit and the first quarters of deliveries of the new model, whether the operating loss falls as volume rises, and the terms of the next funding round. Separate leading signals (orders, cost per unit) from lagging ones (reported loss). 'Keep watching' is not a trigger."
+
+alternatives = "Compare at least two against the same criteria. A partnership or minority sale shares the burn and keeps the option, but cedes control and some brand halo. An exit is cleanest financially but forfeits the option value of staying in electric. Rank them, say what each gives up, and say which assumption the ranking rests on."
