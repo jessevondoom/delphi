@@ -3,7 +3,7 @@ id: spec-035-failover-without-a-driver
 title: "035: Failover without a driver's seat"
 author: architect
 timestamp: 2026-10-26T12:00:00Z
-status: draft   # asked for by the operator on 2026-10-26; D-1..D-8 are proposals the operator has not yet confirmed (the code follows them, with the defaults unchanged); §5 says what is built
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); D-1..D-8 as proposed, the code follows them; §5 says what is built
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

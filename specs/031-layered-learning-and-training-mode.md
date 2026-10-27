@@ -3,7 +3,7 @@ id: spec-031-layered-learning-and-training-mode
 title: "031: Layered Learning, Cheap Capture, and Training Mode (draft)"
 author: architect
 timestamp: 2026-10-26T00:00:00Z
-status: draft   # text merged on the operator's "go", 2026-10-26; OD-1..OD-6 were not answered one by one, so their recommendations are being built to and stay open to change
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); text merged on the operator's "go" 2026-10-26; OD-1..OD-6 follow the recommendations being built to
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
