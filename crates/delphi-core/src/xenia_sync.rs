@@ -351,7 +351,7 @@ impl Store {
 
     /// Only the roster and the freshness files of `head`: all the freshness judgement needs, so judging an
     /// unchanged store against the clock does not read a single record.
-    fn roster_snapshot(&self, head: &str) -> Result<Snapshot> {
+    pub(crate) fn roster_snapshot(&self, head: &str) -> Result<Snapshot> {
         let src = GitSource::new(self);
         let n = src.epoch_in_tree(head)?.min(MAX_EPOCHS as u64);
         let mut paths = vec![FRESHNESS.to_string(), FRESHNESS_SIGS.to_string()];

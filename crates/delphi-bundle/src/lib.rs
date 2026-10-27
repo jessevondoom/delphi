@@ -27,6 +27,7 @@ pub mod redaction;
 pub mod scan;
 mod skills;
 mod prereg;
+pub mod source_check;
 mod summary;
 mod tree;
 mod vectors;

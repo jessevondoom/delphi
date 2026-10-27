@@ -53,6 +53,14 @@ export function completions(input: string | string[], cur: number, info: Info, l
   return items.length ? { items: items.slice(0, 40), from, to: cur } : null;
 }
 
+/** `bundle:agent` or `org/bundle:agent` (the word after `@`) as the daemon's `bundle:` target, else null. A path mention such as `specs/a.md:12` is not one. */
+export function bundleTarget(word: string): string | null {
+  const m = /^([A-Za-z0-9_-]+)(?:\/([A-Za-z0-9_-]+))?:([A-Za-z0-9_-]+)$/.exec(word);
+  if (!m) return null;
+  if (m[2] && ['specs', 'project', 'bundle', 'runtime', 'team', 'missions'].includes(m[1]!)) return null;
+  return `bundle:${m[2] ? `${m[1]}/${m[2]}` : m[1]}:${m[3]}`;
+}
+
 /** Ctrl+R: the newest history entry containing `q` at or before index `from` (exclusive upper bound), or -1. */
 export function searchHistory(hist: string[], q: string, before: number): number {
   if (!q) return -1;
