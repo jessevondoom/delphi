@@ -507,6 +507,7 @@ pub struct Session {
     exited: bool,
     /// The last few KB of the CLI's stderr, kept only while the error log is on (`specs/039`); the CLI's stderr is otherwise discarded.
     stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// How much of a CLI's stderr the error log can ever see.
@@ -529,9 +530,10 @@ impl Session {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         // A bounded tail only: a CLI that talks forever on stderr costs a 4 KB buffer, not the disk.
         let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut stderr_task = None;
         if let Some(mut se) = child.stderr.take() {
             let keep = stderr_tail.clone();
-            tokio::spawn(async move {
+            stderr_task = Some(tokio::spawn(async move {
                 use tokio::io::AsyncReadExt;
                 let mut chunk = [0u8; 2048];
                 while let Ok(n) = se.read(&mut chunk).await {
@@ -546,7 +548,7 @@ impl Session {
                         }
                     }
                 }
-            });
+            }));
         }
         let first = first_turn(l);
         let cli = l.cli;
@@ -574,11 +576,15 @@ impl Session {
         }
         stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
-        Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false, stderr_tail })
+        Ok(Session { child, stdin: Some(stdin), rx, pgid, exited: false, stderr_tail, stderr_task })
     }
 
     /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
-    pub fn stderr_tail(&self) -> String {
+    pub async fn stderr_tail(&mut self) -> String {
+        // The pipe closes when the process (group) is gone; give the reader a moment to take the last bytes.
+        if let Some(h) = self.stderr_task.take() {
+            let _ = tokio::time::timeout(Duration::from_millis(300), h).await;
+        }
         self.stderr_tail.lock().map(|t| String::from_utf8_lossy(&t).into_owned()).unwrap_or_default()
     }
 

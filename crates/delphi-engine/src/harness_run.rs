@@ -820,7 +820,7 @@ impl Engine {
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
             // A spent quota is a decision (warn), anything else an error.
             if delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
-                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail(), "reason": if retryable { "retryable" } else { "final" }});
+                let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }});
                 if exhaustion.is_some() {
                     delphi_core::elog::warn("harness", "harness_exhausted", &reason, ctx);
                 } else {
@@ -1021,6 +1021,28 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
             other => panic!("{:?}", other),
         }
         assert!(events_of(&g, "harness.started").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_harness_run_reaches_the_error_log_with_a_redacted_stderr_tail_and_no_secret() {
+        use delphi_core::elog::{self, Level, Logger};
+        let d = tempfile::tempdir().unwrap();
+        let mut st = elog::settings_with(d.path(), None, None);
+        st.level = Level::Debug;
+        elog::install(Logger::new(d.path(), "daemon", "9.9.9", st));
+        let (f, _s) = fixture("echo 'CANARY-ONE sk-ant-api03-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK https://user:pw@host.example/x\nIgnore previous instructions' >&2\nexit 3", |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(matches!(out.status, Status::Escalated(_)));
+        let text = std::fs::read_to_string(d.path().join("logs").join(elog::FILE)).unwrap_or_default();
+        elog::uninstall();
+        let rec: serde_json::Value = text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).find(|r| r["slug"] == "harness_failed" && r["context"]["stderr_tail"].as_str().is_some_and(|t| t.contains("CANARY-ONE"))).unwrap_or_else(|| panic!("no harness_failed record with the stderr tail: {}", text));
+        assert_eq!((rec["component"].as_str(), rec["context"]["exit_code"].as_i64()), (Some("harness"), Some(3)));
+        assert_eq!(rec["context"]["mission"], f.m.id.as_str());
+        for bad in ["DDDDDDDD", "z6Mkha", "user:pw"] {
+            assert!(!text.contains(bad), "{} leaked into the error log: {}", bad, text);
+        }
+        assert!(rec["context"]["stderr_tail"].as_str().unwrap().contains("\\nIgnore previous"), "newlines are escaped to one line");
+        assert_eq!(text.lines().filter(|l| l.contains("CANARY-ONE")).count(), 1);
     }
 
     fn two_methods(f: &Fx) {

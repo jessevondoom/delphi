@@ -2710,4 +2710,29 @@ mod tests {
         assert_eq!(snap["budget"]["cap_usd"], 5.0);
         assert!(snap["enabled_agents"].as_array().unwrap().iter().any(|a| a == "red-team"));
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_rpc_error_is_logged_by_method_and_code_never_with_its_params() {
+        use delphi_core::elog::{self, Level, Logger};
+        let d = tempfile::tempdir().unwrap();
+        let mut st = elog::settings_with(d.path(), None, None);
+        st.level = Level::Error;
+        elog::install(Logger::new(d.path(), "daemon", "9.9.9", st));
+        let f = setup(vec![Step::text("unused")], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (sock, tok) = (s.sock.clone(), s.console.clone());
+        let code = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&tok).unwrap();
+            rpc_code(c.call("permissions.set", json!({"mode": "CANARY-PARAMS sk-ant-api03-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"})))
+        })
+        .await;
+        assert_eq!(code, Some(code::INVALID_PARAMS));
+        let text = std::fs::read_to_string(d.path().join("logs").join(elog::FILE)).unwrap_or_default();
+        elog::uninstall();
+        let rec = text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|r| r["slug"] == "rpc_error" && r["context"]["method"] == "permissions.set").unwrap_or_else(|| panic!("no rpc_error record: {}", text));
+        assert_eq!((rec["component"].as_str(), rec["context"]["kind"].as_i64()), (Some("daemon"), Some(code::INVALID_PARAMS)));
+        assert!(!text.contains("CANARY-PARAMS") && !text.contains("EEEEEEEE"), "params must not reach the log at error level: {}", text);
+    }
 }
