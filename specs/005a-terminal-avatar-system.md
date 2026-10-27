@@ -3,7 +3,7 @@ id: spec-005a-terminal-avatar-system
 title: "005a: In-Terminal Agent Avatar & Status Badge System"
 author: architect
 timestamp: 2026-10-23T17:15:00Z
-status: active
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); was active
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified

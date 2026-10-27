@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/xenia-sidecar.schema.json",
+  "title": "Xenia record signature sidecar",
+  "description": "records/<kind>/<id>.sig.json (specs/012 §3): strict JSON with these fixed fields, at most 1 KiB. `hash` is BLAKE3 of the record's raw bytes; `sig` is Ed25519 (RFC 8032 strict) over the store-bound domain string. The verifier builds org, store, kind, id and kid from its own pinned configuration, the path and this file, never from the record.",
+  "type": "object",
+  "required": ["alg", "kid", "signed_at", "roster_epoch", "hash", "sig"],
+  "properties": {
+    "alg": { "const": "ed25519" },
+    "kid": { "type": "string", "pattern": "^did:key:z" },
+    "signed_at": { "type": "string", "format": "date-time" },
+    "roster_epoch": { "type": "integer", "minimum": 0 },
+    "hash": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
+    "sig": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "base64url, unpadded." }
+  },
+  "additionalProperties": false
+}

@@ -8,10 +8,12 @@ mod bundle_init;
 mod bundle_fetch;
 mod bundle_life;
 mod bundle_pack;
+mod bundle_report;
 mod check;
 mod chat;
 mod console;
 mod decisions;
+mod docs_cmd;
 mod doctor;
 mod escalation;
 // Moved to the engine so the daemon's `check` tool and the CLI share one implementation.
@@ -71,7 +73,7 @@ struct Cmd {
 const CMDS: &[Cmd] = &[
     Cmd { group: "Start", name: "", about: "set up whatever is missing, then open the console", synopsis: "  delphi [--no-onboard] [--plain] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Start", name: "chat", about: "the console, on today's mission or one you name", synopsis: "  delphi chat [--plain] [--inline] [--no-mouse] [--workspace <name>] [--mission <id>] [--home <dir>]", detail: "`delphi missions` lists the missions you can reopen." },
-    Cmd { group: "Start", name: "run", about: "one task without a terminal, then a summary", synopsis: "  delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>]\n    [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]", detail: "Exit codes: 0 ok · 1 gates failed · 2 a card was denied · 3 budget · 4 infrastructure." },
+    Cmd { group: "Start", name: "run", about: "one task without a terminal, then a summary", synopsis: "  delphi run \"<task>\" [--on-card deny|policy:<file>] [--permissions <mode>] [--budget <usd>] [--timeout <dur>]\n    [--json|--jsonl] [--mission <id>] [--keep-daemon] [--workspace <name>] [--home <dir>]", detail: "Exit codes: 0 ok · 1 gates failed · 2 a card was denied · 3 budget · 4 infrastructure ·\n5 an optimistic build awaits decision review." },
     Cmd { group: "Set up", name: "setup", about: "find the model tools you have and connect them", synopsis: "  delphi setup [--yes] [--check] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "init", about: "create a workspace for a project", synopsis: "  delphi init [--non-interactive] [--workspace <name>] [--project <path>]... [--theme <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Set up", name: "auth", about: "sign in to, or out of, a model endpoint", synopsis: "  delphi auth login <name> [--manual] | status | logout <name> [--workspace <name>] [--home <dir>]", detail: "" },
@@ -101,7 +103,9 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
     Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--resume] [--pace-window <0-1>] [--allow-sleep] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
-    Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]\n  delphi xenia status [--json] [--home <dir>]", detail: "status is read-only and offline: the accepted head, roster, how fresh the admins' statement is, records by tier, quarantined files (by reason), contested records, the last sync outcome and any rewrite waiting for you. It never changes state and never calls a model." },
+    Cmd { group: "Maintain", name: "xenia", about: "who this install is, for sharing", synopsis: "  delphi xenia whoami [--home <dir>]\n  delphi xenia status [--json] [--home <dir>]", detail: "status is read-only and offline: the accepted head, roster, how fresh the admins' statement is, records\nby tier, quarantined files (by reason), contested records, the last sync outcome and any rewrite waiting\nfor you. It never changes state and never calls a model." },
+    Cmd { group: "Maintain", name: "docs", about: "print the command reference or a man page", synopsis: "  delphi docs cli | man", detail: "Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff." },
+    Cmd { group: "Maintain", name: "completions", about: "print a shell completion script", synopsis: "  delphi completions bash|zsh|fish", detail: "For example: `delphi completions zsh > ~/.zfunc/_delphi`." },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
 
@@ -263,6 +267,8 @@ fn main() {
         Some("needs") => cmd_needs(&args),
         Some("train") => train::run(&args),
         Some("xenia") => xenia_cmd::run(&args),
+        Some("docs") => docs_cmd::docs(&args),
+        Some("completions") => docs_cmd::completions(&args),
         Some("connectors") => cmd_core("connectors", &args),
         Some("narrator") | Some("observe") => cmd_narrator(&args),
         Some("auth") => cmd_core("auth", &args),
@@ -591,7 +597,7 @@ fn cmd_bundle(args: &[String]) -> i32 {
         run_args.extend(["--task".to_string(), task.trim().to_string()]);
         return cmd_run(&run_args);
     }
-    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove" | "update" | "rollback" | "gc" | "export" | "serve")) {
+    if matches!(args.first().map(|a| a.as_str()), Some("add" | "list" | "remove" | "update" | "rollback" | "gc" | "export" | "serve" | "report")) {
         let (home, ws) = match resolve_ws("bundle", args) {
             Ok(v) => v,
             Err(code) => return code,

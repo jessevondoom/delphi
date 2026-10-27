@@ -523,7 +523,7 @@ pub fn pending_for(home: &Path, org: &str, store_name: &str, cfg: &VerifyConfig,
     let Some(head) = sticky.accepted_head else { return empty };
     let Ok(snap) = store.roster_snapshot(&head) else { return empty };
     let files = epoch_files(&snap);
-    let Ok(roster) = (!files.is_empty()).then(|| pins.verify(&files)).unwrap_or(Err(delphi_xenia::roster::RosterError::BadPins("no roster"))) else { return empty };
+    let Ok(roster) = (if !files.is_empty() { pins.verify(&files) } else { Err(delphi_xenia::roster::RosterError::BadPins("no roster")) }) else { return empty };
     let Some(me) = roster.member(my_did).filter(|m| m.is_active() && m.steward_areas.is_steward()) else { return empty };
     let my_person = me.person.clone();
     let areas = me.steward_areas.clone();

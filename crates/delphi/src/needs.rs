@@ -67,6 +67,7 @@ fn team_has_remote(ws: &Path) -> bool {
     fs::read_to_string(cfg).map(|t| t.contains("[remote ")).unwrap_or(false)
 }
 
+#[cfg(test)]
 pub fn report(ws: &Path) -> Vec<Item> {
     report_in(ws, None)
 }

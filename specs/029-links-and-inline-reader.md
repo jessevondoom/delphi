@@ -3,7 +3,7 @@ id: spec-029-links-and-inline-reader
 title: "029: Links and the Inline Reader (draft)"
 author: architect
 timestamp: 2026-10-25T22:00:00Z
-status: draft   # asked for by the operator on 2026-10-25; nothing here is built or approved
+status: approved   # by the operator, 2026-10-26 ("ratify all specs"); asked for 2026-10-25; slices 1-4 are built (§8); the key bindings have not been tried by the operator
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -89,11 +89,14 @@ The crate was considered (the operator's suggestion) and **not adopted**:
 ## 8. Build order and state
 1. **Built:** `ui/src/links.ts` (the model, the pointer pattern, `parseTarget`, focus stepping) and `renderMarkdownLinks` in `ui/src/markdown.ts`, which returns `{ lines, links }` with each link's rows and columns. It marks links with zero-width OSC 8 markers that survive wrapping and are removed afterwards, so output without links is unchanged line for line.
 2. **Built:** the reader, in the archives pane (`ui/src/archives.ts`), reading through the narrator socket's new read-only `kb.get` (the same routes as `delphi kb serve`, `specs/028` §6a). Tab and shift+tab focus, `enter` opens, `[` `]` and `esc` walk the history, `y` copies, an anchor or a line range opens partway down (the range is approximate: source lines are scaled to rendered rows). External links open the browser (D-7).
-3. Next: the same in the narrator's thinking feed (pointers linked once a span closes, D-6).
-4. Next: the same in the main chat behind `ctrl+o` (D-5), and the sources/pin recording of §6.
+3. **Built:** the narrator's change feed (`changes`, also reached as `thinking`), which is where finished work is written down. Documents agents name in a recorded change are links, found by their text in the finished rows (`scanLinks` in `ui/src/links.ts`, so no renderer had to change); `tab` / `shift+tab` focus one (reversed, its target in the status row), `enter` reads it in the same reader over the feed, `esc` returns to the feed where it was. A change is only recorded when the work is done, so D-6 holds without further work: nothing is linked while a span streams. Files that are not Markdown documents (`claim.rs`) are not links. The narrator's reader cannot pin (§9.2).
+4. **Built:** the main chat. `ctrl+o` enters link mode; nothing is focused until `tab` (the first link on screen), so a stray `enter` opens nothing. Pointers and `http(s)` addresses anywhere in the transcript are links, including the ones inside tool rows. `enter` reads a document in place of the transcript (its own reader, so the knowledge deck's search and history are left alone), `esc` walks back and then returns to the chat with link mode still on, `esc` again leaves it. Opening a document there records it as a source (`how: read`, role `operator`). `p` (on a focused link, or in the reader) pins the passage to the mission notebook with its pointer, a short sha256 of the passage (of the whole document when no lines are cited) and, for a line range, the quoted lines. Typing, and every key but `ctrl+c`, the wheel, the page keys and the deck keys, is held by the mode.
+   - **`ctrl+o` was already "tool details".** D-5 wins; tool details moved to `ctrl+t`. The help card and its goldens say so.
+   - A link split across two rows by wrapping is not found (a path wider than the window).
+   - An anchor (`#4`) opens at the section and pins the whole document; only `#L10-L20` is a passage.
 
 ## 9. Settled questions (operator, 2026-10-25)
 1. **Leaving link mode:** `esc` leaves it, and only `esc`, so it behaves like every other mode here (`ctrl+o` enters; it does not toggle).
 2. **Sources from the narrator:** documents opened in the narrator's reader are **not** recorded as sources. The narrator is for human access and research, and is read-only; only the console records sources (§6).
 
-Nothing is open for slices 3 and 4.
+Nothing is open. What is unproven is how the keys feel in use.

@@ -468,7 +468,17 @@ impl Engine {
         self.reconcile_bundles(m).await?;
         self.reconcile_xenia(m).await?;
         let operator_task = parent.is_none();
+        // `@<bundle>:<agent>` from the console arrives as `bundle:<bundle>:<agent>`: the span is the agent's host role's,
+        // attributed to the bundle agent, exactly as when a role dispatches it (`specs/023` §5B).
+        let (target, bundle_agent) = if target.starts_with("bundle:") {
+            let a = crate::bundle_load::agent(&self.ws, target).map_err(EngineError::Invalid)?;
+            (a.host_role.clone(), Some(a.id))
+        } else {
+            (target.to_string(), None)
+        };
+        let target = target.as_str();
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
+        handoff.bundle_agent = bundle_agent.clone();
         // What the operator and the team have said in this session, so a follow-up has something to follow (`specs/030`).
         // A task a timer woke, and a builder, get none; and if an earlier reply read untrusted content, this task starts
         // below full trust as well.
@@ -490,7 +500,7 @@ impl Engine {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled role", target)));
         }
         if announce {
-            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "source": if operator_task { "operator" } else { "timer" }}));
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else { "timer" }}));
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
@@ -1415,10 +1425,25 @@ impl Engine {
         if let Some((connector, tool)) = self.connectors.parse_wire(name) {
             return self.exec_connector(sc, call_id, &connector, &tool, args).await;
         }
-        let c = match self.tools.classify(name, args) {
+        let mut c = match self.tools.classify(name, args) {
             Ok(c) => c,
             Err(e) => return Ok(tool_result_error(e.0)),
         };
+        // An added bundle's `require_card` (`specs/023` §6.5): a Green read of a matching path becomes Amber. It can only ask
+        // more, and a policy that cannot be verified refuses, as for commands.
+        if c.tier == tools::ToolTier::Green && c.kind == tools::ActionKind::Read {
+            if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                match crate::bundle_load::policy(&self.ws) {
+                    Ok(p) => {
+                        if let Some(why) = p.requires_card(path) {
+                            c.tier = tools::ToolTier::Amber;
+                            c.summary = format!("{} ({})", c.summary, why);
+                        }
+                    }
+                    Err(e) => return Ok(tool_result_error(format!("refused by policy: {}", e))),
+                }
+            }
+        }
         // Refuse what would fail anyway before the operator is asked about it.
         if name == "write_file" {
             let now = self.now();
@@ -1683,6 +1708,9 @@ impl Engine {
                 _ => self.broker.resolved_by(&id).unwrap_or_else(|| "console".to_string()),
             };
             who.m.append(ev("approval.resolved", resolution.event_payload(&id, &by))).await?;
+            if matches!(resolution, Resolution::Approved { .. }) {
+                crate::bundle_cited::emit(who.m, who.task_id, "approval").await?;
+            }
             // Away mode: the timed-out card stays denied (its id is dead, so a late answer cannot revive it), but
             // the task waits on a fresh card instead of being told no, until the park window is used up.
             if matches!(resolution, Resolution::TimedOut) && !self.settings.approval_park_max.is_zero() {
@@ -3553,6 +3581,46 @@ mod tests {
         assert!(last.contains("changed after the bundle was added") && last.contains("has no agent `ghost`") && last.contains("Claude Code only"), "{}", last);
     }
 
+    // specs/023 §5B: the console's `@<bundle>:<agent>` starts the agent as a task of its host role, attributed to the agent.
+    #[tokio::test]
+    async fn the_console_can_address_a_bundle_agent_and_it_runs_as_its_host_role() {
+        let f = setup(vec![Step::text("Two findings.")], 5.0, |_| {});
+        agent_bundle(&f);
+        let out = f.engine.run_task(&f.m, "bundle:plat:reviewer", "Review the plan").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "Two findings."));
+        let created = events_of(&f, "task.created");
+        assert_eq!((created[0].payload["target"].as_str(), created[0].payload["bundle_agent"].as_str()), (Some("red-team"), Some("acme/plat:reviewer")));
+        let added = events_of(&f, "dag.node.added");
+        assert_eq!((added[0].payload["role"].as_str(), added[0].payload["bundle_agent"].as_str()), (Some("red-team"), Some("acme/plat:reviewer")));
+        let sys = f.model.requests()[0].body["system"].to_string();
+        assert!(sys.contains("### Agent `reviewer` of acme/plat@1.0.0"), "{}", sys);
+        // a name that is not an agent starts nothing
+        let e = f.engine.run_task(&f.m, "bundle:plat:ghost", "x").await.unwrap_err();
+        assert!(e.to_string().contains("no agent `ghost`"), "{}", e);
+        assert_eq!(events_of(&f, "task.created").len(), 1);
+    }
+
+    // specs/023 §6.5: `require_card` upgrades a Green read of a matching path to a card; other reads stay Green.
+    #[tokio::test]
+    async fn a_bundle_require_card_policy_asks_before_a_matching_read_and_only_that() {
+        use crate::bundle_load::tests::add_bundle;
+        let f = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::text("It defines needle.")], 5.0, |_| {});
+        let policy = "[policy]\nschema = 1\n\n[[policy.require_card]]\npattern = \"app/src/lib\\\\.rs$\"\nreason = \"Contracts are sensitive.\"\n";
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/policies.toml", policy)]);
+        let task = spawn_task(&f, "architect", "What does lib.rs define?");
+        let card = wait_for_card(&f).await;
+        assert!(card.summary.contains("acme/plat bundle's policy asks before reading") && card.summary.contains("Contracts are sensitive."), "{}", card.summary);
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert_eq!(out.text, "It defines needle.");
+        // a path that does not match is read without a card, as before
+        let g = setup(vec![Step::tool("c1", "read_file", json!({"path": "@project/app/src/lib.rs"})), Step::text("ok")], 5.0, |_| {});
+        let other = "[policy]\nschema = 1\n\n[[policy.require_card]]\npattern = \"secrets/\"\n";
+        add_bundle(&g.engine.ws, "acme", "plat", 10, "2026-10-01", &[("behavior/policies.toml", other)]);
+        g.engine.run_task(&g.m, "architect", "What does lib.rs define?").await.unwrap();
+        assert!(events_of(&g, "approval.requested").is_empty());
+    }
+
     // specs/023 §6.5: a bundle's policy can only refuse. A command it denies never reaches a card or the shell.
     #[tokio::test]
     async fn a_bundle_deny_rule_refuses_a_command_before_any_card() {
@@ -3665,6 +3733,30 @@ mod tests {
         assert!(result.contains("quokka procedure") && result.contains("L2"), "{}", result);
         assert!(!result.contains("L5"), "a bundle's own source_type is a display copy");
         assert!(f.model.requests()[2].body["messages"].to_string().contains("denied"), "bundles are read-only to agents");
+    }
+
+    // specs/027 §7.3: a bundle file in a task's context plus an accepted card is a `bundle.cited`; an accepted card without one is not.
+    #[tokio::test]
+    async fn bundle_cited_is_written_when_a_bundle_file_was_read_and_a_card_is_then_approved() {
+        use crate::bundle_load::tests::add_bundle;
+        let f = setup(vec![Step::tool("r1", "read_file", json!({"path": "@bundle/acme/plat/knowledge/a.md"})), Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New spec\nbody"})), Step::text("Drafted.")], 5.0, |_| {});
+        add_bundle(&f.engine.ws, "acme", "plat", 10, "2026-10-01", &[("knowledge/a.md", "---\nid: a\n---\n# A\n\nThe quokka procedure.\n")]);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let card = wait_for_card(&f).await;
+        assert!(events_of(&f, "bundle.cited").is_empty(), "nothing is accepted yet");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        let cited = events_of(&f, "bundle.cited");
+        assert_eq!(cited.len(), 1);
+        assert_eq!((cited[0].payload["org"].as_str(), cited[0].payload["name"].as_str(), cited[0].payload["accepted_by"].as_str()), (Some("acme"), Some("plat"), Some("approval")));
+        assert_eq!(cited[0].payload["files"], json!(["knowledge/a.md"]));
+        assert!(!cited[0].payload.to_string().contains("quokka"), "names, never text");
+        let g = setup(vec![Step::tool("w1", "write_file", json!({"path": "specs/009-new.md", "content": "# New spec\nbody"})), Step::text("Drafted.")], 5.0, |_| {});
+        let task = { let e = g.engine.clone(); let m = g.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Draft a spec").await }) };
+        let card = wait_for_card(&g).await;
+        g.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(events_of(&g, "bundle.cited").is_empty(), "accepted, but no bundle was in context");
     }
 
     // specs/026 AC-1..3: the roles that plan and review are told the organization's goals once, in the user channel at

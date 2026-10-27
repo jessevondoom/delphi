@@ -16,6 +16,7 @@ Delphi is a spec-driven, multi-agent working environment for software engineerin
 - [Quick start](#quick-start)
 - [Using it](#using-it)
 - [Configuration](#configuration)
+- [Documentation](#documentation)
 - [Development](#development)
 - [Status and limitations](#status-and-limitations)
 - [Repository layout](#repository-layout)
@@ -82,7 +83,7 @@ Taint is computed, not declared: every span carries the lowest trust tier of any
 
 ### Org bundles and sharing
 
-An org bundle is a directory an organization publishes so every install starts from the same knowledge, skills, agents and stated goals; it is a superset of a Claude Code plugin ([`specs/022`](specs/022-xenia-sharing-overview.md) to [`027`](specs/027-bundle-authoring-distribution-and-evaluation.md)). Today `delphi bundle validate <dir>` and `delphi bundle manifest <dir>` check a bundle (the `delphi-bundle` crate; a golden bundle lives in `dev/bundles/acme-platform` and is checked in CI), and `delphi bundle add <dir or file.xbundle>` re-checks it (verifying a signature, if any, and the publisher's continuity), prints what it brings, copies it into `~/.delphi/bundles` and makes its knowledge searchable (`delphi kb search <words> --bundle org/name`; no model is called). A vector cache a bundle ships is used only if it matches your embedder and passes a local spot check (`add --no-vectors` skips it); the rest are embedded in the background, `bundle list` shows how far along they are, and until then results from the bundle say `(lexical only: vectors N% ready)`. `bundle list`, `remove`, `update`, `rollback` and `gc` complete the set; a publisher runs `bundle sign` (at a terminal) and `bundle package` (a reproducible `.xbundle`) ([`specs/024`](specs/024-bundle-trust-adoption-and-precedence.md)). The spec you are about to approve lists the goals and decisions of your bundles that it cites and that no longer stand (advice only; [`specs/026`](specs/026-team-alignment-and-strategist-integration.md)). `bundle serve` is a later slice (B12). Xenia, the signed org-level memory store ([`specs/011`](specs/011-xenia-trust-model.md), [`012`](specs/012-xenia-record-schema.md)), has its verification code in `crates/delphi-xenia` and `delphi xenia whoami`; the store itself is not built.
+An org bundle is a directory an organization publishes so every install starts from the same knowledge, skills, agents and stated goals; it is a superset of a Claude Code plugin ([`specs/022`](specs/022-xenia-sharing-overview.md) to [`027`](specs/027-bundle-authoring-distribution-and-evaluation.md)). Today `delphi bundle validate <dir>` and `delphi bundle manifest <dir>` check a bundle (the `delphi-bundle` crate; a golden bundle lives in `dev/bundles/acme-platform` and is checked in CI), and `delphi bundle add <dir or file.xbundle>` re-checks it (verifying a signature, if any, and the publisher's continuity), prints what it brings, copies it into `~/.delphi/bundles` and makes its knowledge searchable (`delphi kb search <words> --bundle org/name`; no model is called). A vector cache a bundle ships is used only if it matches your embedder and passes a local spot check (`add --no-vectors` skips it); the rest are embedded in the background, `bundle list` shows how far along they are, and until then results from the bundle say `(lexical only: vectors N% ready)`. `bundle list`, `remove`, `update`, `rollback` and `gc` complete the set; a publisher runs `bundle sign` (at a terminal) and `bundle package` (a reproducible `.xbundle`) ([`specs/024`](specs/024-bundle-trust-adoption-and-precedence.md)). The spec you are about to approve lists the goals and decisions of your bundles that it cites and that no longer stand (advice only; [`specs/026`](specs/026-team-alignment-and-strategist-integration.md)). `bundle serve` is a later slice (B12). Xenia, the signed org-level memory store ([`specs/011`](specs/011-xenia-trust-model.md), [`012`](specs/012-xenia-record-schema.md)), has its library code built: signed-record validation, the roster chain and pins, a hardened store clone and sync, standing, tiers, endorsements and tombstones, the retrieval index and the publish gate (`crates/delphi-xenia` and `delphi-core`, with the record format in [`schemas/xenia-record.schema.json`](schemas/xenia-record.schema.json)). The only command today is `delphi xenia whoami`; no store has been run against a real organization.
 
 **Plugins in and out.** `delphi bundle import <plugin dir>` turns a plain Claude Code plugin into a new bundle directory and prints a table of what was imported, what was ignored and why (`hooks/`, `commands/`, `bin/` and the rest never run or load; `.mcp.json` servers become inert declarations with every value dropped; agents need a host role from you, `--agent-role reviewer=red-team`, and skills need `--agents`). It never adds. `delphi bundle export <name> --claude-plugin <dir> [--strip-delphi]` writes an added bundle as a plugin, `--agents-md [file]` writes a knowledge-only fragment (by default under `~/.delphi/exports`, never in a project), and `export <name>... --marketplace <dir> --repo owner/repo --sha <commit>` writes a `marketplace.json` that pins every bundle to a commit. `delphi bundle add --from-marketplace <repo> <name>` fetches only the entry's pinned commit (a locked-down fetch, nothing checked out) and then checks it exactly like a directory.
 
@@ -165,7 +166,8 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle init\|validate [--report]\|distill\|manifest\|sign\|package [--vectors]\|import\|export\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
 | Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
-| Maintain | `update` · `xenia whoami` · `xenia status` · `help` |
+| Inspect (more) | `changelog` · `sessions` · `tools` · `learn` · `release` |
+| Maintain | `update` · `train validate\|plan\|run` · `xenia whoami` · `xenia status` · `docs cli\|man` · `completions bash\|zsh\|fish` · `help` |
 
 `delphi run` is for scripts and CI: it answers cards by a written policy (never Red, never a merge), stops at "ready to merge", and exits 0 ok, 1 gates failed, 2 a card was denied, 3 budget, 4 infrastructure ([`specs/016`](specs/016-headless-run.md)). `delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane because the daemon issues tokens only to processes with a controlling tty. `delphi observe --once` prints one frame as text and works without a terminal.
 
@@ -204,6 +206,23 @@ The workspace is chosen by `--workspace`, `DELPHI_WORKSPACE`, or the project con
 
 API keys never live in `config.toml`: they go to the macOS Keychain or Linux Secret Service, with `*_env` fallbacks. Environment variables Delphi reads: `DELPHI_HOME`, `DELPHI_WORKSPACE`, `DELPHI_UI`, `DELPHI_THEME`, `DELPHI_NO_ONBOARD`, `DELPHI_NO_MOUSE`, `DELPHI_REDUCE_MOTION`, `DELPHI_EMBED_MODEL` / `DELPHI_RERANK_MODEL` / `DELPHI_SEED_VECTORS` (a file path, or `off`), and `DELPHI_SKIP_ATTESTATION` for the installer.
 
+## Documentation
+
+[`docs/`](docs/README.md) is the user documentation; this file is the tour, the specs in [`specs/`](specs/) are the design.
+
+| For | Read |
+| :-- | :-- |
+| Your first session | [Getting started](docs/getting-started.md) |
+| A task | the guides: [model access](docs/guides/model-access.md) · [builds and Councils](docs/guides/builds-and-councils.md) · [headless runs and CI](docs/guides/headless-and-ci.md) · [away mode](docs/guides/away-mode.md) · [org bundles](docs/guides/org-bundles.md) |
+| Something broken | [Troubleshooting](docs/troubleshooting.md) |
+| Every command and option | [Command reference](docs/reference/cli.md) (also `man ./docs/reference/delphi.1`, and `delphi help <command>`) |
+| Every config key | [Configuration reference](docs/reference/config.md) |
+| Tools and scripts | the JSON Schemas in [`schemas/`](schemas/) ([guide](docs/reference/schemas.md)), [`llms.txt`](llms.txt) and [`AGENTS.md`](AGENTS.md) |
+| What changed | [`CHANGELOG.md`](CHANGELOG.md) |
+| Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
+The command reference and the man page are generated by `delphi docs cli` and `delphi docs man` from the table behind `--help`, and a test fails when they are out of date. `delphi completions bash|zsh|fish` prints shell completions.
+
 ## Development
 
 ```sh
@@ -239,7 +258,7 @@ This is an early project built mostly by its own agents under one operator. The 
 - Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
 
 **Specified, not built**
-- `bundle serve`, evaluation (slices B8, B11, B12; authoring and `package --vectors`, B10, and alignment, B9, are built; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and vectors, B3, are built); the Xenia store itself (011/012) and the Librarian role (013).
+- `bundle serve`, evaluation (slices B8, B11, B12; authoring and `package --vectors`, B10, and alignment, B9, are built; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and vectors, B3, are built); the Librarian role (013); the Xenia member commands and a live store (X8 and a real run).
 - Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
 - Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
 
@@ -264,6 +283,9 @@ delphi/
 ├── themes/greek/          default theme pack     context/       seed knowledge (index, heuristics, capability matrix)
 ├── memory/agents/<role>/  seed private lessons   missions/      Delphi's own design records, roadmap, Councils, tracker
 ├── specs/                 subsystem specifications, UI blueprints and assets
+├── docs/                  user guides, troubleshooting, and the generated command reference and man page
+├── schemas/               JSON Schemas for config.toml, bundle.toml, events, handoffs, Xenia records, AGENT.md and SKILL.md
+├── CHANGELOG.md  CONTRIBUTING.md  AGENTS.md  llms.txt
 ├── GOVERNANCE.md  SPEC.md  REVIEW.md  OVERVIEW.md   charter, master spec, review rubric, one-page tour
 ├── dev/                   benchmark runner, kb eval sets, golden bundle, model fetch and seed-vector scripts, skill evals
 ├── Formula/delphi.rb      Homebrew formula (written by the release workflow)
@@ -288,13 +310,22 @@ All in [`specs/`](specs/); each file's `status` line says whether the operator h
 | 008 | [Ambient watch, rewind, HITL tiers](specs/008-ambient-watch-and-rewind.md) | tiers built; watches and rewind gated |
 | 009 | [Model access and authentication](specs/009-model-access-and-auth.md) | built; live Gemini OAuth unverified |
 | 010 | [Connectors (MCP)](specs/010-connectors-and-tool-access.md) | slice 1 built; never run live |
-| 011-013 | [Xenia trust model](specs/011-xenia-trust-model.md), [record schema](specs/012-xenia-record-schema.md), [Librarian](specs/013-librarian-and-internal-retrieval.md) | approved; not built |
+| 011-013 | [Xenia trust model](specs/011-xenia-trust-model.md), [record schema](specs/012-xenia-record-schema.md), [Librarian](specs/013-librarian-and-internal-retrieval.md) | approved; 011 and 012: the library code is built (X0-X7), the member commands and a live store are not; 013: not built |
 | 014 | [Documents and data visualization](specs/014-documents-and-dataviz.md) | built |
 | 014 | [Relay and away mode](specs/014-relay-and-away-mode.md) | built; no live mailbox trial |
 | 015-019 | [Provisional decisions](specs/015-provisional-decisions.md), [headless run](specs/016-headless-run.md), [timers](specs/017-timers.md), [operator hooks](specs/018-operator-hooks.md), [skills import/export](specs/019-skills-import-export.md) | built |
 | 020, 021 | [Harness tool bridge](specs/020-harness-tool-bridge.md); [harness CLI features](specs/021-harness-cli-features.md) (draft) | built |
 | 022-027 | [The sharing layer](specs/022-xenia-sharing-overview.md), [bundle standard](specs/023-org-bundle-standard.md), [provenance and precedence](specs/024-bundle-trust-adoption-and-precedence.md), [compatibility](specs/025-plugin-skill-and-tool-compatibility.md), [team alignment](specs/026-team-alignment-and-strategist-integration.md), [authoring and evaluation](specs/027-bundle-authoring-distribution-and-evaluation.md) | approved; B1 (`validate`) built |
 | 028, 029 | [Knowledge window](specs/028-knowledge-window.md), [links and inline reader](specs/029-links-and-inline-reader.md) | drafts; first slices built in the narrator |
+| 030 | [Console sessions and conversation context](specs/030-console-sessions-and-conversation-context.md): `/new`, `/context`, `/export all` | active; built |
+| 031 | [Layered learning and training mode](specs/031-layered-learning-and-training-mode.md): staged notes, `delphi learn`, `delphi train` | draft; the operator's answers are provisional; nothing run live |
+| 032-034 | [Change log](specs/032-change-log.md), [live usage and tool monitoring](specs/033-live-usage-and-tool-monitoring.md), [narrator monitoring panes](specs/034-narrator-monitoring-panes-spike.md) | approved; built |
+| 035 | [Failover without a driver](specs/035-failover-without-a-driver.md): save first, stay in the family | draft; built; the operator has not confirmed D-1..D-8 |
+| 036 | [Signed releases and the start-time refresh](specs/036-signed-releases-and-start-time-refresh.md) | approved; built; inert until the maintainers make a release key |
+| 037 | [Console deck change log](specs/037-console-deck-change-log.md) | approved; built |
+| 037 | [Training experiments](specs/037-training-experiments-quality-and-efficiency.md): quality and efficiency arms, jury, report | draft; built; proven live on the research cases |
+
+Two numbers are used twice (014: documents and data visualization, and relay and away mode; 037: the console deck change log, and training experiments); the file names are unique and the specs cite each other by name, so both pairs stay until a renumbering PR can fix every reference at once. The machine-readable counterparts of the specs that define a format are in [`schemas/`](schemas/) (see [`docs/reference/schemas.md`](docs/reference/schemas.md)).
 
 ## License
 
