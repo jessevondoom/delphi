@@ -1022,3 +1022,100 @@ fn a_candidate_that_fails_the_verifier_is_never_pushed() {
     assert_eq!(err.reason(), "verify-failed", "{err:?}");
     assert_eq!(fx.host_head(), head);
 }
+
+// ----- ported attacker cases (X8 review) --------------------------------------------------------------------
+
+impl Fx {
+    /// Commit `files` and a symlink on top of `from_branch`, then push to `to_branch` (a hostile pusher).
+    fn hostile_push_with_link(&self, from_branch: &str, to_branch: &str, files: &[(String, Vec<u8>)], link: (&str, &str)) {
+        self.checkout(from_branch);
+        for (p, b) in files {
+            self.remote.write(p, b);
+        }
+        self.remote.symlink(link.0, link.1);
+        self.remote.git(&["add", "-A", "--force"]);
+        self.remote.git(&["commit", "--quiet", "--no-verify", "--allow-empty", "-m", "hostile"]);
+        let host = self.host();
+        self.remote.git(&["push", "--quiet", "--force", &host, &format!("HEAD:refs/heads/{to_branch}")]);
+        self.checkout("main");
+    }
+}
+
+#[test]
+fn a_hostile_tree_on_a_fully_signed_proposal_branch_never_reaches_main() {
+    let fx = Fx::new();
+    fx.admin().propose(add_gail()).unwrap();
+    for s in ["alice", "bob"] {
+        fx.admin().sign(&who(s), 2, &mut Yes::new()).unwrap();
+    }
+    // The host (or anyone who can push) adds junk next to the signed files: a forged record, a submodule file, a
+    // hook-looking path, a symlink and a huge-ish blob.
+    fx.hostile_push_with_link(
+        "roster-proposal/2",
+        "roster-proposal/2",
+        &[
+            (format!("records/memory/{REC}.md"), b"forged".to_vec()),
+            (".gitmodules".to_string(), b"[submodule \"x\"]\n".to_vec()),
+            (".githooks/post-merge".to_string(), b"#!/bin/sh\ntouch /tmp/xenia-pwned\n".to_vec()),
+        ],
+        ("evil-link", "/etc/passwd"),
+    );
+    let before = fx.host_head();
+    fx.tick();
+    fx.admin().publish(&who("carol"), 2, admin::DEFAULT_VALIDITY_SECS, &mut Yes::new()).unwrap();
+    let after = fx.host_head();
+    assert_ne!(before, after);
+    let tree = String::from_utf8(fx.git_host(&["ls-tree", "-r", "--name-only", &after]).unwrap()).unwrap();
+    for bad in ["gitmodules", "githooks", "evil-link", REC] {
+        assert!(!tree.contains(bad), "{bad} reached main:\n{tree}");
+    }
+    assert!(fx.git_host(&["merge-base", "--is-ancestor", &before, &after]).is_some(), "publish is a fast-forward");
+    // And a fresh install still accepts the result.
+    let (_d, _s, r) = fx.fresh_install(&fx.join_now("alice"));
+    assert!(matches!(r.unwrap(), VerifiedSync::Accepted { .. }));
+}
+
+#[test]
+fn an_epoch_file_that_is_a_symlink_is_not_a_proposal() {
+    let fx = Fx::new();
+    fx.hostile_push_with_link("main", "roster-proposal/2", &[], ("roster/epochs/2.json", "../../../../etc/passwd"));
+    let err = fx.admin().inspect(2).unwrap_err();
+    assert!(matches!(err, AdminError::ProposalNotFound(2) | AdminError::StoreNotUsable(_) | AdminError::Refused(_)), "{err:?}");
+    assert!(fx.admin().prepare_sign(&who("bob"), 2).is_err());
+}
+
+#[test]
+fn a_proposal_edited_after_it_was_signed_keeps_no_signatures_and_cannot_be_published() {
+    let fx = Fx::new();
+    fx.admin().propose(add_gail()).unwrap();
+    fx.admin().sign(&who("alice"), 2, &mut Yes::new()).unwrap();
+    // The host swaps the epoch file for one that also makes erin an admin; alice's signature file stays.
+    let evil = fx.forge(|e| {
+        e.members.iter_mut().find(|m| m.person == "erin").unwrap().roles = vec![roster::Role::Member, roster::Role::Admin];
+    });
+    fx.hostile_push("roster-proposal/2", "roster-proposal/2", &[(layout::roster_epoch(2), evil)]);
+    let rep = fx.admin().inspect(2).unwrap();
+    assert_eq!(rep.quorum.have, 0, "alice signed other bytes");
+    assert!(!rep.quorum.met);
+    // bob is shown the grant and signs anyway: still one signature that counts, so publish is refused.
+    fx.admin().sign(&who("bob"), 2, &mut Yes::new()).unwrap();
+    fx.tick();
+    let head = fx.host_head();
+    let err = fx.admin().publish(&who("carol"), 2, admin::DEFAULT_VALIDITY_SECS, &mut Yes::new()).unwrap_err();
+    assert!(matches!(err, AdminError::QuorumNotMet { have: 1, .. }), "{err:?}");
+    assert_eq!(fx.host_head(), head);
+}
+
+#[test]
+fn a_retired_key_can_neither_publish_nor_refresh() {
+    let fx = Fx::new();
+    fx.change(Operation::Rotate { old_did: who("bob").did(), new_did: who("bob2").did(), kind: admin::Rotation::Routine }, &["alice", "carol"], "alice");
+    fx.tick();
+    assert_eq!(fx.admin().prepare_refresh(&who("bob"), admin::DEFAULT_VALIDITY_SECS).err(), Some(AdminError::NotAnApprover));
+    fx.admin().propose(add_gail()).unwrap();
+    for s in ["alice", "carol"] {
+        fx.admin().sign(&who(s), 3, &mut Yes::new()).unwrap();
+    }
+    assert_eq!(fx.admin().prepare_publish(&who("bob"), 3, admin::DEFAULT_VALIDITY_SECS).err(), Some(AdminError::NotAnApprover));
+    assert!(fx.admin().prepare_refresh(&who("bob2"), admin::DEFAULT_VALIDITY_SECS).is_ok());
+}
