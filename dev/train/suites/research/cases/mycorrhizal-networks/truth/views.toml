@@ -1,0 +1,8 @@
+# Baseline judgements for this pack (specs/037 §4). A default, not the operator's own: it reaches a judge labelled as a
+# baseline, and only for a question the operator has set nothing for. To override one, put the same key under
+# ["research/mycorrhizal-networks"] in the operator's views file (dev/train/README.md, "Your own judgements"); an empty string withdraws it.
+# This file is outside the verification stamp, so editing it does not make the pack stale.
+
+how-confident = "Not very. Fungal networks exist, and carbon moving between trees through them has been measured in some studies. Whether that helps seedlings, or is directed at kin, is unestablished and disputed. Keep four things apart: that networks exist, that resources transfer, that the transfer benefits the receiver, and that parents favour kin. Weigh field studies against critiques of method (isotope labelling, alternative pathways, few forest types) and note citation bias. 'Plausible but unproven, and the popular version overreaches' is a fair summary; 'established' and 'debunked' are not."
+
+popular-sources = "Treat popular books and documentaries as claims to check against the primary literature, not as evidence. They are useful for knowing what the public has been told, and popularity is never proof."
