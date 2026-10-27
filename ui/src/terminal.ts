@@ -2,6 +2,7 @@
 // alternate screen left, mouse and paste modes off, the cursor shown, raw mode cleared.
 import { EventEmitter } from 'node:events';
 import { InputParser, type Ev } from './input.ts';
+import { logCrash } from './elog.ts';
 
 const SCREEN = '\x1b[?1049h';
 const PASTE = '\x1b[?2004h';
@@ -56,9 +57,10 @@ export class Term extends EventEmitter {
     // Say what went wrong only after the screen is given back: anything printed on the alternate screen is gone
     // the moment it is left.
     for (const sig of ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT'] as const) process.on(sig, () => { this.stop(); process.exit(128 + (sig === 'SIGHUP' ? 1 : sig === 'SIGINT' ? 2 : sig === 'SIGQUIT' ? 3 : 15)); });
-    const die = (e: unknown) => { this.stop(); console.error(e); process.exit(1); };
-    process.on('uncaughtException', die);
-    process.on('unhandledRejection', die);
+    // The error goes to the central log first (best effort, never throws), then the terminal is given back and it is printed as before.
+    const die = (kind: 'uncaught_exception' | 'unhandled_rejection') => (e: unknown) => { logCrash(kind, e); this.stop(); console.error(e); process.exit(1); };
+    process.on('uncaughtException', die('uncaught_exception'));
+    process.on('unhandledRejection', die('unhandled_rejection'));
     // Suspended (Ctrl+Z, a shell's job control) and continued: hand the terminal back, take it again, redraw.
     process.on('SIGCONT', () => { if (!this.active) { this.start(); this.emit('resume'); } });
   }

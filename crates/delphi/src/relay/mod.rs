@@ -202,6 +202,13 @@ impl<C: Channel, D: Daemon> Relay<C, D> {
     fn note(&mut self, s: impl Into<String>) {
         let s = s.into();
         eprintln!("delphi relay: {}", s);
+        // Delivery failures are errors in the central log (`specs/039`); refusals and rate limits are warnings. The text is redacted there (addresses included).
+        let failed = s.starts_with("could not") || s.starts_with("poll failed");
+        if failed {
+            delphi_core::elog::error("relay", "relay_delivery_failed", &s, serde_json::json!({}));
+        } else {
+            delphi_core::elog::warn("relay", "relay_refused", &s, serde_json::json!({}));
+        }
         self.log.push(s);
     }
 

@@ -469,6 +469,7 @@ pub fn run_relay(args: &[String]) -> i32 {
         Ok(s) => s,
         Err(e) => {
             eprintln!("cannot reach the Delphi bridge: {}", e);
+            delphi_core::elog::error("tool", "bridge_unreachable", "the tool bridge relay could not reach the span's server", serde_json::json!({"kind": format!("{:?}", e.kind())}));
             return 1;
         }
     };

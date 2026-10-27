@@ -10,6 +10,7 @@ pub mod budget;
 pub mod bundle_trust;
 pub mod bundles;
 pub mod client;
+pub mod elog;
 pub mod event;
 pub mod hub;
 pub mod ledger;

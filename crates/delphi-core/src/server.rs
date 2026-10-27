@@ -234,7 +234,14 @@ impl Daemon {
                 accepted = listener.accept() => {
                     let Ok((stream, _)) = accepted else { continue };
                     let me = self.clone();
-                    tokio::spawn(async move { let _ = me.handle(stream, scope).await; });
+                    tokio::spawn(async move {
+                        // A connection that ended in an I/O error was silent; now it leaves a record (kind only, no peer data).
+                        if let Err(e) = me.handle(stream, scope).await {
+                            if !matches!(e.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::UnexpectedEof) {
+                                crate::elog::warn("daemon", "connection_error", "a client connection ended in an error", json!({"kind": format!("{:?}", e.kind()), "view": scope.as_str()}));
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -357,9 +364,11 @@ impl Daemon {
         // The narrator socket offers a fixed list of read methods. A new method is unreachable from it until
         // someone adds it here on purpose, so nothing mutating can get through by being left off a deny list.
         if scope == Scope::Narrator && !NARRATOR_METHODS.contains(&req.method.as_str()) {
+            crate::elog::warn("daemon", "rpc_forbidden", "a method outside the narrator list was refused", json!({"method": req.method, "kind": "narrator"}));
             return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the read-only narrator socket", req.method));
         }
         if scope == Scope::Relay && !RELAY_METHODS.contains(&req.method.as_str()) {
+            crate::elog::warn("daemon", "rpc_forbidden", "a method outside the relay list was refused", json!({"method": req.method, "kind": "relay"}));
             return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the relay socket", req.method));
         }
         // The server's own methods first; everything else may belong to the engine.
@@ -371,7 +380,14 @@ impl Daemon {
             if let Some(outcome) = ext.call(&req.method, req.params.clone(), CallContext { scope, client_id }).await {
                 return match outcome {
                     Ok(v) => Response::ok(id, v),
-                    Err(e) => Response { jsonrpc: "2.0".into(), id, result: None, error: Some(e) },
+                    Err(e) => {
+                        // The method and the code only: never the params, and the message only at debug level.
+                        if crate::elog::enabled(crate::elog::Level::Error) {
+                            crate::elog::error("daemon", "rpc_error", &format!("{} failed with code {}", req.method, e.code), json!({"method": req.method, "kind": e.code}));
+                            crate::elog::debug_with("daemon", "rpc_error_message", || (e.message.clone(), json!({"method": req.method})));
+                        }
+                        Response { jsonrpc: "2.0".into(), id, result: None, error: Some(e) }
+                    }
                 };
             }
         }

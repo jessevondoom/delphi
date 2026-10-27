@@ -73,6 +73,8 @@ impl SecretRegistry {
         if !lits.iter().any(|l| l == secret) {
             lits.push(secret.to_string());
             self.redactor.lock().unwrap().register_literal(secret);
+            // The central error log masks the same runtime credentials (`specs/039`).
+            delphi_core::elog::register_secret(secret);
         }
     }
 

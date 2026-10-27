@@ -16,6 +16,8 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 
 fn die(msg: &str) -> ! {
     eprintln!("delphi-core: {}", msg);
+    // The daemon's own startup failure, beside the per-daemon file the CLI shows (`specs/039`).
+    delphi_core::elog::error("daemon", "startup_failed", msg, serde_json::json!({"phase": "startup"}));
     std::process::exit(1);
 }
 
@@ -44,6 +46,8 @@ pub fn run(args: Vec<String>) -> ! {
     }
     let workspace = PathBuf::from(arg(&args, "--workspace").unwrap_or_else(|| die("--workspace is required")));
     let home = PathBuf::from(arg(&args, "--home").unwrap_or_else(|| die("--home is required")));
+    delphi_core::elog::init(&home, "daemon", &std::env::var("DELPHI_RELEASE_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()));
+    delphi_core::elog::install_panic_hook("daemon");
     let ready_fd: i32 = arg(&args, "--ready-fd").and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--ready-fd is required"));
     // The inherited lock descriptor: held (never closed) for the daemon's lifetime. We do not re-lock by path.
     let lock_fd: i32 = arg(&args, "--lock-fd").and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--lock-fd is required"));
