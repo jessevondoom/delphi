@@ -285,6 +285,29 @@ Asks each CLI's own list commands and reads the skill directories; saves <home>/
 Setup and update refresh it in the background. --ask also asks the claude and agy models what they can
 use; that answer is shown apart and is not verified. Calls no model otherwise.
 
+### `delphi logs`
+
+The error log: what went wrong, with context.
+
+```
+  delphi logs [--lines <n>] [--since 1h] [--level error|warn|debug] [--component <name>] [--mission <id>] [--json] [--follow] [--path] [--home <dir>]
+```
+
+Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the console: errors and panics by default, redacted, 10 MB x 3 files.
+DELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read-only and offline. --path prints the file's location.
+Components: cli, daemon, engine, harness, provider, ui, xenia, relay, tool.
+
+### `delphi debug`
+
+Pack a redacted slice of the log for sharing.
+
+```
+  delphi debug bundle [--since 24h] [-o <file>] [--mission <id>] [--workspace <name>] [--home <dir>]
+```
+
+Writes one .tar.gz (mode 0600, never over an existing file): the log slice, the `delphi doctor` report, version and OS, the config's key paths with values
+redacted, and the last events of the mission (types and short status fields only; no prompts, outputs or file contents). Prints what it included. Read-only and offline.
+
 ### `delphi doctor`
 
 Check the workspace, its files and its models.
@@ -413,5 +436,6 @@ This list, or one command's options.
 | `NO_COLOR` | no colour at all; TERM=dumb also drops styling |
 | `DELPHI_REDUCE_MOTION` | 1 stops the badge animation |
 | `DELPHI_NO_ONBOARD` | 1 skips the first-run questions |
+| `DELPHI_LOG` | off, error (default), warn or debug: what the error log keeps (`delphi logs`) |
 
 `delphi --version` prints the release of this program.
