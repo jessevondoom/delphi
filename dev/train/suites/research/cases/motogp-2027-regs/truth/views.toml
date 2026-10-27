@@ -1,0 +1,8 @@
+# Baseline judgements for this pack (specs/037 §4). A default, not the operator's own: it reaches a judge labelled as a
+# baseline, and only for a question the operator has set nothing for. To override one, put the same key under
+# ["research/motogp-2027-regs"] in the operator's views file (dev/train/README.md, "Your own judgements"); an empty string withdraws it.
+# This file is outside the verification stamp, so editing it does not make the pack stale.
+
+who-benefits = "Too early to say with confidence, and a good answer says so. A reasoned lean is fine if each claim ties to a specific rule change: removing ride-height and holeshot devices takes away a manufacturer-engineering advantage and returns weight to rider start technique; a smaller engine and narrower aero cut top speed and aero advantage, which may favour braking and corner entry. The tyre supplier change and the concession reset are separate sources of change. Nobody has raced under the rules, so 'it will not change who wins' is as defensible as a prediction."
+
+weight-of-sources = "The regulations text and the series' own announcements are the record. A trade-press reading of what they will do is opinion: useful, but labelled as such and kept apart from what the rules say."

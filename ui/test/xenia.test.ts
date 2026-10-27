@@ -60,6 +60,10 @@ test('/xenia status words each store, or says none is joined; daemon text cannot
   assert.ok(!cardText({ ok: true, code: 'c', card: 'a\x1b[31mb' }).includes('\x1b'));
   assert.match(cardText({ ok: false, message: 'outside your areas' }), /^nothing to sign: outside your areas/);
   assert.match(resultText({ ok: false, reason: 'scan-blocked', message: 'a secret' }), /^not published: a secret/);
+  // A refusal carries the catalog's what-to-do line, and daemon text cannot move the cursor there either.
+  const helped = resultText({ ok: false, reason: 'scan-blocked', message: 'a secret', help: 'what to do: remove it.\x1b[2J (ask: you)' });
+  assert.match(helped, /^not published: a secret\n  what to do: remove it\./);
+  assert.ok(!helped.includes('\x1b'));
   const r = ctx(() => ({ stores: [{ text: 'Xenia store acme/main' }] }));
   await runSlash('/xenia', r.c);
   assert.equal(r.calls[0][0], 'xenia.status');

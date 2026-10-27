@@ -1,0 +1,8 @@
+# Baseline judgements for this pack (specs/037 §4). A default, not the operator's own: it reaches a judge labelled as a
+# baseline, and only for a question the operator has set nothing for. To override one, put the same key under
+# ["research/lions-mane-claim"] in the operator's views file (dev/train/README.md, "Your own judgements"); an empty string withdraws it.
+# This file is outside the verification stamp, so editing it does not make the pack stale.
+
+should-i-take-it = "Match the recommendation to the evidence. The human evidence is thin and mixed: a few small, short trials, modest signals, one null pilot. There is no safety signal so far, but no demonstration of benefit for healthy people and nothing supporting it as a treatment for memory problems. Trying it is low-stakes with realistic expectations and a word with a doctor about medication; skipping it loses little; it never replaces care for memory problems."
+
+weight-of-a-preprint = "Count it as a reason to run larger trials, not a settlement. It is the biggest human trial of the set and points the same modest way, but it is unreviewed, its outcomes were self-assessed and remote, and products differ between studies. A peer-reviewed trial counts for more than a preprint of equal size; the null pilot keeps the picture mixed."

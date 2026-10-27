@@ -358,7 +358,7 @@ Exit codes: 0 ok · 1 problems · 2 usage · 3 over budget.
 The org's shared, signed memory store: join, sync, status, publish, endorse.
 
 ```
-  delphi xenia whoami
+  delphi xenia whoami | help [topic] | explain <slug or message>   [--json]
   delphi xenia join <url> --org <o> --store <s> --admin <fingerprint> --head <epoch>:<hash> [--allow-local]
   delphi xenia sync [--auto-update-bundles] | status [--store <org>/<store>] [--json]
   delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]
@@ -367,7 +367,7 @@ The org's shared, signed memory store: join, sync, status, publish, endorse.
   delphi xenia republish --old <did>   [--workspace <name>] [--home <dir>]
 ```
 
-Signing wants a code typed at a terminal. See also `xenia admin` and `sync --accept-rewritten-head`.
+Signing needs a typed code at a terminal. Start with `delphi xenia help` (it covers admin and recovery).
 
 ### `delphi docs`
 
