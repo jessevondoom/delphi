@@ -181,7 +181,7 @@ impl EngineService {
         Ok(match result {
             Ok(out) => json!({"ok": true, "store": store.id(), "action": word, "commit": out.commit, "files": out.paths, "already_there": out.already_there}),
             Err(PublishError::Denied) => json!({"ok": false, "reason": "denied", "message": "cancelled: nothing was signed or sent"}),
-            Err(e) => json!({"ok": false, "reason": e.reason(), "message": e.to_string()}),
+            Err(e) => json!({"ok": false, "reason": e.reason(), "message": e.to_string(), "help": delphi_core::xenia_help::what_to_do(e.reason())}),
         })
     }
 }
