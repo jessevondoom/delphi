@@ -1,11 +1,13 @@
 ---
+id: xenia-x10-redteam-checklist
 title: "Xenia X10 red-team sweep checklist (per REVIEW.md)"
-status: draft
-source_type: internal_empirical
+author: builder
+timestamp: 2026-10-27T12:00:00Z
+source_type: internal_generated
 confidence: medium
-author: Builder
-timestamp: 2026-10-27
+status: active
 source_mission: 2026-10-23-foundational-design
+tags: [xenia, verification, x10]
 ---
 
 # Xenia X10: red-team sweep checklist

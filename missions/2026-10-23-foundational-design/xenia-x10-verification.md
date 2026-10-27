@@ -1,11 +1,13 @@
 ---
+id: xenia-x10-verification
 title: "Xenia X10 verification record: fuzz budget, 3-admin chain test, recovery drill, gate status"
-status: draft
-source_type: internal_empirical
-confidence: high
-author: Builder
-timestamp: 2026-10-27
+author: builder
+timestamp: 2026-10-27T12:00:00Z
+source_type: internal_generated
+confidence: medium
+status: active
 source_mission: 2026-10-23-foundational-design
+tags: [xenia, verification, x10]
 ---
 
 # Xenia X10 verification record

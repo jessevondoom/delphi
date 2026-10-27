@@ -1,11 +1,13 @@
 ---
+id: xenia-x10-conformance
 title: "Xenia X10 conformance map: every numbered test of specs 011 §10 and 012 §10"
-status: draft
-source_type: internal_empirical
-confidence: high
-author: Builder
-timestamp: 2026-10-27
+author: builder
+timestamp: 2026-10-27T12:00:00Z
+source_type: internal_generated
+confidence: medium
+status: active
 source_mission: 2026-10-23-foundational-design
+tags: [xenia, verification, x10]
 ---
 
 # Xenia X10 conformance map
