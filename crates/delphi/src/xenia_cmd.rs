@@ -34,7 +34,8 @@ const USAGE: &str = "usage:
   delphi xenia endorse <id> [--scope a,b] [--note <n>]       delphi xenia dispute <id> --note <n>
   delphi xenia withdraw <id> --reason <r> [--note <n>]       delphi xenia restore <id> [--note <n>]
   delphi xenia retract <id>                                   delphi xenia republish --old <did>
-  delphi xenia help [topic] [--json]                          delphi xenia explain <slug or pasted message> [--json]
+  delphi xenia help [topic] [--json]
+  delphi xenia explain <slug or pasted message> [--json]
     [--workspace <name>] [--home <dir>]";
 
 /// Flags that take no value.

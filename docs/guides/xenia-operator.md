@@ -282,6 +282,7 @@ The table is the catalog `delphi xenia explain <slug>` reads. "Who" is who can f
 | `few-admins` | Fewer than three people hold an admin key. | Add admins: `delphi xenia help being-an-admin`. | an admin of your org's store |
 | `stale` | The freshness statement is not current, so no endorsement counts. | Ask an admin to run `delphi xenia admin refresh`, then run `delphi xenia sync`. | an admin of your org's store |
 | `sync-refused` | The last sync was refused; the store's head was not accepted. | Run `delphi xenia status` to see which files, then `delphi xenia help troubleshooting`. | an admin of your org's store |
+| `state-permissions` | One of this install's private Xenia state files (pins or journal) is not a private regular file. | Run `chmod 600` on the file named in the warning, or join the store again. | you: it is on this machine |
 | `store-unreadable` | This install cannot read its own copy of the store. | Run `delphi xenia sync`; if it fails the same way, move the folder under `$DELPHI_HOME/xenia/` away and join again. | you: it is on this machine |
 | `contested` | Stewards who cover the record disagree about hiding it, so it is hidden from everyone. | Ask the covering stewards to agree (one can restore or withdraw). | a steward of your org's store |
 | `author-superseded` | The author replaced this record with a newer one. | Nothing to do. | nobody: it clears by itself, or nothing is wrong |

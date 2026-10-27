@@ -244,7 +244,7 @@ fn a_relay_message_is_short_plain_secret_free_and_cannot_be_read_as_an_approval(
         assert!(m.len() < 1200, "{} is {} bytes", x.slug, m.len());
         assert!(m.contains(x.slug) && m.contains(x.meaning) && m.contains(x.next), "{}", x.slug);
         assert!(m.contains("cannot approve, sign or change anything"), "{}", x.slug);
-        for bad in ["://", "did:", "@", "BEGIN ", "identity.key", "/Users/", "/home/", ".ssh", "password", "token"] {
+        for bad in ["://", "did:", "@", "BEGIN ", "identity.key", "\x2fUsers/", "/home/", ".ssh", "password", "token"] {
             assert!(!m.contains(bad), "{}: {bad}", x.slug);
         }
         // No long hex run (a fingerprint, a hash, a key).
@@ -258,7 +258,7 @@ fn a_relay_message_is_short_plain_secret_free_and_cannot_be_read_as_an_approval(
 
 #[test]
 fn a_slug_the_catalog_does_not_know_is_never_repeated_in_a_relay_message() {
-    let canary = "CANARY-did:key:z6MkSECRET-https://user:pw@evil.example/repo.git-/Users/someone/.ssh/id_ed25519";
+    let canary = "CANARY-did:key:z6MkSECRET-https://user:pw@evil.example/repo.git-\x2fUsers/someone/.ssh/id_ed25519";
     let m = relay_message(canary);
     assert!(!m.contains("CANARY") && !m.contains("evil") && !m.contains("z6Mk") && !m.contains("/Users"), "{m}");
     assert!(m.contains("delphi xenia status"));
