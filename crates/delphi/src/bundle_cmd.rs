@@ -103,8 +103,8 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 /// Flags that take a value, so the word after one is not a positional argument.
-const VALUE_FLAGS: [&str; 24] = [
-    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name",
+const VALUE_FLAGS: [&str; 25] = [
+    "--against", "--order", "--workspace", "--home", "--skill-roles", "--to", "-o", "--as", "--org", "--name", "--report", "--agents", "--agent-role", "--out", "--from-marketplace", "--claude-plugin", "--agents-md", "--marketplace", "--repo", "--sha", "--ref", "--owner", "--subdir", "--marketplace-name", "--bundle",
 ];
 
 /// Value flags of `connectors map` (`bundle_connect.rs`).
@@ -114,8 +114,7 @@ pub(crate) fn positionals(args: &[String]) -> Vec<&String> {
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && a.as_str() != "-o" && (*i == 0 || !VALUE_FLAGS.contains(&args[*i - 1].as_str()) && !CONNECTOR_FLAGS.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
-const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--workspace <name>] [--home <dir>]\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]
-       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc   (these take --workspace <name> --home <dir>)";
+const USAGE: &str = "usage: delphi bundle init <dir> --org <org> --name <name>\n       delphi bundle validate <dir> [--claude] [--against <previous dir>] [--package] [--report <file>] [--workspace <name>]\n       delphi bundle distill [<path|missions/id>...] [--workspace <name>]\n       delphi bundle import <plugin dir> [-o <new dir>] [--as <name>] [--org <org>] [--agents <role,role>] [--agent-role <agent>=<role>]...\n       delphi bundle export <name> --claude-plugin <new dir> [--strip-delphi] | --agents-md [<file>] | (<name>... --marketplace <dir> --repo <owner/repo|https url> --sha <commit> [--ref R] [--owner O] [--subdir D])\n       delphi bundle manifest <dir> [--claude]\n       delphi bundle sign <dir> [--against <previous dir>] [--home <dir>]\n       delphi bundle package <dir> [-o <file.xbundle>] [--vectors] [--workspace <name>] [--home <dir>]\n       delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--skill-roles <skill>=<roles>] [--replace-publisher] [--no-vectors] [--yes] [--dry-run]\n       delphi bundle connectors map <bundle> <server> --roles <role,role> --tool <name>=read|draft|write [--tool ...] [--first-use ask|allow] [--login <auth block> --account <who> --identity google]\n       delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc | serve [--bundle <org/name>]...   (these take --workspace <name> --home <dir>)";
 
 /// `add`, `list` and `remove`: they change one workspace, which the caller has resolved.
 pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -158,6 +157,10 @@ pub fn run_in(home: &Path, ws: &Path, args: &[String]) -> i32 {
             bundle_life::rollback(home, ws, name, to.as_deref(), true, &Real)
         }
         (Some("gc"), _) => bundle_life::gc(home, ws),
+        (Some("serve"), _) => {
+            let only: Vec<String> = args.iter().enumerate().filter(|(_, a)| *a == "--bundle").filter_map(|(i, _)| args.get(i + 1).cloned()).collect();
+            delphi_engine::bundle_serve::run(home, ws, &only)
+        }
         (Some("list"), _) => bundle_add::list(home, ws),
         (Some("remove"), Some(name)) => bundle_add::remove(ws, name),
         _ => {

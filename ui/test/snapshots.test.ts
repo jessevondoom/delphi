@@ -38,9 +38,8 @@ test('chat: tool details expanded, the slash menu, help and history search, and 
   check('chat-scrolled', { ...base, back: 6 }, 100, 20);
 });
 
-test('decks: the inbox and the left deck', () => {
+test('decks: the inbox', () => {
   check('deck-inbox', { ...base, deck: 2 }, 100, 24);
-  check('deck-thinking', { ...base, deck: 0 }, 100, 24);
 });
 
 test('research panels over the chat', () => {

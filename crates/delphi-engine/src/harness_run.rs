@@ -1902,6 +1902,22 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
     }
 
     #[tokio::test]
+    async fn the_orchestrator_on_a_subscription_can_ask_whether_an_external_tool_is_available_and_is_told_no_when_nothing_confirms_it() {
+        if !have_python() {
+            return;
+        }
+        let (answer, f, _s) = call_over_claude("orchestrator", "external_available", r#"{"need":"github"}"#).await;
+        let listed: Vec<&str> = answer["listed"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(listed.contains(&"external_available"), "the bridge offers it to the orchestrator: {:?}", listed);
+        let result = &answer["response"]["result"];
+        assert_eq!(result["isError"], false, "{}", answer);
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("not available:") && text.contains("the external tool was not available"), "{text}");
+        let call = events_of(&f, "harness.bridge_call").into_iter().find(|e| e.payload["name"] == "external_available").unwrap();
+        assert_eq!(call.payload["is_error"].as_bool(), Some(false));
+    }
+
+    #[tokio::test]
     async fn another_role_is_offered_name_thread_over_the_bridge_but_its_call_is_refused_and_nothing_is_logged_as_a_thread() {
         if !have_python() {
             return;

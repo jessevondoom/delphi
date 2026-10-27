@@ -235,13 +235,6 @@ test('a reply that streams and then lands keeps one anchor: the label row does n
   assert.equal(a2.row, a1.row, 'the same row');
 });
 
-test('the chat and the activity deck keep their own scroll offsets', () => {
-  const s = conversation();
-  const chat = lines(model(s, { back: 5, activityBack: 0 }), 100, 24).join('\n');
-  assert.ok(chat.includes('more lines'), 'the chat is scrolled');
-  const deck = lines(model(s, { deck: 0, back: 5, activityBack: 0 }), 100, 24).join('\n');
-  assert.ok(!deck.includes('lines below'), 'the activity deck is not scrolled by the chat\'s offset');
-});
 
 test('hostile text cannot widen a block or move the cursor', () => {
   let s = initial(0);

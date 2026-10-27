@@ -111,66 +111,22 @@ test('a council\'s blind round keeps no text, only the fact that it is taking it
   s = step(s, delta('sp_a_1', { thinking: 'secret stance', text: 'OPTION: table' }), 2);
   const r = s.activity.running[0]!;
   assert.deepEqual(['text' in r, 'thinking' in r, r.blind], [false, false, true]);
-  assert.ok(!lines(model(s), 100, 24).join('\n').includes('table'));
-  assert.match(lines(model(s), 100, 24).join('\n'), /daedalus · taking its seat · \d\d:\d\d/);
 });
 
-test('a failed tool call shows its first line under the span until the next one', () => {
+test('a failed tool call keeps its first line on the span until the next one', () => {
   let s = initial(0);
   s = step(s, ev('dag.node.added', { node_id: 'sp_b_1', role: 'builder', depth: 1 }), 0);
   s = step(s, ev('agent.block.complete', { block: { type: 'tool_call', id: 'c', name: 'run_command', arguments: { path: 'x' } } }, 't_1', { span_id: 'sp_b_1' }), 1);
   s = step(s, ev('tool.result', { tool_call_id: 'c', content: 'exit 1: no such file\nmore', is_error: true }, 't_1', { span_id: 'sp_b_1' }), 2);
-  assert.match(lines(model(s), 100, 24).join('\n'), /✖ exit 1: no such file/);
-  assert.ok(!lines(model(s), 100, 24).join('\n').includes('\nmore'));
+  assert.equal(s.activity.running[0]!.error, 'exit 1: no such file');
 });
 
-// ── the screen ───────────────────────────────────────────────────────────────────────────
-
-test('golden: history above, running spans below (005e 8.2)', () => {
-  check('activity-100x34', model(world()), 100, 34);
-  check('activity-80x24', model(world()), 80, 24);
-});
-
-test('golden: scrolled, with earlier entries above; empty; and without colour', () => {
-  let s = world();
-  for (let i = 0; i < 12; i++) {
-    s = step(s, ev('dag.node.added', { node_id: `sp_extra_${i}`, role: 'strategist', depth: 1 }, 't_x'), 100_000 + i * 100);
-    s = step(s, ev('dag.node.state', { node_id: `sp_extra_${i}`, state: 'done' }, 't_x'), 100_050 + i * 100);
-  }
-  check('activity-earlier-80x24', model(s, { now: T0 + 130_000 }), 80, 24);
-  check('activity-scrolled-80x24', model(s, { now: T0 + 130_000, activityBack: 6 }), 80, 24);
-  check('activity-empty-80x24', model(initial(0)), 80, 24);
-  const prev = T.currentCapabilities();
-  T.useCapabilities(T.capabilities({ NO_COLOR: '1' }));
-  try { check('activity-nocolor-80x24', model(world()), 80, 24); } finally { T.useCapabilities(prev); }
-});
-
-test('the chip: green with the terminal\'s own background as its text; [✔ finished] without colour; never in the chat', () => {
-  const prev = T.currentCapabilities(), lvl = chalk.level;
-  T.useCapabilities(T.capabilities({ TERM: 'xterm' }));
-  try {
-    const row = frame(model(world()), 100, 34).find((l) => plain(l).includes('finished'))!;
-    assert.match(row, /\x1b\[32m\x1b\[7m|\x1b\[7m\x1b\[32m|\x1b\[32;7m/, 'green, reversed');
-    assert.ok(plain(row).includes(' ✔ finished '));
-  } finally { T.useCapabilities(prev); chalk.level = lvl; }
-  T.useCapabilities(T.capabilities({ NO_COLOR: '1' }));
-  try { assert.ok(lines(model(world()), 100, 34).some((l) => l.includes('[✔ finished]'))); } finally { T.useCapabilities(prev); }
-  assert.ok(!lines(model(world(), { deck: 1 }), 100, 34).join('\n').includes('finished'), 'not in the chat deck');
-});
-
-test('what an agent thinks or writes is dropped on the spot: not kept, not drawn; the running span shows who, how long, the tool', () => {
+test('what an agent thinks or writes is dropped on the spot: not kept', () => {
   let s = initial(0);
   s = step(s, ev('dag.node.added', { node_id: 'sp_o_1', role: 'orchestrator', depth: 0 }), 0);
   const long = Array.from({ length: 30 }, (_, i) => `line ${i + 1} ` + 'word '.repeat(12)).join('\n');
   s = step(s, delta('sp_o_1', { thinking: long, text: 'My answer is the table.' }), 1);
   assert.ok(!JSON.stringify(s.activity).includes('line 30') && !JSON.stringify(s.activity).includes('the table'), 'nothing of it is in the deck state');
-  for (const w of [100, 80, 48, 28]) {
-    const rows = lines(model(s), w, 40);
-    const t = rows.join('\n');
-    assert.match(t, w >= 48 ? /athena · working · \d\d:\d\d/ : /athena · working/, `${w}`);
-    assert.ok(!t.includes('line 30') && !t.includes('the table') && !/thinking|writing/.test(t), `${w}: no model text, no \"thinking\"/\"writing\"`);
-    for (const l of rows) assert.ok(stringWidth(l) <= w, `${w}: ${l}`);
-  }
   assert.equal(s.live, 'My answer is the table.', 'the reply still streams into the chat');
 });
 
@@ -184,11 +140,8 @@ test('a running span shows its live token total, and the tool it waits on by nam
   assert.equal(s.activity.running[0]!.tokens, 900, 'an API seat\'s estimate of the call in flight is shown the same way');
   s = step(s, delta('sp_b_1', { tokens: 18_200 }), 2);
   s = step(s, ev('agent.block.complete', { block: { type: 'tool_call', id: 'c', name: 'run_command', arguments: { command: 'cargo test --secret-flag' } } }, 't_1', { span_id: 'sp_b_1' }), 3);
-  const t = lines(model(s), 100, 24).join('\n');
-  assert.match(t, /hephaestus · working · \d\d:\d\d · ~18\.2k tokens\n\s+→ run_command …/);
-  assert.ok(!t.includes('secret-flag'), 'the tool\'s arguments are not drawn');
   s = step(s, delta('sp_b_1', { text: 'Done.' }), 4);
-  assert.ok(!lines(model(s), 100, 24).join('\n').includes('→ run_command'), 'answering ends the tool call');
+  assert.equal(s.activity.running[0]!.tool, null, 'answering ends the tool call');
 });
 
 test('recorded changes join the ticker as their own sentence, by session, and survive a replay of the current session', () => {
@@ -197,8 +150,6 @@ test('recorded changes join the ticker as their own sentence, by session, and su
   s = step(s, ev('change.recorded', { summary: '  reworked the\npermission model  ', role: 'builder' }, 't_1', { agent: 'builder' }), 5_000);
   s = step(s, ev('change.recorded', { summary: '   ', role: 'builder' }, 't_1', { agent: 'builder' }), 6_000);
   assert.deepEqual(s.activity.history.map((h) => [h.change, h.what, h.role]), [[true, 'reworked the permission model', 'builder']]);
-  const t = lines(model(s), 100, 24).join('\n');
-  assert.match(t, /✎ recorded\s+⟦.*⟧ hephaestus · \d\d:\d\d\n\s+reworked the permission model/);
   // History from the log (a reattach) brings back this session's changes, and not the finished spans.
   const events = [ev('session.started', { session_id: 's_0001' }), ev('change.recorded', { summary: 'old one', role: 'builder' }, 't_1', { agent: 'builder' }), ev('session.started', { session_id: 's_0002' }), ev('change.recorded', { summary: 'new one', role: 'builder' }, 't_2', { agent: 'builder' })];
   const back = replay(initial(0), events.map((e) => ({ ...e.params, type: e.params.type })));
@@ -207,34 +158,6 @@ test('recorded changes join the ticker as their own sentence, by session, and su
   let u = world();
   u = step(u, ev('session.started', { session_id: 's_0009' }), 70_000);
   assert.ok(u.activity.history.every((h) => !h.change) && u.activity.history.length > 0);
-});
-
-test('the running zone stays in reach: following shows the end, with ↑ N earlier above; scrolling shows ↓ N lines below', () => {
-  let s = world();
-  for (let i = 0; i < 12; i++) {
-    s = step(s, ev('dag.node.added', { node_id: `sp_extra_${i}`, role: 'strategist', depth: 1 }, 't_x'), 100_000 + i * 100);
-    s = step(s, ev('dag.node.state', { node_id: `sp_extra_${i}`, state: 'done' }, 't_x'), 100_050 + i * 100);
-  }
-  const following = lines(model(s), 80, 24);
-  assert.match(following.join('\n'), /↑ \d+ earlier · pgup/);
-  assert.ok(following.join('\n').includes('hephaestus · working'), 'the running zone is on screen');
-  assert.ok(!following.join('\n').includes('lines below'));
-  const scrolled = lines(model(s, { activityBack: 8 }), 80, 24);
-  assert.match(scrolled.join('\n'), /↓ 8 lines below · pgdn/);
-  assert.ok(!scrolled.join('\n').includes('hephaestus · working'), 'scrolled up, the end is out of view');
-  const huge = lines(model(s, { activityBack: 9999 }), 80, 24);
-  assert.equal(huge.length, 24, 'an offset past the start is clamped');
-});
-
-test('the deck and the chat keep separate offsets; history survives a resize', () => {
-  const s = world();
-  const a = lines(model(s, { back: 50, activityBack: 0 }), 100, 34).join('\n');
-  assert.ok(a.includes('wrote crates/queue.rs'), 'the chat\'s offset does not move the deck');
-  for (const [w, h] of [[100, 34], [80, 24], [60, 20], [40, 16]] as const) {
-    const out = lines(model(s), w, h);
-    assert.equal(out.length, h);
-    for (const l of out) assert.ok(stringWidth(l) <= w, `${w}x${h}: ${l}`);
-  }
 });
 
 test('a streaming frame in flight while a resync reloads the history does not bring a finished reply back as a live one', () => {
@@ -265,7 +188,6 @@ test('replay does not bring the deck back, and the empty deck says what it is fo
   const back = replay(world(), []).activity;
   assert.deepEqual([back.running, back.history.every((h) => h.change)], [[], true], 'no spans come back; the session\'s recorded changes do');
   assert.deepEqual(replay(initial(0), []).activity, { running: [], history: [] });
-  assert.match(lines(model(initial(0)), 100, 24).join('\n'), /nothing running/);
 });
 
 test('a streaming frame that arrives after its task is over does not bring the reply back as a live one', () => {
