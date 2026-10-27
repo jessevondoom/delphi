@@ -556,14 +556,10 @@ fn delphi_xenia_now() -> i64 {
 /// store is joined.
 pub(crate) fn check_xenia(home: &Path, now: i64, r: &mut Report) {
     use delphi_core::xenia_status::{self, Severity};
-    if !xenia_status::list_stores(home).is_empty() {
-        let on = delphi_core::xenia_admin_console::console_admin_enabled(home);
-        r.push(
-            Level::Ok,
-            "13 xenia",
-            "console admin",
-            if on { "console admin signing is ON ($DELPHI_HOME/operator/xenia.toml): the console may sign roster proposals that touch no admin, one card at a time, 5 an hour; admin changes stay in the terminal" } else { "console admin signing is off (the default); roster signing happens in a terminal. To allow the limited console form, set `[xenia] console_admin = true` in $DELPHI_HOME/operator/xenia.toml" }.to_string(),
-        );
+    let console_admin = delphi_core::xenia_admin_console::console_admin_enabled(home);
+    // On is the notable state and gets its own line; off (the default) is said at the end of each healthy store's line.
+    if console_admin && !xenia_status::list_stores(home).is_empty() {
+        r.push(Level::Ok, "13 xenia", "console admin", "console admin signing is ON (operator/xenia.toml): the console may sign roster proposals that touch no admin, one card at a time, 5 an hour; admin changes stay in the terminal".to_string());
     }
     for (store, st) in xenia_status::all(home, &delphi_core::xenia_sync::VerifyConfig::at(now)) {
         let loc = store.id();
@@ -578,7 +574,7 @@ pub(crate) fn check_xenia(home: &Path, now: i64, r: &mut Report) {
                 }
                 if st.warnings.is_empty() {
                     let f = st.freshness.as_ref();
-                    r.push(Level::Ok, "13 xenia", loc, format!("{} admin(s), statement {}% of its life used, nothing contested or quarantined by the last sync", st.roster.as_ref().map(|x| x.admins).unwrap_or(0), f.and_then(|f| f.life_used_pct).unwrap_or(0)));
+                    r.push(Level::Ok, "13 xenia", loc, format!("{} admin(s), statement {}% of its life used, nothing contested or quarantined by the last sync{}", st.roster.as_ref().map(|x| x.admins).unwrap_or(0), f.and_then(|f| f.life_used_pct).unwrap_or(0), if console_admin { "" } else { "; console admin signing is off (set `[xenia] console_admin = true` in operator/xenia.toml to allow the limited console form)" }));
                 }
             }
         }

@@ -448,7 +448,7 @@ impl EngineService {
             }
             Err(ac::ConsoleError::Admin(delphi_core::xenia_admin::AdminError::Denied)) => {
                 self.admin_journal(&store, "denied", None, detail, now);
-                self.console_error(result.as_ref().err().expect("err"), &command, &n_text)
+                self.console_error(result.as_ref().expect_err("err"), &command, &n_text)
             }
             Err(e) => {
                 self.admin_journal(&store, if matches!(e, ac::ConsoleError::Stale) { "stale" } else { "refused" }, None, detail, now);

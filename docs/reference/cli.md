@@ -363,8 +363,7 @@ The org's shared, signed memory store: join, sync, status, publish, endorse.
   delphi xenia admin init|add|remove|rotate --routine|--compromised|show|sign|publish <n>|refresh   (terminal)
 ```
 
-Commands that sign show the exact bytes and want the card's code typed at a terminal; admin commands also take --store and --json.
-The console may sign a roster proposal that touches no admin, only if [xenia] console_admin = true in operator/xenia.toml.
+Signing wants a code typed at a terminal. Console admin needs [xenia] console_admin = true in operator/xenia.toml.
 
 ### `delphi docs`
 
