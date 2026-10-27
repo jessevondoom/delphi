@@ -7,6 +7,7 @@ import { addBlock, fold, initial, replay } from '../src/fold.ts';
 import { badge, sanitize, type Info } from '../src/theme.ts';
 import { completions } from '../src/complete.ts';
 import { newInbox } from '../src/inbox.ts';
+import * as A from '../src/archives.ts';
 
 const info: Info = {
   console_socket: '', narrator_socket: '', workspace: '', mission: null, version: '0.5', cwd: '/proj',
@@ -121,22 +122,19 @@ test('stopping ends the task, clears the spinner and says so', () => {
   assert.deepEqual([Object.keys(s.running), s.blocks.at(-1)?.text], [[], '■ stopped']);
 });
 
-test('the left deck shows who is working and the tool by name, never in the chat, and never what they think or write; it is not replayed', () => {
+test('the left deck is the knowledge window: titled for it, its results drawn, and nothing an agent thinks', () => {
+  const plain = (l: string) => l.replace(/\x1b\[[0-9;]*m/g, '');
   let s = initial(0);
   s = fold(s, { method: 'event', params: { type: 'dag.node.added', task_id: 't1', payload: { node_id: 'n_1', role: 'architect', depth: 0 } } }, 1);
-  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'weighing the index ', text: '' } } } }, 2);
-  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'against a scan\x1b[2J', text: '' } } } }, 3);
-  const working = frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n');
-  assert.match(working, /⟦.{3}⟧ daedalus · working · 00:00/);
-  assert.ok(!working.includes('weighing') && !working.includes('\x1b[2J') && !/thinking/.test(working), 'what it thinks is not drawn');
-  assert.equal(s.agents['architect']?.thinkingAt, 3, 'only the fact that it is thinking is noted, for the badge');
-  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: '', text: 'Use the index.' } } } }, 4);
-  assert.ok(!frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n').includes('Use the index.'), 'its words are in the chat, not the deck');
-  s = fold(s, { method: 'event', params: { type: 'agent.block.complete', span_id: 'n_1', agent: 'architect', payload: { block: { type: 'tool_call', id: 'c1', name: 'read_file', arguments: { path: 'a.rs' } } } } }, 5);
-  const tool = frame(model({ state: s, deck: 0 }), 100, 30).map(plain).join('\n');
-  assert.match(tool, /daedalus · working[\s\S]*→ read_file …/);
-  assert.ok(!tool.includes('a.rs'), 'the arguments stay in the chat');
-  assert.ok(!frame(model({ state: s, deck: 1 }), 100, 30).map(plain).join('\n').includes('weighing the index'), 'reasoning is not in the chat');
-  assert.deepEqual(replay(initial(0), [{ type: 'task.output', payload: { text: 'x' } }]).activity, { running: [], history: [] }, 'nothing is replayed into the deck');
-  assert.match(frame(model({ deck: 0 }), 100, 30).map(plain).join('\n'), /Who is working and the changes they record appear here/);
+  s = fold(s, { method: 'delta.frame', params: { spans: { n_1: { thinking: 'weighing the index against a scan', text: '' } } } }, 2);
+  const rest = frame(model({ state: s, deck: 0 }), 100, 30).map(plain);
+  assert.match(rest[1]!, /· knowledge$/, 'the title row names the pane');
+  assert.ok(!rest.join('\n').includes('weighing'), 'what agents think is not drawn');
+  assert.match(rest.join('\n'), /type to search the knowledge base/, 'the prompt row is the key hint');
+  const arch = { ...A.emptyArch(), q: 'retry', searched: 'retry', hits: [{ path: 'specs/003.md', collection: 'specs', trust: 'trusted', heading: 'Retry ladder', preview: 'three attempts, then escalate' }] };
+  const found = frame(model({ deck: 0, arch }), 100, 30).map(plain).join('\n');
+  assert.match(found, /Retry ladder/);
+  assert.match(found, /specs\/003\.md/);
+  for (const l of frame(model({ deck: 0, arch }), 40, 16)) assert.ok(stringWidth(l) <= 40);
 });
+

@@ -697,7 +697,9 @@ fn check_signatures(org: &str, store: &str, file_hash: &str, epoch: &Epoch, prev
     }
 }
 
-fn check_genesis(e: &Epoch) -> RResult<()> {
+/// Genesis entries all start `active` with no successor, removal or voiding. Public so a founder can refuse a
+/// genesis draft before signing it (the chain verifier runs the same function once signatures are assembled).
+pub fn check_genesis(e: &Epoch) -> RResult<()> {
     for m in &e.members {
         if m.status != Status::Active || m.successor.is_some() || m.removed_at_epoch.is_some() || m.voids_tombstones {
             return Err(RosterError::BadNewEntry { epoch: e.epoch });
