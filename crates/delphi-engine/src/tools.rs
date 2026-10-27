@@ -201,6 +201,12 @@ impl Registry {
             classify: classify_xenia_search,
             exec: ToolExec::Local(xenia_search),
         });
+        r.register(ToolSpec {
+            def: read_def("external_available", "Ask whether an external tool, connector, skill or model is available on this machine, by name (`github`, `google drive`, `pdf`, `gemini`), before you plan work that depends on it. It reads the operator's capabilities map (`delphi capabilities`) and answers `available` (with where, and whether it is usable) or `not available`. Only `available` is a yes: a connector that is signed out, failed its health check, or is merely configured is not. If the answer is not `available` and the task cannot be done without it, stop and tell the operator that the external tool was not available; do not substitute another tool or pretend. A match means a CLI offers it, usable only by a task on that CLI's seat. Orchestrator only.", json!({"type": "object", "required": ["need"], "properties": {"need": {"type": "string", "maxLength": 200}}})),
+            requires_write_scope: false,
+            classify: classify_external_available,
+            exec: ToolExec::Local(external_available),
+        });
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
@@ -375,6 +381,30 @@ fn xenia_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         }
         Err(e) => ToolResult::err(format!("could not search the org records: {e}")),
     }
+}
+
+/// A read of one local file; nothing leaves the machine and nothing is written, so it never asks.
+fn classify_external_available(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let need = str_arg(args, "need")?;
+    if need.trim().is_empty() || need.chars().count() > 200 {
+        return Err(ToolError("`need` must be 1 to 200 characters".into()));
+    }
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: tool.into(), payload: args.clone(), pattern: tool.into() })
+}
+
+/// Answer from the operator's capabilities map (`specs/038`). The answer carries names, never the descriptions in the map (those are
+/// third-party text), so it does not lower the span's trust ceiling.
+fn external_available(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    if ctx.role != "orchestrator" {
+        return ToolResult::err("only the orchestrator asks what is available; say in your report what you could not do");
+    }
+    let need = match str_arg(args, "need") {
+        Ok(n) => n,
+        Err(e) => return ToolResult::err(e.0),
+    };
+    let map = crate::hostmap::home_of_local(&ctx.guard.zones.local).and_then(crate::hostmap::load);
+    let now = delphi_core::xenia_index::unix_of(ctx.now_rfc3339).unwrap_or(0);
+    ToolResult::ok(crate::hostmap::answer(map.as_ref(), need, now))
 }
 
 fn classify_write(tool: &str, args: &Value) -> Result<Classified, ToolError> {
@@ -801,8 +831,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "xenia_search"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "xenia_search", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "xenia_search", "external_available"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "xenia_search", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -859,6 +889,11 @@ mod tests {
         run(&mut ctx, tool, &args)
     }
 
+    fn run_tool_as(f: &mut Fx, role: &str, tool: &str, args: Value) -> ToolResult {
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role, mission_id: "m1", now_rfc3339: "1970-01-01T00:00:10.000Z", stamps: vec![], events: vec![] };
+        run(&mut ctx, tool, &args)
+    }
+
     #[test]
     fn only_the_orchestrator_names_a_thread_and_the_engine_is_asked_to_log_it() {
         let mut f = fx(&[]);
@@ -872,6 +907,36 @@ mod tests {
         assert_eq!(ctx.events, vec![("thread.named".to_string(), json!({"thread": "pricing", "label": "Pricing for the knowledge base", "tasks": ["t_1", "t_2"]}))]);
         let none = run_tool(&mut f, "name_thread", args);
         assert!(none.is_error && none.content.contains("only the orchestrator"), "{}", none.content);
+    }
+
+    #[test]
+    fn the_orchestrator_can_ask_what_is_available_and_anything_but_a_usable_match_is_a_no() {
+        use crate::hostmap::{save, CliEntry, Item, Snapshot};
+        let mut f = fx(&[]);
+        let ceiling = f.span.ceiling();
+        let home = f._t.path().to_path_buf();
+        f.guard.zones.local = home.join("workspaces/w/local");
+        let it = |n: &str, d: &str| Item { name: n.into(), detail: d.into(), source: "cli".into() };
+        let map = Snapshot { schema: 1, taken_unix: 1, clis: vec![CliEntry { cli: "claude".into(), installed: true, mcp: vec![it("Docs", "https://d · Connected"), it("Sentry", "https://s · Needs authentication")], ..Default::default() }], ..Default::default() };
+        let args = |n: &str| json!({"need": n});
+        assert!(Registry::builtin().classify("external_available", &args("docs")).unwrap().tier == ToolTier::Green, "asking never asks the operator");
+        assert!(Registry::builtin().classify("external_available", &json!({"need": " "})).is_err());
+
+        // No map yet: not available, and it says why.
+        let no_map = run_tool_as(&mut f, "orchestrator", "external_available", args("docs"));
+        assert!(!no_map.is_error && no_map.content.starts_with("not available: there is no capabilities map"), "{}", no_map.content);
+
+        save(&home, &map).unwrap();
+        let yes = run_tool_as(&mut f, "orchestrator", "external_available", args("docs"));
+        assert!(yes.content.starts_with("available:") && yes.content.contains("in claude (usable)"), "{}", yes.content);
+        let failed = run_tool_as(&mut f, "orchestrator", "external_available", args("sentry"));
+        assert!(failed.content.starts_with("not available:") && failed.content.contains("stop and report that the external tool was not available"), "{}", failed.content);
+        let absent = run_tool_as(&mut f, "orchestrator", "external_available", args("jira"));
+        assert!(absent.content.starts_with("not available: no CLI"), "{}", absent.content);
+
+        let other = run_tool_as(&mut f, "builder", "external_available", args("docs"));
+        assert!(other.is_error && other.content.contains("only the orchestrator"), "{}", other.content);
+        assert!(f.span.ceiling() == ceiling, "the answer carries names only, so the span's ceiling does not move");
     }
 
     #[test]
@@ -1267,7 +1332,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "xenia_search"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "xenia_search", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "xenia_search", "external_available"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "xenia_search", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 }

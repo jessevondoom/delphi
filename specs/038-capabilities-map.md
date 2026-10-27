@@ -1,14 +1,29 @@
+---
+id: spec-038-capabilities-map
+title: "038: Operator capabilities map"
+author: architect
+timestamp: 2026-10-26T20:00:00Z
+status: draft   # built (PR #232); awaiting the operator's approval. One follow-up is a decision for the operator (section 11)
+governed_by: "GOVERNANCE.md"
+review_rubric: "REVIEW.md"
+source_type: internal_generated
+confidence: medium   # run live on one machine (claude, agy, gemini, ollama); the detached start from setup and update was not run end to end
+source_mission: 2026-10-23-foundational-design
+tags: [spec, capabilities, connectors, orchestrator, draft]
+---
+
 # 038: Operator capabilities map
 
-**Status:** built (PR #232); two follow-ups are decisions for the operator (§11). **Command:** `delphi capabilities`.
-**Store:** `<home>/capabilities.json`. **Code:** `crates/delphi/src/host_caps.rs`.
+**Status:** built (PR #232). **Command:** `delphi capabilities`. **Store:** `<home>/capabilities.json`.
+**Code:** `crates/delphi/src/host_caps.rs` (collect), `crates/delphi-engine/src/hostmap.rs` (snapshot, lookup), the
+`external_available` tool in `crates/delphi-engine/src/tools.rs`.
 
 ## 1. Why
 
 Delphi drives several model CLIs (`claude`, `agy`, `gemini`, `ollama`). What each can use (connectors, plugins, skills, agents,
 models) differs by machine, by sign-in and by project, and nothing kept it in one place. The tool inventory of `specs/020` records
 what a *session* reported at start-up; this records what the *host's CLIs* offer, before any session, so the operator can see it and
-so later work (§11) can plan from it.
+the orchestrator can ask it (§11).
 
 Non-goals: installing or configuring anything, calling a model by default, and listing a CLI's built-in tools (no CLI has a command
 for that; see §4).
@@ -127,13 +142,36 @@ the snapshot's age is recent afterwards.
 - A connector that is configured but not logged in shows as listed. Only claude's list reports health.
 - The map is a snapshot. A CLI changed after the last refresh shows its old state until the next `setup`, `update` or `--refresh`.
 
-## 11. Decisions for the operator
+## 11. The orchestrator can ask (`external_available`)
 
-Neither is built; both change what Delphi does, not just what it shows.
+The map is **not** put in any prompt. The orchestrator gets one read-only tool and calls it only when it needs to know whether
+something outside Delphi is possible:
 
-1. **Feed the map to the orchestrator.** Today the orchestrator plans from `specs/020`'s per-seat inventory. The map would add what the
-   *host* offers (a connector another seat has, a skill a role could use). *Recommendation:* not yet. Show it to the operator first
-   and let it prove useful; adding a second source to the plan prompt risks the orchestrator promising tools a seat cannot reach.
-2. **Refresh on a schedule.** The map is refreshed at `setup` and `update` only. A daily refresh in the daemon would keep it current.
+```
+external_available { need: "github" }        → available: / not available:
+```
+
+- **Orchestrator only.** Any other role's call is refused (`only the orchestrator asks what is available`). Green, never asks the
+  operator, writes nothing; it reads `<home>/capabilities.json` (the home is found from the workspace's `local/` directory).
+- **Only a usable match is a yes.** The words of `need` (filler such as "tool" or "connector" dropped) must all appear in an item's
+  name or description. A match is `usable` for a skill, plugin, agent or model that is present, and for a connector the CLI reports
+  as connected. It is **not** a yes when the connector failed its health check or needs authentication, is disabled, is only
+  configured in a file (never health-checked), or belongs to a CLI that is signed out. A CLI that is not installed offers nothing.
+- **Not a yes means stop.** Every other answer ends with: if the task needs it, stop and report that the external tool was not
+  available; do not substitute or pretend. No map on the machine is the same answer (with a note that the operator can run
+  `delphi capabilities`). A map over seven days old still answers, with its age.
+- **Where, not just whether.** A yes names the CLI (or project) that offers it and says it can be used only by a task on that CLI's
+  seat; the tool does not route anything.
+- **Names only.** Skill and server descriptions are text other people wrote, so matching reads them but the answer shows only
+  names, cut to plain characters and 60 characters. The answer therefore does not lower the span's trust ceiling.
+
+Tests: `hostmap.rs` (the lookup and every refusal above), `tools.rs` (the role gate, Green, no map / yes / not usable / absent, the
+ceiling unmoved), `harness_run.rs` (offered to the orchestrator over a Claude seat's bridge and answered).
+
+## 12. Decisions for the operator
+
+Not built; it changes what Delphi does, not just what it shows.
+
+1. **Refresh on a schedule.** The map is refreshed at `setup` and `update` only. A daily refresh in the daemon would keep it current.
    *Recommendation:* no; `delphi capabilities --refresh` is one command, and a daemon that probes CLIs on a timer can wake a
    sleeping login or spend quota (`--ask` never runs unprompted in any case).

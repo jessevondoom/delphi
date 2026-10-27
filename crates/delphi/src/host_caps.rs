@@ -8,64 +8,18 @@
 //! Setup and update start a refresh in the background (`refresh_in_background`) so the map is there when it is wanted. A CLI that
 //! is missing, signed out or broken is recorded as such, with the reason; it never fails the command.
 
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const FILE: &str = "capabilities.json";
 const PROBE_LIMIT: Duration = Duration::from_secs(45);
 const ASK_LIMIT: Duration = Duration::from_secs(180);
 const ASK_PROMPT: &str = "List every tool, skill and connector (MCP server) you can use in this session, one per line, as `kind: name`. No commentary.";
 /// A snapshot younger than this is not refreshed again by a background start.
 const FRESH_SECS: i64 = 60;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Item {
-    pub name: String,
-    pub detail: String,
-    /// `cli`, `disk` or `model`.
-    pub source: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct CliEntry {
-    pub cli: String,
-    pub installed: bool,
-    pub path: String,
-    pub version: String,
-    /// What the CLI says about the sign-in (`signed in, max`, `signed out`), when it can say.
-    pub auth: String,
-    pub mcp: Vec<Item>,
-    pub plugins: Vec<Item>,
-    pub extensions: Vec<Item>,
-    pub skills: Vec<Item>,
-    pub agents: Vec<Item>,
-    pub models: Vec<Item>,
-    /// A model's own answer to "what can you use", unverified. Only with `--ask`.
-    pub asked: Option<String>,
-    /// What could not be read, and why.
-    pub notes: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct Snapshot {
-    pub schema: u32,
-    pub taken_unix: i64,
-    pub delphi_version: String,
-    pub clis: Vec<CliEntry>,
-    /// What projects add on top: their `.mcp.json`, skills and agents. Kept across refreshes.
-    #[serde(default)]
-    pub projects: Vec<ProjectEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct ProjectEntry {
-    pub path: String,
-    pub mcp: Vec<Item>,
-    pub skills: Vec<Item>,
-    pub agents: Vec<Item>,
-}
+// The snapshot and its file live in the engine, so the orchestrator's `external_available` tool reads the same thing.
+pub use delphi_engine::hostmap::{load, path, save, CliEntry, Item, ProjectEntry, Snapshot};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ran {
@@ -359,22 +313,6 @@ pub fn scan_project(dir: &Path) -> ProjectEntry {
 fn merge_projects(scanned: Vec<ProjectEntry>, before: Option<&Snapshot>) -> Vec<ProjectEntry> {
     let kept = before.into_iter().flat_map(|b| b.projects.iter()).filter(|p| Path::new(&p.path).is_dir() && !scanned.iter().any(|s| s.path == p.path)).cloned();
     scanned.iter().cloned().chain(kept).collect()
-}
-
-pub fn path(home: &Path) -> PathBuf {
-    home.join(FILE)
-}
-
-pub fn load(home: &Path) -> Option<Snapshot> {
-    serde_json::from_str(&std::fs::read_to_string(path(home)).ok()?).ok()
-}
-
-/// Write beside the final name and rename over it, so a reader never sees half a file.
-pub fn save(home: &Path, s: &Snapshot) -> std::io::Result<()> {
-    std::fs::create_dir_all(home)?;
-    let tmp = home.join(format!("{FILE}.tmp{}", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(s).map_err(std::io::Error::other)?)?;
-    std::fs::rename(&tmp, path(home))
 }
 
 fn now_unix() -> i64 {
