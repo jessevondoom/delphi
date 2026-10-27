@@ -359,10 +359,14 @@ The org's shared, signed memory store: join, sync, status, publish, endorse.
   delphi xenia sync | status [--store <org>/<store>] [--json]
   delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]
   delphi xenia endorse|dispute|retract|withdraw|restore <id> [--scope a,b] [--note <n>] [--reason <r>]
-  delphi xenia republish --old <did>   [--workspace <name>] [--home <dir>]
+  delphi xenia republish --old <did>
+  delphi xenia admin add <did> --person <p> --handle <h> [--as-admin] [--steward a,b|*] | remove <did> [--for-cause]
+  delphi xenia admin rotate <old-did> --to <new-did> --routine|--compromised
+  delphi xenia admin show|sign|publish <n> | refresh [--validity-days D]
+  delphi xenia admin genesis draft|sign|publish ...   [--workspace <name>] [--home <dir>]
 ```
 
-Commands that sign show the exact bytes and want the card's code typed at a terminal. No admin commands yet.
+Commands that sign show the exact bytes and want the card's code typed at a terminal. The admin family proposes roster changes (add, remove, rotate: rotate needs --routine or --compromised, no default), signs them (2-of-3), publishes the new epoch with a fresh statement, refreshes the statement after verifying history, and runs the founders' genesis ceremony.
 
 ### `delphi docs`
 
