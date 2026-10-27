@@ -197,7 +197,7 @@ pub fn delphi_tools(claude: &str) -> Vec<String> {
         "Write" | "Edit" | "MultiEdit" => &["write_file"],
         "Bash" => &["run_command"],
         "Task" | "Agent" => &["dispatch_agent"],
-        "read_file" | "read_doc" | "check" | "check_alignment" | "search" | "list_dir" | "write_file" | "run_command" | "dispatch_agent" | "timer" | "name_thread" => return vec![claude.to_string()],
+        "read_file" | "read_doc" | "check" | "check_alignment" | "search" | "list_dir" | "write_file" | "run_command" | "dispatch_agent" | "timer" | "name_thread" | "external_available" => return vec![claude.to_string()],
         _ => &[],
     };
     v.iter().map(|s| s.to_string()).collect()
@@ -301,6 +301,8 @@ pub struct BundlePolicy {
     pub red: Vec<String>,
     /// (`connector.tool`, roles or `*`, bundle)
     pub connectors: Vec<(String, Vec<String>, String)>,
+    /// Reads whose path matches ask the operator (a Green read becomes Amber); never the reverse.
+    pub require: Vec<DenyRule>,
 }
 
 /// Loaded fresh each time it is asked, so `remove` takes effect at once. A policy file that fails verification is an
@@ -317,6 +319,9 @@ pub fn policy(ws: &WorkspacePaths) -> Result<BundlePolicy, String> {
         for (pat, reason) in p.deny_commands {
             out.deny.push(DenyRule { re: regex::Regex::new(&pat).map_err(|w| w.to_string())?, reason, bundle: e.id() });
         }
+        for (pat, reason) in p.require_card {
+            out.require.push(DenyRule { re: regex::Regex::new(&pat).map_err(|w| w.to_string())?, reason, bundle: e.id() });
+        }
         out.red.extend(p.red_paths.into_iter().map(|(g, _)| g));
         out.connectors.extend(p.connector_denied.into_iter().map(|(t, r)| (t, r, e.id())));
     }
@@ -328,6 +333,11 @@ impl BundlePolicy {
     pub fn denies_command(&self, argv: &[String]) -> Option<String> {
         let line = argv.join(" ");
         self.deny.iter().find(|r| r.re.is_match(&line)).map(|r| format!("the {} bundle's policy denies `{}`{}", r.bundle, r.re.as_str(), if r.reason.is_empty() { String::new() } else { format!(": {}", r.reason) }))
+    }
+
+    /// Why a read of this path needs a card, if a bundle says so (`require_card`).
+    pub fn requires_card(&self, path: &str) -> Option<String> {
+        self.require.iter().find(|r| r.re.is_match(path)).map(|r| format!("the {} bundle's policy asks before reading `{}`{}", r.bundle, path, if r.reason.is_empty() { String::new() } else { format!(": {}", r.reason) }))
     }
 
     /// Whether `connector.tool` is never offered to `role` while a bundle is added.

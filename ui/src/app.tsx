@@ -6,22 +6,25 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as C from './composer.ts';
 import { lookup } from './commands.ts';
-import { completions, enterAccepts, searchHistory, type Completion, type ListDir } from './complete.ts';
+import { bundleTarget, completions, enterAccepts, searchHistory, type Completion, type ListDir } from './complete.ts';
 import { addBlock, fold, type State } from './fold.ts';
 import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
+import * as A from './archives.ts';
+import { openExternal } from './external.ts';
 import * as O from './org.ts';
-import { pin, previewOf, readNotes } from './research.ts';
+import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
+import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
-import { anchorBack, bodyHeight, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
+import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
 import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
 import type { Ev } from './input.ts';
-import { useSelection } from './select.ts';
+import { copyToClipboard, useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
 import type { Term } from './terminal.ts';
 import type { Info, Pal, Rgb } from './theme.ts';
@@ -56,7 +59,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const [composer, setComposer] = useState(() => C.empty());
   const [deck, setDeck] = useState<0 | 1 | 2>(1);
   const [back, setBack] = useState(0);
-  const [activityBack, setActivityBack] = useState(0);
+  const [arch, setArchState] = useState<A.Arch>(() => A.emptyArch(true));
+  // A document opened from a link in the chat reads in its own window state (the knowledge deck keeps its search and history), and link mode
+  // (`specs/029`): the pointers and addresses in the transcript can be focused and followed. Both are refs first, like the rest of the key state.
+  const [rdr, setRdrState] = useState<A.Arch>(() => A.emptyArch(true));
+  const [lm, setLmState] = useState<{ focus: number | null; note: string } | null>(null);
   const [help, setHelp] = useState(false);
   const [sel, setSel] = useState(0);
   const [expandTools, setExpandTools] = useState(false);
@@ -86,6 +93,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const deckRef = useRef<0 | 1 | 2>(1);
   deckRef.current = deck;
   const panelRef = useRef<P.Panel | null>(null);
+  const rdrRef = useRef(rdr);
+  const lmRef = useRef(lm);
+  const expandRef = useRef(false);
+  const palRef = useRef(pal);
+  palRef.current = pal;
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const listDir = useMemo(() => listTeamDir(info), [info]);
@@ -144,6 +156,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       const want = m[1]!.toLowerCase();
       target = Object.entries(info.roles).find(([id, r]) => id === want || r.name.toLowerCase() === want)?.[0];
       if (target) prompt = m[2]!;
+      else {
+        // `@bundle:agent` / `@org/bundle:agent`: a bundle's agent; the daemon checks the name and says if it is wrong.
+        const b = bundleTarget(m[1]!);
+        if (b) { target = b; prompt = m[2]!; }
+      }
     }
     setBack(0);
     anchorRef.current = null;
@@ -160,9 +177,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     }
   }, [running]);
 
-  /** Scroll the deck that is showing: the chat and the activity deck each keep their own place. Reaching the end resumes following. */
+  /** Scroll the chat. Reaching the end resumes following. */
   const scroll = (by: number) => {
-    if (deckRef.current === 0) { setActivityBack((b) => Math.max(0, b + by)); return; }
     const next = Math.max(0, backRef.current + by);
     if (next === 0) anchorRef.current = null;
     backRef.current = next;
@@ -239,6 +255,52 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     // A command may have changed what the workspace can run on (`/ratify apply`), so ask again afterwards.
     void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note }).then(checkModels);
   };
+
+  // The left deck is the knowledge window (`archives.ts`), reading through `kb.get` as the narrator's does. The ref moves
+  // at once, not when React gets to the update: text and Enter can arrive in one read.
+  const archRef = useRef(arch);
+  archRef.current = arch;
+  const setArchOf = (f: (a: A.Arch) => A.Arch) => { const n = f(archRef.current); archRef.current = n; setArchState(n); };
+  const setArch = setArchOf;
+  const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
+  const enc = encodeURIComponent;
+  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(archRef.current).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(archRef.current)}`), kb('/v1/health')])
+    .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
+    .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
+  const setRdr = (f: (a: A.Arch) => A.Arch) => { const n = f(rdrRef.current); rdrRef.current = n; setRdrState(n); };
+  const setLm = (f: (l: { focus: number | null; note: string } | null) => { focus: number | null; note: string } | null) => { const n = f(lmRef.current); lmRef.current = n; setLmState(n); };
+  /** Pin a document or passage to the mission notebook with its pointer and a hash of what it said (`specs/029` §6): the one write the reader makes. */
+  const pinTarget = (target: Extract<Target, { k: 'doc' | 'pointer' }>) => {
+    const say = (msg: string, tone?: 'ok' | 'error') => { setRdr((a) => A.withNote(a, msg)); setLm((l) => (l ? { ...l, note: msg } : l)); if (tone) note(msg, tone); };
+    kb(`/v1/doc?path=${enc(target.path)}`).then((r) => {
+      if (r.status !== 200) { say(`could not pin: ${target.path} could not be read`, 'error'); return; }
+      const p = passageOf(String(r.body?.text ?? ''), target);
+      pin(info, mission, p.from, p.text);
+      say('pinned to the mission notebook (/notes)', 'ok');
+    }).catch((er) => say('could not pin: ' + (er?.message ?? 'the knowledge base is not available'), 'error'));
+  };
+  const runKb = (act: A.Action, on: 'arch' | 'rdr' = 'arch') => {
+    const setArch = on === 'arch' ? setArchOf : setRdr;
+    const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); if (on === 'rdr') setLm((l) => (l ? { ...l, note: msg } : l)); };
+    const a0 = on === 'arch' ? archRef.current : rdrRef.current, tp = A.trustParam(a0);
+    if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) runKb({ t: 'search', q: a0.q.trim() }, on); else if (a0.browse) runKb({ t: 'browse', name: a0.browse }, on); }
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    else if (act.t === 'open') {
+      const t = act.target;
+      kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => {
+        if (r.status === 200 && on === 'rdr') { // a document the operator read from the chat is a source of this research (§6)
+          setLm((l) => (l ? { ...l, note: '' } : l));
+          setState((st) => ({ ...st, sources: noteSources(st.sources, [t.path], 'read', 'operator', Date.now()) }));
+        }
+        setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, sizeRef.current.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')));
+        if (r.status !== 200 && on === 'rdr') fail(r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it');
+      }).catch(() => fail('could not open it'));
+    } else if (act.t === 'pin') pinTarget(act.target);
+    else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
+    else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
+  };
+  useEffect(() => { if (deck === 0 && !archRef.current.shelf) void loadShelf(); }, [deck]);
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
   // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs
@@ -321,6 +383,51 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         return;
       }
 
+      // Following links in the chat (`specs/029`): a document opened from a link takes the keys until it is closed; link mode
+      // takes them until Esc, so a stray Enter or letter opens and types nothing. Ctrl+C, the wheel, the page keys and the deck keys still work.
+      if (deckRef.current === 1 && !panelRef.current && e.t !== 'bg' && !(e.t === 'ctrl' && e.c === 'c') && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right'))) {
+        const { w, h } = sizeRef.current, dense = h < 16;
+        if (rdrRef.current.at >= 0) {
+          const r = A.key(rdrRef.current, e, w, Math.max(1, h - 7));
+          if (r.used) { setRdr(() => r.a); runKb(r.action, 'rdr'); }
+          return;
+        }
+        if (!lmRef.current && e.t === 'ctrl' && e.c === 'o') {
+          const { lines, links } = chatLinks(chatModel(), w, dense);
+          setLm(() => ({ focus: null, note: '' })); // nothing is focused yet, so a stray Enter opens nothing
+          return;
+        }
+        if (lmRef.current) {
+          const lmNow = lmRef.current, key = e.t === 'key' ? e.k : e.t === 'text' ? e.s : '';
+          const { lines, links } = chatLinks(chatModel(), w, dense);
+          const cur = lmNow.focus === null ? undefined : links.find((l) => l.id === lmNow.focus);
+          const move = (dir: 1 | -1) => {
+            const bh = bodyHeight({ ...chatModel(), composer: C.empty() }, w, h);
+            // From nothing, the first link on screen; after that, the next or previous.
+            const f = lmNow.focus === null ? firstVisible(links, Math.max(0, lines.length - bh - backRef.current), bh) ?? stepFocus(links, null, dir) : stepFocus(links, lmNow.focus, dir), l = links.find((x) => x.id === f);
+            if (l) { const b = backShowing(lines.length, l.spans[0]!.line, bh, backRef.current); backRef.current = b; setBack(b); }
+            setLm(() => ({ focus: f, note: '' }));
+          };
+          if (e.t === 'wheel') { scroll(e.dir === 'up' ? 3 : -3); return; }
+          if (key === 'pgup' || key === 'pgdn') { scroll(key === 'pgup' ? Math.max(3, h - 10) : -Math.max(3, h - 10)); return; }
+          if (key === 'esc') { setLm(() => null); return; }
+          if (key === 'tab') { move(1); return; }
+          if (key === 'shift-tab') { move(-1); return; }
+          if (cur && key === 'enter') {
+            if (cur.target.k === 'external') runKb({ t: 'browser', url: cur.target.url }, 'rdr');
+            else { setLm((l) => (l ? { ...l, note: 'opening…' } : l)); runKb({ t: 'open', target: cur.target }, 'rdr'); }
+          } else if (cur && key === 'y') runKb({ t: 'copy', text: copyText(cur.target) }, 'rdr');
+          else if (cur && key === 'p' && cur.target.k !== 'external') pinTarget(cur.target);
+          return;
+        }
+      }
+
+      // On the left deck the keyboard belongs to the knowledge window; ← → (and shift+← →) it leaves to the deck keys.
+      if (deckRef.current === 0 && !(e.t === 'ctrl' && e.c === 'c') && e.t !== 'bg') {
+        const r = A.key(archRef.current, e, sizeRef.current.w, Math.max(1, sizeRef.current.h - 7));
+        if (r.used) { setArch(() => r.a); runKb(r.action); return; }
+      }
+
       // On the right deck the keyboard belongs to the inbox (an explicit focus change), never the prompt.
       if (deckRef.current === 2 && !(e.t === 'key' && e.shift && (e.k === 'left' || e.k === 'right')) && !(e.t === 'ctrl' && e.c === 'c')) {
         const now = Date.now();
@@ -360,7 +467,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           if (e.c === 'k') { upd(C.killToEnd); return; }
           if (e.c === 'w') { upd(C.killWord); return; }
           if (e.c === 'l') { follow(); return; }
-          if (e.c === 'o') { setExpandTools((x) => !x); return; }
+          if (e.c === 't') { expandRef.current = !expandRef.current; setExpandTools(expandRef.current); return; }
           if (e.c === 'r') { setS({ q: '', at: hist.length, match: null }); return; }
           return;
         case 'key': {
@@ -424,6 +531,10 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   // begins while the operator is at the end is pinned by its label row once it outgrows the body (`005e` §7.2).
   const total = useRef(0);
   const base = { info, pal, state, now: 0, deck, composer, back: 0, help: false, menu: null, expandTools, search: null, queue, inbox, mode, panel, noModel };
+  /** The chat model as the key handler sees it (it runs from refs, not from the last render). */
+  function chatModel(): Model {
+    return { info, pal: palRef.current, state: stateRef.current, now: 0, deck: 1, composer: comp.current, back: 0, help: false, menu: null, expandTools: expandRef.current, search: null, queue: queueRef.current, inbox: inboxRef.current, mode: modeRef.current, panel: null };
+  }
   const dense = size.h < 16;
   const lineCount = useMemo(() => transcriptCount(base, size.w, dense), [state.blocks, state.live, size.w, dense, pal, expandTools, queue]);
   useEffect(() => {
@@ -446,8 +557,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, still, now, back, activityBack, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, activityBack, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const model: Model = { ...base, still, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>

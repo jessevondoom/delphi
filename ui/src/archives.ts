@@ -15,7 +15,7 @@ export type Shelf = {
   stats: { documents: number; passages: number; vectors: number } | null;
 };
 /** One document in the reader, with where the operator is in it. */
-export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null };
+export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
 export type Arch = {
   q: string;
   /** Where the keys go: the search box, or the list under it. */
@@ -40,12 +40,14 @@ export type Arch = {
   /** The queries searched in this window, oldest first, and which one up and down have recalled (null: none). */
   history: string[];
   hist: number | null;
+  /** The console can pin a passage to the operator's notebook (`p`); the narrator is read-only and cannot. */
+  pins: boolean;
 };
 
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, scope: null, trustedOnly: false, history: [], hist: null });
+export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, scope: null, trustedOnly: false, history: [], hist: null, pins });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
@@ -57,7 +59,8 @@ export type Action =
   | { t: 'browse'; name: string }
   | { t: 'open'; target: Extract<Target, { k: 'doc' | 'pointer' }> }
   | { t: 'browser'; url: string }
-  | { t: 'copy'; text: string };
+  | { t: 'copy'; text: string }
+  | { t: 'pin'; target: Extract<Target, { k: 'doc' | 'pointer' }> };
 
 type Row = { k: 'hit'; hit: Hit } | { k: 'doc'; path: string; collection: string; updated: string } | { k: 'collection'; name: string; documents: number; updated: string };
 
@@ -140,7 +143,7 @@ export function gotShelf(a: Arch, collections: any[], recent: any[], health: any
 
 /** A document arrived: show it, after the entry now on screen (anything forward of it in the history is dropped). */
 export function gotDoc(a: Arch, body: any, target: Target | null, w: number): Arch {
-  const entry: Entry = { path: String(body.path), collection: String(body.collection ?? ''), trust: String(body.trust ?? ''), stale: !!body.stale, text: String(body.text ?? ''), scroll: 0, focus: null };
+  const entry: Entry = { path: String(body.path), collection: String(body.collection ?? ''), trust: String(body.trust ?? ''), stale: !!body.stale, text: String(body.text ?? ''), scroll: 0, focus: null, ...(target?.k === 'pointer' ? { range: { from: target.from, to: target.to } } : {}) };
   entry.scroll = startRow(entry, w, target);
   const trail = [...a.trail.slice(0, a.at + 1), entry];
   return { ...a, trail, at: trail.length - 1, note: '' };
@@ -233,6 +236,7 @@ function reader(a: Arch, e: Ev, w: number, h: number, used: (n: Arch, act?: Acti
     if (e.s === '[') return back();
     if (e.s === ']') return forward();
     if (e.s === 'y') return used(a, { t: 'copy', text: cur.focus !== null && links[cur.focus] ? copyText(links[cur.focus]!.target) : cur.path });
+    if (e.s === 'p' && a.pins) return used({ ...a, note: 'pinning…' }, { t: 'pin', target: cur.range ? { k: 'pointer', path: cur.path, from: cur.range.from, to: cur.range.to } : { k: 'doc', path: cur.path } });
     return used(a); // the reader has no input: a stray letter changes nothing
   }
   if (e.t === 'ctrl' && e.c === 'c') return NOT_USED(a);
@@ -337,7 +341,7 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
     ...pad(body, rowsHigh),
     T.hairline(pal, w),
     T.spread(' ' + T.dim(status), T.dim(`${a.note ? a.note + ' · ' : ''}${a.trail.length > 1 ? `${a.at + 1}/${a.trail.length} · ` : ''}${pct}% `), w),
-  ].concat(hint('tab link · enter open · [ back · ] forward · y copy · esc close'));
+  ].concat(hint(`tab link · enter open · [ back · ] forward · y copy${a.pins ? ' · p pin' : ''} · esc close`));
 }
 
 /** The pane's body: `h` rows of at most `w` columns. */

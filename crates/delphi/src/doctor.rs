@@ -594,6 +594,12 @@ fn check_bundles(ws: &Workspace, home: &Path, r: &mut Report) {
         if e.is_stale(&today) {
             r.warn("12 bundles", loc, format!("{} is past its review date ({}); it ranks lower until its publisher releases a reviewed version", e.version, e.review_by));
         }
+        // A newer version at the bundle's source (`specs/024` §3.5). Information: it is applied only by `delphi bundle update`.
+        // A source that cannot be looked at (moved, a store) says nothing here; `/org` shows why.
+        let check = delphi_bundle::source_check::check(&e.source.kind, &e.source.path, &e.hash, &e.publisher_kid);
+        if let Some(line) = check.line() {
+            r.warn("12 bundles", e.id(), format!("update available: {} -> {} at {}; `delphi bundle update {}` applies it", e.version, line, e.source.path, e.name));
+        }
     }
     // How far each bundle's vectors are (`specs/027` §5.4): search is lexical for a bundle until they are complete, which
     // is normal for a while after an add and so is information, not a warning. A cache that failed its spot check is

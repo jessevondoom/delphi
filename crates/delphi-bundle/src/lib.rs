@@ -26,6 +26,7 @@ mod relax;
 pub mod redaction;
 pub mod scan;
 mod skills;
+pub mod source_check;
 mod summary;
 mod tree;
 mod vectors;

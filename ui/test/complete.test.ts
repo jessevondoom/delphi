@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { completions, searchHistory } from '../src/complete.ts';
+import { bundleTarget, completions, searchHistory } from '../src/complete.ts';
 import type { Info } from '../src/theme.ts';
 
 const info = { roles: { architect: { name: 'daedalus', chassis: '#0', face: 'x' }, builder: { name: 'hephaestus', chassis: '#0', face: 'x' } } } as unknown as Info;
@@ -31,4 +31,12 @@ test('ctrl+r finds the newest match, then older ones', () => {
   assert.equal(searchHistory(h, 'fix', a), 0);
   assert.equal(searchHistory(h, 'fix', 0), -1);
   assert.equal(searchHistory(h, '', 3), -1);
+});
+
+test("@bundle:agent names a bundle agent; a line reference is not one", () => {
+  assert.equal(bundleTarget("acme-plat:reviewer"), "bundle:acme-plat:reviewer");
+  assert.equal(bundleTarget("acme/plat:reviewer"), "bundle:acme/plat:reviewer");
+  assert.equal(bundleTarget("specs/a-b:12"), null);
+  assert.equal(bundleTarget("architect"), null);
+  assert.equal(bundleTarget("a:b:c"), null);
 });

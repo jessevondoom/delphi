@@ -188,6 +188,15 @@ impl EngineService {
         if prompt.is_empty() || prompt.chars().count() > 20_000 {
             return Err(err(code::INVALID_PARAMS, "`prompt` must be 1 to 20,000 characters"));
         }
+        // `@<bundle>:<agent>`: validated against the added bundles and the host role's being enabled, before anything starts.
+        if target.starts_with("bundle:") {
+            let a = crate::bundle_load::agent(&self.engine.ws, &target).map_err(|e| err(code::INVALID_PARAMS, e))?;
+            if !self.engine.settings.enabled_agents.contains(&a.host_role) {
+                return Err(err(code::INVALID_PARAMS, format!("`{}` runs as {}, which is not an enabled role", target, a.host_role)));
+            }
+            let task_id = self.spawn_task(&m, &target, &prompt, None);
+            return Ok(json!({"task_id": task_id, "mission_id": m.id, "bundle_agent": a.id, "role": a.host_role}));
+        }
         if !self.engine.settings.enabled_agents.contains(&target) {
             return Err(err(code::INVALID_PARAMS, format!("`{}` is not an enabled role (enabled: {})", target, self.engine.settings.enabled_agents.join(", "))));
         }

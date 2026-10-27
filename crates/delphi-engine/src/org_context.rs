@@ -268,8 +268,17 @@ pub fn view(ws: &WorkspacePaths, projects: &[(String, PathBuf)], today: &str) ->
         if stale {
             open.push(format!("{} is past its review date ({})", id, e.review_by));
         }
-        // `update_available` stays null until a source that can say exists (B6); `vectors` is how far the index has got.
-        bundles.push(json!({"id": id, "title": clean(&e.title), "version": clean(&e.version), "provenance": clean(&e.provenance), "order": e.order, "review_by": clean(&e.review_by), "stale": stale, "matched": is_matched(&repos, projects), "source": {"kind": clean(&e.source.kind), "path": clean(&e.source.path)}, "update_available": null, "vectors": status.get(&id).map(|s| s.label())}));
+        // `update_available`: the new version and the publisher state when the source holds another hash, else null (also null
+        // when the source cannot be looked at: `update_note` says why). `vectors` is how far the index has got.
+        let check = delphi_bundle::source_check::check(&e.source.kind, &e.source.path, &e.hash, &e.publisher_kid);
+        if let Some(line) = check.line() {
+            open.push(format!("{} has an update available: {} (`u` applies it)", id, clean(&line)));
+        }
+        let update_note = match &check {
+            delphi_bundle::source_check::Check::Unknown(why) => Some(clean(why)),
+            _ => None,
+        };
+        bundles.push(json!({"update_note": update_note,"id": id, "title": clean(&e.title), "version": clean(&e.version), "provenance": clean(&e.provenance), "order": e.order, "review_by": clean(&e.review_by), "stale": stale, "matched": is_matched(&repos, projects), "source": {"kind": clean(&e.source.kind), "path": clean(&e.source.path)}, "update_available": check.line().map(|l| clean(&l)), "vectors": status.get(&id).map(|s| s.label())}));
         if let Some(t) = read(ws, &e, "behavior/goals.md", "goals", &mut notes) {
             for g in load::goals(&t) {
                 if g.status == "active" && horizon_end(&g.horizon).is_some_and(|end| end.as_str() < today) {
@@ -374,6 +383,28 @@ mod tests {
         }
         assert!(a.text.find("acme/plat 1.0.0").unwrap() < a.text.find("beta/ops 1.0.0").unwrap(), "in overlay order");
         assert!(!a.text.contains("Why:") && !a.text.contains("because"), "the slice carries stated intent, not every field");
+    }
+
+    // specs/024 §3.5: the view says when the source holds a newer version, with the publisher state; the lock is not touched.
+    #[test]
+    fn the_org_view_says_when_the_source_holds_a_newer_version() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let e = bundle(&ws, "acme", "plat", 10, &goal(1, "active", "2999-Q1"), &persp("acme", 1), &index(1, 3));
+        let src = t.path().join("src");
+        fs::create_dir_all(src.join(".delphi-bundle")).unwrap();
+        fs::write(src.join("bundle.toml"), "[bundle]\nname = \"plat\"\norg = \"acme\"\nversion = \"1.1.0\"\n\n[publisher]\nname = \"P\"\n").unwrap();
+        fs::write(src.join(".delphi-bundle/files.json"), "{\"bundle\":1,\"newer\":true}").unwrap();
+        let mut lock = delphi_core::bundles::read(&ws.dir).unwrap();
+        lock.bundle[0].source = delphi_core::bundles::Source { kind: "directory".into(), path: src.display().to_string() };
+        delphi_core::bundles::write(&ws.dir, &lock).unwrap();
+        let v = view(&ws, &[], "2026-10-26");
+        let b = &v["bundles"][0];
+        assert_eq!(b["update_available"], "1.1.0 (unsigned before: needs `add`)", "{}", b);
+        assert!(v["open"].as_array().unwrap().iter().any(|o| o.as_str().unwrap().contains("acme/plat has an update available: 1.1.0")), "{}", v["open"]);
+        // the source now holds what was added: nothing to say
+        fs::write(src.join(".delphi-bundle/files.json"), fs::read(delphi_core::bundles::cache_dir(&ws.home, "acme", "plat", &e.hash).join(".delphi-bundle/files.json")).unwrap()).unwrap();
+        assert!(view(&ws, &[], "2026-10-26")["bundles"][0]["update_available"].is_null());
     }
 
     #[test]

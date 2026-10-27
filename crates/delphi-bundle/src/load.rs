@@ -200,6 +200,8 @@ pub struct Policies {
     pub red_paths: Vec<(String, String)>,
     /// (`connector.tool`, roles or `*`)
     pub connector_denied: Vec<(String, Vec<String>)>,
+    /// (regular expression over the path of a read, reason): a Green read that matches becomes Amber
+    pub require_card: Vec<(String, String)>,
 }
 
 pub fn policies(text: &str) -> Result<Policies, String> {
@@ -213,7 +215,14 @@ pub fn policies(text: &str) -> Result<Policies, String> {
         let items = || v.as_array().map(|a| a.iter().filter_map(|x| x.as_table()).collect::<Vec<_>>()).unwrap_or_default();
         let s = |t: &toml::Table, k: &str| t.get(k).and_then(|x| x.as_str()).map(String::from);
         match k.as_str() {
-            "schema" | "require_card" => {}
+            "schema" => {}
+            "require_card" => {
+                for it in items() {
+                    let pat = s(it, "pattern").ok_or("require_card needs `pattern`")?;
+                    regex::Regex::new(&pat).map_err(|e| format!("require_card pattern `{}`: {}", pat, e))?;
+                    out.require_card.push((pat, s(it, "reason").unwrap_or_default()));
+                }
+            }
             "deny_commands" => {
                 for it in items() {
                     let (pat, why) = (s(it, "pattern").ok_or("deny_commands needs `pattern`")?, s(it, "reason").unwrap_or_default());
