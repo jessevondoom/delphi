@@ -13,6 +13,9 @@
 use crate::xenia_action::escape;
 use crate::xenia_admin::{Action, AdminPreview};
 
+/// The most affected paths the card lists; the rest are counted.
+const MAX_AFFECTED_SHOWN: usize = 60;
+
 /// One line of text made safe: escapes as [`escape`], and the newline too.
 pub fn inline(s: &str) -> String {
     escape(s.as_bytes()).replace('\n', "\\n")
@@ -31,6 +34,8 @@ fn title(p: &AdminPreview) -> String {
         Action::SignEpoch => format!("Sign roster epoch {} of {scope}", p.epoch),
         Action::Publish => format!("Publish roster epoch {} of {scope} with a new freshness statement", p.epoch),
         Action::Refresh => format!("Refresh the freshness statement of {scope} (roster epoch {})", p.epoch),
+        Action::SignRewrite => format!("Sign a HISTORY REWRITE statement for {scope} (roster epoch {})", p.epoch),
+        Action::PublishRewrite => format!("Publish a HISTORY REWRITE statement for {scope} (roster epoch {})", p.epoch),
     }
 }
 
@@ -44,6 +49,22 @@ pub fn card(p: &AdminPreview) -> String {
     }
     if let Some(e) = &p.expires_at {
         o.push_str(&format!("statement expires: {}\n", inline(e)));
+    }
+    if let Some(r) = &p.rewrite {
+        o.push_str("\nHISTORY REWRITE (spec 011 section 8.4)\n");
+        o.push_str(&format!("  rewritten head (the host serves it; the statement names it as store_head): {}\n", inline(&r.rewritten)));
+        o.push_str(&format!("  replaced head (rewrite_of; the head this install holds):                  {}\n", inline(&r.replaced)));
+        o.push_str(&format!("  {} violation(s) of the store's history rules lie between the two\n", r.rule_findings));
+        o.push_str(&format!("  {} signed file(s) would be deleted, reverted or reassigned for an install holding the replaced head:\n", r.affected.len()));
+        for (why, path) in r.affected.iter().take(MAX_AFFECTED_SHOWN) {
+            o.push_str(&format!("    {:<24} {}\n", inline(why), inline(path)));
+        }
+        if r.affected.len() > MAX_AFFECTED_SHOWN {
+            o.push_str(&format!("    ... and {} more (every install lists all of them)\n", r.affected.len() - MAX_AFFECTED_SHOWN));
+        }
+        o.push_str("  Every install will list every affected path and require its own operator to type the commit and the count before it accepts anything.\n");
+        o.push_str("  A majority of the admin people must sign these exact bytes; one signature, or a signature from a non-admin, publishes nothing.\n");
+        o.push_str("  Signing does not accept the rewrite for anyone, and it does not clear any install's sticky state or pinned roster hashes.\n");
     }
     if !p.walked.is_empty() {
         o.push_str("history verified before this card (explicit walk, nothing unverified is signed over):\n");
@@ -76,7 +97,11 @@ pub fn card(p: &AdminPreview) -> String {
         }
         o.push_str("=== end ===\n");
     }
-    o.push_str("\nYour key will sign exactly these strings (domain-separated, so the signature is good for nothing else):\n");
+    if p.signs.is_empty() {
+        o.push_str("\nYour key signs nothing new here: this publishes signatures that other admins already made over the bytes above.\n");
+    } else {
+        o.push_str("\nYour key will sign exactly these strings (domain-separated, so the signature is good for nothing else):\n");
+    }
     for s in &p.signs {
         o.push_str(&format!("  {}\n", inline(s)));
     }
@@ -118,6 +143,7 @@ mod tests {
             store_head: Some("0123456789abcdef0123".into()),
             expires_at: Some(evil.into()),
             walked: vec![(evil.into(), 3)],
+            rewrite: None,
             digest: "blake3:0123456789abcdef".into(),
         };
         let text = card(&p);

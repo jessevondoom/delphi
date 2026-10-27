@@ -291,6 +291,7 @@ fn fake_preview() -> AdminPreview {
         store_head: None,
         expires_at: None,
         walked: vec![],
+        rewrite: None,
         digest: "blake3:0123456789abcdef".into(),
     }
 }
@@ -508,4 +509,149 @@ fn a_three_admin_two_of_three_chain_survives_a_fork_and_an_install_that_slept_th
     assert_eq!(run_with_both(&a(&["join", &w.url(), "--org", ORG, "--store", STORE, "--admin", &fp, "--head", &format!("1:{genesis_hash}"), "--allow-local", "--home", &hd]), &mut NoMember, &mut Say::no()), 0);
     sync(&hd);
     assert_eq!(roster_of(&hd).head_epoch(), 5);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Rewrite recovery, end to end through the commands (spec 011 section 8.4)
+
+/// The person at an install's terminal: types what the prompt asks for (or `Some(text)` instead).
+struct Typist {
+    reply: Option<&'static str>,
+    shown: String,
+    asked: usize,
+}
+
+impl Typist {
+    fn honest() -> Typist {
+        Typist { reply: None, shown: String::new(), asked: 0 }
+    }
+}
+
+impl crate::xenia_terminal::Terminal for Typist {
+    fn interactive(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn show(&mut self, text: &str) {
+        self.shown.push_str(text);
+    }
+    fn ask(&mut self, prompt: &str) -> Option<String> {
+        self.asked += 1;
+        if let Some(r) = self.reply {
+            return Some(r.to_string());
+        }
+        let i = prompt.rfind("type ")? + 5;
+        let rest = &prompt[i..];
+        Some(rest[..rest.find("; anything")?].to_string())
+    }
+}
+
+fn proposal_ids(w: &World) -> Vec<String> {
+    w.refs().lines().filter_map(|l| l.split(' ').next()?.strip_prefix("refs/heads/rewrite-proposal/")).map(str::to_string).collect()
+}
+
+fn open_home(home: &str) -> delphi_core::xenia_store::Store {
+    let home = PathBuf::from(home);
+    let r = delphi_core::xenia_status::list_stores(&home).remove(0);
+    delphi_core::xenia_status::open(&home, &r).unwrap()
+}
+
+/// `delphi xenia sync --accept-rewritten-head` for the home, with the person at `term`.
+fn recover(w: &World, home: &str, term: &mut Typist) -> (i32, String, String) {
+    let hp = PathBuf::from(home);
+    let r = delphi_core::xenia_status::list_stores(&hp).remove(0);
+    let store = delphi_core::xenia_status::open(&hp, &r).unwrap();
+    let cfg = VerifyConfig::at(w.clock);
+    let outcome = store.sync_verified(&cfg).unwrap();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = crate::xenia_recover::recover_with(&r, &store, &cfg, &outcome, term, &mut out, &mut err);
+    (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+}
+
+#[test]
+fn a_force_pushed_store_is_recovered_through_propose_sign_publish_and_the_installs_accept() {
+    let mut w = World::new();
+    let (ha, hb, hc, hash) = genesis(&mut w);
+    // A member who is not an admin: joined, never allowed to author.
+    let he = w.home("erin", 9);
+    let fp = key(1).fingerprint();
+    let url = w.url();
+    assert_eq!(run_with_both(&a(&["join", &url, "--org", ORG, "--store", STORE, "--admin", &fp, "--head", &format!("1:{hash}"), "--allow-local", "--home", &he]), &mut NoMember, &mut Say::no()), 0);
+
+    // The store holds a signed note; everyone accepts it.
+    w.remote.git(&["fetch", "--quiet", &w.host(), "main"]);
+    w.remote.reset_hard("FETCH_HEAD");
+    let genesis_head = w.remote.head();
+    let note = delphi_core::xenia_fixture::records::memory(&key(1), &delphi_core::xenia_fixture::u(0), 1, "active", "note");
+    for (p, b) in note.files() {
+        w.remote.write(p, b);
+    }
+    w.remote.commit("a signed note");
+    w.tick();
+    for h in [&ha, &hb, &hc, &he] {
+        sync(h);
+    }
+    let pins_before = std::fs::read(open_home(&hc).paths.state.join("pins.toml")).unwrap();
+    assert!(open_home(&hc).load_sticky().unwrap().paths.contains_key(&note.path), "the note is tracked");
+
+    // The host force-pushes a history without the note: a normal sync refuses and applies nothing.
+    w.remote.reset_hard(&genesis_head);
+    let rewritten = w.remote.commit("history rewritten");
+    w.tick();
+    assert_ne!(run_with_both(&a(&["sync", "--home", &hc]), &mut NoMember, &mut Say::no()), 0, "a force-push is refused");
+    let mut t = Typist::honest();
+    let (code, _, err) = recover(&w, &hc, &mut t);
+    assert_eq!(code, 1, "no statement yet: {err}");
+    assert!(err.contains("rewrite-quorum-missing") && t.asked == 0, "{err}");
+
+    // propose: an admin; a non-admin is refused with no card and nothing pushed.
+    let before = w.refs();
+    let mut none = Say::yes();
+    assert_eq!(go(&["rewrite", "propose", "--home", &he], &mut none), 1);
+    assert!(none.seen.is_empty());
+    assert_eq!(w.refs(), before);
+    assert_eq!(go(&["rewrite", "propose", "--home", &ha], &mut Say::no()), 0, "propose needs a key but no card: nothing is signed");
+    let ids = proposal_ids(&w);
+    assert_eq!(ids.len(), 1, "{:?}", w.refs());
+    let id = ids[0].clone();
+    assert!(id.starts_with(&rewritten[..12]));
+
+    // One signature is not a quorum; a non-admin cannot sign; the card says what is being asked.
+    let mut alice = Say::yes();
+    assert_eq!(go(&["rewrite", "sign", &id, "--home", &ha], &mut alice), 0);
+    let card_text = card(&alice.seen[0]);
+    assert!(card_text.contains(&rewritten) && card_text.contains(&note.path), "{card_text}");
+    assert!(card_text.contains("replaced head") && card_text.contains("rewritten head"), "{card_text}");
+    assert!(card_text.contains("will list every affected path and require its own operator"), "{card_text}");
+    assert!(card_text.contains("WARNING rewrites-history"), "{card_text}");
+    assert_eq!(go(&["rewrite", "sign", &id, "--home", &he], &mut none), 1);
+    let mut early = Say::yes();
+    assert_eq!(go(&["rewrite", "publish", &id, "--home", &hb], &mut early), 1);
+    assert!(early.seen.is_empty(), "no card for a publish that cannot succeed");
+    assert_eq!(go(&["rewrite", "show", &id, "--home", &hb], &mut Say::no()), 0);
+    // A card whose warning is not acknowledged signs nothing.
+    let mut cold = Say { yes: true, ack: false, seen: Vec::new() };
+    assert_eq!(go(&["rewrite", "sign", &id, "--home", &hb], &mut cold), 1);
+    assert_eq!(go(&["rewrite", "sign", &id, "--home", &hb], &mut Say::yes()), 0);
+    let mut publish = Say::yes();
+    assert_eq!(go(&["rewrite", "publish", &id, "--home", &hb], &mut publish), 0);
+    assert_eq!(publish.seen.len(), 1);
+
+    // The install with the history: it lists the path, wants the commit and the count typed, and accepts exactly that.
+    let published = w.remote.host_head();
+    assert_ne!(published, rewritten);
+    let mut wrong = Typist { reply: Some("accept 000000000000 99"), shown: String::new(), asked: 0 };
+    let (code, _, _) = recover(&w, &hc, &mut wrong);
+    assert_eq!(code, 1, "a wrong answer changes nothing");
+    assert!(wrong.shown.contains(&note.path), "the path is listed before anything is asked: {}", wrong.shown);
+    assert_eq!(open_home(&hc).accepted_head().unwrap().as_deref(), Some(open_home(&ha).accepted_head().unwrap().unwrap().as_str()), "still on the old history");
+    let mut person = Typist::honest();
+    let (code, out, err) = recover(&w, &hc, &mut person);
+    assert_eq!(code, 0, "{err}");
+    assert!(person.shown.contains(&note.path), "{}", person.shown);
+    assert!(out.contains("accepted the rewritten head"), "{out}");
+    let store = open_home(&hc);
+    assert_eq!(store.accepted_head().unwrap().as_deref(), Some(published.as_str()));
+    assert_eq!(std::fs::read(store.paths.state.join("pins.toml")).unwrap(), pins_before, "pinned roster hashes are untouched");
+    assert!(!store.load_sticky().unwrap().paths.contains_key(&note.path), "the approved path started over");
+    assert_eq!(run_with_both(&a(&["sync", "--home", &hc]), &mut NoMember, &mut Say::no()), 0, "an ordinary store again");
 }

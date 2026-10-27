@@ -24,7 +24,7 @@ Companion to `xenia-x10-conformance.md` (the test map) and `xenia-x10-redteam-ch
 | 4 | Freshness and history tests (011 tests 12-15, 27) incl. hidden newest epoch and every revert case | **Satisfied** (existing tests, now mapped) | map rows 011.12-15, 011.27 |
 | 5 | Strict Ed25519 with published vectors | **Satisfied** (existing) | `sig::rfc8032_vectors_pass` and the three refusal tests |
 | 6 | Fuzz run of the sidecar and frontmatter parsers finds no crash or accepted malformed record | **Satisfied** with the budgets below; no crash and no accepted malformed input was found | `sidecar_fuzz.rs`, `record_fuzz.rs`, `serialize_fuzz.rs` |
-| 7 | Live recovery drill of the re-pin path (§8.4) on a scratch store | **Satisfied on a scratch store**, with the limit that the CLI flag `sync --accept-rewritten-head` is not wired, so the drill drives the library functions the flag would call. | transcript below |
+| 7 | Live recovery drill of the re-pin path (§8.4) on a scratch store | **Satisfied on a scratch store.** The ignored drill drives the library; since X10a the same recovery also runs through the commands in a normal test (`rewrite propose|sign|publish`, then `sync --accept-rewritten-head`), see the as-built note below. | transcript below |
 | 8 | Dogfood: 3 humans, 2 weeks | **NOT satisfied. Needs humans (X11).** Not touched. | |
 
 Not done and not claimed: the **independent red-team sweep** itself (the checklist exists; a reviewer who is not the Builder has not run it), real admin identities, a real store, the operator's acceptance of anything. The plan's "Reads the sweep result" step is the operator's.
@@ -93,7 +93,7 @@ Test: `crates/delphi-core/src/xenia_sync_tests.rs::xenia_recovery_drill`. Record
 
 (The "sticky entries" line was reworded after the recorded run to say what the numbers mean; the assertions did not change.)
 
-What the drill does not do: it calls `plan_rewrite` and `accept_rewritten_head` directly, because the CLI flag `sync --accept-rewritten-head` is not wired (X9 note); the statement carrying `rewrite_of` is built with the test kit, because `delphi xenia admin` has no command to author one (X8 deferred it). A recovery on a real store therefore cannot be done from the CLI today. That is a gap in the product, found by writing the drill, and is listed in the red-team checklist (section 7).
+What the drill does not do: it calls `plan_rewrite` and `accept_rewritten_head` directly, because the CLI flag `sync --accept-rewritten-head` is not wired (X9 note); the statement carrying `rewrite_of` is built with the test kit, because `delphi xenia admin` has no command to author one (X8 deferred it). A recovery on a real store therefore could not be done from the CLI when this was written. **As built (X10a, 2026-10-27):** both halves now exist, and `xenia_admin_cmd::tests::a_force_pushed_store_is_recovered_through_propose_sign_publish_and_the_installs_accept` runs the whole thing through the commands with temp git hosts and generated keys. The drill transcript above is unchanged and still drives the library.
 
 ## What X10 added to the tree
 
@@ -104,7 +104,7 @@ What the drill does not do: it calls `plan_rewrite` and `accept_rewritten_head` 
 ## Gaps found (honest list)
 
 1. The independent red-team sweep is not done (the Builder is not independent). The checklist is the hand-off.
-2. (Follow-up: the flag was wired by X9a, #252.) No admin command authors a `rewrite_of` statement yet, and: the break-glass path of §8.4 exists only as library functions and tests. Gate 7 is met on a scratch store by driving the library.
+2. ~~No admin command authors a `rewrite_of` statement~~ **Closed by X10a** (`delphi xenia admin rewrite propose|show|sign|publish`); the flag `sync --accept-rewritten-head` was wired by X9a (#252). Gate 7 is now met both by the library drill and by a command-level test (`xenia_admin_cmd::tests::a_force_pushed_store_is_recovered_through_propose_sign_publish_and_the_installs_accept`). A recovery on a real store has not been run; that is the operator's.
 3. No OS-level network-denied run for the no-fetch tests (011.23, 012.11): a loopback-listener test and a source scan stand in.
 4. 012.20 (same results on every platform) is not tested across platforms.
 5. No differential test against a second implementation of the verifier; there is none.

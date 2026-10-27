@@ -291,7 +291,7 @@ fn the_daemon_and_the_tool_registry_reach_only_the_limited_admin_operations() {
         }
         let text = std::fs::read_to_string(entry.path()).unwrap();
         let text = text.split("#[cfg(test)]").next().unwrap_or("");
-        for banned in ["init_store", "prepare_genesis_signature", "GenesisDraft", "accept_rewritten_head", "plan_rewrite"] {
+        for banned in ["init_store", "prepare_genesis_signature", "GenesisDraft", "accept_rewritten_head", "plan_rewrite", "rewrite_propose", "rewrite_sign", "rewrite_publish", "rewrite_candidate", "build_rewrite_statement"] {
             assert!(!text.contains(banned), "{name} mentions {banned}");
         }
     }

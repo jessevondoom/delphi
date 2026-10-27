@@ -84,6 +84,16 @@ pub enum AdminError {
     TooManyRaces,
     Unavailable(String),
     Io(String),
+    /// There is no rewrite to author: the host serves a plain fast-forward, an older view, or cannot be judged.
+    RewriteNotApplicable(&'static str),
+    RewriteProposalNotFound(String),
+    RewriteProposalExists(String),
+    /// The host's head is not the one the statement names: the proposal is stale (or already published).
+    RewriteHeadMoved,
+    /// The statement's `rewrite_of` is not a head this install holds (or descends from).
+    RewriteOfNotOurHead,
+    /// The statement is not a well-formed, current rewrite statement for this store and roster.
+    RewriteStatementRefused(&'static str),
 }
 
 impl AdminError {
@@ -110,6 +120,12 @@ impl AdminError {
             AdminError::TooManyRaces => "too-many-races",
             AdminError::Unavailable(_) => "unavailable",
             AdminError::Io(_) => "io",
+            AdminError::RewriteNotApplicable(_) => "rewrite-not-applicable",
+            AdminError::RewriteProposalNotFound(_) => "rewrite-proposal-not-found",
+            AdminError::RewriteProposalExists(_) => "rewrite-proposal-exists",
+            AdminError::RewriteHeadMoved => "rewrite-head-moved",
+            AdminError::RewriteOfNotOurHead => "rewrite-of-is-not-our-head",
+            AdminError::RewriteStatementRefused(_) => "rewrite-statement-refused",
         }
     }
 }
@@ -125,6 +141,10 @@ impl std::fmt::Display for AdminError {
             AdminError::MissingFounderSignatures(w) => write!(f, "refused: {} founder(s) have not signed", w.len()),
             AdminError::PushRejected(w) => write!(f, "the store refused the push: {w}"),
             AdminError::Unavailable(w) | AdminError::Io(w) => write!(f, "{}: {w}", self.reason()),
+            AdminError::RewriteNotApplicable(w) => write!(f, "refused: there is no rewrite to author ({w}); nothing was signed or sent"),
+            AdminError::RewriteStatementRefused(w) => write!(f, "refused: the statement is not acceptable ({w}); nothing was signed or sent"),
+            AdminError::RewriteHeadMoved => write!(f, "refused: the host no longer serves the head this proposal names (it moved, or the statement is already published); propose again"),
+            AdminError::RewriteOfNotOurHead => write!(f, "refused: the statement replaces a head this install does not hold, so this admin cannot vouch for it"),
             other => write!(f, "{}", other.reason()),
         }
     }
@@ -155,6 +175,10 @@ pub enum Action {
     SignEpoch,
     Publish,
     Refresh,
+    /// Sign a rewrite-recovery freshness statement (spec 011 §8.4).
+    SignRewrite,
+    /// Publish a quorum-signed rewrite-recovery statement.
+    PublishRewrite,
 }
 
 impl Action {
@@ -164,6 +188,8 @@ impl Action {
             Action::SignEpoch => "sign-epoch",
             Action::Publish => "publish",
             Action::Refresh => "refresh",
+            Action::SignRewrite => "sign-rewrite",
+            Action::PublishRewrite => "publish-rewrite",
         }
     }
 }
@@ -182,6 +208,19 @@ pub struct QuorumView {
     pub need: usize,
     /// Persons who signed (for display).
     pub people: Vec<String>,
+}
+
+/// What a rewrite recovery asks of every install (spec 011 §8.4), shown on the card. Plain data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewriteView {
+    /// The head the statement says it replaces (`rewrite_of`).
+    pub replaced: String,
+    /// The head the host serves and the statement names (`store_head`).
+    pub rewritten: String,
+    /// `(reason, path)`: every signed file an install holding the replaced head would be asked to give up.
+    pub affected: Vec<(String, String)>,
+    /// Violations of the store's history rules between the replaced head and the rewritten one.
+    pub rule_findings: usize,
 }
 
 /// Everything the admin sees before saying yes. Plain data; changing a copy changes nothing.
@@ -203,6 +242,8 @@ pub struct AdminPreview {
     pub expires_at: Option<String>,
     /// For a refresh: each base the history was walked from, and how many commits that covered.
     pub walked: Vec<(String, usize)>,
+    /// Only for a rewrite recovery.
+    pub rewrite: Option<RewriteView>,
     pub digest: String,
 }
 
@@ -240,6 +281,7 @@ struct Held {
     store_head: Option<String>,
     expires_at: Option<String>,
     flags: Vec<Flag>,
+    rewrite: Option<RewriteView>,
 }
 
 fn digest_of(h: &Held) -> String {
@@ -258,6 +300,14 @@ fn digest_of(h: &Held) -> String {
     }
     for d in &h.domains {
         parts.push(("signs".into(), d.as_str().as_bytes().to_vec()));
+    }
+    if let Some(r) = &h.rewrite {
+        parts.push(("rewrite-replaced".into(), r.replaced.clone().into_bytes()));
+        parts.push(("rewrite-rewritten".into(), r.rewritten.clone().into_bytes()));
+        parts.push(("rewrite-findings".into(), r.rule_findings.to_string().into_bytes()));
+        for (why, path) in &r.affected {
+            parts.push(("rewrite-affected".into(), format!("{why} {path}").into_bytes()));
+        }
     }
     let refs: Vec<(&str, &[u8])> = parts.iter().map(|(a, b)| (a.as_str(), b.as_slice())).collect();
     admin::digest(&refs)
@@ -317,6 +367,7 @@ fn make_prepared<T>(held: Held, preview_parts: PreviewParts, payload: T) -> Prep
         store_head: held.store_head.clone(),
         expires_at: held.expires_at.clone(),
         walked: preview_parts.walked,
+        rewrite: held.rewrite.clone(),
         digest,
     };
     Prepared { held, preview, payload }
@@ -474,6 +525,7 @@ pub fn prepare_genesis_signature(draft: &GenesisDraft, signer: &Identity) -> Res
         store_head: None,
         expires_at: None,
         flags: d.flags,
+        rewrite: None,
     };
     let parts = PreviewParts { changes: d.changes, reminders: d.reminders, ..Default::default() };
     Ok(make_prepared(held, parts, EpochSigPayload { n: 1, bytes: draft.proposed.bytes.clone() }))
@@ -626,11 +678,16 @@ impl<'a> Admin<'a> {
 
     /// Fetch `roster-proposal/<n>` into a staging ref. `Ok(None)`: the host has no such branch.
     fn fetch_proposal(&self, n: u64) -> Result<Option<(Staged<'_>, String)>, AdminError> {
-        let name = format!("refs/xenia/proposal/{n}");
+        self.fetch_branch(&admin::proposal_branch(n), &format!("refs/xenia/proposal/{n}"))
+    }
+
+    /// Fetch the host's branch `branch` into the staging ref `name`. `Ok(None)`: the host has no such branch.
+    fn fetch_branch(&self, branch: &str, name: &str) -> Result<Option<(Staged<'_>, String)>, AdminError> {
+        let name = name.to_string();
         let objects = self.store.paths.clone.join("objects");
         let mut cmd = git_command(&self.store.paths, Some(self.store.url.scheme), Some(&self.store.paths.clone));
         cmd.args(["fetch", "--quiet", "--force", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--no-auto-gc", "--no-auto-maintenance"]);
-        cmd.arg(&self.store.url.url).arg(format!("+refs/heads/{}:{name}", admin::proposal_branch(n)));
+        cmd.arg(&self.store.url.url).arg(format!("+refs/heads/{branch}:{name}"));
         let staged = Staged { store: self.store, name: name.clone() };
         match run(cmd, None, 64 * 1024, Duration::from_secs(self.store.caps.fetch_timeout_secs), Some((&objects, self.store.caps.max_total_bytes))) {
             Err(RunFail::DiskCap) | Err(RunFail::TooMuchOutput) => return Err(AdminError::StoreNotUsable("the proposal branch is too large".into())),
@@ -662,12 +719,18 @@ impl<'a> Admin<'a> {
         if bytes.len() > roster::MAX_EPOCH_BYTES {
             return Err(AdminError::Refused(Refusal::Roster(RosterError::Oversize("epoch file over 128 KiB"))));
         }
-        let dir = admin::proposal_sig_dir(n);
-        let listing = self.store.git_ok(&["ls-tree", "-z", "--name-only", tip, "--", &dir], 64 * 1024).map_err(xe)?;
+        let sigs = self.read_sig_files(tip, &admin::proposal_sig_dir(n), &|kid| admin::proposal_sig_path(n, kid).ok())?;
+        Ok((bytes, sigs))
+    }
+
+    /// The signature files directly under `dir` on a proposal tip, read by object id. A file counts only if it parses
+    /// and sits at the path `path_of` gives for its own key.
+    fn read_sig_files(&self, tip: &str, dir: &str, path_of: &dyn Fn(&str) -> Option<String>) -> Result<Vec<ProposalSig>, AdminError> {
+        let listing = self.store.git_ok(&["ls-tree", "-z", "--name-only", tip, "--", dir], 64 * 1024).map_err(xe)?;
         let mut paths = Vec::new();
         for name in listing.split(|b| *b == 0).filter(|t| !t.is_empty()) {
             let Ok(name) = std::str::from_utf8(name) else { continue };
-            let Some(file) = name.strip_prefix(dir.as_str()) else { continue };
+            let Some(file) = name.strip_prefix(dir) else { continue };
             let stem = file.strip_suffix(".json").unwrap_or("");
             if stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && paths.len() < MAX_SIG_FILES {
                 paths.push(name.to_string());
@@ -695,13 +758,13 @@ impl<'a> Admin<'a> {
                 pos += size + 1;
                 // A file counts only if it parses and is named for its own key.
                 if let Ok(s) = ProposalSig::parse(body) {
-                    if admin::proposal_sig_path(n, &s.kid).as_deref() == Ok(p.as_str()) {
+                    if path_of(&s.kid).as_deref() == Some(p.as_str()) {
                         sigs.push(s);
                     }
                 }
             }
         }
-        Ok((bytes, sigs))
+        Ok(sigs)
     }
 
     /// Everything about proposal `n` against the verified `head`, judged. Any refusal here means no one should be
@@ -821,6 +884,7 @@ impl<'a> Admin<'a> {
             store_head: Some(l.head.clone()),
             expires_at: None,
             flags: rep.flags.clone(),
+            rewrite: None,
         };
         let parts = PreviewParts { changes: rep.changes, reminders: rep.reminders, quorum: Some(rep.quorum), ..Default::default() };
         Ok(make_prepared(held, parts, EpochSigPayload { n, bytes: l.bytes }))
@@ -917,6 +981,7 @@ impl<'a> Admin<'a> {
             store_head: Some(head.clone()),
             expires_at: Some(st.expires_at),
             flags: rep.flags.clone(),
+            rewrite: None,
         };
         let parts = PreviewParts { changes: rep.changes, reminders: rep.reminders, quorum: Some(rep.quorum), ..Default::default() };
         let payload = PublishPayload { n, epoch_hash: l.hash, files: vec![(epoch_path, l.bytes), (sigs_path, sigs_file)], statement };
@@ -997,6 +1062,7 @@ impl<'a> Admin<'a> {
             store_head: Some(head.clone()),
             expires_at: Some(st.expires_at),
             flags: Vec::new(),
+            rewrite: None,
         };
         let parts = PreviewParts { walked, ..Default::default() };
         Ok(make_prepared(held, parts, RefreshPayload { epoch: roster.head_epoch(), epoch_hash: roster.head_hash().to_string(), statement }))
@@ -1164,6 +1230,7 @@ impl<'a> Admin<'a> {
             store_head: Some(first.clone()),
             expires_at: Some(st.expires_at),
             flags: d.flags,
+            rewrite: None,
         };
         let parts = PreviewParts { changes: d.changes, reminders: d.reminders, ..Default::default() };
         let prepared = make_prepared(held, parts, GenesisPayload { first_commit: first.clone(), statement, epoch_hash: draft.proposed.hash.clone() });
@@ -1243,6 +1310,10 @@ pub fn join_store(store: &Store, req: &JoinRequest) -> Result<Pins, AdminError> 
         other => Err(AdminError::StoreNotUsable(format!("{other:?}").chars().take(60).collect())),
     }
 }
+
+#[path = "xenia_admin_rewrite.rs"]
+mod rewrite;
+pub use rewrite::{rewrite_branch, rewrite_id, RewriteProposal, RewriteReport};
 
 #[cfg(test)]
 #[path = "xenia_admin_tests.rs"]

@@ -86,7 +86,7 @@ Your duties:
   - Handle roster changes as proposals: one admin proposes (`delphi xenia admin propose ...`, an add, a removal or a rotation), each other admin reviews the preview and signs, and once enough have signed one admin publishes it. Read every preview: it lists the exact change and flags anything that adds an admin, widens a steward's areas, lets a key speak twice for one person, or voids someone's tombstones. You may refuse.
   - Never share your admin key, and run admin commands only at a terminal you control.
 
-Admin subcommands: `add`, `remove`, `rotate` (with `--routine` or `--compromised`), `show <n>`, `sign <n>`, `publish <n>`, `refresh` and `genesis draft|sign|publish`; `delphi xenia admin` lists them. They need your key and a terminal; a relay or an agent cannot run them."#,
+Admin subcommands: `add`, `remove`, `rotate` (with `--routine` or `--compromised`), `show <n>`, `sign <n>`, `publish <n>`, `refresh`, `rewrite propose|show|sign|publish` (the admins' side of a force-push recovery) and `genesis draft|sign|publish`; `delphi xenia admin` lists them. They need your key and a terminal; a relay or an agent cannot run them."#,
     },
     Topic {
         name: "genesis",
@@ -147,7 +147,7 @@ If you are not an admin: tell one. If you are, refresh at least twice per statem
 Drill:
   1. Run `delphi xenia status` to see which signed files were deleted or reverted.
   2. Tell the admins. They must find out who rewrote the history and why (a force-push by someone with write access? a restored backup? an attack?).
-  3. If the rewrite is legitimate, a MAJORITY of the epoch's admins (counted per person) sign a freshness statement for the new head that names the rewritten head it replaces. One admin cannot do this alone.
+  3. If the rewrite is legitimate, a MAJORITY of the epoch's admins (counted per person) sign a freshness statement for the new head that names the rewritten head it replaces. One admin cannot do this alone. The command is `delphi xenia admin rewrite`: one admin runs `propose` (it prints an id and writes the draft statement to a branch; nothing is signed), each admin of a majority runs `sign <id>` (a terminal card shows the rewritten head, the replaced head and every file installs will be asked to give up; you type the code and acknowledge the warning), and any admin runs `publish <id>` once the signatures are in. It works from the admin's own install, which must still hold the old history, and it refuses a non-admin, a single signature, a statement that is expired or names a head the admin does not hold, and a host that has moved since the proposal.
   4. Each install's operator is shown every signed file that was deleted or reverted and confirms with `delphi xenia sync --accept-rewritten-head`. Only the files you approve are replaced; everything else you have stays. It is a terminal-only command: it first runs an ordinary sync, does nothing unless the admins' statement is authentic, and then needs a person at a terminal to type the commit and the number of files listed. A host that went back in time (an older view than you hold) cannot be recovered this way.
   5. If a majority of admins is compromised, or the roster is deadlocked, the org rebuilds from a new genesis and everyone re-joins with the new fingerprint, over a channel that is not the store.
 
