@@ -115,6 +115,7 @@ Check an org bundle: knowledge, skills and behavior to share.
   delphi bundle package <dir> [-o <file.xbundle>] [--vectors]
   delphi bundle add <dir or file.xbundle> | --from-marketplace <repo> <name> [--order N] [--replace-publisher] [--no-vectors] [--yes] [--dry-run] [--workspace <name>] [--home <dir>]
   delphi bundle list | remove <name> | update [name] | rollback <name> [--to <hash>] | gc [--workspace <name>] [--home <dir>]
+  delphi bundle serve [--bundle <org/name>]... [--workspace <name>] [--home <dir>]
 ```
 
 init writes a skeleton that validates at once. validate reads the directory and changes nothing; --report writes the redaction report (every
@@ -125,7 +126,7 @@ nothing into a bundle. package --vectors embeds the knowledge with the installed
 add takes a directory or an archive, verifies any signature, prints what it brings, copies it into the cache and makes its
 knowledge searchable (`delphi kb search --bundle org/name`); a new publisher key needs --replace-publisher. update re-adds from
 the recorded source under that rule and prints the changelog; rollback re-points at an earlier cached version; gc prunes the
-cache. No model is called to add. Vectors it ships are used only if they match this install's embedder and pass a local spot check
+cache. serve is a read-only MCP server on stdio for the added bundles' knowledge (resources, and the tools search and get_doc); it writes nothing, opens no port and runs nothing. No model is called to add. Vectors it ships are used only if they match this install's embedder and pass a local spot check
 (--no-vectors skips them); the rest are embedded in the background, and `list` shows how far along they are.
 import turns a Claude Code plugin into a new bundle directory (it never adds it, and never imports hooks/ or bin/); export writes an added
 bundle as a plugin (--claude-plugin), an AGENTS.md fragment, or a marketplace.json; add --from-marketplace fetches the entry's pinned commit.
@@ -264,6 +265,18 @@ Notes staged from denials, corrections, retries and escalations.
 ```
 
 Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml.
+
+### `delphi capabilities`
+
+What each model CLI here can use: connectors, skills, models.
+
+```
+  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--project <dir>]... [--home <dir>]
+```
+
+Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.
+Setup and update refresh it in the background. --ask also asks the claude and agy models what they can
+use; that answer is shown apart and is not verified. Calls no model otherwise.
 
 ### `delphi doctor`
 
