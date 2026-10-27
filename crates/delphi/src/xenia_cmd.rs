@@ -39,7 +39,7 @@ const USAGE: &str = "usage:
     [--workspace <name>] [--home <dir>]";
 
 /// Flags that take no value.
-const SWITCHES: [&str; 5] = ["--promoted", "--allow-local", "--json", "--auto-update-bundles", "--no-verify-tree"];
+const SWITCHES: [&str; 6] = ["--promoted", "--allow-local", "--json", "--auto-update-bundles", "--no-verify-tree", "--accept-rewritten-head"];
 
 #[derive(Debug)]
 struct Parsed {
@@ -206,6 +206,9 @@ fn sync(home: &Path, p: &Parsed) -> i32 {
             return 1;
         }
     };
+    if p.opts.contains_key("accept-rewritten-head") {
+        return crate::xenia_recover::run(&r, &store, &cfg, &outcome);
+    }
     let ws = quiet_workspace(home, p);
     let indexed = match open_kb(&ws) {
         Some(mut kb) => match delphi_engine::xenia_read::index_sync(&store, &mut kb, &cfg, &outcome, &delphi_core::time::now_rfc3339()) {

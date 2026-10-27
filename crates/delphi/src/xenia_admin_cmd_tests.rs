@@ -584,3 +584,161 @@ fn genesis_refuses_a_hostile_address_and_a_signature_from_someone_who_is_not_a_f
     }
     assert!(!ha.join("xenia/acme").exists(), "no store directory was made");
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// `sync --accept-rewritten-head`
+
+struct Rw {
+    _tmp: tempfile::TempDir,
+    fx: Fx,
+    c2: String,
+    r2: String,
+    tomb: delphi_xenia::testkit_records::SignedRecord,
+    sticky: Vec<u8>,
+}
+
+/// An install holding a note and a tombstone; the host then rewrites history to drop the tombstone. `signers` sign a
+/// statement naming the replaced head (none: no statement at all).
+fn rewritten(signers: &[&str]) -> Rw {
+    use delphi_xenia::testkit_records::{self as rk, FreshSpec};
+    let tmp = tempfile::tempdir().unwrap();
+    let org = delphi_core::xenia_fixture::Org::three_admins();
+    let alice = org.key("alice");
+    let note = rk::memory(&alice, &fxt::u(0), 1, "active", "note");
+    let tomb = rk::tombstone(&alice, &fxt::u(1), 1, &fxt::u(0), "withdraw");
+    let (fx, c1) = Fx::installed_on(Fx::new(tmp.path(), org), &[&note, &tomb]);
+    let c2 = fx.store.accepted_head().unwrap().unwrap();
+    let sticky = std::fs::read(fx.store.paths.state.join("sticky.json")).unwrap();
+    fx.remote.reset_hard(&c1);
+    fx.remote.remove(&tomb.path);
+    fx.remote.remove(&tomb.sidecar_path);
+    let mut r2 = fx.commit("rewrite");
+    if !signers.is_empty() {
+        let mut spec = FreshSpec::for_head(&fx.org, &r2, fxt::now() - 600, 7 * fxt::DAY);
+        spec.rewrite_of = Some(c2.clone());
+        let keys: Vec<_> = signers.iter().map(|n| fx.id(n)).collect();
+        let refs: Vec<&_> = keys.iter().collect();
+        let (stmt, sigs) = spec.sign(&refs);
+        fx.remote.write("roster/freshness.json", &stmt);
+        fx.remote.write("roster/freshness.sigs.json", &sigs);
+        r2 = fx.commit("statement");
+    }
+    Rw { _tmp: tmp, fx, c2, r2, tomb, sticky }
+}
+
+impl Rw {
+    fn recover(&self, term: &mut Term) -> (i32, String, String) {
+        let cfg = fxt::cfg();
+        let outcome = self.fx.store.sync_verified(&cfg).unwrap();
+        let r = delphi_core::xenia_status::StoreRef { org: "acme".into(), store: "acme-main".into(), url: self.fx.remote.url() };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = crate::xenia_recover::recover_with(&r, &self.fx.store, &cfg, &outcome, term, &mut out, &mut err);
+        (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+    }
+
+    fn unchanged(&self, what: &str) {
+        assert_eq!(self.fx.store.accepted_head().unwrap().as_deref(), Some(self.c2.as_str()), "{what}: still at the old head");
+        assert_eq!(std::fs::read(self.fx.store.paths.state.join("sticky.json")).unwrap(), self.sticky, "{what}: state untouched");
+    }
+}
+
+#[test]
+fn a_quorum_statement_and_the_typed_commit_and_count_accept_the_rewrite_and_it_is_journaled() {
+    let rw = rewritten(&["alice", "bob"]);
+    let mut t = Term::honest();
+    let (c, out, err) = rw.recover(&mut t);
+    assert_eq!(c, 0, "{out}{err}");
+    assert!(t.shown.contains(&rw.tomb.path) && t.shown.contains(&rw.tomb.sidecar_path) && t.shown.contains(&rw.c2) && t.shown.contains(&rw.r2), "{}", t.shown);
+    assert!(t.asked[0].contains(&format!("accept {} 2", &rw.r2[..12])), "{:?}", t.asked);
+    assert_eq!(rw.fx.store.accepted_head().unwrap().as_deref(), Some(rw.r2.as_str()));
+    let log = std::fs::read_to_string(rw.fx.store.paths.state.join("rewrite-log.jsonl")).unwrap();
+    assert_eq!(log.lines().count(), 2, "{log}");
+    let journal = delphi_core::xenia_status::read_journal(&rw.fx.store);
+    assert!(journal.iter().any(|e| e.kind == "recovery" && e.outcome == "accepted" && e.detail["count"] == 2), "{journal:?}");
+}
+
+#[test]
+fn without_an_authentic_quorum_statement_the_recovery_explains_and_changes_nothing() {
+    for (what, signers) in [("no statement at all", vec![]), ("a statement signed by one of three admins", vec!["alice"])] {
+        let rw = rewritten(&signers);
+        let mut t = Term::honest();
+        let (c, out, err) = rw.recover(&mut t);
+        assert_eq!(c, 1, "{what}: {out}{err}");
+        assert!(err.contains("rewrite-quorum-missing") && err.contains("Nothing was changed"), "{what}: {err}");
+        assert!(t.asked.is_empty(), "{what}: no question was asked");
+        rw.unchanged(what);
+    }
+}
+
+#[test]
+fn an_approval_for_another_commit_a_wrong_count_a_yes_or_a_pipe_is_refused() {
+    let rw = rewritten(&["alice", "bob"]);
+    for (what, ans) in [
+        ("another commit", Ans::Text("accept 000000000000 2")),
+        ("fewer paths", Ans::Text("accept 111111111111 1")),
+        ("yes", Ans::Text("yes")),
+        ("the word alone", Ans::Text("accept")),
+        ("end of input", Ans::Eof),
+    ] {
+        let mut t = Term::script(vec![ans]);
+        let (c, out, err) = rw.recover(&mut t);
+        assert_eq!(c, 1, "{what}: {out}{err}");
+        assert!(t.shown.contains(&rw.tomb.path), "{what}: the paths were listed first");
+        rw.unchanged(what);
+    }
+    // The right commit with a count that is not the list's.
+    let wrong_count = format!("accept {} 1", &rw.r2[..12]);
+    let mut t = Term::script(vec![Ans::Text(Box::leak(wrong_count.into_boxed_str()))]);
+    assert_eq!(rw.recover(&mut t).0, 1);
+    rw.unchanged("wrong count");
+    // No terminal: refused before anything is shown.
+    let mut t = Term::pipe();
+    let (c, _, err) = rw.recover(&mut t);
+    assert_eq!(c, 1);
+    assert!(err.contains("human act"), "{err}");
+    assert!(t.shown.is_empty() && t.asked.is_empty());
+    rw.unchanged("pipe");
+    let journal = delphi_core::xenia_status::read_journal(&rw.fx.store);
+    assert!(journal.iter().all(|e| e.outcome != "accepted" || e.kind != "recovery"));
+}
+
+#[test]
+fn a_host_that_went_back_in_time_is_explained_as_not_recoverable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let org = delphi_core::xenia_fixture::Org::three_admins();
+    let note = delphi_xenia::testkit_records::memory(&org.key("alice"), &fxt::u(0), 1, "active", "note");
+    let (fx, _c1) = Fx::installed_on(Fx::new(tmp.path(), org), &[&note]);
+    let accepted = fx.store.accepted_head().unwrap().unwrap();
+    // Back to the first commit, forced: the host now serves an ancestor of what we hold.
+    let first = fx.remote.git(&["rev-list", "--max-parents=0", "HEAD"]).trim().to_string();
+    fx.remote.reset_hard(&first);
+    fx.remote.force_push();
+    let cfg = fxt::cfg();
+    let outcome = fx.store.sync_verified(&cfg).unwrap();
+    assert!(matches!(&outcome, delphi_core::xenia_sync::VerifiedSync::NonFastForward(n) if n.kind == delphi_core::xenia_store::Divergence::Behind), "{outcome:?}");
+    let r = delphi_core::xenia_status::StoreRef { org: "acme".into(), store: "acme-main".into(), url: fx.remote.url() };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let mut t = Term::honest();
+    let c = crate::xenia_recover::recover_with(&r, &fx.store, &cfg, &outcome, &mut t, &mut out, &mut err);
+    assert_eq!(c, 1);
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("OLDER view") && err.contains("cannot be recovered"), "{err}");
+    assert!(t.asked.is_empty());
+    assert_eq!(fx.store.accepted_head().unwrap().as_deref(), Some(accepted.as_str()));
+}
+
+#[test]
+fn the_recovery_is_not_reachable_from_the_daemon_or_a_tool() {
+    // The engine never names the library's recovery calls (the engine-source test above also pins this), and the CLI word
+    // is the only caller.
+    let cmd = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/xenia_cmd.rs")).unwrap();
+    assert!(cmd.contains("crate::xenia_recover::run("));
+    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../delphi-engine/src");
+    for entry in std::fs::read_dir(engine).unwrap().flatten() {
+        if entry.file_name().to_string_lossy().ends_with(".rs") {
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let code = text.split("#[cfg(test)]").next().unwrap_or("");
+            assert!(!code.contains("accept_rewritten_head") && !code.contains("plan_rewrite"), "{:?}", entry.path());
+        }
+    }
+}

@@ -157,7 +157,7 @@ pub fn parse(args: &[String], valued: &[&str], bools: &[&str]) -> Result<Parsed,
 }
 
 /// A fresh short code for one prompt (4 characters from an unambiguous alphabet), from the system random source.
-fn fresh_code() -> String {
+pub(crate) fn fresh_code() -> String {
     use std::io::Read;
     const ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let mut b = [0u8; 4];
@@ -170,7 +170,7 @@ fn fresh_code() -> String {
 }
 
 /// An agent seat starts its tools with these set; a signature never comes from inside one.
-fn inside_an_agent_seat() -> bool {
+pub(crate) fn inside_an_agent_seat() -> bool {
     std::env::var_os("DELPHI_BRIDGE_SOCKET").is_some() || std::env::var_os("DELPHI_BRIDGE_TOKEN").is_some()
 }
 

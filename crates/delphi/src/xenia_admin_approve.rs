@@ -239,3 +239,17 @@ impl AdminApprover for TermApprover<'_> {
         }
     }
 }
+
+/// A plain typed confirmation for acts that have no preview type (a rewrite recovery): the lines are shown, and the
+/// person must type exactly `expect`. Refuses, before showing anything, when no person is at a terminal.
+pub fn confirm_typed(term: &mut dyn Terminal, lines: &str, expect: &str, what: &str) -> Result<(), Why> {
+    if let Err(m) = term.interactive() {
+        return Err(Why::NotInteractive(m));
+    }
+    term.show(lines);
+    match term.ask(&format!("\nto {what}, type {expect}; anything else cancels: ")) {
+        Some(a) if a == expect => Ok(()),
+        Some(_) => Err(Why::WrongChallenge),
+        None => Err(Why::Cancelled),
+    }
+}

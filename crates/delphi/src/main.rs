@@ -42,6 +42,7 @@ mod needs;
 mod xenia_cmd;
 mod xenia_admin_approve;
 mod xenia_admin_cmd;
+mod xenia_recover;
 mod observer;
 mod ratify_console;
 mod relay;
