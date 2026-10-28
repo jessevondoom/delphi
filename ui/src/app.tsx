@@ -321,7 +321,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
-  useEffect(() => { if (deck === 0 && !archRef.current.shelf) void loadShelf(); }, [deck]);
+  useEffect(() => { if (deck === 0 && !archRef.current.shelf && archRef.current.mode === 'search') void loadShelf(); }, [deck]);
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
   // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs

@@ -5,6 +5,7 @@ import stringWidth from 'string-width';
 import * as A from '../src/archives.ts';
 import { openable, openExternal } from '../src/external.ts';
 import type { Ev } from '../src/input.ts';
+import { info, snapshot } from './helpers.ts';
 
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const k = (key: string, extra: object = {}): Ev => ({ t: 'key', k: key as never, alt: false, shift: false, ctrl: false, ...extra });
@@ -178,7 +179,7 @@ test('tab cycles the collection searched, and a search in progress is run again 
   assert.equal(first.action.t, 'none', 'nothing searched yet, so nothing to rerun');
   assert.equal(A.key(first.a, k('tab'), W, H).a.scope, 'context');
   assert.equal(A.key(A.key(first.a, k('tab'), W, H).a, k('tab'), W, H).a.scope, null, 'back to all');
-  assert.equal(A.key(a, k('shift-tab'), W, H).a.scope, 'context', 'the other way round');
+  assert.equal(A.key(a, k('shift-tab'), W, H).a.scope, null, 'shift+tab no longer walks the scope: it switches the mode (spec 028-A1)');
   const searched = A.gotHits(first.a, 'retry', { results: [{ path: 'specs/a.md', collection: 'specs', trust: 'x', heading: '', preview: '' }] });
   const again = A.key(searched, k('tab'), W, H);
   assert.deepEqual([again.a.scope, again.action], ['context', { t: 'search', q: 'retry' }]);
@@ -244,4 +245,67 @@ test('an external link opens only when it is a web address, with the address as 
   assert.equal(openExternal('file:///x', (c, a) => calls.push([c, a]), 'darwin'), false);
   assert.equal(openExternal('https://example.com', (c, a) => calls.push([c, a]), 'plan9'), false);
   assert.equal(calls.length, 2);
+});
+// ── spec 028-A1 §10.1: two modes, no offline/online indicators, a clean expand page ──
+
+const view = (a: A.Arch, w = 100, h = 27) => A.view(a, w, h, { dark: true }, info).map(plain).join('\n');
+
+test('shift+tab switches between search and expand, both ways, and the mode is kept', () => {
+  const a = shelf();
+  assert.equal(a.mode, 'search', 'the window starts on search');
+  const e = A.key(a, k('shift-tab', { shift: true }), W, H);
+  assert.deepEqual([e.used, e.a.mode, e.action.t], [true, 'expand', 'none']);
+  const kept = A.key(type(e.a, 'raft'), k('esc'), W, H); // esc clears the topic and leaves the mode
+  assert.equal(kept.a.mode, 'expand');
+  const back = A.key(e.a, k('shift-tab', { shift: true }), W, H);
+  assert.deepEqual([back.a.mode, back.action.t], ['search', 'none'], 'the shelf is already loaded');
+  const cold = A.key(A.key(A.emptyArch(), k('shift-tab'), W, H).a, k('shift-tab'), W, H);
+  assert.deepEqual([cold.a.mode, cold.action], ['search', { t: 'reload' }], 'back on search with no shelf: load it');
+});
+
+test('there are no offline or online indicators in either mode, and the title names the page', () => {
+  const s = view(shelf());
+  assert.ok(!/offline|online|○|●/.test(s), s);
+  assert.match(s, /⟦•─•⟧ search the archives/);
+  assert.ok(!s.includes('knowledge\n'), 'the word knowledge no longer titles the page');
+  const x = view({ ...shelf(), mode: 'expand' });
+  assert.ok(!/offline|online/.test(x), x);
+  assert.match(x, /search the archives/);
+  const narrowed = view({ ...shelf(), scope: 'specs', trustedOnly: true });
+  assert.match(narrowed, /in: specs {4}trusted only/);
+});
+
+test('the expand page is clean: the title, the scout label and the box, and no shelf', () => {
+  const x = view({ ...shelf(), mode: 'expand' });
+  assert.match(x, /expand knowledge base: research a topic/);
+  assert.match(x, /a topic to research…/);
+  for (const gone of ['collections', 'recently changed', 'documents', 'passages', 'specs', '243', 'reading the index']) assert.ok(!x.includes(gone), gone);
+  assert.match(x, /shift\+tab {2}search/, 'the footer names the other mode');
+  assert.match(view(shelf()), /shift\+tab {2}expand/);
+  const lines = x.split('\n').filter((l) => l.trim());
+  assert.ok(lines.length <= 8, `a clean page: ${lines.length} non-empty lines\n${x}`);
+});
+
+test('in expand mode typing fills the topic, enter says the research is not built yet, and no list, history or scope is used', () => {
+  let a = A.key(shelf(), k('shift-tab'), W, H).a;
+  a = type(a, 'raft');
+  assert.equal(a.q, 'raft');
+  const r = A.key(a, k('enter'), W, H);
+  assert.deepEqual([r.used, r.action.t], [true, 'none']);
+  assert.match(r.a.note, /not built yet/);
+  assert.equal(A.key(a, k('tab'), W, H).a.scope, null, 'tab has no scope here');
+  assert.equal(A.key(a, k('down'), W, H).a.focus, 'box', 'there is no list to move into');
+  assert.equal(A.key(a, k('esc'), W, H).a.q, '');
+  assert.equal(A.key(A.key(a, k('esc'), W, H).a, k('esc'), W, H).used, false, 'esc with an empty topic leaves the pane to the window');
+  for (const key of ['left', 'right']) assert.equal(A.key(a, k(key), W, H).used, false, key);
+  assert.equal(A.key(a, { t: 'ctrl', c: 't' }, W, H).a.trustedOnly, false, 'the trust filter belongs to search');
+});
+
+test('golden screens: the search page and the expand page', () => {
+  const a = shelf();
+  for (const [name, arch] of [['archives-search-100x34', a], ['archives-expand-100x34', { ...a, mode: 'expand' as const }], ['archives-expand-typed-80x24', type({ ...a, mode: 'expand' as const }, 'byzantine fault tolerance')]] as [string, A.Arch][]) {
+    const w = name.includes('80x24') ? 80 : 100, h = name.includes('80x24') ? 24 : 34;
+    const r = snapshot(name, A.view(arch, w, h, { dark: true }, info));
+    assert.ok(r.ok, r.message);
+  }
 });

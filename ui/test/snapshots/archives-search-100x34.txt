@@ -1,0 +1,34 @@
+
+                                     ⟦•─•⟧ search the archives
+
+                    ╭──────────────────────────────────────────────────────────╮
+                    │ ›  search what Delphi knows…                             │
+                    ╰──────────────────────────────────────────────────────────╯
+
+
+  collections
+   specs        31 documents · changed 2026-10-25
+   context      212 documents · changed 2026-10-24
+
+  recently changed
+   specs/028-knowledge-window.md  2026-10-25
+
+  243 documents · 1800 passages · hybrid (keyword + vector) search
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust · shift+tab  expand
