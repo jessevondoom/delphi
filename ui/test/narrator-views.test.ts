@@ -64,7 +64,7 @@ test('agents leads with the roster: name, role, state in words, model, task and 
 });
 
 test('archives and changes keep their calm empty states', () => {
-  assert.match(observeFrame(model('archives'), 100, 24).map(plain).join('\n'), /search what Delphi knows[\s\S]*● offline/);
+  assert.match(observeFrame(model('archives'), 100, 24).map(plain).join('\n'), /search the archives[\s\S]*search what Delphi knows/);
   const t = observeFrame(model('changes'), 100, 24).map(plain).join('\n');
   assert.match(t, /no changes recorded yet/);
   assert.match(t, /chat summary and a pull request description/);

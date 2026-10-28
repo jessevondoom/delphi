@@ -150,9 +150,9 @@ test('epic: threads of work with a a few lines each and the critical path (the p
 
 test('archives: the knowledge window, a search box at rest and ranked results after a search', () => {
   const rest = observeFrame(model('archives'), 110, 34).map(plain).join('\n');
-  assert.match(rest, /knowledge/);
+  assert.match(rest, /search the archives/);
   assert.match(rest, /search what Delphi knows/);
-  assert.match(rest, /● offline/);
+  assert.doesNotMatch(rest, /offline|online/);
   const hit = { path: 'specs/003.md', collection: 'specs', trust: 'internal_generated', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' };
   const a = observeFrame(model('archives', { arch: { ...emptyArch(), q: 'retry', searched: 'retry', hits: [hit], took: 400, engine: 'hybrid' } }), 110, 34).map(plain).join('\n');
   assert.match(a, /1 result · 0\.4 s · hybrid/);

@@ -231,7 +231,7 @@ function agents(m: OModel, w: number, _h: number): string[] {
   return out;
 }
 
-const archives = (m: OModel, w: number, h: number): string[] => A.view(m.arch, w, h, m.pal);
+const archives = (m: OModel, w: number, h: number): string[] => A.view(m.arch, w, h, m.pal, m.info);
 
 const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 

@@ -4,11 +4,11 @@ delphi v0.5 · archives
  ✔ nothing needs you
 
 
-                                             knowledge
+                                     ⟦•─•⟧ search the archives
                     ╭──────────────────────────────────────────────────────────╮
                     │ ›  search what Delphi knows…                             │
                     ╰──────────────────────────────────────────────────────────╯
-                                 ● offline    ○ online (not set up)
+
 
                                          reading the index…
 
@@ -25,6 +25,6 @@ delphi v0.5 · archives
 
 
 
- type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust
+ type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust · shift+tab expand
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 1 running  ·  3500 tokens                                                  ← →  ·  ○ ○ ○ ○ ○ ○ ○ ● ○

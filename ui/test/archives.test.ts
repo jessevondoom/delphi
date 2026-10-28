@@ -178,7 +178,7 @@ test('tab cycles the collection searched, and a search in progress is run again 
   assert.equal(first.action.t, 'none', 'nothing searched yet, so nothing to rerun');
   assert.equal(A.key(first.a, k('tab'), W, H).a.scope, 'context');
   assert.equal(A.key(A.key(first.a, k('tab'), W, H).a, k('tab'), W, H).a.scope, null, 'back to all');
-  assert.equal(A.key(a, k('shift-tab'), W, H).a.scope, 'context', 'the other way round');
+  assert.equal(A.key(a, k('shift-tab'), W, H).a.scope, null, 'shift+tab is the mode now, not the scope');
   const searched = A.gotHits(first.a, 'retry', { results: [{ path: 'specs/a.md', collection: 'specs', trust: 'x', heading: '', preview: '' }] });
   const again = A.key(searched, k('tab'), W, H);
   assert.deepEqual([again.a.scope, again.action], ['context', { t: 'search', q: 'retry' }]);
@@ -244,4 +244,51 @@ test('an external link opens only when it is a web address, with the address as 
   assert.equal(openExternal('file:///x', (c, a) => calls.push([c, a]), 'darwin'), false);
   assert.equal(openExternal('https://example.com', (c, a) => calls.push([c, a]), 'plan9'), false);
   assert.equal(calls.length, 2);
+});
+
+// ── modes (spec 028 §10) ────────────────────────────────────────────────────
+
+const shiftTab = k('shift-tab', { shift: true });
+
+test('shift+tab toggles search and expand, and the typed text stays', () => {
+  const a = shelf(type(A.emptyArch(), 'council'));
+  assert.equal(a.mode, 'search');
+  const on = A.key(a, shiftTab, W, H);
+  assert.equal(on.used, true);
+  assert.equal(on.a.mode, 'expand');
+  assert.equal(on.a.q, 'council');
+  assert.equal(A.key(on.a, shiftTab, W, H).a.mode, 'search', 'a second press is the way back');
+});
+
+test('the search page names the orchestrator and has no offline/online indicators; tab still scopes', () => {
+  const text = A.view(shelf(), W, H, {} as never).map(plain).join('\n');
+  assert.match(text, /search the archives/);
+  assert.match(text, /collections/);
+  assert.match(text, /recently changed/);
+  assert.doesNotMatch(text, /offline|online|both/);
+  assert.equal(A.key(shelf(), k('tab'), W, H).a.scope, 'specs');
+});
+
+test('the expand page is clean: the label and the box, no shelf and no metadata', () => {
+  const a = A.key(shelf(), shiftTab, W, H).a;
+  const text = A.view(a, W, H, {} as never).map(plain).join('\n');
+  assert.match(text, /expand knowledge base: research a topic/);
+  assert.match(text, /research a topic…/);
+  for (const gone of [/collections/, /recently changed/, /documents/, /passages/, /specs\/028/, /offline|online/]) assert.doesNotMatch(text, gone);
+  assert.equal(A.key(a, k('tab'), W, H).a.scope, null, 'the scope belongs to the shelf');
+  assert.equal(A.key(a, { t: 'ctrl', c: 't' }, W, H).action.t, 'none', 'no shelf to reload');
+  assert.equal(A.key(a, k('down'), W, H).a.focus, 'box');
+});
+
+test('enter in expand mode never searches the store, and an empty box does nothing', () => {
+  const empty = A.key(shelf(), shiftTab, W, H).a;
+  const r = A.key(type(empty, 'mitochondria'), k('enter'), W, H);
+  assert.equal(r.action.t, 'none');
+  assert.match(r.a.note, /not built yet/);
+  assert.equal(A.key(empty, k('enter'), W, H).a.note, '');
+});
+
+test('the reader keeps shift+tab for links', () => {
+  const read = A.gotDoc(A.emptyArch(), doc(), null, W);
+  assert.equal(A.key(read, shiftTab, W, H).a.mode, 'search');
 });

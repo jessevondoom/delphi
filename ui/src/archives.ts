@@ -16,7 +16,11 @@ export type Shelf = {
 };
 /** One document in the reader, with where the operator is in it. */
 export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
+/** `search` reads the store; `expand` is the clean page that researches a topic from the trusted sources (`specs/028` §10). */
+export type Mode = 'search' | 'expand';
 export type Arch = {
+  /** Shift+Tab toggles it. The window starts on `search`. */
+  mode: Mode;
   q: string;
   /** Where the keys go: the search box, or the list under it. */
   focus: 'box' | 'list';
@@ -47,7 +51,7 @@ export type Arch = {
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, scope: null, trustedOnly: false, history: [], hist: null, pins });
+export const emptyArch = (pins = false): Arch => ({ mode: 'search', q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, scope: null, trustedOnly: false, history: [], hist: null, pins });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
@@ -170,18 +174,22 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
     return used({ ...a, focus: 'box', q: (a.q + s).slice(0, 200), note: '', hist: null });
   }
   if (e.t === 'ctrl' && e.c === 'u') return used({ ...a, q: '', focus: 'box', hist: null });
+  if (e.t === 'ctrl' && e.c === 't' && a.mode === 'expand') return used(a); // no shelf to reload
   if (e.t === 'ctrl' && e.c === 't') return used({ ...a, trustedOnly: !a.trustedOnly, note: a.trustedOnly ? 'showing every document, tagged by provenance' : 'trusted documents only' }, { t: 'reload' });
+  if (e.t === 'wheel' && a.mode === 'expand') return used(a);
   if (e.t === 'wheel') return used({ ...a, sel: Math.max(0, Math.min(list.length - 1, a.sel + (e.dir === 'up' ? -1 : 1))), focus: list.length ? 'list' : 'box' });
   if (e.t !== 'key' || e.alt || e.ctrl) return NOT_USED(a);
   switch (e.k) {
     case 'backspace': return used({ ...a, focus: 'box', q: [...a.q].slice(0, -1).join(''), note: '', hist: null });
     case 'enter': {
+      if (a.mode === 'expand') return used(a.q.trim() ? { ...a, note: 'researching a topic is not built yet (specs/028 §10, slices E2 to E4)' } : a);
       if (a.focus === 'list' && list[a.sel]) return open(a, list[a.sel]!, used);
       const q = a.q.trim();
       const history = q && a.history[a.history.length - 1] !== q ? [...a.history, q].slice(-50) : a.history;
       return q ? used({ ...a, note: 'searching…', history, hist: null }, { t: 'search', q }) : used(a);
     }
     case 'down':
+      if (a.mode === 'expand') return used(a);
       if (a.focus === 'box' && a.hist !== null) return used(a.hist + 1 < a.history.length ? { ...a, hist: a.hist + 1, q: a.history[a.hist + 1]! } : { ...a, hist: null, q: '' }); // newer, then the empty box again
       return list.length ? used({ ...a, focus: 'list', sel: a.focus === 'list' ? Math.min(list.length - 1, a.sel + 1) : 0 }) : used(a);
     case 'up':
@@ -191,13 +199,15 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
         return used({ ...a, hist, q: a.history[hist]! });
       }
       return a.sel > 0 ? used({ ...a, sel: a.sel - 1 }) : used({ ...a, focus: 'box' });
-    case 'pgdn': return list.length ? used({ ...a, focus: 'list', sel: Math.min(list.length - 1, a.sel + 5) }) : used(a);
+    case 'pgdn': return a.mode === 'expand' ? used(a) : list.length ? used({ ...a, focus: 'list', sel: Math.min(list.length - 1, a.sel + 5) }) : used(a);
     case 'pgup': return used({ ...a, sel: Math.max(0, a.sel - 5) });
-    case 'tab': case 'shift-tab': {
-      // The scope: all collections, then each in turn. (Online search is not built; this is what tab is for until it is.)
+    case 'shift-tab': return used({ ...a, mode: a.mode === 'search' ? 'expand' : 'search', focus: 'box', note: '' });
+    case 'tab': {
+      if (a.mode === 'expand') return used(a); // the scope belongs to the shelf, which expand mode does not show
+      // The scope: all collections, then each in turn.
       const names: (string | null)[] = [null, ...(a.shelf?.collections.map((c) => c.name) ?? [])];
       const at = Math.max(0, names.indexOf(a.scope));
-      const scope = names[(at + (e.k === 'tab' ? 1 : names.length - 1)) % names.length] ?? null;
+      const scope = names[(at + 1) % names.length] ?? null;
       const q = a.q.trim();
       const next = { ...a, scope, note: scope ? `searching in ${scope}` : 'searching in every collection' };
       return a.searched !== null && !a.browse && q ? used({ ...next, note: 'searching…' }, { t: 'search', q }) : used(next);
@@ -267,21 +277,33 @@ const pad = (lines: string[], h: number) => [...lines.slice(0, h), ...Array(Math
 const hint = (s: string) => T.dim(' ' + s);
 
 function box(a: Arch, w: number): string[] {
+  const ask = a.mode === 'expand' ? 'research a topic…' : 'search what Delphi knows…';
   const cursor = a.focus === 'box' ? chalk.inverse(' ') : '';
   const inner = Math.min(58, Math.max(10, w - 8));
   const q = [...a.q].slice(-(inner - 6)).join('');
-  if (w < 40) return [' ' + T.accent('›') + ' ' + (q || T.dim('search')) + cursor, T.dim('─'.repeat(Math.max(0, w - 2)).padStart(w - 1))];
-  const body = ` ${T.accent('›')}  ${q || (a.focus === 'box' ? '' : '')}${q ? '' : T.dim('search what Delphi knows…')}${cursor}`;
+  if (w < 40) return [' ' + T.accent('›') + ' ' + (q || T.dim(a.mode === 'expand' ? 'research' : 'search')) + cursor, T.dim('─'.repeat(Math.max(0, w - 2)).padStart(w - 1))];
+  const body = ` ${T.accent('›')}  ${q || (a.focus === 'box' ? '' : '')}${q ? '' : T.dim(ask)}${cursor}`;
   const fill = ' '.repeat(Math.max(0, inner - 1 - T.width(body)));
   return [center('╭' + '─'.repeat(inner) + '╮', w), center('│' + body + fill + ' │', w), center('╰' + '─'.repeat(inner) + '╯', w)];
 }
 
-const modeLine = (a: Arch, w: number) => center(`${T.accent('●')} offline    ${T.dim('○ online (not set up)')}${a.scope ? `    in: ${chalk.bold(a.scope)}` : ''}${a.trustedOnly ? `    ${T.dim('trusted only')}` : ''}`, w);
+/** What narrows the search, when anything does. The offline/online indicators are gone: search is always local (`specs/028` §10.1). */
+const modeLine = (a: Arch, w: number) => center([a.scope ? `in: ${chalk.bold(a.scope)}` : '', a.trustedOnly ? T.dim('trusted only') : ''].filter(Boolean).join('    '), w);
 
 function mark(sel: boolean, a: Arch) { return sel && a.focus === 'list' ? T.accent('›') : ' '; }
 
-function home(a: Arch, w: number, h: number): string[] {
-  const out: string[] = ['', center(chalk.bold('knowledge'), w), ...box(a, w), modeLine(a, w), ''];
+/** The face of a role, or nothing when the roster is unknown (the same badge the strip draws). */
+const face = (role: string, info?: T.Info, pal?: T.Pal) => (info && pal ? T.badge(role, 'idle', info, pal) + ' ' : '');
+
+function expandPage(a: Arch, w: number, h: number, info?: T.Info, pal?: T.Pal): string[] {
+  const out: string[] = ['', center(face('orchestrator', info, pal) + chalk.bold('search the archives'), w), '', center(face('scout', info, pal) + 'expand knowledge base: research a topic', w), ...box(a, w)];
+  if (a.note) out.push('', T.dim(center(a.note, w)));
+  return pad(out, h - 1).concat(hint('type a topic · enter research · shift+tab search · ← → views'));
+}
+
+function home(a: Arch, w: number, h: number, info?: T.Info, pal?: T.Pal): string[] {
+  if (a.mode === 'expand') return expandPage(a, w, h, info, pal);
+  const out: string[] = ['', center(face('orchestrator', info, pal) + chalk.bold('search the archives'), w), ...box(a, w), modeLine(a, w), ''];
   const list = rows(a);
   if (!a.shelf) out.push(T.dim(center('reading the index…', w)));
   else if (!list.length) out.push(T.dim(center('the knowledge base is empty', w)));
@@ -298,7 +320,7 @@ function home(a: Arch, w: number, h: number): string[] {
     if (s) out.push('', T.dim(`  ${s.documents} documents · ${s.passages} passages · ${s.vectors > 0 ? 'hybrid (keyword + vector)' : 'keyword'} search`));
   }
   if (a.note) out.push('', T.dim(center(a.note, w)));
-  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · esc back · ← → views' : 'type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust'));
+  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · esc back · ← → views' : 'type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust · shift+tab expand'));
 }
 
 function results(a: Arch, w: number, h: number): string[] {
@@ -345,8 +367,8 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
 }
 
 /** The pane's body: `h` rows of at most `w` columns. */
-export function view(a: Arch, w: number, h: number, pal: T.Pal): string[] {
-  const lines = a.at >= 0 ? readerView(a, w, h, pal) : a.searched !== null ? results(a, w, h) : home(a, w, h);
+export function view(a: Arch, w: number, h: number, pal: T.Pal, info?: T.Info): string[] {
+  const lines = a.at >= 0 ? readerView(a, w, h, pal) : a.searched !== null && a.mode === 'search' ? results(a, w, h) : home(a, w, h, info, pal);
   return pad(lines, h).map((l) => T.clip(l, w));
 }
 

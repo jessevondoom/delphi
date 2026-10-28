@@ -371,7 +371,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       if (hk === 'close-and-pass') setHelp(false);
 
       // Shift+Tab cycles the approval mode from anywhere.
-      if (e.t === 'key' && e.k === 'shift-tab') {
+      // (On the knowledge deck it belongs to the window: it switches between searching and expanding the archive.)
+      if (e.t === 'key' && e.k === 'shift-tab' && deckRef.current !== 0) {
         const next = nextMode(modeRef.current);
         const set = (m: string) => cmd.call('permissions.set', { mode: m }).then((v: any) => { const got = String(v?.mode ?? m); setMode(got); note(modeNote(got)); });
         // Optimistic needs the OS sandbox; without one the cycle skips it and wraps to default.
