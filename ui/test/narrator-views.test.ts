@@ -34,11 +34,10 @@ const withChanges = (): Partial<OModel> => ({ st: { ...world(), changes: changed
 
 const cases: [string, Partial<OModel>][] = [
   ['agents', {}],
-  ['archives', { arch: { ...emptyArch(), q: 'retry', searched: 'retry', hits, took: 400, engine: 'hybrid', focus: 'list' } }],
   ['changes', withChanges()],
 ];
 
-test('goldens: agents, archives and changes at 80x24, 100x34 and 40x12', () => {
+test('goldens: agents and changes at 80x24, 100x34 and 40x12', () => {
   for (const [view, over] of cases) for (const [w, h] of SIZES) {
     const r = snapshot(`narrator-${view}-${w}x${h}`, observeFrame(model(view as (typeof VIEWS)[number], over), w, h));
     assert.ok(r.ok, r.message);
@@ -63,8 +62,7 @@ test('agents leads with the roster: name, role, state in words, model, task and 
   assert.ok(!/cache \d|think \d|call\(s\)/.test(t), 'the per-kind token split is gone');
 });
 
-test('archives and changes keep their calm empty states', () => {
-  assert.match(observeFrame(model('archives'), 100, 24).map(plain).join('\n'), /search what Delphi knows[\s\S]*● offline/);
+test('changes keeps its calm empty state', () => {
   const t = observeFrame(model('changes'), 100, 24).map(plain).join('\n');
   assert.match(t, /no changes recorded yet/);
   assert.match(t, /chat summary and a pull request description/);

@@ -69,19 +69,14 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     }, SAMPLE_SECS * 1000);
     return () => clearInterval(t);
   }, [busy]);
-  const [arch, setArchState] = useState<A.Arch>(A.emptyArch());
-  // A document opened from a link in another view (the change feed, `specs/029`) reads in its own window state, so the
-  // knowledge window's search and history are left as they were, and closing it returns to the view it came from.
+  // A document opened from a link in another view (the change feed, `specs/029`) reads in its own window state;
+  // closing it returns to the view it came from.
   const [rdr, setRdrState] = useState<A.Arch>(A.emptyArch());
   const [feed, setFeedState] = useState<{ focus: number | null; note: string }>({ focus: null, note: '' });
-  const R = useRef({ view, pick, st, arch, rdr, feed, scroll, selNode, size, liveTokens, liveEst });
-  R.current = { view, pick, st, arch, rdr, feed, scroll, selNode, size, liveTokens, liveEst };
+  const R = useRef({ view, pick, st, rdr, feed, scroll, selNode, size, liveTokens, liveEst });
+  R.current = { view, pick, st, rdr, feed, scroll, selNode, size, liveTokens, liveEst };
   const setRdr = (f: (a: A.Arch) => A.Arch) => { const n = f(R.current.rdr); R.current.rdr = n; setRdrState(n); };
   const setFeed = (f: (a: { focus: number | null; note: string }) => { focus: number | null; note: string }) => { const n = f(R.current.feed); R.current.feed = n; setFeedState(n); };
-  // The ref moves at once, not when React gets to the update: text and Enter can arrive in one read, and the second
-  // key must see what the first one did.
-  const setArchOf = (f: (a: A.Arch) => A.Arch) => { const n = f(R.current.arch); R.current.arch = n; setArchState(n); };
-  const setArch = setArchOf;
   const picked = useRef(first !== null);
 
   const load = () => cmd.call('observe.state', {}).then((s: OState) => {
@@ -92,23 +87,19 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
 
   useEffect(() => { void load(); }, []);
 
-  // The knowledge window reads through `kb.get`, the read-only knowledge API on the narrator socket (spec 028 §6a).
+  // A document opened from a link reads through `kb.get`, the read-only knowledge API on the narrator socket (spec 028 §6a).
   const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
   const enc = encodeURIComponent;
-  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(R.current.arch).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(R.current.arch)}`), kb('/v1/health')])
-    .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
-    .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
-  useEffect(() => { if (view === 'archives' && !R.current.arch.shelf) void loadShelf(); }, [view, connected]);
-  const run = (act: A.Action, on: 'arch' | 'rdr' = 'arch') => {
-    const setArch = on === 'arch' ? setArchOf : setRdr;
-    const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); if (on === 'rdr') setFeed((f) => ({ ...f, note: msg })); };
-    const a0 = R.current[on], tp = A.trustParam(a0);
-    if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) run({ t: 'search', q: a0.q.trim() }, on); else if (a0.browse) run({ t: 'browse', name: a0.browse }, on); }
+  const run = (act: A.Action) => {
+    const setArch = setRdr;
+    const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); setFeed((f) => ({ ...f, note: msg })); };
+    const a0 = R.current.rdr, tp = A.trustParam(a0);
+    if (act.t === 'reload') { if (a0.searched && a0.q.trim() && !a0.browse) run({ t: 'search', q: a0.q.trim() }); else if (a0.browse) run({ t: 'browse', name: a0.browse }); }
     else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
     else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
     else if (act.t === 'open') {
       const t = act.target;
-      kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => { if (r.status === 200 && on === 'rdr') setFeed((f) => ({ ...f, note: '' })); setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it'))); }).catch(() => fail('could not open it'));
+      kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => { if (r.status === 200) setFeed((f) => ({ ...f, note: '' })); setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it'))); }).catch(() => fail('could not open it'));
     } else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
@@ -172,7 +163,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
       // A document opened from a link takes the keys until it is closed.
       if (R.current.rdr.at >= 0 && !(e.t === 'ctrl' && e.c === 'c')) {
         const r = A.key(R.current.rdr, e, R.current.size.w, Math.max(1, R.current.size.h - 7));
-        if (r.used) { setRdr(() => r.a); run(r.action, 'rdr'); }
+        if (r.used) { setRdr(() => r.a); run(r.action); }
         return; // the view does not change under an open document
       }
       // The change feed's links: tab and shift+tab focus one, enter reads it here (or opens the address in the browser), esc lets go.
@@ -189,16 +180,12 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
         if (e.t === 'key' && e.k === 'tab' && links.length) { move(1); return; }
         if (e.t === 'key' && e.k === 'shift-tab' && links.length) { move(-1); return; }
         if (e.t === 'key' && e.k === 'enter' && cur) {
-          if (cur.target.k === 'external') run({ t: 'browser', url: cur.target.url }, 'rdr');
-          else { setFeed((f) => ({ ...f, note: 'opening…' })); run({ t: 'open', target: cur.target }, 'rdr'); }
+          if (cur.target.k === 'external') run({ t: 'browser', url: cur.target.url });
+          else { setFeed((f) => ({ ...f, note: 'opening…' })); run({ t: 'open', target: cur.target }); }
           return;
         }
-        if (e.t === 'text' && e.s === 'y' && cur) { run({ t: 'copy', text: copyText(cur.target) }, 'rdr'); return; }
+        if (e.t === 'text' && e.s === 'y' && cur) { run({ t: 'copy', text: copyText(cur.target) }); return; }
         if (e.t === 'key' && e.k === 'esc' && (foc !== null || R.current.feed.note)) { setFeed(() => ({ focus: null, note: '' })); return; }
-      }
-      if (v === 'archives' && !(e.t === 'ctrl' && e.c === 'c')) {
-        const r = A.key(R.current.arch, e, R.current.size.w, Math.max(1, R.current.size.h - 7));
-        if (r.used) { setArch(() => r.a); run(r.action); return; }
       }
       if (e.t === 'wheel') { setScroll((x) => Math.max(0, x + (e.dir === 'up' ? -3 : 3))); return; }
       if (e.t === 'ctrl' && e.c === 'c') { exit(); return; }
@@ -214,7 +201,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     return () => { term.off('ev', onEv); };
   }, [term]);
 
-  const model: OModel = { info, pal, st, view, pick, scroll, selNode, arch, reader: rdr, feed, live, liveTokens, liveEst, lastSeen: seen.current, since, pulse, connected, now, still };
+  const model: OModel = { info, pal, st, view, pick, scroll, selNode, reader: rdr, feed, live, liveTokens, liveEst, lastSeen: seen.current, since, pulse, connected, now, still };
   const lines = observeFrame(model, size.w, size.h);
   const shown = useSelection(term, lines);
   return (

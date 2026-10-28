@@ -9,4 +9,4 @@ delphi · pulse
 
  ► waiting on you  6m  ares · run cargo…
 ────────────────────────────────────────
-1 running  ·  14.2k t… ○ ○ ○ ○ ● ○ ○ ○ ○
+1 running  ·  14.2k tok… ○ ○ ○ ○ ● ○ ○ ○

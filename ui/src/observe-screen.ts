@@ -51,19 +51,17 @@ export type OState = {
 };
 
 /** The views, in order (`005e` §9.2; the dashboard is `specs/030`; `changes` is `specs/032`). The narrator shows no money, so there is no spend view. */
-export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'archives', 'changes'] as const;
+export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'changes'] as const;
 export type View = (typeof VIEWS)[number];
 /** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
 export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
 export const parseView =(s: string): View | null => {
-  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', archives: 'archives', kb: 'archives', pulse: 'pulse', meters: 'pulse', timeline: 'timeline', tools: 'tools', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
+  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', pulse: 'pulse', meters: 'pulse', timeline: 'timeline', tools: 'tools', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
   return m[s.toLowerCase()] ?? null;
 };
 
 export type OModel = {
   info: T.Info; pal: T.Pal; st: OState; view: View; pick: number; scroll: number; selNode: number;
-  /** The knowledge window (`archives.ts`): the search box, the shelf, the results and the reader. */
-  arch: A.Arch;
   /** A document opened from a link in another view (`specs/029`): while one is open it takes the body, and closing it returns to the view. */
   reader?: A.Arch;
   /** Link focus in the change feed, and the last thing a link did (`opening…`, a failure). */
@@ -238,7 +236,6 @@ function agentsAndTools(m: OModel, w: number, h: number): string[] {
   return joinColumns(agents(m, lw, h, true), toolsBoard(m, rw, h), w, m.pal);
 }
 
-const archives = (m: OModel, w: number, h: number): string[] => A.view(m.arch, w, h, m.pal);
 
 const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
@@ -356,10 +353,10 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
-  const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, archives, changes }[m.view];
+  const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, changes }[m.view];
   if (m.reader && m.reader.at >= 0) return [...head, slot(m, w), '', ...A.view(m.reader, w, Math.max(1, bodyH - 2), m.pal), ...foot].slice(0, h).map((l) => T.clip(l, w));
   let body = m.view === 'agents' && w >= TWO_COLUMNS_AT ? agentsAndTools(m, w, inner) : fn(m, w, inner);
-  if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic' && m.view !== 'archives') body = body.slice(m.scroll);
+  if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic') body = body.slice(m.scroll);
   body = [slot(m, w), feedStatus(m, w), ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');
   return [...head, ...body, ...foot].slice(0, h);
