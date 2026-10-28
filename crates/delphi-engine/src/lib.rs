@@ -66,6 +66,8 @@ pub mod decision_model;
 pub mod provisional_run;
 pub mod hostmap;
 pub mod recovery;
+pub mod research;
+pub mod research_setup;
 pub mod route;
 pub mod ratify;
 pub mod service;

@@ -2,6 +2,7 @@
 //! the allow-checked fetch of a page. Deterministic code only; the job that drives it and the scout's decision call are E3.
 
 pub mod fetch;
+pub mod html;
 pub mod search;
 pub mod transport;
 pub mod trusted;

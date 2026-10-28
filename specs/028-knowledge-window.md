@@ -195,7 +195,7 @@ The spec 040 validator is for **chat prompts that bring in research**: arbitrary
 ```
 `esc` cancels; entries already written stay.
 
-**Limits** (provisional, in `[research]`): at most 15 sources read per job, link depth 1, 20 s per fetch, 2 MB per page, 90 s per job, one job at a time.
+**Limits** (provisional; constants in `research.rs` until a `[research]` table is worth having): at most 15 sources read per job and 5 per host, link depth 1 (only links to a different trusted host, at most 3 per page), 20 s per fetch, 2 MB per page, **180 s per job** (the first figure, 90 s, did not allow for the scout's calls), at most 80,000 tokens of scout calls per job (a job that reaches it keeps what it has written and says so), one job at a time. The scout is asked one page at a time, and a fact is kept only if its quote is a run of at least three words that appears in the page (§10.2 step 3 as built).
 
 **After it completes**, a results page replaces the progress page. Near the top, a banner:
 
