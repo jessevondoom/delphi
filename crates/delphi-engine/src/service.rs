@@ -21,6 +21,25 @@ use std::time::{Duration, Instant};
 #[path = "service_xenia.rs"]
 mod service_xenia;
 
+/// The running research job, if any: its task id and its cancel flag.
+type ResearchSlot = Arc<Mutex<Option<(String, Arc<std::sync::atomic::AtomicBool>)>>>;
+
+/// Held by a research task: when it ends, or is aborted, the slot is cleared and the job is told to stop.
+struct ResearchGuard {
+    slot: ResearchSlot,
+    running: Arc<Mutex<HashMap<String, Running>>>,
+    task_id: String,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for ResearchGuard {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.slot.lock().unwrap() = None;
+        self.running.lock().unwrap().remove(&self.task_id);
+    }
+}
+
 struct Running {
     target: String,
     prompt: String,
@@ -34,6 +53,8 @@ pub struct EngineService {
     default_mission: String,
     missions: Mutex<HashMap<String, Arc<MissionState>>>,
     running: Arc<Mutex<HashMap<String, Running>>>,
+    /// The research job that is running, if any: its task and its cancel flag. One at a time (`specs/028` §10.6).
+    research: ResearchSlot,
     notices: Mutex<Vec<String>>,
     /// Serializes opening a mission (and planning its recovery).
     open_gate: tokio::sync::Mutex<()>,
@@ -96,7 +117,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), research: Arc::new(Mutex::new(None)), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -531,6 +552,60 @@ impl EngineService {
         });
         self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
         Ok(json!({"task_id": task_id, "mission_id": mid}))
+    }
+
+    /// `research.start`: "expand knowledge base" for a topic (`specs/028` §10). Runs as a task of the scout in the background:
+    /// progress comes as `research.progress` events and the end as `research.finished` or `research.failed`. One job at a
+    /// time. Refused up front, with the reason, when the scout is not enabled or no search engine is configured.
+    async fn research_start(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let topic: String = p["topic"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+        if topic.is_empty() || topic.chars().count() > 200 || topic.chars().any(|c| c.is_control()) {
+            return Err(err(code::INVALID_PARAMS, "`topic` must be 1 to 200 characters of plain text"));
+        }
+        if !self.engine.settings.enabled_agents.iter().any(|a| a == "scout") {
+            return Err(err(code::INVALID_PARAMS, "the scout role is not enabled: add \"scout\" to [agents] enabled in config.toml"));
+        }
+        if self.engine.cfg.get().search.providers.is_empty() {
+            return Err(err(code::INVALID_PARAMS, crate::research_search::SearchError::NotConfigured.to_string()));
+        }
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_id = m.next_task_id();
+        {
+            let mut slot = self.research.lock().unwrap();
+            if slot.is_some() {
+                return Err(err(code::INVALID_PARAMS, "a research job is already running: wait for it, or cancel it"));
+            }
+            *slot = Some((task_id.clone(), cancel.clone()));
+        }
+        self.running.lock().unwrap().insert(task_id.clone(), Running { target: "scout".into(), prompt: format!("research {}", topic), started: Instant::now() });
+        let guard = ResearchGuard { slot: self.research.clone(), running: self.running.clone(), task_id: task_id.clone(), cancel: cancel.clone() };
+        let (engine, tid, mid) = (self.engine.clone(), task_id.clone(), m.id.clone());
+        let h = tokio::spawn(async move {
+            let _guard = guard; // dropped when the job ends or the task is aborted: it clears the slot and stops the job
+            if let Err(e) = engine.run_research(&m, tid.clone(), topic, cancel).await {
+                elog_task_failed(&m.id, &tid, &e);
+                let mut ev = EventEnvelope::new(&m.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
+                ev.task_id = Some(tid.clone());
+                let _ = m.append(ev).await;
+            }
+        });
+        self.aborts.lock().unwrap().insert(task_id.clone(), h.abort_handle());
+        Ok(json!({"task_id": task_id, "mission_id": mid}))
+    }
+
+    /// `research.cancel`: stop the running job between steps. Entries already written stay.
+    fn research_cancel(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let slot = self.research.lock().unwrap();
+        match slot.as_ref() {
+            Some((task, flag)) => {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(json!({"cancelled": true, "task_id": task}))
+            }
+            None => Ok(json!({"cancelled": false})),
+        }
     }
 
     fn approval_resolve(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -1234,6 +1309,8 @@ impl Extension for ServiceExt {
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
+                "research.start" => svc.research_start(params, ctx).await,
+                "research.cancel" => svc.research_cancel(ctx),
                 "kb.search" => svc.kb_search(params).await,
                 "kb.get" => svc.kb_get(params).await,
                 "observe.snapshot" => svc.observe_snapshot(params).await,
@@ -2282,6 +2359,36 @@ mod tests {
                 c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
                 c.hello(tok).unwrap();
                 assert_eq!(rpc_code(c.call("decision.list", json!({}))), Some(code::FORBIDDEN));
+            }
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn research_start_is_the_consoles_alone_and_refused_with_a_reason_before_anything_starts() {
+        let f = setup(vec![Step::text("x")], 5.0, |s| {
+            if !s.enabled_agents.iter().any(|a| a == "scout") {
+                s.enabled_agents.push("scout".into());
+            }
+        });
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            assert_eq!(rpc_code(c.call("research.start", json!({"topic": "   "}))), Some(code::INVALID_PARAMS), "an empty topic");
+            assert_eq!(rpc_code(c.call("research.start", json!({"topic": "a".repeat(201)}))), Some(code::INVALID_PARAMS), "a long topic");
+            assert_eq!(rpc_code(c.call("research.start", json!({"topic": "bell\u{7}"}))), Some(code::INVALID_PARAMS), "a control character");
+            let no_search = c.call("research.start", json!({"topic": "byzantine fault tolerance"})).unwrap_err();
+            assert!(format!("{:?}", no_search).contains("[search]"), "{no_search:?}: with no [search] section the web is off, and it says so");
+            assert_eq!(c.call("research.cancel", json!({})).unwrap()["cancelled"], false, "nothing is running");
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("research.start", json!({"topic": "x"}))), Some(code::FORBIDDEN));
+                assert_eq!(rpc_code(c.call("research.cancel", json!({}))), Some(code::FORBIDDEN));
             }
         })
         .await;

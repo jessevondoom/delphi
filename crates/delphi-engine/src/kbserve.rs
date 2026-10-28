@@ -48,6 +48,12 @@ pub fn kind_of(rel_path: &str, zone: &str) -> &'static str {
         "other"
     }
 }
+/// The trust a result shows. A research entry is stored at the validated-source tier (L2, `federated_verified`) but is
+/// shown as what it is: a page from a source the operator listed.
+pub fn shown_trust(kind: &str, source_type: &str) -> String {
+    if kind == "research" && source_type == "federated_verified" { "trusted_source".into() } else { source_type.to_string() }
+}
+
 /// How long the index may go without being brought up to date (unchanged files cost a stat).
 const REFRESH_EVERY: Duration = Duration::from_secs(10);
 /// A document larger than this is not served whole (the indexer's own cap is 512 KiB).
@@ -205,7 +211,7 @@ impl Reader<'_> {
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
             }
-            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note}));
+            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": shown_trust(kind_of(&d.rel_path, &d.zone), &d.source_type), "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note}));
             if !facets && kind.is_none() && out.len() >= limit {
                 break;
             }
@@ -521,6 +527,25 @@ mod tests {
     fn get(api: &mut Api, target: &str) -> (u16, Value) {
         let r = api.handle("GET", target);
         (r.status, r.body)
+    }
+
+    #[test]
+    fn what_the_research_job_wrote_is_indexed_at_the_folders_tier_and_shown_as_a_listed_source() {
+        let (home, ws) = workspace();
+        let dir = ws.path().join("local/knowledge/web/en.wikipedia.org");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The entry claims the highest tier for itself; the folder decides.
+        std::fs::write(dir.join("zebra.md"), "---\nid: web-1\ntitle: \"Zebra\"\nauthor: scout\ntimestamp: 2026-10-28T10:00:00Z\nsource_type: user_ratified\nconfidence: low\nstatus: active\nsource_mission: m\ntags: [research]\n---\n\n# Zebra\n\nThe zebra crossing was researched.\n").unwrap();
+        let mut api = Api::new(home.path(), ws.path()).unwrap();
+        let (s, b) = get(&mut api, "/v1/search?q=researched&rerank=0&facets=1");
+        assert_eq!(s, 200, "{b}");
+        let r = &b["results"][0];
+        assert_eq!((r["path"].as_str(), r["kind"].as_str(), r["trust"].as_str()), (Some("knowledge/web/en.wikipedia.org/zebra.md"), Some("research"), Some("trusted_source")), "{b}");
+        assert_eq!(b["facets"]["research"], 1);
+        assert_eq!(shown_trust("research", "federated_verified"), "trusted_source");
+        assert_eq!(shown_trust("spec", "federated_verified"), "federated_verified", "only research entries are shown as listed sources");
+        let (_, k) = get(&mut api, "/v1/kinds");
+        assert!(k.as_array().unwrap().iter().any(|e| e["kind"] == "research" && e["documents"] == 1), "{k}");
     }
 
     #[test]

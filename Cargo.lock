@@ -895,6 +895,7 @@ dependencies = [
  "delphi-sandbox",
  "libc",
  "regex",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

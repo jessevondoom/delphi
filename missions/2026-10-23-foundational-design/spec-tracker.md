@@ -165,7 +165,7 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | :-- | :-- | :-- |
 | E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
 | E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (no network yet: the `Http` trait is faked in tests, a real transport arrives with E3; `[search]` config, the shipped default list and a lint check are in) |
-| E3 | research job, scout decision, `knowledge/web/` writes | not started |
+| E3 | research job, scout decision, `knowledge/web/` writes | built (the job, the real transport, the scout's one fast-tier call as a tool-less span, `research.start` / `research.cancel`, the `knowledge/web/` index folder at L2; no live search or site has been tried, and the scout's real model call is untested against a real model) |
 | E4 | progress, results page and banner, failure states | not started |
 
 ## Open items that are not specs
