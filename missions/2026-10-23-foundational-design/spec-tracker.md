@@ -100,6 +100,14 @@ Asked for by the operator on 2026-10-26; pilot budget **80 engineering hours** (
 
 R4-R6 truth packs join in the first study phase.
 
+## Central error log (spec 039, approved, 2026-10-27)
+
+Asked for by the operator on 2026-10-27. Built in one slice and approved after the merge ("committed work counts as ratified").
+
+| Slice | Delivers | State |
+| :-- | :-- | :-- |
+| E1 | `$DELPHI_HOME/logs/delphi.log.jsonl`, `delphi logs`, `delphi debug bundle`, `delphi doctor` check 14, console error boundary | merged (#256) |
+
 ## Roadmap steps, for cross-reference
 
 | Step | State |
