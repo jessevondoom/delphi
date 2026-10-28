@@ -129,7 +129,17 @@ Extensions compose by **addition, in `--order`**, with names namespaced by bundl
 - guidance from several bundles is concatenated in `--order` inside the 4 KiB cap (§5.3), each block labeled with its bundle;
 - a bundle whose guidance contradicts an earlier one is **not detectable by code**; precedence for how to work stays as `specs/024` §5.2 (later `--order` does not override governance, role manifest or tighten-only policies), and `/org` lists every extension on a role so the operator can see the stack.
 
-### 5.6 Disabling
+### 5.6 Asking for help (draft, OD-4)
+Flat dispatch must not mean agents work alone. Any role or team member, working at the edge of its expertise, may call **`request_help`**; this is how lateral collaboration happens when only the orchestrator dispatches.
+
+`request_help({ need: string, tried: string, kind?: "expertise" | "second_opinion" | "decision", suggested_target?: string })` pauses the span and returns control to the orchestrator as a handoff:
+- `need`: what it cannot do well and why it is outside its expertise; `tried`: what it already attempted, with pointers, not pasted content; `suggested_target`: an optional registry target or domain, **advisory only**.
+- The **orchestrator decides**: it may `search_agent_registry`, dispatch a specialist (or a Council seat for `second_opinion`), answer from its own context, or send the question to the operator for `decision`. The result returns to the original agent as a new handoff, so the asker continues with the answer and its own context.
+- **No authority moves.** The request is content, not a command: it cannot dispatch, name a role's tools, or raise trust (I-1, I-2, I-4); the specialist runs under its own host role and scope; taint carries (I-5).
+- **Bounded.** At most **2 requests per task**, counted by the daemon; a third is refused with "answer with what you have, say what you could not verify". A help request is not a retry and does not spend a rung of the retry ladder (`specs/003` §3.2); if the specialist's answer does not resolve it, the ladder proceeds as usual.
+- **Calibrated.** Each request is logged with its outcome. §9 adds *help-request rate per role* and *outcome after help versus unaided on the same task class*; a role that asks on more than 25% of its tasks, or never asks and fails outside its field, is flagged in `/retro`. Asking is also a skill the role guidance can teach (when to ask) but guidance cannot remove the tool or raise the cap.
+
+### 5.7 Disabling
 `delphi bundle add --no-extends` adds a bundle without applying its `[extends]`; `delphi bundle extends <bundle> --role <role> off|on` toggles one (operator confirmation as for trust changes, lowering needs none). `[routing] registry = "flat"` in `config.toml` forces the pre-041 behavior.
 
 ## 6. Authority Invariants (what the tests prove)
@@ -172,6 +182,8 @@ Each routed or team dispatch records on its event: `bundle`, `agent`, `domain`, 
 | outcome parity | rework rate and escalations on the same tasks, flat list vs registry, using the `specs/037` harness | no regression |
 | re-route rate | tasks needing a reformulation, or ending on the fallback after a search | reported; above 25% blocks default-on |
 | extension effect | `bundle eval` with vs without each extension on its role | no regression on the bundle's own cases |
+| help-request rate and value (§5.6) | requests per role per task; outcome (rework, escalation) after help vs unaided on the same task class | reported; a role above 25% asking, or failing outside its field without asking, is flagged |
+| collaboration (OD-1 proviso) | the operator's judgment, from the epic pane and `/retro`, that flat dispatch plus help requests lost nothing against the flat list's baseline | no perceived loss; any is recorded and reopens OD-1 |
 | router latency | `search_agent_registry` wall time at 200 agents | ≤ 50 ms (a target to measure, not a promise) |
 
 The router is **default-on** only when the labeled set meets the recall bar; otherwise the flat list (with S0's reporting) stays and the operator is told why.
@@ -191,6 +203,7 @@ The router is **default-on** only when the labeled set meets the recall bar; oth
 12. **AC-12:** `bundle add --no-extends` applies no `[extends]`; `bundle extends <b> --role builder off` removes only that role's extension; `[routing] registry = "flat"` restores the pre-041 slice byte for byte.
 13. **AC-13:** `bundle update` that changes an `[extends]` table lists the changed skills, team and guidance for each role before asking; an update that changes no `[extends]` table shows no such list.
 14. **AC-14:** `delphi route "<task>"` prints candidates with lexical and vector parts, runs with no model, creates no workspace under `~/.delphi` when given `--home <tmp>`.
+15. **AC-15 (§5.6):** `request_help` from a team member pauses its span and reaches the orchestrator as a handoff carrying `need` and `tried`; a `suggested_target` the caller may not see or that is not in the registry changes nothing; the asker cannot dispatch; a third request in one task is refused with the "answer with what you have" message; the answer returns to the asker as a new handoff; the event records the request and its outcome; the retry ladder's rung count is unchanged by a request.
 
 ## 11. Build Plan (slices; one per pull request; none starts before approval)
 | Slice | Content | Needs |
@@ -205,9 +218,9 @@ The router is **default-on** only when the labeled set meets the recall bar; oth
 Files touched (indicative): `crates/delphi-bundle/src/manifest.rs` (`[extends]`, `[domains]`, agent keys), `crates/delphi-bundle/src/changes.rs`, `crates/delphi-engine/src/bundle_load.rs`, `crates/delphi-engine/src/engine.rs` (tool, slice), `crates/delphi/src/main.rs` (`route`, `bundle extends`; regenerate `docs/reference/`), `schemas/bundle.schema.json`, `crates/delphi/config.example.toml` and `schemas/config.schema.json` (`[routing] registry`), the tracker.
 
 ## 12. Open Decisions for the Operator
-- **OD-1 (the pyramid).** Council 011 cut domain leads (3 of 3). Recommendation: accept, ship the organization map with flat dispatch (this spec), and build leads only if §7's measured gate trips. The alternative is to approve leads now with the §7 safeguards; the Council advises against it.
+- **OD-1 (the pyramid). DECIDED 2026-10-27 by the operator: accepted.** Domain leads are cut from this spec (Council 011, 3 of 3); the organization map ships with flat dispatch, and leads are built only if §7's measured gate trips. The operator's reasoning: humans need pyramids to coordinate; agents may not, provided collaboration is not perceived to suffer. That proviso is a requirement: §5.6 (help requests) and the §9 outcome measures exist to check it.
 - **OD-2 (guidance).** 4 KiB static per role across bundles, fail at add. Alternative: relevance-loaded up to 8 KiB (Haiku's later-slice idea), which the other two seats rejected.
 - **OD-3 (limits and bars).** 8 skills and 8 team members per bundle per role, 24 skills per role, 12 domains and 100 agents per bundle, recall bars 0.90 / 0.95, 25% re-route ceiling. All provisional until S4 measures.
-- **OD-4 (team requests).** Whether a role may emit a *structured* request for a specialist that the orchestrator can accept with one decision (never a dispatch by the role itself). Default here: free text in its report.
+- **OD-4 (help requests).** The operator asked (2026-10-27) that an agent working outside its expertise can ask the orchestrator for help. Recommended and drafted as §5.6: a structured `request_help` tool, never a dispatch by the asker. Awaiting the operator's confirmation of the bounds in §5.6.
 - **OD-5 (domain mapping).** Domains are bundle-namespaced; whether the operator may merge `acme/platform` and `studio/platform` into one. Default: not merged.
 - **OD-6 (housekeeping).** This spec is numbered 041: 039 is the error log, and 040 is the validator spec (renumbered from 039 in #259). If another spec lands on 041 first, renumber this one at merge. The tracker section for it is added in the PR that introduces the draft.
