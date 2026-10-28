@@ -510,6 +510,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           const go = () => resolveCard(cmd, action.card, action.decision).then((bad) => { if (bad) { note(bad, 'error'); unsend(); } });
           void confirmReading(action.d, action.decision, action.conditions).then(go);
         }
+        else if (action.t === 'record') {
+          const d = action.d;
+          cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: action.choice_id, payload_blake3: d.payload_blake3, conditions: action.conditions ?? [] })
+            .then(() => loadDecisionsSoon())
+            .catch((er: any) => { note('could not record the answer: ' + (er?.message ?? JSON.stringify(er)), 'error'); unsend(); loadDecisionsSoon(); });
+        }
         else if (action.t === 'thread') loadThread(action.d);
         else if (action.t === 'retry') {
           cmd.call('decision.retry_brief', { mission_id: mission, id: action.d.id }).then(() => note('asking a model for a brief, once…', 'ok')).catch((er: any) => note('could not ask: ' + (er?.message ?? 'failed'), 'error'));
@@ -527,6 +533,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
             let ok = 0; const bad: string[] = [];
             for (const d of action.ds) {
               const resolution = d.brief.recommendation?.choice_id;
+              if (d.source === 'raised' && resolution) {
+                try { await cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: resolution, payload_blake3: d.payload_blake3, conditions: [] }); ok++; }
+                catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
+                continue;
+              }
               if (d.source !== 'provisional' || (resolution !== 'ratified' && resolution !== 'rejected')) { bad.push(`${d.label}: nothing to call for this kind yet`); continue; }
               try { await cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution }); ok++; }
               catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
