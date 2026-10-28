@@ -76,6 +76,20 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_list_lets_wikipedia_keep_pictures_but_never_stores_wikimedia_pages_whole() {
+        let l = TrustedList::parse(SHIPPED_LIST, None).unwrap();
+        for url in ["https://upload.wikimedia.org/wikipedia/commons/a/ab/X.png", "https://commons.wikimedia.org/w/api.php?action=query"] {
+            assert!(l.allows_url(url).is_some(), "{} is listed so that a Wikipedia picture can be checked and fetched", url);
+        }
+        for host in ["upload.wikimedia.org", "commons.wikimedia.org"] {
+            let s = l.lookup(host).unwrap();
+            assert_eq!((s.reuse, s.images), (delphi_adapter::research::trusted::Reuse::SummaryOnly, false), "{}: text is never kept whole and its pictures need a licence of their own", host);
+        }
+        assert!(l.lookup("en.wikipedia.org").is_some() && !l.lookup("en.wikipedia.org").unwrap().images, "a Wikipedia page's licence is not its pictures'");
+        assert!(l.allows_url("https://commons.wikimedia.org.evil.example/").is_none() && l.allows_url("http://upload.wikimedia.org/x.png").is_none());
+    }
+
+    #[test]
     fn the_workspace_copy_of_the_default_list_wins_over_the_compiled_in_one() {
         let (home, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         std::fs::create_dir_all(ws.path().join("base/context/sources")).unwrap();
