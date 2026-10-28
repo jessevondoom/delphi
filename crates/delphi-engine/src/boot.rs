@@ -48,7 +48,7 @@ pub fn project_roots(root: &toml::Value) -> Vec<(String, PathBuf)> {
 
 /// Operational settings from `config.toml`, with the defaults of `crates/delphi/config.example.toml`.
 pub fn settings_from(root: &toml::Value) -> Settings {
-    let mut s = Settings::default();
+    let mut s = Settings { loop_cfg: crate::loopctl::LoopConfig::from_root(root), ..Settings::default() };
     if let Some(v) = root.get("budget").and_then(|b| b.get("mission_budget_usd")).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))) {
         s.mission_budget_usd = v;
     }

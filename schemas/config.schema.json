@@ -68,6 +68,16 @@
         "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
       }
     },
+    "loop": {
+      "type": "object",
+      "properties": {
+        "nudge": { "type": "boolean" },
+        "nudge_edits": { "type": "integer", "minimum": 1, "description": "Writes to one file before the nudge; twice this ends the span." },
+        "budget_warnings": { "type": "boolean" },
+        "verify_gate": { "type": "boolean" },
+        "workspace_bootstrap": { "type": "boolean" }
+      }
+    },
     "hitl": { "type": "object", "properties": { "approval_timeout_sec": { "type": "integer", "minimum": 1, "description": "Unanswered approvals resolve to deny." } } },
     "exec": {
       "type": "object",
