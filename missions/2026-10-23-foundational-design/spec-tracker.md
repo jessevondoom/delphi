@@ -109,13 +109,13 @@ R4-R6 truth packs join in the first study phase.
 | 6 Usage-gated (coaching, diff3, sync, watches, rewind) | deliberately not built; `delphi needs` reports every rule "not yet". Vectors and the reranker were pulled forward by the operator on 2026-10-24 (D-01) and are built |
 | 7 Deferred (federation 1 to 2, OpenAI driver) | not scheduled |
 
-## Agent registry, routing and role extensions (spec 041, **draft**, 2026-10-27)
+## Agent registry, routing and role extensions (spec 041, approved 2026-10-27)
 
-Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Nothing is built; no slice starts until the operator sets `approved`. Open decisions OD-1..OD-6 are in the spec (§12).
+Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by the operator 2026-10-27 (OD-1 accepted, OD-2..OD-5 recommendations followed). Nothing is built. Limits and pass bars are provisional until S4.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | report truncation of the 20-agent catalog | not started (needs approval) |
+| S0 | report truncation of the 20-agent catalog | not started |
 | S1 | registry entry, `[domains]`, validation | not started |
 | S2 | index, `search_agent_registry`, `delphi route`, eval set | not started |
 | S3 | `[extends.<role>]`: skills, guidance, team | not started |

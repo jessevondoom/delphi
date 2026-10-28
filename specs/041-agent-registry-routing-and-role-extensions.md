@@ -3,7 +3,7 @@ id: spec-041-agent-registry-routing-and-role-extensions
 title: "041: Agent Registry, Routing and Role Extensions: Scaling the Fleet Without Taxing the Orchestrator"
 author: architect
 timestamp: 2026-10-27T20:00:00Z
-status: draft   # a proposal, not permission: build only after the operator sets `approved` (AGENTS.md, No Spec, No Build)
+status: approved   # by the operator, 2026-10-27: OD-1 accepted; OD-2..OD-5 follow the recommendations in §12; the text as written is approved when this pull request merges
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, xenia, bundles, agents, routing, orchestrator, post-v1]
 
 # Spec 041: Agent Registry, Routing and Role Extensions
 
-> **Status: draft.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md); it extends the agents section of [`specs/023`](023-org-bundle-standard.md) §5B and the role guidance of §6.3, and rides the lifecycle of [`specs/024`](024-bundle-trust-adoption-and-precedence.md). Decisions behind it: [Council 011](../missions/2026-10-23-foundational-design/councils/011-verdict.md) (Claude Haiku and two Gemini 3.8 Flash High seats; verdict: build with changes). Nothing here is built; §11 is the build plan; §12 lists what only the operator can decide.
+> **Status: approved by the operator 2026-10-27 (decisions OD-1..OD-5, §12), text approved on merge.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md); it extends the agents section of [`specs/023`](023-org-bundle-standard.md) §5B and the role guidance of §6.3, and rides the lifecycle of [`specs/024`](024-bundle-trust-adoption-and-precedence.md). Decisions behind it: [Council 011](../missions/2026-10-23-foundational-design/councils/011-verdict.md) (Claude Haiku and two Gemini 3.8 Flash High seats; verdict: build with changes). Nothing here is built; §11 is the build plan; §12 lists what only the operator can decide.
 
 ## 1. Scope & Objectives
 Two operator goals, one mechanism:
@@ -219,8 +219,8 @@ Files touched (indicative): `crates/delphi-bundle/src/manifest.rs` (`[extends]`,
 
 ## 12. Open Decisions for the Operator
 - **OD-1 (the pyramid). DECIDED 2026-10-27 by the operator: accepted.** Domain leads are cut from this spec (Council 011, 3 of 3); the organization map ships with flat dispatch, and leads are built only if §7's measured gate trips. The operator's reasoning: humans need pyramids to coordinate; agents may not, provided collaboration is not perceived to suffer. That proviso is a requirement: §5.6 (help requests) and the §9 outcome measures exist to check it.
-- **OD-2 (guidance).** 4 KiB static per role across bundles, fail at add. Alternative: relevance-loaded up to 8 KiB (Haiku's later-slice idea), which the other two seats rejected.
-- **OD-3 (limits and bars).** 8 skills and 8 team members per bundle per role, 24 skills per role, 12 domains and 100 agents per bundle, recall bars 0.90 / 0.95, 25% re-route ceiling. All provisional until S4 measures.
-- **OD-4 (help requests).** The operator asked (2026-10-27) that an agent working outside its expertise can ask the orchestrator for help. Recommended and drafted as §5.6: a structured `request_help` tool, never a dispatch by the asker. Awaiting the operator's confirmation of the bounds in §5.6.
-- **OD-5 (domain mapping).** Domains are bundle-namespaced; whether the operator may merge `acme/platform` and `studio/platform` into one. Default: not merged.
+- **OD-2 (guidance). DECIDED 2026-10-27: recommendation followed.** 4 KiB static per role across bundles, fail at add. Alternative: relevance-loaded up to 8 KiB (Haiku's later-slice idea), which the other two seats rejected.
+- **OD-3 (limits and bars). DECIDED 2026-10-27: recommendation followed; values stay provisional until S4 measures them.** 8 skills and 8 team members per bundle per role, 24 skills per role, 12 domains and 100 agents per bundle, recall bars 0.90 / 0.95, 25% re-route ceiling. All provisional until S4 measures.
+- **OD-4 (help requests).** The operator asked (2026-10-27) that an agent working outside its expertise can ask the orchestrator for help. Recommended and drafted as §5.6: a structured `request_help` tool, never a dispatch by the asker. **DECIDED 2026-10-27: recommendation followed, including the bounds in §5.6 (2 requests per task, 25% flag).**
+- **OD-5 (domain mapping). DECIDED 2026-10-27: recommendation followed (default: not merged).** Domains are bundle-namespaced; whether the operator may merge `acme/platform` and `studio/platform` into one. Default: not merged.
 - **OD-6 (housekeeping).** This spec is numbered 041: 039 is the error log, and 040 is the validator spec (renumbered from 039 in #259). If another spec lands on 041 first, renumber this one at merge. The tracker section for it is added in the PR that introduces the draft.
