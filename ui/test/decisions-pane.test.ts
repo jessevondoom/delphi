@@ -435,3 +435,15 @@ test('through the inbox the new actions pass, and a confirmed reading carries it
   const conf = inboxKey({ ...inb, pane: { ...open(items, 2), reading: { choice_id: 'rejected', label: 'Reject', conditions: ['hold t_016'] } } }, [], k('enter'), 5000);
   assert.deepEqual([conf.action.t, conf.action.t === 'review' && conf.action.resolution, conf.action.t === 'review' && conf.action.conditions], ['review', 'rejected', ['hold t_016']]);
 });
+
+test('a raised decision is answered with decision.resolve, singly and in the batch of recommended defaults', () => {
+  const items = five().map((d) => ({ ...d, source: 'raised' }));
+  const opened = inboxKey(newInbox(0, items), [], k('enter'), 1000);
+  assert.equal(opened.action.t, 'thread');
+  const one = inboxKey(opened.inbox, [], ch('1'), 2000);
+  assert.deepEqual([one.action.t, one.action.t === 'record' && one.action.d.id, one.action.t === 'record' && one.action.choice_id], ['record', 'dec-081', 'ratified']);
+  const cond = inboxKey({ ...opened.inbox, pane: { ...opened.inbox.pane, reading: { choice_id: 'rejected', label: 'Reject', conditions: ['hold t_016'] } } }, [], k('enter'), 5000);
+  assert.deepEqual([cond.action.t, cond.action.t === 'record' && cond.action.conditions], ['record', ['hold t_016']]);
+  const batch = inboxKey(newInbox(0, items, { ...tickedPane(items), confirm: true, confirmedAt: 0 }), [], k('enter'), 5000);
+  assert.equal(batch.action.t, 'accept', 'the batch carries the raised ones too; the console calls decision.resolve for each');
+});

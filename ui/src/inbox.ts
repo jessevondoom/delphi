@@ -22,6 +22,8 @@ export type Action =
   | { t: 'chat' }
   | { t: 'resolve'; card: Approval; decision: Decision; /** Set when a reading of typed words was confirmed: the decision it belongs to, and its notes. */ d?: D.Decision; conditions?: string[] }
   | { t: 'review'; d: D.Decision; resolution: 'ratified' | 'rejected'; conditions?: string[] }
+  /** A raised decision answered: the console records it with `decision.resolve`. */
+  | { t: 'record'; d: D.Decision; choice_id: string; conditions?: string[] }
   | { t: 'thread'; d: D.Decision } | { t: 'reply'; d: D.Decision; text: string } | { t: 'retry'; d: D.Decision }
   | { t: 'accept'; ds: D.Decision[] }
   | { t: 'resolve-all'; cards: Approval[] };
@@ -62,6 +64,8 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
       if (d.source === 'card') {
         const c = list.find((x) => x.id === d.source_id);
         if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions, d } : {}) } };
+      } else if (d.source === 'raised') {
+        return { inbox: { ...inb, pane: r.pane }, action: { t: 'record', d, choice_id: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };
       } else if (d.source === 'provisional' && (choice.id === 'ratified' || choice.id === 'rejected')) {
         return { inbox: { ...inb, pane: r.pane }, action: { t: 'review', d, resolution: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };
       }

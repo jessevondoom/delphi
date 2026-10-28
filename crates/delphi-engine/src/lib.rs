@@ -67,6 +67,7 @@ pub mod provisional;
 pub mod decision_model;
 pub mod decision_brief;
 pub mod decision_run;
+pub mod decision_raised;
 pub mod provisional_run;
 pub mod hostmap;
 pub mod recovery;
