@@ -3,7 +3,7 @@ id: spec-043-harness-and-openai-coverage
 title: "043: Harness and OpenAI Coverage: Every Claude and agy Capability, and the OpenAI-Spec APIs, Classified and Closed"
 author: architect
 timestamp: 2026-10-28T12:00:00Z
-status: draft   # OD-1..OD-3 answered by the operator 2026-10-28; OD-4..OD-6 follow the recommendations in §9 unless the operator objects; the text is approved when this pull request merges (as spec 041)
+status: approved   # by the operator, 2026-10-28 ("ratify any spec changes"); undecided points follow the recommendations in the decisions table
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

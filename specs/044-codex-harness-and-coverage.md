@@ -3,7 +3,7 @@ id: spec-044-codex-harness-and-coverage
 title: "044: Codex CLI as a Third Harness, with Its Coverage Manifest"
 author: architect
 timestamp: 2026-10-28T13:00:00Z
-status: draft   # the operator asked for it 2026-10-28 (spec 043 OD-2); the text is approved when this pull request merges (as spec 041)
+status: approved   # by the operator, 2026-10-28 ("ratify any spec changes"); undecided points follow the recommendations in the decisions table
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

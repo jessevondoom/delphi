@@ -130,9 +130,9 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
-## Harness and OpenAI coverage (spec 043, draft 2026-10-28)
+## Harness and OpenAI coverage (spec 043, approved 2026-10-28)
 
-Asked for by the operator on 2026-10-28: every `claude` and `agy` command and the OpenAI-spec APIs classified and covered as far as the rules allow. OD-1 (Responses API default), OD-3 (bundle skills via `--plugin-dir`, no opt-in) and the Codex harness (spec 044) answered yes by the operator 2026-10-28. Text approved when the PR merges. Nothing is built.
+Asked for by the operator on 2026-10-28: every `claude` and `agy` command and the OpenAI-spec APIs classified and covered as far as the rules allow. OD-1 (Responses API default), OD-3 (bundle skills via `--plugin-dir`, no opt-in) and the Codex harness (spec 044) answered yes by the operator 2026-10-28. Approved by the operator 2026-10-28; S0 in progress.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
@@ -145,7 +145,7 @@ Asked for by the operator on 2026-10-28: every `claude` and `agy` command and th
 | S6 | Responses API dialect | not started |
 | S7 | embeddings and batch (optional) | not started |
 
-## Codex CLI harness (spec 044, draft 2026-10-28)
+## Codex CLI harness (spec 044, approved 2026-10-28)
 
 Asked for by the operator on 2026-10-28. `codex` is not installed on this machine, so S0 (install, snapshot `--help`, probe) comes first. Nothing is built.
 
