@@ -6,10 +6,10 @@
 flag | * | --help, --version | na | | every CLI prints its help and version
 
 # ── Launch: one non-interactive prompt, JSONL out ──
-flag | . | --prompt, --output-format | planned | S1 | `copilot -p … --output-format json`: the span's launch and its event stream (spec 051 §2.1); whether the prompt can come on stdin is an S0 probe
+flag | . | --prompt, --output-format | planned | S1 | the span's launch and its event stream (spec 051 §2.1). The prompt goes on stdin with no `-p` (probed: `-p -` is a literal "-"), so it never reaches `ps`
 flag | . | --interactive, --silent, --stream, --plain-diff, --screen-reader, --banner, --no-color, --mouse, --no-mouse, --no-eager-powershell-resolution | na | | interactive display or text output a span does not use
 flag | . | --usage-output-file | planned | S1 | final usage as JSON; a cross-check of the stream's `session.usage_checkpoint`
-flag | . | --log-dir | planned | S1 | the span's scratch directory, so nothing lands in ~/.copilot/logs
+flag | . | --log-dir | planned | S1 | the span's scratch directory for log files (probed: it does not move session state, which needs `COPILOT_HOME`)
 flag | . | --log-level | na | | the span keeps the default; hiding errors would hide the exhausted-quota output
 flag | . | --max-ai-credits | planned | S1 | a backstop only (minimum 30, a soft cap checked after each response); the real ceiling is Delphi's own ledger
 
@@ -20,12 +20,11 @@ flag | . | --context | planned | S1 | `long_context` off by default; S0 measures
 flag | . | --auto-tier | refused | | Auto routing hides which model, and so which family, answered
 
 # ── Tools, paths, URLs: the narrowing gate ──
-flag | . | --available-tools, --excluded-tools | planned | S1 | what the model can see; a bare `--available-tools` removed no tool in the S0 probe, so S0 finds the form that does before a no-tools seat is believed
+flag | . | --available-tools, --excluded-tools | planned | S1 | what the model can see. Probed: a list narrows to exactly those tools; an empty value (`=` or `""`) narrows nothing; a name that matches nothing (`none`) yields zero tools plus a `session.info` warning. S1 never passes an empty list and checks the stream's `tool_count`
 flag | . | --deny-tool, --deny-url, --disallow-temp-dir | planned | S1 | always passed; deny beats allow
-flag | . | --allow-all-tools | planned | S1 | "required for non-interactive mode"; only paired with `--available-tools` narrowed to read tools, so it approves nothing not already allowed; never on its own
 flag | . | --allow-tool | planned | S1 | only for a ratified Builder in its worktree, after the approval bridge (S2) is proven
 flag | . | --allow-url, --add-dir | planned | S1 | only from a ratified block, as spec 021
-flag | . | --allow-all, --yolo, --allow-all-paths, --allow-all-urls | refused | | grants every permission; never passed
+flag | . | --allow-all-tools, --allow-all, --yolo, --allow-all-paths, --allow-all-urls | refused | | grants every permission; never passed. `--allow-all-tools` is not needed: probed 2026-10-28, a headless run without it reads inside the working directory and denies everything else with a clean error
 flag | . | --assisted-approval | refused | | a probabilistic judge answers approvals; Delphi's approvals stay Delphi's (spec 047 §1.1)
 flag | . | --secret-env-vars | planned | S1 | the names of any variable Delphi puts in the child's environment
 flag | . | --attachment | planned | S3 | vision, off by default
@@ -44,7 +43,7 @@ flag | . | --continue | refused | | resumes the most recent session in the direc
 
 # ── MCP, plugins, protocol ──
 flag | . | --additional-mcp-config | planned | S2 | the candidate transport for Delphi's tool bridge (spec 020)
-flag | . | --acp | planned | S2 | Agent Client Protocol server: the candidate for answering approvals; needs probing
+flag | . | --acp | planned | S2 | Agent Client Protocol on stdio: probed, it sends `session/request_permission` to the client and honors `reject`; it also lists the account's models. The approval bridge and the catalog read
 flag | . | --plugin-dir | planned | S2 | candidate for bundle skills, as Claude's; needs probing, hooks and bin never included
 flag | . | --disable-mcp-server | na | | the built-in servers are disabled wholesale
 flag | . | --enable-mcp-server, --mcp-github-auth, --allow-all-mcp-server-instructions, --enable-all-github-mcp-tools, --add-github-mcp-toolset, --add-github-mcp-tool | refused | | widens what reaches GitHub's cloud or the system prompt
