@@ -166,7 +166,7 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
 | E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (PR pending): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. Not wired to the daemon or the console yet (that is E3); `delphi sources` command not built |
 | E3 | research job, scout decision, `knowledge/web/` writes | built (PR pending): `delphi-engine/src/research.rs` (job, scout contract, quote check, writer), `research_setup.rs`, `research.start` / `research.status` / `research.cancel` (console only), `knowledge/web/` indexed at `federated_verified` and shown as the `research` kind. Needs `[search]` set; never run against the live web or a real model. The console does not call it yet (E4) |
-| E4 | progress, results page and banner, failure states | not started |
+| E4 | progress, results page and banner, failure states | built (PR pending, stacked on E3): the console's expand page starts the job, polls `research.status`, shows the live count, then the banner and the entries (open in the reader, esc back), cancel with esc, failure and refusal states. The narrator is read-only and says research runs from the console. Never run end to end against the live web, a search key or a real model; unproven in a real terminal. Left: K5's hint and the query carried into expand |
 
 ## Harness loop techniques (spec 045, approved 2026-10-28)
 

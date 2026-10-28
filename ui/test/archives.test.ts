@@ -281,13 +281,13 @@ test('the expand page is clean: the title, the scout label and the box, and no s
   assert.ok(lines.length <= 8, `a clean page: ${lines.length} non-empty lines\n${x}`);
 });
 
-test('in expand mode typing fills the topic, enter says the research is not built yet, and no list, history or scope is used', () => {
+test('in expand mode typing fills the topic, enter in a read-only window says research runs from the console, and no list, history or scope is used', () => {
   let a = A.key(shelf(), k('shift-tab'), W, H).a;
   a = type(a, 'raft');
   assert.equal(a.q, 'raft');
   const r = A.key(a, k('enter'), W, H);
   assert.deepEqual([r.used, r.action.t], [true, 'none']);
-  assert.match(r.a.note, /not built yet/);
+  assert.match(r.a.note, /research runs from the console/);
   assert.equal(A.key(a, k('tab'), W, H).a.kind, null, 'tab has no kinds here');
   assert.equal(A.key(a, k('down'), W, H).a.focus, 'box', 'there is no list to move into');
   assert.equal(A.key(a, k('esc'), W, H).a.q, '');
@@ -383,4 +383,85 @@ test('golden screens: results with the best match, at 100x34 and 80x24', () => {
     const r = snapshot(name, A.view(found(), w, h, { dark: true }, info, NOW));
     assert.ok(r.ok, r.message);
   }
+});
+
+// ── research from the expand page (spec 028-A1 §10.6) ───────────────────────
+
+const console_ = (): A.Arch => A.key(shelf(A.emptyArch(true)), k('shift-tab'), W, H).a; // the console's window, on the expand page
+const made = (n: number, form = 'summary') => ({ path: `knowledge/web/en.wikipedia.org/page-${n}.md`, title: `Page ${n}`, publisher: 'Wikipedia', url: `https://en.wikipedia.org/wiki/Page_${n}`, form, licence: 'CC-BY-SA-4.0' });
+const status = (over: object = {}, rep: object | null = null) => ({ topic: 'raft', phase: 'reading', found: 12, read: 7, skipped: 3, hosts: ['en.wikipedia.org', 'pubmed.ncbi.nlm.nih.gov'], tokens: 0, error: null, report: rep, ...over });
+const report = (over: object = {}) => ({ new: [made(1, 'full'), made(2)], updated: [], unchanged: 0, not_kept: [['https://x.org/a', 'not relevant to the topic'], ['https://x.org/b', 'not relevant to the topic']], unlisted_hosts: ['blog.example.com'], provider: 'brave', tokens: 900, stopped: null, ...over });
+const text = (a: A.Arch) => A.view(a, W, 30, { dark: true } as never).map(plain).join('\n');
+
+test('enter on the console starts the job and shows the page for it; esc cancels, and nothing is searched in the store', () => {
+  const start = A.key(type(console_(), 'raft'), k('enter'), W, H);
+  assert.deepEqual(start.action, { t: 'research', topic: 'raft' });
+  assert.equal(start.a.research?.phase, 'starting');
+  assert.match(text(start.a), /searching the trusted sources/);
+  const typing = A.key(start.a, { t: 'text', s: 'x' }, W, H);
+  assert.equal(typing.a.q, 'raft', 'a stray letter changes nothing while the job is on screen');
+  const cancel = A.key(start.a, k('esc'), W, H);
+  assert.deepEqual(cancel.action, { t: 'research-cancel' });
+  assert.equal(A.key(start.a, k('right'), W, H).used, false, 'the view keys still work');
+});
+
+test('while it runs the page counts the sources it is reading and names the hosts', () => {
+  const a = A.gotResearch(A.key(type(console_(), 'raft'), k('enter'), W, H).a, status());
+  const t = text(a);
+  assert.match(t, /researching "raft"/);
+  assert.match(t, /reading 7 sources · 12 found · 3 skipped/);
+  assert.match(t, /en\.wikipedia\.org · pubmed\.ncbi\.nlm\.nih\.gov/);
+  assert.equal(A.researchRunning(a.research), true);
+  assert.equal(A.gotResearch(a, status({ topic: 'something else' })), a, 'a status for another topic is ignored');
+});
+
+test('when it ends a banner says how many entries were added, above the entries', () => {
+  const run = A.key(type(console_(), 'raft'), k('enter'), W, H).a;
+  const done = A.gotResearch(run, status({ phase: 'done' }, report()));
+  const t = text(done);
+  assert.match(t, /the archive has been expanded to include 2 new entries/);
+  assert.ok(t.indexOf('expanded to include') < t.indexOf('Page 1'), 'the banner is above the entries');
+  assert.match(t, /Page 1[\s\S]*full · CC-BY-SA-4\.0/);
+  assert.match(t, /read, not kept: 2 not relevant to the topic/);
+  assert.match(t, /not on the trusted lists: blog\.example\.com/);
+  assert.equal(A.researchRunning(done.research), false);
+  const one = A.gotResearch(run, status({ phase: 'done' }, report({ new: [made(1)] })));
+  assert.match(text(one), /expanded to include 1 new entry\b/);
+  const none = A.gotResearch(run, status({ phase: 'done' }, report({ new: [], unchanged: 3 })));
+  assert.match(text(none), /no new entries: the archive already covers this/);
+  assert.match(text(none), /3 already there/);
+  assert.doesNotMatch(text(none), /expanded to include/);
+});
+
+test('the results can be walked and opened; esc returns to the clean page', () => {
+  const done = A.gotResearch(A.key(type(console_(), 'raft'), k('enter'), W, H).a, status({ phase: 'done' }, report({ updated: [made(3)] })));
+  assert.equal(A.madeOf(done.research).length, 3);
+  const second = A.key(done, k('down'), W, H).a;
+  assert.equal(second.research?.sel, 1);
+  const open = A.key(second, k('enter'), W, H);
+  assert.deepEqual(open.action, { t: 'open', target: { k: 'doc', path: 'knowledge/web/en.wikipedia.org/page-2.md' } });
+  assert.equal(A.key(A.key(done, k('up'), W, H).a, k('up'), W, H).a.research?.sel, 0, 'no further up');
+  const back = A.key(done, k('esc'), W, H).a;
+  assert.equal(back.research, null);
+  assert.equal(back.q, '');
+  assert.match(text(back), /research a topic/);
+  assert.doesNotMatch(text(back), /expanded to include/);
+});
+
+test('a cancelled job keeps what it wrote, a failed one says why, and a refused start returns to the box', () => {
+  const run = A.key(type(console_(), 'raft'), k('enter'), W, H).a;
+  const cancelled = A.gotResearch(run, status({ phase: 'cancelled' }, report({ new: [made(1)], stopped: 'cancelled' })));
+  assert.match(text(cancelled), /expanded to include 1 new entry[\s\S]*stopped: cancelled/);
+  const failed = A.gotResearch(run, status({ phase: 'failed', error: 'no search engine is configured: set `providers` under [search] in config.toml' }));
+  assert.match(text(failed), /research failed: no search engine is configured/);
+  assert.equal(A.key(failed, k('esc'), W, H).a.research, null);
+  const refused = A.researchRefused(run, 'a research job is already running');
+  assert.equal(refused.research, null);
+  assert.match(text(refused), /a research job is already running/);
+});
+
+test('research text from the page and the scout is made safe to print', () => {
+  const run = A.key(type(console_(), 'raft'), k('enter'), W, H).a;
+  const rep = report({ new: [{ ...made(1), title: 'Evil \x1b[2J title', publisher: 'P\x07' }] });
+  assert.doesNotMatch(text(A.gotResearch(run, status({ phase: 'done' }, rep))), /\x1b|\x07/);
 });
