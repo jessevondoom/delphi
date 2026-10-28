@@ -403,7 +403,7 @@ Print the command reference or a man page.
   delphi docs cli | man | coverage
 ```
 
-Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/043).
+Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/046).
 
 ### `delphi completions`
 

@@ -1,4 +1,4 @@
-# Coverage of the `agy` (Antigravity) CLI (specs/043 §4). Format and rules: crates/delphi-engine/src/coverage.rs.
+# Coverage of the `agy` (Antigravity) CLI (specs/046 §4). Format and rules: crates/delphi-engine/src/coverage.rs.
 # kind | path | names | disposition | slice | reason
 
 flag | * | --help | na | | hidden: every CLI prints its help (agy's own page lists only `-h`)
@@ -7,7 +7,7 @@ flag | * | --help | na | | hidden: every CLI prints its help (agy's own page lis
 flag | . | --print | used | | as --print= (harness.rs passes `--print=` so the prompt arrives on stdin)
 flag | . | --input-format, --output-format, --disable-slash-commands, --model, --mode, --effort, --json-schema, --print-timeout, --conversation, --add-dir, --sandbox | used | |
 
-# ── Planned (spec 043 S3) ──
+# ── Planned (spec 046 S3) ──
 flag | . | --project, --new-project | planned | S3 | a project scopes the conversation store; one per workspace keeps spans apart from the operator's own agy use. S0 probes whether a headless span creates the project and where it lives
 flag | . | --log-file | planned | S3 | as Claude's --debug-file, under DELPHI_LOG=debug
 flag | . | --agent | planned | S3 | select an `agy agent` by role

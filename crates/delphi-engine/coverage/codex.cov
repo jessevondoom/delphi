@@ -1,5 +1,5 @@
-# Coverage of the `codex` CLI, 0.165.0 (specs/044). Format and rules: crates/delphi-engine/src/coverage.rs.
-# Nothing is used yet: Codex is not a Delphi harness until spec 044 S1 lands.
+# Coverage of the `codex` CLI, 0.165.0 (specs/047). Format and rules: crates/delphi-engine/src/coverage.rs.
+# Nothing is used yet: Codex is not a Delphi harness until spec 047 S1 lands.
 # kind | path | names | disposition | slice | reason
 
 # ── Flags that appear on several pages: one disposition wherever they appear ──
@@ -15,7 +15,7 @@ flag | * | --ask-for-approval | planned | S2 | `never` for a reader; `on-request
 flag | * | --image | planned | S3 | vision, off by default
 flag | * | --search | planned | S1 | live web search; ratified, off by default, results untrusted (spec 020)
 flag | * | --no-daemon | planned | S1 | a span never attaches to the operator's shared background server
-flag | * | --approve-for-me | refused | | routes approvals to the CLI's own automatic reviewer; Delphi's approvals stay Delphi's (spec 044 §1.1)
+flag | * | --approve-for-me | refused | | routes approvals to the CLI's own automatic reviewer; Delphi's approvals stay Delphi's (spec 047 §1.1)
 flag | * | --dangerously-bypass-approvals-and-sandbox, --dangerously-bypass-hook-trust | refused | | skips approvals, sandbox or hook trust; never passed
 flag | * | --profile | refused | | layers the operator's own config file over the span's
 flag | * | --oss, --local-provider | refused | | the local-model route; Delphi has `family = "local"`
@@ -25,7 +25,7 @@ flag | * | --no-alt-screen | na | | interactive display
 
 # ── Top level and `exec` ──
 cmd | . | exec | planned | S1 | `codex exec --json` for read-only roles, structured output, API-key mode
-flag | exec | --json, --output-schema, --output-last-message, --ephemeral, --ignore-user-config, --skip-git-repo-check | planned | S1 | the span's launch (spec 044 §2.2): events on stdout, the schema written to a scratch file, nothing persisted, the operator's config ignored, a git check skipped only in Delphi's scratch directory
+flag | exec | --json, --output-schema, --output-last-message, --ephemeral, --ignore-user-config, --skip-git-repo-check | planned | S1 | the span's launch (spec 047 §2.2): events on stdout, the schema written to a scratch file, nothing persisted, the operator's config ignored, a git check skipped only in Delphi's scratch directory
 flag | exec | --ignore-rules | refused | | skips the user's execpolicy rules, a safety layer
 flag | exec | --cyber-access-program | refused | | requests an experimental access program
 flag | exec | --color, --thread-source | na | | display, thread classification

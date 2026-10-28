@@ -284,7 +284,7 @@ fn help_page(program: &str, words: &[&str]) -> Option<String> {
 }
 
 /// For every CLI a `path = "harness"` endpoint uses: does it show flags or commands that `coverage/<cli>.cov` has no
-/// disposition for (`specs/043` §6)? The CLIs ship weekly, so this is the alarm that a release added surface. Read-only:
+/// disposition for (`specs/046` §6)? The CLIs ship weekly, so this is the alarm that a release added surface. Read-only:
 /// it runs `--help` pages only, never a command.
 fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<String>, r: &mut Report) {
     let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
@@ -298,7 +298,7 @@ fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<S
         let run = |words: &[&str]| help(cli, words);
         let Some(items) = delphi_engine::coverage::drift(cli, &run) else { continue }; // not installed: check 10 says so
         if items.is_empty() {
-            r.push(Level::Ok, "10 harness", format!("{} surface", cli), "every flag and command in its --help has a disposition in the coverage manifest (specs/043)");
+            r.push(Level::Ok, "10 harness", format!("{} surface", cli), "every flag and command in its --help has a disposition in the coverage manifest (specs/046)");
         } else {
             let shown: Vec<String> = items.iter().take(6).map(|i| i.describe()).collect();
             let more = if items.len() > 6 { format!(" and {} more", items.len() - 6) } else { String::new() };
@@ -753,7 +753,7 @@ mod tests {
         (t, home, ws, proj)
     }
 
-    // specs/043 §6: a CLI whose --help shows something the manifest does not know is a warning; a CLI not installed is check 10's business.
+    // specs/046 §6: a CLI whose --help shows something the manifest does not know is a warning; a CLI not installed is check 10's business.
     #[test]
     fn coverage_drift_warns_on_new_surface_and_is_quiet_when_classified() {
         let cfg = "[[endpoints]]\nid = \"c\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\n";

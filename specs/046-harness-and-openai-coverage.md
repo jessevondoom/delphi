@@ -1,6 +1,6 @@
 ---
-id: spec-043-harness-and-openai-coverage
-title: "043: Harness and OpenAI Coverage: Every Claude and agy Capability, and the OpenAI-Spec APIs, Classified and Closed"
+id: spec-046-harness-and-openai-coverage
+title: "046: Harness and OpenAI Coverage: Every Claude and agy Capability, and the OpenAI-Spec APIs, Classified and Closed"
 author: architect
 timestamp: 2026-10-28T12:00:00Z
 status: approved   # by the operator, 2026-10-28 ("ratify any spec changes"); undecided points follow the recommendations in the decisions table
@@ -12,7 +12,7 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, harness, claude, agy, openai, coverage, adapter]
 ---
 
-# Spec 043: Harness and OpenAI Coverage
+# Spec 046: Harness and OpenAI Coverage
 
 Extends [`specs/020`](020-harness-tool-bridge.md), [`021`](021-harness-cli-features.md) and [`002`](002-adapter-and-routing.md) §2.2. (Number 042 stays reserved by spec 041.)
 
@@ -157,7 +157,7 @@ The OpenAI surface *as the operator should expect it in 2026* (to be verified in
 | Batch API (`/v1/batches`, `/v1/files`) | **S7**, optional: half-price offline runs fit training experiments (spec 037). Needs file upload, so it goes through the same egress rule as any outbound content (the operator's card) |
 | Moderation | **n/a** |
 | Realtime, audio in/out, image generation, fine-tuning, Assistants (deprecated), vector stores, evals API | **n/a** (Delphi has its own knowledge index and eval harness) |
-| Codex CLI as a third harness | **decided (OD-2)**: [`specs/044`](044-codex-harness-and-coverage.md). The Codex *models* over the API are the Responses dialect (S6) |
+| Codex CLI as a third harness | **decided (OD-2)**: [`specs/047`](047-codex-harness-and-coverage.md). The Codex *models* over the API are the Responses dialect (S6) |
 
 ## 6. How coverage stays complete
 
@@ -180,7 +180,7 @@ Three pieces, built in **S0**:
 | **S6** | Responses dialect, default for `family = "openai"` on a real key, non-degraded; `web_search` as untrusted | S5 |
 | **S7** | embeddings and batch (optional) | OD-5 |
 
-Every slice is one pull request with its own `Implements-Spec: specs/043-*.md`, tracker row and tests against stand-in CLIs and a stand-in HTTP server. **Live proof is a separate, named step**: the CLI flags are exercised once against the real installed CLIs by the operator-run `delphi endpoints test --probe`; the OpenAI dialects have never run against a real key (the operator has none; spec 021 §4 says the same of the Claude key mode), so S5 and S6 ship marked *unproven against a live endpoint* until someone runs them.
+Every slice is one pull request with its own `Implements-Spec: specs/046-*.md`, tracker row and tests against stand-in CLIs and a stand-in HTTP server. **Live proof is a separate, named step**: the CLI flags are exercised once against the real installed CLIs by the operator-run `delphi endpoints test --probe`; the OpenAI dialects have never run against a real key (the operator has none; spec 021 §4 says the same of the Claude key mode), so S5 and S6 ship marked *unproven against a live endpoint* until someone runs them.
 
 ## 8. Safety
 
@@ -194,7 +194,7 @@ Every slice is one pull request with its own `Implements-Spec: specs/043-*.md`, 
 | # | Question | Recommendation |
 | :-- | :-- | :-- |
 | OD-1 | Is the Responses API the default for `family = "openai"` with a real OpenAI key, with chat-completions kept for `gateway-compat`? | **Decided: yes** (operator, 2026-10-28). Compat stays for gateways and Ollama. |
-| OD-2 | Add the Codex CLI as a third harness, with its own coverage manifest? | **Decided: yes** (operator, 2026-10-28). It is [`specs/044`](044-codex-harness-and-coverage.md); its manifest uses the format of §6. |
+| OD-2 | Add the Codex CLI as a third harness, with its own coverage manifest? | **Decided: yes** (operator, 2026-10-28). It is [`specs/047`](047-codex-harness-and-coverage.md); its manifest uses the format of §6. |
 | OD-3 | May a span load a bundle's skills through `--plugin-dir`? | **Decided: yes, with no opt-in** (operator, 2026-10-28). The bundle is already hashed and trust-tiered (spec 024); skills stay data, not instructions. |
 | OD-4 | A `delphi review --ultra` wrapper for `claude ultrareview`? | No. It is billed, vendor-hosted and the CLI says user-triggered; the operator types it. |
 | OD-5 | Build embeddings and batch (S7)? | Defer until a measured need (the local embedder works; batch only matters at training-experiment scale). |

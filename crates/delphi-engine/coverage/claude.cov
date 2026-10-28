@@ -1,4 +1,4 @@
-# Coverage of the `claude` CLI (specs/043 §3). Format and rules: crates/delphi-engine/src/coverage.rs.
+# Coverage of the `claude` CLI (specs/046 §3). Format and rules: crates/delphi-engine/src/coverage.rs.
 # kind | path | names | disposition | slice | reason
 # A `used` flag must be one harness.rs passes (a test checks both ways). A reason starting `as -p` means harness.rs passes the short form.
 # A reason starting `hidden:` means the CLI accepts it but does not list it in --help (the stale-row test skips it).
@@ -12,7 +12,7 @@ flag | . | --input-format, --output-format, --verbose, --setting-sources, --no-s
 flag | . | --permission-prompt-tool | used | | hidden: absent from `claude --help` 2.1.312 but passed on every span; S0 probes that it is still accepted
 flag | . | --max-turns | used | | hidden: absent from `claude --help` 2.1.312; S0 probes whether it still ends a span with error_max_turns
 
-# ── Planned: narrowing and hygiene (spec 043 S1) ──
+# ── Planned: narrowing and hygiene (spec 046 S1) ──
 flag | . | --allowedTools, --allowed-tools, --disallowedTools, --disallowed-tools | planned | S1 | narrowing only: a profile names tools it denies, never ones beyond the span's own set
 flag | . | --restricted | planned | S1 | removes code-running tools and WebFetch and confines file tools; verify on the installed version first
 flag | . | --permission-prompts | planned | S1 | `none` for a span with no bridge, so an unanswerable request is denied instead of hanging
@@ -28,7 +28,7 @@ flag | . | --agent | planned | S1 | select a CLI-native agent from --agents for 
 flag | . | --no-chrome | planned | S1 | always passed, so no span reaches a browser extension
 flag | . | --disable-slash-commands | planned | S1 | agy always passes it (spec 021); a prompt that begins with / must not expand a skill on Claude either; S0 probes whether stream-json input expands it
 flag | . | --system-prompt-snapshot | planned | S1 | with `on`, a resumed span keeps its old prompt; S0 probes, resumed spans likely need `off`
-flag | . | --plugin-dir | planned | S4 | the skills of added, hash-verified bundles, on by default (spec 043 OD-3); hooks/ and bin/ never included
+flag | . | --plugin-dir | planned | S4 | the skills of added, hash-verified bundles, on by default (spec 046 OD-3); hooks/ and bin/ never included
 
 # ── Refused or not applicable to a span ──
 flag | . | --dangerously-skip-permissions, --allow-dangerously-skip-permissions | refused | | bypasses every permission check; never passed
@@ -48,8 +48,8 @@ flag | . | --version | na | | prints the version; Delphi reads it for doctor
 cmd | . | doctor | read-only | S2 | summarized in `delphi doctor`
 cmd | . | gateway, import | na | | enterprise gateway; the operator's own migration (Delphi has `bundle import`)
 cmd | . | attach, logs, stop, rm, respawn | refused | | manage the vendor's background sessions, outside the daemon
-cmd | . | install, update, purge, setup-token | operator-only | | changes the installed CLI, its data or its credentials; Delphi reads the version only (setup-token: spec 043 §3.2)
-cmd | . | ultrareview | refused | | billed, vendor-hosted and user-triggered by the CLI's own terms (spec 043 OD-4)
+cmd | . | install, update, purge, setup-token | operator-only | | changes the installed CLI, its data or its credentials; Delphi reads the version only (setup-token: spec 046 §3.2)
+cmd | . | ultrareview | refused | | billed, vendor-hosted and user-triggered by the CLI's own terms (spec 046 OD-4)
 
 group | agents | | refused | | the vendor's background sessions
 flag | agents | --json, --all, --cwd | read-only | S2 | `claude agents --json` lets doctor warn about sessions the operator left running

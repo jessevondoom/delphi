@@ -1,6 +1,6 @@
 ---
-id: spec-044-codex-harness-and-coverage
-title: "044: Codex CLI as a Third Harness, with Its Coverage Manifest"
+id: spec-047-codex-harness-and-coverage
+title: "047: Codex CLI as a Third Harness, with Its Coverage Manifest"
 author: architect
 timestamp: 2026-10-28T13:00:00Z
 status: approved   # by the operator, 2026-10-28 ("ratify any spec changes"); undecided points follow the recommendations in the decisions table
@@ -12,18 +12,18 @@ source_mission: 2026-10-23-foundational-design
 tags: [spec, harness, codex, openai, coverage]
 ---
 
-# Spec 044: Codex CLI as a Third Harness
+# Spec 047: Codex CLI as a Third Harness
 
-Extends [`specs/043`](043-harness-and-openai-coverage.md) (the classification method and the manifest format of its §6), [`020`](020-harness-tool-bridge.md) and [`021`](021-harness-cli-features.md). Delphi drives `claude` and `agy` as subscription "harness" seats; this adds the Codex CLI (`codex`) as a third, on a ChatGPT login or a `CODEX_API_KEY`.
+Extends [`specs/046`](046-harness-and-openai-coverage.md) (the classification method and the manifest format of its §6), [`020`](020-harness-tool-bridge.md) and [`021`](021-harness-cli-features.md). Delphi drives `claude` and `agy` as subscription "harness" seats; this adds the Codex CLI (`codex`) as a third, on a ChatGPT login or a `CODEX_API_KEY`.
 
 **S0 is built (§5); S1 onward is not.** Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
 
 ## 1. Principles
 
-Those of spec 043 §1, unchanged: a disposition for every item; narrow or read, never widen; no Delphi path changes the operator's global CLI state; drift is detected, not remembered. Two additions:
+Those of spec 046 §1, unchanged: a disposition for every item; narrow or read, never widen; no Delphi path changes the operator's global CLI state; drift is detected, not remembered. Two additions:
 
 1. **Delphi's approvals stay Delphi's.** A Codex seat is useful only if Delphi can answer its approval requests (spec 020's bridge) or deny its tools by a gate it controls. A seat that can only run with `--dangerously-bypass-approvals-and-sandbox` or with the CLI's own policy answering is **never a Builder**, the same rule agy follows until its hook is probed.
-2. **The vendor's own cloud is not a seat.** `codex cloud`, `apply` (a cloud diff), `remote-control`, `--remote` and the ChatGPT app hand work to OpenAI's infrastructure or leave a session outside the daemon; refused, as spec 043 does for `claude --cloud`.
+2. **The vendor's own cloud is not a seat.** `codex cloud`, `apply` (a cloud diff), `remote-control`, `--remote` and the ChatGPT app hand work to OpenAI's infrastructure or leave a session outside the daemon; refused, as spec 046 does for `claude --cloud`.
 
 ## 2. What the docs say (to be probed)
 
@@ -38,7 +38,7 @@ Those of spec 043 §1, unchanged: a disposition for every item; narrow or read, 
 
 ### 2.2 `codex exec` options (headless span)
 
-| Flag / feature | Neutral option (spec 043 §2) | Disposition |
+| Flag / feature | Neutral option (spec 046 §2) | Disposition |
 | :-- | :-- | :-- |
 | `--json` | stream parse | **S1** (new `parse_codex_line`, beside `parse_line` and `parse_agy_line`) |
 | `--output-schema <file>` | `structured` | **S1**: Delphi writes the schema to a file in the span's scratch directory (Codex takes a path, not text) |
@@ -83,7 +83,7 @@ Those of spec 043 §1, unchanged: a disposition for every item; narrow or read, 
 
 | Slice | Delivers | Needs |
 | :-- | :-- | :-- |
-| **S0** (built; see §5) | install `codex`; snapshot its real `--help` into the manifest (`crates/delphi-engine/coverage/codex.cov`, spec 043 §6); probe: does `exec --json` expose approval events, is `app-server` stable, what do `--output-schema` and `--ignore-user-config` really do, does a headless span need a git repo, can a PreToolUse-like gate exist | operator installs `codex` and logs in (or supplies a key) |
+| **S0** (built; see §5) | install `codex`; snapshot its real `--help` into the manifest (`crates/delphi-engine/coverage/codex.cov`, spec 046 §6); probe: does `exec --json` expose approval events, is `app-server` stable, what do `--output-schema` and `--ignore-user-config` really do, does a headless span need a git repo, can a PreToolUse-like gate exist | operator installs `codex` and logs in (or supplies a key) |
 | **S1** | `Cli::Codex` in `harness.rs`; `exec --json` driver, read-only roles only; structured output; API-key mode; tests with a stand-in CLI | S0 |
 | **S2** | read-only introspection (`login status`, `doctor`, `debug models`, `mcp list`); the approval bridge over `app-server` if S0 says it is stable; only then may a Codex seat run a Builder | S0 |
 | **S3** | `review` lane, vision, `execpolicy` lint | S1 |
