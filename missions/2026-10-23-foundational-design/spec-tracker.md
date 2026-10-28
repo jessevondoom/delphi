@@ -130,9 +130,9 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
-## Knowledge window modes and "expand the archive" (spec 028-A1, proposed 2026-10-28)
+## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 
-Draft amendment awaiting the operator's approval. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
+Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |

@@ -133,7 +133,7 @@ Any letter types into the box · `enter` search / open · `↑ ↓` move through
 
 ## 10. Amendment 028-A1: two modes, and "expand the archive" (proposed 2026-10-28)
 
-**Status: proposed, not approved.** The design below is the operator's, given in chat on 2026-10-28. It supersedes D-2 (online is an explicit query choice, `●/○` toggle), §3's mode line, and §9.3 (saving is read-only) for the archives pane, and it relaxes validation for one narrow path (§10.4). Nothing is built. Per `AGENTS.md`, build starts only after the operator approves this section; the open questions in §10.8 have recommended answers so approval can be one word.
+**Status: approved by the operator, 2026-10-28** (with the clarification of §10.3: two allow lists, both operator-owned). The design below is the operator's, given in chat on 2026-10-28. It supersedes D-2 (online is an explicit query choice, `●/○` toggle), §3's mode line, and §9.3 (saving is read-only) for the archives pane, and it relaxes validation for one narrow path (§10.4). Nothing is built. Open questions of §10.8 that remain: Q2 (search API) and the Wikipedia entry in Q1.
 
 ### 10.1 What changes
 The archives pane has **two modes**, switched by `shift+tab` (it already cycles the approval mode in the chat; here the pane owns the key):
@@ -158,11 +158,19 @@ On `enter`, the daemon runs a **research job** for the topic. It is bounded and 
 
 The scout's call is the only token spend. Fetching, parsing, link filtering, licence lookup and writing are deterministic code.
 
-### 10.3 The trusted-source list
-- A release file, `context/sources/trusted.toml`, ratified like the other context files (a change is a proposal; a signed release ratifies it). It is what the primary-sources registry (`missions/2026-10-23-foundational-design/primary-sources-plan-2026-10-26.md` §3) grows from; until that registry is built this file stands alone, and S1 of that plan absorbs it.
-- Each entry: `host`, `publisher`, `kind` (`encyclopedia`, `standards`, `government`, `journal`, `documentation`), `licence` (an SPDX id or `unknown`), `reuse` (`full` or `summary-only`).
-- **The list is operator-owned.** The scout and the job cannot add a host, and a page's content cannot: a link is followed only if its host is already listed. This keeps "content read from outside cannot raise its own trust" (`specs/001` §5) true.
-- A host matches by exact registrable domain over HTTPS. Redirects are followed only between listed hosts; a redirect off the list stops the fetch.
+### 10.3 The trusted-source lists: two allow lists, both the operator's choice
+A source is trusted for this pane **only because the operator put it on a list**. The lists are what lets the archive grow quickly in a subject while the operator still decides, source by source, what counts. There are two:
+
+| List | Where | Who changes it |
+| :-- | :-- | :-- |
+| **Default list** | `context/sources/trusted.toml`, committed to the main repo and shipped in the release | a ratified proposal (a change is a pull request the operator approves; a signed release ratifies it) |
+| **Operator list** | `$DELPHI_HOME/operator/trusted-sources.toml`, in the operator's space | the operator only, by editing the file or by `delphi sources add <host>` (a later slice). Agents cannot read it for write: `$DELPHI_HOME/operator/**` is never writable by agent file tools (`specs/001` §2.2). |
+
+- The job's allow list is the **union** of the two, read fresh at each job. An operator entry adds a host (or, with `block = true`, removes a default one for this install). Adding a source is the operator's act of validating it.
+- Each entry: `host`, `publisher`, `kind` (`standards`, `government`, `journal`, `encyclopedia`, `documentation`, `news`), `licence` (an SPDX id or `unknown`), `reuse` (`full` or `summary-only`).
+- **The default list is seeded from Appendix A of the validator spec** (`specs/040`, classes A.1 Primary and A.2 Reputable secondary, which the operator approved in principle on 2026-10-26; that spec is on branch `worktree-horkos-validator-040` and not yet on main). The two lists are meant to become **one registry**: when spec 040 or the primary-sources plan builds its registry (`missions/2026-10-23-foundational-design/primary-sources-plan-2026-10-26.md` §3), it reads this file instead of keeping a second copy, and gains the per-claim tier. Until then this file stands alone, with no tier field. A source that spec 040 marks Weak (A.3) is not in the default list; the operator may still add it to the operator list (§10.8 Q1).
+- **The scout and the job cannot add a host, and a page's content cannot:** a link is followed only if its host is on the union. This keeps "content read from outside cannot raise its own trust" (`specs/001` §5) true.
+- A host matches by exact registrable domain over HTTPS. A wildcard entry (`*.gov`) matches by suffix; a subdomain the daemon cannot classify under a wildcard is skipped (the A.5 caution). Redirects are followed only between listed hosts; a redirect off the lists stops the fetch.
 
 ### 10.4 Why validation is not invoked (and what still holds)
 The spec 040 validator is for **chat prompts that bring in research**: arbitrary web content, chosen by a model, shaping an answer. Here the sources are fixed in advance by a ratified list, the pane is a deliberate operator action, and every stored item says where it came from. So the job does **not** call the validator. This relaxes validation only; it does not widen authority:
@@ -205,7 +213,7 @@ The spec 040 validator is for **chat prompts that bring in research**: arbitrary
 | the query text | leaves the machine to the search API on `enter` in expand mode only, never while typing |
 
 ### 10.8 Open questions (recommended answers)
-1. **Seed list.** Recommended: `en.wikipedia.org` and `developer.mozilla.org` (CC BY-SA, `full`, share-alike), US-government `.gov` works (public domain, `full`), `pubmed.ncbi.nlm.nih.gov` and `arxiv.org` (`summary-only`), `rfc-editor.org`, `w3.org`, `docs.rs`, `doc.rust-lang.org`. The operator edits it before approval.
+1. **Seed list and Wikipedia.** The default list is Appendix A.1 and A.2 of `specs/040`, restricted to hosts a fetch can read: standards bodies (`ietf.org`, `rfc-editor.org`, `w3.org`, `whatwg.org`, `unicode.org`, `nist.gov`), government (`*.gov`, `*.gov.uk`, `legislation.gov.uk`, `europa.eu`), `sec.gov`, research (`pubmed.ncbi.nlm.nih.gov`, `clinicaltrials.gov`, `arxiv.org` as summary-only, `doi.org` landing pages), software documentation (`docs.rs`, `doc.rust-lang.org`, `crates.io`, `pypi.org`), reference (`britannica.com` as summary-only, `loc.gov`, `si.edu`), news wires as summary-only (`apnews.com`, `reuters.com`, `bbc.com`, `npr.org`). **Wikipedia:** spec 040 A.3 classes `wikipedia.org` as Weak (a pointer to sources, not evidence), but you named it as an example for this pane, and it is the fastest way to find the references the job then follows. Recommended: put `en.wikipedia.org` on the **default list** with `reuse = "full"` (CC BY-SA, share-alike) and mark entries from it `kind: encyclopedia` so spec 040 can still treat it as a pointer when it reads this file. Say if you would rather it live on your operator list only.
 2. **Which search API.** As §9.1: Brave Search API, with SearXNG as the keyless alternative.
 3. **Does the scout need a model-facing web tool?** Recommended no: the daemon does the fetches; the scout gets extracted text and returns a structured decision (`keep`, `form`, `summary`, `facts`). Tool surface stays zero and the job is testable with a fake model.
 4. **Export of `knowledge/web/` in bundles.** Recommended off by default.
