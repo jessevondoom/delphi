@@ -185,14 +185,14 @@ Approved by the operator 2026-10-28 with the mockups ("the decision pages are pe
 
 ## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 
-Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
+Approved by the operator 2026-10-28, with two allow lists (the default `context/sources/trusted.toml` in the repo, and the operator's own `$DELPHI_HOME/operator/trusted-sources.toml`); Wikipedia is on the default list; search goes Brave first with a privacy-friendly fallback order (decided 2026-10-28). It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4). E1 to E4 are merged. The job has never run against the live web, a search key or a real model.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
-| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (PR pending): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. Not wired to the daemon or the console yet (that is E3); `delphi sources` command not built |
-| E3 | research job, scout decision, `knowledge/web/` writes | built (PR pending): `delphi-engine/src/research.rs` (job, scout contract, quote check, writer), `research_setup.rs`, `research.start` / `research.status` / `research.cancel` (console only), `knowledge/web/` indexed at `federated_verified` and shown as the `research` kind. Needs `[search]` set; never run against the live web or a real model. The console does not call it yet (E4) |
-| E4 | progress, results page and banner, failure states | built (PR pending, stacked on E3): the console's expand page starts the job, polls `research.status`, shows the live count, then the banner and the entries (open in the reader, esc back), cancel with esc, failure and refusal states. The narrator is read-only and says research runs from the console. Never run end to end against the live web, a search key or a real model; unproven in a real terminal. Left: K5's hint and the query carried into expand |
+| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | merged (#280); the console's left deck; unproven in a real terminal |
+| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | merged (#273): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. `delphi sources add` is not built: the operator edits the file |
+| E3 | research job, scout decision, `knowledge/web/` writes | merged (#289): `delphi-engine/src/research.rs` (job, scout contract, quote check, writer), `research_setup.rs`, `research.start` / `research.status` / `research.cancel` (console only), `knowledge/web/` indexed at `federated_verified` as the `research` kind. Pictures with full-text entries: spec 028-A2 I3 (#292). Needs `[search]` set; never run live |
+| E4 | progress, results page and banner, failure states | merged (#290): the console's expand page starts the job, polls `research.status`, shows the live count, then the banner and the entries (open in the reader, esc back), cancel with esc, failure and refusal states. The narrator is read-only and says research runs from the console. Unproven end to end and in a real terminal |
 
 ## Harness loop techniques (spec 045, approved 2026-10-28)
 
