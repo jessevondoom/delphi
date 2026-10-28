@@ -2,94 +2,66 @@
 
 # Delphi
 
-**A team of AI agents in your terminal that plans, builds and reviews software with you, and has to get your approval before anything leaves the sandbox.**
+**A team of AI agents in your terminal that plans, builds and reviews software with you, and has to get your approval before anything leaves its sandbox.**
 
-Delphi is a spec-driven, multi-agent working environment for software engineering, research and systems architecture. It is a single Rust executable plus a full-screen console. You talk to one window; behind it a small team of specialist agents reads your project, drafts specs, builds changes in isolated git worktrees, audits each other's work and argues in a Council when a decision is hard. It runs on the model access you already have: the Anthropic and Gemini APIs, AWS Bedrock, Google Vertex, an OpenAI-compatible gateway, your own `claude` and `agy` subscriptions, or a local Ollama fallback.
-
-> Where things stand: [`missions/2026-10-23-foundational-design/spec-tracker.md`](missions/2026-10-23-foundational-design/spec-tracker.md) says, spec by spec, what is approved, built and proven. Design decisions are numbered (D-nn) in [`decisions.md`](missions/2026-10-23-foundational-design/decisions.md). Status: pre-1.0, macOS and Linux, one operator per install. The latest release is v0.3.0 (`delphi update --dev` follows `main`).
+> Status: pre-1.0, macOS and Linux, one person per install. Latest release: v0.3.0 (`delphi update --dev` follows `main`). For an honest list of what is proven and what is not, see [Status and limitations](#status-and-limitations).
 
 ## Contents
 
-- [What you get](#what-you-get)
-- [How it works](#how-it-works)
+**The short version**
+- [What is Delphi?](#what-is-delphi)
+- [A tour in five minutes](#a-tour-in-five-minutes)
 - [Install](#install)
 - [Quick start](#quick-start)
-- [Using it](#using-it)
+
+**Going deeper**
+- [The team: roles and skills](#the-team-roles-and-skills)
+- [How safety works](#how-safety-works)
+- [Everything it can do](#everything-it-can-do)
+- [How it works inside](#how-it-works-inside)
+- [Using it: console and shell commands](#using-it)
 - [Configuration](#configuration)
-- [Documentation](#documentation)
-- [Development](#development)
-- [Status and limitations](#status-and-limitations)
-- [Repository layout](#repository-layout)
-- [Specifications](#specifications)
 
-## What you get
+**Reference**
+- [Documentation](#documentation) · [Development](#development) · [Status and limitations](#status-and-limitations) · [Repository layout](#repository-layout) · [Specifications](#specifications)
 
-- **A console** (just `delphi`). Ask questions, hand out work with `@architect …`, `/build …` or `/council …`, and answer approval cards. Nothing consequential happens without a card.
-- **Builds you can trust.** The Builder works in a throwaway worktree; Delphi runs your tests and checks, has a different agent audit the exact commit, and asks you before merging (or opens a pull request).
-- **Councils.** Several seats on different model families answer blind, cross-examine each other's answers, and the verdict carries a Minority Report that the runtime copies verbatim.
-- **A second, read-only window** (`delphi observe`): the live Council, work grouped into threads, the agents, the archives and knowledge window, and a change log of what the agents finished (their own one-line reports, by session, never their reasoning). It never spends money.
-- **Knowledge search** (`delphi kb search`, `/search` in the console): keywords, meaning and a reranking pass, all run locally from models compiled into the executable.
-- **Documents without dependencies.** Agents read PDF, Office, archives, HTML, notebooks and more, and write HTML pages, reports, decks, spreadsheets, charts and diagrams, all with in-tree code.
-- **Work while you are away.** `delphi run` does one task headless by a written policy; `delphi relay` mails approval cards to you (email or Telegram) and takes your replies; timers wake a role later.
-- **Safety by construction.** Everything an agent reads from outside is tainted and limits what it may do next; model access, agent definitions and connector pins change only when you ratify them; using Delphi never writes into your project repository.
+---
 
-## How it works
+## What is Delphi?
 
-### One runtime, two windows
+Imagine a small engineering team that lives in your terminal. One of them plans the work. One writes the code. One tries to break what the first one built. One writes things down. You talk to a single window, and they coordinate behind it.
+
+You describe what you want, in plain words:
 
 ```
- console (delphi) ──┐                 delphi __core daemon (one per workspace)
-   input, approvals  ├── unix socket ──┤  agent loop · tools · approvals · builds · Council · timers
- narrator (observe) ─┘  JSON-RPC       │  model pool and routing, budget reservations
-   read-only, live                     │  local/missions/<id>/*.jsonl ← the event log, single source of truth (agents cannot read it)
-                                       │  local/state.db              ← derived index: FTS5 + vectors, usage ledger
- $DELPHI_HOME/workspaces/<name>/       ← all state lives here (default ~/.delphi); project repos stay clean
+› @architect draft a spec for the retry ladder
+› /build implement specs/011-retry.md
+› /council Should the retry queue be a table or a file?
 ```
 
-The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log and the index, and it enforces every invariant in code. The console and the narrator are clients. The console is `delphi-ui`, an [Ink](https://github.com/vadimdemedes/ink) program compiled with Bun and installed next to `delphi`; when it is absent `delphi` falls back to the Rust inline console (`delphi chat --inline`). If the daemon restarts, the console says so, re-attaches and rebuilds the conversation from the mission log.
+Delphi then drafts a spec, builds the change in a throwaway copy of your repository, runs your tests, has a *different* agent audit the exact commit, and finally asks you whether to merge. If a decision is hard, it can convene a **Council**: several AI models answer independently, question each other, and hand you a verdict *and* the strongest dissenting view.
 
-### Roles and themes
+Three ideas hold it together:
 
-Agents are data: each is an `agents/<role>/AGENT.md` with write globs, allowed tools and a model tier; each skill is a `SKILL.md` under `skills/` that loads only when used. Nine roles exist (`orchestrator`, `builder`, `architect`, `red-team`, `strategist`, `investigator`, `scout`, `writer`, `integrator`); the default roster enables the first five (D-07). Specs, config and manifests use role IDs only. Display names and voice come from a theme pack (Greek mythology by default; [`themes/greek/theme.md`](themes/greek/theme.md)); a theme can never change what a role may do, and the repo lint refuses a theme name outside `themes/` and Council records. The charter is [`GOVERNANCE.md`](GOVERNANCE.md) (*No Spec, No Build*, trust boundaries), and [`REVIEW.md`](REVIEW.md) is the review rubric; both are seeded into every workspace.
+1. **Specs first.** Delphi builds from a written, approved spec ("No Spec, No Build"), so you can see what it intends before it touches code.
+2. **You approve what matters.** Reading is free. Anything consequential (a merge, a new dependency, anything that goes outside your machine) shows you a card and waits. If nobody answers, the answer is no.
+3. **It uses the AI access you already have.** The Anthropic or Gemini APIs, AWS Bedrock, Google Vertex, an OpenAI-compatible gateway, your own `claude` or `agy` subscription, or a local Ollama model. Delphi never writes into your project repository, and never reads your logins.
 
-### Seats, harnesses and the model pool
+Delphi is one Rust executable plus a full-screen console. There is no server to run and no account to create.
 
-Roles ask for capabilities and a tier (`fast` / `workhorse` / `frontier`), never for a named model. The adapter compiles one intermediate prompt representation into each provider's dialect, preserving reasoning signatures across tool loops. A **seat** is a model reached over one of these paths ([`specs/009`](specs/009-model-access-and-auth.md)):
+## A tour in five minutes
 
-| Path | What it is | Credentials |
-| :-- | :-- | :-- |
-| `api` | Anthropic or Gemini API directly | keychain / Secret Service, env, or a command |
-| `cloud` | AWS Bedrock (SigV4) or Google Vertex | `aws:<profile>`, `gcloud-adc` |
-| `gateway-native`, `gateway-compat` | a corporate gateway or any OpenAI-compatible endpoint; also a loopback Ollama with `credential = "none"` | OAuth2 device code / PKCE, or none |
-| `harness` | your own `claude` (Claude Code) or `agy` (Antigravity) CLI as a subscription seat | the CLI's own login; Delphi never reads it |
-
-Harness seats get Delphi's tools through a per-span MCP bridge ([`specs/020`](specs/020-harness-tool-bridge.md)): Claude seats run with delegated approvals and the account's own connectors by default; `agy` seats run behind a `PreToolUse` hook that denies every tool but Delphi's, start untrusted until `delphi endpoints test --probe` has watched the gate hold on the installed version, and can then act as a Builder with edits routed through Delphi's cards. The **model pool** ([`specs/002`](specs/002-adapter-and-routing.md) §4.1) keeps models in preference order per endpoint; when one is out of quota or cooling down the next takes over, a task waits rather than failing when none is left, and a weaker substitute needs your confirmation. `delphi models` shows where each stands.
-
-### Trust, approvals and budget
-
-Taint is computed, not declared: every span carries the lowest trust tier of anything it read (`external_untrusted` < `federated_peer` < `federated_verified` < `internal_generated` < `internal_empirical` < `user_ratified`), and a span that has read untrusted content cannot write, execute, call out or dispatch without a Red card. Three approval tiers: **Green** (reads, mission notes, commands your `[exec] allow` rules cover, and everything inside the OS sandbox when it is on) runs without asking; **Amber** (commits, pinned installs, other commands) is shown to you and can be approved per task with `/a`; **Red** (anything outbound, merges, new dependencies, charter edits, destructive commands) always asks and is denied if nobody answers. The OS sandbox (`sandbox-exec` on macOS, `bubblewrap` on Linux) is optional and off by default (D-24). Spending is reserved before each model call against a per-mission and per-Council ceiling (D-10) and shown by `/usage`.
-
-### Builds and Councils
-
-`/build <request>` runs the escalation ladder: a worktree is created, the Builder works under *No Spec, No Build*, your `test_command` and `check_command` run as merge gates, a different agent audits the exact commit, and a merge card (or a pull request) ends it. `/build --optimistic` lets the build decide its own worktree edits, records each as a provisional decision, and refuses to merge until you have reviewed them (`/decisions`, then `/merge`; [`specs/015`](specs/015-provisional-decisions.md)). `/council <proposition>` runs three rounds (blind answers, cross-examination, verdict) across seats on different model families, with the Minority Report written by the daemon, not the arbiter; a deadlock becomes a structured decision for you ([`specs/003`](specs/003-collaboration-and-council.md)).
-
-### Knowledge search
-
-`delphi kb search` combines FTS5 keyword matching (so `[REV-SEC-04]` still hits exactly), a local `bge-base` embedding search (sqlite-vec) and a MiniLM cross-encoder that reads the best few results with your question. The two models (about 146 MB) are compiled into release builds and run on your machine; nothing is sent anywhere. The index covers `context/`, `specs/`, `missions/`, agent memory and the agents and skills themselves, is refreshed on every search, ships with vectors for the built-in documents, and returns `path#L10-L40` pointers. Untrusted or inactive material is left out unless you ask, and an agent sees only its own private memory. `delphi kb serve` exposes the same search as a read-only local HTTP API (`/v1/search`, `/v1/doc`, `/v1/image`, `/v1/documents`, `/v1/collections`, `/v1/health`), which the narrator's knowledge window also uses over its socket ([`specs/004`](specs/004-memory-and-coaching.md), [`specs/028`](specs/028-knowledge-window.md)).
-
-### Documents and data visualization
-
-[`specs/014`](specs/014-documents-and-dataviz.md) is built with no new third-party crates: `crates/delphi-docs` holds in-tree zip, XML, PDF, HTML, PNG and chart code. Agents get `read_doc` (docx, xlsx, pptx, csv, PDF, HTML, JSON/YAML/TOML, notebooks, mail, ics, RTF, ODF, epub, images, archives, sqlite queries) and `write_archive`, `write_html`, `write_chart`, `write_report`, `write_deck`, `write_sheet` and `write_diagram`, each writing into a path the role's manifest allows with a provenance sidecar.
-
-### Org bundles and sharing
-
-An org bundle is a directory an organization publishes so every install starts from the same knowledge, skills, agents and stated goals; it is a superset of a Claude Code plugin ([`specs/022`](specs/022-xenia-sharing-overview.md) to [`027`](specs/027-bundle-authoring-distribution-and-evaluation.md)). Today `delphi bundle validate <dir>` and `delphi bundle manifest <dir>` check a bundle (the `delphi-bundle` crate; a golden bundle lives in `dev/bundles/acme-platform` and is checked in CI), and `delphi bundle add <dir or file.xbundle>` re-checks it (verifying a signature, if any, and the publisher's continuity), prints what it brings, copies it into `~/.delphi/bundles` and makes its knowledge searchable (`delphi kb search <words> --bundle org/name`; no model is called). A vector cache a bundle ships is used only if it matches your embedder and passes a local spot check (`add --no-vectors` skips it); the rest are embedded in the background, `bundle list` shows how far along they are, and until then results from the bundle say `(lexical only: vectors N% ready)`. `bundle list`, `remove`, `update`, `rollback` and `gc` complete the set; a publisher runs `bundle sign` (at a terminal) and `bundle package` (a reproducible `.xbundle`) ([`specs/024`](specs/024-bundle-trust-adoption-and-precedence.md)). The spec you are about to approve lists the goals and decisions of your bundles that it cites and that no longer stand (advice only; [`specs/026`](specs/026-team-alignment-and-strategist-integration.md)). `bundle serve` is a later slice (B12). Xenia, the signed org-level memory store ([`specs/011`](specs/011-xenia-trust-model.md), [`012`](specs/012-xenia-record-schema.md)), has its library code built: signed-record validation, the roster chain and pins, a hardened store clone and sync, standing, tiers, endorsements and tombstones, the retrieval index and the publish gate (`crates/delphi-xenia` and `delphi-core`, with the record format in [`schemas/xenia-record.schema.json`](schemas/xenia-record.schema.json)). `delphi xenia join|sync|status` and the commands that sign (`publish`, `endorse`, `dispute`, `withdraw`, `restore`, `republish`, each behind an approval card you answer at a terminal) are built, and `delphi doctor` checks a joined store's health; `delphi xenia admin add|remove|rotate|show|sign|publish|refresh|genesis` runs the roster ceremony at a terminal (a person types a code over the exact bytes; no flag, variable or pipe answers), and the console can sign a roster proposal that touches no admin once you set `[xenia] console_admin = true` in `operator/xenia.toml` (off by default; admin changes, rotations and genesis stay terminal-only). No store has been run against a real organization.
-
-**Plugins in and out.** `delphi bundle import <plugin dir>` turns a plain Claude Code plugin into a new bundle directory and prints a table of what was imported, what was ignored and why (`hooks/`, `commands/`, `bin/` and the rest never run or load; `.mcp.json` servers become inert declarations with every value dropped; agents need a host role from you, `--agent-role reviewer=red-team`, and skills need `--agents`). It never adds. `delphi bundle export <name> --claude-plugin <dir> [--strip-delphi]` writes an added bundle as a plugin, `--agents-md [file]` writes a knowledge-only fragment (by default under `~/.delphi/exports`, never in a project), and `export <name>... --marketplace <dir> --repo owner/repo --sha <commit>` writes a `marketplace.json` that pins every bundle to a commit. `delphi bundle add --from-marketplace <repo> <name>` fetches only the entry's pinned commit (a locked-down fetch, nothing checked out) and then checks it exactly like a directory.
-
-### Learning without memory poisoning
-
-Lessons, rules, config changes, imported skills and release-refreshed files all arrive as **proposals** and only take effect when you `/ratify` them; rules the Orchestrator proposes after a mission wait in `/retro`. Always-loaded rule files stay small (D-09), and only test-verified or ratified content can be promoted. Coaching automation, diff3 updates, team sync, ambient watches and `/rewind` are deliberately not built until `delphi needs` records evidence for them (roadmap Step 6).
+| You want to… | Do this |
+| :-- | :-- |
+| Ask a question about your code | Type it. `@project/my-app/src/lib.rs` points at a file. |
+| Get a design or spec drafted | `@architect draft a spec for …` |
+| Have a change built and reviewed | `/build <request>`. You get a merge card (or a pull request) at the end. |
+| Settle a hard decision | `/council <proposition>`. Blind answers, cross-examination, verdict, Minority Report. |
+| Watch the work live | `/observe` opens a second, read-only window: threads of work, the agents, a change log. |
+| Find something Delphi knows | `/search` (or `ctrl+k`). Local keyword + meaning search; nothing leaves your machine. |
+| Run a task from a script or CI | `delphi run "<task>"`, which answers cards by a policy you wrote. |
+| Go away and still get asked | `delphi relay` emails or messages you the approval cards. |
+| Have an agent wake up later | `/timer 1h @architect check the benchmark` |
 
 ## Install
 
@@ -101,7 +73,7 @@ brew tap jessevondoom/delphi https://github.com/jessevondoom/delphi && brew inst
 
 macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64). The installer puts `delphi` and `delphi-ui` in `~/.local/bin` (`--dir`, `DELPHI_INSTALL_DIR`), checks the download against its SHA-256 and the release's GitHub build attestation, and therefore needs the `gh` CLI signed in; without it the install stops unless `DELPHI_SKIP_ATTESTATION=1` accepts the checksum alone. `--version vX.Y.Z` installs a specific release; `--no-setup` skips the offer to run `delphi setup`.
 
-Later, `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending), and restarts any running daemon (`--no-restart` leaves them). `--check` shows what it would do, `--rollback` undoes all three steps, `--dev` follows the rolling build of `main`. When the build is a **signed release** (signed in CI by the maintainers' key; `delphi release` says, and `delphi doctor` check 2), the first `delphi chat` or `delphi run` after an update refreshes the workspace and ratifies the release's own files itself, so there is nothing for you to approve; your customized files and your own files are never touched, and a build whose signature does not hold ratifies nothing and is refused by `delphi update` (`specs/036`; `--require-signed`, `DELPHI_REQUIRE_SIGNED=1` or `[update] require_signed = true` in `config.toml` also refuse an unsigned build; `DELPHI_NO_AUTO_UPDATE=1` turns the refresh off).
+Later, `delphi update` fetches and verifies the newest release, replaces both executables, refreshes the built-in agents, skills and themes in your workspaces (as ratification proposals when they differ from yours; `--review` leaves them pending), and restarts any running daemon (`--no-restart` leaves them). `--check` shows what it would do, `--rollback` undoes all three steps, `--dev` follows the rolling build of `main`. When the build is a **signed release** (`delphi release` says, and `delphi doctor` check 2), the first `delphi chat` or `delphi run` after an update refreshes the workspace and ratifies the release's own files itself; your customized files are never touched, and a build whose signature does not hold ratifies nothing and is refused by `delphi update` ([`specs/036`](specs/036-signed-releases-and-start-time-refresh.md); `--require-signed`, `DELPHI_REQUIRE_SIGNED=1` or `[update] require_signed = true` also refuse an unsigned build; `DELPHI_NO_AUTO_UPDATE=1` turns the refresh off).
 
 **From source** (Rust 1.85 or newer; the repo pins a toolchain in `rust-toolchain.toml`):
 
@@ -119,17 +91,139 @@ cd ~/code/my-project
 delphi
 ```
 
-The first time, `delphi` creates a workspace for the project under `~/.delphi/workspaces/`, runs the guided model setup if no model access exists (it finds `claude` and `agy`, asks only for what it cannot find, and ratifies the config), runs the doctor and offers to fix what it can, then opens the console. After that it just opens the console. Outside a git repository it uses a `default` workspace that holds only the built-in knowledge.
+The first time, `delphi` creates a workspace for the project under `~/.delphi/workspaces/`, runs a guided model setup if no model access exists (it finds `claude` and `agy`, asks only for what it cannot find, and ratifies the config), runs the doctor and offers to fix what it can, then opens the console. After that it just opens the console. Outside a git repository it uses a `default` workspace that holds only the built-in knowledge.
+
+Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@worktree/…` inside a build, `specs/…`, `missions/…` and `context/…` for the workspace's own files. A new user should read [Getting started](docs/getting-started.md) next.
+
+---
+
+## The team: roles and skills
+
+### Roles
+
+Agents are plain files: each is an `agents/<role>/AGENT.md` that states what the role may write, which tools it may use and which model tier it needs. Nine roles exist; five are on by default.
+
+| Role | What it does | On by default |
+| :-- | :-- | :-- |
+| `orchestrator` | Breaks your goal into a task graph, dispatches the others, chairs Councils, runs the post-mission retrospective | yes |
+| `builder` | Writes code in an isolated worktree against an approved spec, test first | yes |
+| `architect` | Drafts specs and designs; owns the technical shape of a change | yes |
+| `red-team` | Audits other agents' work: security, assumptions, adversarial tests, the exact commit | yes |
+| `strategist` | Keeps work on your actual goal, sequences roadmaps, flags scope creep, checks specs against your org's stated goals | yes |
+| `investigator` | Finds the one root cause: bisect hunts, microbenchmarks, checking an upstream claim | no |
+| `scout` | Maps unfamiliar repositories, surveys literature, audits dependencies | no |
+| `writer` | User-facing documentation, turning dense output into clear prose | no |
+| `integrator` | The boundary with the outside world: GitHub through `gh`, external services, MCP server onboarding | no |
+
+Specs, config and manifests always use these role IDs. **Display names and voice come from a theme pack** (Greek mythology by default, [`themes/greek/theme.md`](themes/greek/theme.md)); a theme changes how things look and sound, never what a role may do. You can write your own pack in `~/.delphi/themes/`.
+
+### Skills
+
+A skill is a small package (`skills/<name>/SKILL.md`) that loads into an agent only when needed, so prompts stay short. Rules worth enforcing are compiled into `delphi check <kind> <path>` rather than left to a model. 45 ship with Delphi ([full catalog](skills/CATALOG.md), [generated reference](docs/reference/catalog.md)):
+
+| Area | Skills |
+| :-- | :-- |
+| **Planning and coordination** | `task-decomposition` · `roadmap-sequencing` · `dynamic-model-scaling` · `council-moderation` · `handoff-packaging` · `scope-creep-detection` · `spec-authoring` |
+| **Building and shipping** | `worktree-isolation` · `tdd-execution` · `safe-refactoring` · `git-pr-packaging` · `ci-triage` · `git-bisect-hunt` · `ast-code-search` · `benchmark-profiling` · `dependency-audit` · `github-ops-sync` |
+| **Review and risk** | `adversarial-test-gen` · `assumption-stress-test` · `threat-modeling` · `pr-alignment-review` · `review-md-audit` · `primary-source-verification` · `risk-roi-analysis` · `trade-off-matrix` |
+| **Research and memory** | `literature-survey` · `multi-source-synthesis` · `repo-cartography` · `knowledge-compaction` · `contradiction-pruning` · `lesson-promotion` · `retrospective-facilitation` · `review-md-distillation` · `documentation-architecture` |
+| **Writing, design and integration** | `clarity-synthesis` · `concision-audit` · `narrative-briefing` · `diagram-generation` · `tui-design` · `external-comms-dispatch` · `api-contract-design` · `protocol-schema-translation` · `mcp-server-integration` · `org-bundle-authoring` |
+
+You can add your own skills, and import and export skills with `delphi skills import|export` ([`specs/019`](specs/019-skills-import-export.md)). Organizations can ship skills, agents and knowledge together as [org bundles](#org-bundles-and-sharing).
+
+---
+
+## How safety works
+
+Delphi is built so that a mistaken or manipulated agent has little room to do harm. The rules live in code, not in prompts.
+
+- **Three approval tiers.** **Green** (reading, mission notes, commands your `[exec] allow` rules cover, anything inside the OS sandbox) runs without asking. **Amber** (commits, pinned installs, other commands) is shown to you and can be approved for a whole task with `/a`. **Red** (anything outbound, merges, new dependencies, edits to the charter, destructive commands) always asks, and is denied if nobody answers.
+- **Taint.** Everything an agent reads from outside carries a trust level, and a step that has read untrusted content cannot write, run commands, call out or dispatch other agents without a Red card. Trust levels, lowest to highest: `external_untrusted`, `federated_peer`, `federated_verified`, `internal_generated`, `internal_empirical`, `user_ratified`.
+- **Ratification.** Model access, agent definitions, connector pins, learned lessons, imported skills and release-refreshed files all arrive as *proposals* and take effect only when you `/ratify` them.
+- **Sandboxing.** An optional OS sandbox (`sandbox-exec` on macOS, `bubblewrap` on Linux) is off by default and can be set to `prefer` or `required`.
+- **Your repository stays clean.** Delphi keeps its state in `~/.delphi`; builds happen in separate worktrees.
+- **Budgets.** Spending is reserved before each model call against a per-mission and per-Council ceiling, and shown by `/usage`.
+- **Different agents check each other.** The agent that audits a build is never the one that built it; the Minority Report in a Council is written by the daemon, not the arbiter.
+
+The charter is [`GOVERNANCE.md`](GOVERNANCE.md); the review rubric is [`REVIEW.md`](REVIEW.md). Both are seeded into every workspace.
+
+---
+
+## Everything it can do
+
+### Builds you can trust
+
+`/build <request>` creates a worktree, lets the Builder work under *No Spec, No Build*, runs your `test_command` and `check_command` as gates, has a different agent audit the exact commit, and ends with a merge card (or a pull request). `/build --optimistic` lets the build decide its own edits, records each as a provisional decision, and refuses to merge until you have reviewed them (`/decisions`, then `/merge`; [`specs/015`](specs/015-provisional-decisions.md)). Epics are shown as named threads of work with the critical path highlighted ([`specs/005g`](specs/005g-epic-threads.md)).
+
+### Councils
+
+`/council <proposition>` runs three rounds (blind answers, cross-examination, verdict) across seats on different model families. A deadlock becomes a structured decision for you; a Council can be raised to a higher tier but never lowered to save money; and it ends in next steps that `/follow` starts ([`specs/003`](specs/003-collaboration-and-council.md)). With org bundles, `--lenses` gives each seat one of your team's perspectives to argue from.
+
+### Two windows, a decisions pane, and a change log
+
+The console is where you work. `/observe` opens the **narrator**, a read-only second window that never spends money. It shows the live Council, work grouped into threads, the agents, token use by thread, live usage for subscription seats, a timeline and tools, the archives and knowledge window, and a **change log** of what the agents finished (their own one-line reports, by session, never their reasoning; [`specs/032`](specs/032-change-log.md)-[`034`](specs/034-narrator-monitoring-panes-spike.md)). Links in answers open in an inline reader ([`specs/029`](specs/029-links-and-inline-reader.md)). A **Decisions pane** ([`specs/044`](specs/044-decisions-pane.md)) gathers every decision you owe (approval cards, provisional decisions, specs waiting for sign-off, open questions) and walks you through them one at a time with a short brief and a recommendation, and is being built now. The console respects reduced-motion and `NO_COLOR` settings.
+
+### Knowledge search
+
+`delphi kb search` (or `/search`) combines keyword matching (so `[REV-SEC-04]` still hits exactly), a local embedding search and a reranking pass that reads the best few results with your question. Two small models (about 146 MB) are compiled into release builds and run on your machine; nothing is sent anywhere. It indexes `context/`, `specs/`, `missions/`, agent memory, agents and skills, refreshes on every search, and returns `path#L10-L40` pointers. `delphi kb serve` offers the same search as a read-only local HTTP API. The **knowledge window** in the narrator ([`specs/028`](specs/028-knowledge-window.md), [`043`](specs/043-knowledge-window-search-page-and-growing-corpus.md)) is a plain search page with a best match; its *expand* mode researches a topic on the web, stores the result as readable markdown and lets the corpus grow with use (built, not yet run live). See [`specs/004`](specs/004-memory-and-coaching.md).
+
+### Documents and charts, no extra dependencies
+
+Agents can read PDF, Word, Excel, PowerPoint, CSV, HTML, JSON/YAML/TOML, notebooks, mail, calendars, RTF, ODF, epub, images, archives and SQLite queries (`read_doc`), and write HTML pages, reports, decks, spreadsheets, charts, diagrams and archives, each with a provenance sidecar, using code in the repository itself ([`specs/014`](specs/014-documents-and-dataviz.md)).
+
+### Working while you are away
+
+- **`delphi run "<task>"`** does one task headless by a written policy (never Red, never a merge), stops at "ready to merge", and exits with a code scripts can read: 0 ok, 1 gates failed, 2 card denied, 3 budget, 4 infrastructure, 5 an optimistic build awaits review ([`specs/016`](specs/016-headless-run.md)).
+- **`delphi relay`** mails approval cards to you (email or Telegram) and takes your replies, with a TOTP step-up for anything sensitive ([`specs/014`](specs/014-relay-and-away-mode.md)).
+- **Timers** wake a role later ([`specs/017`](specs/017-timers.md)). **Operator hooks** run your commands on events, or as vetoes; they can only watch or refuse ([`specs/018`](specs/018-operator-hooks.md)).
+
+### Models and seats
+
+Roles ask for a tier (`fast`, `workhorse`, `frontier`), never a named model. A **seat** is a model reached over one path ([`specs/009`](specs/009-model-access-and-auth.md)):
+
+| Path | What it is | Credentials |
+| :-- | :-- | :-- |
+| `api` | Anthropic or Gemini API directly | keychain / Secret Service, env, or a command |
+| `cloud` | AWS Bedrock (SigV4) or Google Vertex | `aws:<profile>`, `gcloud-adc` |
+| `gateway-native`, `gateway-compat` | a corporate gateway or any OpenAI-compatible endpoint; also a loopback Ollama with `credential = "none"` | OAuth2 device code / PKCE, or none |
+| `harness` | your own `claude` (Claude Code) or `agy` (Antigravity) CLI as a subscription seat | the CLI's own login; Delphi never reads it |
+
+Harness seats get Delphi's tools through a bridge, so approvals stay Delphi's ([`specs/020`](specs/020-harness-tool-bridge.md), [`021`](specs/021-harness-cli-features.md)). An `agy` seat starts untrusted until `delphi endpoints test --probe` has watched the gate hold on the installed version; only then can it act as a Builder. The **model pool** keeps models in preference order; when one is out of quota the next takes over (saving state first and staying in the same family, [`specs/035`](specs/035-failover-without-a-driver.md)), a task waits rather than failing when none is left, and a weaker substitute needs your confirmation. `delphi models` shows where each stands. `delphi capabilities` records what each installed CLI offers on this machine (connectors, plugins, skills) so the orchestrator knows what is really available ([`specs/038`](specs/038-capabilities-map.md)). The loop around the model gets mechanical help too: nudges when an agent repeats itself, budget notes and a verification gate before "done" ([`specs/045`](specs/045-harness-loop-techniques.md), first slice built).
+
+### Org bundles and sharing
+
+An **org bundle** is a directory an organization publishes so every install starts from the same knowledge, skills, agents and stated goals; it is a superset of a Claude Code plugin ([`specs/022`](specs/022-xenia-sharing-overview.md) to [`027`](specs/027-bundle-authoring-distribution-and-evaluation.md)).
+
+- **Using one:** `delphi bundle add <dir or file.xbundle>` re-checks it (signature and publisher continuity included), shows what it brings, installs it and makes its knowledge searchable (`delphi kb search <words> --bundle org/name`). Vector caches are used only if they match your embedder and pass a spot check. `list`, `remove`, `update`, `rollback` and `gc` complete the set; `/org` shows them in the console. The spec you are about to approve lists any goals or decisions of your bundles that it cites and that no longer stand ([`specs/026`](specs/026-team-alignment-and-strategist-integration.md)).
+- **Publishing one:** `bundle init`, `distill` (the writer drafts knowledge from your specs and Council verdicts into a staging directory), `validate --report`, `sign` (at a terminal) and `package` (a reproducible `.xbundle`).
+- **Plugins in and out:** `bundle import <plugin dir>` converts a Claude Code plugin (hooks, commands and `bin/` never run; MCP servers become inert declarations), `export --claude-plugin | --agents-md | --marketplace` goes the other way, and `add --from-marketplace` fetches only a pinned commit.
+- **Xenia**, the signed org-level memory store ([`specs/011`](specs/011-xenia-trust-model.md), [`012`](specs/012-xenia-record-schema.md)): signed-record validation, roster chain, a hardened store clone and sync, standing, endorsements and tombstones, and a publish gate are built. `delphi xenia join|sync|status` and the signing commands (`publish`, `endorse`, `dispute`, `withdraw`, …) each sit behind a card you answer at a terminal; admin ceremonies (`xenia admin …`) need a person to type a code over the exact bytes. No store has been run against a real organization.
+- **Coming:** a registry that lets an organization scale to hundreds of specialist agents without growing the orchestrator's context, and bundle "role extensions" that teach a built-in role a company's craft ([`specs/041`](specs/041-agent-registry-routing-and-role-extensions.md), approved, not built).
+
+### Learning without memory poisoning
+
+Lessons, rules, config changes and imported skills all arrive as proposals and take effect only when you `/ratify` them; rules the orchestrator proposes after a mission wait in `/retro`. Always-loaded rule files stay small. Cheap capture of staged notes (`delphi learn`) and a **training mode** (`delphi train validate|plan|run`) with research and code cases, truth packs, a blinded jury and a report measure whether a change in prompts or models actually helps ([`specs/031`](specs/031-layered-learning-and-training-mode.md), [`037`](specs/037-training-experiments-quality-and-efficiency.md)).
+
+### Diagnostics
+
+`delphi doctor [--fix]` checks the install; `delphi status`, `missions`, `sessions`, `tools` and `changelog` show what is going on; errors, panics and (opt in) debug detail go to one redacted, size-capped log (`delphi logs`, `DELPHI_LOG=debug`) and `delphi debug bundle` packs it up for a bug report ([`specs/039`](specs/039-error-log.md)).
+
+---
+
+## How it works inside
 
 ```
-› What does @project/my-project/src/lib.rs do?
-› @architect draft a spec for the retry ladder
-› /build implement specs/011-retry.md in @project/my-project
-› /council Should the retry queue be a table or a file?
-› /observe
+ console (delphi) ──┐                 delphi __core daemon (one per workspace)
+   input, approvals  ├── unix socket ──┤  agent loop · tools · approvals · builds · Council · timers
+ narrator (observe) ─┘  JSON-RPC       │  model pool and routing, budget reservations
+   read-only, live                     │  local/missions/<id>/*.jsonl ← the event log, single source of truth (agents cannot read it)
+                                       │  local/state.db              ← derived index: FTS5 + vectors, usage ledger
+ $DELPHI_HOME/workspaces/<name>/       ← all state lives here (default ~/.delphi); project repos stay clean
 ```
 
-Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@worktree/…` inside a build, `specs/…`, `missions/…` and `context/…` for the workspace's own files. `/search` (or `ctrl+k`) finds a document and puts its `@path` in the prompt.
+The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log and the index, and it enforces every invariant in code. The console and the narrator are clients. The console is `delphi-ui`, an [Ink](https://github.com/vadimdemedes/ink) program compiled with Bun and installed next to `delphi`; when it is absent `delphi` falls back to the Rust inline console (`delphi chat --inline`). If the daemon restarts, the console says so, re-attaches and rebuilds the conversation from the mission log. The adapter compiles one intermediate prompt representation into each provider's dialect, preserving reasoning signatures across tool loops.
+
+---
 
 ## Using it
 
@@ -139,8 +233,8 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | :-- | :-- |
 | `@<role> <request>` | ask one role directly (by role ID or its theme name) |
 | `/build [--optimistic] <request>` | worktree, tests, audit, then your merge card |
-| `/council [--lenses] <proposition>` | a blind three-round Council; `--lenses` gives each seat one of your bundles' perspectives to argue from |
-| `/distill [<path\|missions/id> …]` | the writer drafts bundle knowledge from allow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of the mission; nothing is written into a bundle |
+| `/council [--lenses] [--tier …] <proposition>` | a blind three-round Council; `/follow` starts its next steps |
+| `/distill [<path\|missions/id> …]` | the writer drafts bundle knowledge into a staging directory; nothing is written into a bundle |
 | `/timer <when> <note>`, `/timer @architect 1h …` | wake a role later; `/timer list`, `/timer cancel <id>` |
 | `/y` `/a` `/n` `/d` | approve once, approve similar this task (Amber only), reject, show the card's payload |
 | `/permissions [default\|accept-edits\|mission-auto\|optimistic]` | approval mode (`Shift+Tab` cycles it) |
@@ -149,9 +243,9 @@ Paths in the prompt are logical: `@project/<name>/…` for a project repo, `@wor
 | `/decisions`, `/merge <task>` | review an optimistic build's decisions; rerun the gates and merge card |
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
-| `/org` | the added org bundles, their goals, perspectives and open items; add, update, roll back or remove a bundle (no approval card: your key is the decision) |
+| `/org` | the added org bundles, their goals, perspectives and open items |
 | `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
-| `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | after a daemon restart; the current and past missions; housekeeping |
+| `/new`, `/context`, `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | sessions and conversation context; housekeeping |
 
 `?` on an empty prompt lists the keys. `Esc` clears the prompt, then stops the running task; `Alt+Enter` or `Ctrl+J` inserts a newline; the mouse wheel scrolls and `/mouse` hands selection back to the terminal. The console follows `NO_COLOR`, `TERM=dumb`, `DELPHI_THEME=dark|light`, `DELPHI_REDUCE_MOTION=1`, `DELPHI_NO_MOUSE=1` and `DELPHI_NO_TITLE=1`.
 
@@ -162,17 +256,18 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | Group | Commands |
 | :-- | :-- |
 | Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
-| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle init\|validate [--report]\|distill\|manifest\|sign\|package [--vectors]\|import\|export\|add\|list\|remove\|update\|rollback\|gc` · `hooks` |
+| Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle …` · `hooks` · `capabilities` |
 | Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
-| Inspect | `status` · `missions` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` |
-| Inspect (more) | `changelog` · `sessions` · `tools` · `learn` · `release` · `logs [--since 1h] [--level] [--component] [--mission] [--follow] [--json]` · `debug bundle [--since 24h] [-o file]` |
-| Maintain | `update` · `train validate\|plan\|run` · `xenia` · `docs cli\|man` · `completions bash\|zsh\|fish` · `help` |
+| Inspect | `status` · `missions` · `sessions` · `tools` · `changelog` · `learn` · `release` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` · `logs` · `debug bundle` |
+| Maintain | `update` · `train validate\|plan\|run` · `xenia` · `docs cli\|man\|catalog` · `completions bash\|zsh\|fish` · `help` |
 
-`delphi run` is for scripts and CI: it answers cards by a written policy (never Red, never a merge), stops at "ready to merge", and exits 0 ok, 1 gates failed, 2 a card was denied, 3 budget, 4 infrastructure ([`specs/016`](specs/016-headless-run.md)). `delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane because the daemon issues tokens only to processes with a controlling tty. `delphi observe --once` prints one frame as text and works without a terminal.
+`delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane, because the daemon issues tokens only to processes with a controlling tty. `delphi observe --once` prints one frame as text and works without a terminal.
+
+---
 
 ## Configuration
 
-Delphi keeps all state in `$DELPHI_HOME` (default `~/.delphi`) and never writes into a project repository (D-03):
+Delphi keeps all state in `$DELPHI_HOME` (default `~/.delphi`) and never writes into a project repository:
 
 ```
 ~/.delphi/
@@ -184,6 +279,7 @@ Delphi keeps all state in `$DELPHI_HOME` (default `~/.delphi`) and never writes 
 │   │                     #   proposals/, ratified/ and ratified.lock, kb-misses.jsonl, agy-gate.json
 │   ├── locks/  worktrees/   # daemon locks; Builder worktrees
 ├── run/                  # the daemons' sockets
+├── logs/                 # delphi.log.jsonl
 ├── models/               # optional embed.dlphmdl / rerank.dlphmdl that override the compiled-in models
 └── themes/               # your own theme packs
 ```
@@ -200,10 +296,12 @@ The workspace is chosen by `--workspace`, `DELPHI_WORKSPACE`, or the project con
 | `[exec]` | `sandbox = off\|prefer\|required`, `allow` / `deny` command patterns, `test_command`, `check_command`. **Ratified** |
 | `[harness.claude]`, `[harness.agy]`, `[harness]` | narrow the subscription-CLI defaults (bridge, approvals, native web tools, connectors, env). **Ratified** |
 | `[connectors.<name>]` | MCP connectors (Drive, Slack, Zoom): URL, login, allowed tools and their read/write class. **Ratified** |
-| `[[hooks.observe]]`, `[[hooks.deny]]` | your commands on events or as vetoes; they can only watch or refuse ([`specs/018`](specs/018-operator-hooks.md)) |
-| `[theme]`, `[agents]`, `[rag]`, `[events]` | theme name, enabled roster, search settings, thinking retention |
+| `[[hooks.observe]]`, `[[hooks.deny]]` | your commands on events or as vetoes; they can only watch or refuse |
+| `[theme]`, `[agents]`, `[rag]`, `[events]`, `[logging]`, `[update]` | theme name, enabled roster, search settings, thinking retention, log level, update policy |
 
-API keys never live in `config.toml`: they go to the macOS Keychain or Linux Secret Service, with `*_env` fallbacks. Environment variables Delphi reads: `DELPHI_HOME`, `DELPHI_WORKSPACE`, `DELPHI_UI`, `DELPHI_THEME`, `DELPHI_NO_ONBOARD`, `DELPHI_NO_MOUSE`, `DELPHI_REDUCE_MOTION`, `DELPHI_EMBED_MODEL` / `DELPHI_RERANK_MODEL` / `DELPHI_SEED_VECTORS` (a file path, or `off`), and `DELPHI_SKIP_ATTESTATION` for the installer.
+API keys never live in `config.toml`: they go to the macOS Keychain or Linux Secret Service, with `*_env` fallbacks. Environment variables Delphi reads: `DELPHI_HOME`, `DELPHI_WORKSPACE`, `DELPHI_UI`, `DELPHI_THEME`, `DELPHI_LOG`, `DELPHI_NO_ONBOARD`, `DELPHI_NO_MOUSE`, `DELPHI_REDUCE_MOTION`, `DELPHI_EMBED_MODEL` / `DELPHI_RERANK_MODEL` / `DELPHI_SEED_VECTORS` (a file path, or `off`), and `DELPHI_SKIP_ATTESTATION` for the installer.
+
+---
 
 ## Documentation
 
@@ -216,18 +314,19 @@ API keys never live in `config.toml`: they go to the macOS Keychain or Linux Sec
 | Something broken | [Troubleshooting](docs/troubleshooting.md) |
 | Every command and option | [Command reference](docs/reference/cli.md) (also `man ./docs/reference/delphi.1`, and `delphi help <command>`) |
 | Every config key | [Configuration reference](docs/reference/config.md) |
+| Roles and skills | [Catalog](docs/reference/catalog.md) |
 | Tools and scripts | the JSON Schemas in [`schemas/`](schemas/) ([guide](docs/reference/schemas.md)), [`llms.txt`](llms.txt) and [`AGENTS.md`](AGENTS.md) |
 | What changed | [`CHANGELOG.md`](CHANGELOG.md) |
 | Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
-The command reference and the man page are generated by `delphi docs cli` and `delphi docs man` from the table behind `--help`, and a test fails when they are out of date. `delphi completions bash|zsh|fish` prints shell completions.
+The command reference and the man page are generated by `delphi docs cli` and `delphi docs man`, and a test fails when they are out of date. Where things stand, spec by spec: [`spec-tracker.md`](missions/2026-10-23-foundational-design/spec-tracker.md); numbered design decisions (D-nn): [`decisions.md`](missions/2026-10-23-foundational-design/decisions.md).
 
 ## Development
 
 ```sh
 cargo test --workspace --locked                      # everything (e2e console tests need ui/node_modules, else they skip)
-cargo clippy --workspace --all-targets -- -D warnings
-cargo run -q -p delphi -- lint --repo .              # this repository's own Delphi files (frontmatter, theme names, links)
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo run -q --locked -p delphi -- lint --repo .     # this repository's own Delphi files (frontmatter, theme names, links)
 cargo run -q -p delphi -- bundle validate dev/bundles/acme-platform --claude
 python3 -I dev/bench/bench.py self-test              # the benchmark runner for the evaluation plan
 
@@ -237,7 +336,7 @@ npm run typecheck && npm test                        # the screen is pure data: 
 ./try.sh                                             # the console against a fake daemon, from source
 ```
 
-CI (`.github/workflows/ci.yml`) runs the Rust suite on macOS and Ubuntu, the UI suite, pty end-to-end tests against the real daemon (from source and with the Bun-compiled executable), and a Linux job that requires the bubblewrap sandbox tests to really run. The `release` workflow (tag `vX.Y.Z` matching `crates/delphi/Cargo.toml`, on `main`) fetches and packs the search models, builds four targets with them embedded, smoke-tests, attests provenance, publishes, and updates `Formula/delphi.rb`; running it by hand is a dry run that publishes nothing.
+CI (`.github/workflows/ci.yml`) runs the Rust suite on macOS and Ubuntu, the UI suite, pty end-to-end tests against the real daemon, and a Linux job that requires the bubblewrap sandbox tests to really run. The `release` workflow (tag `vX.Y.Z` matching `crates/delphi/Cargo.toml`, on `main`) packs the search models, builds four targets, smoke-tests, attests provenance, publishes, and updates `Formula/delphi.rb`; running it by hand is a dry run.
 
 Conventions: build only against an `approved` spec and name it in the commit (`Implements-Spec: specs/NNN-*.md`); one slice per pull request; update the spec tracker in the same PR that changes a spec's state. When running the binary in a scratch setting always pass `--home <tmpdir>`: bare `delphi` and `delphi init` create a real workspace. Builds fill disks quickly; `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` helps.
 
@@ -247,21 +346,24 @@ This is an early project built mostly by its own agents under one operator. The 
 
 **Built and exercised for real**
 - Install, self-update, rollback and attestation, from real releases (`brew install` has not been run by a person).
-- The console on the daemon, the single-agent loop, worktree builds with gates and audit, the model pool with quota failover, Claude and `agy` harness seats with the tool bridge (exercised live by hand, including the gated `agy` Builder path), one real cross-family Council, local hybrid knowledge search with measured recall on a dev and a held-out question set, the document readers and writers, `delphi run`, timers, hooks, skills import/export, `bundle validate`.
-- The operator's Step 2 go/no-go (three real tasks on a real project) was passed on 2026-10-25.
+- The console on the daemon, the single-agent loop, worktree builds with gates and audit, the model pool with quota failover, Claude and `agy` harness seats with the tool bridge (including the gated `agy` Builder path), one real cross-family Council, local hybrid knowledge search with measured recall, the document readers and writers, `delphi run`, timers, hooks, skills import/export, `bundle validate`, and the training experiments on their first research cases.
+- The operator's go/no-go (three real tasks on a real project) was passed on 2026-10-25.
 
 **Built, but proven only by tests, mocks or a pty**
-- The full-screen console and narrator in real terminal programs (Terminal.app, iTerm2, Ghostty, tmux, ssh): CI covers a pseudo-terminal and an emulator; a person has barely watched them. `Shift+Enter` depends on the terminal.
-- Connectors (Drive, Slack, Zoom): the policy pipeline is tested against a scripted MCP server; it has never been run against Google, Slack or Zoom, and the spec's server URLs are reported, not confirmed. Delphi ships no OAuth client IDs; you create your own.
-- The relay by email or Telegram (TOTP step-up) has not had a live mailbox trial; live Gemini OAuth is unverified; the bridge on an org-managed Claude SSO account is unchecked.
-- Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
+- The full-screen console and narrator in real terminal programs (Terminal.app, iTerm2, Ghostty, tmux, ssh): CI covers a pseudo-terminal and an emulator; a person has barely watched them.
+- Connectors (Drive, Slack, Zoom): never run against the real services. Delphi ships no OAuth client IDs; you create your own.
+- The relay by email or Telegram has not had a live mailbox trial; live Gemini OAuth is unverified; the bridge on an org-managed Claude SSO account is unchecked.
+- Failover to the Ollama local endpoint mid-task; the research "expand" mode of the knowledge window; signed releases (inert until the maintainers make a release key).
+- Org bundles (specs 022-027) and the Xenia library code: no store has been run against a real organization.
 
-**Specified, not built**
-- Org bundles (specs 022-027) are built through B12, `bundle serve` and the evaluation gate included; deferred are archive tree pointers, `i8` vectors, vectors in `serve`, the blind grader and any live paid evaluation run. The Librarian role (013); Xenia Phase 2 and 3 (signed invites, skill adoption, the pointer resolver, requests and claims); the Xenia dogfood gate, an independent red-team sweep and a live store with real admin identities.
-- Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
-- Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
+**Approved, partly built**
+- The knowledge window round 2 ([043](specs/043-knowledge-window-search-page-and-growing-corpus.md)), the decisions pane ([044](specs/044-decisions-pane.md)), harness loop techniques ([045](specs/045-harness-loop-techniques.md)), and harness coverage for Claude, `agy` and OpenAI-spec APIs ([046](specs/046-harness-and-openai-coverage.md)) and Codex CLI as a third harness ([047](specs/047-codex-harness-and-coverage.md)): first slices merged, the rest not built.
 
-Other limits: git repositories only (D-13); one operator per install; no Windows; harness seats are governed by each provider's terms for automated use of a subscription (`specs/009` §7); CJK PDFs without a ToUnicode map read as empty and there is no OCR; the reranker was trained on MS MARCO, whose data terms you should weigh before commercial distribution.
+**Approved, not built**
+- The agent registry and role extensions ([041](specs/041-agent-registry-routing-and-role-extensions.md)); the Librarian role ([013](specs/013-librarian-and-internal-retrieval.md)); Xenia Phase 2 and 3 (signed invites, skill adoption, requests and claims); ambient watches and `/rewind`, deliberately gated on recorded need (`delphi needs`).
+- Deferred: federation ([007](specs/007-federated-mesh-and-sync.md)), a direct OpenAI API driver, multi-terminal auto-spawn.
+
+Other limits: git repositories only; one operator per install; no Windows; harness seats are governed by each provider's terms for automated use of a subscription ([`specs/009`](specs/009-model-access-and-auth.md) §7); CJK PDFs without a ToUnicode map read as empty and there is no OCR; the reranker was trained on MS MARCO, whose data terms you should weigh before commercial distribution.
 
 ## Repository layout
 
@@ -291,40 +393,47 @@ delphi/
 └── install.sh             the installer behind the curl one-liner
 ```
 
-`OVERVIEW.md` and `SPEC.md` are the original design documents and predate the build; where they disagree with this file or the spec tracker (for example the Ratatui console, which became Ink under D-28), the tracker is current.
+`OVERVIEW.md` and `SPEC.md` are the original design documents and predate the build; where they disagree with this file or the spec tracker (for example the Ratatui console, which became Ink), the tracker is current.
 
 ## Specifications
 
-All in [`specs/`](specs/); each file's `status` line says whether the operator has approved it.
+All in [`specs/`](specs/); each file's `status` line says whether the operator has approved it. Nearly all are approved; the "state" column says how much is built.
 
 | | Spec | State |
 | :-- | :-- | :-- |
 | 001 | [Governance and manifests](specs/001-governance-and-manifests.md): `AGENT.md`, `SKILL.md`, handoff envelope, taint lattice, themes | built |
-| 002 | [Adapter and routing](specs/002-adapter-and-routing.md): IPR, dialects, model scaler, model pool | built |
-| 003 | [Collaboration and Council](specs/003-collaboration-and-council.md): escalation ladder, DAG, retry ladder, Council | built; one real Council |
-| 004 | [Memory, retrieval and coaching](specs/004-memory-and-coaching.md): hybrid search, ratified learning loop | search built; coaching gated |
+| 002 | [Adapter and routing](specs/002-adapter-and-routing.md): dialects, model scaler, model pool | built |
+| 003 | [Collaboration and Council](specs/003-collaboration-and-council.md) | built; one real Council |
+| 004 | [Memory, retrieval and coaching](specs/004-memory-and-coaching.md) | search built; coaching gated |
 | 005, 005a-g | [Console and narrator](specs/005-console-and-narrator-tui.md), [avatars](specs/005a-terminal-avatar-system.md), [decks and inbox](specs/005b-deck-navigation-and-visual-interface.md), [inline console](specs/005c-inline-console.md), [full-screen console](specs/005d-full-screen-console.md), [redesign](specs/005e-console-ux-review-and-redesign.md) and [build plan](specs/005f-console-redesign-build-plan.md), [epic threads](specs/005g-epic-threads.md) | built; real-terminal pass pending |
-| 006 | [Installer, layout and updater](specs/006-installer-and-updater.md) | built (SHA-256 + attestation; the release signature of [036](specs/036-signed-releases-and-start-time-refresh.md) is built and waits for the maintainers' key) |
+| 006 | [Installer, layout and updater](specs/006-installer-and-updater.md) | built |
 | 007 | [Federation and sync](specs/007-federated-mesh-and-sync.md) | deferred |
 | 008 | [Ambient watch, rewind, HITL tiers](specs/008-ambient-watch-and-rewind.md) | tiers built; watches and rewind gated |
 | 009 | [Model access and authentication](specs/009-model-access-and-auth.md) | built; live Gemini OAuth unverified |
-| 010 | [Connectors (MCP)](specs/010-connectors-and-tool-access.md) | slice 1 built; never run live |
-| 011-013 | [Xenia trust model](specs/011-xenia-trust-model.md), [record schema](specs/012-xenia-record-schema.md), [Librarian](specs/013-librarian-and-internal-retrieval.md) | approved; 011 and 012: the library code is built (X0-X7), the member commands and a live store are not; 013: not built |
+| 010 | [Connectors (MCP)](specs/010-connectors-and-tool-access.md) | built; never run live |
+| 011-013 | [Xenia trust model](specs/011-xenia-trust-model.md), [record schema](specs/012-xenia-record-schema.md), [Librarian](specs/013-librarian-and-internal-retrieval.md) | 011-012: library code and member commands built, no live store; 013: not built |
 | 014 | [Documents and data visualization](specs/014-documents-and-dataviz.md) | built |
 | 014 | [Relay and away mode](specs/014-relay-and-away-mode.md) | built; no live mailbox trial |
 | 015-019 | [Provisional decisions](specs/015-provisional-decisions.md), [headless run](specs/016-headless-run.md), [timers](specs/017-timers.md), [operator hooks](specs/018-operator-hooks.md), [skills import/export](specs/019-skills-import-export.md) | built |
-| 020, 021 | [Harness tool bridge](specs/020-harness-tool-bridge.md); [harness CLI features](specs/021-harness-cli-features.md) (draft) | built |
-| 022-027 | [The sharing layer](specs/022-xenia-sharing-overview.md), [bundle standard](specs/023-org-bundle-standard.md), [provenance and precedence](specs/024-bundle-trust-adoption-and-precedence.md), [compatibility](specs/025-plugin-skill-and-tool-compatibility.md), [team alignment](specs/026-team-alignment-and-strategist-integration.md), [authoring and evaluation](specs/027-bundle-authoring-distribution-and-evaluation.md) | approved; B1 (`validate`) built |
-| 028, 029 | [Knowledge window](specs/028-knowledge-window.md), [links and inline reader](specs/029-links-and-inline-reader.md) | drafts; first slices built in the narrator |
-| 030 | [Console sessions and conversation context](specs/030-console-sessions-and-conversation-context.md): `/new`, `/context`, `/export all` | active; built |
-| 031 | [Layered learning and training mode](specs/031-layered-learning-and-training-mode.md): staged notes, `delphi learn`, `delphi train` | draft; the operator's answers are provisional; nothing run live |
-| 032-034 | [Change log](specs/032-change-log.md), [live usage and tool monitoring](specs/033-live-usage-and-tool-monitoring.md), [narrator monitoring panes](specs/034-narrator-monitoring-panes-spike.md) | approved; built |
-| 035 | [Failover without a driver](specs/035-failover-without-a-driver.md): save first, stay in the family | draft; built; the operator has not confirmed D-1..D-8 |
-| 036 | [Signed releases and the start-time refresh](specs/036-signed-releases-and-start-time-refresh.md) | approved; built; inert until the maintainers make a release key |
-| 037 | [Console deck change log](specs/037-console-deck-change-log.md) | approved; built |
-| 037 | [Training experiments](specs/037-training-experiments-quality-and-efficiency.md): quality and efficiency arms, jury, report | draft; built; proven live on the research cases |
+| 020, 021 | [Harness tool bridge](specs/020-harness-tool-bridge.md); [harness CLI features](specs/021-harness-cli-features.md) | built |
+| 022-027 | [The sharing layer](specs/022-xenia-sharing-overview.md), [bundle standard](specs/023-org-bundle-standard.md), [provenance and precedence](specs/024-bundle-trust-adoption-and-precedence.md), [compatibility](specs/025-plugin-skill-and-tool-compatibility.md), [team alignment](specs/026-team-alignment-and-strategist-integration.md), [authoring and evaluation](specs/027-bundle-authoring-distribution-and-evaluation.md) | built |
+| 028, 029 | [Knowledge window](specs/028-knowledge-window.md), [links and inline reader](specs/029-links-and-inline-reader.md) | first slices built |
+| 030 | [Console sessions and conversation context](specs/030-console-sessions-and-conversation-context.md) | built |
+| 031 | [Layered learning and training mode](specs/031-layered-learning-and-training-mode.md) | built; nothing run live |
+| 032-034 | [Change log](specs/032-change-log.md), [live usage and tool monitoring](specs/033-live-usage-and-tool-monitoring.md), [narrator monitoring panes](specs/034-narrator-monitoring-panes-spike.md) | built |
+| 035 | [Failover without a driver](specs/035-failover-without-a-driver.md) | built |
+| 036 | [Signed releases and the start-time refresh](specs/036-signed-releases-and-start-time-refresh.md) | built; inert until a release key exists |
+| 037 | [Console deck change log](specs/037-console-deck-change-log.md) | built |
+| 037 | [Training experiments](specs/037-training-experiments-quality-and-efficiency.md) | built; proven live on research cases |
+| 038 | [Capabilities map](specs/038-capabilities-map.md) | built |
+| 039 | [Error log](specs/039-error-log.md) | built |
+| 041 | [Agent registry, routing and role extensions](specs/041-agent-registry-routing-and-role-extensions.md) | approved; not built |
+| 043 | [Knowledge window, round 2](specs/043-knowledge-window-search-page-and-growing-corpus.md) | approved; partly built |
+| 044 | [Decisions pane](specs/044-decisions-pane.md) | approved; partly built |
+| 045 | [Harness loop techniques](specs/045-harness-loop-techniques.md) | approved; first slice built |
+| 046, 047 | [Harness and OpenAI coverage](specs/046-harness-and-openai-coverage.md); [Codex CLI as a third harness](specs/047-codex-harness-and-coverage.md) | approved; first slice built |
 
-Two numbers are used twice (014: documents and data visualization, and relay and away mode; 037: the console deck change log, and training experiments); the file names are unique and the specs cite each other by name, so both pairs stay until a renumbering PR can fix every reference at once. The machine-readable counterparts of the specs that define a format are in [`schemas/`](schemas/) (see [`docs/reference/schemas.md`](docs/reference/schemas.md)).
+Two numbers are used twice (014 and 037); the file names are unique and the specs cite each other by name. Numbers 040 and 042 are reserved for specs not yet written. The machine-readable counterparts of the specs that define a format are in [`schemas/`](schemas/) (see [`docs/reference/schemas.md`](docs/reference/schemas.md)).
 
 ## License
 
