@@ -22,7 +22,7 @@ const solid = (w: number, h: number, c: [number, number, number, number]): Raste
 test('a picture is painted two pixels to a cell: the upper as the glyph colour, the lower as the background', () => {
   withColour('truecolor', () => {
     const r: Raster = { width: 1, height: 2, rgba: Uint8Array.from([255, 0, 0, 255, 0, 0, 255, 255]) };
-    const [row] = paint(r, 10);
+    const [row] = paint(r, 10, 'half');
     assert.equal(plain(row!), '▀');
     assert.ok(row!.includes('38;2;255;0;0') && row!.includes('48;2;0;0;255'), JSON.stringify(row));
   });
@@ -31,7 +31,7 @@ test('a picture is painted two pixels to a cell: the upper as the glyph colour, 
 test('transparent pixels leave the terminal background showing, in every combination', () => {
   withColour('truecolor', () => {
     const [clear, red] = [[0, 0, 0, 0], [255, 0, 0, 255]];
-    const cell = (a: number[], b: number[]) => paint({ width: 1, height: 2, rgba: Uint8Array.from([...a, ...b]) }, 4)[0]!;
+    const cell = (a: number[], b: number[]) => paint({ width: 1, height: 2, rgba: Uint8Array.from([...a, ...b]) }, 4, 'half')[0]!;
     assert.equal(cell(clear, clear), ' ');
     assert.equal(plain(cell(red, clear)), '▀');
     assert.equal(plain(cell(clear, red)), '▄');
@@ -41,16 +41,16 @@ test('transparent pixels leave the terminal background showing, in every combina
 
 test('an odd number of pixel rows ends in a half cell, not a missing row', () => {
   withColour('truecolor', () => {
-    assert.equal(paint(solid(3, 3, [9, 9, 9, 255]), 10).length, 2);
+    assert.equal(paint(solid(3, 3, [9, 9, 9, 255]), 10, 'half').length, 2);
   });
 });
 
 test('a picture is never wider than the window nor taller than the cap, and keeps its proportions', () => {
   withColour('truecolor', () => {
-    const wide = paint(solid(160, 40, [1, 2, 3, 255]), 30);
+    const wide = paint(solid(160, 40, [1, 2, 3, 255]), 30, 'half');
     assert.equal(plain(wide[0]!).length, 30);
     assert.equal(wide.length, 4, '160x40 at 30 wide is 30x8 pixels: 4 cell rows');
-    const tall = paint(solid(40, 160, [1, 2, 3, 255]), 80);
+    const tall = paint(solid(40, 160, [1, 2, 3, 255]), 80, 'half');
     assert.equal(tall.length, MAX_PICTURE_ROWS);
     assert.equal(plain(tall[0]!).length, 10, '40x160 at 40 pixels high is 10x40');
   });

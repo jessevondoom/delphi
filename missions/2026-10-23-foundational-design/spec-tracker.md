@@ -182,3 +182,4 @@ The operator asked for a half-block image renderer (not `ink-picture`: 136 packa
 | I1 | PNG/JPEG/GIF decoders in `delphi-docs`, `/v1/image`, half-block painter, reader draws whole-line pictures | built |
 | I2 | check pictures in the chat reader and the change feed | not started |
 | I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | not started; after E2/E3 |
+| Q1 | quadrant pictures as the default (spec 029-A2), half blocks kept: `DELPHI_PICTURE`, `/pictures` | built; font support in the operator's terminal unproven |

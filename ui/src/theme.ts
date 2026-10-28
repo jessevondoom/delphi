@@ -126,6 +126,16 @@ export function pixelCell(top: Px, bottom: Px): string {
   if (t) return chalk.rgb(top[0], top[1], top[2])('▀');
   return b ? chalk.rgb(bottom[0], bottom[1], bottom[2])('▄') : ' ';
 }
+/**
+ * One cell of a quadrant picture (`specs/029` §11): `glyph` in `fg` over `bg`, either of which may be left to the
+ * terminal's own colour (null). A cell of one colour is a space on that background, so it has no glyph to leave a seam.
+ */
+export function paintedCell(glyph: string, fg: readonly [number, number, number] | null, bg: readonly [number, number, number] | null): string {
+  let s = chalk;
+  if (fg) s = s.rgb(fg[0], fg[1], fg[2]);
+  if (bg) s = s.bgRgb(bg[0], bg[1], bg[2]);
+  return fg || bg ? s(glyph) : glyph;
+}
 /** Whether the terminal can show a picture: it needs colour, and `NO_COLOR` and a dumb terminal have none. */
 export const pictureOk = (): boolean => caps.color !== 'none';
 /** A mascot's chin: seven cells of a darker shade of the body, painted, not drawn with `▀`. Glyphs where there is no colour. */
