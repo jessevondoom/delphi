@@ -3,7 +3,7 @@ id: spec-050-memory-lifecycle-types-supersession-and-trace-mining
 title: "050: Memory lifecycle: entry types, supersession, validity, trace mining and write-path audit (draft)"
 author: architect
 timestamp: 2026-10-28T18:20:00Z
-status: draft   # a proposal, not permission to build (No Spec, No Build). Extends 004 §5, 031 §3 and 045 T11 if approved; open decisions in §8.
+status: approved   # by the operator, 2026-10-28 ("approve 049 and 050, follow your recommendation on the other decisions"). Extends 004 §5, 031 §3 and 045 T11. Slices that measure against spec 048 wait for 048's approval.
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, memory, learning, retro, traces, trust, draft]
 
 # Spec 050: Memory lifecycle
 
-> **Status: draft.** Sibling of `specs/048` (benchmarking) and `specs/049` (context). Delphi's memory is ahead of the usual agent frameworks on trust (staged notes cannot reach the prompt unratified, 031 §3.1; taint blocks promotion, `[H-004]`) and on measurement (rule exposure and scores, 031 §3.4). The gaps are in the *life* of an entry: what kind it is, when it is stale, what it replaces, and how failures are turned into proposals.
+> **Status: approved (2026-10-28).** Sibling of `specs/048` (benchmarking) and `specs/049` (context). Delphi's memory is ahead of the usual agent frameworks on trust (staged notes cannot reach the prompt unratified, 031 §3.1; taint blocks promotion, `[H-004]`) and on measurement (rule exposure and scores, 031 §3.4). The gaps are in the *life* of an entry: what kind it is, when it is stale, what it replaces, and how failures are turned into proposals.
 
 ## 1. Why
 
@@ -80,12 +80,12 @@ Memory that only grows, or only decays by age, accumulates contradictions and st
 | ML5 | ML-5 trace mining report, then the T11 skill wiring | 045 H1 (events), 045 H8 |
 | ML6 | ML-7 retention probes in the learning-loop suite | ML3, 048 BM3 |
 
-## 8. Open decisions (provisional answers, change on request)
+## 8. Decisions (answered by the operator 2026-10-28: the provisional answers are accepted; change on request)
 
 - **OD-1** Is ML-2's similarity floor worth having, or only exact key and link matches at first? Provisional: keys and links first; add similarity only if the first runs miss real conflicts.
 - **OD-2** Whether the new frontmatter counts toward the 6 KB file cap. Provisional: it does not count (it is metadata), but rule bodies keep every existing cap.
 - **OD-3** The review window for `last_confirmed`. Provisional: 90 days, flagged only.
-- **OD-4** Verify the LangMem / Deep Agents description (048 OD-1) before approval.
+- **OD-4** Verifying the LangMem / Deep Agents description before approval: waived by the operator. Approved with the claims unchecked; every addition proposes only or ships `off`, and spec 048 measures it, so an unverified source cannot change a default.
 - **OD-5** Whether the agent may set `valid_until` through the `note` tool. Provisional: yes for notes (they stay staged); never for rules.
 
 ## 9. Non-goals

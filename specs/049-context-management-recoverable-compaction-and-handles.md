@@ -3,7 +3,7 @@ id: spec-049-context-management-recoverable-compaction-and-handles
 title: "049: Context management: recoverable compaction, argument trimming, offload previews, structured digests and handle relay (draft)"
 author: architect
 timestamp: 2026-10-28T18:10:00Z
-status: draft   # a proposal, not permission to build (No Spec, No Build). Amends 045 T5/T6 and 030 §4.3 if approved; open decisions in §8.
+status: approved   # by the operator, 2026-10-28 ("approve 049 and 050, follow your recommendation on the other decisions"). Amends 045 T5/T6 and 030 §4.3. Slices that measure against spec 048 wait for 048's approval.
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, context, compaction, handoff, payload-store, draft]
 
 # Spec 049: Context management
 
-> **Status: draft.** Sibling of `specs/048` (benchmarking) and `specs/050` (memory). It refines slices H2 and H3 of `specs/045` and the model-written summary of `specs/030` §4.3 before they are built. Nothing here changes what a role may touch.
+> **Status: approved (2026-10-28).** Sibling of `specs/048` (benchmarking) and `specs/050` (memory). It refines slices H2 and H3 of `specs/045` and the model-written summary of `specs/030` §4.3 before they are built. Nothing here changes what a role may touch.
 
 ## 1. Why
 
@@ -86,12 +86,12 @@ A long span fills its window with old tool results, large tool-call arguments an
 
 Where a slice is "folded into" a 045 slice, the 045 slice's pull request carries it and the tracker lists both specs.
 
-## 8. Open decisions (provisional answers, change on request)
+## 8. Decisions (answered by the operator 2026-10-28: the provisional answers are accepted; change on request)
 
 - **OD-1** Keep the dropped turns for the life of the mission (provisional), or age them out by size? Provisional: for the mission, bounded by the payload store's existing limits; revisit if it grows.
 - **OD-2** How many recent turns stay untrimmed (CX-1). Provisional: 6.
 - **OD-3** Whether CX-6 handles replace pasted raw output in the operator-facing answer, or only travel between seats. Provisional: between seats only; the operator sees the exact text quoted where it matters.
-- **OD-4** Verify the LangChain description (OD-1 of spec 048) before approval.
+- **OD-4** Verifying the LangChain description before approval: waived by the operator. Approved with the claims unchecked; every technique ships `off` and is a hypothesis that spec 048 measures, so an unverified source cannot change a default.
 
 ## 9. Non-goals
 

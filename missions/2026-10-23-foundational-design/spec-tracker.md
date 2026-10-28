@@ -210,9 +210,9 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 | H8 | trace review skill | not started |
 | H9 | measure H1 to H5; set defaults | not started |
 
-## Benchmarking, context and memory (specs 048, 049, 050; draft 2026-10-28)
+## Benchmarking, context and memory (specs 048, 049, 050; drafted 2026-10-28)
 
-Drafted from a review of LangChain / LangSmith benchmarking, memory and context practice (recollection, unverified: OD-1 of each spec). Delphi uses no LangChain code; these take methods. **Drafts are proposals, not permission to build**: none starts until the operator approves. 049 refines slices H2/H3 of spec 045 and §4.3 of spec 030; 048 supplies the measuring instruments 045 H9 needs.
+Drafted from a review of LangChain / LangSmith benchmarking, memory and context practice (recollection, unverified). Delphi uses no LangChain code; these take methods. **049 and 050 were approved by the operator on 2026-10-28**, with their provisional decisions accepted and the source check waived (every technique ships `off` or proposes only, and 048 measures it). **048 is still a draft**: its open decisions (efficiency flag threshold, external benchmark choice, CI use of behavior evals) are unanswered, and the GAIA-style anchor is under consideration. 049 refines slices H2/H3 of spec 045 and §4.3 of spec 030; 048 supplies the measuring instruments 045 H9 needs. A 049 or 050 slice that *measures* against 048 (CX2's retention numbers, CX4, CX5, CX6, ML6) waits for 048 BM1-BM3 to be approved and built; ML1, ML2, ML3 and CX1's code can start now, with defaults `off`.
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
@@ -223,18 +223,18 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | draft |
 | 048 | BM6 | external benchmark anchor (operator picks the subset) | draft |
 | 048 | BM7 | phase-effort arm (after 045 H4) | draft |
-| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | draft |
-| 049 | CX2 | recoverable compaction (folded into 045 H3) | draft |
-| 049 | CX3 | context composition in accounting | draft |
-| 049 | CX4 | result summary plus handles between seats | draft |
-| 049 | CX5 | structured session digest (amends 030 §4.3) | draft |
-| 049 | CX6 | compaction threshold arms; default decisions | draft |
-| 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | draft |
-| 050 | ML2 | entry types and dates, schemas | draft |
-| 050 | ML3 | validity, stale list in `/retro`, type-aware selection | draft |
-| 050 | ML4 | supersession candidates and ratification | draft |
-| 050 | ML5 | trace mining report; wires 045 T11 / H8 | draft |
-| 050 | ML6 | retention probes in the learning-loop suite | draft |
+| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | not started |
+| 049 | CX2 | recoverable compaction (folded into 045 H3) | not started |
+| 049 | CX3 | context composition in accounting | not started |
+| 049 | CX4 | result summary plus handles between seats | not started |
+| 049 | CX5 | structured session digest (amends 030 §4.3) | not started |
+| 049 | CX6 | compaction threshold arms; default decisions | not started |
+| 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | not started |
+| 050 | ML2 | entry types and dates, schemas | not started |
+| 050 | ML3 | validity, stale list in `/retro`, type-aware selection | not started |
+| 050 | ML4 | supersession candidates and ratification | not started |
+| 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started |
+| 050 | ML6 | retention probes in the learning-loop suite | not started |
 
 Suggested order if approved: 048 BM1, 050 ML1, 049 CX1 with 045 H2, 048 BM2/BM3, then the rest.
 
