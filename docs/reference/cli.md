@@ -400,10 +400,10 @@ Commands that sign show the exact bytes and want the card's code typed at a term
 Print the command reference or a man page.
 
 ```
-  delphi docs cli | man
+  delphi docs cli | man | catalog [--repo <dir>]
 ```
 
-Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff.
+Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout.
 
 ### `delphi completions`
 

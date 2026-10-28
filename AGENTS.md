@@ -38,6 +38,7 @@ Delphi: a Rust workspace (`crates/`) plus an Ink/TypeScript console (`ui/`). One
 ```sh
 cargo run -q -p delphi -- docs cli > docs/reference/cli.md
 cargo run -q -p delphi -- docs man > docs/reference/delphi.1
+cargo run -q -p delphi -- docs catalog > docs/reference/catalog.md   # roles and skills, from their manifests
 ```
 
 `cargo test -p delphi --test docs` fails when these, or a schema, drift from the program.
