@@ -130,3 +130,93 @@ Any letter types into the box · `enter` search / open · `↑ ↓` move through
 2. ~~Opening a result~~ Settled by the operator: inline, navigated like hyperlinks (`specs/029`).
 3. **Saving:** can an online result be saved into the knowledge base from the window, through the scout's verification? Recommended: read-only in the first version.
 4. **Build order:** recommended slices: (a) the box, offline results and the §3 shelf, using the existing search RPC; (b) browse a collection and `m` more-like-this, which needs the RPC to accept a passage as the query; (c) the `[search]` client and online mode; (d) the scout's skill and tool.
+
+## 10. Amendment 028-A1: two modes, and "expand the archive" (proposed 2026-10-28)
+
+**Status: proposed, not approved.** The design below is the operator's, given in chat on 2026-10-28. It supersedes D-2 (online is an explicit query choice, `●/○` toggle), §3's mode line, and §9.3 (saving is read-only) for the archives pane, and it relaxes validation for one narrow path (§10.4). Nothing is built. Per `AGENTS.md`, build starts only after the operator approves this section; the open questions in §10.8 have recommended answers so approval can be one word.
+
+### 10.1 What changes
+The archives pane has **two modes**, switched by `shift+tab` (it already cycles the approval mode in the chat; here the pane owns the key):
+
+| Mode | Title row | Label above the box | What the page shows |
+| :-- | :-- | :-- | :-- |
+| **search** (default; the page as it is today) | the orchestrator badge, a space, `search the archives` (replaces the word `knowledge`) | none beyond the title | the shelf: collection counts, recently changed, most used, totals |
+| **expand** | the same title | the scout badge, a space, `expand knowledge base: research a topic` | a clean page: the title, the label and the box only. No shelf, no collection counts, no recent list, no totals, no metadata |
+
+- The `● offline ○ online ○ both` indicators are **removed** from both modes. `tab` no longer cycles them; search mode is always the local, offline search (the zero-token path of §6a). Searching the web from this pane exists only through expand mode.
+- The badges are the roles' faces as the roster draws them (`ui/src/theme.ts`; role IDs `orchestrator` and `scout`, never theme names).
+- The mode starts on `search`, is remembered per window for the session, and `shift+tab` toggles it. The footer names the other mode: `shift+tab  expand` / `shift+tab  search`.
+- In expand mode the shelf's data is not fetched either (no `kb.get` for `/v1/collections` while the clean page shows).
+
+### 10.2 What expand mode does
+On `enter`, the daemon runs a **research job** for the topic. It is bounded and mostly code, with a model only where judgement is needed:
+
+1. **Query only trusted sources.** The search is restricted to the **trusted-source list** (§10.3): a site-restricted query to the search API of §6, plus direct fetches from the encyclopedic sources' own APIs where they have one. No open-web result enters the job.
+2. **Read, and follow references.** The job reads the top pages, extracts each page's references and external links, and follows only those whose host is also on the list (depth 1, capped; §10.6). A reference to an unlisted host is recorded as `seen, not read` and never fetched.
+3. **Decide what to bring back.** The scout (one `fast`-tier model call) reads the extracted text and, per source, chooses: **full text as markdown** if the source's licence allows reuse (§10.5); **summary and facts** (each fact with its source URL and a short quote) if the page is pertinent but the licence does not allow copying; or **nothing** if it is not relevant to the topic.
+4. **Write entries.** Each kept item becomes one document in a new collection, `knowledge/web/`, with frontmatter `source_url`, `publisher`, `retrieved`, `licence`, `kind: full | summary`, `topic`, `trust: trusted_source`. The index refreshes, so the entries are searchable by the local vector search at once.
+
+The scout's call is the only token spend. Fetching, parsing, link filtering, licence lookup and writing are deterministic code.
+
+### 10.3 The trusted-source list
+- A release file, `context/sources/trusted.toml`, ratified like the other context files (a change is a proposal; a signed release ratifies it). It is what the primary-sources registry (`missions/2026-10-23-foundational-design/primary-sources-plan-2026-10-26.md` §3) grows from; until that registry is built this file stands alone, and S1 of that plan absorbs it.
+- Each entry: `host`, `publisher`, `kind` (`encyclopedia`, `standards`, `government`, `journal`, `documentation`), `licence` (an SPDX id or `unknown`), `reuse` (`full` or `summary-only`).
+- **The list is operator-owned.** The scout and the job cannot add a host, and a page's content cannot: a link is followed only if its host is already listed. This keeps "content read from outside cannot raise its own trust" (`specs/001` §5) true.
+- A host matches by exact registrable domain over HTTPS. Redirects are followed only between listed hosts; a redirect off the list stops the fetch.
+
+### 10.4 Why validation is not invoked (and what still holds)
+The spec 040 validator is for **chat prompts that bring in research**: arbitrary web content, chosen by a model, shaping an answer. Here the sources are fixed in advance by a ratified list, the pane is a deliberate operator action, and every stored item says where it came from. So the job does **not** call the validator. This relaxes validation only; it does not widen authority:
+- **Taint.** The job runs as an untrusted-content span (`specs/001` §5.1, $L_2$–$L_3$ while it reads): no worktree writes outside `knowledge/web/`, no code execution, no outbound call except GET to listed hosts, no dispatch. The daemon, not the scout, writes `knowledge/web/` after the scout returns.
+- **Provenance stays.** Entries are `trust: trusted_source`, not operator-trusted. The explorer shows a `web` tag with publisher and date; agent retrieval ranks them below `specs/`, `context/` and the operator's documents, and cites the URL. When an agent relies on a `knowledge/web/` entry for a factual assertion in a deliverable, the validator applies there as it would anywhere (that is an agent use, not this pane).
+- **Storing never raises trust.** An entry cannot become `specs/`, `context/` or operator memory by being stored; promotion is a ratified proposal.
+- **Instructions in pages are data.** Page text reaches the scout inside the spotlighted untrusted block, and the job's tool surface is fixed (§10.2), so an injected instruction has nothing to call.
+
+### 10.5 Licensing
+- **Full text as markdown** only when the list entry has `reuse = "full"` and the page carries no stricter notice. Seed: CC BY, CC BY-SA, CC0 and public-domain sources (US government works). The entry keeps the licence, an attribution line (author and URL) and a `share-alike` flag where required.
+- **Everything else** is stored as a summary plus facts, each with a source URL and a quote of at most one sentence. No page body is copied.
+- An `unknown` licence is `summary-only`. The job does not guess a licence from page text.
+- Share-alike entries are marked, because a bundle that exports the collection (`specs/023`) must carry the licence; export of `knowledge/web/` is off by default (§10.8 Q4).
+
+### 10.6 Progress and the results page
+**While running**, the page shows a live count from the job's own counters (no model call):
+```
+ researching "mitochondrial calcium uniporter"
+ reading 7 sources · 12 found · 3 skipped (not on the trusted list)
+ en.wikipedia.org · pubmed.ncbi.nlm.nih.gov · …
+```
+`esc` cancels; entries already written stay.
+
+**Limits** (provisional, in `[research]`): at most 15 sources read per job, link depth 1, 20 s per fetch, 2 MB per page, 90 s per job, one job at a time.
+
+**After it completes**, a results page replaces the progress page. Near the top, a banner:
+
+> **the archive has been expanded to include N new entries**
+
+(`1` reads `1 new entry`; `0` reads `no new entries: the archive already covers this`.) Under it, the new entries as result rows in the §4 shape (path, publisher, `full` or `summary`, licence), opening in the reader of `specs/029` on `enter`. A line below lists sources read but not kept, with the reason (not relevant, licence, duplicate). An entry identical to an existing one (same URL and content hash) is not counted. `esc` returns to the clean expand page.
+
+### 10.7 Failure and risk
+| Case | Behaviour |
+| :-- | :-- |
+| no `[search]` provider configured | one line naming the config key (§6); expand cannot run |
+| no network | `can't reach the sources`; nothing is written |
+| one source fetch fails | skipped and counted; the job continues |
+| the scout call fails or the quota is out | nothing is written; the page says so and offers a retry |
+| a listed site serves wrong or poisoned content | stored with provenance, ranked below curated documents, checked by the validator where an agent relies on it (§10.4). This residual risk is the cost of skipping validation here. |
+| the query text | leaves the machine to the search API on `enter` in expand mode only, never while typing |
+
+### 10.8 Open questions (recommended answers)
+1. **Seed list.** Recommended: `en.wikipedia.org` and `developer.mozilla.org` (CC BY-SA, `full`, share-alike), US-government `.gov` works (public domain, `full`), `pubmed.ncbi.nlm.nih.gov` and `arxiv.org` (`summary-only`), `rfc-editor.org`, `w3.org`, `docs.rs`, `doc.rust-lang.org`. The operator edits it before approval.
+2. **Which search API.** As §9.1: Brave Search API, with SearXNG as the keyless alternative.
+3. **Does the scout need a model-facing web tool?** Recommended no: the daemon does the fetches; the scout gets extracted text and returns a structured decision (`keep`, `form`, `summary`, `facts`). Tool surface stays zero and the job is testable with a fake model.
+4. **Export of `knowledge/web/` in bundles.** Recommended off by default.
+5. **Removal.** Recommended: entries are never deleted automatically; a `delphi kb forget <path>` is a later slice.
+
+### 10.9 Slices and tests
+| Slice | Content |
+| :-- | :-- |
+| E1 | `shift+tab` mode toggle in the archives window, role badges, indicators removed, the clean expand page (UI only, no job) |
+| E2 | `[search]` client (§6), `context/sources/trusted.toml` with parser and lint, deterministic fetch, link filter and licence logic, tested with a fake search and fake pages |
+| E3 | the research job: daemon method, scout decision call, `knowledge/web/` writes, index refresh, counters |
+| E4 | progress and results pages, the banner, cancel, failure states; a pty test against a fixture server |
+
+Acceptance tests (automated, no live network): `shift+tab` toggles modes and expand mode hides every shelf element; the offline/online indicators are absent in both modes; an unlisted host is never fetched, including by redirect or by a link in a fetched page; a `summary-only` or `unknown`-licence source never yields a body copy; nothing is written outside `knowledge/web/`; an injected instruction in a fixture page changes nothing; the banner count equals the entries written, and a repeated run says `no new entries`; a failed scout call writes nothing; the pane never calls the validator, and the validator applies when an agent cites a `knowledge/web/` entry in a deliverable.
