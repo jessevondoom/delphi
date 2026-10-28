@@ -45,6 +45,8 @@ pub struct EngineService {
     attest: Mutex<HashMap<String, service_xenia::Parked>>,
     /// The one console admin card waiting for an answer (`service_xenia.rs`, `xenia_admin_console.rs`).
     admin_card: Mutex<Option<service_xenia::ParkedAdmin>>,
+    /// The archives pane's research job: the last one started, running or finished (`research.rs`). One at a time.
+    research: Mutex<Option<Arc<crate::research::Shared>>>,
 }
 
 struct PlanState {
@@ -96,7 +98,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -767,6 +769,73 @@ impl EngineService {
         Ok(json!({"status": r.status, "body": r.body}))
     }
 
+    /// `research.start`: expand the knowledge base with what the trusted sources say about a topic (`specs/028` §10). Returns at once;
+    /// `research.status` reports progress and, when the job ends, the report. One job at a time. Console only: it sends the topic to a
+    /// search engine and writes into the workspace.
+    async fn research_start(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let topic = p["topic"].as_str().unwrap_or("").trim().to_string();
+        if topic.is_empty() || topic.chars().count() > 200 {
+            return Err(err(code::INVALID_PARAMS, "`topic` must be 1 to 200 characters"));
+        }
+        let shared = crate::research::Shared::new(&topic);
+        {
+            let mut cur = self.research.lock().unwrap();
+            if cur.as_ref().is_some_and(|j| !j.finished()) {
+                return Err(err(-32000, "a research job is already running"));
+            }
+            *cur = Some(shared.clone());
+        }
+        let (e, ws, home) = (self.engine.clone(), self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let setup = tokio::task::spawn_blocking(move || crate::research_setup::deps(&e, &ws, &home)).await.map_err(|e| err(-32000, e.to_string()))?;
+        let deps = match setup {
+            Ok(d) => d,
+            Err(msg) => {
+                shared.state.lock().unwrap().phase = "failed";
+                shared.state.lock().unwrap().error = Some(msg.clone());
+                return Err(err(-32000, &msg));
+            }
+        };
+        let (engine, ws, home) = (self.engine.clone(), self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        tokio::spawn(async move {
+            crate::research::run(deps, &topic, shared.clone()).await;
+            // What was written is searchable now: bring the index up to date (the words at once, the vectors in the background).
+            if shared.snapshot().report.is_some_and(|r| !r.new.is_empty() || !r.updated.is_empty()) {
+                let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::kb::KbError> {
+                    let mut kb = crate::kb::Kb::open(&ws.join("local/state.db"))?;
+                    let model = crate::kb::attach_default(&home, &mut kb)?;
+                    kb.refresh(&ws, "")?;
+                    if model {
+                        crate::kb::embed_in_background(&home, &ws);
+                    }
+                    Ok(())
+                })
+                .await;
+            }
+            drop(engine);
+        });
+        Ok(json!({"started": true}))
+    }
+
+    async fn research_status(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        match self.research.lock().unwrap().as_ref() {
+            Some(j) => Ok(crate::research::status_json(&j.snapshot())),
+            None => Err(err(code::NOT_FOUND, "no research job has been started")),
+        }
+    }
+
+    async fn research_cancel(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        match self.research.lock().unwrap().as_ref() {
+            Some(j) if !j.finished() => {
+                j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(json!({"cancelling": true}))
+            }
+            _ => Ok(json!({"cancelling": false})),
+        }
+    }
+
     async fn kb_index(&self, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let (ws, home) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
@@ -1228,6 +1297,9 @@ impl Extension for ServiceExt {
                 "timer.cancel" => svc.timer_cancel(params, ctx).await,
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
+                "research.start" => svc.research_start(params, ctx).await,
+                "research.status" => svc.research_status(ctx).await,
+                "research.cancel" => svc.research_cancel(ctx).await,
                 "decisions.list" => svc.decisions_list(params).await,
                 "decision.list" => svc.decision_list(params).await,
                 "decision.get" => svc.decision_get(params).await,
@@ -2038,7 +2110,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2095,7 +2167,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
+            let everything_a_relay_must_not_reach = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","kb.search", "kb.get", "approval.resolve", "budget.set", "permissions.set", "permissions.get", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "ratify.apply", "ratify.reject", "ratify.list", "mission.rewind", "daemon.shutdown", "usage.get", "session.snapshot", "observe.snapshot", "observe.state", "models.get", "anything.else"];
             for m in everything_a_relay_must_not_reach {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2477,6 +2549,22 @@ mod tests {
             assert!(saw_resync, "an overflowing narrator gets resync_required");
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn research_is_for_the_console_and_says_plainly_when_nothing_can_run() {
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let (narrator, console) = (CallContext { scope: Scope::Narrator, client_id: 1 }, CallContext { scope: Scope::Console, client_id: 2 });
+        assert!(svc.research_start(json!({"topic": "bft"}), narrator).await.is_err(), "the narrator is read-only");
+        assert!(svc.research_status(narrator).await.is_err() && svc.research_cancel(narrator).await.is_err());
+        assert_eq!(svc.research_status(console).await.unwrap_err().code, code::NOT_FOUND, "nothing started yet");
+        assert_eq!(svc.research_start(json!({"topic": "  "}), console).await.unwrap_err().code, code::INVALID_PARAMS);
+        assert_eq!(svc.research_cancel(console).await.unwrap(), json!({"cancelling": false}));
+        // No [search] engine in the test workspace: the job cannot start, and the reason is the config key to set.
+        let e = svc.research_start(json!({"topic": "bft"}), console).await.unwrap_err();
+        assert!(e.message.contains("[search]"), "{}", e.message);
+        assert_eq!(svc.research_status(console).await.unwrap()["phase"], "failed");
     }
 
     #[tokio::test(flavor = "multi_thread")]

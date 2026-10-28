@@ -152,19 +152,27 @@ impl Engine {
     /// One capped, tool-less call on a given pair, outside any span: the text it wrote, made safe, redacted. `None` if the pair cannot
     /// be called or the call fails. It raises no card and takes no budget reservation; callers use it only for a few hundred tokens.
     pub(crate) async fn one_shot(&self, key: &delphi_adapter::config::PoolKey, contract: &str, max_tokens: u64) -> Option<Written> {
+        let raw = self.one_shot_raw(key, &ipr(contract), max_tokens).await?;
+        let text = clean_summary(&raw.text);
+        if text.is_empty() {
+            return None;
+        }
+        Some(Written { text: self.secrets.redact(&text), ..raw })
+    }
+
+    /// The call under [`Engine::one_shot`], for a caller that wants the model's words as written (a JSON answer, say) and cleans them
+    /// itself: the text is joined but neither cleaned nor redacted. Same limits: no tools, no span, no card, no budget reservation.
+    pub(crate) async fn one_shot_raw(&self, key: &delphi_adapter::config::PoolKey, ipr: &Ipr, max_tokens: u64) -> Option<Written> {
         let cfg = self.cfg.get();
         let ep = cfg.endpoint(&key.endpoint_id)?;
         let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: key.model_id.clone() };
         let opts = CompileOptions { max_tokens, thinking_budget: None, temperature: None, tools: vec![], betas: ep.betas.clone() };
-        let compiled = delphi_adapter::compile_for(ep, &ipr(contract), &[], &target, &opts).ok()?;
+        let compiled = delphi_adapter::compile_for(ep, ipr, &[], &target, &opts).ok()?;
         let mut sink = |_e: delphi_adapter::claude::StreamEvent| {};
         let done = self.model.call(ep, &key.model_id, &compiled, &mut sink).await.ok()?;
-        let text = clean_summary(&done.blocks.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n"));
-        if text.is_empty() {
-            return None;
-        }
+        let text = done.blocks.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n");
         let u = &done.usage;
-        Some(Written { text: self.secrets.redact(&text), endpoint_id: ep.id.clone(), model_id: key.model_id.clone(), tokens: u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens + u.thinking_tokens })
+        Some(Written { text, endpoint_id: ep.id.clone(), model_id: key.model_id.clone(), tokens: u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens + u.thinking_tokens })
     }
 }
 
