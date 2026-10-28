@@ -240,7 +240,7 @@ The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log 
 | `/permissions [default\|accept-edits\|mission-auto\|optimistic]` | approval mode (`Shift+Tab` cycles it) |
 | `/budget [dollars]`, `/usage [mission\|role\|task\|model]` | this mission's ceiling; tokens and spend |
 | `/models`, `/agents`, `/connectors` | the pool, who is running, which connectors are pinned |
-| `/decisions`, `/merge <task>` | review an optimistic build's decisions; rerun the gates and merge card |
+| `/decisions`, `/merge <task>` | open the decisions pane (everything you owe, one at a time); rerun the gates and merge card |
 | `/ratify` | pending proposals (config, manifests, skills, release files) |
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
 | `/org` | the added org bundles, their goals, perspectives and open items |

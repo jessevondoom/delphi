@@ -295,7 +295,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       return;
     }
     // A command may have changed what the workspace can run on (`/ratify apply`), so ask again afterwards.
-    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note }).then(checkModels);
+    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note, openDecisions: () => { setDeck(2); deckRef.current = 2; loadDecisions(); } }).then(checkModels);
   };
 
   // The left deck is the knowledge window (`archives.ts`), reading through `kb.get` as the narrator's does. The ref moves
