@@ -4,7 +4,7 @@
 
 # ── Flags that appear on several pages: one disposition wherever they appear ──
 flag | * | --help, --version | na | | every CLI prints its help and version
-flag | * | --config | used | | `-c key=value` only from a short allow-list, and so far only `model_reasoning_effort` (from `effort`); any other key could widen authority, so it is refused
+flag | * | --config | used | | `-c key=value` only from a short allow-list, and so far only `model_reasoning_effort` (from `effort`) and `features.shell_tool=false` (a reader seat has no shell: the read-only sandbox still reads any file on disk, probed 2026-10-28); any other key could widen authority, so it is refused
 flag | * | --enable, --disable | refused | | flips a feature flag, which could turn on surface Delphi has not classified
 flag | * | --strict-config | na | | the operator's config is ignored (`--ignore-user-config`), so there is nothing to be strict about
 flag | * | --model | used | | the span's model
