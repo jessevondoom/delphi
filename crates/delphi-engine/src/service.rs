@@ -381,6 +381,35 @@ impl EngineService {
         Ok(json!({"mission_id": m.id, "decisions": ds.iter().map(|d| d.to_json()).collect::<Vec<_>>(), "pending": pending}))
     }
 
+    /// `decision.list`: every decision the operator owes (`specs/044` §4), built by `decision_model` from the pending
+    /// approval cards and the provisional decisions that await review. Read-only: it calls no model.
+    async fn decision_list(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let list = self.decision_records(&m)?;
+        let tickable = list.iter().filter(|d| d["tickable"] == true).count();
+        Ok(json!({"mission_id": m.id, "count": list.len(), "tickable": tickable, "decisions": list}))
+    }
+
+    /// `decision.get`: one entry of `decision.list`, by its `id`.
+    async fn decision_get(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let Some(id) = p["id"].as_str() else {
+            return Err(err(code::INVALID_PARAMS, "`id` is required"));
+        };
+        match self.decision_records(&m)?.into_iter().find(|d| d["id"] == id) {
+            Some(d) => Ok(json!({"mission_id": m.id, "decision": d})),
+            None => Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id))),
+        }
+    }
+
+    fn decision_records(&self, m: &MissionState) -> Result<Vec<Value>, RpcError> {
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let at: std::collections::HashMap<u64, String> = events.iter().filter(|e| e.kind == "decision.provisional").map(|e| (e.seq, e.timestamp.clone())).collect();
+        let ledger: Vec<_> = crate::provisional::ledger_all(&events).into_iter().map(|d| { let t = at.get(&d.seq).cloned().unwrap_or_default(); (d, t) }).collect();
+        let cards: Vec<Value> = self.engine.broker.pending().iter().map(|r| r.event_payload()).collect();
+        Ok(crate::decision_model::list(&cards, &ledger))
+    }
+
     /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
     /// decision's payload hash, so a review of one thing cannot ratify another, and only an allowed decision (the
     /// kind that enabled work) is reviewed.
@@ -1163,6 +1192,8 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "decisions.list" => svc.decisions_list(params).await,
+                "decision.list" => svc.decision_list(params).await,
+                "decision.get" => svc.decision_get(params).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
@@ -2155,6 +2186,39 @@ mod tests {
         let reviewed = events_of(&f, "decision.reviewed");
         assert_eq!(reviewed.len(), 1);
         assert!(reviewed[0].payload["by"].as_str().unwrap().starts_with("console-") && reviewed[0].task_id.as_deref() == Some("t_0001"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_decision_list_holds_what_awaits_the_operator_and_only_a_console_can_ask_for_it() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let hash_a = seed_decision(&f, "dec_a", true).await;
+        let _ = seed_decision(&f, "dec_b", false).await;
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let l = c.call("decision.list", json!({})).unwrap();
+            assert_eq!(l["count"], 1, "the refusal needs nothing from the operator: {}", l);
+            let d = &l["decisions"][0];
+            assert_eq!((d["id"].as_str(), d["kind"].as_str(), d["tier"].as_str(), d["source_id"].as_str()), (Some("provisional:dec_a"), Some("build"), Some("amber"), Some("dec_a")));
+            assert_eq!(d["payload_blake3"], hash_a.as_str());
+            assert_eq!(d["brief"]["state"], "authored");
+            let one = c.call("decision.get", json!({"id": "provisional:dec_a"})).unwrap();
+            assert_eq!(one["decision"]["id"], "provisional:dec_a");
+            assert_eq!(rpc_code(c.call("decision.get", json!({"id": "provisional:nope"}))), Some(code::NOT_FOUND));
+            assert_eq!(rpc_code(c.call("decision.get", json!({}))), Some(code::INVALID_PARAMS));
+            c.call("decisions.review", json!({"decision_id": "dec_a", "payload_blake3": hash_a, "resolution": "ratified"})).unwrap();
+            assert_eq!(c.call("decision.list", json!({})).unwrap()["count"], 0, "a reviewed decision is no longer owed");
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("decision.list", json!({}))), Some(code::FORBIDDEN));
+            }
+        })
+        .await;
     }
 
     // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──

@@ -5,9 +5,11 @@ import type { Approval, State } from './fold.ts';
 import type { Ev } from './input.ts';
 import * as T from './theme.ts';
 import { highlightLine } from './highlight.ts';
+import * as D from './decisions-pane.ts';
 
-export type Inbox = { mode: 'list' | 'focus'; sel: number; opt: number; payload: boolean; confirmAll: boolean; since: number };
-export const newInbox = (now: number): Inbox => ({ mode: 'list', sel: 0, opt: 0, payload: false, confirmAll: false, since: now });
+/** `items` is the daemon's `decision.list` (specs/044); while it is empty the list falls back to the cards alone. */
+export type Inbox = { mode: 'list' | 'focus'; sel: number; opt: number; payload: boolean; confirmAll: boolean; since: number; items: D.Decision[]; pane: D.Pane };
+export const newInbox = (now: number, items: D.Decision[] = [], pane: D.Pane = D.newPane()): Inbox => ({ mode: 'list', sel: 0, opt: 0, payload: false, confirmAll: false, since: now, items, pane: D.reconcile(pane, items) });
 
 export type Decision = 'allow' | 'allow_similar' | 'deny';
 export type Action =
@@ -40,6 +42,25 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
   const guarded = now - inb.since < GUARD_MS || (card ? now - card.at < GUARD_MS : false);
   const k = e.t === 'key' ? e.k : e.s;
   const answer = (decision: Decision) => (card && !guarded ? { inbox: { ...inb, sel, confirmAll: false, payload: false, opt: 0 }, action: { t: 'resolve', card, decision } as Action } : none());
+  // The list of specs/044: the keys belong to the pane. `y` and `n` still answer the selected card, as they always have
+  // (the guard applies); slice D2 retires them in favour of the detail view. A build has no such shortcut.
+  if (inb.mode === 'list' && inb.items.length) {
+    if (k === 'y' || k === 'n') {
+      const d = D.visible(inb.items, inb.pane.filter)[inb.pane.sel];
+      const c = d && d.source === 'card' ? list.find((x) => x.id === d.source_id) : undefined;
+      if (!c || now - inb.since < GUARD_MS || now - c.at < GUARD_MS) return none();
+      return { inbox: inb, action: { t: 'resolve', card: c, decision: k === 'y' ? 'allow' : 'deny' } };
+    }
+    const r = D.key(inb.pane, inb.items, e);
+    if (r.action.t === 'chat') return { inbox: { ...inb, pane: r.pane }, action: { t: 'chat' } };
+    if (r.action.t === 'open') {
+      const d = r.action.d;
+      const at = d.source === 'card' ? list.findIndex((c) => c.id === d.source_id) : -1;
+      // A card opens in the focus view that exists today; a build's detail view is slice D2 (`/decisions` reviews it until then).
+      return at >= 0 ? none({ ...inb, pane: r.pane, mode: 'focus', sel: at, opt: 0, payload: false }) : none({ ...inb, pane: r.pane });
+    }
+    return none({ ...inb, pane: r.pane });
+  }
   if (k === 'esc') return { inbox: { ...inb, confirmAll: false }, action: { t: 'chat' } };
   if (k === 'tab') return none({ ...inb, mode: inb.mode === 'list' ? 'focus' : 'list', confirmAll: false });
   if (k === 'up' || k === 'down') {
@@ -77,6 +98,10 @@ const tier = (a: Approval) => (a.tier === 'red' ? T.crimson('RED') : T.warn('AMB
 /** The deck's body: exactly `h` lines. */
 export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number, w: number, h: number): string[] {
   const list = cards(s);
+  if (inb.mode === 'list' && inb.items.length) {
+    const at = (d: D.Decision): number | null => (d.source === 'card' ? s.approvals[d.source_id]?.at ?? null : d.raised_at ? Date.parse(d.raised_at) || null : null);
+    return D.view(inb.items, inb.pane, { pal, now, w, h, at });
+  }
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
   if (!list.length) return pad(['', '  ' + chalk.bold(T.text(pal)('Decision inbox')), '', '  ' + T.dim('nothing needs you'), '', '  ' + T.dim('Approvals from every agent arrive here; the header shows an alert when one is waiting.')]);
   const sel = Math.min(inb.sel, list.length - 1);
@@ -114,6 +139,7 @@ export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number
 }
 
 export const hint = (inb: Inbox, n: number): string =>
-  n === 0 ? 'nothing to decide · esc for chat'
+  inb.mode === 'list' && inb.items.length ? D.hint(inb.items.length, inb.pane)
+    : n === 0 ? 'nothing to decide · esc for chat'
     : inb.mode === 'list' ? 'enter open card · y approve · n reject · a approve all amber · tab focus mode · esc chat'
       : 'enter select · 1-3 choose · ←→ other cards · d payload · tab list mode · esc chat';

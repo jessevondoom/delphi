@@ -149,7 +149,7 @@ Approved by the operator 2026-10-28 with the mockups ("the decision pages are pe
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | not started |
+| D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | built (cards and provisional decisions; raised decisions come with D6; unproven in a real terminal) |
 | D2 | detail view, choices, accept, advance, empty state, composer bound to the decision | not started |
 | D3 | brief cache and the one-time card brief | not started |
 | D4 | typed replies: READ AS, confirm, conditions, saved thread | not started |

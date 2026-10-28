@@ -12,6 +12,7 @@ import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
+import * as D from './decisions-pane.ts';
 import * as P from './panel.ts';
 import * as A from './archives.ts';
 import { openExternal } from './external.ts';
@@ -94,6 +95,17 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   useEffect(() => () => { if (quitTimer.current) clearTimeout(quitTimer.current); }, []);
   const searchRef = useRef(search);
   const inboxRef = useRef(inbox);
+  /** The daemon's list of everything the operator owes (specs/044), kept beside the cards. A failed call leaves the cards-only list. */
+  const loadDecisions = () => {
+    cmd.call('decision.list', { mission_id: mission }).then((r: any) => {
+      const items = D.parse(r);
+      const next = { ...inboxRef.current, items, pane: D.reconcile(inboxRef.current.pane, items) };
+      inboxRef.current = next; setInbox(next);
+    }).catch(() => {});
+  };
+  const decisionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadDecisionsSoon = () => { decisionsTimer.current ??= setTimeout(() => { decisionsTimer.current = null; loadDecisions(); }, 150); };
+  useEffect(() => { cmd.whenReady().then(loadDecisions).catch(() => {}); return () => { if (decisionsTimer.current) clearTimeout(decisionsTimer.current); }; }, []);
   const deckRef = useRef<0 | 1 | 2>(1);
   deckRef.current = deck;
   const panelRef = useRef<P.Panel | null>(null);
@@ -135,6 +147,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const onNote = (n: any) => {
       queued.push(n); timer ??= setTimeout(flush, 33);
       if (n?.method === 'event' && n.params?.type === 'model.recovered') checkModels();
+      if (n?.method === 'event' && /^(approval\.(requested|resolved|parked)|decision\.(provisional|reviewed|reverted))$/.test(String(n.params?.type))) loadDecisionsSoon();
     };
     ev.on('notification', onNote);
     const onClosed = () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed; trying to reconnect…', at: Date.now() }));
@@ -493,7 +506,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           const d = deckTarget(deckRef.current as Deck, e, comp.current.chars.length === 0);
           if (d !== null) {
             deckRef.current = d; setDeck(d);
-            if (d === 2) { const fresh = I.newInbox(Date.now()); inboxRef.current = fresh; setInbox(fresh); }
+            if (d === 2) { const fresh = I.newInbox(Date.now(), inboxRef.current.items, inboxRef.current.pane); inboxRef.current = fresh; setInbox(fresh); loadDecisions(); }
             return;
           }
           const pick = (n: number) => { selRef.current = n; setSel(n); };

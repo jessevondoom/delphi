@@ -69,7 +69,7 @@ The pane reads a **read model**, `decision.list` / `decision.get`, assembled by 
 
 | Field | Meaning |
 | :-- | :-- |
-| `id` | stable (`DEC-<n>` for display; the source id is kept) |
+| `id` | stable, `<source>:<source id>` (for example `provisional:dec_a`); `label` is the source id, shown in the pane |
 | `source` | `card` (approval), `provisional` (015) or `raised` (§4.4) |
 | `kind` | `action`, `spec`, `build`, `question`, `council`, `release`, `budget` (§4.3) |
 | `tier` | `red`, `amber` or `open` (§4.3) |
