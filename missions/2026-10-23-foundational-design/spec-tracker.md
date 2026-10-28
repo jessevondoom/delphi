@@ -164,7 +164,7 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
-| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | not started |
+| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (no network yet: the `Http` trait is faked in tests, a real transport arrives with E3; `[search]` config, the shipped default list and a lint check are in) |
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |
 

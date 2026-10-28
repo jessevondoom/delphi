@@ -91,6 +91,12 @@ Defaults are those of the template; "—" means no default.
 | `[federation] enabled` | `false` | deferred ([`specs/007`](../../specs/007-federated-mesh-and-sync.md)) |
 | `[federation] transport` | `tailscale` | `tailscale`, `ssh-uds` or `mdns` |
 | `[federation] default_peer_trust_ceiling` | `federated_peer` | |
+| `[search] providers` | unset (the web is off) | the engines that "expand knowledge base" asks ([`specs/028`](../../specs/028-knowledge-window.md) §10), in order, **one at a time**: the next is asked only when the one before failed. `brave`, `mojeek`, `searxng`, `google` |
+| `[search.brave] key`, `[search.mojeek] key` | | a credential reference such as `env:BRAVE_API_KEY` or `keychain:brave`, never the key itself |
+| `[search.searxng] url` | | your SearXNG instance: `https://…`, or a loopback `http://` address |
+| `[search.google] key`, `cx` | | Google Programmable Search; allowed only when a Gemini endpoint is configured, since Google then already sees your prompts |
+
+Which sites the research job may read is not set here: it is the union of the shipped list `context/sources/trusted.toml` and your own `$DELPHI_HOME/operator/trusted-sources.toml` (an entry adds a host; `block = true` removes a shipped one). The query text leaves the machine to the first engine that answers, only when you press enter in expand mode.
 
 ## Error log (operator scope)
 

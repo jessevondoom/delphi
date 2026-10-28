@@ -444,6 +444,92 @@ pub struct PoolKey {
     pub family: String,
 }
 
+/// One engine of `[search]`: where its key comes from (a credential reference, never the key itself), its URL where it
+/// has one (a SearXNG instance), and Google's search-engine id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchEngine {
+    pub key: Option<String>,
+    pub url: Option<String>,
+    pub cx: Option<String>,
+}
+
+/// `[search]` (`specs/028` §6 and §10.8): which search engines the research job asks, in order, one at a time. Unset means
+/// the web is off and expand mode says so.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchConfig {
+    pub providers: Vec<String>,
+    pub engines: BTreeMap<String, SearchEngine>,
+}
+
+/// The engines a `[search] providers` list may name.
+pub const SEARCH_PROVIDERS: [&str; 4] = ["brave", "mojeek", "searxng", "google"];
+
+fn parse_search(root: &toml::Value, errs: &mut Vec<String>) -> SearchConfig {
+    let mut out = SearchConfig::default();
+    let Some(t) = root.get("search") else { return out };
+    let Some(t) = t.as_table() else {
+        errs.push("[search] must be a table".into());
+        return out;
+    };
+    match t.get("providers") {
+        None => {}
+        Some(v) => match v.clone().try_into::<Vec<String>>() {
+            Ok(list) => out.providers = list,
+            Err(_) => errs.push("[search] providers must be a list of engine names".into()),
+        },
+    }
+    for (name, v) in t.iter().filter(|(k, _)| k.as_str() != "providers") {
+        if !SEARCH_PROVIDERS.contains(&name.as_str()) {
+            errs.push(format!("[search.{}]: unknown engine (use {})", name, SEARCH_PROVIDERS.join(", ")));
+            continue;
+        }
+        let Some(b) = v.as_table() else {
+            errs.push(format!("[search.{}] must be a table", name));
+            continue;
+        };
+        let mut e = SearchEngine::default();
+        for (k, val) in b {
+            let text = val.as_str().map(str::to_string);
+            match (k.as_str(), text) {
+                ("key", Some(r)) => match CredentialRef::parse(&r) {
+                    Ok(_) => e.key = Some(r),
+                    Err(m) => errs.push(format!("[search.{}] key: {}", name, m)),
+                },
+                ("url", Some(u)) => {
+                    if u.starts_with("https://") || is_loopback(&u) {
+                        e.url = Some(u);
+                    } else {
+                        errs.push(format!("[search.{}] url must be https:// (or a loopback http:// address)", name));
+                    }
+                }
+                ("cx", Some(c)) => e.cx = Some(c),
+                (other, _) => errs.push(format!("[search.{}]: `{}` is not a recognised string setting (key, url, cx)", name, other)),
+            }
+        }
+        out.engines.insert(name.clone(), e);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for name in &out.providers {
+        if !SEARCH_PROVIDERS.contains(&name.as_str()) {
+            errs.push(format!("[search] providers names unknown engine `{}` (use {})", name, SEARCH_PROVIDERS.join(", ")));
+        } else if !seen.insert(name.clone()) {
+            errs.push(format!("[search] providers lists `{}` twice", name));
+        } else {
+            let e = out.engines.get(name).cloned().unwrap_or_default();
+            let mut need = |ok: bool, what: &str| if !ok { errs.push(format!("[search] `{}` is listed but [search.{}] has no {}", name, name, what)) };
+            match name.as_str() {
+                "brave" | "mojeek" => need(e.key.is_some(), "key"),
+                "searxng" => need(e.url.is_some(), "url"),
+                _ => {
+                    need(e.key.is_some(), "key");
+                    need(e.cx.is_some(), "cx");
+                }
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub endpoints: Vec<Endpoint>,
@@ -456,6 +542,8 @@ pub struct Config {
     pub connectors: BTreeMap<String, Connector>,
     /// `[harness.<cli>]` (`claude`, `agy`): how Delphi runs and equips each subscription CLI.
     pub harness: BTreeMap<String, HarnessProfile>,
+    /// `[search]`: the engines of the research job, in order.
+    pub search: SearchConfig,
 }
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
@@ -509,6 +597,7 @@ impl Config {
                 }
             }
         }
+        cfg.search = parse_search(&root, &mut errs);
         if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
             if let Some(p) = r.get("pool") {
                 match p.clone().try_into::<PoolRaw>() {
@@ -570,6 +659,10 @@ impl Config {
 
     fn validate(&self) -> Vec<String> {
         let mut errs = Vec::new();
+        // Google may be asked only when a Gemini endpoint is configured: Google then already receives the operator's prompts (`specs/028` §10.8 Q2).
+        if self.search.providers.iter().any(|p| p == "google") && !self.endpoints.iter().any(|e| e.family == "gemini") {
+            errs.push("[search] providers lists `google`, which is allowed only when a Gemini endpoint is configured (Google then already sees your prompts)".into());
+        }
         let mut seen = std::collections::BTreeSet::new();
         for e in &self.endpoints {
             if !seen.insert(e.id.clone()) {
@@ -977,6 +1070,41 @@ impl Config {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    const GEMINI_ENDPOINT: &str = "[[endpoints]]\nid = \"g\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:GEMINI_KEY\"\n[endpoints.models]\nfast = \"gemini-fast\"\n";
+
+    #[test]
+    fn the_search_section_names_engines_in_order_with_credential_references_never_keys() {
+        let text = "[search]\nproviders = [\"brave\", \"mojeek\", \"searxng\"]\n[search.brave]\nkey = \"env:BRAVE_API_KEY\"\n[search.mojeek]\nkey = \"keychain:mojeek\"\n[search.searxng]\nurl = \"https://searx.example.org\"\n";
+        let c = Config::parse(text).unwrap();
+        assert_eq!(c.search.providers, ["brave", "mojeek", "searxng"]);
+        assert_eq!(c.search.engines["brave"].key.as_deref(), Some("env:BRAVE_API_KEY"));
+        assert_eq!(c.search.engines["searxng"].url.as_deref(), Some("https://searx.example.org"));
+        assert_eq!(Config::parse("").unwrap().search, SearchConfig::default(), "unset means the web is off");
+    }
+
+    #[test]
+    fn a_search_section_with_problems_reports_each_of_them() {
+        let text = "[search]\nproviders = [\"brave\", \"brave\", \"kagi\", \"searxng\", \"mojeek\"]\n[search.brave]\nkey = \"sk-pasted-secret-value\"\n[search.searxng]\nurl = \"http://searx.example.org\"\n[search.bing]\nkey = \"env:X\"\n[search.mojeek]\nkey = \"env:M\"\nsurprise = \"x\"\n";
+        let errs = Config::parse(text).unwrap_err().join("\n");
+        for want in ["unknown credential source", "url must be https://", "[search.bing]: unknown engine", "`surprise` is not a recognised", "lists `brave` twice", "unknown engine `kagi`", "[search] `searxng` is listed but [search.searxng] has no url"] {
+            assert!(errs.contains(want), "{want}\n{errs}");
+        }
+        assert!(!errs.contains("sk-pasted-secret-value"), "a pasted secret is never echoed");
+        assert!(Config::parse("[search]\nproviders = \"brave\"\n").unwrap_err().join("\n").contains("list of engine names"));
+        assert!(Config::parse("[search]\nproviders = [\"brave\"]\n").unwrap_err().join("\n").contains("has no key"));
+        assert!(Config::parse("[search]\nproviders = [\"searxng\"]\n[search.searxng]\nurl = \"http://127.0.0.1:8080\"\n").is_ok(), "a loopback instance may be plain http");
+    }
+
+    #[test]
+    fn google_may_be_listed_only_when_a_gemini_endpoint_is_configured() {
+        let g = "[search]\nproviders = [\"brave\", \"google\"]\n[search.brave]\nkey = \"env:B\"\n[search.google]\nkey = \"env:G\"\ncx = \"abc\"\n";
+        assert!(Config::parse(g).unwrap_err().join("\n").contains("only when a Gemini endpoint is configured"));
+        let with = format!("{}\n{}", GEMINI_ENDPOINT, g);
+        assert!(Config::parse(&with).is_ok(), "{:?}", Config::parse(&with).err());
+        let no_cx = format!("{}\n[search]\nproviders = [\"google\"]\n[search.google]\nkey = \"env:G\"\n", GEMINI_ENDPOINT);
+        assert!(Config::parse(&no_cx).unwrap_err().join("\n").contains("has no cx"));
+    }
 
     pub const SAMPLE: &str = r#"
 [models.claude]

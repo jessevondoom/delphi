@@ -116,6 +116,14 @@
       "additionalProperties": { "$ref": "#/$defs/harnessProfile" }
     },
     "session": { "type": "object" },
+    "search": {
+      "type": "object",
+      "description": "The search engines of the research job, in order, one at a time (specs/028 §10). Unset means the web is off.",
+      "properties": {
+        "providers": { "type": "array", "items": { "enum": ["brave", "mojeek", "searxng", "google"] }, "uniqueItems": true }
+      },
+      "additionalProperties": { "$ref": "#/$defs/searchEngine" }
+    },
     "relay": { "type": "object" },
     "away": { "type": "object" },
     "optimistic": { "type": "object" },
@@ -166,6 +174,15 @@
         "betas": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": true
+    },
+    "searchEngine": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "description": "A credential reference (for example `env:BRAVE_API_KEY`). Never the key itself." },
+        "url": { "type": "string", "description": "A SearXNG instance: https://, or a loopback http:// address." },
+        "cx": { "type": "string", "description": "Google Programmable Search engine id." }
+      },
+      "additionalProperties": false
     },
     "authBlock": {
       "type": "object",

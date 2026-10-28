@@ -88,7 +88,22 @@ pub fn run(tree: &Tree) -> Report {
     check_links(tree, &mut r);
     check_abs_paths(tree, &mut r);
     check_councils(tree, &mut r);
+    check_trusted_sources(tree, &mut r);
     r
+}
+
+// ── the trusted sources of the research job (specs/028-A1 §10.3) ────────────
+
+/// The shipped default list must parse, and every entry must be well formed: a wildcard only on a public-sector suffix, a
+/// `full` reuse only with a known licence, a kind from the list. A bad entry would otherwise be found at the first job.
+fn check_trusted_sources(tree: &Tree, r: &mut Report) {
+    let path = "context/sources/trusted.toml".to_string();
+    let Some(text) = tree.read(&path) else { return };
+    if let Err(errs) = delphi_engine::research_sources::parse(&text, &path) {
+        for e in errs {
+            r.fail("trusted-sources", path.clone(), e);
+        }
+    }
 }
 
 // ── Council artifacts (specs/003 §4.1) ──────────────────────────────────────
@@ -876,6 +891,21 @@ mod tests {
 
     fn fails(tree: &Tree, check: &str) -> Vec<String> {
         run(tree).findings.into_iter().filter(|f| f.level == Level::Fail && f.check == check).map(|f| format!("{} {}", f.location, f.message)).collect()
+    }
+
+    #[test]
+    fn the_default_trusted_source_list_is_checked_by_lint() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("context/sources")).unwrap();
+        let tree = |text: &str| {
+            std::fs::write(d.path().join("context/sources/trusted.toml"), text).unwrap();
+            Tree::from_repo(d.path()).unwrap()
+        };
+        assert!(fails(&tree("[[source]]\nhost = \"ietf.org\"\npublisher = \"IETF\"\nkind = \"standards\"\n"), "trusted-sources").is_empty());
+        let bad = fails(&tree("[[source]]\nhost = \"*.com\"\npublisher = \"x\"\nkind = \"news\"\n\n[[source]]\nhost = \"a.org\"\npublisher = \"x\"\nkind = \"news\"\nreuse = \"full\"\n"), "trusted-sources");
+        assert_eq!(bad.len(), 2, "{:?}", bad);
+        assert!(bad.iter().any(|m| m.contains("public-sector suffix")) && bad.iter().any(|m| m.contains("needs a known licence")));
+        assert!(bad[0].starts_with("context/sources/trusted.toml "));
     }
 
     // specs/035 D-14: a manifest says its default tier in a word we know, and no built-in role starts on the top one.

@@ -165,6 +165,19 @@ default_peer_trust_ceiling = "federated_peer"
 # [harness]
 # connector_settle_secs = 10           # how long a span waits for the account's connectors to finish loading before its first turn
 
+# ── Research (specs/028-A1). "Expand knowledge base" asks these search engines, in order, one at a time (the next only
+# when the one before failed), and reads only the sites on the trusted lists (context/sources/trusted.toml plus your own
+# $DELPHI_HOME/operator/trusted-sources.toml). Unset means the web is off. Keys are credential references, never the key.
+# [search]
+# providers = ["brave", "mojeek", "searxng"]
+# [search.brave]
+# key = "env:BRAVE_API_KEY"
+# [search.mojeek]
+# key = "keychain:mojeek-api-key"
+# [search.searxng]
+# url = "https://searx.example.org"          # keyless; your own instance
+# # google is allowed only with a Gemini endpoint: [search.google] key = "env:GOOGLE_CSE_KEY", cx = "<engine id>"
+
 # ── Connectors (specs/010). [connectors.*] is ratified like [access]. Delphi ships no client IDs: create an OAuth
 # client in your own Google Cloud project, then `delphi auth login google`, `delphi connectors test drive`,
 # `delphi connectors pin drive`, and /ratify the pins. The server URLs below are reported, not confirmed: check them

@@ -1,0 +1,216 @@
+# The default trusted sources of the research job (specs/028, amendment 028-A1 §10.3).
+#
+# A source is trusted for "expand knowledge base" only because it is on a list. This is the default list: it ships with
+# the release, and a change to it is a ratified change (a pull request the operator approves). The operator's own list is
+# $DELPHI_HOME/operator/trusted-sources.toml, which only the operator edits: an entry there adds a host, and `block = true`
+# removes one of these for that install. The job reads the union, fresh, at each run.
+#
+# Each entry:
+#   host       an exact name (en.wikipedia.org) or a public-sector wildcard (*.gov); HTTPS only
+#   publisher  who runs it
+#   kind       standards | government | journal | encyclopedia | documentation | news
+#   licence    an SPDX id, or `unknown` (never guessed from a page)
+#   reuse      full          the page may be stored as Markdown, with its licence and an attribution line
+#              summary-only  a summary and facts only, each fact with its URL and a quote of one sentence
+#
+# An exact entry wins over a wildcard. A source that spec 040 (the validator) classes as Weak is not here; the operator may
+# still add it to their own list. Pages that say "all rights reserved" or the like are kept as summaries whatever this says.
+
+# ── standards bodies ────────────────────────────────────────────────────────
+
+[[source]]
+host = "ietf.org"
+publisher = "Internet Engineering Task Force"
+kind = "standards"
+licence = "BSD-3-Clause"
+reuse = "summary-only"
+
+[[source]]
+host = "rfc-editor.org"
+publisher = "RFC Editor"
+kind = "standards"
+licence = "BSD-3-Clause"
+reuse = "summary-only"
+
+[[source]]
+host = "w3.org"
+publisher = "World Wide Web Consortium"
+kind = "standards"
+licence = "W3C-20150513"
+reuse = "summary-only"
+
+[[source]]
+host = "whatwg.org"
+publisher = "WHATWG"
+kind = "standards"
+licence = "CC-BY-4.0"
+reuse = "full"
+
+[[source]]
+host = "unicode.org"
+publisher = "Unicode Consortium"
+kind = "standards"
+licence = "Unicode-3.0"
+reuse = "summary-only"
+
+# ── government ──────────────────────────────────────────────────────────────
+
+# Every .gov host may be read, but only as a summary: state and local sites often claim copyright. The federal hosts that
+# publish public-domain works are listed exactly, below, and win over this wildcard.
+[[source]]
+host = "*.gov"
+publisher = "United States government"
+kind = "government"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "nist.gov"
+publisher = "National Institute of Standards and Technology"
+kind = "government"
+licence = "LicenseRef-PD-US-Gov"
+reuse = "full"
+
+[[source]]
+host = "sec.gov"
+publisher = "U.S. Securities and Exchange Commission"
+kind = "government"
+licence = "LicenseRef-PD-US-Gov"
+reuse = "full"
+
+[[source]]
+host = "loc.gov"
+publisher = "Library of Congress"
+kind = "government"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "clinicaltrials.gov"
+publisher = "U.S. National Library of Medicine"
+kind = "government"
+licence = "LicenseRef-PD-US-Gov"
+reuse = "full"
+
+[[source]]
+host = "*.gov.uk"
+publisher = "United Kingdom government"
+kind = "government"
+licence = "OGL-UK-3.0"
+reuse = "full"
+
+[[source]]
+host = "europa.eu"
+publisher = "European Union"
+kind = "government"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "si.edu"
+publisher = "Smithsonian Institution"
+kind = "government"
+licence = "unknown"
+reuse = "summary-only"
+
+# ── research ────────────────────────────────────────────────────────────────
+
+[[source]]
+host = "pubmed.ncbi.nlm.nih.gov"
+publisher = "U.S. National Library of Medicine"
+kind = "journal"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "arxiv.org"
+publisher = "arXiv, Cornell University"
+kind = "journal"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "doi.org"
+publisher = "International DOI Foundation"
+kind = "journal"
+licence = "unknown"
+reuse = "summary-only"
+
+# ── software documentation ──────────────────────────────────────────────────
+
+[[source]]
+host = "docs.rs"
+publisher = "docs.rs"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "doc.rust-lang.org"
+publisher = "The Rust Project"
+kind = "documentation"
+licence = "MIT"
+reuse = "full"
+
+[[source]]
+host = "crates.io"
+publisher = "The Rust Project"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "pypi.org"
+publisher = "Python Software Foundation"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
+
+# ── encyclopedias ───────────────────────────────────────────────────────────
+
+# Wikipedia is a pointer to primary sources more than evidence (spec 040 classes it Weak); it is here because it is the
+# fastest way to find the references the job then follows. Its entries are marked `encyclopedia` so that spec 040 can still
+# treat them as a pointer. Share-alike: an export of the collection must carry the licence.
+[[source]]
+host = "en.wikipedia.org"
+publisher = "Wikimedia Foundation"
+kind = "encyclopedia"
+licence = "CC-BY-SA-4.0"
+reuse = "full"
+
+[[source]]
+host = "britannica.com"
+publisher = "Encyclopaedia Britannica"
+kind = "encyclopedia"
+licence = "unknown"
+reuse = "summary-only"
+
+# ── news wires (summaries only) ─────────────────────────────────────────────
+
+[[source]]
+host = "apnews.com"
+publisher = "The Associated Press"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "reuters.com"
+publisher = "Reuters"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "bbc.com"
+publisher = "BBC"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "npr.org"
+publisher = "National Public Radio"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
