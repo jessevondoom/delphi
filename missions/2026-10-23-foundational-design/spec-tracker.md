@@ -132,7 +132,7 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 
 ## Harness and OpenAI coverage (spec 043, draft 2026-10-28)
 
-Asked for by the operator on 2026-10-28: every `claude` and `agy` command and the OpenAI-spec APIs classified and covered as far as the rules allow. A draft: needs the operator's answers to §9 before any slice starts. Nothing is built.
+Asked for by the operator on 2026-10-28: every `claude` and `agy` command and the OpenAI-spec APIs classified and covered as far as the rules allow. OD-1 (Responses API default), OD-3 (bundle skills via `--plugin-dir`, no opt-in) and the Codex harness (spec 044) answered yes by the operator 2026-10-28. Text approved when the PR merges. Nothing is built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
@@ -144,6 +144,17 @@ Asked for by the operator on 2026-10-28: every `claude` and `agy` command and th
 | S5 | chat-completions completeness | not started |
 | S6 | Responses API dialect | not started |
 | S7 | embeddings and batch (optional) | not started |
+
+## Codex CLI harness (spec 044, draft 2026-10-28)
+
+Asked for by the operator on 2026-10-28. `codex` is not installed on this machine, so S0 (install, snapshot `--help`, probe) comes first. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | manifest from the real `--help`, probes (approval events, app-server stability) | not started; needs `codex` installed |
+| S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | not started |
+| S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
+| S3 | `review` lane, vision, `execpolicy` lint | not started |
 
 ## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 

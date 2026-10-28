@@ -3,7 +3,7 @@ id: spec-043-harness-and-openai-coverage
 title: "043: Harness and OpenAI Coverage: Every Claude and agy Capability, and the OpenAI-Spec APIs, Classified and Closed"
 author: architect
 timestamp: 2026-10-28T12:00:00Z
-status: draft   # a proposal, not permission to build (AGENTS.md: No Spec, No Build). Needs the operator's answers to §9.
+status: draft   # OD-1..OD-3 answered by the operator 2026-10-28; OD-4..OD-6 follow the recommendations in §9 unless the operator objects; the text is approved when this pull request merges (as spec 041)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -67,7 +67,7 @@ The abstraction is deliberately thin: a flag with no neutral meaning (`--betas`,
 | `--replay-user-messages` | **n/a**: Delphi already keeps the turn it sent |
 | `--betas` | **S1, ratified block only**: API-key mode only (the CLI says so) |
 | `--autocompact <auto\|tokens>` | **S1**: `[harness.claude] autocompact`; a long Builder span benefits, and the setting changes cost, not authority |
-| `--plugin-dir`, `--plugin-url` | **S4**: load a bundle's skills as a plugin for one span (spec 025). `--plugin-url` is **refused**: it fetches code from a URL |
+| `--plugin-dir`, `--plugin-url` | **S4** (decided, OD-3: no opt-in): load the skills of every added, hash-verified bundle a role may use as a plugin for the span (spec 025). Only skills and agents travel; `hooks/` and `bin/` are never included (spec 025 never imports them), so this adds no code that runs. `--plugin-url` is **refused**: it fetches code from a URL |
 | `--no-chrome` | **S1**: always passed, so no span reaches a browser extension. `--chrome`, `--ide`, `--desktop`: **refused** |
 | `--safe-mode`, `--bare` | `--bare` stays **refused** (spec 021 §6: it ignores the subscription login). `--safe-mode` is **n/a**: `--setting-sources ""` plus `--strict-mcp-config` already disable the customizations it targets |
 | `--brief`, `--prompt-suggestions`, `--ax-screen-reader`, `--verbose` (config), `--file` | **n/a** (interactive or cloud-file features) |
@@ -157,7 +157,7 @@ The OpenAI surface *as the operator should expect it in 2026* (to be verified in
 | Batch API (`/v1/batches`, `/v1/files`) | **S7**, optional: half-price offline runs fit training experiments (spec 037). Needs file upload, so it goes through the same egress rule as any outbound content (the operator's card) |
 | Moderation | **n/a** |
 | Realtime, audio in/out, image generation, fine-tuning, Assistants (deprecated), vector stores, evals API | **n/a** (Delphi has its own knowledge index and eval harness) |
-| Codex CLI as a third harness | **OD-2**; the lib.rs note "later `codex`" predates this spec |
+| Codex CLI as a third harness | **decided (OD-2)**: [`specs/044`](044-codex-harness-and-coverage.md). The Codex *models* over the API are the Responses dialect (S6) |
 
 ## 6. How coverage stays complete
 
@@ -175,16 +175,16 @@ Three pieces, built in **S0**:
 | **S1** | Claude narrowing and hygiene flags (§3.1 S1 rows), `[harness.claude]` keys, schema and `docs/reference/config.md` | S0 |
 | **S2** | read-only introspection: `claude auth status`, `doctor`, `auto-mode config`, `mcp list`, `plugin list`, `agents --json`; `agy models`, `mcp list`, `plugin list`; into `delphi doctor` and `delphi capabilities` (spec 038); `agy models` into the tier probe | S0 |
 | **S3** | agy: `--project`, `--log-file`, `--agent` | S0 probes |
-| **S4** | `--plugin-dir` for bundle skills (spec 025); `claude plugin validate` in `bundle validate --claude` | S1; OD-3 |
+| **S4** | `--plugin-dir` for bundle skills (spec 025), on by default; `claude plugin validate` in `bundle validate --claude` | S1 |
 | **S5** | chat-completions completeness (§5, S5 rows), per-endpoint declared features, Azure flavor | S0 snapshot |
-| **S6** | Responses dialect, non-degraded OpenAI path, `web_search` as untrusted | S5; OD-1 |
+| **S6** | Responses dialect, default for `family = "openai"` on a real key, non-degraded; `web_search` as untrusted | S5 |
 | **S7** | embeddings and batch (optional) | OD-5 |
 
 Every slice is one pull request with its own `Implements-Spec: specs/043-*.md`, tracker row and tests against stand-in CLIs and a stand-in HTTP server. **Live proof is a separate, named step**: the CLI flags are exercised once against the real installed CLIs by the operator-run `delphi endpoints test --probe`; the OpenAI dialects have never run against a real key (the operator has none; spec 021 §4 says the same of the Claude key mode), so S5 and S6 ship marked *unproven against a live endpoint* until someone runs them.
 
 ## 8. Safety
 
-- Every S1 option narrows or reads. The only widening ones (`--betas`, `add_dirs`, `--plugin-dir`, Responses `web_search`) sit in the ratified block and are off by default.
+- Every S1 option narrows or reads. The widening ones (`--betas`, `add_dirs`, Responses `web_search`) sit in the ratified block and are off by default. `--plugin-dir` is on by default by the operator's decision (OD-3) because it carries only hash-verified skills and agents, never `hooks/` or `bin/`.
 - `--permission-prompts none` and `--restricted` can only produce more denials, never fewer; a Builder keeps Delphi's rules (spec 020).
 - Read-only subcommands run with the span's `env_allow` environment only, a timeout, and no stdin; their output is data, passed through the redactor, never instructions.
 - The OpenAI paths keep every rule of the existing passes: no reasoning crosses a family, nothing is stored vendor-side, tool results from a hosted tool are untrusted.
@@ -193,9 +193,9 @@ Every slice is one pull request with its own `Implements-Spec: specs/043-*.md`, 
 
 | # | Question | Recommendation |
 | :-- | :-- | :-- |
-| OD-1 | Is the Responses API the default for `family = "openai"` with a real OpenAI key, with chat-completions kept for `gateway-compat`? | Yes: it removes the degraded label for OpenAI proper. Compat stays for gateways and Ollama. |
-| OD-2 | Add the Codex CLI as a third harness, with its own coverage manifest? | Not in this spec. Write 044 if the operator has a Codex seat; the manifest format here is reusable. |
-| OD-3 | May a span load a bundle's skills through `--plugin-dir`? | Yes, as a ratified opt-in per role, because the bundle is already hashed and trust-tiered (spec 024). |
+| OD-1 | Is the Responses API the default for `family = "openai"` with a real OpenAI key, with chat-completions kept for `gateway-compat`? | **Decided: yes** (operator, 2026-10-28). Compat stays for gateways and Ollama. |
+| OD-2 | Add the Codex CLI as a third harness, with its own coverage manifest? | **Decided: yes** (operator, 2026-10-28). It is [`specs/044`](044-codex-harness-and-coverage.md); its manifest uses the format of §6. |
+| OD-3 | May a span load a bundle's skills through `--plugin-dir`? | **Decided: yes, with no opt-in** (operator, 2026-10-28). The bundle is already hashed and trust-tiered (spec 024); skills stay data, not instructions. |
 | OD-4 | A `delphi review --ultra` wrapper for `claude ultrareview`? | No. It is billed, vendor-hosted and the CLI says user-triggered; the operator types it. |
 | OD-5 | Build embeddings and batch (S7)? | Defer until a measured need (the local embedder works; batch only matters at training-experiment scale). |
 | OD-6 | Is "read-only half in Delphi, writing half left to the operator's terminal" the right line for the CLIs' admin groups (`mcp`, `plugin`, `auth`)? | Yes (principle 3). A `delphi harness <cli> -- …` passthrough would be a way around the sandbox and the cards. |
