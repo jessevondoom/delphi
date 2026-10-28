@@ -1,5 +1,5 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
-delphi v0.5 · dashboard · session 3 · 3 asks · 1 from before
+delphi v0.5 · dashboard
 
  ✔ nothing needs you
 
@@ -21,4 +21,4 @@ delphi v0.5 · dashboard · session 3 · 3 asks · 1 from before
 
 
 ────────────────────────────────────────────────────────────────────────────────
-1 running  ·  14.2k tokens                               ← →  ·  ● ○ ○ ○ ○ ○ ○ ○
+1 running  ·  14.2k tokens                                   ← →  ·  ● ○ ○ ○ ○ ○

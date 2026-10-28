@@ -11,12 +11,13 @@ import { dashboard, needs } from './dashboard.ts';
 import * as V from './tiers.ts';
 import * as A from './archives.ts';
 import { describe as describeLink, paintFocus, scanLinks, type Link } from './links.ts';
-import { pulse, timeline, toolsBoard } from './monitors.ts';
+import { timelineAndTools } from './monitors.ts';
 import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, spark, type Paint } from './meters.ts';
 
 export type Tokens = { input: number; cache_read: number; cache_write: number; output: number; thinking: number };
 export type AgentRow = { role: string; state: string; task_id: string; endpoint: string; tier: string; model: string; default_tier?: string; upscaled: boolean; tokens: Tokens; cost_usd: number; calls: number };
 export type RoleTools = { calls: number; errors: number; last: string; streak?: { tool: string; n: number; failed: number }; open?: { tool: string; since_ms: number } | null; by_tool: Record<string, { calls: number; errors: number }> };
+export type Provider = { endpoint: string; family: string; models: number; cooling: number; out: number; back_ms: number | null };
 export type OState = {
   agents: Record<string, AgentRow>;
   nodes: Record<string, { id: string; role: string; parent: string | null; depth: number; task_id: string; state: string; waiting?: string; endpoint?: string; model?: string; tier?: string; default_tier?: string; requested_tier?: string; tier_reason?: string; tokens: number; cost_usd: number; started_ms: number; ended_ms: number | null; after: string[] }>;
@@ -46,16 +47,20 @@ export type OState = {
   adoption?: { by_model: Record<string, { spans: number; calls: number; errors: number; worked: number; recorded: number }>; total: { spans: number; calls: number; errors: number; worked: number; recorded: number } };
   /** What agents recorded as finished (`record_change`), oldest first: their own plain words, never their reasoning. */
   changes?: { session: string; at_ms: number; role: string; task: string; summary: string; files: string[] }[];
+  /** Each connected provider: how many of its models can be used now, and when the ones that cannot come back. */
+  providers?: Provider[];
+  /** How the team is spread over the providers for now (`/pace`). */
+  pace_mode?: 'balanced' | 'sprint' | 'frugal';
   pending_approvals?: Record<string, string>; cache_hit_ratio: number; default_view: string; mission_id: string; budget: { cap_usd: number }; pending_proposals: number;
 };
 
 /** The views, in order (`005e` §9.2; the dashboard is `specs/030`; `changes` is `specs/032`). The narrator shows no money, so there is no spend view. */
-export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'changes'] as const;
+export const VIEWS = ['dashboard', 'council', 'epic', 'agents', 'timeline', 'changes'] as const;
 export type View = (typeof VIEWS)[number];
 /** The view one step left (-1) or right (+1) of `v`; it stops at the ends instead of wrapping. */
 export const stepView = (v: View, d: -1 | 1): View => VIEWS[Math.max(0, Math.min(VIEWS.length - 1, VIEWS.indexOf(v) + d))]!;
 export const parseView =(s: string): View | null => {
-  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', pulse: 'pulse', meters: 'pulse', timeline: 'timeline', tools: 'tools', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
+  const m: Record<string, View> = { dashboard: 'dashboard', now: 'dashboard', ops: 'dashboard', monitor: 'dashboard', council: 'council', chamber: 'council', epic: 'epic', forge: 'epic', diffs: 'epic', agents: 'agents', roster: 'agents', pulse: 'timeline', meters: 'timeline', timeline: 'timeline', tools: 'timeline', changes: 'changes', changelog: 'changes', log: 'changes', thinking: 'changes', reasoning: 'changes' };
   return m[s.toLowerCase()] ?? null;
 };
 
@@ -296,20 +301,11 @@ function strip(m: OModel, w: number): string {
   }).join(' '), w);
 }
 
-/** `session 3 · 5 asks`, plus how many tasks of earlier sessions are still running (they stay on the screen). Empty before any session began. */
-export function sessionNote(st: OState): string {
-  const cur = st.sessions?.[st.sessions.length - 1];
-  if (!cur) return '';
-  const older = Object.values(st.tasks).filter((t) => t.status === 'running' && t.session !== cur.id).length;
-  return `session ${Number(cur.id.replace(/\D/g, '')) || cur.id} · ${cur.turns} ask${cur.turns === 1 ? '' : 's'}${older ? ` · ${older} from before` : ''}`;
-}
-
 /** `delphi v0.5 · epic`: directly under the strip, no path and no mission id. */
 function titleRow(m: OModel, w: number): string {
   const name = chalk.bold(text(m)('delphi'));
   const conn = m.connected ? '' : ' · disconnected';
-  const sess = sessionNote(m.st);
-  return T.clip(w < 48 ? name + dim(` · ${m.view}${conn}`) : name + dim(` v${m.info.version} · ${m.view}${sess ? ` · ${sess}` : ''}${conn}`), w);
+  return T.clip(w < 48 ? name + dim(` · ${m.view}${conn}`) : name + dim(` v${m.info.version} · ${m.view}${conn}`), w);
 }
 
 const header = (m: OModel, w: number): string[] => [strip(m, w), titleRow(m, w), ''];
@@ -346,7 +342,7 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const head = header(m, w), foot = footer(m, w);
   const bodyH = Math.max(1, h - head.length - foot.length);
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
-  const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, changes }[m.view];
+  const fn = { dashboard, council, epic, agents, timeline: timelineAndTools, changes }[m.view];
   if (m.reader && m.reader.at >= 0) return [...head, slot(m, w), '', ...A.view(m.reader, w, Math.max(1, bodyH - 2), m.pal), ...foot].slice(0, h).map((l) => T.clip(l, w));
   let body = fn(m, w, inner);
   if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic') body = body.slice(m.scroll);

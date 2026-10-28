@@ -18,9 +18,7 @@ pub enum View {
     Council,
     Epic,
     Agents,
-    Pulse,
     Timeline,
-    Tools,
     Changes,
 }
 
@@ -32,9 +30,7 @@ impl View {
             View::Council => "council",
             View::Epic => "epic",
             View::Agents => "agents",
-            View::Pulse => "pulse",
             View::Timeline => "timeline",
-            View::Tools => "tools",
             View::Changes => "changes",
         }
     }
@@ -45,9 +41,7 @@ impl View {
             "council" | "chamber" => Some(View::Council),
             "epic" | "forge" | "diffs" => Some(View::Epic), // the forge view folded into the epic pane (`005g`)
             "agents" | "roster" => Some(View::Agents),
-            "pulse" | "meters" => Some(View::Pulse),
-            "timeline" | "lanes" => Some(View::Timeline),
-            "tools" => Some(View::Tools),
+            "timeline" | "lanes" | "pulse" | "meters" | "tools" => Some(View::Timeline), // pulse is gone and tools sits under the timeline
             "changes" | "changelog" | "log" | "thinking" | "reasoning" => Some(View::Changes), // the reasoning pane was dropped for the change log
             _ => None,
         }

@@ -5,7 +5,7 @@
 import chalk from 'chalk';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
-import type { OModel, OState } from './observe-screen.ts';
+import type { OModel, OState, Provider } from './observe-screen.ts';
 import * as V from './tiers.ts';
 
 type Task = OState['tasks'][string];
@@ -135,22 +135,39 @@ function pace(m: OModel, w: number): string[] {
   return out;
 }
 
-/** The tasks that ended most recently, newest first: how each ended, which session asked, and the first line of what it said. */
-function finished(m: OModel, w: number, limit: number): string[] {
-  const done = Object.values(m.st.tasks).filter((t) => t.status !== 'running').sort((a, b) => taskNum(b.id) - taskNum(a.id)).slice(0, limit);
-  const sessions = m.st.sessions ?? [];
-  return done.map((t) => {
-    const mark = t.status === 'done' ? T.ok('✔') : T.alert('✖');
-    const where = t.session && sessions.length > 1 ? dim(`s${num(t.session)}  `) : '';
-    const said = clean((t.output ?? '').split('\n').find((l) => l.trim()) ?? '', 200);
-    const head = ` ${mark} ${dim(t.id)}  ${where}`;
-    const room = Math.max(0, w - T.width(head) - 2);
-    const ask = clean(t.prompt, Math.min(room, 36));
-    return T.clip(head + ask + (said && room - T.width(ask) > 12 ? dim('  →  ' + clean(said, room - T.width(ask) - 5)) : ''), w);
+const RING = ['○', '◔', '◑', '◕', '●'];
+/** A provider's health as a ring and a bar: the share of its models that can be used now. */
+export function health(p: Provider, bw: number): { ring: string; bar: string; paint: Paint; share: number } {
+  const up = Math.max(0, p.models - p.cooling - p.out), share = p.models ? up / p.models : 0;
+  const paint = share >= 1 ? T.ok : share > 0 ? T.warn : T.alert;
+  const n = Math.round(share * bw);
+  return { ring: RING[Math.round(share * 4)]!, bar: '▓'.repeat(n) + '░'.repeat(bw - n), paint, share };
+}
+
+/** One row per connected provider: how many of its models can be used now, and when the ones that cannot come back. */
+export function providers(m: OModel, w: number): string[] {
+  const ps = m.st.providers ?? [];
+  const now = m.now ?? 0;
+  const nameW = Math.min(16, Math.max(...ps.map((p) => [...p.endpoint].length)));
+  const bw = w >= 60 ? 12 : 6;
+  return ps.map((p) => {
+    const h = health(p, bw), up = p.models - p.cooling - p.out;
+    const why = p.out ? `${p.out} out of quota` : p.cooling ? `${p.cooling} cooling down` : '';
+    const back = (p.out || p.cooling) && p.back_ms && now ? ` · back in ${eta(p.back_ms - now)}` : '';
+    return T.clip(` ${h.paint(h.ring)} ${chalk.bold(clean(p.endpoint, nameW).padEnd(nameW))}  ${h.paint(h.bar)}  ${dim(`${up}/${p.models} model${p.models === 1 ? '' : 's'}${why ? ' · ' : ''}`)}${why ? h.paint(why) : ''}${dim(back)}`, w);
   });
 }
 
-/** The dashboard: sections in order of importance; finished work and the latest happenings take whatever rows are left. */
+/** The sprint / frugal switch: where it stands and how to move it. Only with more than one provider, since one has nothing to balance. */
+export function paceRow(m: OModel, w: number): string[] {
+  if ((m.st.providers ?? []).length < 2) return [];
+  const cur = m.st.pace_mode ?? 'balanced';
+  const cell = (id: string, label: string) => (cur === id ? T.accent(`◉ ${label}`) : dim(`○ ${label}`));
+  const note = cur === 'sprint' ? 'work goes where it runs freely' : cur === 'frugal' ? 'subscription and local providers first' : '/pace sprint · /pace frugal';
+  return [T.clip(` ${cell('frugal', 'frugal')}  ${dim('·')}  ${cell('balanced', 'balanced')}  ${dim('·')}  ${cell('sprint', 'sprint')}${dim('   ' + note)}`, w)];
+}
+
+/** The dashboard: sections in order of importance. */
 export function dashboard(m: OModel, w: number, h: number): string[] {
   const out: string[] = [];
   // A short window keeps what is happening first and the current session as one chip; a tall one has room for all of it.
@@ -163,19 +180,11 @@ export function dashboard(m: OModel, w: number, h: number): string[] {
   else sections.push(['sessions', chips(m, w)], ['running now', running(m, w)]);
   if (items.length) sections.push(ask);
   if (models.length) sections.push(['models', models]);
+  if ((m.st.providers ?? []).length) sections.push(['providers', [...providers(m, w), ...paceRow(m, w)]]);
   if (!short) sections.push(['pace', pace(m, w)]);
   for (const [title, rows] of sections) {
     if (out.length && !short) out.push('');
     out.push(rule(m, w, title), ...rows);
-  }
-  let left = h - out.length - 2;
-  if (left >= 3) {
-    const rows = finished(m, w, Math.min(6, Math.max(1, Math.floor(left / 2)) - 1));
-    if (rows.length) { out.push('', rule(m, w, 'finished lately'), ...rows); left -= rows.length + 2; }
-  }
-  if (left >= 3) {
-    const feed = m.st.narrative.slice(-(left - 1)).map((l) => ' ' + dim(clean(l, w - 3)));
-    if (feed.length) out.push('', rule(m, w, 'recent'), ...feed);
   }
   return out.slice(0, h);
 }
