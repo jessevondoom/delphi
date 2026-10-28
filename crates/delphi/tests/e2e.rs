@@ -1339,15 +1339,15 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
     c.type_keys("\x1b[1;2C");
-    c.wait_for("Pending decisions (1)");
+    c.wait_for("1 decision");
     std::thread::sleep(Duration::from_millis(500));
     c.type_keys("\r");
-    c.wait_for("Approval required · 1 of 1 pending");
-    c.wait_for("1. Approve once");
+    c.wait_for("NO RECOMMENDATION");
+    c.wait_for("Approve once");
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "nothing is written before the answer");
-    std::thread::sleep(Duration::from_millis(150));
+    std::thread::sleep(Duration::from_millis(400)); // the guard, from when the detail opened
     c.type_keys("1");
-    c.wait_for("nothing needs you");
+    c.wait_for("Nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Drafted specs/009-e2e.md.");
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
@@ -1536,10 +1536,13 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     line(&mut c, "@architect Draft a spec called 009-e2e");
     c.wait_for("approval needed [amber]");
     c.type_keys("\x1b[C"); // Right, with nothing typed: the next deck
-    c.wait_for("Pending decisions (1)");
+    c.wait_for("1 decision");
     std::thread::sleep(Duration::from_millis(400)); // the 300 ms guard
-    c.type_keys("n");
-    c.wait_for("nothing needs you");
+    c.type_keys("\r"); // open the decision
+    c.wait_for("NO RECOMMENDATION");
+    std::thread::sleep(Duration::from_millis(400)); // the guard again, from when the detail opened
+    c.type_keys("3"); // an Amber card: 1 Approve once, 2 Allow similar, 3 Reject
+    c.wait_for("Nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Understood, nothing was written.");
     c.wait_for("Daedalus · ");

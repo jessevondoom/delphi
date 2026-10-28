@@ -369,7 +369,7 @@ const KEYS = [
   'ctrl+o  follow links (tab next · enter read here · p pin · esc leave)',
   '/  commands   @role …  one role   @specs/…  a file   ?  this help',
   'shift+tab  approval mode (default → accept edits → auto → optimistic)',
-  'inbox:  y approve · n reject · a all amber · d payload · tab list/focus',
+  'decisions:  enter open · space tick · a tick all · f filter · 1-9 choose',
   'ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)',
 ];
 
