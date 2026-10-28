@@ -166,7 +166,7 @@ Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisio
 | K2 | index PDF, DOCX, EPUB text; list media by name | not started |
 | K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
 | K4 | summarize for me, with the cache | not started |
-| K5 | thin-reference hint, query carried into expand, expand pages' visuals | built (PR pending): the results line says `thin on reference: shift+tab to research this topic` under 3 `research`/`docs` results (console only; counts from the facets when present); `shift+tab` carries the query and starts nothing; the expand pages keep the box and show one line per source (`✔ ● ○ ✖`, form, licence; `research.status` gains `sources`) and the results table with `read, not kept` and `seen, not read`. Matches the mockups kb-8/kb-9 in text; unproven in a real terminal and against a live job |
+| K5 | thin-reference hint, query carried into expand, expand pages' visuals | merged (#299): the results line says `thin on reference: shift+tab to research this topic` under 3 `research`/`docs` results (console only; counts from the facets when present); `shift+tab` carries the query and starts nothing; the expand pages keep the box and show one line per source (`✔ ● ○ ✖`, form, licence; `research.status` gains `sources`) and the results table with `read, not kept` and `seen, not read`. Matches the mockups kb-8/kb-9 in text; unproven in a real terminal and against a live job |
 | K6 | docs regenerated, tracker | not started |
 
 ## The decisions pane (spec 044, approved 2026-10-28)
