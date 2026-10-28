@@ -81,14 +81,14 @@ test('changes: grouped by session, newest first, results only; the session in pr
   assert.ok(!/reasoning|thinking/i.test(t), 'no reasoning anywhere');
 });
 
-test('agents: the running builder shows its live token total (estimated) and its tool counts side by side', () => {
+test('agents: the running builder shows its live token total (estimated) and its tool counts on the row under it', () => {
   const tools = { builder: { calls: 15, errors: 2, last: 'run_command', by_tool: { read_file: { calls: 12, errors: 0 }, record_change: { calls: 3, errors: 0 }, run_command: { calls: 0, errors: 2 } } } };
   const t = observeFrame(model('agents', { st: { ...world(), tools }, liveTokens: { n3: 4_000 } }), 100, 34).map(plain).join('\n');
   // 6,200 + 3,100 + 2,400 + 900 logged, plus 4,000 so far in the span that has not ended.
-  assert.match(t, /~16\.6k tokens {2}· {2}15 calls · ✎ 3 · ✗ 2 · → run_command/);
+  assert.match(t, /~16.6k tokens[^\n]*\n +15 calls · ✎ 3 · ✗ 2 · → run_command/);
   // Once the span's usage is logged the estimate goes away: only the logged figure.
   const done = observeFrame(model('agents', { st: { ...world(), tools } }), 100, 34).map(plain).join('\n');
-  assert.match(done, /12\.6k tokens {2}· {2}15 calls/);
+  assert.match(done, /12\.6k tokens[^\n]*\n +15 calls/);
   assert.ok(!done.includes('~'), 'no estimate mark without a live total');
   // Changed something, recorded nothing yet: the running agent's count is a warning; a reader (no work tool) is not nagged.
   const worked = { builder: { calls: 4, errors: 0, last: 'write_file', by_tool: { read_file: { calls: 3, errors: 0 }, write_file: { calls: 1, errors: 0 } } } };
