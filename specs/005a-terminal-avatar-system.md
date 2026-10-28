@@ -133,7 +133,7 @@ The 1-line badge strip is now the only place an agent's state shows in a window 
 
 | State | Rule |
 | :-- | :-- |
-| Idle blink | `⟦-_-⟧` for 150 ms about every 5 s (§2 INV-AVATAR-07 still holds) |
+| Idle blink | `⟦-_-⟧` for 150 ms at random, 7-30 s apart (§2 INV-AVATAR-07 still holds) |
 | Thinking | the two pan frames swap every 600 ms while a reasoning delta arrived in the last 1.5 s |
 | Working, Waiting, Escalated | static frames |
 | Success | `⟦^─^⟧` held for 3 s, then idle |
