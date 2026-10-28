@@ -97,8 +97,8 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); setFeed((f) => ({ ...f, note: msg })); };
     const a0 = R.current.rdr, tp = A.trustParam(a0);
     if (act.t === 'reload') { if (a0.searched && a0.q.trim() && !a0.browse) run({ t: 'search', q: a0.q.trim() }); else if (a0.browse) run({ t: 'browse', name: a0.browse }); }
-    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
-    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?kind=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
     else if (act.t === 'open') {
       const t = act.target;
       kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => { if (r.status === 200) setFeed((f) => ({ ...f, note: '' })); setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, R.current.size.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it'))); }).catch(() => fail('could not open it'));

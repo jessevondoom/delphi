@@ -382,7 +382,7 @@ function helpOverlay(m: Model, w: number): string[] {
 
 function deckBody(m: Model, w: number, h: number): string[] {
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
-  if (m.deck === 0) return A.view(m.arch ?? A.emptyArch(), w, h, m.pal, m.info);
+  if (m.deck === 0) return A.view(m.arch ?? A.emptyArch(), w, h, m.pal, m.info, m.now > 0 ? m.now : undefined);
   if (m.deck === 2) return I.view(m.state, m.inbox, m.info, m.pal, m.now, w, h);
   return pad([]);
 }
