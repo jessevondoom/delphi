@@ -130,6 +130,21 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
+## Harness and OpenAI coverage (spec 043, draft 2026-10-28)
+
+Asked for by the operator on 2026-10-28: every `claude` and `agy` command and the OpenAI-spec APIs classified and covered as far as the rules allow. A draft: needs the operator's answers to §9 before any slice starts. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | coverage manifests, help-snapshot test, doctor drift check, probes | not started |
+| S1 | Claude narrowing and hygiene flags | not started |
+| S2 | read-only introspection (`auth status`, `agy models`, `mcp list`, ...) | not started |
+| S3 | agy `--project`, `--log-file`, `--agent` | not started |
+| S4 | `--plugin-dir` for bundle skills | not started |
+| S5 | chat-completions completeness | not started |
+| S6 | Responses API dialect | not started |
+| S7 | embeddings and batch (optional) | not started |
+
 ## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 
 Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
