@@ -6,7 +6,7 @@
 
 Delphi is a spec-driven, multi-agent working environment for software engineering, research and systems architecture. It is a single Rust executable plus a full-screen console. You talk to one window; behind it a small team of specialist agents reads your project, drafts specs, builds changes in isolated git worktrees, audits each other's work and argues in a Council when a decision is hard. It runs on the model access you already have: the Anthropic and Gemini APIs, AWS Bedrock, Google Vertex, an OpenAI-compatible gateway, your own `claude` and `agy` subscriptions, or a local Ollama fallback.
 
-> Where things stand: [`missions/2026-10-23-foundational-design/spec-tracker.md`](missions/2026-10-23-foundational-design/spec-tracker.md) says, spec by spec, what is approved, built and proven. Design decisions are numbered (D-nn) in [`decisions.md`](missions/2026-10-23-foundational-design/decisions.md). Status: pre-1.0, macOS and Linux, one operator per install. The latest release is v0.2.7; `main` is well ahead of it (`delphi update --dev` follows `main`).
+> Where things stand: [`missions/2026-10-23-foundational-design/spec-tracker.md`](missions/2026-10-23-foundational-design/spec-tracker.md) says, spec by spec, what is approved, built and proven. Design decisions are numbered (D-nn) in [`decisions.md`](missions/2026-10-23-foundational-design/decisions.md). Status: pre-1.0, macOS and Linux, one operator per install. The latest release is v0.3.0 (`delphi update --dev` follows `main`).
 
 ## Contents
 

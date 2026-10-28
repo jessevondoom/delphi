@@ -6,7 +6,9 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
-## Unreleased (on `main` since v0.2.7)
+## Unreleased
+
+## 0.3.0 — 2026-10-28
 
 ### Added
 
