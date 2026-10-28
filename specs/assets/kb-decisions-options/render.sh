@@ -7,7 +7,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 chrome="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 [ -x "$chrome" ] || { echo "set CHROME to a Chrome/Chromium binary" >&2; exit 1; }
-ids=(kb-1-resting kb-2-results kb-3-summary kb-4-reader kb-5-pdf kb-6-empty dec-1-queue dec-2-filtered dec-3-confirm dec-4-detail dec-7-typed dec-5-norec dec-6-empty)
+ids=(kb-1-resting kb-2-results kb-3-summary kb-4-reader kb-5-pdf kb-6-empty kb-7-expand kb-8-researching kb-9-expanded dec-1-queue dec-2-filtered dec-3-confirm dec-4-detail dec-7-typed dec-5-norec dec-6-empty)
 w=$(awk 'BEGIN{printf "%d", 100*7.8+32+4}')
 h=$(awk 'BEGIN{printf "%d", 34*17.16+28+4}')
 for id in "${ids[@]}"; do

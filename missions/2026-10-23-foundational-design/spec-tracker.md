@@ -130,6 +130,33 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
+## Knowledge window round 2 (spec 043, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | not started (needs 028-A1 E1) |
+| K2 | index PDF, DOCX, EPUB text; list media by name | not started |
+| K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
+| K4 | summarize for me, with the cache | not started |
+| K5 | thin-reference hint, query carried into expand, expand pages' visuals | not started (needs 028-A1 E3, E4) |
+| K6 | docs regenerated, tracker | not started |
+
+## The decisions pane (spec 044, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups ("the decision pages are perfect"). One pane for every decision owed (cards, provisional decisions, raised decisions), a brief and recommendation each, tick boxes only where a default is safe, a filter, a detail view with the only prompt bar, typed replies, and a cache so tokens are spent once. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | not started |
+| D2 | detail view, choices, accept, advance, empty state, composer bound to the decision | not started |
+| D3 | brief cache and the one-time card brief | not started |
+| D4 | typed replies: READ AS, confirm, conditions, saved thread | not started |
+| D5 | ticks, confirm page, batch accept with re-checks | not started |
+| D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
+| D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".

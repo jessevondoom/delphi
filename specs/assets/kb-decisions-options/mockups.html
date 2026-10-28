@@ -51,158 +51,198 @@ function frame(o){
 }
 
 /* ============================ KNOWLEDGE BASE ============================ */
-var KDOTS='← →  ·  ○ ○ ○ ○ ● ○';
+var KDOTS='shift+tab  expand  ·  ← →  ·  ○ ○ ○ ○ ● ○';
+var KDOTSE='shift+tab  search  ·  ← →  ·  ○ ○ ○ ○ ● ○';
 var KHEAD=STRIP;
-var MODE='{acc|●} offline   {dim|○ online   ○ both}';
-function boxTop(q,mode){
+var KTITLE='{|⟦•_•⟧} {b|search the archives}';
+var KLABEL='{scout|⟦•••⟧} {b|expand knowledge base: research a topic}';
+var KC={spec:'arch',lesson:'strat',code:'build',mission:'scout',skill:'dim',memory:'dim',docs:'ok',research:'warn',pdf:'dim',png:'dim'};
+function boxTop(q,ph){
   var inner=60;
   return [
     mk('  {dim|╭'+rep('─',inner)+'╮}'),
-    lr('  {dim|│} {acc b|›}  '+fit(q,inner-5)+' {dim|│}',mode+'  ',W),
+    mk('  {dim|│} {acc b|›}  '+(ph?'{dim|'+fit(ph,inner-5)+'}':fit(q,inner-5))+' {dim|│}'),
     mk('  {dim|╰'+rep('─',inner)+'╯}')
   ];
 }
-var KC={spec:'arch',lesson:'strat',code:'build',mission:'scout',memory:'dim',pdf:'amb',png:'amb',skill:'warn'};
 function chips(active,items){
   var s='  {dim|show}  ';
-  items.forEach(function(it,i){var on=i===active;s+='{'+(on?it[2]+' b':it[2])+'|'+(on?'●':'○')+' '+it[0]+' '+it[1]+'}   '});
-  return lr(s,'{dim|tab to change}  ');
+  items.forEach(function(it,i){var on=i===active;s+='{'+(on?(it[2]?it[2]+' b':'b'):(it[2]||'dim'))+'|'+(on?'●':'○')+' '+it[0]+' '+it[1]+'}   '});
+  return mk(s);
 }
-var CH=[['all',14,''],['specs',5,'arch'],['lessons',3,'strat'],['code',4,'build'],['missions',2,'scout']];
+var CH=[['all',14,''],['research',5,'warn'],['docs',4,'ok'],['specs',3,'arch'],['lessons',1,'strat'],['missions',1,'scout']];
 function krow(sel,rank,title,kind,trust,age,snip,mark,words){
-  var out='';
-  out+=(sel?'{acc b|❯}':' ')+' {'+(sel?'acc b':'dim')+'|'+String(rank).padStart(2)+'}  {'+(sel?'b':'')+'|'+fit(title,56)+'}  {'+KC[kind.replace(' ↗','')]+'|'+fit(kind,8)+'}  {'+(trust==='untrusted'?'warn':'dim')+'|'+fit(trust,9)+'} {dim|'+age.padStart(6)+'}';
+  var out='',kk=kind.replace(' ↗','');
+  out+=(sel?'{acc b|❯}':' ')+' {'+(sel?'acc b':'dim')+'|'+String(rank).padStart(2)+'}  {'+(sel?'b':'')+'|'+fit(title,56)+'}  {'+KC[kk]+'|'+fit(kind,8)+'}  {'+(trust==='untrusted'?'warn':'dim')+'|'+fit(trust,9)+'} {dim|'+age.padStart(6)+'}';
   if(mark)out+='  {acc b|'+mark+'}';
-  return [mk('  '+out),mk('       '+hlm(fit(snip,86).replace(/\s+$/,''),words||['council','deadlock','escalat'],'dim')),blank()];
+  return [mk('  '+out),mk('       '+hlm(fit(snip,86).replace(/\s+$/,''),words||KW,'dim')),blank()];
 }
 function listHead(){return mk('  {dim|   #  title                                                    kind      trust       edited}')}
-var KW=['council','deadlock','escalat'];
-function rows(sel,marks,start){
+var KW=['byzantine','fault','quorum','vote','tolerat'];
+function rows(sel,marks){
   var R=[
-    ['context/lessons/council-deadlock.md › Model-family tiebreakers','lesson','trusted','5 d','a deadlock between two seats of one model family is not a deadlock: it is one vote …'],
-    ['crates/delphi-engine/src/handoff.rs › escalate_deadlock','code','trusted','1 d','pub fn escalate_deadlock(session, card): creates the operator card, emits CouncilDeadlockEscalated'],
-    ['specs/011-xenia-signatures.md › 3 Deadlock seal format','spec','trusted','2 w','deadlock records are sealed with a detached signature before the operator sees them'],
-    ['missions/2026-10-23-foundational-design/spec-tracker.md › 005e','mission','trusted','4 d','005e approved; the deadlock escalation card is wired to the operator deck'],
-    ['memory/agents/red-team/notes.md › council','memory','untrusted','3 w','seats of one family often agree on the same wrong answer; ask a second family']
+    ['knowledge/web/arxiv.org/castro-liskov-pbft.md › Abstract','research','listed','2 d','a state machine replication algorithm that tolerates Byzantine faults and works in asynchronous …'],
+    ['context/lessons/council-deadlock.md › Model-family tiebreakers','lesson','trusted','5 d','two seats of one model family are one vote: they tend to share the same fault …'],
+    ['docs/reference/council.md › Quorum and votes','docs','trusted','1 w','a quorum needs three agreeing votes; two seats of one model family count as one vote'],
+    ['specs/003-collaboration-and-council.md › 4 Quorum','spec','trusted','2 w','the council decides by quorum; a seat that cannot be reached counts as a fault, not a vote']
   ],out=[];
   R.forEach(function(r,i){out=out.concat(krow(sel===i,i+2,r[0],r[1],r[2],r[3],r[4],marks&&marks[i]))});
   return out;
 }
 var SCREENS={};
+function cardHead(l,r){return [T('  ')].concat(cls(pad([T('  ')].concat(lr(l,r,92)),96),'tint'))}
 
 SCREENS['kb-1-resting']=function(){
   var b=[];for(var i=0;i<6;i++)b.push(blank());
-  b.push(ctr('{b|knowledge}'));b.push(blank());
+  b.push(ctr(KTITLE));b.push(blank());
   b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
   b.push(ctr('{dim|│} {acc b|›}  {dim|search what Delphi knows…}'+rep(' ',19)+'{dim|│}'));
   b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
-  b.push(blank());
-  b.push(ctr(MODE));
-  b.push(blank());b.push(blank());b.push(blank());
-  b.push(ctr('{arch|specs 31}    {strat|lessons 42}    {build|code 118}    {scout|missions 19}    {warn|skills 48}    {dim|memory 64}'));
+  b.push(blank());b.push(blank());b.push(blank());b.push(blank());b.push(blank());
+  b.push(ctr('{warn|research 214}   {ok|docs 87}   {arch|specs 31}   {strat|lessons 42}   {scout|missions 19}   {dim|skills 48}   {dim|memory 64}'));
   b.push(blank());
   b.push(ctr('{dim|1,204 documents · 8,931 passages · updated 2 min ago}'));
-  return frame({id:'kb-1',head1:KHEAD,pane:'knowledge',body:b,hint:'type to search · tab offline / online / both · ↑ earlier searches · ctrl+t trusted only',dots:KDOTS});
+  return frame({id:'kb-1',head1:KHEAD,pane:'knowledge',body:b,hint:'type to search · ↑ earlier searches · tab filter by kind · ctrl+t trusted only',dots:KDOTS});
 };
 
 SCREENS['kb-2-results']=function(){
-  var b=boxTop('how does the council escalate a deadlock',MODE);
+  var b=boxTop('byzantine fault tolerance');
   b.push(lr('  {dim|14 results · 0.04 s · 0 tokens}','{acc b|s}  summarize for me {dim|· uses the model, about 1.2k tokens}  '));
-  b.push(chips(0,CH));b.push(blank());
-  var c=[
-    lr('{dim b|BEST MATCH}','{arch|spec} {dim|· trusted · edited 3 d ago}',W-6),
-    '{acc b|specs/005e-console-redesign.md › 9.2 The council view}'
-  ];
-  wrap('When two rounds end without agreement, the council escalates. The seats keep their stances and the decision goes to the operator as a card. The card pauses autonomous work on the blocking worktree until you resolve it.',88).forEach(function(l){c.push(hlm(l,KW,''))});
-  c.push('');c.push('{dim|lines 184–210 · cited again by results 2, 4 and 5}');
+  b.push(chips(0,CH));
+  var c=['{acc b|knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md › Overview}'];
+  wrap('A Byzantine fault is a condition in which components fail in arbitrary ways, including sending conflicting information to different parts of the system. A system is Byzantine fault tolerant when it keeps working correctly despite such failures, usually by reaching agreement among the healthy nodes.',88).forEach(function(l){c.push(hlm(l,KW,''))});
+  c.push('');c.push('{dim|en.wikipedia.org · lines 12–31 · cited again by results 2, 3 and 5}');
   c.push('{acc b|enter} read   {acc b|o} open file   {acc b|m} more like this');
-  var cc=card(c.map(function(x){return typeof x==='string'?x:'';}));
-  /* header row of the card is a segment list: rebuild it */
-  cc[0]=[T('  ')].concat(cls(pad([T('  ')].concat(lr('{dim b|BEST MATCH}','{arch|spec} {dim|· trusted · edited 3 d ago}',92)),96),'tint'));
+  var cc=card(c);
+  cc.unshift(cardHead('{dim b|BEST MATCH}','{warn|research} {dim|· full text · CC BY-SA · retrieved 2 d ago}'));
   b=b.concat(cc);b.push(blank());
   b.push(listHead());
   b=b.concat(rows(0,null).slice(0,11));
-  b.push(mk('  {dim|   + 8 more below}'));
+  b.push(mk('  {dim|   + 9 more below}'));
   return frame({id:'kb-2',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick · enter open · s summarize · m more like this · tab filter · / edit the search · esc clear',dots:KDOTS});
 };
 
 SCREENS['kb-3-summary']=function(){
-  var b=boxTop('how does the council escalate a deadlock',MODE);
-  b.push(lr('  {dim|14 results · 0.04 s}','{ok|✔} summarized · 1,180 tokens spent  '));
-  b.push(chips(0,CH));b.push(blank());
-  var hd=[T('  ')].concat(cls(pad([T('  ')].concat(lr('{b|SUMMARY}  {warn|written by the model, not checked}','{dim|from results 1–5}',92)),96),'tint'));
+  var b=boxTop('byzantine fault tolerance');
+  b.push(lr('  {dim|14 results · 0.04 s}','{ok|✔} summarized · 1,180 tokens spent · cached, reopening is free  '));
+  b.push(chips(0,CH));
   var c=[];
-  wrap('A deadlock is two rounds of council debate that end without agreement. The council stops there and sends the decision to you as a card [1], and the blocked worktree waits while other work continues [1]. Two seats from the same model family count as one vote, so a second family is asked before you see the card [2]. The card is sealed with a detached signature [3][4].',88).forEach(function(l){c.push(l)});
+  wrap('A Byzantine fault is a component failing in arbitrary ways, including telling different nodes different things [1]. A system tolerates such faults by reaching agreement among the healthy nodes, which PBFT does while fewer than a third of the nodes are faulty [2]. Delphi’s council uses a small version of this: three agreeing votes make a quorum [3], and two seats of one model family count as one vote [4].',88).forEach(function(l){c.push(l)});
   c.push('');
-  c.push('{dim|sources}  {acc|[1]} 005e §9.2   {acc|[2]} council-deadlock.md   {acc|[3]} handoff.rs   {acc|[4]} 011 §3');
+  c.push('{dim|sources}  {acc|[1]} wikipedia   {acc|[2]} castro-liskov-pbft   {acc|[3]} docs/reference/council   {acc|[4]} lessons/deadlock');
   c.push('{acc b|c} copy summary   {acc b|esc} back to the best match');
   var cc=card(c);
-  b.push(hd);b=b.concat(cc);b.push(blank());
+  cc.unshift(cardHead('{b|SUMMARY}  {warn|written by the model, not checked}','{dim|from results 1–5}'));
+  b=b.concat(cc);b.push(blank());
   b.push(listHead());
-  var first=[mk('    '+'{dim| 1}'+'  '+fit('specs/005e-console-redesign.md › 9.2 The council view',56)+'  {arch|spec    }  {dim|trusted }  {dim|  3 d}  {acc b|◂ [1]}'),blank()];
-  b=b.concat(first);
-  b=b.concat(rows(-1,[ '◂ [2]','◂ [3]','◂ [4]',null,null]).slice(0,9));
+  b=b.concat([mk('    {dim| 1}  '+fit('knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md › Overview',56)+'  {warn|research}  {dim|listed   }  {dim|  2 d}  {acc b|◂ [1]}'),blank()]);
+  b=b.concat(rows(-1,['◂ [2]','◂ [4]','◂ [3]',null]).slice(0,8));
   return frame({id:'kb-3',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick a source · enter open it · c copy summary · esc back to the best match',dots:KDOTS});
 };
 
 SCREENS['kb-4-reader']=function(){
   var b=[];
-  b.push(lr('  {arch b|specs/005e-console-redesign.md}','{dim|spec · trusted · edited 3 d ago}  '));
-  b.push(mk('  {dim|knowledge › how does the council escalate a deadlock › 9.2 The council view}'));
+  b.push(lr('  {warn b|knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md}','{warn|research} {dim|· full text · CC BY-SA 4.0}  '));
+  b.push(mk('  {dim|en.wikipedia.org · retrieved 2026-10-26 · share-alike · listed source, not curated by you}'));
   b.push([T('  '+rep('─',W-4),'rule')]);b.push(blank());
-  b.push(mk('  {acc b|9.2  The council view}'));b.push(blank());
-  wrap('When two rounds end without agreement, the council escalates. The seats keep their stances and the decision goes to the operator as a card. The card pauses autonomous work on the blocking worktree until it is resolved.',92).forEach(function(l){b.push(mk('  '+hlm(l,KW,'')))});
+  b.push(mk('  {acc b|Byzantine fault tolerance}'));b.push(blank());
+  wrap('Byzantine fault tolerance is the resilience of a distributed system to Byzantine faults: components that fail in arbitrary ways, including sending conflicting information to different parts of the system. The name comes from the Byzantine Generals Problem.',92).forEach(function(l){b.push(mk('  '+hlm(l,KW,'')))});
   b.push(blank());
-  b.push(mk('  {b|Rules of escalation}'));
-  b.push(mk('   {dim|1.}  The blocking worktree is frozen; independent worktrees keep running.'));
-  b.push(mk('   {dim|2.}  Each seat records its reasons on the card, signed (see {acc b|[1] 011 · seal format}).'));
-  b.push(mk('   {dim|3.}  The card waits 10 minutes, then the task pauses safely.'));
-  b.push(blank());
-  b.push(mk('  {dim|┌ card contract}'));
-  b.push(cls(mk('  │ escalate_deadlock(session, card) → HandoffState'),'build'));
-  b.push(mk('  {dim|└}'));
+  b.push(mk('  {b|Properties}'));
+  b.push(mk('   {dim|1.}  safety: healthy nodes never decide different values'));
+  b.push(mk('   {dim|2.}  liveness: healthy nodes eventually decide, if fewer than a third are faulty'));
+  b.push(mk('   {dim|3.}  practical algorithms, such as {acc b|[1] PBFT}, trade messages for fault tolerance'));
   b.push(blank());
   b.push(mk('  {b|See also}'));
-  b.push(mk('   {acc b|[1]} {acc|specs/011-xenia-signatures.md › 3 Deadlock seal format}'));
-  b.push(mk('   {acc|[2]} context/lessons/council-deadlock.md › Model-family tiebreakers'));
-  b.push(mk('   {acc|[3]} AGENTS.md › Do not widen authority'));
-  b.push(blank());b.push(lr('  {dim|─── end of section 9.2 ───}','{dim|lines 184–226 of 412  ·  48%}  '));
+  b.push(mk('   {acc b|[1]} {acc|knowledge/web/arxiv.org/castro-liskov-pbft.md › Abstract}'));
+  b.push(mk('   {acc|[2]} docs/reference/council.md › Quorum and votes'));
+  b.push(mk('   {acc|[3]} specs/003-collaboration-and-council.md › 4 Quorum'));
+  b.push(mk('   {dim|[4]} en.wikipedia.org/wiki/Paxos_(computer_science)  {dim|seen, not read: not on your list}'));
+  b.push(blank());b.push(lr('  {dim|─── end of Overview ───}','{dim|lines 12–58 of 214  ·  26%}  '));
   return frame({id:'kb-4',head1:KHEAD,pane:'knowledge › reading',body:b,hint:'tab next link · enter follow · [ ] back / forward · ↑ ↓ scroll · y copy path · esc back to results',dots:KDOTS});
 };
 
 SCREENS['kb-5-pdf']=function(){
-  var b=boxTop('council flow diagram',MODE);
+  var b=boxTop('pbft message flow diagram');
   b.push(lr('  {dim|3 results · 0.01 s · 0 tokens}','{dim|↗ opens in your browser, everything else opens here}  '));
-  b.push(chips(0,[['all',3,''],['specs',1,'arch'],['pdf',1,'amb'],['images',1,'amb']]));b.push(blank());
-  var hd=[T('  ')].concat(cls(pad([T('  ')].concat(lr('{dim b|BEST MATCH}','{amb|pdf ↗} {dim|· untrusted: from outside Delphi · 1.4 MB · 2 pages}',92)),96),'tint'));
+  b.push(chips(0,[['all',3,''],['docs',3,'ok']]));
   var c=[
-    '{acc b|docs/diagrams/council-flow.pdf}','',
-    '{dim|page 1 text}  “Council escalation flow: seat rounds, deadlock check, operator card, resume.”',
-    '{dim|page 2 text}  “Seals: every card carries a detached signature before it reaches the operator.”','',
+    '{acc b|docs/diagrams/pbft-message-flow.pdf}',
+    '{dim|page 1 text}  “PBFT message flow: request, pre-prepare, prepare, commit, reply.”',
+    '{dim|page 2 text}  “A replica waits for 2f + 1 matching prepares before it commits.”','',
     '{ok|✔} opened in your browser {dim|· read-only, Delphi never runs it}',
     '{acc b|enter} open again   {acc b|o} show in Finder   {acc b|c} copy path'
   ];
-  b.push(hd);b=b.concat(card(c));b.push(blank());
+  var cc=card(c);cc.unshift(cardHead('{dim b|BEST MATCH}','{ok|docs} {dim|· pdf ↗ · trusted · 1.4 MB · 2 pages}'));
+  b=b.concat(cc);b.push(blank());
   b.push(listHead());
-  b.push(mk('  '+'  {dim| 2}  '+fit('docs/diagrams/council-flow.png',56)+'  {amb|png ↗   }  {warn|untrusted}  {dim|  2 w}'));
+  b.push(mk('    '+'{dim| 2}  '+fit('docs/diagrams/pbft-message-flow.png',56)+'  {dim|png ↗   }  {dim|trusted  }  {dim|  1 w}'));
   b.push(mk('       {dim|image 1920 × 1080 · 420 KB · enter opens it in your browser}'));b.push(blank());
-  b.push(mk('  '+'{acc b|❯}'+' {acc b| 3}  {b|'+fit('specs/005e-console-redesign.md › 9.2 Diagram references',56)+'}  {arch|spec    }  {dim|trusted }  {dim|  3 d}'));
-  b.push(mk('       '+hlm('text description of the council flow diagram that matches the PDF sheet',['council','diagram','flow'],'dim')));
+  b.push(mk('  '+'{acc b|❯}'+' {acc b| 3}  {b|'+fit('docs/reference/council.md › Message flow',56)+'}  {ok|docs    }  {dim|trusted }  {dim|  1 w}'));
+  b.push(mk('       '+hlm('text description of the PBFT message flow that the diagram shows',['pbft','message','flow','diagram'],'dim')));
   b.push(mk('       {dim|enter reads it here}'));
   return frame({id:'kb-5',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick · enter open (↗ in the browser, else here) · o show in Finder · c copy path · esc clear',dots:KDOTS});
 };
 
 SCREENS['kb-6-empty']=function(){
-  var b=boxTop('zyzzyva distributed consensus',MODE);
+  var b=boxTop('zyzzyva consensus');
   b.push(lr('  {dim|0 results · 0.12 s}',''));b.push(blank());b.push(blank());
-  b.push(mk('  {b|Nothing in the knowledge base matches} “zyzzyva distributed consensus”.'));b.push(blank());
+  b.push(mk('  {b|Nothing in the archives matches} “zyzzyva consensus”.'));b.push(blank());
   b.push(mk('  {dim|try}'));
-  b.push(mk('   {acc b|fewer words}    “consensus” alone matches 6 documents'));
-  b.push(mk('   {acc b|ctrl+t}         include untrusted documents (3 more would match)'));
-  b.push(mk('   {acc b|tab}            search online {dim|· sends the query to a third party, so it only runs when you ask}'));
+  b.push(mk('   {acc b|fewer words}     “consensus” alone matches 41 documents'));
+  b.push(mk('   {acc b|ctrl+t}          include untrusted documents (3 more would match)'));
+  b.push(mk('   {acc b|shift+tab}       expand the archive: research this topic from trusted sources'));
   b.push(blank());
-  b.push(mk('  {dim|online search is not set up: add a [search] section to config.toml (specs/028 §6)}'));
-  return frame({id:'kb-6',head1:KHEAD,pane:'knowledge',body:b,hint:'type to change the search · tab offline / online / both · ctrl+t trusted only · esc clear',dots:KDOTS});
+  b.push(mk('  {dim|expanding needs a [search] provider in config.toml (specs/028 §6)}'));
+  return frame({id:'kb-6',head1:KHEAD,pane:'knowledge',body:b,hint:'type to change the search · tab filter by kind · ctrl+t trusted only · esc clear',dots:KDOTS});
+};
+
+SCREENS['kb-7-expand']=function(){
+  var b=[];for(var i=0;i<6;i++)b.push(blank());
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr(KLABEL));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  {dim|a topic to research…}'+rep(' ',22)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  return frame({id:'kb-7',head1:KHEAD,pane:'knowledge',body:b,hint:'type a topic · enter research it · esc back',dots:KDOTSE});
+};
+
+SCREENS['kb-8-researching']=function(){
+  var b=[];for(var i=0;i<4;i++)b.push(blank());
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr(KLABEL));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  byzantine fault tolerance'+rep(' ',20)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  b.push(blank());b.push(blank());
+  b.push(mk('    {b|researching} “byzantine fault tolerance”'));
+  b.push(mk('    reading {b|7} sources · {b|12} found · {dim|3 skipped (not on the trusted list)}'));
+  b.push(blank());
+  b.push(mk('    {ok|✔} {warn|en.wikipedia.org}       full text         CC BY-SA'));
+  b.push(mk('    {ok|✔} {warn|nist.gov}               full text         public domain'));
+  b.push(mk('    {ok|✔} {warn|arxiv.org}              summary and facts  {dim|summary-only source}'));
+  b.push(mk('    {acc|●} {warn|britannica.com}         reading…'));
+  b.push(mk('    {dim|○ pubmed.ncbi.nlm.nih.gov · acm.org · …}'));
+  return frame({id:'kb-8',head1:KHEAD,pane:'knowledge',body:b,hint:'esc cancel · entries already written stay · nothing leaves the trusted list',dots:KDOTSE});
+};
+
+SCREENS['kb-9-expanded']=function(){
+  var b=[];
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr(KLABEL));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  byzantine fault tolerance'+rep(' ',20)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  b.push(blank());
+  b.push(mk('  {ok b|the archive has been expanded to include 6 new entries}'));
+  b.push(blank());
+  b.push(mk('  {dim|   #  new entry                                                   form        licence}'));
+  var R=[['knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md','full','CC BY-SA'],['knowledge/web/nist.gov/fault-tolerance-glossary.md','full','public domain'],['knowledge/web/arxiv.org/castro-liskov-pbft.md','summary','summary-only'],['knowledge/web/acm.org/lamport-byzantine-generals.md','summary','summary-only'],['knowledge/web/britannica.com/distributed-computing.md','summary','summary-only'],['knowledge/web/ietf.org/rfc-4251-byzantine-note.md','full','IETF Trust']];
+  R.forEach(function(r,i){b.push(mk('  '+(i===0?'{acc b|❯}':' ')+' {'+(i===0?'acc b':'dim')+'|'+String(i+1).padStart(2)+'}  {'+(i===0?'b':'')+'|'+fit(r[0],60)+'}  {warn|'+fit(r[1],10)+'}  {dim|'+r[2]+'}'))});
+  b.push(blank());
+  b.push(mk('  {dim|read, not kept: britannica.com/… (nothing pertinent) · acm.org/dl/… (duplicate of 4)}'));
+  b.push(mk('  {dim|seen, not read: 4 links to hosts that are not on your list}'));
+  return frame({id:'kb-9',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick · enter read it · esc back to the clean page · they are searchable now',dots:KDOTSE});
 };
 
 /* ============================== DECISIONS ============================== */
