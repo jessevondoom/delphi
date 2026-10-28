@@ -633,7 +633,44 @@ impl EngineService {
         v["mission_id"] = json!(m.id);
         v["budget"] = Self::budget_json(&m);
         v["pending_proposals"] = json!(crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len());
+        v["providers"] = json!(self.providers());
+        v["pace_mode"] = json!(self.engine.pace.lock().unwrap().as_str());
         Ok(v)
+    }
+
+    /// How each connected provider (endpoint) stands: of its models, how many can be used now, how many are cooling down after a
+    /// throttle and how many are out of quota, and when the soonest comes back (Unix ms). Names and counts only (`specs/035` D-21).
+    fn providers(&self) -> Vec<Value> {
+        let cfg = self.engine.cfg.get();
+        let now = (self.engine.clock_unix)();
+        let state = self.engine.pool.snapshot();
+        let mut order: Vec<String> = Vec::new();
+        let mut rows: std::collections::BTreeMap<String, (String, u32, u32, u32, Option<i64>)> = Default::default();
+        for k in cfg.pool_entries() {
+            if !order.contains(&k.endpoint_id) {
+                order.push(k.endpoint_id.clone());
+            }
+            let row = rows.entry(k.endpoint_id.clone()).or_insert_with(|| (k.family.clone(), 0, 0, 0, None));
+            row.1 += 1;
+            if let Some(e) = state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id) {
+                let live = e.until.is_none_or(|t| t > now);
+                match e.state {
+                    crate::pool::State::CoolingDown if live => row.2 += 1,
+                    crate::pool::State::Exhausted if live || e.until.is_none() => row.3 += 1,
+                    _ => {}
+                }
+                if live && e.state != crate::pool::State::Available {
+                    if let Some(t) = e.until {
+                        row.4 = Some(row.4.map_or(t, |b| b.min(t)));
+                    }
+                }
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|id| rows.remove(&id).map(|r| (id, r)))
+            .map(|(id, (family, models, cooling, out, back))| json!({"endpoint": id, "family": family, "models": models, "cooling": cooling, "out": out, "back_ms": back.map(|t| t * 1000)}))
+            .collect()
     }
 
     /// `kb.search`: pointers and previews from the workspace's knowledge base (read-only). `kb.index` refreshes it.
@@ -1000,7 +1037,7 @@ impl EngineService {
             })
             .collect();
         let pending: Vec<Value> = crate::settings_store::pending(&events).iter().map(|s| json!({"id": s.id, "key": s.key, "value": s.value, "reason": s.reason, "by": s.by})).collect();
-        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m), "reduce_motion": o.reduce_motion}))
+        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m), "reduce_motion": o.reduce_motion, "pace": self.engine.pace.lock().unwrap().as_str()}))
     }
 
     /// `settings.set`: the operator changes one setting by command. `{key, value}`.
@@ -1479,6 +1516,35 @@ mod tests {
         assert!(events_of(&f, "task.created")[0].payload["prompt"].as_str().unwrap().contains("cost the cron job"));
         let by_label = svc.council_follow(json!({"option": "proceed"}), console()).await.unwrap();
         assert_eq!(by_label["started"].as_u64(), Some(2), "a label works as well as a number");
+    }
+
+    // specs/035 D-21: the pace is set by command, told exactly, held in memory, and the narrator is told how each provider stands.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_operator_sets_a_pace_and_the_narrator_is_told_it_and_how_each_provider_stands() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let console = || CallContext { scope: Scope::Console, client_id: 7 };
+        assert_eq!(svc.settings_get(json!({}), console()).await.unwrap()["pace"], "balanced");
+        let set = svc.settings_set(json!({"key": "pace", "value": "sprint"}), console()).await.unwrap();
+        assert_eq!((set["old"].as_str(), set["new"].as_str()), (Some("balanced"), Some("sprint")));
+        assert!(set["text"].as_str().unwrap().contains("No role starts on a lower model"), "{}", set["text"]);
+        assert_eq!(*f.engine.pace.lock().unwrap(), crate::route::Pace::Sprint);
+        assert_eq!(events_of(&f, "setting.changed").last().unwrap().payload["key"], "pace");
+        assert!(svc.settings_set(json!({"key": "pace", "value": "reckless"}), console()).await.is_err());
+        assert!(svc.settings_set(json!({"key": "pace", "value": "frugal"}), CallContext { scope: Scope::Narrator, client_id: 1 }).await.is_err(), "only a console sets the pace");
+        let st = svc.observe_state(json!({})).await.unwrap();
+        assert_eq!(st["pace_mode"], "sprint");
+        for p in st["providers"].as_array().unwrap() {
+            assert!(p["models"].as_u64().unwrap() >= p["cooling"].as_u64().unwrap() + p["out"].as_u64().unwrap(), "{}", p);
+        }
+        // A model out of quota shows against its provider, with when it is back.
+        let ep = f.engine.cfg.get().pool_entries().into_iter().next().expect("the test workspace has a model");
+        let reset = (f.engine.clock_unix)() + 3600;
+        f.engine.pool.record_exhausted(&ep.endpoint_id, &ep.model_id, &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let st = svc.observe_state(json!({})).await.unwrap();
+        let row = st["providers"].as_array().unwrap().iter().find(|p| p["endpoint"] == ep.endpoint_id.as_str()).unwrap();
+        assert_eq!((row["out"].as_u64(), row["back_ms"].as_i64()), (Some(1), Some(reset * 1000)), "{}", row);
     }
 
     // specs/035 D-17..D-19: the operator's own commands for settings, and the suggestions waiting for them.

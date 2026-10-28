@@ -1,5 +1,5 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦x?x⟧ ⟦•_•⟧ ⟦•••⟧
-delphi v0.5 · changes · session 2 · 2 asks · 1 from before
+delphi v0.5 · changes
 
  ✔ nothing needs you
  1 link · tab to follow
@@ -31,4 +31,4 @@ delphi v0.5 · changes · session 2 · 2 asks · 1 from before
 
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-1 running  ·  14.2k tokens                                                   ← →  ·  ○ ○ ○ ○ ○ ○ ○ ●
+1 running  ·  14.2k tokens                                                       ← →  ·  ○ ○ ○ ○ ○ ●

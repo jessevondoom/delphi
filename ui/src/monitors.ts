@@ -1,9 +1,9 @@
-// The monitoring panes (`specs/034`, a spike): `pulse` (live meters per agent), `timeline` (who worked when, with the changes
-// they recorded) and `tools` (what the team calls, how often it fails, and who reports their work). Each is pure: the
+// The monitoring panes (`specs/034`, a spike): `timeline` (who worked when, with the changes
+// they recorded) with `tools` (what the team calls, how often it fails, and who reports their work) below it, on one page. Pure: the
 // folded state and a few in-memory samples in, `h` lines of `w` columns out. Read-only, no boxes, no reasoning, no text a
 // model wrote: names, counts, times and states only.
 import * as T from './theme.ts';
-import { bar, capMeter, colored, kilo, LOOP_CALLS, LOOP_FAILS, quietNote, SAMPLE_SECS, SAMPLES, spark } from './meters.ts';
+import { bar, colored, LOOP_CALLS, LOOP_FAILS, spark } from './meters.ts';
 import { clockOf, plan } from './epic-plan.ts';
 import type { OModel, OState } from './observe-screen.ts';
 
@@ -17,47 +17,6 @@ const calm = (...lines: string[]) => ['', ...lines.map((l) => dim('  ' + l))];
 
 /** `6m`, `1h 05m`: how long ago, coarse. */
 const ago = (ms: number) => { const m = Math.max(0, Math.round(ms / 60_000)); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
-
-/**
- * pulse: one meter row per agent that is working. A sparkline of its tokens per sample (the last three minutes), the rate
- * now, the cap meter and quiet note, the state in words. Meters stay on screen all the time: nothing here needs a mode.
- */
-export function pulse(m: OModel, w: number, h: number): string[] {
-  const st = m.st;
-  const roles = Object.values(st.agents).filter((a) => a.state !== 'idle').map((a) => a.role).sort(byRole);
-  const out: string[] = [head(m, 'pulse', `tokens per ${SAMPLE_SECS}s · last ${Math.round((SAMPLES * SAMPLE_SECS) / 60)} min`, w)];
-  if (!roles.length) return [...out, ...calm('', 'nothing is working right now', 'a meter per agent appears here while it runs: pace, the share of its token cap, and how long it has been silent')];
-  const sw = Math.max(8, Math.min(SAMPLES, w - 46));
-  const now = m.now ?? 0;
-  // Coming back: what has happened since the operator last asked or answered something.
-  const sy = st.since_you;
-  if (sy && sy.since_ms > 0 && now - sy.since_ms > 60_000 && sy.changes + sy.done + sy.failed + sy.approvals > 0) {
-    const bits = ([[sy.changes, 'change', 'changes'], [sy.done, 'task done', 'tasks done'], [sy.failed, 'failed', 'failed'], [sy.approvals, 'approval raised', 'approvals raised']] as [number, string, string][]).filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
-    out.push('', ' ' + dim(`since you last acted, ${ago(now - sy.since_ms)} ago:  ${bits.join(' · ')}`));
-  }
-  // Waiting on you: the human is the slowest part, so how long each card has waited.
-  for (const a of Object.values(st.approvals ?? {}).sort((x, y) => x.since_ms - y.since_ms)) {
-    const waited = now ? now - a.since_ms : 0;
-    out.push('', ' ' + colored(`► waiting on you  ${ago(waited)}`, waited > 10 * 60_000 ? T.alert : T.warn) + dim(`  ${T.roleName(a.role, m.info)} · ${a.summary}`));
-  }
-  for (const r of roles) {
-    const a = st.agents[r]!;
-    const s = m.pulse?.[r] ?? [];
-    const perMin = s.slice(-Math.round(60 / SAMPLE_SECS)).reduce((x, y) => x + y, 0);
-    const state = colored(`${a.state === 'running' ? '●' : a.state === 'waiting on you' ? '►' : '○'} ${a.state}`, a.state === 'running' ? T.accent : a.state === 'waiting on you' ? T.warn : T.muted);
-    out.push('', ' ' + T.badge(r, a.state as never, m.info, m.pal) + ' ' + pad(T.roleColor(r, m.info).bold(T.roleName(r, m.info)), 12) + ' ' + T.accent(pad(spark(s, sw), sw)) + '  ' + pad(dim(`${kilo(perMin)}/min`), 11) + state);
-    const tail = [capMeter(m, r).trim(), quietNote(m, r).replace(/^ · /, '')].filter(Boolean);
-    const t = st.tools?.[r];
-    const loop = t?.streak && (t.streak.n >= LOOP_CALLS || t.streak.failed >= LOOP_FAILS) ? colored(`⟳ ${t.streak.tool} ×${t.streak.n}`, t.streak.failed >= LOOP_FAILS ? T.alert : T.warn) : '';
-    if (loop) tail.push(loop);
-    if (t?.last && a.state === 'running') tail.push(dim(`→ ${t.last}`));
-    if (tail.length) out.push('          ' + ' '.repeat(12) + tail.join(dim('  ·  ')));
-  }
-  const all = Object.values(m.pulse ?? {});
-  const sum = Array.from({ length: SAMPLES }, (_, i) => all.reduce((t, v) => t + (v[v.length - SAMPLES + i] ?? 0), 0));
-  out.push('', T.rule(m.pal)('─'.repeat(w)), ' ' + dim(pad('all agents', 13)) + ' ' + T.accent(pad(spark(sum, sw), sw)) + '  ' + dim(`${kilo(st.tokens.input + st.tokens.output + st.tokens.cache_read + st.tokens.cache_write)} tokens in all`));
-  return out.slice(0, h);
-}
 
 /** Cells of a lane: which of `n` columns each of the role's runs covers, drawn by how the run ended. */
 function lane(nodes: OState['nodes'][string][], start: number, end: number, n: number): string[] {
@@ -149,4 +108,9 @@ export function toolsBoard(m: OModel, w: number, h: number): string[] {
   const looping = Object.entries(st.tools ?? {}).filter(([role, t]) => t.streak && (t.streak.n >= LOOP_CALLS || t.streak.failed >= LOOP_FAILS) && st.agents[role]?.state === 'running').map(([role, t]) => `${T.roleName(role, m.info)} ${t.streak!.tool} ×${t.streak!.n}`);
   if (looping.length) out.push('', colored('  ⟳ going round in circles: ' + looping.join(', '), T.warn));
   return out.slice(0, h);
+}
+
+/** The timeline page: the lanes first, then the tools board below it. The page scrolls (`observeFrame`), so neither is cut to the window. */
+export function timelineAndTools(m: OModel, w: number, _h: number): string[] {
+  return [...timeline(m, w, Infinity), '', ...toolsBoard(m, w, 40)];
 }

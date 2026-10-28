@@ -46,7 +46,7 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
     const t = setInterval(() => setNow(Date.now()), 300);
     return () => clearInterval(t);
   }, [still, busy]);
-  // The pulse pane's samples: every few seconds, the tokens each running role used since the last look (logged plus live).
+  // The cap meter's forecast samples: every few seconds, the tokens each running role used since the last look (logged plus live).
   useEffect(() => {
     if (!busy) return;
     const t = setInterval(() => {
