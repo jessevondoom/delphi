@@ -71,6 +71,7 @@ pub mod research;
 pub mod research_setup;
 pub mod route;
 pub mod ratify;
+pub mod retro;
 pub mod service;
 pub mod status;
 pub mod timers;

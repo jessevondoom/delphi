@@ -197,8 +197,14 @@ pub fn live_proposals(mission: &str, events: &[EventEnvelope]) -> Vec<LivePropos
             _ => {}
         }
     }
+    // A chatty mission cannot bury the operator's review: only the newest few stay listed.
+    let excess = out.len().saturating_sub(MAX_LIVE_PROPOSALS);
+    out.drain(..excess);
     out
 }
+
+/// Unresolved proposals listed per mission; older ones fall off the list (their events stay in the log).
+pub const MAX_LIVE_PROPOSALS: usize = 20;
 
 /// The five capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5), by the name a note and
 /// `[learning] triggers` use.
@@ -813,5 +819,8 @@ mod tests {
         assert_eq!(live.iter().map(|p| p.reference()).collect::<Vec<_>>(), ["m1/p3", "m1/p4"], "bad vocabulary is ignored; a resolved one is gone");
         assert_eq!((live[0].tier.as_str(), live[1].tier.as_str()), ("L3", "L3"), "a payload cannot claim more than L3");
         assert_eq!(live[0].to_json()["text"], "Run the formatter first.");
+        let many: Vec<EventEnvelope> = (1..=30).map(|i| at(i, None, "learn.proposed", json!({"op": "add", "scope": "workspace", "text": format!("rule {}", i), "rationale": "r"}))).collect();
+        let kept = live_proposals("m1", &many);
+        assert_eq!((kept.len(), kept[0].id.as_str(), kept[MAX_LIVE_PROPOSALS - 1].id.as_str()), (MAX_LIVE_PROPOSALS, "p11", "p30"), "the newest twenty stay");
     }
 }
