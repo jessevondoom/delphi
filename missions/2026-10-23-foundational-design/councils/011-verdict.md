@@ -7,12 +7,12 @@ source_type: internal_generated
 confidence: medium   # three seats, Round 1 only; two families; claims checked against the code where marked
 status: active
 source_mission: 2026-10-23-foundational-design
-tags: [council, bundles, routing, xenia, spec-040]
+tags: [council, bundles, routing, xenia, spec-041]
 ---
 
 # Council 011: agent routing pyramid and role extensions
 
-**Proposition.** Let an organization grow its agent fleet far past today's 20 without taxing the orchestrator (a registry and a routing step, organized like a reporting pyramid), and let an org bundle *extend* a built-in role with skills, more guidance and team members (`specs/040`, draft).
+**Proposition.** Let an organization grow its agent fleet far past today's 20 without taxing the orchestrator (a registry and a routing step, organized like a reporting pyramid), and let an org bundle *extend* a built-in role with skills, more guidance and team members (`specs/041`, draft).
 
 **Seats (Round 1, blind, no tools).** Claude Haiku (`claude -p --model haiku`); Gemini 3.8 Flash High twice (`agy --mode plan`, two independent runs; `agy` offers no level above High for Flash and rejects `--effort` together with a model id that already names a level). Verbatim answers: [`011/`](011/). The brief: [`011/brief.md`](011/brief.md). Round 2 (cross-examination) was not run: the three seats agreed on the recommendation, and the two real disagreements (below) are design choices, not facts.
 
@@ -29,7 +29,7 @@ tags: [council, bundles, routing, xenia, spec-040]
 8. **Measure first**: a labeled set of 100 to 200 real task descriptions; recall@3/5 at or above 0.90; zero silent truncation; orchestrator listing tokens flat as the registry grows; outcome parity against the flat list.
 
 ### Real disagreements, and how the spec resolves them
-| Question | Seats | Resolution in `specs/040` |
+| Question | Seats | Resolution in `specs/041` |
 | :-- | :-- | :-- |
 | Push top-k into the orchestrator's context every turn, or give it a query tool? | Haiku and Flash A: shortlist per task. Flash B: on-demand tool; per-turn injection thrashes the prompt cache and is blind to wording. | **On-demand tool** `search_agent_registry`; the context holds only the fixed-size domain index. The model chooses; the daemon only ranks. |
 | Guidance cap | Haiku: up to 8 KiB later, relevance-loaded. Flash A, B: 4 KiB static. | **4 KiB static total per role**, over-cap fails at add. Longer material goes in skills (already loaded by relevance, with scope checks) or knowledge. |
@@ -44,6 +44,6 @@ tags: [council, bundles, routing, xenia, spec-040]
 - Not checked: Flash A's 25 ms router budget and its 60% token-reduction bar (no baseline measured); both are carried into the spec as targets to measure, not as facts.
 
 ### Unresolved, for the operator
-**The management pyramid.** The operator asked for a reporting pyramid. The Council (3 of 3) says: keep the *pyramid of organization* (domains, roles, teams, all visible in the registry and the console) but keep *dispatch flat* (orchestrator to leaf) for now. `specs/040` follows that and lists domain leads as a gated later slice (OD-1). This is the one place the spec departs from the operator's stated picture, so it is flagged there.
+**The management pyramid.** The operator asked for a reporting pyramid. The Council (3 of 3) says: keep the *pyramid of organization* (domains, roles, teams, all visible in the registry and the console) but keep *dispatch flat* (orchestrator to leaf) for now. `specs/041` follows that and lists domain leads as a gated later slice (OD-1). This is the one place the spec departs from the operator's stated picture, so it is flagged there.
 
 Seat reliability note (the usual triage rule): Flash marked claims "P0" that are design opinions, not defects; the P0s above are accepted only because Haiku independently raised the same points and the code confirms the invariants they protect.

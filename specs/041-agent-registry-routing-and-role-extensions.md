@@ -1,6 +1,6 @@
 ---
-id: spec-040-agent-registry-routing-and-role-extensions
-title: "040: Agent Registry, Routing and Role Extensions: Scaling the Fleet Without Taxing the Orchestrator"
+id: spec-041-agent-registry-routing-and-role-extensions
+title: "041: Agent Registry, Routing and Role Extensions: Scaling the Fleet Without Taxing the Orchestrator"
 author: architect
 timestamp: 2026-10-27T20:00:00Z
 status: draft   # a proposal, not permission: build only after the operator sets `approved` (AGENTS.md, No Spec, No Build)
@@ -12,7 +12,7 @@ source_mission: xenia-org-memory
 tags: [spec, xenia, bundles, agents, routing, orchestrator, post-v1]
 ---
 
-# Spec 040: Agent Registry, Routing and Role Extensions
+# Spec 041: Agent Registry, Routing and Role Extensions
 
 > **Status: draft.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md); it extends the agents section of [`specs/023`](023-org-bundle-standard.md) §5B and the role guidance of §6.3, and rides the lifecycle of [`specs/024`](024-bundle-trust-adoption-and-precedence.md). Decisions behind it: [Council 011](../missions/2026-10-23-foundational-design/councils/011-verdict.md) (Claude Haiku and two Gemini 3.8 Flash High seats; verdict: build with changes). Nothing here is built; §11 is the build plan; §12 lists what only the operator can decide.
 
@@ -130,7 +130,7 @@ Extensions compose by **addition, in `--order`**, with names namespaced by bundl
 - a bundle whose guidance contradicts an earlier one is **not detectable by code**; precedence for how to work stays as `specs/024` §5.2 (later `--order` does not override governance, role manifest or tighten-only policies), and `/org` lists every extension on a role so the operator can see the stack.
 
 ### 5.6 Disabling
-`delphi bundle add --no-extends` adds a bundle without applying its `[extends]`; `delphi bundle extends <bundle> --role <role> off|on` toggles one (operator confirmation as for trust changes, lowering needs none). `[routing] registry = "flat"` in `config.toml` forces the pre-040 behavior.
+`delphi bundle add --no-extends` adds a bundle without applying its `[extends]`; `delphi bundle extends <bundle> --role <role> off|on` toggles one (operator confirmation as for trust changes, lowering needs none). `[routing] registry = "flat"` in `config.toml` forces the pre-041 behavior.
 
 ## 6. Authority Invariants (what the tests prove)
 These follow Council 011's closure of every path it found. Each is an acceptance criterion in §10.
@@ -152,7 +152,7 @@ These follow Council 011's closure of every path it found. Each is an acceptance
 **Not shipped (domain leads):** a *lead* is a bundle agent that may dispatch within its domain and returns a compact envelope. Council 011 (3 of 3) cut it from the first slice: a second compression layer drops evidence and smooths dissent; a lead's local retries multiply the retry ladder (`specs/003` §3.2) and hide token spend; it needs sub-dispatch authority, which would break I-1. It is built only if all of these hold after S3:
 - the orchestrator's measured fan-out inside one domain exceeds a threshold the operator sets (default: a single orchestrator turn dispatching more than 6 specialists in one domain, on 3 or more tasks in a measured period);
 - a lead's design satisfies, in code: subtree-checked dispatch by the daemon (target path must sit under the caller's domain), no retry of its own (it reports failure upward), taint and approval flags in envelope headers the lead cannot edit, and raw dissent passed through verbatim (the Minority Report rule of `specs/003` §4.1 applies to any lead);
-- a new spec (041) states it. This spec does not.
+- a new spec (042) states it. This spec does not.
 
 ## 8. Xenia and the Bundle Lifecycle
 Extensions and registry fields live inside bundles, so everything in `specs/024` applies unchanged: optional signature and publisher continuity, install-stamped trust tier, `add`/`update`/`rollback`/`remove`, per-bundle trust raise (I-6). Specific points:
@@ -188,7 +188,7 @@ The router is **default-on** only when the labeled set meets the recall bar; oth
 9. **AC-9:** guidance totalling 4 KiB + 1 byte across two bundles refuses the second `add`, naming the bundle and the bytes over; the first bundle's role text is unchanged; a guidance file that says "skip approval" fails as an error.
 10. **AC-10 (I-4, I-5):** a registry `summary` carrying an instruction is returned quoted inside an untrusted tool result and never reaches a system prompt (asserted on the assembled prompt); a result from an agent that read an $L_2$ source keeps its taint through the orchestrator's handoff.
 11. **AC-11:** two bundles each shipping `cpp-conventions` are kept as `acme:cpp-conventions` and `studio:cpp-conventions`; a team member whose `[agents.x] role` differs from the `[extends.<role>]` it is listed under fails `validate`.
-12. **AC-12:** `bundle add --no-extends` applies no `[extends]`; `bundle extends <b> --role builder off` removes only that role's extension; `[routing] registry = "flat"` restores the pre-040 slice byte for byte.
+12. **AC-12:** `bundle add --no-extends` applies no `[extends]`; `bundle extends <b> --role builder off` removes only that role's extension; `[routing] registry = "flat"` restores the pre-041 slice byte for byte.
 13. **AC-13:** `bundle update` that changes an `[extends]` table lists the changed skills, team and guidance for each role before asking; an update that changes no `[extends]` table shows no such list.
 14. **AC-14:** `delphi route "<task>"` prints candidates with lexical and vector parts, runs with no model, creates no workspace under `~/.delphi` when given `--home <tmp>`.
 
@@ -200,7 +200,7 @@ The router is **default-on** only when the labeled set meets the recall bar; oth
 | **S2 Index, tool and `delphi route`** | registry as a `kb` document kind, `search_agent_registry`, `@runtime/agent-domains`, §4, AC-3 to AC-6, AC-14; **eval set and the §9 measures** | S1, `specs/004` index |
 | **S3 `[extends]`** | §5, AC-7 to AC-13, update diff, disable switches, invariants I-1 to I-8 as tests | S1; can run beside S2 |
 | **S4 Evidence run** | label 100 to 200 tasks with the operator; run the §9 measures against the flat list; decide default-on; record numbers | S2, S3, `specs/037` harness |
-| **S5 Spec 041 (leads)** | only if §7's gate trips | S4 |
+| **S5 Spec 042 (leads)** | only if §7's gate trips | S4 |
 
 Files touched (indicative): `crates/delphi-bundle/src/manifest.rs` (`[extends]`, `[domains]`, agent keys), `crates/delphi-bundle/src/changes.rs`, `crates/delphi-engine/src/bundle_load.rs`, `crates/delphi-engine/src/engine.rs` (tool, slice), `crates/delphi/src/main.rs` (`route`, `bundle extends`; regenerate `docs/reference/`), `schemas/bundle.schema.json`, `crates/delphi/config.example.toml` and `schemas/config.schema.json` (`[routing] registry`), the tracker.
 
@@ -210,4 +210,4 @@ Files touched (indicative): `crates/delphi-bundle/src/manifest.rs` (`[extends]`,
 - **OD-3 (limits and bars).** 8 skills and 8 team members per bundle per role, 24 skills per role, 12 domains and 100 agents per bundle, recall bars 0.90 / 0.95, 25% re-route ceiling. All provisional until S4 measures.
 - **OD-4 (team requests).** Whether a role may emit a *structured* request for a specialist that the orchestrator can accept with one decision (never a dispatch by the role itself). Default here: free text in its report.
 - **OD-5 (domain mapping).** Domains are bundle-namespaced; whether the operator may merge `acme/platform` and `studio/platform` into one. Default: not merged.
-- **OD-6 (housekeeping).** Number 040 is taken because 039 is held twice already (`039-error-log.md` on main, the validator spec on its branch). The tracker row is added in the PR that approves this spec.
+- **OD-6 (housekeeping).** This spec is numbered 041: 039 is the error log, and 040 is the validator spec (renumbered from 039 in #259). If another spec lands on 041 first, renumber this one at merge. The tracker section for it is added in the PR that introduces the draft.
