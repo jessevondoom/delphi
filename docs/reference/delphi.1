@@ -338,10 +338,10 @@ Commands that sign show the exact bytes and want the card's code typed at a term
 print the command reference or a man page.
 .PP
 .nf
-  delphi docs cli | man | catalog [\-\-repo <dir>]
+  delphi docs cli | man | catalog [\-\-repo <dir>] | coverage
 .fi
 .PP
-Generated from the table behind \-\-help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built\-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout.
+Generated from the table behind \-\-help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built\-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout. `coverage` is Markdown (docs/reference/harness\-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's \-\-help (specs/046).
 .SS delphi completions
 print a shell completion script.
 .PP

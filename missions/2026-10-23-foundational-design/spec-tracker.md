@@ -130,6 +130,32 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
+## Harness and OpenAI coverage (spec 046, approved 2026-10-28)
+
+Asked for by the operator on 2026-10-28: every `claude` and `agy` command and the OpenAI-spec APIs classified and covered as far as the rules allow. OD-1 (Responses API default), OD-3 (bundle skills via `--plugin-dir`, no opt-in) and the Codex harness (spec 047) answered yes by the operator 2026-10-28. Approved by the operator 2026-10-28; S0 in progress.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | coverage manifests, help-snapshot test, doctor drift check, probes | built (this PR); probes in spec 046 §10 |
+| S1 | Claude narrowing and hygiene flags | not started |
+| S2 | read-only introspection (`auth status`, `agy models`, `mcp list`, ...) | not started |
+| S3 | agy `--project`, `--log-file`, `--agent` | not started |
+| S4 | `--plugin-dir` for bundle skills | not started |
+| S5 | chat-completions completeness | not started |
+| S6 | Responses API dialect | not started |
+| S7 | embeddings and batch (optional) | not started |
+
+## Codex CLI harness (spec 047, approved 2026-10-28)
+
+Asked for by the operator on 2026-10-28. `codex` is not installed on this machine, so S0 (install, snapshot `--help`, probe) comes first. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | manifest from the real `--help`, probes (approval events, app-server stability) | manifest and first probe built (this PR); approval events and app-server not yet probed |
+| S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | not started |
+| S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
+| S3 | `review` lane, vision, `execpolicy` lint | not started |
+
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)
 
 Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
@@ -166,7 +192,7 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
 | E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (PR pending): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. Not wired to the daemon or the console yet (that is E3); `delphi sources` command not built |
 | E3 | research job, scout decision, `knowledge/web/` writes | built (PR pending): `delphi-engine/src/research.rs` (job, scout contract, quote check, writer), `research_setup.rs`, `research.start` / `research.status` / `research.cancel` (console only), `knowledge/web/` indexed at `federated_verified` and shown as the `research` kind. Needs `[search]` set; never run against the live web or a real model. The console does not call it yet (E4) |
-| E4 | progress, results page and banner, failure states | not started |
+| E4 | progress, results page and banner, failure states | built (PR pending, stacked on E3): the console's expand page starts the job, polls `research.status`, shows the live count, then the banner and the entries (open in the reader, esc back), cancel with esc, failure and refusal states. The narrator is read-only and says research runs from the console. Never run end to end against the live web, a search key or a real model; unproven in a real terminal. Left: K5's hint and the query carried into expand |
 
 ## Harness loop techniques (spec 045, approved 2026-10-28)
 

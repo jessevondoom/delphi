@@ -1,0 +1,73 @@
+# Coverage of the `claude` CLI (specs/046 §3). Format and rules: crates/delphi-engine/src/coverage.rs.
+# kind | path | names | disposition | slice | reason
+# A `used` flag must be one harness.rs passes (a test checks both ways). A reason starting `as -p` means harness.rs passes the short form.
+# A reason starting `hidden:` means the CLI accepts it but does not list it in --help (the stale-row test skips it).
+
+# ── Every page ──
+flag | * | --help | na | | every CLI prints its help
+
+# ── Options of a headless span: used today (specs 009, 020, 021) ──
+flag | . | --print | used | | as -p
+flag | . | --input-format, --output-format, --verbose, --setting-sources, --no-session-persistence, --resume, --fork-session, --strict-mcp-config, --mcp-config, --model, --append-system-prompt, --tools, --effort, --max-budget-usd, --json-schema, --fallback-model, --settings, --include-partial-messages, --agents, --add-dir, --permission-mode | used | |
+flag | . | --permission-prompt-tool | used | | hidden: absent from `claude --help` 2.1.312 but passed on every span; S0 probes that it is still accepted
+flag | . | --max-turns | used | | hidden: absent from `claude --help` 2.1.312; S0 probes whether it still ends a span with error_max_turns
+
+# ── Planned: narrowing and hygiene (spec 046 S1) ──
+flag | . | --allowedTools, --allowed-tools, --disallowedTools, --disallowed-tools | planned | S1 | narrowing only: a profile names tools it denies, never ones beyond the span's own set
+flag | . | --restricted | planned | S1 | removes code-running tools and WebFetch and confines file tools; verify on the installed version first
+flag | . | --permission-prompts | planned | S1 | `none` for a span with no bridge, so an unanswerable request is denied instead of hanging
+flag | . | --exclude-dynamic-system-prompt-sections | planned | S1 | moves cwd/env/git status out of the system prompt so spans share a prompt cache; measure before default-on
+flag | . | --session-id | planned | S1 | Delphi picks the id so a retry can resume without waiting for the init event
+flag | . | --name | planned | S1 | the span label (`role/mission`)
+flag | . | --debug, --debug-file | planned | S1 | under DELPHI_LOG=debug (spec 039) the CLI's debug log goes into the job's log directory
+flag | . | --include-hook-events | planned | S1 | hook lifecycle lines in the stream, logged (Delphi already ships a PreToolUse hook)
+flag | . | --forward-subagent-text | planned | S1 | CLI-native subagent text in the agents pane, tagged by parent_tool_use_id
+flag | . | --autocompact | planned | S1 | [harness.claude] autocompact; changes cost, not authority
+flag | . | --betas | planned | S1 | ratified block only, and only on an API key (the CLI says so)
+flag | . | --agent | planned | S1 | select a CLI-native agent from --agents for the span
+flag | . | --no-chrome | planned | S1 | always passed, so no span reaches a browser extension
+flag | . | --disable-slash-commands | planned | S1 | agy always passes it (spec 021); a prompt that begins with / must not expand a skill on Claude either; S0 probes whether stream-json input expands it
+flag | . | --system-prompt-snapshot | planned | S1 | with `on`, a resumed span keeps its old prompt; S0 probes, resumed spans likely need `off`
+flag | . | --plugin-dir | planned | S4 | the skills of added, hash-verified bundles, on by default (spec 046 OD-3); hooks/ and bin/ never included
+
+# ── Refused or not applicable to a span ──
+flag | . | --dangerously-skip-permissions, --allow-dangerously-skip-permissions | refused | | bypasses every permission check; never passed
+flag | . | --bare | refused | | does not read the subscription login (spec 021 §6)
+flag | . | --plugin-url | refused | | fetches code from a URL
+flag | . | --chrome, --ide, --desktop | refused | | reaches outside the span (browser extension, IDE, desktop app)
+flag | . | --bg, --background, --cloud, --environment, --remote-control, --remote-control-session-name-prefix, --teleport | refused | | hands the work to the vendor's infrastructure or leaves a session outside the daemon (spec 021 §6)
+flag | . | --continue, --from-pr | refused | | picks a session by directory or PR, which depends on global state
+flag | . | --worktree, --tmux | refused | | Delphi owns worktrees (specs 003, 008)
+flag | . | --system-prompt | na | | replaces the CLI's default prompt and its safety text; Delphi appends instead
+flag | . | --replay-user-messages | na | | Delphi already keeps the turn it sent
+flag | . | --safe-mode | na | | --setting-sources "" and --strict-mcp-config already disable what it targets
+flag | . | --brief, --prompt-suggestions, --ax-screen-reader, --file | na | | interactive or cloud-file feature
+flag | . | --version | na | | prints the version; Delphi reads it for doctor
+
+# ── Subcommands ──
+cmd | . | doctor | read-only | S2 | summarized in `delphi doctor`
+cmd | . | gateway, import | na | | enterprise gateway; the operator's own migration (Delphi has `bundle import`)
+cmd | . | attach, logs, stop, rm, respawn | refused | | manage the vendor's background sessions, outside the daemon
+cmd | . | install, update, purge, setup-token | operator-only | | changes the installed CLI, its data or its credentials; Delphi reads the version only (setup-token: spec 046 §3.2)
+cmd | . | ultrareview | refused | | billed, vendor-hosted and user-triggered by the CLI's own terms (spec 046 OD-4)
+
+group | agents | | refused | | the vendor's background sessions
+flag | agents | --json, --all, --cwd | read-only | S2 | `claude agents --json` lets doctor warn about sessions the operator left running
+
+group | auth | | operator-only | | signs in or out of the account
+cmd | auth | status | read-only | | doctor check 10 runs it today
+flag | auth status | --json, --text | read-only | | output format of the read-only status
+
+group | auto-mode | | operator-only | | changes the classifier configuration
+cmd | auto-mode | config, defaults | read-only | S2 | shows the rules that decide what Delphi never sees under --permission-mode auto
+cmd | auto-mode | critique | refused | | calls a model
+
+group | mcp | | operator-only | | writes ~/.claude.json or the keychain
+cmd | mcp | list, get | read-only | S2 | the connector inventory behind claudeai_connectors
+cmd | mcp | serve | na | | Claude as a server; Delphi serves its own tools over __mcp-bridge
+
+group | plugin | | operator-only | | installs, enables or changes plugins and marketplaces
+cmd | plugin | list, details, validate | read-only | S2 | S4 uses validate as a second opinion in `bundle validate --claude`
+cmd | plugin | init, eval, test, tag | na | | plugin authoring, not a span (eval may join spec 027)
+group | plugin marketplace | | operator-only | | adds, removes or updates marketplaces
+cmd | plugin marketplace | list | read-only | S2 | the configured marketplaces

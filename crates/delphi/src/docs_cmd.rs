@@ -28,8 +28,12 @@ pub fn docs(args: &[String]) -> i32 {
                 }
             }
         }
+        Some("coverage") => {
+            print!("{}", delphi_engine::coverage::markdown());
+            0
+        }
         _ => {
-            eprintln!("usage:\n  delphi docs cli                     the command reference, as Markdown\n  delphi docs man                     the same as a man page (roff)\n  delphi docs catalog [--repo <dir>]  the built-in roles and skills, as Markdown");
+            eprintln!("usage:\n  delphi docs cli                     the command reference, as Markdown\n  delphi docs man                     the same as a man page (roff)\n  delphi docs catalog [--repo <dir>]  the built-in roles and skills, as Markdown\n  delphi docs coverage                what Delphi does with every flag and command of the claude, agy and codex CLIs");
             2
         }
     }
