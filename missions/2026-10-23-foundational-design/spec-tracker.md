@@ -168,6 +168,22 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |
 
+## Harness loop techniques (spec 045, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go"). From a research pass over published harness work; every slice is measured on the spec 037 suites before its default moves (H9). Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | not started |
+| H2 | tool-result offload and clearing, cache accounting | not started |
+| H3 | compaction with flush and its check | not started |
+| H4 | phase reasoning (037 arm first) | not started |
+| H5 | progressive tools (`find_tool`) | not started |
+| H6 | verification gate for CLI seats (stop hook, if a probe allows) | not started |
+| H7 | family overlays | not started |
+| H8 | trace review skill | not started |
+| H9 | measure H1 to H5; set defaults | not started |
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
