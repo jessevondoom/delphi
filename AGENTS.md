@@ -18,6 +18,7 @@ Delphi: a Rust workspace (`crates/`) plus an Ink/TypeScript console (`ui/`). One
   ```
 - **Role IDs, not theme names**, outside `themes/` (the lint enforces it). Theme packs change display only, never behavior.
 - **Do not widen authority.** No new code path may act outside the sandbox, approve its own action, or let content read from outside raise its own trust. Red actions always ask.
+- **Every animation obeys reduce motion** (an accessibility setting: `/reduce-motion`, `DELPHI_REDUCE_MOTION=1`, `NO_COLOR`). Anything that changes with time in the console takes its answer from `stillMotion` in `ui/src/motion.ts` and uses its helpers (`spinner`, `pulseOn`, `faceOf`); no private clocks. `ui/test/reduce-motion.test.ts` fails on one.
 - **Scratch runs need `--home <tmpdir>`.** Bare `delphi` and `delphi init` create a real workspace under `~/.delphi`.
 
 ## Where things are

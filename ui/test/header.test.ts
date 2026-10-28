@@ -100,8 +100,11 @@ test('one timer, repaint only on change: an idle window repaints once a second a
   assert.ok(animated > changes && animated <= changes + 2 * 6 * 4 + 2, `${animated}`);
   // while a task runs the clock moves at the spinner's pace
   let spin = 0; last = '';
+  for (let t = 100_000; t < 101_000; t += TICK_MS) { const k = tickKey({ builder: running() }, roles, t, false, true); if (k !== last) { spin++; last = k; } }
+  assert.ok(spin >= 4, `at least four spinner steps in a second (${spin}; a badge frame may add one)`);
+  last = ''; spin = 0;
   for (let t = 100_000; t < 101_000; t += TICK_MS) { const k = tickKey({ builder: running() }, roles, t, true, true); if (k !== last) { spin++; last = k; } }
-  assert.equal(spin, 4, 'four spinner steps in a second');
+  assert.equal(spin, 1, 'reduced motion: the clock moves once a second even while a task runs');
 });
 
 test('the strip frames come from the agents: a thinking builder pans while the others stay put', () => {

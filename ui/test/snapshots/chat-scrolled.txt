@@ -13,7 +13,7 @@ delphi v0.5 · /proj · chat
   Write crates/queue.rs (+84)
     + fn enqueue()
                                              ↓ 6 more lines · pgdn or space · enter jumps to the end
-◐ working · 2s                                                                           esc to stop
+● working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────

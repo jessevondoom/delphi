@@ -6,7 +6,7 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { classify } from './attention.ts';
 import { speakerOf, type Block, type Done, type Span, type State } from './fold.ts';
-import { faceOf, STRIP_ROLES, typingFrame } from './motion.ts';
+import { faceOf, spinner, STRIP_ROLES, typingFrame } from './motion.ts';
 import * as T from './theme.ts';
 import { kilo } from './meters.ts';
 import * as I from './inbox.ts';
@@ -284,7 +284,7 @@ function layout_(m: Model, w: number, dense: boolean): Laid {
   if (m.state.live) { out.push(liveBlock(m, w, tools)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
   else {
     const ty = typingOf(m.state);
-    const frame = ty ? typingFrame(ty.since, ty.id, m.now) : -1;
+    const frame = ty ? typingFrame(ty.since, ty.id, m.now, m.still ?? false) : -1;
     if (ty && frame >= 0) { out.push(typingBlock(m, w, tools, frame)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
     else flush();
   }
@@ -395,8 +395,6 @@ export function tooSmall(w: number, h: number): string[] {
   return out;
 }
 
-const SPIN = ['◐', '◓', '◑', '◒'];
-
 function statusRow(m: Model, w: number): string {
   if (m.search) {
     const hit = m.search.match;
@@ -409,9 +407,9 @@ function statusRow(m: Model, w: number): string {
   if (m.state.live && m.deck === 1) { // in the chat, a reply is being written: say who and what
     const pending = [...m.state.blocks].reverse().find((b) => b.kind === 'tool' && b.status === 'pending');
     const what = pending ? ` ${pending.text}` : '';
-    return T.spread(T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);
+    return T.spread(T.accent(spinner(m.now, m.still ?? false)) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);
   }
-  const left = T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` working · ${secs}s${n > 1 ? ` · ${n} tasks` : ''}${m.queue.length ? ` · ${m.queue.length} queued` : ''}`);
+  const left = T.accent(spinner(m.now, m.still ?? false)) + T.dim(` working · ${secs}s${n > 1 ? ` · ${n} tasks` : ''}${m.queue.length ? ` · ${m.queue.length} queued` : ''}`);
   return T.spread(left, T.dim('esc to stop'), w);
 }
 

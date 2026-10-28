@@ -23,6 +23,7 @@ import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, tra
 import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
 import { STRIP_ROLES, stillMotion, tickKey, TICK_MS, typingFrame } from './motion.ts';
+import { useReduceMotion } from './reduce-motion.ts';
 import type { Ev } from './input.ts';
 import { copyToClipboard, useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
@@ -109,7 +110,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [stdout]);
 
   const running = Object.keys(state.running).length;
-  const still = useMemo(() => stillMotion(), []);
+  const asked = useReduceMotion(cmd, ev);
+  const still = useMemo(() => stillMotion(process.env, asked), [asked]);
   // One timer for everything that moves with time (badge frames, the clock, the spinner). It looks every 150 ms and
   // asks for a repaint only when something on screen would differ, so an idle window does not redraw.
   useEffect(() => {
@@ -117,7 +119,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const t = setInterval(() => {
       const n = Date.now(), s = stateRef.current;
       const ty = typingOf(s);
-      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0, ty ? String(still ? typingFrame(ty.since, ty.id, n) >= 0 : typingFrame(ty.since, ty.id, n)) : '');
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
       if (key !== last) { last = key; setNow(n); }
     }, TICK_MS);
     return () => clearInterval(t);

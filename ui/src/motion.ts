@@ -19,9 +19,19 @@ export const STRIP_ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 
 /** What a badge shows: the library's activity name, and the console state it belongs to (eye colour, fallback faces). */
 export type Face = { frame: string; state: AgentState };
 
-/** No animation: `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin every badge to its static frame. */
-export const stillMotion = (env: Record<string, string | undefined> = process.env): boolean =>
-  env.DELPHI_REDUCE_MOTION === '1' || capabilities(env).color === 'none';
+/**
+ * No animation: `DELPHI_REDUCE_MOTION=1`, `NO_COLOR`, `TERM=dumb`, or the operator's reduce-motion setting (`asked`).
+ * Every animation, now or later, takes its answer from here (AGENTS.md): faces, spinners, pulses, anything on a timer.
+ */
+export const stillMotion = (env: Record<string, string | undefined> = process.env, asked = false): boolean =>
+  asked || env.DELPHI_REDUCE_MOTION === '1' || capabilities(env).color === 'none';
+
+/** The "working" spinner. Standing still it is one fixed glyph: the words beside it already say the work is going on. */
+const SPIN = ['◐', '◓', '◑', '◒'];
+export const spinner = (now: number, still: boolean): string => (still ? '●' : SPIN[Math.floor(now / 250) % SPIN.length]!);
+
+/** A two-state flash (a live dot, a shimmer): steady in its first state when motion is reduced. */
+export const pulseOn = (now: number, still: boolean, everyMs = 600): boolean => still || Math.floor(now / everyMs) % 2 === 0;
 
 /** Roles blink out of step, so the strip does not wink all at once. */
 const phase = (role: string) => [...role].reduce((n, c) => n + c.charCodeAt(0) * 31, 0) % BLINK_EVERY_MS;
@@ -47,7 +57,7 @@ export const stripFaces = (agents: Record<string, Agent>, roles: string[], now: 
  * (a second when idle, a quarter second while something runs, for the spinner, and the typing bubble's own frame). An idle window does not repaint.
  */
 export function tickKey(agents: Record<string, Agent>, roles: string[], now: number, still: boolean, running: boolean, typing = ''): string {
-  return `${Math.floor(now / (running ? 250 : 1000))}|${typing}|${stripFaces(agents, roles, now, still).map((f) => f.frame).join(',')}`;
+  return `${Math.floor(now / (running && !still ? 250 : 1000))}|${typing}|${stripFaces(agents, roles, now, still).map((f) => f.frame).join(',')}`;
 }
 
 /** The typing bubble (the operator sent a prompt, no reply has started): it waits a random 500-850 ms, then three dots pulse in turn. */
@@ -58,8 +68,8 @@ export const TYPING_STEP_MS = 300;
 /** The wait for one prompt. Random per prompt but a pure function of its id, so a repaint never changes it and a test can pin it. */
 export const typingDelay = (id: number): number => TYPING_MIN_MS + (Math.imul(id + 1, 2654435761) >>> 0) % (TYPING_SPAN_MS + 1);
 
-/** Which frame the typing bubble shows `now`: -1 while it is still waiting, then 0..3 (dot 0, 1, 2 lit, then a rest). */
-export function typingFrame(since: number, id: number, now: number): number {
+/** Which frame the typing bubble shows `now` (one fixed frame once it appears when `still`): -1 while it is still waiting, then 0..3 (dot 0, 1, 2 lit, then a rest). */
+export function typingFrame(since: number, id: number, now: number, still = false): number {
   const t = now - since - typingDelay(id);
-  return t < 0 ? -1 : Math.floor(t / TYPING_STEP_MS) % 4;
+  return t < 0 ? -1 : still ? 0 : Math.floor(t / TYPING_STEP_MS) % 4;
 }

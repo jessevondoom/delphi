@@ -39,6 +39,7 @@ export function renderSettings(v: any): string {
   for (const r of v.roles ?? []) lines.push(`  ${String(r.role).padEnd(13)} ${r.override ? `${r.shipped} → ${r.override}  (yours)` : r.shipped}`);
   const b = v.budget ?? {};
   if (b.cap_usd !== undefined) lines.push(`budget ceiling ${usd(b.cap_usd, 2)} · spent ${usd(b.spent_usd, 4)}`);
+  lines.push(`reduce motion ${v.reduce_motion ? 'on' : 'off'}  (/reduce-motion)`);
   const pending = v.pending ?? [];
   if (pending.length) {
     lines.push('waiting for your yes:');
@@ -186,6 +187,15 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       const option = rest.find((w) => w !== 'again');
       const v = await call('council.follow', { ...(option ? { option } : {}), ...(again ? { again: true } : {}) });
       if (v) { ctx.post(`(started ${v.started} step${v.started === 1 ? '' : 's'}${v.option ? ` for ${v.option}` : ''}; each starts when the one before it is done)`); ctx.started?.(); }
+      return;
+    }
+    case 'reduce-motion': {
+      // The setting is saved in the workspace and said once, from the daemon's own event; the windows follow that event.
+      const usage = '/reduce-motion [on | off] (no argument flips it)';
+      const word = rest[0]?.toLowerCase();
+      if (word && !['on', 'off'].includes(word)) { ctx.post(usage); return; }
+      const value = word ?? ((await call('settings.get'))?.reduce_motion ? 'off' : 'on');
+      await call('settings.set', { key: 'reduce_motion', value });
       return;
     }
     case 'settings': {

@@ -19,7 +19,7 @@ const LIST = raw as Entry[];
 test('the shared list is well formed, with only /more left to the Rust consoles', () => {
   const names = LIST.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
   assert.equal(new Set(names).size, names.length, 'no name or alias twice');
-  for (const c of LIST) { assert.match(c.name, /^\/[a-z]+$/); assert.ok(c.desc.length > 8, c.name); assert.ok(c.ink || c.rust, `${c.name} is on some console`); }
+  for (const c of LIST) { assert.match(c.name, /^\/[a-z]+(-[a-z]+)?$/); assert.ok(c.desc.length > 8, c.name); assert.ok(c.ink || c.rust, `${c.name} is on some console`); }
   assert.deepEqual(LIST.filter((c) => c.rust && !c.ink).map((c) => c.name), ['/more'], 'the only command this console lacks');
   assert.deepEqual(COMMANDS.map((c) => c.name), LIST.filter((c) => c.ink).map((c) => c.name).sort((a, b) => a.localeCompare(b)), 'the menu is the list, alphabetical');
 });

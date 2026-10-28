@@ -17,6 +17,7 @@
   { "name": "/distill", "args": "[<path|missions/id> ...]", "desc": "The writer drafts knowledge files for an org bundle from allow-listed sources (team context and specs, mission decisions and Council verdicts) into a staging directory of this mission; nothing is written into a bundle", "ink": true, "rust": true, "local": false },
   { "name": "/follow", "args": "[option] [again]", "desc": "Start the next steps of the last Council's verdict, one after the other; a Council that asked you to choose needs the option's number", "ink": true, "rust": false, "local": false },
   { "name": "/settings", "args": "[accept <n> | dismiss <n> | set <key> <value> | reset <role>]", "desc": "What each role starts on and what is waiting for your yes; change a setting here or just ask for it", "ink": true, "rust": false, "local": false },
+  { "name": "/reduce-motion", "args": "[on | off]", "desc": "Accessibility: stop every animation (badge blinks, spinners, faces, pulses); no argument flips it, or just ask for it", "ink": true, "rust": false, "local": false },
   { "name": "/timer", "aliases": ["/timers"], "args": "<when> <note>", "desc": "Wake a role later: /timer 20m check CI · /timer @architect 1h review · /timer list · /timer cancel <id>", "ink": true, "rust": true, "local": false },
   { "name": "/models", "desc": "The model pool: which models are usable, out of quota, or cooling down", "ink": true, "rust": true, "local": false },
   { "name": "/agents", "desc": "Every agent running now and what it is doing", "ink": true, "rust": true, "local": false },
