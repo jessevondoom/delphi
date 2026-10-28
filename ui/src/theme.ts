@@ -199,14 +199,16 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
  * `⟦•─•⟧`: brackets and mouth in the role's colour, eyes bright on a dark terminal and deep slate on a light one.
  * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
  * `frame` is the library's activity name when the badge animates (`motion.ts`); without it, the state's own frame.
+ * `crossed` swaps the eyes for dim `x`s (the "press Ctrl+C again" window).
  */
-export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string): string {
+export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string, crossed = false): string {
   const chassis = roleColor(role, info);
   // The library's eye colours need true colour; below it the eyes are the terminal's own foreground, bold (`005e` §12).
   const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
   const { cells, mouth } = badgeCells(role, state, info, frame);
-  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : eye(c))).join('') + chassis('⟧');
+  // `crossed` (Ctrl+C pressed once): every eye becomes a lightly drawn `x`; the mouth and any blank cell stay.
+  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(c))).join('') + chassis('⟧');
 }
 
 /**

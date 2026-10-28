@@ -568,9 +568,9 @@ fn event_loop(term: &mut ratatui::DefaultTerminal, session: &mut Session, rx: &m
                             mode = session.permission_mode();
                         }
                     }
-                    // Leave at once when nothing would be lost; with text typed or a task running, ask once (`005e` §10.5).
+                    // Always twice within two seconds, as in Claude Code (`005e` §10.5).
                     KeyCode::Char('c') if ctrl => {
-                        if (editor.is_empty() && !session.busy()) || last_ctrl_c.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+                        if last_ctrl_c.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
                             return 0;
                         }
                         last_ctrl_c = Some(Instant::now());
