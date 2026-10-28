@@ -210,6 +210,15 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 | H8 | trace review skill | not started |
 | H9 | measure H1 to H5; set defaults | not started |
 
+## The validator role and fact ratification (spec 040, draft, merged 2026-10-28)
+
+A draft, not approved: a proposal, so nothing is built from it. Decisions D-1 to D-10 are recorded (§22); open work is the operator labelling the 41-claim draft set, a Council pass on §19.6, and the operator's go for V1. Appendix A (the default source list) already seeds `context/sources/trusted.toml` for spec 028-A1; the two are meant to become one registry (see the primary-sources plan).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | not started (waits for approval) |
+| V2 | fetcher, `fact` check, `ratify_fact`, dry-run in advisory, blind audit cards, hash chain | not started |
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
