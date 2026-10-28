@@ -191,7 +191,7 @@ The knowledge base: index it, search it.
 The read-only live window (also: delphi narrator).
 
 ```
-  delphi observe [dashboard|council|epic|agents|pulse|timeline|tools|archives|changes]
+  delphi observe [dashboard|council|epic|agents|timeline|changes]
     [--once] [--workspace <name>] [--home <dir>]
 ```
 

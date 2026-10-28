@@ -22,6 +22,32 @@ use std::time::{Duration, Instant};
 const MAX_URL: usize = 2048;
 const MAX_QUERY_CHARS: usize = 500;
 const MAX_LIMIT: usize = 50;
+/// How many ranked candidates a search looks at when it counts kinds (`facets`) or filters by one (`specs/043` §3.2).
+const FACET_CANDIDATES: usize = 200;
+
+/// The kind of a document, from where it lives (`specs/043` §4.1). A display and filter label: it carries no authority
+/// and is never read from the document's own text. The first match wins; `lessons` is cut out of `context/` before
+/// `docs` takes the rest of it.
+pub fn kind_of(rel_path: &str, zone: &str) -> &'static str {
+    let p = rel_path.trim_start_matches('/');
+    if p.starts_with("knowledge/web/") {
+        "research"
+    } else if p.starts_with("context/lessons/") {
+        "lesson"
+    } else if p.starts_with("docs/") || p.starts_with("context/") {
+        "docs"
+    } else if p.starts_with("specs/") {
+        "spec"
+    } else if p.starts_with("missions/") {
+        "mission"
+    } else if p.starts_with("skills/") || zone == "skills" {
+        "skill"
+    } else if p.starts_with("memory/") {
+        "memory"
+    } else {
+        "other"
+    }
+}
 /// How long the index may go without being brought up to date (unchanged files cost a stat).
 const REFRESH_EVERY: Duration = Duration::from_secs(10);
 /// A document larger than this is not served whole (the indexer's own cap is 512 KiB).
@@ -105,11 +131,12 @@ impl Reader<'_> {
         let r = match path {
             "/v1/health" => self.health(),
             "/v1/collections" => self.collections(&q),
+            "/v1/kinds" => self.kinds(&q),
             "/v1/documents" => self.documents(&q),
             "/v1/search" => self.search(&q),
             "/v1/doc" => self.doc(&q),
             "/v1/image" => self.image(&q),
-            _ => return fail(404, "no such endpoint: /v1/health /v1/collections /v1/documents /v1/search /v1/doc /v1/image"),
+            _ => return fail(404, "no such endpoint: /v1/health /v1/collections /v1/kinds /v1/documents /v1/search /v1/doc /v1/image"),
         };
         r.unwrap_or_else(|e| fail(500, &e))
     }
@@ -126,10 +153,36 @@ impl Reader<'_> {
         Ok(reply(200, json!(c.into_iter().map(|(name, count, updated)| json!({"name": name, "documents": count, "updated": updated})).collect::<Vec<_>>())))
     }
 
+    /// Every visible document counted by kind (`specs/043` §4), newest change first among the kinds with the same count.
+    fn kinds(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
+        let docs = self.kb.documents(None, 100_000, 0, &self.view(q)).map_err(|e| e.to_string())?;
+        let mut n: std::collections::BTreeMap<&'static str, (usize, String)> = std::collections::BTreeMap::new();
+        for d in &docs {
+            let e = n.entry(kind_of(&d.rel_path, &d.zone)).or_insert((0, String::new()));
+            e.0 += 1;
+            if d.updated_at > e.1 {
+                e.1 = d.updated_at.clone();
+            }
+        }
+        Ok(reply(200, json!(n.into_iter().map(|(kind, (documents, updated))| json!({"kind": kind, "documents": documents, "updated": updated})).collect::<Vec<_>>())))
+    }
+
     fn documents(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
         let limit = num(q, "limit", 20).clamp(1, 200);
         let offset = num(q, "offset", 0).min(100_000);
-        let docs = self.kb.documents(q.get("collection").map(String::as_str), limit, offset, &self.view(q)).map_err(|e| e.to_string())?;
+        let collection = q.get("collection").map(String::as_str);
+        let with_kind = |d: &kb::DocInfo| {
+            let mut v = json!(d);
+            v["kind"] = json!(kind_of(&d.rel_path, &d.zone));
+            v
+        };
+        let Some(kind) = q.get("kind").filter(|k| !k.is_empty()) else {
+            let docs = self.kb.documents(collection, limit, offset, &self.view(q)).map_err(|e| e.to_string())?;
+            return Ok(reply(200, json!(docs.iter().map(with_kind).collect::<Vec<_>>())));
+        };
+        // A kind comes from the path, so it is filtered here, after the newest-first listing.
+        let all = self.kb.documents(collection, 100_000, 0, &self.view(q)).map_err(|e| e.to_string())?;
+        let docs: Vec<Value> = all.iter().filter(|d| kind_of(&d.rel_path, &d.zone) == kind.as_str()).skip(offset).take(limit).map(with_kind).collect();
         Ok(reply(200, json!(docs)))
     }
 
@@ -140,9 +193,12 @@ impl Reader<'_> {
         }
         let limit = num(q, "limit", 10).clamp(1, MAX_LIMIT);
         let collection = q.get("collection").filter(|c| !c.is_empty());
+        let kind = q.get("kind").filter(|k| !k.is_empty());
+        let facets = q.get("facets").map(String::as_str) == Some("1");
         let mut opts = self.view(q);
-        // A collection filter is applied after ranking, so ask for the most there is.
-        opts.limit = if collection.is_some() { MAX_LIMIT } else { limit };
+        // A collection or kind filter is applied after ranking, and the kind counts look at many candidates, so ask for
+        // the most there is.
+        opts.limit = if facets || kind.is_some() { FACET_CANDIDATES } else if collection.is_some() { MAX_LIMIT } else { limit };
         if q.get("rerank").map(String::as_str) == Some("0") {
             opts.rerank_weight = 0.0;
         }
@@ -154,12 +210,31 @@ impl Reader<'_> {
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
             }
-            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note}));
-            if out.len() >= limit {
+            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note}));
+            if !facets && kind.is_none() && out.len() >= limit {
                 break;
             }
         }
-        Ok(reply(200, json!({"query": query, "took_ms": started.elapsed().as_millis() as u64, "mode": if self.kb.embedder().is_some() { "hybrid" } else { "lexical" }, "results": out})))
+        let candidates = out.len();
+        // The counts are over every candidate, before the kind filter, so the chips keep their numbers when one is chosen.
+        let counts = facets.then(|| {
+            let mut n: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+            for r in &out {
+                *n.entry(r["kind"].as_str().unwrap_or("other").to_string()).or_insert(0) += 1;
+            }
+            n
+        });
+        if let Some(k) = kind {
+            out.retain(|r| r["kind"].as_str() == Some(k.as_str()));
+        }
+        out.truncate(limit);
+        let mut body = json!({"query": query, "took_ms": started.elapsed().as_millis() as u64, "mode": if self.kb.embedder().is_some() { "hybrid" } else { "lexical" }, "results": out});
+        if let Some(n) = counts {
+            body["facets"] = json!(n);
+            body["candidates"] = json!(candidates);
+            body["capped"] = json!(candidates >= FACET_CANDIDATES);
+        }
+        Ok(reply(200, body))
     }
 
     fn doc(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
@@ -428,7 +503,7 @@ pub fn token_at(path: &Path) -> Result<String, String> {
     Ok(token)
 }
 
-const USAGE: &str = "usage: delphi kb serve [--bind <host:port>] [--token-file <path>] [--allow-remote]\n  a read-only JSON API over the knowledge base: /v1/search?q=  /v1/doc?path=  /v1/collections  /v1/documents  /v1/health\n  every request needs `Authorization: Bearer <token>`; the token is made on first use and kept in the token file";
+const USAGE: &str = "usage: delphi kb serve [--bind <host:port>] [--token-file <path>] [--allow-remote]\n  a read-only JSON API over the knowledge base: /v1/search?q=  /v1/doc?path=  /v1/collections  /v1/kinds  /v1/documents  /v1/health\n  every request needs `Authorization: Bearer <token>`; the token is made on first use and kept in the token file";
 
 /// `delphi kb serve`.
 pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -490,6 +565,72 @@ mod tests {
     fn get(api: &mut Api, target: &str) -> (u16, Value) {
         let r = api.handle("GET", target);
         (r.status, r.body)
+    }
+
+    #[test]
+    fn a_kind_comes_from_where_a_document_lives() {
+        for (path, zone, want) in [
+            ("knowledge/web/en.wikipedia.org/bft.md", "knowledge", "research"),
+            ("context/lessons/council-deadlock.md", "context", "lesson"),
+            ("context/architecture/overview.md", "context", "docs"),
+            ("docs/reference/council.md", "docs", "docs"),
+            ("specs/043-knowledge-window.md", "specs", "spec"),
+            ("missions/m1/notes.md", "missions", "mission"),
+            ("skills/repo-cartography/SKILL.md", "skills", "skill"),
+            ("bundles/acme/platform/skills/s/references/a.md", "skills", "skill"),
+            ("memory/agents/builder/notes.md", "memory", "memory"),
+            ("GOVERNANCE.md", "core", "other"),
+            ("agents/architect/AGENT.md", "agents", "other"),
+        ] {
+            assert_eq!(kind_of(path, zone), want, "{path}");
+        }
+        assert_eq!(kind_of("/specs/a.md", "specs"), "spec", "a leading slash changes nothing");
+        assert_eq!(kind_of("context/lessons/x.md", "context"), "lesson", "lessons are cut out of context before docs takes the rest");
+    }
+
+    #[test]
+    fn search_counts_kinds_over_the_candidates_and_a_kind_filter_keeps_the_counts() {
+        let (home, ws) = workspace();
+        let lessons = ws.path().join("base/context/lessons");
+        std::fs::create_dir_all(&lessons).unwrap();
+        std::fs::write(lessons.join("zebra.md"), doc("internal_generated", "# Lesson\n\nA zebra lesson about deadlocks.\n")).unwrap();
+        std::fs::write(ws.path().join("base/context/notes.md"), doc("internal_generated", "# Notes\n\nZebra reference notes.\n")).unwrap();
+        let mut api = Api::new(home.path(), ws.path()).unwrap();
+        let (s, all) = get(&mut api, "/v1/search?q=zebra&rerank=0&facets=1");
+        assert_eq!(s, 200, "{all}");
+        assert_eq!(all["facets"], json!({"docs": 1, "lesson": 1, "spec": 2}), "untrusted and private memory stay out of the counts: {all}");
+        assert_eq!((all["candidates"].as_u64(), all["capped"].as_bool()), (Some(4), Some(false)));
+        assert!(all["results"].as_array().unwrap().iter().all(|r| r["kind"].is_string() && r["updated"].is_string()));
+        let (_, specs) = get(&mut api, "/v1/search?q=zebra&rerank=0&facets=1&kind=spec");
+        let kinds: Vec<&str> = specs["results"].as_array().unwrap().iter().map(|r| r["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["spec", "spec"]);
+        assert_eq!(specs["facets"], all["facets"], "the chips keep their counts when one is chosen");
+        let (_, one) = get(&mut api, "/v1/search?q=zebra&rerank=0&kind=spec&limit=1");
+        assert_eq!(one["results"].as_array().unwrap().len(), 1);
+        assert!(one.get("facets").is_none(), "no counts unless asked for");
+        let (_, none) = get(&mut api, "/v1/search?q=zebra&rerank=0&kind=research");
+        assert_eq!(none["results"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn kinds_lists_every_visible_document_by_kind_and_documents_can_be_filtered_by_one() {
+        let (home, ws) = workspace();
+        let lessons = ws.path().join("base/context/lessons");
+        std::fs::create_dir_all(&lessons).unwrap();
+        std::fs::write(lessons.join("a.md"), doc("internal_generated", "# A\n\nx\n")).unwrap();
+        let mut api = Api::new(home.path(), ws.path()).unwrap();
+        let (s, k) = get(&mut api, "/v1/kinds");
+        assert_eq!(s, 200, "{k}");
+        let n = |kind: &str| k.as_array().unwrap().iter().find(|e| e["kind"] == kind).map(|e| e["documents"].as_u64().unwrap());
+        assert_eq!((n("spec"), n("lesson"), n("memory")), (Some(2), Some(1), None), "the untrusted web page and private memory are not counted: {k}");
+        let (_, docs) = get(&mut api, "/v1/documents?kind=lesson");
+        assert_eq!(docs.as_array().unwrap().len(), 1);
+        assert_eq!(docs[0]["kind"], "lesson", "a listing says each document's kind");
+        let (_, plain) = get(&mut api, "/v1/documents?limit=5");
+        assert!(plain.as_array().unwrap().iter().all(|d| d["kind"].is_string()), "also without a kind filter");
+        let (_, specs) = get(&mut api, "/v1/documents?kind=spec&limit=1&offset=1");
+        assert_eq!(specs.as_array().unwrap().len(), 1, "offset and limit apply after the kind filter");
+        assert_eq!(get(&mut api, "/v1/nonsense").0, 404);
     }
 
     #[test]

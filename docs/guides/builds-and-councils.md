@@ -69,7 +69,7 @@ A Council has its own ceiling, `[budget] council_budget_usd` (default 20.0). `de
 
 | To | Do |
 | :-- | :-- |
-| watch the team | `/observe` (a second window), or `delphi observe [dashboard\|council\|epic\|agents\|pulse\|timeline\|tools\|archives\|changes]` |
+| watch the team | `/observe` (a second window), or `delphi observe [dashboard\|council\|epic\|agents\|timeline\|changes]` |
 | see what the agents finished | `delphi changelog` (Markdown by session, from the mission log; `--json` for one line per change) |
 | see spend | `/usage [mission\|role\|task\|model]` |
 | stop the running task | `Esc` (first clears the prompt, then stops the task) |

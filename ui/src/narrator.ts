@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import type { Info } from './theme.ts';
 import { openWindow } from './window.ts';
 
-export const NARRATOR_VIEWS = ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'archives', 'changes'] as const;
+export const NARRATOR_VIEWS = ['dashboard', 'council', 'epic', 'agents', 'timeline', 'changes'] as const;
 
 /** A shell word: as it is when it is safe, else in single quotes. */
 const sh = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
@@ -13,7 +13,7 @@ const sh = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, 
 /** The command that opens the narrator (at `view`, when one is named), or what is wrong with the request. */
 export function narratorCommand(view: string | undefined, info: Info): string {
   const v = view ?? '';
-  if (v && !(NARRATOR_VIEWS as readonly string[]).includes(v)) return `/observe takes dashboard, council, epic, agents, pulse, timeline, tools, archives or changes, not ${v}`;
+  if (v && !(NARRATOR_VIEWS as readonly string[]).includes(v)) return `/observe takes dashboard, council, epic, agents, timeline or changes, not ${v}`;
   const exe = info.delphi_exe ?? 'delphi';
   return [sh(exe), 'observe', ...(v ? [v] : []), '--workspace', sh(info.workspace_name ?? ''), '--home', sh(info.home ?? '')].join(' ');
 }

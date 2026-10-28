@@ -198,6 +198,13 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       await call('settings.set', { key: 'reduce_motion', value });
       return;
     }
+    case 'pace': {
+      // Held by the daemon, not saved: it lasts until set back or the daemon stops. The reply is the daemon's own, said once.
+      const word = rest[0]?.toLowerCase();
+      if (!word) { const v = await call('settings.get'); if (v) ctx.post(`pace: ${v.pace ?? 'balanced'} · /pace sprint (fastest progress) · /pace frugal (token efficiency) · /pace balanced`); return; }
+      await call('settings.set', { key: 'pace', value: word });
+      return;
+    }
     case 'settings': {
       const usage = '/settings · /settings accept <n> · /settings dismiss <n> · /settings set <role_tier.role | mission_budget_usd> <value> · /settings reset <role>';
       const sub = rest[0];

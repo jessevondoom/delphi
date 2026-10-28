@@ -21,4 +21,4 @@ delphi · council
    a table is already the house
                               ↓ 14 more
 ────────────────────────────────────────
-3 agents  ·  14.2k to… ○ ● ○ ○ ○ ○ ○ ○ ○
+3 agents  ·  14.2k tokens    ○ ● ○ ○ ○ ○

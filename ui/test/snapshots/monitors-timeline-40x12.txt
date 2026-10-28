@@ -9,4 +9,4 @@ delphi · timeline
  hephaestus                    ▓✎▓▓✎▓▓
  odysseus              █████████
 ────────────────────────────────────────
-1 running  ·  14.2k t… ○ ○ ○ ○ ○ ● ○ ○ ○
+1 running  ·  14.2k tokens   ○ ○ ○ ○ ● ○
