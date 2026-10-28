@@ -152,7 +152,7 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, probes (approval events, app-server stability) | manifest and first probe built (this PR); approval events and app-server not yet probed |
-| S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | not started |
+| S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | built (this PR): stand-in CLI tests plus one live `exec --json` probe on `codex-cli 0.165.0` (prompt on stdin via `-`, effort via `-c`); the seat is unproven until `delphi endpoints test --probe` has run it; `family = "openai"` is now accepted in `[access]` |
 | S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
 

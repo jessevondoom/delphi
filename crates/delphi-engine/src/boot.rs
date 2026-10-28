@@ -113,6 +113,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     }
     s.harness_claude = crate::harness_opts::parse(root, crate::harness::Cli::Claude).0;
     s.harness_agy = crate::harness_opts::parse(root, crate::harness::Cli::Agy).0;
+    s.harness_codex = crate::harness_opts::parse(root, crate::harness::Cli::Codex).0;
     s.learning = crate::learn::LearningSettings::parse(root).0;
     if let Some(v) = root.get("harness").and_then(|h| h.get("connector_settle_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.connector_settle = Duration::from_secs(v as u64);

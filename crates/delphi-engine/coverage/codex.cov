@@ -1,20 +1,20 @@
 # Coverage of the `codex` CLI, 0.165.0 (specs/047). Format and rules: crates/delphi-engine/src/coverage.rs.
-# Nothing is used yet: Codex is not a Delphi harness until spec 047 S1 lands.
+# S1 (read-only `exec --json` seats) uses the rows marked `used`; the rest wait for their slice.
 # kind | path | names | disposition | slice | reason
 
 # ── Flags that appear on several pages: one disposition wherever they appear ──
 flag | * | --help, --version | na | | every CLI prints its help and version
-flag | * | --config | planned | S1 | `-c key=value` only from a short allow-list (model_reasoning_effort, model_reasoning_summary, web_search); any other key could widen authority, so it is refused
+flag | * | --config | used | | `-c key=value` only from a short allow-list, and so far only `model_reasoning_effort` (from `effort`); any other key could widen authority, so it is refused
 flag | * | --enable, --disable | refused | | flips a feature flag, which could turn on surface Delphi has not classified
-flag | * | --strict-config | planned | S1 | passed so an unknown key in the config is an error, not a silent no-op
-flag | * | --model | planned | S1 | the span's model
-flag | * | --sandbox | planned | S1 | `read-only` for no-tools roles; `workspace-write` for a Builder in its worktree only once the approval bridge is proven; `danger-full-access` refused
-flag | * | --cd | planned | S1 | the span's working directory
-flag | * | --add-dir | planned | S1 | only for a span with tools, from the ratified block (as spec 021)
+flag | * | --strict-config | na | | the operator's config is ignored (`--ignore-user-config`), so there is nothing to be strict about
+flag | * | --model | used | | the span's model
+flag | * | --sandbox | used | | `read-only` for every S1 seat; `workspace-write` for a Builder in its worktree only once the approval bridge is proven; `danger-full-access` refused
+flag | * | --cd | na | | the process is started in the span's directory instead
+flag | * | --add-dir | planned | S2 | only for a span with tools, from the ratified block (as spec 021)
 flag | * | --ask-for-approval | planned | S2 | `never` for a reader; `on-request` once the app-server bridge answers the requests
 flag | * | --image | planned | S3 | vision, off by default
-flag | * | --search | planned | S1 | live web search; ratified, off by default, results untrusted (spec 020)
-flag | * | --no-daemon | planned | S1 | a span never attaches to the operator's shared background server
+flag | * | --search | planned | S3 | live web search; ratified, off by default, results untrusted (spec 020)
+flag | * | --no-daemon | planned | S2 | not a flag of `exec` (0.165.0); S2 decides whether the commands that have it (introspection) must pass it so they never attach to the operator's shared background server
 flag | * | --approve-for-me | refused | | routes approvals to the CLI's own automatic reviewer; Delphi's approvals stay Delphi's (spec 047 §1.1)
 flag | * | --dangerously-bypass-approvals-and-sandbox, --dangerously-bypass-hook-trust | refused | | skips approvals, sandbox or hook trust; never passed
 flag | * | --profile | refused | | layers the operator's own config file over the span's
@@ -25,7 +25,8 @@ flag | * | --no-alt-screen | na | | interactive display
 
 # ── Top level and `exec` ──
 cmd | . | exec | planned | S1 | `codex exec --json` for read-only roles, structured output, API-key mode
-flag | exec | --json, --output-schema, --output-last-message, --ephemeral, --ignore-user-config, --skip-git-repo-check | planned | S1 | the span's launch (spec 047 §2.2): events on stdout, the schema written to a scratch file, nothing persisted, the operator's config ignored, a git check skipped only in Delphi's scratch directory
+flag | exec | --json, --output-schema, --ephemeral, --ignore-user-config, --skip-git-repo-check | used | | the span's launch (spec 047 §2.2): events on stdout, the schema written to a scratch file, nothing persisted, the operator's config ignored, a git check skipped only in Delphi's scratch directory
+flag | exec | --output-last-message | na | | the final message arrives as a JSON event on stdout
 flag | exec | --ignore-rules | refused | | skips the user's execpolicy rules, a safety layer
 flag | exec | --cyber-access-program | refused | | requests an experimental access program
 flag | exec | --color, --thread-source | na | | display, thread classification
