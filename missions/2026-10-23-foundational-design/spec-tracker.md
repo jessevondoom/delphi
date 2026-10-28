@@ -210,6 +210,34 @@ Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go").
 | H8 | trace review skill | not started |
 | H9 | measure H1 to H5; set defaults | not started |
 
+## Benchmarking, context and memory (specs 048, 049, 050; draft 2026-10-28)
+
+Drafted from a review of LangChain / LangSmith benchmarking, memory and context practice (recollection, unverified: OD-1 of each spec). Delphi uses no LangChain code; these take methods. **Drafts are proposals, not permission to build**: none starts until the operator approves. 049 refines slices H2/H3 of spec 045 and §4.3 of spec 030; 048 supplies the measuring instruments 045 H9 needs.
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 048 | BM1 | harness arm kind (fixed model) and efficiency columns in the 037 report | draft |
+| 048 | BM2 | handoff fidelity eval (paraphrase loss) | draft |
+| 048 | BM3 | context retention eval | draft |
+| 048 | BM4 | tool-count degradation eval | draft |
+| 048 | BM5 | behavior suites (nudge, verify gate, budget, name_thread, record_change) | draft |
+| 048 | BM6 | external benchmark anchor (operator picks the subset) | draft |
+| 048 | BM7 | phase-effort arm (after 045 H4) | draft |
+| 049 | CX1 | argument trimming and offload previews (folded into 045 H2); handoff design check | draft |
+| 049 | CX2 | recoverable compaction (folded into 045 H3) | draft |
+| 049 | CX3 | context composition in accounting | draft |
+| 049 | CX4 | result summary plus handles between seats | draft |
+| 049 | CX5 | structured session digest (amends 030 §4.3) | draft |
+| 049 | CX6 | compaction threshold arms; default decisions | draft |
+| 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | draft |
+| 050 | ML2 | entry types and dates, schemas | draft |
+| 050 | ML3 | validity, stale list in `/retro`, type-aware selection | draft |
+| 050 | ML4 | supersession candidates and ratification | draft |
+| 050 | ML5 | trace mining report; wires 045 T11 / H8 | draft |
+| 050 | ML6 | retention probes in the learning-loop suite | draft |
+
+Suggested order if approved: 048 BM1, 050 ML1, 049 CX1 with 045 H2, 048 BM2/BM3, then the rest.
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
