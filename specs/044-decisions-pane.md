@@ -226,9 +226,9 @@ The chat composer is **not shown** in the list, the confirm page or the empty st
 | Slice | Content | Depends on |
 | :-- | :-- | :-- |
 | D1 | `decision.list` / `decision.get`: the read model over cards and provisional decisions, kinds, tiers, the tick rule (§5.4), derived briefs for builds, the `plain` brief for cards; the list screen (header, count line, filter row, entries, colour), the filter, `NO_COLOR`; golden screens 100×34 and 80×24 | none |
-| D2 | The detail view: brief, choices, Accept, tab and number choice, `d`, previous/next, advance to the next, the empty state; the composer shown only here and bound to the decision | D1 |
+| D2 | The detail view: brief, choices, Accept, tab and number choice, `d`, previous/next, advance to the next, the empty state. `y` and `n` from the list retire here. **The prompt bar is not shown yet:** a prompt that cannot send is worse than none, so it arrives with typed replies in D4 (the list, confirm page and empty state never show it) | D1 |
 | D3 | The brief cache and the one-time card brief (§7.1, §7.2): payload-change handling, `r` | D1 |
-| D4 | Typed replies: the no-tools call, the question and answer outcomes, READ AS, Confirm, conditions delivered, the saved thread | D2, D3 |
+| D4 | Typed replies: **the prompt bar in the detail view, bound to the decision**, the no-tools call, the question and answer outcomes, READ AS, Confirm, conditions delivered, the saved thread | D2, D3 |
 | D5 | Ticks and the confirm page; batch accept with re-checks | D1, D2 |
 | D6 | `raise_decision`, the record store, `decision.raised`, `decision.resolve` (console and relay only), delivery of the answer to the requester; limits and de-duplication | D1 |
 | D7 | `docs/reference` regenerated, `delphi help`, `/decisions` with no argument opens the pane, the tracker | all |

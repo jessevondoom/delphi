@@ -99,10 +99,12 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const loadDecisions = () => {
     cmd.call('decision.list', { mission_id: mission }).then((r: any) => {
       const items = D.parse(r);
-      const next = { ...inboxRef.current, items, pane: D.reconcile(inboxRef.current.pane, items) };
+      const next = { ...inboxRef.current, items, loaded: true, pane: D.reconcile(inboxRef.current.pane, items) };
       inboxRef.current = next; setInbox(next);
     }).catch(() => {});
   };
+  /** An answer failed: let the operator send it again. */
+  const unsend = () => { const next = { ...inboxRef.current, pane: D.unsent(inboxRef.current.pane) }; inboxRef.current = next; setInbox(next); };
   const decisionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadDecisionsSoon = () => { decisionsTimer.current ??= setTimeout(() => { decisionsTimer.current = null; loadDecisions(); }, 150); };
   useEffect(() => { cmd.whenReady().then(loadDecisions).catch(() => {}); return () => { if (decisionsTimer.current) clearTimeout(decisionsTimer.current); }; }, []);
@@ -464,7 +466,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
         inboxRef.current = next; setInbox(next);
         if (action.t === 'chat') { setDeck(1); deckRef.current = 1; }
-        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => bad && note(bad, 'error'));
+        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => { if (bad) { note(bad, 'error'); unsend(); } });
+        else if (action.t === 'review') {
+          const d = action.d;
+          cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution: action.resolution })
+            .then(() => loadDecisionsSoon())
+            .catch((er: any) => { note('could not record the review: ' + (er?.message ?? JSON.stringify(er)), 'error'); unsend(); loadDecisionsSoon(); });
+        }
         else if (action.t === 'resolve-all') for (const c of action.cards) void resolveCard(cmd, c, 'allow').then((bad) => bad && note(bad, 'error'));
         return;
       }

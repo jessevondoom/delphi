@@ -3,7 +3,7 @@
 process.env.TZ = 'UTC';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chips, isTicked, key, newPane, parse, reconcile, ticked, view, visible, type Decision, type Pane } from '../src/decisions-pane.ts';
+import { chips, detail, isTicked, key, newPane, parse, reconcile, ticked, unsent, view, visible, type Decision, type Pane } from '../src/decisions-pane.ts';
 import { frame, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { fold, initial } from '../src/fold.ts';
@@ -135,26 +135,114 @@ test('ticked entries show [x], a filtered list says what it hides, and 80 column
   assert.ok(narrow.some((l) => l.includes('DEC-081')) && narrow.length === 24);
 });
 
-test('opening a card from the list opens the focus view of that card; a build has no detail view yet', () => {
+
+const open = (items: Decision[], at: number, now = 1000): Pane => key({ ...newPane(), sel: at }, items, k('enter'), now).pane;
+
+test('enter opens the detail view: a recommended decision starts on the accept button, one with no recommendation on nothing', () => {
+  const items = five();
+  const rec = open(items, 2);
+  assert.equal(rec.open, 'dec-082');
+  assert.equal(rec.opt, 0, 'the recommended choice is focused');
+  const none = open(items, 0);
+  assert.equal(none.open, 'dec-081');
+  assert.equal(none.opt, null, 'nothing is preselected for a decision with no recommendation');
+  assert.equal(key(none, items, k('enter'), 5000).action.t, 'none', 'enter with nothing focused chooses nothing');
+});
+
+test('answering: the guard, one answer only, a number takes that choice, and the note says what was decided', () => {
+  const items = five();
+  const p = open(items, 2, 1000);
+  assert.equal(key(p, items, k('enter'), 1100).action.t, 'none', 'the guard: the decision only just opened');
+  const r = key(p, items, k('enter'), 1400);
+  assert.equal(r.action.t, 'answer');
+  assert.equal(r.action.t === 'answer' && r.action.choice.id, 'ratified');
+  assert.equal(r.pane.answered, 'dec-082');
+  assert.equal(r.pane.note, '✔ DEC-082 decided: ratify');
+  assert.equal(key(r.pane, items, k('enter'), 2000).action.t, 'none', 'a second press does not send it twice');
+  const two = key(p, items, ch('2'), 1400);
+  assert.equal(two.action.t === 'answer' && two.action.choice.id, 'rejected');
+  assert.equal(key(p, items, ch('9'), 1400).action.t, 'none', 'there is no ninth choice');
+  assert.equal(unsent(r.pane).answered, null, 'a failed answer can be sent again');
+});
+
+test('tab and shift+tab walk the choices; up and down walk the decisions of the filter; esc and left go back; d shows the payload', () => {
+  const items = five();
+  let p = open(items, 0);
+  assert.equal(p.opt, null);
+  p = key(p, items, k('tab'), 2000).pane;
+  assert.equal(p.opt, 0);
+  p = key(p, items, k('tab'), 2000).pane;
+  assert.equal(p.opt, 1);
+  p = key(p, items, k('tab'), 2000).pane;
+  assert.equal(p.opt, 0, 'wraps');
+  assert.equal(key(open(items, 0), items, k('shift-tab'), 2000).pane.opt, 1, 'backwards from nothing lands on the last');
+  const next = key(open(items, 0), items, k('down'), 2000).pane;
+  assert.deepEqual([next.open, next.sel, next.openedAt], ['dec-083', 1, 2000]);
+  assert.equal(key(open(items, 0), items, k('up'), 2000).pane.open, 'dec-081', 'the first has nothing before it');
+  assert.equal(key({ ...open(items, 2), filter: 'build', sel: 0 }, items, k('down'), 2000).pane.open, 'dec-085');
+  assert.equal(key(p, items, k('esc'), 2000).pane.open, null);
+  assert.equal(key(p, items, k('left'), 2000).pane.open, null);
+  assert.equal(key(p, items, ch('d'), 2000).pane.payload, true);
+});
+
+test('when the open decision is answered the pane moves to the next in the filter, and leaves when none is left', () => {
+  const items = five();
+  const p = open(items, 2);
+  const rest = items.filter((d) => d.label !== 'DEC-082');
+  const r = reconcile({ ...p, answered: 'dec-082' }, rest);
+  assert.equal(r.open, 'dec-085', 'the next one');
+  assert.equal(r.answered, null);
+  assert.equal(r.opt, 0);
+  const last = reconcile({ ...open(items, 4), answered: 'dec-084' }, items.filter((d) => d.label !== 'DEC-084'));
+  assert.equal(last.open, 'dec-085', 'the last one answered: the previous one, so it stays inside the list');
+  assert.equal(reconcile({ ...p }, []).open, null, 'nothing left: back to the empty state');
+  assert.equal(reconcile(p, items).sel, 2, 'still open and in place');
+});
+
+test('the detail view: a recommendation card with the accept button, or a no-recommendation card with nothing selected', () => {
+  const items = five();
+  const ctx = { pal: { dark: true }, now: NOW, w: 100, h: 34, at: (d: Decision) => Date.parse(d.raised_at ?? '') || null };
+  const rec = detail(items, open(items, 2), ctx).map(plain).join('\n');
+  for (const want of ['‹ decisions', '3 of 5 · ↑ previous · ↓ next', 'DEC-082', 'AMBER · build · requested by builder · task t_1 · waiting 9 m', 'WHAT IT IS', 'WHAT IT ADDS OR CHANGES', 'RECOMMENDATION', '[ Accept recommendation ]', 'enter, or 1', 'other choices   2 Reject', 'Ratify. Routine risk, second seat (scout) concurred.']) assert.ok(rec.includes(want), want);
+  const red = detail(items, open(items, 1), ctx).map(plain).join('\n');
+  assert.ok(red.includes('Red: you decide, nothing is ticked for you'));
+  const none = detail(items, open(items, 0), ctx).map(plain).join('\n');
+  assert.ok(none.includes('NO RECOMMENDATION') && none.includes('your call'));
+  assert.ok(!none.includes('Accept recommendation'), 'no accept button without a recommendation');
+  assert.ok(!none.includes('❯'), 'nothing is selected');
+  const tabbed = detail(items, key(open(items, 0), items, k('tab'), 2000).pane, ctx).map(plain).join('\n');
+  assert.match(tabbed, /❯ 1 {2}Ratify/);
+  const diff = detail(items, { ...open(items, 2), payload: true }, { ...ctx, payload: () => ['+ new line', '- old line'] }).map(plain).join('\n');
+  assert.ok(diff.includes('CHANGES') && diff.includes('+ new line') && !diff.includes('WHAT IT IS'));
+});
+
+test('an answer becomes the call for the decision source: a card resolves, a provisional decision is reviewed, and the list answers nothing', () => {
   let s = initial(0);
   s = fold(s, { method: 'event', params: { type: 'approval.requested', task_id: 't_1', payload: { approval_id: 'c1', role: 'builder', tier: 'amber', tool: 'write_file', summary: 'write deck.rs', payload_blake3: 'h', payload: { preview: '+x' }, timeout_secs: 600 } } } as const, 1000);
-  const items = parse({ decisions: [raw('c1', 'action', 'amber', 'write deck.rs', 's', null, false, { source: 'card', source_id: 'c1' }), raw('p1', 'build', 'amber', 'b', 's', 'ok', true, { source: 'provisional', source_id: 'p1' })] });
-  const inb = newInbox(0, items);
-  const open = inboxKey(inb, cards(s), k('enter'), 5000);
-  assert.equal(open.inbox.mode, 'focus');
-  assert.equal(open.inbox.sel, 0);
-  const second = inboxKey({ ...inb, pane: { ...inb.pane, sel: 1 } }, cards(s), k('enter'), 5000);
-  assert.equal(second.inbox.mode, 'list', 'a build stays in the list until D2');
-  assert.equal(second.action.t, 'none');
-  // y and n still answer the selected card (after the guard); on a build they do nothing.
-  const y = inboxKey(inb, cards(s), ch('y'), 9000).action;
-  assert.deepEqual(y.t === 'resolve' ? [y.card.id, y.decision] : y, ['c1', 'allow']);
-  const n = inboxKey(inb, cards(s), ch('n'), 9000).action;
-  assert.deepEqual(n.t === 'resolve' ? [n.card.id, n.decision] : n, ['c1', 'deny']);
-  assert.equal(inboxKey(inb, cards(s), ch('y'), 1100).action.t, 'none', 'the guard: the card only just appeared');
-  assert.equal(inboxKey({ ...inb, pane: { ...inb.pane, sel: 1 } }, cards(s), ch('y'), 9000).action.t, 'none', 'a build is not answered from the list');
-  // With no daemon list the inbox is what it was.
-  assert.ok(inboxView(s, newInbox(0), info, { dark: true }, 5000, 100, 24).map(plain).join('\n').includes('Pending decisions'));
+  const cardChoices = [{ id: 'allow', label: 'Approve once', effect: 'approval.resolve', reversible: false }, { id: 'allow_similar', label: 'Allow similar actions this task', effect: 'approval.resolve', reversible: false }, { id: 'deny', label: 'Reject', effect: 'approval.resolve', reversible: false }];
+  const items = parse({ decisions: [raw('c1', 'action', 'amber', 'write deck.rs', 's', null, false, { source: 'card', source_id: 'c1', choices: cardChoices }), raw('p1', 'build', 'amber', 'b', 's', 'ok', true, { source: 'provisional', source_id: 'p1' })] });
+  let inb = newInbox(0, items);
+  assert.equal(inboxKey(inb, cards(s), ch('y'), 9000).action.t, 'none', 'the list answers nothing');
+  inb = inboxKey(inb, cards(s), k('enter'), 5000).inbox;
+  assert.equal(inb.pane.open, 'c1');
+  const r = inboxKey(inb, cards(s), ch('3'), 9000).action;
+  assert.deepEqual(r.t === 'resolve' ? [r.card.id, r.decision] : r, ['c1', 'deny']);
+  assert.equal(inboxKey(inb, cards(s), ch('3'), 5100).action.t, 'none', 'the guard');
+  let inb2 = newInbox(0, items);
+  inb2 = inboxKey({ ...inb2, pane: { ...inb2.pane, sel: 1 } }, cards(s), k('enter'), 5000).inbox;
+  const v = inboxKey(inb2, cards(s), k('enter'), 9000).action;
+  assert.deepEqual(v.t === 'review' ? [v.d.source_id, v.resolution] : v, ['p1', 'ratified']);
+});
+
+test('nothing owed: the daemon list has arrived and is empty, so the pane says so; before it arrives the inbox is what it was', () => {
+  const s = initial(0);
+  const inb = newInbox(0, [], newPane(), true);
+  const t = inboxView(s, inb, info, { dark: true }, 5000, 100, 12).map(plain).join('\n');
+  assert.ok(t.includes('Nothing needs you.'));
+  const done = inboxView(s, { ...inb, pane: { ...inb.pane, note: '✔ DEC-081 decided: reject' } }, info, { dark: true }, 5000, 100, 12).map(plain).join('\n');
+  assert.ok(done.includes('✔ DEC-081 decided: reject'));
+  assert.ok(inboxView(s, newInbox(0), info, { dark: true }, 5000, 100, 12).map(plain).join('\n').includes('nothing needs you'), 'no daemon list yet');
+  assert.equal(inboxKey(inb, [], k('esc'), 9000).action.t, 'chat');
 });
 
 const state = stateWorld();
@@ -167,6 +255,11 @@ test('golden screens: the list, the filtered list and the list at 80x24', () => 
     ['decisions-list-100x34', base, 100, 34],
     ['decisions-list-filtered-100x34', { ...base, inbox: newInbox(0, five(), { ...newPane(), filter: 'build', ticks: ['dec-082@h-dec-082', 'dec-085@h-dec-085'] }) }, 100, 34],
     ['decisions-list-80x24', base, 80, 24],
+    ['decisions-detail-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 2)) }, 100, 34],
+    ['decisions-detail-red-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 1)) }, 100, 34],
+    ['decisions-detail-norec-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 0)) }, 100, 34],
+    ['decisions-detail-80x24', { ...base, inbox: newInbox(0, five(), open(five(), 2)) }, 80, 24],
+    ['decisions-empty-100x34', { ...base, inbox: newInbox(0, [], { ...newPane(), note: '✔ DEC-081 decided: reject' }, true) }, 100, 34],
   ] as [string, Model, number, number][]) {
     const r = snapshot(name, frame(m, w, h));
     assert.ok(r.ok, r.message);

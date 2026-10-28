@@ -13,11 +13,20 @@ export type Decision = {
   requester: string; task: string; raised_at: string | null; payload_blake3: string; brief: Brief; choices: Choice[];
   tickable: boolean; tickable_reason: string;
 };
-/** Where the operator is in the list. A tick names the payload it was given for, so a changed payload loses it. */
-export type Pane = { sel: number; filter: string | null; ticks: string[] };
-export const newPane = (): Pane => ({ sel: 0, filter: null, ticks: [] });
+/**
+ * Where the operator is in the pane. A tick names the payload it was given for, so a changed payload loses it. `open`
+ * is the decision whose detail view shows (null: the list); `opt` is the choice the focus is on (null: none, which is
+ * how a decision with no recommendation starts); `answered` is the decision an answer has been sent for, so a second
+ * press cannot send it twice; `note` is the line that confirms the last answer.
+ */
+export type Pane = { sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string };
+export const newPane = (): Pane => ({ sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '' });
 
-export type Action = { t: 'none' } | { t: 'chat' } | { t: 'open'; d: Decision };
+/** `answer` is the operator choosing: the console turns it into the existing call for the decision's source. */
+export type Action = { t: 'none' } | { t: 'chat' } | { t: 'answer'; d: Decision; choice: Choice };
+
+/** The keys that answer are ignored for this long after a decision opens (spec 005's guard). */
+export const GUARD_MS = 300;
 
 const KIND_ORDER = ['action', 'spec', 'release', 'build', 'council', 'budget', 'question'];
 const KIND_LABEL: Record<string, string> = { action: 'actions', spec: 'specs', release: 'releases', build: 'builds', council: 'councils', budget: 'budgets', question: 'questions' };
@@ -68,20 +77,59 @@ export function reconcile(p: Pane, items: Decision[]): Pane {
   const filter = p.filter && items.some((d) => d.kind === p.filter) ? p.filter : null;
   const live = new Set(items.filter((d) => d.tickable).map(tickKey));
   const rows = visible(items, filter);
-  return { filter, ticks: p.ticks.filter((t) => live.has(t)), sel: Math.max(0, Math.min(p.sel, rows.length - 1)) };
+  const sel = Math.max(0, Math.min(p.sel, rows.length - 1));
+  const base = { ...p, filter, ticks: p.ticks.filter((t) => live.has(t)), sel };
+  if (p.open === null) return base;
+  const at = rows.findIndex((d) => d.id === p.open);
+  if (at >= 0) return { ...base, sel: at };
+  // The decision being read is gone (it was answered): move to the next one in this filter, or leave the detail view.
+  const next = rows[sel];
+  return next ? { ...base, open: next.id, opt: initialOpt(next), payload: false, answered: null } : { ...base, open: null, opt: null, payload: false, answered: null };
 }
 
-export function key(p: Pane, items: Decision[], e: Ev): { pane: Pane; action: Action } {
+const recIndex = (d: Decision): number => (d.brief.recommendation ? d.choices.findIndex((c) => c.id === d.brief.recommendation!.choice_id) : -1);
+/** The focus starts on the recommended choice; a decision with no recommendation starts with none selected. */
+export const initialOpt = (d: Decision): number | null => { const i = recIndex(d); return i >= 0 ? i : null; };
+const openAt = (p: Pane, rows: Decision[], i: number, now: number): Pane => ({ ...p, sel: i, open: rows[i]!.id, opt: initialOpt(rows[i]!), payload: false, openedAt: now, answered: null });
+
+/** Clear the sent mark after a failed answer so the operator can try again. */
+export const unsent = (p: Pane): Pane => ({ ...p, answered: null, note: '' });
+
+export function key(p: Pane, items: Decision[], e: Ev, now = 0): { pane: Pane; action: Action } {
   const none = (q: Pane = p) => ({ pane: q, action: { t: 'none' } as Action });
   if (e.t !== 'key' && e.t !== 'text') return none();
   const rows = visible(items, p.filter);
   const sel = Math.max(0, Math.min(p.sel, rows.length - 1));
   const d = rows[sel];
   const k = e.t === 'key' ? e.k : e.s;
+  if (p.open !== null) {
+    const at = rows.findIndex((x) => x.id === p.open);
+    const cur = rows[at];
+    if (!cur) return none({ ...p, open: null });
+    const answer = (c: Choice | undefined) => {
+      if (!c || p.answered === cur.id || now - p.openedAt < GUARD_MS) return none();
+      return { pane: { ...p, answered: cur.id, note: `✔ ${cur.label} decided: ${c.label.toLowerCase()}` }, action: { t: 'answer', d: cur, choice: c } as Action };
+    };
+    if (k === 'esc' || (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl)) return none({ ...p, open: null, opt: null, payload: false });
+    if (k === 'up' || k === 'down') {
+      const to = at + (k === 'up' ? -1 : 1);
+      return to < 0 || to >= rows.length ? none() : none(openAt(p, rows, to, now));
+    }
+    if (k === 'tab' || k === 'shift-tab') {
+      const n = cur.choices.length;
+      if (!n) return none();
+      const back = k === 'shift-tab';
+      return none({ ...p, opt: p.opt === null ? (back ? n - 1 : 0) : (p.opt + (back ? n - 1 : 1)) % n });
+    }
+    if (k === 'enter') return answer(p.opt === null ? undefined : cur.choices[p.opt]);
+    if (/^[1-9]$/.test(k)) return answer(cur.choices[Number(k) - 1]);
+    if (k === 'd') return none({ ...p, payload: !p.payload });
+    return none();
+  }
   if (k === 'esc') return p.filter ? none({ ...p, filter: null, sel: 0 }) : { pane: p, action: { t: 'chat' } };
   if (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl) return { pane: p, action: { t: 'chat' } };
   if (k === 'up' || k === 'down') return none({ ...p, sel: Math.max(0, Math.min(rows.length - 1, sel + (k === 'up' ? -1 : 1))) });
-  if (k === 'enter') return d ? { pane: { ...p, sel }, action: { t: 'open', d } } : none();
+  if (k === 'enter') return d ? none(openAt(p, rows, sel, now)) : none();
   if (k === 'f') {
     const kinds = chips(items).map((c) => c.kind);
     const at = p.filter ? kinds.indexOf(p.filter) : -1;
@@ -122,7 +170,13 @@ export function age(ms: number): string {
   return m < 60 ? `${m} m` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
 }
 
-export type Ctx = { pal: T.Pal; now: number; w: number; h: number; /** When a decision was raised, in ms, if the console knows. */ at: (d: Decision) => number | null };
+export type Ctx = {
+  pal: T.Pal; now: number; w: number; h: number;
+  /** When a decision was raised, in ms, if the console knows. */
+  at: (d: Decision) => number | null;
+  /** The diff or payload lines of a decision, when the console holds them (a card's preview); otherwise its listed changes show. */
+  payload?: (d: Decision) => string[] | null;
+};
 
 const recLine = (d: Decision): string => {
   const rec = d.brief.recommendation;
@@ -177,5 +231,86 @@ export function view(items: Decision[], p: Pane, c: Ctx): string[] {
 }
 
 
-export const hint = (n: number, p: Pane): string =>
-  n === 0 ? 'nothing to decide · esc for chat' : `↑ ↓ move · enter open · space tick · a tick recommended · f filter${p.filter ? ' · esc clear the filter' : ''} · red: open to decide`;
+const card = (c: Ctx, lines: string[]): string[] => {
+  const t = T.tint(c.pal.bg ?? null, c.pal.dark);
+  return lines.map((l) => {
+    const row = ' ' + l + ' '.repeat(Math.max(0, c.w - 7 - T.width(l))) + ' ';
+    return '  ' + (t ? t.fill(row) : row);
+  });
+};
+
+/** The detail view of the open decision (specs/044 §6.2): what it is, what it changes, the recommendation and the choices. */
+export function detail(items: Decision[], p: Pane, c: Ctx): string[] {
+  const { w, h } = c;
+  const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
+  const rows = visible(items, p.filter);
+  const at = rows.findIndex((x) => x.id === p.open);
+  const d = rows[at];
+  if (!d) return view(items, { ...p, open: null }, c);
+  const style = tierStyle(d.tier);
+  const when = c.at(d);
+  const rec = d.brief.recommendation;
+  const ri = recIndex(d);
+  const L: string[] = [
+    '',
+    '  ' + T.spread(T.dim('‹ decisions'), T.dim(`${at + 1} of ${rows.length} · ↑ previous · ↓ next`), w - 4),
+    '',
+    '  ' + T.dim(d.label) + '  ' + chalk.bold(style(d.title)),
+    '  ' + (d.tier === 'open' ? T.dim : style)(`${TIER_WORD[d.tier]} · ${KIND_WORD[d.kind] ?? d.kind}`) + T.dim(` · requested by ${d.requester || 'an agent'}${d.task ? ` · task ${d.task}` : ''}${when === null ? '' : ` · waiting ${age(c.now - when)}`}`),
+    '  ' + T.dim(T.clip(`d shows ${d.source === 'card' ? 'the diff or payload' : 'the changes'}${d.brief.state === 'plain' ? ' · written from the card’s own facts, not by a model' : ''}`, w - 4)),
+    '',
+  ];
+  if (p.payload) {
+    const lines = c.payload?.(d) ?? d.brief.changes;
+    L.push('  ' + chalk.bold(d.source === 'card' ? 'PAYLOAD' : 'CHANGES'));
+    for (const l of lines.slice(0, Math.max(1, h - L.length - 9))) L.push('  ' + T.dim(T.clip(l, w - 4)));
+  } else {
+    L.push('  ' + chalk.bold('WHAT IT IS'));
+    for (const l of wrap(d.brief.summary, w - 4)) L.push('  ' + l);
+    L.push('', '  ' + chalk.bold('WHAT IT ADDS OR CHANGES'));
+    if (d.brief.changes.length) for (const ch of d.brief.changes) L.push('   ' + T.dim('▪') + ' ' + T.clip(ch, w - 8));
+    else L.push('   ' + T.dim('nothing listed'));
+  }
+  L.push('');
+  if (rec && ri >= 0) {
+    const why = rec.why ? rec.why[0]!.toUpperCase() + rec.why.slice(1) + '.' : '';
+    const btn = p.opt === ri ? chalk.inverse('[ Accept recommendation ]') : chalk.bold('[ Accept recommendation ]');
+    const others = d.choices.map((ch, i) => ({ ch, i })).filter((x) => x.i !== ri).map((x) => T.accent(String(x.i + 1)) + ' ' + (p.opt === x.i ? chalk.bold(x.ch.label) : x.ch.label)).join('   ');
+    L.push(...card(c, [
+      chalk.bold('RECOMMENDATION') + (d.tier === 'red' ? '  ' + T.crimson('Red: you decide, nothing is ticked for you') : ''),
+      '',
+      ...wrap(`${d.choices[ri]!.label}. ${why}`, w - 10),
+      '',
+      btn + T.dim(`  enter, or ${ri + 1}`),
+      ...(others ? [T.dim('other choices') + '   ' + others] : []),
+    ]));
+  } else {
+    L.push(...card(c, [
+      chalk.bold('NO RECOMMENDATION') + T.dim('  your call'),
+      '',
+      ...wrap('There is no default for this one, so there is no accept button and nothing is preselected.' + (d.tier === 'red' ? ' Red actions are decided one at a time.' : ''), w - 10),
+      '',
+      ...d.choices.map((ch, i) => (p.opt === i ? T.accent('❯ ') : '  ') + T.accent(String(i + 1)) + '  ' + (p.opt === i ? chalk.bold(ch.label) : ch.label)),
+    ]));
+  }
+  if (p.answered === d.id) L.push('', '  ' + T.dim('sent…'));
+  return pad(L);
+}
+
+/** Nothing is owed: the last answer, if this console just gave one, and the plain statement of the spec (§6.2). */
+export function empty(p: Pane, c: Ctx): string[] {
+  const pad = (a: string[]) => [...a, ...Array(Math.max(0, c.h - a.length)).fill('')].slice(0, c.h);
+  return pad(['', p.note ? '  ' + T.ok(p.note) : '', '', '', '  ' + chalk.bold(T.text(c.pal)('Nothing needs you.')), '', '  ' + T.dim('Decisions from every agent arrive here; the header shows an alert when one is waiting.')]);
+}
+
+/** The pane's body: the detail of the open decision, the list, or the empty state. */
+export const render = (items: Decision[], p: Pane, c: Ctx): string[] => (!items.length ? empty(p, c) : p.open !== null ? detail(items, p, c) : view(items, p, c));
+
+export const hint = (items: Decision[], p: Pane): string => {
+  if (!items.length) return 'nothing to decide · esc for chat';
+  if (p.open !== null) {
+    const d = visible(items, p.filter).find((x) => x.id === p.open);
+    return `${d && d.brief.recommendation ? 'tab / enter choose · 1-9 pick' : 'tab / 1-9 choose'} · d diff · ↑ ↓ other decisions · esc back to the list`;
+  }
+  return `↑ ↓ move · enter open · space tick · a tick recommended · f filter${p.filter ? ' · esc clear the filter' : ''}`;
+};

@@ -19,6 +19,6 @@ delphi v0.5 · /proj · decisions
 
 ● working · 1793181597s                                              esc to stop
 ────────────────────────────────────────────────────────────────────────────────
-↑ ↓ move · enter open · space tick · a tick recommended · f filter · red: open …
+↑ ↓ move · enter open · space tick · a tick recommended · f filter
 ────────────────────────────────────────────────────────────────────────────────
 0 tokens  ·  default  ·  2 waiting                             ← / ? →  ·  ○ ○ ●
