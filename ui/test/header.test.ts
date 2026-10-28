@@ -10,7 +10,7 @@ import { helpKey } from '../src/help.ts';
 import type { Ev } from '../src/input.ts';
 import { newInbox } from '../src/inbox.ts';
 import { modeNote, nextMode } from '../src/mode.ts';
-import { BLINK_EVERY_MS, faceOf, SUCCESS_MS, stripFaces, STRIP_ROLES, THINKING_WINDOW_MS, tickKey, TICK_MS } from '../src/motion.ts';
+import { BLINK_SLOT_MS, faceOf, SUCCESS_MS, stripFaces, STRIP_ROLES, THINKING_WINDOW_MS, tickKey, TICK_MS } from '../src/motion.ts';
 import { footer, frame, header, titleRow, type Model } from '../src/screen.ts';
 import * as T from '../src/theme.ts';
 import { info, plain, snapshot, stateWorld } from './helpers.ts';
@@ -56,14 +56,20 @@ test('the title row keeps the pane name: the path gives way from the left', () =
   assert.match(plain(titleRow(model({ deck: 2 }), 80)), / · decisions$/);
 });
 
-test('badge frames: idle blinks for 150 ms about every 5 s, and each role blinks out of step', () => {
+test('badge frames: idle blinks for 150 ms at random, 7-30 s apart, and each role blinks on its own schedule', () => {
   const at = (role: string, t: number) => faceOf(idle(), role, t, false).frame;
-  const blinks = (role: string) => { const out: number[] = []; for (let t = 0; t < 3 * BLINK_EVERY_MS; t += 50) if (at(role, t) === 'blink') out.push(t); return out; };
-  const b = blinks('orchestrator');
-  assert.equal(b.length, 3 * 3, 'three 150 ms blinks in three periods (50 ms steps)');
-  assert.equal(b[1]! - b[0]!, 50);
-  assert.equal(b[3]! - b[0]!, BLINK_EVERY_MS);
-  assert.notDeepEqual(blinks('architect').slice(0, 1), b.slice(0, 1), 'another role is out of step');
+  const starts = (role: string) => {
+    const out: number[] = [];
+    for (let t = 0; t < 40 * BLINK_SLOT_MS; t += 50) if (at(role, t) === 'blink' && at(role, t - 50) !== 'blink') out.push(t);
+    return out;
+  };
+  const b = starts('orchestrator');
+  assert.equal(b.length, 40, 'one blink per slot');
+  const gaps = b.slice(1).map((t, i) => t - b[i]!);
+  assert.ok(gaps.every((g) => g >= 7000 - 50 && g <= 30_000 + 50), `gaps ${gaps}`);
+  assert.ok(new Set(gaps).size > 10, 'the gaps are not regular');
+  assert.equal([...Array(3).keys()].filter((i) => at('orchestrator', b[0]! + i * 50) === 'blink').length, 3, 'a blink lasts 150 ms');
+  assert.notDeepEqual(starts('architect').slice(0, 5), b.slice(0, 5), 'another role is out of step');
   assert.ok(![...Array(200).keys()].some((i) => faceOf(idle(), 'scout', i * 50, true).frame === 'blink'), 'reduced motion: never blinks');
 });
 

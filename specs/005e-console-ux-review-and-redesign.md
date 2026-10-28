@@ -652,7 +652,7 @@ delphi v0.5 · ~/projects/app · chat
 
   | State | Trigger | Frames (5 cells) | Cadence |
   | :-- | :-- | :-- | :-- |
-  | idle | resting | `⟦•_•⟧` (scout `⟦•••⟧`) | blinks to `⟦-_-⟧` (scout `⟦---⟧`) for 150 ms about every 5 s |
+  | idle | resting | `⟦•_•⟧` (scout `⟦•••⟧`) | blinks to `⟦-_-⟧` (scout `⟦---⟧`) for 150 ms at random, 7-30 s apart |
   | thinking | reasoning deltas in the last 1.5 s | `⟦•• ⟧` ↔ `⟦ ••⟧` (scout `⟦…  ⟧` ↔ `⟦  …⟧`) | swap every 600 ms |
   | working | a tool call or build is running | `⟦•─•⟧` (scout `⟦···⟧`) | static |
   | waiting on you | `approval.requested` | `⟦x?x⟧` | static; the alert banner in the console header (005b) is unchanged |
