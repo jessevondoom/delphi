@@ -203,6 +203,14 @@ pub fn rebuild_with(events: &[EventEnvelope], payload: &dyn Fn(&str) -> Option<S
                     s.known_results.clear();
                 }
             }
+            "loop.gate" => {
+                // The verification turn (`specs/045`): a user turn after the assistant's answer, which a resumed span must replay.
+                if let Some(s) = rec.spans.get_mut(&span) {
+                    if s.pending.is_empty() && s.history.last().is_some_and(|t| t.role == delphi_adapter::blocks::Role::Assistant) {
+                        s.history.push(Turn::user(p["turn_index"].as_u64().unwrap_or(0) as u32, vec![ContentBlock::Text { text: p["text"].as_str().unwrap_or("").to_string() }]));
+                    }
+                }
+            }
             "turn.interrupted" => {
                 if let Some(s) = rec.spans.get_mut(&span) {
                     s.interruptions += 1;
@@ -271,6 +279,24 @@ mod tests {
 
     fn text(t: &str) -> ContentBlock {
         ContentBlock::Text { text: t.into() }
+    }
+
+    #[test]
+    fn a_verification_turn_is_replayed_after_the_answer_it_followed() {
+        let mut l = Log::new();
+        l.ev("task.created", "", json!({"target": "architect"}));
+        l.start("sp1", 0, "operator", "ho_t_0001");
+        l.turn("sp1", 1, vec![text("done")], "end_turn", true);
+        l.ev("loop.gate", "sp1", json!({"turn_index": 2, "text": "[delphi] Before you finish. Check it."}));
+        let h = &rebuild(&l.events).spans["sp1"].history;
+        assert_eq!(h.len(), 2);
+        assert!(matches!(&h[1].blocks[..], [ContentBlock::Text { text }] if text.starts_with("[delphi] Before you finish")) && h[1].role == delphi_adapter::blocks::Role::User);
+        // A gate event with nothing before it to follow is ignored rather than breaking the alternation.
+        let mut l = Log::new();
+        l.ev("task.created", "", json!({"target": "architect"}));
+        l.start("sp1", 0, "operator", "ho_t_0001");
+        l.ev("loop.gate", "sp1", json!({"turn_index": 1, "text": "x"}));
+        assert!(rebuild(&l.events).spans["sp1"].history.is_empty());
     }
 
     #[test]

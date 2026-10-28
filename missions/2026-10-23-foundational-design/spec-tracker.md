@@ -143,11 +143,11 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 
 ## Harness loop techniques (spec 045, approved 2026-10-28)
 
-Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go"). From a research pass over published harness work; every slice is measured on the spec 037 suites before its default moves (H9). Nothing is built.
+Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go"). From a research pass over published harness work; every slice is measured on the spec 037 suites before its default moves (H9). Only H1 is built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | not started |
+| H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | built (draft PR); tests only, no live run; not yet measured (H9) |
 | H2 | tool-result offload and clearing, cache accounting | not started |
 | H3 | compaction with flush and its check | not started |
 | H4 | phase reasoning (037 arm first) | not started |

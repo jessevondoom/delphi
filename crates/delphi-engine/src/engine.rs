@@ -60,6 +60,8 @@ pub struct Settings {
     /// Output budget per call, raised to leave room above the thinking budget.
     pub max_tokens: u64,
     pub max_dispatch_depth: u32,
+    /// `[loop]`: the nudges, warnings and verification pass around a span's model calls (`specs/045`).
+    pub loop_cfg: crate::loopctl::LoopConfig,
     /// `mission_budget_usd` (D-10): the ceiling a new mission starts with.
     pub mission_budget_usd: f64,
     /// Escalate when this many consecutive interruptions hit the same turn (`specs/005` §2.5).
@@ -132,6 +134,7 @@ impl Default for Settings {
             checkpoint_wait: Duration::from_secs(120),
             max_tokens: 8192,
             max_dispatch_depth: 2,
+            loop_cfg: Default::default(),
             mission_budget_usd: 5.0,
             max_interruptions: 2,
             enabled_agents: ["orchestrator", "architect", "builder", "red-team", "strategist"].iter().map(|s| s.to_string()).collect(),
@@ -344,6 +347,8 @@ pub(crate) struct SpanCtx {
     pub(crate) bundle_agent: Option<crate::bundle_load::LoadedAgent>,
     /// The run of the same tool this span is in (`observe::extend_streak`), to raise a `monitor.alert` when it becomes a loop.
     pub(crate) streak: crate::observe::Streak,
+    /// This span's counters for the loop techniques (`specs/045`).
+    pub(crate) lp: crate::loopctl::SpanLoop,
 }
 
 impl SpanCtx {
@@ -597,7 +602,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default() };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history) };
 
             if fresh {
                 let mut open = vec![
@@ -682,6 +687,13 @@ impl Engine {
             if !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/change-log".into(), tier: "L3".into(), text: tools::CHANGE_LOG_NOTE.into() });
             }
+            // Where the span starts (`specs/045` T4): the worktree's layout and commands, computed here, not asked of the model.
+            if self.settings.loop_cfg.workspace_bootstrap && !sc.toolless {
+                if let Some(w) = sc.guard.zones.worktree.as_ref() {
+                    let ec = &self.exec.cfg;
+                    slices.push(ContextSlice { label: "@runtime/workspace".into(), tier: "L3".into(), text: crate::loopctl::workspace_slice(w, ec.test_command.as_deref(), ec.check_command.as_deref(), &std::env::var("PATH").unwrap_or_default()) });
+                }
+            }
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
             }
@@ -729,16 +741,28 @@ impl Engine {
                 if let Some(calls) = pending.take() {
                     let result_index = history.len() as u32 + 1;
                     let mut results = Vec::new();
-                    for Call { id, name, args } in calls {
+                    let last = calls.len().saturating_sub(1);
+                    for (n, Call { id, name, args }) in calls.into_iter().enumerate() {
                         let r = match known.remove(&id) {
                             Some((content, is_error)) => tools::ToolResult { content, is_error }, // already persisted before the interruption
                             None => {
-                                let r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
+                                let mut r = self.exec_tool(&mut sc, &id, &name, &args, &rec).await?;
                                 if r.is_error {
                                     // The tool and the span, never the result text: a refusal or a failed command is routine for an agent, so warn.
                                     delphi_core::elog::warn("tool", "tool_failed", "a tool call returned an error", json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "tool": name, "role": sc.role, "kind": "is_error"}));
                                 }
-                                self.note_tool_call(&mut sc, &name, r.is_error).await?;
+                                // The notes become part of the result, so the log holds what the model saw and a resumed span replays it.
+                                match self.note_tool_call(&mut sc, &name, &args, r.is_error).await? {
+                                    Some(crate::loopctl::Reaction::Note(t)) => r.content.push_str(&format!("\n\n{}", t)),
+                                    Some(crate::loopctl::Reaction::Stop(why)) => sc.child_escalation = Some(why),
+                                    None => {}
+                                }
+                                if n == last {
+                                    if let Some(t) = sc.lp.budget_note(&self.settings.loop_cfg, turns, sc.manifest.max_turn_budget) {
+                                        sc.m.append(sc.ev("loop.action", json!({"action": "budget", "turns": turns, "cap": sc.manifest.max_turn_budget}))).await?;
+                                        r.content.push_str(&format!("\n\n{}", t));
+                                    }
+                                }
                                 // Durable before the next tool runs (or waits for an approval): a crash must not re-run a finished side effect.
                                 let payload = match sc.content_ref.take() {
                                     // A connector result: the log holds a pointer to the payload store, never the text.
@@ -793,6 +817,17 @@ impl Engine {
                     let mut text = final_text(&done.blocks);
                     if done.stop_reason.as_deref() == Some("max_tokens") {
                         text.push_str("\n[the reply was cut off at the output limit]");
+                    }
+                    // One verification pass before a worker may finish (`specs/045` T3): the answer is kept in the history, and
+                    // the model is asked to check it against the task. Its next answer is final.
+                    let works = !sc.manifest.write.is_empty() || !sc.manifest.execute.is_empty();
+                    if works && !sc.toolless && !council_seat && sc.output_schema.is_none() && done.stop_reason.as_deref() != Some("max_tokens") && sc.lp.wants_gate(&self.settings.loop_cfg, turns, sc.manifest.max_turn_budget) {
+                        let gate = crate::loopctl::gate_text(&handoff.objective, &handoff.constraints, &handoff.expected_output.artifact_type);
+                        let idx = history.len() as u32 + 1;
+                        m.append(sc.ev("loop.gate", json!({"turn_index": idx, "text": gate}))).await?;
+                        history.push(Turn::user(idx, vec![ContentBlock::Text { text: gate }]));
+                        sc.lp.gated = true;
+                        continue;
                     }
                     break Ok(text);
                 }
@@ -1386,11 +1421,22 @@ impl Engine {
 
     /// Count a finished tool call towards the span's streak; the call that makes it a loop is announced (`monitor.alert`), once.
     /// An operator hook on `monitor.*` can carry it out of the window; nothing else sends it anywhere.
-    pub(crate) async fn note_tool_call(&self, sc: &mut SpanCtx, name: &str, failed: bool) -> Result<(), EngineError> {
-        if let Some(alert) = crate::observe::extend_streak(&mut sc.streak, name, failed) {
+    /// Returns what the loop techniques make of the call (`specs/045`): a note to add to its result, or a reason to end the span.
+    pub(crate) async fn note_tool_call(&self, sc: &mut SpanCtx, name: &str, args: &Value, failed: bool) -> Result<Option<crate::loopctl::Reaction>, EngineError> {
+        let alert = crate::observe::extend_streak(&mut sc.streak, name, failed);
+        let looped = alert.is_some();
+        if let Some(alert) = alert {
             sc.m.append(sc.ev("monitor.alert", alert)).await?;
         }
-        Ok(())
+        let reaction = sc.lp.after_call(&self.settings.loop_cfg, name, args, looped);
+        if let Some(r) = &reaction {
+            let (action, text) = match r {
+                crate::loopctl::Reaction::Note(t) => ("nudge", t),
+                crate::loopctl::Reaction::Stop(t) => ("stop", t),
+            };
+            sc.m.append(sc.ev("loop.action", json!({"action": action, "tool": crate::observe::tool_name(name), "calls": sc.lp.calls, "reason": text}))).await?;
+        }
+        Ok(reaction)
     }
 
     /// Run one tool call: classify → taint gate → approval if needed → execute → persist stamps.
@@ -2213,6 +2259,86 @@ mod tests {
         assert_eq!(alerts.len(), 1, "{:?}", alerts.iter().map(|a| a.payload.to_string()).collect::<Vec<_>>());
         assert_eq!((alerts[0].payload["kind"].as_str(), alerts[0].payload["tool"].as_str(), alerts[0].payload["failed"].as_u64()), (Some("loop"), Some("read_file"), Some(3)));
         assert_eq!(alerts[0].agent.as_deref(), Some("architect"));
+    }
+
+    fn alternating_reads(n: usize) -> Vec<Step> {
+        (0..n).map(|i| if i % 2 == 0 { Step::tool(&format!("c{}", i), "read_file", json!({"path": "missions/none.md"})) } else { Step::tool(&format!("c{}", i), "list_dir", json!({"path": "missions"})) }).collect()
+    }
+
+    #[tokio::test]
+    async fn a_loop_nudge_reaches_the_agent_in_the_tool_result_and_the_log() {
+        let calls: Vec<Step> = (0..4).map(|i| Step::tool(&format!("c{}", i), "read_file", json!({"path": "missions/none.md"}))).chain(std::iter::once(Step::text("giving up"))).collect();
+        let f = setup(calls, 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Look at the plan").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let told = f.model.requests().last().unwrap().body["messages"].to_string();
+        assert!(told.contains("[delphi] You have called `read_file` again and again") && told.contains("change approach"), "{}", told);
+        let acts = events_of(&f, "loop.action");
+        assert_eq!(acts.len(), 1);
+        assert_eq!((acts[0].payload["action"].as_str(), acts[0].payload["tool"].as_str()), (Some("nudge"), Some("read_file")));
+        let logged = events_of(&f, "tool.result").into_iter().filter(|e| e.payload["content"].as_str().is_some_and(|c| c.contains("[delphi]"))).count();
+        assert_eq!(logged, 1, "the note is part of the logged result, so a resumed span sees what the model saw");
+    }
+
+    #[tokio::test]
+    async fn the_same_tool_called_on_after_a_nudge_ends_the_span_with_a_reason() {
+        let calls: Vec<Step> = (0..12).map(|i| Step::tool(&format!("c{}", i), "read_file", json!({"path": "missions/none.md"}))).chain(std::iter::once(Step::text("never reached"))).collect();
+        let f = setup(calls, 5.0, |_| {});
+        let out = f.engine.run_task(&f.m, "architect", "Look at the plan").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(why) if why.contains("read_file") && why.contains("change approach")), "{:?}", out.status);
+        assert_eq!(events_of(&f, "loop.action").iter().map(|e| e.payload["action"].as_str().unwrap().to_string()).collect::<Vec<_>>(), ["nudge", "stop"]);
+    }
+
+    #[tokio::test]
+    async fn a_worker_is_asked_to_check_its_work_once_before_it_may_finish() {
+        let mut steps = alternating_reads(3);
+        steps.extend([Step::text("done"), Step::text("checked, all good")]);
+        let f = setup(steps, 5.0, |s| s.loop_cfg.verify_gate = true);
+        let out = f.engine.run_task(&f.m, "architect", "Tidy the permission model").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "checked, all good"));
+        let gates = events_of(&f, "loop.gate");
+        assert_eq!(gates.len(), 1);
+        let reqs = f.model.requests();
+        assert_eq!(reqs.len(), 5, "three tool turns, the answer, and the checked answer");
+        let last = reqs[4].body["messages"].to_string();
+        assert!(last.contains("Before you finish") && last.contains("Tidy the permission model"), "{}", last);
+    }
+
+    #[tokio::test]
+    async fn a_short_span_or_a_switched_off_gate_finishes_at_its_first_answer() {
+        let mut steps = alternating_reads(1);
+        steps.push(Step::text("done"));
+        let f = setup(steps, 5.0, |s| s.loop_cfg.verify_gate = true);
+        assert_eq!(f.engine.run_task(&f.m, "architect", "Look").await.unwrap().text, "done");
+        assert!(events_of(&f, "loop.gate").is_empty(), "one call is nothing to verify");
+        let mut steps = alternating_reads(4);
+        steps.push(Step::text("done"));
+        let f = setup(steps, 5.0, |s| s.loop_cfg.verify_gate = false);
+        assert_eq!(f.engine.run_task(&f.m, "architect", "Look").await.unwrap().text, "done");
+        assert!(events_of(&f, "loop.gate").is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_agent_is_told_when_its_turns_run_low_once_at_each_level() {
+        let mut steps = alternating_reads(23);
+        steps.push(Step::text("done"));
+        let f = setup(steps, 5.0, |_| {});
+        assert_eq!(f.engine.run_task(&f.m, "architect", "Look").await.unwrap().status, Status::Done);
+        let budget: Vec<_> = events_of(&f, "loop.action").into_iter().filter(|e| e.payload["action"] == "budget").map(|e| e.payload["turns"].as_u64().unwrap()).collect();
+        assert_eq!(budget, [19, 23]);
+        let told = f.model.requests().last().unwrap().body["messages"].to_string();
+        assert!(told.contains("6 of 25 turns left") && told.contains("2 of 25 turns left"), "{}", told);
+    }
+
+    #[tokio::test]
+    async fn a_worktree_role_is_given_a_map_of_its_workspace_unless_that_is_off() {
+        let f = builder_fixture(vec![Step::text("done")], |_| {});
+        f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap();
+        let first = f.model.requests()[0].body.to_string();
+        assert!(first.contains("runtime/workspace") && first.contains("Your working directory, two levels deep"), "{}", first);
+        let f = setup(vec![Step::text("done")], 5.0, |s| s.loop_cfg.workspace_bootstrap = false);
+        f.engine.run_task(&f.m, "architect", "Look").await.unwrap();
+        assert!(!f.model.requests()[0].body.to_string().contains("runtime/workspace"));
     }
 
     #[tokio::test]

@@ -383,10 +383,14 @@ impl Engine {
     async fn bridge_call(self: &Arc<Self>, sc: &mut SpanCtx, call: BridgeCall, ep: &Endpoint, model: &str) -> Result<Option<String>, EngineError> {
         let id = if call.call_id.is_empty() { format!("bridge-{}", call.name) } else { call.call_id.clone() };
         let started = std::time::Instant::now();
-        let r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
+        let mut r = self.exec_tool(sc, &id, &call.name, &call.args, &None).await?;
         // From the call arriving to its answer, so a call held for an approval card counts the operator's time too.
         let duration_ms = started.elapsed().as_millis() as u64;
-        self.note_tool_call(sc, &call.name, r.is_error).await?;
+        match self.note_tool_call(sc, &call.name, &call.args, r.is_error).await? {
+            Some(crate::loopctl::Reaction::Note(t)) => r.content.push_str(&format!("\n\n{}", t)),
+            Some(crate::loopctl::Reaction::Stop(why)) => sc.child_escalation = Some(why),
+            None => {}
+        }
         let arguments = {
             let text = call.args.to_string();
             if text.chars().count() > 4000 { Value::String(text.chars().take(4000).collect()) } else { call.args.clone() }

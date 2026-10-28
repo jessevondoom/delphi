@@ -81,6 +81,15 @@ council_budget_usd = 20.0            # D-10: Council Mode
 on_budget_exhausted = "escalate"     # halt node and ask the operator; never silently downscale
 per_watch_max_wakes_per_day = 10
 
+# What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
+# never a tool or a permission. Every key shown is the default.
+# [loop]
+# nudge = true                       # tell a role that is going round in circles; end the span if it carries on
+# nudge_edits = 4                    # writes to one file before the nudge (twice this ends the span)
+# budget_warnings = true             # tell a role when 75 % and 90 % of its turns are used
+# verify_gate = true                 # one check against the task before a role that writes or runs commands may finish
+# workspace_bootstrap = true         # give a role with a worktree a map of it
+
 [hitl]
 approval_timeout_sec = 600           # Unanswered approvals resolve to DENY
 

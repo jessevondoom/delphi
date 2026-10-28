@@ -49,10 +49,10 @@ window only; **the agent is never told**. Slice H1 closes that.
 
 | # | Technique | What the engine does | API span | CLI seat |
 | :-- | :-- | :-- | :-- | :-- |
-| T1 | **Loop nudge** | When the streak alert fires, or one file is written N times (default 4), append `[delphi] You have called X n times / edited F n times. Stop and change approach: re-read the objective, say what you have learned, try something different.` to that tool result. A second alert in the same span after a nudge becomes a `hard stop`: the span escalates to the operator (`Escalate`), because a nudge did not work. | yes | yes (bridge tools only; a CLI's own tools are seen as `harness.tool`, counted, not nudged) |
+| T1 | **Loop nudge** | When the streak alert fires, or one file is written N times (default 4), append `[delphi] You have called X n times / edited F n times. Stop and change approach: re-read the objective, say what you have learned, try something different.` to that tool result. A nudge that is not answered becomes a hard stop: the same tool called another 6 times (or a fresh alert), or 2 × N writes to one file, escalates the span to the operator, because a nudge did not work. Calling a different tool clears the nudge. | yes | yes (bridge tools only; a CLI's own tools are seen as `harness.tool`, counted, not nudged) |
 | T2 | **Budget warnings** | At 75 % and 90 % of `max_turn_budget` (and of the span's token share when one is set), append `[delphi] 6 of 25 turns left. Finish the work, then verify it.` to the next tool result, once per threshold. | yes | bridge results only |
 | T3 | **Verification gate** | When a role that writes or executes ends its turn with a final answer, and has not been gated in this span, the engine injects one user turn: the objective, the constraints and expected output from the handoff, and "check your work against each before finishing; run the checks you were given". The model's next answer is final. Counts as a turn. Skipped when the span used under 3 tool calls (nothing to verify), is `toolless`, is a Council seat, or has fewer than 2 turns left. | yes | not in H1 (a CLI's last message is its answer; a stop hook is slice H6, behind a probe) |
-| T4 | **Workspace bootstrap** | Before turn 1, add a slice `@runtime/workspace`: the worktree's top two levels (bounded to 4 KB), the project's detected test and check commands (`[exec]`), and which of `git`, `cargo`, `node`, `python3` are present with versions. Computed once per span, in code. | yes | yes (placed in the first prompt) |
+| T4 | **Workspace bootstrap** | Before turn 1, add a slice `@runtime/workspace`: the worktree's top two levels (bounded to 4 KB), the operator's `[exec]` test and check commands, and which of `git`, `cargo`, `node`, `npm`, `python3`, `make` are on the path (a lookup, no process is run). File names are reduced to plain characters, since a repository's names are not ours. Computed once per span, in code; only for a role that has a worktree. | yes | yes (placed in the first prompt) |
 | T5 | **Tool-result hygiene** | Results over a size limit are stored in the payload store and the history holds a handle (`@payload/<id>`, readable with `read_file`), as connector results already are. Past a threshold of history size, old tool results are replaced by a placeholder (`[result cleared: 3.2 KB, @payload/…]`) in batches, keeping the last N, so the cached prefix is invalidated rarely and never mid-batch. | yes | no (the CLI manages its own context) |
 | T6 | **Compaction with a flush** | At a high-water mark of the window (default 70 %), run a silent turn that asks the role to write its state to its mission notes, then replace the oldest turns with a summary that keeps the goal, done work, open work, decisions and the next step. The summary's source turns stay in the event log; the persisted block is `replayable: false` (002 §3). A compaction is checked: the summary must mention every open task and every file written (a deterministic check against the log); on a miss the compaction is not applied. | yes | no |
 | T7 | **Phase reasoning** | Thinking budget by phase of the span: high while no write has happened (planning), the role's normal level while writing, high again for the T3 verification turn. Never above the role's manifest ceiling. | yes | no (flags are fixed at launch) |
@@ -70,6 +70,7 @@ message the model can read); a hard time limit (agents estimate time badly, and 
   thresholds, `nudge_for(&SpanLoop, tool, args) -> Option<String>`, `budget_note(turns, cap, tokens) -> Option<String>`,
   `needs_gate(...)`, the gate text, and the bootstrap renderer. No I/O except T4's directory listing and `--version` probes, which
   run through `ExecEnv` with the span's policy.
+- Events: `loop.action` (`action` is `nudge`, `stop` or `budget`; tool, counts and the engine's own sentence, never tool output) and `loop.gate` (the verification turn's text, which recovery replays).
 - `Engine::drive` calls `loopctl` at three points: after a tool result is built (T1, T2, appended to `r.content` before it is
   persisted, so a resumed span replays the same text), at the end of a turn that would break the loop (T3), and when slices are
   assembled (T4). `harness_run.rs` calls the first two for bridge results.
@@ -80,7 +81,7 @@ message the model can read); a hard time limit (agents estimate time badly, and 
 ## 5. Configuration
 
 ```toml
-[loop]                       # ratified table: loosening a limit is a proposal, tightening is not
+[loop]                       # not an access table (`lock.rs` ACCESS_KEYS): it changes only what the engine adds to a run
 nudge = true                 # T1
 nudge_edits = 4              # writes to one file before the nudge
 budget_warnings = true       # T2 (at 75 % and 90 %)
@@ -126,7 +127,7 @@ One slice per pull request, in this order. H1 is the fast list.
 ## 8. Open decisions (provisional answers, change on request)
 
 - **OD-1** Gate threshold: gate only spans with 3 or more tool calls (answer given). Lower it if short spans turn out to stop early.
-- **OD-2** Hard stop after one ignored nudge (answer given). Alternative: nudge twice; it costs a few turns on a stuck span.
+- **OD-2** Hard stop after one ignored nudge: 6 more calls of the same tool, or twice the edit count on a file (answer given). Alternative: nudge twice; it costs a few turns on a stuck span.
 - **OD-3** Defaults: H1 `on`, H2 to H7 `off` until H9 (answer given).
 - **OD-4** Whether the gate also runs for the Builder's merge gates: no, those are already deterministic (`checks.rs`, `[exec]` gates).
 
