@@ -3,6 +3,7 @@
 
 pub mod fetch;
 pub mod html;
+pub mod images;
 pub mod search;
 pub mod transport;
 pub mod trusted;

@@ -15,7 +15,7 @@ pub struct Converted {
     pub markdown: String,
 }
 
-fn decode(s: &str) -> String {
+pub(crate) fn decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
@@ -57,7 +57,7 @@ fn decode(s: &str) -> String {
 }
 
 /// The attributes of a start tag as `(name, value)` pairs, names lowercased.
-fn attrs(tag: &str) -> Vec<(String, String)> {
+pub(crate) fn attrs(tag: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let b = tag.as_bytes();
     let mut i = tag.find(|c: char| c.is_whitespace()).unwrap_or(tag.len());
@@ -108,8 +108,66 @@ fn is_chrome(a: &[(String, String)]) -> bool {
     a.iter().any(|(k, v)| (k == "class" || k == "id") && CHROME.iter().any(|c| v.to_ascii_lowercase().contains(c)))
 }
 
-/// Convert `html` (fetched from `base`) to markdown. Output is capped at `max_chars`, cut at a paragraph boundary.
+/// An image's address as it is written in markdown and used everywhere after: parentheses are percent-encoded, so a `)` in a Wikipedia
+/// file name cannot end the markdown early.
+pub fn image_key(u: &Url) -> String {
+    u.as_str().replace('(', "%28").replace(')', "%29")
+}
+
+/// An image in converted markdown, `![alt](url)`: where it starts and ends in the text, and what it says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageTok {
+    pub start: usize,
+    pub end: usize,
+    pub alt: String,
+    pub url: String,
+}
+
+/// The images of `md` in order. The converter writes the alt text without brackets or parentheses and the address percent-encoded, so
+/// the first `](` after `![` and the next `)` close the token.
+pub fn find_images(md: &str) -> Vec<ImageTok> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(p) = md[i..].find("![") {
+        let s = i + p;
+        let Some(m) = md[s + 2..].find("](") else { break };
+        let alt_end = s + 2 + m;
+        let Some(c) = md[alt_end + 2..].find(')') else { break };
+        let end = alt_end + 2 + c + 1;
+        let alt = &md[s + 2..alt_end];
+        if alt.contains(['\n', '[', ']']) {
+            i = s + 2;
+            continue;
+        }
+        out.push(ImageTok { start: s, end, alt: alt.to_string(), url: md[alt_end + 2..end - 1].to_string() });
+        i = end;
+    }
+    out
+}
+
+/// `md` without its images, for text the scout reads and for entries kept as a summary: no picture, no alt text.
+pub fn strip_images(md: &str) -> String {
+    let (mut out, mut at) = (String::with_capacity(md.len()), 0);
+    for t in find_images(md) {
+        out.push_str(&md[at..t.start]);
+        at = t.end;
+    }
+    out.push_str(&md[at..]);
+    out
+}
+
+/// Convert `html` (fetched from `base`) to markdown. Output is capped at `max_chars`, cut at a paragraph boundary. Images are left out.
 pub fn to_markdown(html: &str, base: &str, max_chars: usize) -> Converted {
+    convert(html, base, max_chars, false)
+}
+
+/// As `to_markdown`, with each `<img>` that has an `http(s)` address kept as `![alt](address)` (`specs/028` §11). A link whose only
+/// content is an image becomes the image alone, since a picture is drawn only when it stands alone in its paragraph.
+pub fn to_markdown_with_images(html: &str, base: &str, max_chars: usize) -> Converted {
+    convert(html, base, max_chars, true)
+}
+
+fn convert(html: &str, base: &str, max_chars: usize, images: bool) -> Converted {
     let base = Url::parse(base).ok();
     let mut title = String::new();
     let (mut out, mut i) = (String::new(), 0usize);
@@ -188,7 +246,9 @@ pub fn to_markdown(html: &str, base: &str, max_chars: usize) -> Converted {
                     if let Some((href, start)) = link.take() {
                         let label = out[start..].trim().to_string();
                         out.truncate(start);
-                        if !label.is_empty() {
+                        if images && label.starts_with("![") && label.ends_with(')') && find_images(&label).len() == 1 && find_images(&label)[0].end == label.len() {
+                            out.push_str(&label); // a picture that was a link: the picture alone
+                        } else if !label.is_empty() {
                             out.push_str(&format!("[{}]({})", label, href));
                         }
                     }
@@ -260,6 +320,23 @@ pub fn to_markdown(html: &str, base: &str, max_chars: usize) -> Converted {
             "td" | "th" => {
                 if !out.ends_with(['\n', ' ']) {
                     out.push_str(" | ");
+                }
+            }
+            "img" if images => {
+                let src = a.iter().find(|(k, _)| k == "src").or_else(|| a.iter().find(|(k, _)| k == "data-src")).map(|(_, v)| decode(v.trim())).unwrap_or_default();
+                let abs = base.as_ref().and_then(|bs| bs.join(&src).ok()).filter(|u| matches!(u.scheme(), "http" | "https")).map(|mut u| {
+                    u.set_fragment(None);
+                    image_key(&u)
+                });
+                if let Some(u) = abs {
+                    let alt: String = decode(a.iter().find(|(k, _)| k == "alt").map(|(_, v)| v.as_str()).unwrap_or(""))
+                        .chars()
+                        .map(|c| if matches!(c, '[' | ']' | '(' | ')') || c.is_control() { ' ' } else { c })
+                        .collect::<String>()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    out.push_str(&format!("![{}]({})", alt.chars().take(200).collect::<String>(), u));
                 }
             }
             "br" => out.push_str("  \n"),
@@ -387,6 +464,32 @@ See <a href="/wiki/Consensus#cite">consensus</a> and <a href="https://example.or
         let html: String = (0..200).map(|i| format!("<p>paragraph {} {}</p>", i, "word ".repeat(20))).collect();
         let m = to_markdown(&html, "https://x.org/", 1000).markdown;
         assert!(m.chars().count() < 1100 && m.ends_with("[…the page continues at its source]"), "{}", m.len());
+    }
+
+    #[test]
+    fn images_are_kept_only_when_asked_for_and_a_picture_that_was_a_link_is_the_picture_alone() {
+        let html = r#"<p>Before <a href="/wiki/File:A_(b).png"><img alt="A [b] (c)" src="//up.example.org/a_(b).png"></a> after <a href="/x">a <img src="/i.png" alt="icon"> label</a>.</p><img src="data:image/gif;base64,R0lG" alt="inline"><img src="/n.png">"#;
+        assert_eq!(to_markdown(html, "https://x.org/wiki/P", 1000).markdown, "Before after [a label](https://x.org/x).");
+        let m = to_markdown_with_images(html, "https://x.org/wiki/P", 1000).markdown;
+        assert!(m.starts_with("Before ![A b c](https://up.example.org/a_%28b%29.png) after [a ![icon](https://x.org/i.png) label](https://x.org/x)."), "{}", m);
+        assert!(m.contains("![](https://x.org/n.png)") && !m.contains("data:"), "{}", m);
+        let imgs = find_images(&m);
+        assert_eq!(imgs.iter().map(|i| (i.alt.as_str(), i.url.as_str())).collect::<Vec<_>>(), vec![("A b c", "https://up.example.org/a_%28b%29.png"), ("icon", "https://x.org/i.png"), ("", "https://x.org/n.png")]);
+        assert_eq!(&m[imgs[0].start..imgs[0].end], "![A b c](https://up.example.org/a_%28b%29.png)");
+    }
+
+    #[test]
+    fn stripping_images_leaves_the_text_exactly_as_it_was_without_them() {
+        let html = r#"<h1>T</h1><p>One <img src="/a.png" alt="x"> two <a href="/p"><img src="/b.png"></a> three.</p><p><img src="/c.png" alt="only"></p>"#;
+        let plain = to_markdown(html, "https://x.org/", 1000).markdown;
+        let stripped = strip_images(&to_markdown_with_images(html, "https://x.org/", 1000).markdown);
+        assert_eq!(plain_text(&stripped), plain_text(&plain));
+        assert!(!stripped.contains("!["));
+        for hostile in ["![", "![a](", "![a](b", "![a]\n(b)", "![[x]](y)", "text ![a](b) ![c](d)"] {
+            let _ = strip_images(hostile);
+            let _ = find_images(hostile);
+        }
+        assert_eq!(strip_images("a ![x](https://u/1.png) b ![y](https://u/2.png) c"), "a  b  c");
     }
 
     #[test]
