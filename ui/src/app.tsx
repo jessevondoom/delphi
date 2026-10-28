@@ -467,6 +467,21 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         inboxRef.current = next; setInbox(next);
         if (action.t === 'chat') { setDeck(1); deckRef.current = 1; }
         else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => { if (bad) { note(bad, 'error'); unsend(); } });
+        else if (action.t === 'accept') {
+          // Each ticked recommendation goes through its own call, one at a time; a failure does not stop the others, and the
+          // daemon re-checks each payload hash (a decision that changed since it was shown is refused, specs/044 §5.5).
+          void (async () => {
+            let ok = 0; const bad: string[] = [];
+            for (const d of action.ds) {
+              const resolution = d.brief.recommendation?.choice_id;
+              if (d.source !== 'provisional' || (resolution !== 'ratified' && resolution !== 'rejected')) { bad.push(`${d.label}: nothing to call for this kind yet`); continue; }
+              try { await cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution }); ok++; }
+              catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
+            }
+            note(`accepted ${ok} of ${action.ds.length}${bad.length ? ' · ' + bad.join(' · ') : ''}`, bad.length ? 'error' : 'ok');
+            loadDecisionsSoon();
+          })();
+        }
         else if (action.t === 'review') {
           const d = action.d;
           cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution: action.resolution })

@@ -19,11 +19,11 @@ export type Decision = {
  * how a decision with no recommendation starts); `answered` is the decision an answer has been sent for, so a second
  * press cannot send it twice; `note` is the line that confirms the last answer.
  */
-export type Pane = { sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string };
-export const newPane = (): Pane => ({ sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '' });
+export type Pane = { sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string; /** The confirm page for the ticked decisions is showing, since `confirmedAt`. */ confirm: boolean; confirmedAt: number };
+export const newPane = (): Pane => ({ sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '', confirm: false, confirmedAt: 0 });
 
-/** `answer` is the operator choosing: the console turns it into the existing call for the decision's source. */
-export type Action = { t: 'none' } | { t: 'chat' } | { t: 'answer'; d: Decision; choice: Choice };
+/** `answer` is the operator choosing; `accept-all` is the ticked recommendations accepted together (specs/044 §5.5). The console turns each into the existing call for the decision's source. */
+export type Action = { t: 'none' } | { t: 'chat' } | { t: 'answer'; d: Decision; choice: Choice } | { t: 'accept-all'; ds: Decision[] };
 
 /** The keys that answer are ignored for this long after a decision opens (spec 005's guard). */
 export const GUARD_MS = 300;
@@ -78,7 +78,8 @@ export function reconcile(p: Pane, items: Decision[]): Pane {
   const live = new Set(items.filter((d) => d.tickable).map(tickKey));
   const rows = visible(items, filter);
   const sel = Math.max(0, Math.min(p.sel, rows.length - 1));
-  const base = { ...p, filter, ticks: p.ticks.filter((t) => live.has(t)), sel };
+  const ticks = p.ticks.filter((t) => live.has(t));
+  const base = { ...p, filter, ticks, sel, confirm: p.confirm && ticks.length > 0 };
   if (p.open === null) return base;
   const at = rows.findIndex((d) => d.id === p.open);
   if (at >= 0) return { ...base, sel: at };
@@ -102,6 +103,17 @@ export function key(p: Pane, items: Decision[], e: Ev, now = 0): { pane: Pane; a
   const sel = Math.max(0, Math.min(p.sel, rows.length - 1));
   const d = rows[sel];
   const k = e.t === 'key' ? e.k : e.s;
+  if (p.confirm) {
+    // The confirm page (specs/044 §5.5): enter accepts what was ticked, esc goes back. The guard applies to the accept.
+    if (k === 'esc' || (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl)) return none({ ...p, confirm: false });
+    if (k === 'enter' || k === 'y') {
+      const ds = ticked(p, items);
+      if (!ds.length) return none({ ...p, confirm: false });
+      if (now - p.confirmedAt < GUARD_MS) return none();
+      return { pane: { ...p, confirm: false, ticks: [], note: `✔ accepting ${ds.length} recommendation${ds.length === 1 ? '' : 's'}…` }, action: { t: 'accept-all', ds } };
+    }
+    return none();
+  }
   if (p.open !== null) {
     const at = rows.findIndex((x) => x.id === p.open);
     const cur = rows[at];
@@ -141,6 +153,7 @@ export function key(p: Pane, items: Decision[], e: Ev, now = 0): { pane: Pane; a
     const t = tickKey(d);
     return none({ ...p, sel, ticks: p.ticks.includes(t) ? p.ticks.filter((x) => x !== t) : [...p.ticks, t] });
   }
+  if (k === 'y') return ticked(p, items).length ? none({ ...p, confirm: true, confirmedAt: now }) : none();
   if (k === 'a') {
     // Every tickable decision in the filter, never more: a filter hides entries, it does not widen the batch.
     const ts = rows.filter((x) => x.tickable);
@@ -196,7 +209,8 @@ export function view(items: Decision[], p: Pane, c: Ctx): string[] {
   const count = p.filter
     ? chalk.bold(T.text(c.pal)(`${rows.length} ${KIND_LABEL[p.filter] ?? p.filter}`)) + T.dim(` · hiding ${items.length - rows.length} other decision${items.length - rows.length === 1 ? '' : 's'}`)
     : chalk.bold(T.text(c.pal)(`${items.length} decision${items.length === 1 ? '' : 's'}`)) + T.dim(tickable ? ` · ${tickable} can take the recommendation` : ' · none can take a default');
-  const tickHint = tickable ? T.accent('a') + '  ' + T.text(c.pal)(p.filter ? 'tick every recommended item here' : 'tick every recommended item') : '';
+  const nTicked = ticked(p, items).length;
+  const tickHint = nTicked ? T.accent('y') + '  ' + T.text(c.pal)(`review ${nTicked} ticked`) : tickable ? T.accent('a') + '  ' + T.text(c.pal)(p.filter ? 'tick every recommended item here' : 'tick every recommended item') : '';
   const chipRow = (() => {
     const all = [{ kind: '', n: items.length }, ...chips(items)];
     const parts = all.map(({ kind, n }) => {
@@ -303,14 +317,45 @@ export function empty(p: Pane, c: Ctx): string[] {
   return pad(['', p.note ? '  ' + T.ok(p.note) : '', '', '', '  ' + chalk.bold(T.text(c.pal)('Nothing needs you.')), '', '  ' + T.dim('Decisions from every agent arrive here; the header shows an alert when one is waiting.')]);
 }
 
-/** The pane's body: the detail of the open decision, the list, or the empty state. */
-export const render = (items: Decision[], p: Pane, c: Ctx): string[] => (!items.length ? empty(p, c) : p.open !== null ? detail(items, p, c) : view(items, p, c));
+/** What accepting the recommendation of `d` does, in one line. */
+const effectLine = (d: Decision): string => {
+  const rec = d.brief.recommendation;
+  const label = (d.choices.find((x) => x.id === rec?.choice_id)?.label ?? rec?.choice_id ?? 'accept').toLowerCase();
+  return `${label} · ${d.requester || 'an agent'}'s ${KIND_WORD[d.kind] ?? d.kind}${d.task ? ` on task ${d.task}` : ''}`;
+};
+
+/** The confirm page (specs/044 §5.5): exactly what will be accepted, and what is not included. */
+export function confirm(items: Decision[], p: Pane, c: Ctx): string[] {
+  const { w, h } = c;
+  const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
+  const yes = ticked(p, items);
+  const rest = items.filter((d) => !yes.includes(d));
+  const rule = '  ' + T.dim('─'.repeat(Math.max(0, w - 4)));
+  const L: string[] = ['', '  ' + chalk.bold(T.text(c.pal)(`Accept ${yes.length} recommendation${yes.length === 1 ? '' : 's'}?`)), rule, ''];
+  for (const d of yes) {
+    L.push('  ' + T.ok('✔') + ' ' + T.dim(d.label) + '  ' + chalk.bold(tierStyle(d.tier)(T.clip(d.title, w - 16))));
+    L.push('        ' + T.dim(T.clip(effectLine(d), w - 10)), '');
+  }
+  L.push(rule, '  ' + T.dim('not included: these need you one at a time'));
+  const shown = rest.slice(0, Math.max(1, h - L.length - 7));
+  for (const d of shown) L.push('   ' + T.dim(d.label) + '  ' + tierStyle(d.tier)(T.clip(d.title, w - 16)));
+  if (rest.length > shown.length) L.push('   ' + T.dim(`+ ${rest.length - shown.length} more`));
+  L.push('');
+  for (const l of wrap('Each acceptance is signed as you and logged. You can still change a review in /decisions until the build is merged.', w - 4)) L.push('  ' + T.dim(l));
+  L.push('');
+  L.push('  ' + chalk.inverse(` Accept ${yes.length} `) + T.dim('  enter') + '      ' + T.dim('go back  esc'));
+  return pad(L);
+}
+
+/** The pane's body: the confirm page, the detail of the open decision, the list, or the empty state. */
+export const render = (items: Decision[], p: Pane, c: Ctx): string[] => (!items.length ? empty(p, c) : p.confirm ? confirm(items, p, c) : p.open !== null ? detail(items, p, c) : view(items, p, c));
 
 export const hint = (items: Decision[], p: Pane): string => {
   if (!items.length) return 'nothing to decide · esc for chat';
+  if (p.confirm) return `enter accept ${ticked(p, items).length} · esc back to the list`;
   if (p.open !== null) {
     const d = visible(items, p.filter).find((x) => x.id === p.open);
     return `${d && d.brief.recommendation ? 'tab / enter choose · 1-9 pick' : 'tab / 1-9 choose'} · d diff · ↑ ↓ other decisions · esc back to the list`;
   }
-  return `↑ ↓ move · enter open · space tick · a tick recommended · f filter${p.filter ? ' · esc clear the filter' : ''}`;
+  return `↑ ↓ move · enter open · space tick · a tick recommended${p.ticks.length ? ' · y review ticked' : ''} · f filter${p.filter ? ' · esc clear the filter' : ''}`;
 };

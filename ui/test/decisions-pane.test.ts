@@ -3,7 +3,7 @@
 process.env.TZ = 'UTC';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chips, detail, isTicked, key, newPane, parse, reconcile, ticked, unsent, view, visible, type Decision, type Pane } from '../src/decisions-pane.ts';
+import { chips, confirm, detail, isTicked, key, newPane, parse, reconcile, ticked, unsent, view, visible, type Decision, type Pane } from '../src/decisions-pane.ts';
 import { frame, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { fold, initial } from '../src/fold.ts';
@@ -245,6 +245,57 @@ test('nothing owed: the daemon list has arrived and is empty, so the pane says s
   assert.equal(inboxKey(inb, [], k('esc'), 9000).action.t, 'chat');
 });
 
+const tickedPane = (items: Decision[]): Pane => key(newPane(), items, ch('a')).pane;
+
+test('y with ticks opens the confirm page, y with none does nothing, and esc goes back with the ticks kept', () => {
+  const items = five();
+  assert.equal(key(newPane(), items, ch('y'), 2000).pane.confirm, false, 'nothing is ticked');
+  const p = key(tickedPane(items), items, ch('y'), 2000).pane;
+  assert.deepEqual([p.confirm, p.confirmedAt, p.ticks.length], [true, 2000, 3]);
+  const back = key(p, items, k('esc'), 3000).pane;
+  assert.deepEqual([back.confirm, back.ticks.length], [false, 3]);
+  assert.equal(key(p, items, k('left'), 3000).pane.confirm, false);
+  assert.equal(key(p, items, ch('x'), 3000).action.t, 'none', 'no other key does anything on the confirm page');
+});
+
+test('enter on the confirm page accepts exactly what was ticked, after the guard, and clears the ticks', () => {
+  const items = five();
+  const p = key(tickedPane(items), items, ch('y'), 2000).pane;
+  assert.equal(key(p, items, k('enter'), 2100).action.t, 'none', 'the guard: the page only just opened');
+  const r = key(p, items, k('enter'), 2400);
+  assert.equal(r.action.t, 'accept-all');
+  assert.deepEqual(r.action.t === 'accept-all' ? r.action.ds.map((d) => d.label) : [], ['DEC-082', 'DEC-085', 'DEC-084']);
+  assert.deepEqual([r.pane.confirm, r.pane.ticks.length, r.pane.note], [false, 0, '✔ accepting 3 recommendations…']);
+  assert.equal(key(r.pane, items, k('enter'), 3000).action.t, 'none', 'nothing is ticked any more, so a second press accepts nothing');
+});
+
+test('the confirm page closes by itself when the ticks go away (a payload changed, or the decisions were answered elsewhere)', () => {
+  const items = five();
+  const p = key(tickedPane(items), items, ch('y'), 2000).pane;
+  assert.equal(reconcile(p, items).confirm, true);
+  assert.equal(reconcile(p, items.map((d) => ({ ...d, payload_blake3: d.payload_blake3 + 'x' }))).confirm, false);
+  assert.equal(reconcile(p, items.filter((d) => !d.tickable)).confirm, false);
+});
+
+test('the confirm page names what is accepted, what each does, and what is not included', () => {
+  const items = five();
+  const p = key(tickedPane(items), items, ch('y'), 2000).pane;
+  const t = confirm(items, p, { pal: { dark: true }, now: NOW, w: 100, h: 34, at: () => null }).map(plain).join('\n');
+  for (const want of ['Accept 3 recommendations?', '✔ DEC-082', '✔ DEC-085', '✔ DEC-084', "ratify · builder's build on task t_1", 'not included: these need you one at a time', 'DEC-081', 'DEC-083', 'Each acceptance is signed as you and logged', ' Accept 3 ']) assert.ok(t.includes(want), want);
+  assert.equal((t.match(/✔ DEC-/g) ?? []).length, 3, 'only the ticked ones are listed as accepted');
+  const list = view(items, tickedPane(items), { pal: { dark: true }, now: NOW, w: 100, h: 34, at: () => null }).map(plain).join('\n');
+  assert.match(list, /y {2}review 3 ticked/);
+});
+
+test('through the inbox, enter on the confirm page is one accept action for the ticked decisions', () => {
+  const items = five();
+  const inb = newInbox(0, items, { ...tickedPane(items), confirm: true, confirmedAt: 0 });
+  const r = inboxKey(inb, [], k('enter'), 5000);
+  assert.equal(r.action.t, 'accept');
+  assert.equal(r.action.t === 'accept' && r.action.ds.length, 3);
+  assert.equal(r.inbox.pane.ticks.length, 0);
+});
+
 const state = stateWorld();
 const base: Model = {
   info, pal: { dark: true, bg: [15, 23, 42] }, state, now: NOW, deck: 2, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
@@ -259,6 +310,7 @@ test('golden screens: the list, the filtered list and the list at 80x24', () => 
     ['decisions-detail-red-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 1)) }, 100, 34],
     ['decisions-detail-norec-100x34', { ...base, inbox: newInbox(0, five(), open(five(), 0)) }, 100, 34],
     ['decisions-detail-80x24', { ...base, inbox: newInbox(0, five(), open(five(), 2)) }, 80, 24],
+    ['decisions-confirm-100x34', { ...base, inbox: newInbox(0, five(), { ...tickedPane(five()), confirm: true, confirmedAt: 0 }) }, 100, 34],
     ['decisions-empty-100x34', { ...base, inbox: newInbox(0, [], { ...newPane(), note: '✔ DEC-081 decided: reject' }, true) }, 100, 34],
   ] as [string, Model, number, number][]) {
     const r = snapshot(name, frame(m, w, h));
