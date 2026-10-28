@@ -88,6 +88,9 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   stateRef.current = state;
   const queueRef = useRef<string[]>([]);
   const quitAskedAt = useRef(0); // when Ctrl+C last asked "again to quit"; a second press within 2 s leaves
+  const [quitArmed, setQuitArmed] = useState(false);
+  const quitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (quitTimer.current) clearTimeout(quitTimer.current); }, []);
   const searchRef = useRef(search);
   const inboxRef = useRef(inbox);
   const deckRef = useRef<0 | 1 | 2>(1);
@@ -462,11 +465,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           follow(); upd((c) => C.insert(c, e.s)); return;
         case 'ctrl':
           if (e.c === 'c') {
-            // Leave at once when nothing would be lost; otherwise ask once (`005e` §10.5).
-            const busy = comp.current.chars.length > 0 || queueRef.current.length > 0 || Object.keys(stateRef.current.running).length > 0;
+            // Always twice within 2 s, as in Claude Code; the badges' eyes are crossed while the second press would leave.
             const now = Date.now();
-            if (!busy || now - quitAskedAt.current < 2000) { exit(); return; }
+            if (now - quitAskedAt.current < 2000) { exit(); return; }
             quitAskedAt.current = now;
+            setQuitArmed(true);
+            if (quitTimer.current) clearTimeout(quitTimer.current);
+            quitTimer.current = setTimeout(() => { quitTimer.current = null; setQuitArmed(false); }, 2000);
             note('press Ctrl+C again to quit' + (Object.keys(stateRef.current.running).length ? ' (the running task is left to the daemon)' : ''));
             return;
           }
@@ -568,8 +573,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, still, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const model: Model = { ...base, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>

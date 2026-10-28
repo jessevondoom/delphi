@@ -32,6 +32,8 @@ export type Model = {
   noModel?: boolean;
   /** No animation (`DELPHI_REDUCE_MOTION=1`, `NO_COLOR`, `TERM=dumb`): every badge on its static frame. */
   still?: boolean;
+  /** Ctrl+C was pressed once and the two seconds to confirm have not passed: the title-bar badges show crossed eyes. */
+  quitArmed?: boolean;
   /** The knowledge window on the left deck (`archives.ts`); the app owns it and makes the `kb.get` calls. */
   arch?: A.Arch;
   /** Link mode in the chat (`specs/029`, `ctrl+o`): the pointers and addresses in the transcript can be focused and followed. */
@@ -69,7 +71,7 @@ export function titleRow(m: Model, w: number): string {
  */
 export function header(m: Model, w: number): string[] {
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
-  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame); }).join(' ');
+  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame, m.quitArmed ?? false); }).join(' ');
   return [T.clip(strip, w), titleRow(m, w)];
 }
 
