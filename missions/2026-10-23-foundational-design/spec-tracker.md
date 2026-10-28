@@ -163,7 +163,8 @@ Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logge
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | built (#307): `copilot.cov`, snapshot, quota reads of both CLIs, probes a-f, h, i (spec 051 §6.4: stdin prompt, tool narrowing, fail-closed writes, ACP approval bridge, model catalog with multipliers, `COPILOT_HOME` isolation); plus round 3 (§6.5): `allow_once`, MCP tool bridge via `--additional-mcp-config`, Codex `app-server` approvals; open: g (exhausted-quota text), `session/cancel`, ACP `session/new` `mcpServers` ignored |
-| S1 | `Cli::Copilot`, `-p --output-format json` for read-only roles, request ledger, token mode | not started |
+| S1 | `Cli::Copilot`, the stdin + `--output-format json` driver for read-only roles, model check, token mode | built (stacked on #304 and #307): spec 051 §7; one live run passed on `claude-haiku-4.5` |
+| S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | not started |
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | not started |
 | S3 | `--plan` lane, vision | not started |
 

@@ -673,8 +673,8 @@ impl Config {
             }
         }
         for (name, h) in &self.harness {
-            if !matches!(name.as_str(), "claude" | "agy" | "codex") {
-                errs.push(format!("[harness.{}] only `claude`, `agy` and `codex` are known harnesses", name));
+            if !matches!(name.as_str(), "claude" | "agy" | "codex" | "copilot") {
+                errs.push(format!("[harness.{}] only `claude`, `agy`, `codex` and `copilot` are known harnesses", name));
             }
             let ident = |s: &str| !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             for t in &h.native_tools {
@@ -1090,7 +1090,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
             ("[harness.claude]\nnative_tools = [\"Web Search\"]\n", "must be a tool name"),
             ("[harness.claude]\nconnector_reads = [\"slack_search\"]\n", "exact tool name"),
             ("[harness.claude]\nsurprise = 1\n", "unknown field"),
-            ("[harness.gemini]\n", "only `claude`, `agy` and `codex`"),
+            ("[harness.gemini]\n", "only `claude`, `agy`, `codex` and `copilot`"),
         ] {
             let errs = Config::parse(&format!("{}\n{}", SAMPLE, bad)).unwrap_err().join("; ");
             assert!(errs.contains(needle), "{} -> {}", bad, errs);

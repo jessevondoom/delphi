@@ -409,7 +409,7 @@ impl Engine {
     /// Run the whole span in the subscription CLI.
     pub(crate) async fn run_harness(self: &Arc<Self>, sc: &mut SpanCtx, ipr: &Ipr, ep: &Endpoint) -> Result<Result<String, HarnessErr>, EngineError> {
         let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
-            return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude`, `agy` and `codex`)", ep.harness.as_deref().unwrap_or("?")))));
+            return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude`, `agy`, `codex` and `copilot`)", ep.harness.as_deref().unwrap_or("?")))));
         };
         let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(HarnessErr::retry(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
         let wt: Option<Worktree> = self.exec.known_worktree(&sc.task_id);
@@ -428,6 +428,16 @@ impl Engine {
                 // Its own tools cannot be turned off and nothing here judges them, so what it returns is not vouched for.
                 if sc.span.observe_input(Tier::L0) {
                     sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "codex harness: its tools are not gated by Delphi"}))).await?;
+                }
+            }
+            Cli::Copilot => {
+                // Until the approval bridge over `--acp` is built (`specs/051` S2) a Copilot seat is a reader.
+                if builder {
+                    return Ok(Err(HarnessErr::retry("the copilot harness cannot run a Builder yet: its approvals are not bridged (specs/051 S2); it serves read-only roles")));
+                }
+                // It is offered no tools here, but nothing in Delphi judges what it does, so what it returns is not vouched for.
+                if sc.span.observe_input(Tier::L0) {
+                    sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "copilot harness: its tools are not gated by Delphi"}))).await?;
                 }
             }
             Cli::Agy => {
@@ -470,12 +480,14 @@ impl Engine {
         let program = match cli {
             Cli::Agy => self.settings.agy_program.clone(),
             Cli::Codex => self.settings.codex_program.clone(),
+            Cli::Copilot => self.settings.copilot_program.clone(),
             Cli::Claude => self.settings.harness_program.clone(),
         };
         // An endpoint whose credential is a key source runs the CLI on that key instead of the operator's login.
         let mut opts = match cli {
             Cli::Agy => self.settings.harness_agy.clone(),
             Cli::Codex => self.settings.harness_codex.clone(),
+            Cli::Copilot => self.settings.harness_copilot.clone(),
             Cli::Claude => self.settings.harness_claude.clone(),
         };
         if ep.credential != "harness-login" {
@@ -495,6 +507,10 @@ impl Engine {
         }
         if opts.json_schema.is_none() {
             opts.json_schema = sc.output_schema.clone();
+        }
+        if cli == Cli::Copilot && opts.json_schema.is_some() {
+            // No structured-output flag to validate the answer against: another seat takes a span that needs one.
+            return Ok(Err(HarnessErr::retry(format!("endpoint `{}`: the copilot harness has no structured-output flag (specs/051 §2.2)", ep.id))));
         }
         if cli == Cli::Agy && builder {
             // The gate decides every file call; this keeps the CLI's own permission layer, which cannot ask anyone when it runs
@@ -785,6 +801,8 @@ impl Engine {
             provider: match cli {
                 Cli::Agy => "google",
                 Cli::Codex => "openai",
+                // One login, several vendors' models: the provider is the service, the model says whose.
+                Cli::Copilot => "github-copilot",
                 Cli::Claude => "anthropic",
             }
             .into(),
@@ -861,7 +879,7 @@ impl Engine {
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
         batch.push(sc.agent_ev("agent.block.complete", json!({"turn_index": 1, "role": "assistant", "block_index": 0, "block": serde_json::to_value(&block).expect("serializes")}), ep, &launch.model));
-        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": match cli { Cli::Agy => "agy-cli", Cli::Codex => "codex-cli", Cli::Claude => "claude-cli" }}), ep, &launch.model));
+        batch.push(sc.agent_ev("agent.turn.complete", json!({"turn_index": 1, "stop_reason": "end_turn", "blocks": 1, "provider": match cli { Cli::Agy => "agy-cli", Cli::Codex => "codex-cli", Cli::Copilot => "copilot-cli", Cli::Claude => "claude-cli" }}), ep, &launch.model));
         sc.m.append_batch(batch).await?;
         if self.pool.record_success(&ep.id, &launch.model) {
             sc.m.append(sc.ev("model.recovered", json!({"endpoint_id": ep.id, "model_id": launch.model}))).await?;
@@ -1559,6 +1577,8 @@ open(sys.argv[1], "w").write(json.dumps(out))
         let (family, id) = match cli {
             "agy" => ("gemini", "agy-sub"),
             "codex" => ("openai", "codex-sub"),
+            // The endpoint's family is its model's vendor; the test model stands for a Claude one.
+            "copilot" => ("claude", "copilot-sub"),
             _ => ("claude", "claude-sub"),
         };
         let text = crate::testkit::CONFIG
@@ -1618,6 +1638,46 @@ open(sys.argv[1], "w").write(json.dumps(out))
         let u = &events_of(&f, "agent.usage")[0].payload;
         assert_eq!(u["provider"], "openai");
         assert!(!format!("{:?}", f.m.replay().unwrap()).contains("sk-cx-1"), "the key never reaches the log");
+    }
+
+    /// A stand-in `copilot` that records the token and arguments, reads the prompt, and answers as `reported`.
+    fn fake_copilot_body(dump: &std::path::Path, reported: &str) -> String {
+        format!(
+            "cat > /dev/null\necho \"$COPILOT_GITHUB_TOKEN|$*\" > {}\necho '{{\"type\":\"session.tools_updated\",\"data\":{{\"model\":\"{r}\"}}}}'\necho '{{\"type\":\"assistant.message\",\"data\":{{\"content\":\"Plan: ship it.\",\"toolRequests\":[],\"model\":\"{r}\"}}}}'\necho '{{\"type\":\"session.usage_checkpoint\",\"data\":{{\"accountingSnapshot\":{{\"tokenDetails\":{{\"input\":{{\"tokenCount\":10}},\"output\":{{\"tokenCount\":4}}}}}}}}}}'\necho '{{\"type\":\"result\",\"sessionId\":\"s\",\"exitCode\":0}}'",
+            dump.display(),
+            r = reported
+        )
+    }
+
+    #[tokio::test]
+    async fn a_copilot_seat_answers_a_reading_role_untrusted_on_its_token_and_is_billed_to_the_service() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("dump");
+        let prog = fake_cli(scripts.path(), &fake_copilot_body(&dump, "m-1"));
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "Plan: ship it."), "{}", out.text);
+        let seen = fs::read_to_string(&dump).unwrap();
+        assert!(seen.starts_with("ghp-cp-1|--output-format json --model m-1"), "{}", seen);
+        assert!(seen.contains("--available-tools delphi-no-tools") && !seen.split('|').nth(1).unwrap().contains("ghp-cp-1"), "{}", seen);
+        assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("copilot")), "its output is untrusted");
+        let u = &events_of(&f, "agent.usage")[0].payload;
+        assert_eq!(u["provider"], "github-copilot");
+        assert_eq!((u["input_tokens"].as_u64(), u["output_tokens"].as_u64()), (Some(10), Some(4)));
+        assert!(!format!("{:?}", f.m.replay().unwrap()).contains("ghp-cp-1"), "the token never reaches the log");
+    }
+
+    #[tokio::test]
+    async fn a_copilot_answer_from_a_model_that_was_not_asked_for_is_not_accepted() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), &fake_copilot_body(&scripts.path().join("dump"), "gpt-other"));
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(out.status != Status::Done && !out.text.contains("Plan: ship it."), "{:?} {}", out.status, out.text);
     }
 
     #[tokio::test]

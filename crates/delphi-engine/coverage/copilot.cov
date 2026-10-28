@@ -6,39 +6,41 @@
 flag | * | --help, --version | na | | every CLI prints its help and version
 
 # ── Launch: one non-interactive prompt, JSONL out ──
-flag | . | --prompt, --output-format | planned | S1 | the span's launch and its event stream (spec 051 §2.1). The prompt goes on stdin with no `-p` (probed: `-p -` is a literal "-"), so it never reaches `ps`
+flag | . | --output-format | used | S1 | `json`: the span's event stream (spec 051 §2.1)
+flag | . | --prompt | refused | | the prompt goes on stdin with no `-p` (probed: `-p -` is a literal "-"), so it never reaches `ps`
 flag | . | --interactive, --silent, --stream, --plain-diff, --screen-reader, --banner, --no-color, --mouse, --no-mouse, --no-eager-powershell-resolution | na | | interactive display or text output a span does not use
-flag | . | --usage-output-file | planned | S1 | final usage as JSON; a cross-check of the stream's `session.usage_checkpoint`
-flag | . | --log-dir | planned | S1 | the span's scratch directory for log files (probed: it does not move session state, which needs `COPILOT_HOME`)
+flag | . | --usage-output-file | planned | S2 | final usage as JSON; a cross-check of the stream's `session.usage_checkpoint`
+flag | . | --log-dir | used | S1 | the span's scratch directory for log files (probed: it does not move session state, which needs `COPILOT_HOME`)
 flag | . | --log-level | na | | the span keeps the default; hiding errors would hide the exhausted-quota output
-flag | . | --max-ai-credits | planned | S1 | a backstop only (minimum 30, a soft cap checked after each response); the real ceiling is Delphi's own ledger
+flag | . | --max-ai-credits | planned | S2 | a backstop only (minimum 30, a soft cap checked after each response); the real ceiling is Delphi's own ledger
 
 # ── Model and effort ──
-flag | . | --model | planned | S1 | always explicit: the seat's family is the model's, never `auto` (spec 051 §1.1)
-flag | . | --reasoning-effort | planned | S1 | the neutral `effort`
-flag | . | --context | planned | S1 | `long_context` off by default; S0 measures its cost
+flag | . | --model | used | S1 | always explicit: the seat's family is the model's, never `auto` (spec 051 §1.1)
+flag | . | --reasoning-effort | used | S1 | the neutral `effort`
+flag | . | --context | planned | S2 | `long_context` off by default; S0 measures its cost
 flag | . | --auto-tier | refused | | Auto routing hides which model, and so which family, answered
 
 # ── Tools, paths, URLs: the narrowing gate ──
-flag | . | --available-tools, --excluded-tools | planned | S1 | what the model can see. Probed: a list narrows to exactly those tools; an empty value (`=` or `""`) narrows nothing; a name that matches nothing (`none`) yields zero tools plus a `session.info` warning. S1 never passes an empty list and checks the stream's `tool_count`
-flag | . | --deny-tool, --deny-url, --disallow-temp-dir | planned | S1 | always passed; deny beats allow
-flag | . | --allow-tool | planned | S1 | only for a ratified Builder in its worktree, after the approval bridge (S2) is proven
-flag | . | --allow-url, --add-dir | planned | S1 | only from a ratified block, as spec 021
+flag | . | --available-tools | used | S1 | what the model can see. Probed: a list narrows to exactly those tools; an empty value (`=` or `""`) narrows nothing; a name that matches nothing yields zero tools plus a `session.info` warning. Never an empty list: a span with no tools gets a name that matches nothing, and the seat record shows the tools the stream reports
+flag | . | --excluded-tools | na | | the allowlist already decides what is offered
+flag | . | --deny-tool, --deny-url, --disallow-temp-dir | planned | S2 | always passed; deny beats allow
+flag | . | --allow-tool | planned | S2 | only for a ratified Builder in its worktree, after the approval bridge (S2) is proven
+flag | . | --allow-url, --add-dir | planned | S2 | only from a ratified block, as spec 021
 flag | . | --allow-all-tools, --allow-all, --yolo, --allow-all-paths, --allow-all-urls | refused | | grants every permission; never passed. `--allow-all-tools` is not needed: probed 2026-10-28, a headless run without it reads inside the working directory and denies everything else with a clean error
 flag | . | --assisted-approval | refused | | a probabilistic judge answers approvals; Delphi's approvals stay Delphi's (spec 047 §1.1)
-flag | . | --secret-env-vars | planned | S1 | the names of any variable Delphi puts in the child's environment
+flag | . | --secret-env-vars | planned | S2 | the names of any variable Delphi puts in the child's environment
 flag | . | --attachment | planned | S3 | vision, off by default
 
 # ── Quiet and contained ──
-flag | . | --no-custom-instructions | planned | S1 | always: Delphi supplies the governance text, the checkout's AGENTS.md is not a second voice
-flag | . | --disable-builtin-mcps | planned | S1 | always: the built-in github-mcp-server reaches GitHub's cloud
-flag | . | --no-auto-update, --disable-client-telemetry, --no-ask-user, --no-experimental, --no-bash-env | planned | S1 | always: a span must not change the binary, phone home, stall on a question nobody can answer, or enable experiments
+flag | . | --no-custom-instructions | used | S1 | always: Delphi supplies the governance text, the checkout's AGENTS.md is not a second voice
+flag | . | --disable-builtin-mcps | used | S1 | always: the built-in github-mcp-server reaches GitHub's cloud
+flag | . | --no-auto-update, --disable-client-telemetry, --no-ask-user, --no-experimental, --no-bash-env | used | S1 | always: a span must not change the binary, phone home, stall on a question nobody can answer, or enable experiments
 flag | . | --bash-env | refused | | sources the operator's BASH_ENV script into the span's shell
-flag | . | --sync-session | planned | S1 | always `=off`: no account-history sync from a span
-flag | . | --trust-folder | planned | S1 | only if S0 finds a scratch-directory span needs it (the first probe did not)
+flag | . | --sync-session | used | S1 | as `--sync-session=off`, always: no account-history sync from a span
+flag | . | --trust-folder | na | | not needed: every probe ran in a scratch directory without it
 
 # ── Sessions ──
-flag | . | --session-id, --resume, --name | planned | S1 | Delphi chooses the UUID and resumes by id only; picker and name forms are refused by omission
+flag | . | --session-id, --resume, --name | planned | S2 | Delphi chooses the UUID and resumes by id only; picker and name forms are refused by omission
 flag | . | --continue | refused | | resumes the most recent session in the directory; directory-dependent, as Claude's `--continue`
 
 # ── MCP, plugins, protocol ──
