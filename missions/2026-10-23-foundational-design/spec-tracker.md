@@ -156,13 +156,13 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
 
-## GitHub Copilot CLI harness (spec 051, draft 2026-10-28)
+## GitHub Copilot CLI harness (spec 051, approved 2026-10-28)
 
-Asked for by the operator on 2026-10-28; `copilot` 1.0.105 is installed and logged in on a free tier. The spec is a draft until the operator approves it and answers OD-2 (the free allowance). Nothing is built.
+Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. Only S0 is built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | not started; one probe done (JSONL shape, 1 premium request per call) |
+| S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | built (this PR): `copilot.cov`, snapshot, quota reads of both CLIs (spec 051 §6); probes a, b, h must finish before S1, the rest are open |
 | S1 | `Cli::Copilot`, `-p --output-format json` for read-only roles, request ledger, token mode | not started |
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | not started |
 | S3 | `--plan` lane, vision | not started |
