@@ -1,10 +1,11 @@
 // Console sessions (`specs/030`): a new session empties the screen, a replay shows only the current one, `/clear` is
-// `/new`, and the narrator says which session it is looking at.
+// `/new`, and the narrator header says nothing of sessions.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addBlock, fold, initial, replay } from '../src/fold.ts';
 import { lookup } from '../src/commands.ts';
-import { emptyState, sessionNote } from '../src/observe-screen.ts';
+import { emptyState, observeFrame, VIEWS, type OModel } from '../src/observe-screen.ts';
+import { info } from './epic-fixture.ts';
 
 const ev = (type: string, payload: any, task_id?: string) => ({ method: 'event', params: { type, payload, task_id } });
 
@@ -61,13 +62,13 @@ test('/clear is an alias of /new: a clear that leaves the team remembering would
   assert.equal(lookup('/new')?.name, '/new');
 });
 
-test('the narrator names the session and counts earlier work that is still running', () => {
+test('the narrator header carries no session number and no ask count, on any page', () => {
   const st = emptyState();
-  assert.equal(sessionNote(st), '', 'before any session began there is nothing to say');
   st.sessions = [{ id: 's_0001', reason: 'new', started_ms: 0, turns: 4 }, { id: 's_0002', reason: 'new', started_ms: 1, turns: 1 }];
-  st.tasks = {
-    t_1: { id: 't_1', flow: 'orchestrator', prompt: 'a', status: 'running', session: 's_0001' },
-    t_2: { id: 't_2', flow: 'orchestrator', prompt: 'b', status: 'running', session: 's_0002' },
-  };
-  assert.equal(sessionNote(st), 'session 2 · 1 ask · 1 from before');
+  st.tasks = { t_1: { id: 't_1', flow: 'orchestrator', prompt: 'a', status: 'running', session: 's_0001' } };
+  for (const view of VIEWS) {
+    const head = observeFrame({ info, pal: { dark: true }, st, view, pick: 0, scroll: 0, selNode: 0, live: {}, connected: true, still: true, now: 5 } as OModel, 100, 30).slice(0, 2).map((l) => l.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+    assert.ok(!/session \d|\d+ asks?|from before/.test(head), `${view}: ${head}`);
+    assert.match(head, new RegExp(`delphi v.* · ${view}`));
+  }
 });

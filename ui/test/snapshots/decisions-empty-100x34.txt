@@ -1,0 +1,34 @@
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · /proj · decisions
+
+
+  ✔ DEC-081 decided: reject
+
+
+  Nothing needs you.
+
+  Decisions from every agent arrive here; the header shows an alert when one is waiting.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+● working · 1793181597s                                                                  esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+nothing to decide · esc for chat
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ○ ●

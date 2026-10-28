@@ -75,9 +75,8 @@ The narrator is the operational dashboard, and its first view and default is now
 2. **running now**: everything running, **grouped by the session that asked for it**, current first, earlier ones labelled `(earlier, still running)`. A row is the task's top agent (and `+n` sub-agents), the task id, how long it has run, its state (`working`, or what it waits for: `waiting for a model: …`, `waiting on you`), and what it was asked. Nothing disappears when the operator starts a new session.
 3. **needs you**: every approval, council decision and proposal, not only the first.
 4. **pace**: tokens a minute with the last twelve minutes as a sparkline, total tokens, cache hit rate, retries, agents working. No money, as everywhere in the narrator.
-5. **finished lately**: the last few tasks, how each ended, the session that asked, and the first line of what it said.
-6. **recent**: the newest happenings from the narrative, filling the rows left.
-In a window under 16 rows the order is running first, then the current session as one chip, so the important part is never cut. The epic and agents views are unchanged; their tasks carry the session in the state if they want it later.
+5. **providers** (2026-10-28, the operator's request, replacing *finished lately* and *recent*, which are gone): a ring and a bar per connected provider for the share of its models that can be used now (green all, amber some, red none), with `n/m models`, what is wrong (`1 out of quota`, `1 cooling down`) and when it is back. With more than one provider, a sprint / frugal switch under them shows where `/pace` stands (`specs/035` D-21).
+Nothing sits under the dashboard but what is above: no list of finished tasks and no feed. The narrator's header carries no session number and no ask count on any page (the session chips above say it). In a window under 16 rows the order is running first, then the current session as one chip, so the important part is never cut. The epic and agents views are unchanged; their tasks carry the session in the state if they want it later.
 - Running tasks are unaffected by `/new`; a message queued before it is sent into the new session (the queue is cleared by `/stop`, as now).
 
 ## 7. Still open

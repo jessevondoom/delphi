@@ -369,7 +369,7 @@ const KEYS = [
   'ctrl+o  follow links (tab next · enter read here · p pin · esc leave)',
   '/  commands   @role …  one role   @specs/…  a file   ?  this help',
   'shift+tab  approval mode (default → accept edits → auto → optimistic)',
-  'inbox:  y approve · n reject · a all amber · d payload · tab list/focus',
+  'decisions:  enter open · space tick · a tick all · f filter · 1-9 choose',
   'ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)',
 ];
 
@@ -382,7 +382,7 @@ function helpOverlay(m: Model, w: number): string[] {
 
 function deckBody(m: Model, w: number, h: number): string[] {
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
-  if (m.deck === 0) return A.view(m.arch ?? A.emptyArch(), w, h, m.pal);
+  if (m.deck === 0) return A.view(m.arch ?? A.emptyArch(), w, h, m.pal, m.info, m.now > 0 ? m.now : undefined);
   if (m.deck === 2) return I.view(m.state, m.inbox, m.info, m.pal, m.now, w, h);
   return pad([]);
 }

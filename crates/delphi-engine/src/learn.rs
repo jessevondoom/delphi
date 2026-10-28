@@ -139,6 +139,67 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
     notes
 }
 
+/// What `suggest_rule` may do and where: the vocabulary of `learn.proposed` (`specs/004` §4.2, `specs/031` §3.3).
+pub const PROPOSAL_OPS: [&str; 3] = ["add", "merge", "demote"];
+pub const PROPOSAL_SCOPES: [&str; 2] = ["workspace", "operator"];
+
+/// A proposal's rule text is at most this many characters (the 350-character cap of a rule, `specs/004` §5.2).
+pub const MAX_PROPOSAL_TEXT: usize = 350;
+
+/// A proposal that has not been resolved, read back from a mission's log. Derived, like [`LiveNote`]; its id is
+/// `p<seq>` of the `learn.proposed` event, so no counter is kept.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveProposal {
+    pub mission: String,
+    pub id: String,
+    pub op: String,
+    pub scope: String,
+    pub text: String,
+    pub rationale: String,
+    pub target: String,
+    pub tier: String,
+    pub task_id: Option<String>,
+    pub timestamp: String,
+}
+
+impl LiveProposal {
+    /// `<mission>/<id>`: what `delphi retro show` takes.
+    pub fn reference(&self) -> String {
+        format!("{}/{}", self.mission, self.id)
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"ref": self.reference(), "mission": self.mission, "id": self.id, "op": self.op, "scope": self.scope, "text": self.text,
+                           "rationale": self.rationale, "target": self.target, "tier": self.tier, "task_id": self.task_id, "at": self.timestamp})
+    }
+}
+
+/// The proposals of one mission still waiting for the operator: every `learn.proposed` minus every
+/// `learn.proposal_resolved` (which names the `id`; the apply slice writes it).
+pub fn live_proposals(mission: &str, events: &[EventEnvelope]) -> Vec<LiveProposal> {
+    let mut out: Vec<LiveProposal> = Vec::new();
+    for e in events {
+        match e.kind.as_str() {
+            "learn.proposed" => {
+                let s = |k: &str| e.payload[k].as_str().unwrap_or("").to_string();
+                // A malformed or out-of-vocabulary proposal is ignored, whatever wrote it.
+                if !PROPOSAL_OPS.contains(&s("op").as_str()) || !PROPOSAL_SCOPES.contains(&s("scope").as_str()) || s("text").is_empty() {
+                    continue;
+                }
+                let tier = e.payload["tier"].as_str().and_then(Tier::parse).unwrap_or(Tier::L0).min(Tier::L3);
+                out.push(LiveProposal { mission: mission.to_string(), id: format!("p{}", e.seq), op: s("op"), scope: s("scope"), text: s("text"), rationale: s("rationale"), target: s("target"), tier: tier.as_str().to_string(), task_id: e.task_id.clone(), timestamp: e.timestamp.clone() });
+            }
+            "learn.proposal_resolved" => {
+                if let Some(id) = e.payload["id"].as_str() {
+                    out.retain(|p| p.id != id);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// The five capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5), by the name a note and
 /// `[learning] triggers` use.
 pub const TRIGGERS: [&str; 6] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision", "agent_note"];
@@ -733,5 +794,24 @@ mod tests {
         assert_eq!(problems.len(), 3, "{:?}", problems);
         assert!(problems.iter().any(|p| p.contains("load_staged")), "there is no setting that loads staged text");
         assert_eq!(LearningSettings::parse(&toml::from_str("").unwrap()), (LearningSettings::default(), vec![]));
+    }
+
+    #[test]
+    fn a_proposal_lists_until_resolved_and_is_never_trusted_above_l3() {
+        let p = |seq: u64, payload: Value| at(seq, Some("t_1"), "learn.proposed", payload);
+        let good = json!({"op": "add", "scope": "workspace", "text": "Run the formatter first.", "rationale": "two style failures", "target": "", "tier": "L3"});
+        let log = vec![
+            p(3, good.clone()),
+            p(4, json!({"op": "add", "scope": "operator", "text": "Prefer rg.", "rationale": "r", "tier": "L5"})),
+            p(5, json!({"op": "delete", "scope": "workspace", "text": "x", "rationale": "r"})),
+            p(6, json!({"op": "add", "scope": "team", "text": "x", "rationale": "r"})),
+            p(7, json!({"op": "demote", "scope": "workspace", "text": "", "rationale": "r"})),
+            p(8, json!({"op": "add", "scope": "workspace", "text": "web said so", "rationale": "r", "tier": "L0"})),
+            at(9, None, "learn.proposal_resolved", json!({"id": "p8"})),
+        ];
+        let live = live_proposals("m1", &log);
+        assert_eq!(live.iter().map(|p| p.reference()).collect::<Vec<_>>(), ["m1/p3", "m1/p4"], "bad vocabulary is ignored; a resolved one is gone");
+        assert_eq!((live[0].tier.as_str(), live[1].tier.as_str()), ("L3", "L3"), "a payload cannot claim more than L3");
+        assert_eq!(live[0].to_json()["text"], "Run the formatter first.");
     }
 }

@@ -69,7 +69,7 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 | :-- | :-- | :-- | :-- | --: | :-- |
 | L0 | `snapshot.loaded` event; `learn::task_records` (outcome, attempts, denials, cost per task); skill IDs wait for L3 | 031 §3.4, §7.1 | none | 10 | built (#184); as-built in 031 §7.1 |
 | L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | L1a merged (#196): `learn.staged` events, triggers 1-5, taint, caps, `[learning]`, `delphi learn`; L1b built (PR open): kb zone `staged` (opt-in search), `note` tool (see 031 §7.1) |
-| L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | not started |
+| L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | L2a built (PR open): `suggest_rule` tool, `learn.proposed` events, `delphi retro list/show`; apply, dedupe, scope lint and the console deck not started |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
 | L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
 | L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | not started |
@@ -130,13 +130,40 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
+## Knowledge window round 2 (spec 043, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | built (resting counts by kind, chips, the best match as the passage's own words, uniform rows; `/v1/kinds`, `kind` and `facets` in the API). Kinds in effect today: spec, lesson, docs (`context/`), mission, skill, memory, other; `research` arrives with E3 and `docs/` with K2. Unproven in a real terminal. Stacked on E1 |
+| K2 | index PDF, DOCX, EPUB text; list media by name | not started |
+| K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
+| K4 | summarize for me, with the cache | not started |
+| K5 | thin-reference hint, query carried into expand, expand pages' visuals | not started (needs 028-A1 E3, E4) |
+| K6 | docs regenerated, tracker | not started |
+
+## The decisions pane (spec 044, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups ("the decision pages are perfect"). One pane for every decision owed (cards, provisional decisions, raised decisions), a brief and recommendation each, tick boxes only where a default is safe, a filter, a detail view with the only prompt bar, typed replies, and a cache so tokens are spent once. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | built (cards and provisional decisions; raised decisions come with D6; unproven in a real terminal) |
+| D2 | detail view, choices, accept, advance, empty state (the prompt bar moves to D4 with typed replies) | built (cards and provisional decisions; the "decided in the last hour" list of the empty-state mockup is not built; unproven in a real terminal) |
+| D3 | brief cache and the one-time card brief | not started |
+| D4 | prompt bar bound to the decision, typed replies: READ AS, confirm, conditions, saved thread | not started |
+| D5 | ticks, confirm page, batch accept with re-checks | built (builds only, since only builds are tickable; the daemon re-checks each payload hash; unproven in a real terminal) |
+| D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
+| D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |
+
 ## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 
 Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | not started |
+| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
 | E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | not started |
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |

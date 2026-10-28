@@ -36,7 +36,7 @@ function world(phase: 'round 1' | 'round 2' | 'verdict', over: Partial<OState['c
 }
 
 const model = (st: OState, over: Partial<OModel> = {}): OModel => ({
-  info, pal: { dark: true, bg: [15, 23, 42] }, st, view: 'council', pick: 0, scroll: 0, selNode: 0, arch: emptyArch(),
+  info, pal: { dark: true, bg: [15, 23, 42] }, st, view: 'council', pick: 0, scroll: 0, selNode: 0, 
   live: {}, connected: true, now: T0 + 19_000, still: true, ...over,
 });
 const lines = (m: OModel, w = 80, h = 24) => observeFrame(m, w, h).map(plain);
