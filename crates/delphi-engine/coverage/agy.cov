@@ -1,0 +1,36 @@
+# Coverage of the `agy` (Antigravity) CLI (specs/046 §4). Format and rules: crates/delphi-engine/src/coverage.rs.
+# kind | path | names | disposition | slice | reason
+
+flag | * | --help | na | | hidden: every CLI prints its help (agy's own page lists only `-h`)
+
+# ── Used today (specs 020, 021) ──
+flag | . | --print | used | | as --print= (harness.rs passes `--print=` so the prompt arrives on stdin)
+flag | . | --input-format, --output-format, --disable-slash-commands, --model, --mode, --effort, --json-schema, --print-timeout, --conversation, --add-dir, --sandbox | used | |
+
+# ── Planned (spec 046 S3) ──
+flag | . | --project, --new-project | planned | S3 | a project scopes the conversation store; one per workspace keeps spans apart from the operator's own agy use. S0 probes whether a headless span creates the project and where it lives
+flag | . | --log-file | planned | S3 | as Claude's --debug-file, under DELPHI_LOG=debug
+flag | . | --agent | planned | S3 | select an `agy agent` by role
+
+# ── Refused or not applicable ──
+flag | . | --dangerously-skip-permissions | refused | | auto-approves every tool request; never passed
+flag | . | --remote-control | refused | | leaves a session outside the daemon
+flag | . | --continue | refused | | picks the most recent conversation by directory, which depends on global state
+flag | . | --prompt | na | | alias of --print
+flag | . | --prompt-interactive | na | | interactive
+
+# ── Subcommands ──
+cmd | . | models | read-only | S2 | the models the account can use; feeds tier discovery so a seat is not routed to a model the account no longer lists
+cmd | . | agent, agents | read-only | S3 | the agents --agent can select
+cmd | . | changelog | read-only | S0 | the new-flags check reads it when the version moves
+cmd | . | install, update | operator-only | | changes the installed CLI or the shell profile
+cmd | . | mic-serve | na | | serves the microphone to another host
+
+group | mcp | | operator-only | | writes the CLI's global MCP configuration
+cmd | mcp | list | read-only | S2 | the configured servers
+
+group | plugins | | operator-only | | alias of `plugin`
+group | plugin | | operator-only | | installs, enables or changes plugins (the spec 020 bridge plugin is written into the span's own working directory, not installed)
+cmd | plugin | list, validate | read-only | S2 | `--json` forms
+
+group | remote-control | | refused | | a daemon outside Delphi's

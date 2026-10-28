@@ -44,6 +44,7 @@ pub mod handoff;
 pub mod hooks;
 pub mod hooks_run;
 pub mod harness;
+pub mod coverage;
 pub mod harness_opts;
 pub mod harness_run;
 pub mod inventory;
