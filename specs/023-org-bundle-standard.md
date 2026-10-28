@@ -3,7 +3,7 @@ id: spec-023-org-bundle-standard
 title: "023: The Org Bundle Standard: Manifest, Layout, Knowledge, Skills, Agents, Behavior & Vectors"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges
+status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated

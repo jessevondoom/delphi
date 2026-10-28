@@ -3,7 +3,7 @@ id: spec-027-bundle-authoring-distribution-and-evaluation
 title: "027: Bundle Authoring, Distribution Transports, the Vector Pipeline & Evaluation"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges
+status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -77,7 +77,7 @@ Drafted in this PR at `skills/org-bundle-authoring/SKILL.md` with `templates/red
 §3. Signing and import hardening; still no infrastructure.
 
 ### 4.3 The xenia store: kind `bundle` (slice B8; Xenia Phase 2)
-Proposed to replace the provisional `skill` kind (`specs/012` §11; B-4): a skill is a bundle with one `skills/` entry. Record fields under the common envelope:
+Replaces the provisional `skill` kind (`specs/012` §11; B-4, ratified): a skill is a bundle with one `skills/` entry. Record fields under the common envelope:
 ```yaml
 kind: bundle
 bundle_name: acme-platform
@@ -104,7 +104,7 @@ compat: { delphi: ">=0.3.0", bundle_schema: 1 }
 ### 4.6 Peer sync (deferred)
 A bundle would cross `specs/007` Planes 1–2 as its `bundle` record plus archive bytes; the gateway verifies both as above; no bundle-specific protocol.
 
-### 4.7 Order (B-5, recommended)
+### 4.7 Order (B-5, decided 2026-10-28)
 **Directory → archive → store.** Directory needs nothing and unblocks the strategist work; archive adds provenance and air gap; the store adds organizational standing and depends on xenia X7/X8, not yet built.
 
 ---

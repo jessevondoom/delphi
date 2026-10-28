@@ -3,7 +3,7 @@ id: spec-026-team-alignment-and-strategist-integration
 title: "026: Team Alignment: How Shared Knowledge, Goals & Perspective Reach the Strategist, the Council and the Console"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges
+status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -67,7 +67,7 @@ For each added bundle in `order` (`specs/024` §4.1), skipping `removed` and mar
 
 Then one block for the project: pointers to the nearest `AGENTS.md` and `README` if present.
 
-**Caps:** the whole slice ≤ **4 KiB**; per bundle ≤ 1.5 KiB; over the total, each bundle trims from the bottom of its knowledge index first, then perspectives, never goals; a trimmed part ends with `(trimmed; /org shows all)`. Counted separately from the 12 KB always-loaded memory cap (`specs/004` §5.2). These numbers are B-10 (proposed; measure trims).
+**Caps:** the whole slice ≤ **4 KiB**; per bundle ≤ 1.5 KiB; over the total, each bundle trims from the bottom of its knowledge index first, then perspectives, never goals; a trimmed part ends with `(trimmed; /org shows all)`. Counted separately from the 12 KB always-loaded memory cap (`specs/004` §5.2). These numbers are B-10 (decided 2026-10-28: stand as written; measure trims).
 
 **Placement:** after governance, the role manifest, the guidance block and the frozen memory snapshot (which now includes the bundle rules block), and before the task (`specs/002` §2 amendment in `specs/022` §5). Tier $L_5$; it never lowers a span's ceiling.
 
