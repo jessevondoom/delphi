@@ -137,7 +137,7 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | E1 | `shift+tab` modes, badges, indicators removed, clean expand page | not started |
-| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | not started |
+| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (PR pending): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. Not wired to the daemon or the console yet (that is E3); `delphi sources` command not built |
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |
 

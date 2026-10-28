@@ -14,6 +14,7 @@ pub mod mcp_rmcp;
 pub mod oauth2;
 pub mod openai;
 pub mod platform;
+pub mod research;
 pub mod sigv4;
 pub use reqwest;
 
