@@ -1,0 +1,179 @@
+# The default trusted-source list (specs/028 section 10.3). A source is on this list only because the operator ratified it:
+# the research job of the archives pane reads these hosts and no others. A change is a pull request the operator approves.
+# The operator's own additions live in $DELPHI_HOME/operator/trusted-sources.toml and are added to this list.
+#
+# host         an exact domain; it matches that domain and its subdomains. "*.gov" matches any host that ends in ".gov".
+# kind         standards | government | journal | encyclopedia | documentation | news
+# licence      an SPDX id, or "unknown" (treated as summary-only)
+# reuse        "full" may store the page as markdown (when the page carries no stricter notice); "summary-only" stores a summary and facts
+# share_alike  the licence requires derivative text to carry the same licence
+
+[[source]]
+host = "en.wikipedia.org"
+publisher = "Wikipedia"
+kind = "encyclopedia"
+licence = "CC-BY-SA-4.0"
+reuse = "full"
+share_alike = true
+
+[[source]]
+host = "developer.mozilla.org"
+publisher = "MDN Web Docs"
+kind = "documentation"
+licence = "CC-BY-SA-2.5"
+reuse = "full"
+share_alike = true
+
+[[source]]
+host = "*.gov"
+publisher = "US government"
+kind = "government"
+licence = "US-Gov-PD"
+reuse = "full"
+
+[[source]]
+host = "rfc-editor.org"
+publisher = "RFC Editor"
+kind = "standards"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "ietf.org"
+publisher = "IETF"
+kind = "standards"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "w3.org"
+publisher = "W3C"
+kind = "standards"
+licence = "W3C-20150513"
+reuse = "summary-only"
+
+[[source]]
+host = "whatwg.org"
+publisher = "WHATWG"
+kind = "standards"
+licence = "CC-BY-4.0"
+reuse = "full"
+
+[[source]]
+host = "unicode.org"
+publisher = "Unicode Consortium"
+kind = "standards"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "gov.uk"
+publisher = "UK government"
+kind = "government"
+licence = "OGL-UK-3.0"
+reuse = "summary-only"
+
+[[source]]
+host = "europa.eu"
+publisher = "European Union"
+kind = "government"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "pubmed.ncbi.nlm.nih.gov"
+publisher = "PubMed"
+kind = "journal"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "doi.org"
+publisher = "DOI Foundation"
+kind = "journal"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "arxiv.org"
+publisher = "arXiv"
+kind = "journal"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "docs.rs"
+publisher = "docs.rs"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "doc.rust-lang.org"
+publisher = "The Rust Project"
+kind = "documentation"
+licence = "MIT OR Apache-2.0"
+reuse = "full"
+
+[[source]]
+host = "crates.io"
+publisher = "crates.io"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "pypi.org"
+publisher = "PyPI"
+kind = "documentation"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "britannica.com"
+publisher = "Encyclopaedia Britannica"
+kind = "encyclopedia"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "loc.gov"
+publisher = "Library of Congress"
+kind = "government"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "si.edu"
+publisher = "Smithsonian Institution"
+kind = "encyclopedia"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "apnews.com"
+publisher = "Associated Press"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "reuters.com"
+publisher = "Reuters"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "bbc.com"
+publisher = "BBC"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "npr.org"
+publisher = "NPR"
+kind = "news"
+licence = "unknown"
+reuse = "summary-only"

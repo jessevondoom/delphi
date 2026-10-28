@@ -456,6 +456,8 @@ pub struct Config {
     pub connectors: BTreeMap<String, Connector>,
     /// `[harness.<cli>]` (`claude`, `agy`): how Delphi runs and equips each subscription CLI.
     pub harness: BTreeMap<String, HarnessProfile>,
+    /// `[search]`: the engines the archives pane's research job asks, in order (`specs/028` §10).
+    pub search: crate::research::SearchConfig,
 }
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
@@ -496,6 +498,12 @@ impl Config {
             match c.clone().try_into::<BTreeMap<String, Connector>>() {
                 Ok(v) => cfg.connectors = v,
                 Err(e) => errs.push(format!("[connectors.*]: {}", e)),
+            }
+        }
+        if let Some(s) = root.get("search") {
+            match crate::research::SearchConfig::parse(s, cfg.endpoints.iter().any(|e| e.family == "gemini")) {
+                Ok(v) => cfg.search = v,
+                Err(es) => errs.extend(es),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.

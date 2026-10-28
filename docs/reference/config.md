@@ -64,6 +64,17 @@ Defaults are those of the template; "—" means no default.
 | `[exec] test_command`, `check_command` ◆ | — | the two merge gates, as argument lists |
 | `[update] require_signed` ◆ | `false` | refuse any build that is not a signed release |
 
+## Research (the archives pane's expand mode) ◆
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[search] providers` ◆ | — (none) | the web search engines to ask, in order, one at a time: the next only if the last failed. `brave`, `mojeek`, `searxng`, `kagi`, `google`. `google` needs a Gemini endpoint. Unset: research cannot run |
+| `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `searxng` needs one |
+| `[search.searxng] url` ◆ | — | the SearXNG instance (https, or http to loopback) |
+| `[search.google] cx` ◆ | — | the Programmable Search engine id |
+
+Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`.
+
 ## Away mode and hooks ◆
 
 | Section | Meaning |

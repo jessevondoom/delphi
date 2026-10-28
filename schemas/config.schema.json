@@ -80,6 +80,19 @@
       }
     },
     "update": { "type": "object", "properties": { "require_signed": { "type": "boolean" } } },
+    "search": {
+      "type": "object",
+      "description": "Web search engines for the archives pane's research mode (specs/028 section 10), tried in order, one at a time. Unset means research cannot run.",
+      "additionalProperties": false,
+      "properties": {
+        "providers": { "type": "array", "items": { "enum": ["brave", "mojeek", "searxng", "kagi", "google"] }, "uniqueItems": true },
+        "brave": { "$ref": "#/$defs/searchEngine" },
+        "mojeek": { "$ref": "#/$defs/searchEngine" },
+        "searxng": { "$ref": "#/$defs/searchEngine" },
+        "kagi": { "$ref": "#/$defs/searchEngine" },
+        "google": { "$ref": "#/$defs/searchEngine" }
+      }
+    },
     "rag": {
       "type": "object",
       "properties": {
@@ -124,6 +137,15 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "searchEngine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential": { "type": "string", "description": "Where the key comes from, as for an endpoint." },
+        "url": { "type": "string", "description": "SearXNG only: the instance." },
+        "cx": { "type": "string", "description": "Google only: the Programmable Search engine id." }
+      }
+    },
     "tierMap": {
       "type": "object",
       "properties": {
