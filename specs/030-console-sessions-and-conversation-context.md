@@ -84,7 +84,7 @@ In a window under 16 rows the order is running first, then the current session a
 1. Default budget of 6,000 tokens, and whether the digest of older turns reads well to the model (built; untried live).
 2. The model-written summary (§4.3) is built and tested on a scripted model; it has not been read against a real one, and `summary = "off"` is the default until the operator has seen what it writes.
 3. Whether the epic view should also mark which session each thread began in (the dashboard groups by session; the epic groups by what the work is about).
-4. Two columns on the *dashboard* (sessions beside running work). The agents view has them (`specs/034`, built 2026-10-26: the roster beside the tools board from 116 columns).
+4. Two columns on the *dashboard* (sessions beside running work). The agents view had them for a day (`specs/034`: the roster beside the tools board); withdrawn 2026-10-28.
 5. (done) A pty test of `/new`, `/context` and `/export all` against a real daemon, and a live run (S4).
 6. (done 2026-10-26) `delphi sessions [--mission <id>] [--limit n] [--full] [--json]` lists the finished sessions from the central log, newest first: what was asked, the changes recorded, and the summary when there is one. It calls no model.
 

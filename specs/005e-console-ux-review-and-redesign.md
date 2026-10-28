@@ -381,6 +381,9 @@ Unchanged from 005d except: `Space` pages down while a reply waits below and the
 - **Seam** (hairline frame with time and tokens in the bottom edge, no padding rows): densest; kept as a possible `/density compact` look, not built.
 - **Shelves** and **Margins** (earlier options B and C): superseded by the tinted block.
 
+### 7.7 The typing bubble (amendment, ratified by the operator, 2026-10-28)
+After the operator sends a prompt and until the reply begins, the chat shows an agent bubble holding three dots, like a messaging app's typing indicator. It appears after a random 500-850 ms wait (a pure function of the prompt's id, so a repaint never changes it), labelled `· typing`, and the dots are the page-indicator `●`/`○`, one lit at a time every 300 ms with a rest beat. The first streamed text or the finished reply replaces it in place. Reduced motion (`DELPHI_REDUCE_MOTION=1`, `NO_COLOR`, `TERM=dumb`) keeps the wait and shows all three dots lit and still. Code: `typingOf` and `typingBlock` in `ui/src/screen.ts`, `typingFrame` in `ui/src/motion.ts`; tests in `ui/test/typing.test.ts`.
+
 ## 8. The activity deck: a ticker with finished history
 
 ### 8.1 Problem

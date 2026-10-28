@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { lookup } from '../src/commands.ts';
 import { initial } from '../src/fold.ts';
-import { faceOf, pulseOn, spinner, stillMotion, tickKey } from '../src/motion.ts';
+import { faceOf, pulseOn, spinner, stillMotion, tickKey, typingDelay, typingFrame } from '../src/motion.ts';
 import { reduceMotionFrom } from '../src/reduce-motion.ts';
 import { renderSettings, runSlash, type Ctx } from '../src/run.ts';
 import type { Info } from '../src/theme.ts';
@@ -57,6 +57,13 @@ test('when still: no blink, no thinking pan, a fixed spinner, a steady pulse, an
   assert.notEqual(pulseOn(0, false), pulseOn(600, false));
   const keys = new Set([0, 250, 500, 750].map((t) => tickKey({}, [], t, true, true)));
   assert.equal(keys.size, 1, 'a running window repaints once a second, not four times');
+});
+
+test('the typing bubble\'s three dots stand still: one fixed frame once it appears, never before its wait', () => {
+  const d = typingDelay(1);
+  assert.equal(typingFrame(0, 1, d - 1, true), -1);
+  assert.deepEqual([0, 300, 600, 900, 5000].map((t) => typingFrame(0, 1, d + t, true)), [0, 0, 0, 0, 0]);
+  assert.deepEqual([0, 300, 600, 900].map((t) => typingFrame(0, 1, d + t)), [0, 1, 2, 3], 'they do pulse when motion is allowed');
 });
 
 // A rule for the future: an animation must ask `motion.ts` (stillMotion / spinner / pulseOn / faceOf), not run its own clock.

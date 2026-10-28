@@ -6,7 +6,7 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { classify } from './attention.ts';
 import { speakerOf, type Block, type Done, type Span, type State } from './fold.ts';
-import { faceOf, spinner, STRIP_ROLES } from './motion.ts';
+import { faceOf, spinner, STRIP_ROLES, typingFrame } from './motion.ts';
 import * as T from './theme.ts';
 import { kilo } from './meters.ts';
 import * as I from './inbox.ts';
@@ -238,6 +238,29 @@ function liveBlock(m: Model, w: number, tools: Block[]): string[] {
   return ['', ...message(m, w, label, [...body, ...tools.flatMap((t) => toolRows(t, m, tw))])];
 }
 
+/**
+ * The prompt the operator just sent, while it waits for its reply to begin: the block's `at` and id when the typing
+ * bubble belongs on screen (a task runs, nothing is streaming, and nothing but tool calls followed the prompt).
+ */
+export function typingOf(s: State): { since: number; id: number } | null {
+  if (s.live || !Object.keys(s.running).length) return null;
+  for (let i = s.blocks.length - 1; i >= 0; i--) {
+    const b = s.blocks[i]!;
+    if (b.kind === 'user') return { since: b.at, id: b.id };
+    if (b.kind !== 'tool') return null;
+  }
+  return null;
+}
+
+/** Three dots in an agent's bubble, like a messaging app's "typing": the page-indicator dots, one lit at a time. The reply's own block replaces it. */
+function typingBlock(m: Model, w: number, tools: Block[], frame: number): string[] {
+  const { text: tw } = blockWidths(w);
+  const role = speakerOf(m.state);
+  const label = T.badge(role, 'running', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(' · typing');
+  const dots = [0, 1, 2].map((i) => (m.still || frame === i ? T.accent('●') : T.dim('○'))).join(' ');
+  return ['', ...message(m, w, label, [dots, ...tools.flatMap((t) => toolRows(t, m, tw))])];
+}
+
 type Laid = { parts: string[][]; reply: { part: number; id: 'live' | number } | null };
 
 /** The transcript as pieces (each finished block is cached), and which piece is the newest reply. */
@@ -259,7 +282,12 @@ function layout_(m: Model, w: number, dense: boolean): Laid {
     if (b.kind === 'attention') reply = { part: out.length - 1, id: b.id };
   }
   if (m.state.live) { out.push(liveBlock(m, w, tools)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
-  else flush();
+  else {
+    const ty = typingOf(m.state);
+    const frame = ty ? typingFrame(ty.since, ty.id, m.now, m.still ?? false) : -1;
+    if (ty && frame >= 0) { out.push(typingBlock(m, w, tools, frame)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
+    else flush();
+  }
   for (const q of m.queue) out.push(['', T.dim('❯ ' + q.split('\n')[0] + '  (queued)')]);
   // The frame puts one blank row under the title, so the first message does not bring its own; a short window drops them all.
   const lead = (p: string[], i: number) => p[0] === '' && !(fresh(m) && i === 0) && (dense || i === 0);

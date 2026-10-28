@@ -19,10 +19,10 @@ import * as O from './org.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
-import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
+import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Model } from './screen.ts';
 import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
-import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
+import { STRIP_ROLES, stillMotion, tickKey, TICK_MS, typingFrame } from './motion.ts';
 import { useReduceMotion } from './reduce-motion.ts';
 import type { Ev } from './input.ts';
 import { copyToClipboard, useSelection } from './select.ts';
@@ -118,7 +118,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     let last = '';
     const t = setInterval(() => {
       const n = Date.now(), s = stateRef.current;
-      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0);
+      const ty = typingOf(s);
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
       if (key !== last) { last = key; setNow(n); }
     }, TICK_MS);
     return () => clearInterval(t);
