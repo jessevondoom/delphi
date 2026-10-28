@@ -130,13 +130,40 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
 
+## Knowledge window round 2 (spec 043, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | built (resting counts by kind, chips, the best match as the passage's own words, uniform rows; `/v1/kinds`, `kind` and `facets` in the API). Kinds in effect today: spec, lesson, docs (`context/`), mission, skill, memory, other; `research` arrives with E3 and `docs/` with K2. Unproven in a real terminal. Stacked on E1 |
+| K2 | index PDF, DOCX, EPUB text; list media by name | not started |
+| K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
+| K4 | summarize for me, with the cache | not started |
+| K5 | thin-reference hint, query carried into expand, expand pages' visuals | not started (needs 028-A1 E3, E4) |
+| K6 | docs regenerated, tracker | not started |
+
+## The decisions pane (spec 044, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups ("the decision pages are perfect"). One pane for every decision owed (cards, provisional decisions, raised decisions), a brief and recommendation each, tick boxes only where a default is safe, a filter, a detail view with the only prompt bar, typed replies, and a cache so tokens are spent once. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | built (cards and provisional decisions; raised decisions come with D6; unproven in a real terminal) |
+| D2 | detail view, choices, accept, advance, empty state (the prompt bar moves to D4 with typed replies) | built (cards and provisional decisions; the "decided in the last hour" list of the empty-state mockup is not built; unproven in a real terminal) |
+| D3 | brief cache and the one-time card brief | not started |
+| D4 | prompt bar bound to the decision, typed replies: READ AS, confirm, conditions, saved thread | not started |
+| D5 | ticks, confirm page, batch accept with re-checks | built (builds only, since only builds are tickable; the daemon re-checks each payload hash; unproven in a real terminal) |
+| D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
+| D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |
+
 ## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 
 Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | not started |
+| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
 | E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (PR pending): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. Not wired to the daemon or the console yet (that is E3); `delphi sources` command not built |
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |

@@ -17,7 +17,7 @@ delphi v0.5 · /proj · chat
 
 
 
-◐ hephaestus · writing write_file(crates/queue.rs)                   esc to stop
+● hephaestus · writing write_file(crates/queue.rs)                   esc to stop
 ────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────

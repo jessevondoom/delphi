@@ -191,7 +191,7 @@ The knowledge base: index it, search it.
 The read-only live window (also: delphi narrator).
 
 ```
-  delphi observe [dashboard|council|epic|agents|pulse|timeline|tools|archives|changes]
+  delphi observe [dashboard|council|epic|agents|timeline|changes]
     [--once] [--workspace <name>] [--home <dir>]
 ```
 
@@ -434,7 +434,7 @@ This list, or one command's options.
 | `DELPHI_UI` | the delphi-ui program to use (default: next to delphi) |
 | `DELPHI_THEME` | dark or light, when the terminal cannot say |
 | `NO_COLOR` | no colour at all; TERM=dumb also drops styling |
-| `DELPHI_REDUCE_MOTION` | 1 stops the badge animation |
+| `DELPHI_REDUCE_MOTION` | 1 stops every console animation (also /reduce-motion) |
 | `DELPHI_NO_ONBOARD` | 1 skips the first-run questions |
 | `DELPHI_LOG` | off, error (default), warn or debug: what `delphi logs` keeps |
 

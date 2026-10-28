@@ -6,7 +6,7 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { classify } from './attention.ts';
 import { speakerOf, type Block, type Done, type Span, type State } from './fold.ts';
-import { faceOf, STRIP_ROLES, typingFrame } from './motion.ts';
+import { faceOf, spinner, STRIP_ROLES, typingFrame } from './motion.ts';
 import * as T from './theme.ts';
 import { kilo } from './meters.ts';
 import * as I from './inbox.ts';
@@ -32,6 +32,8 @@ export type Model = {
   noModel?: boolean;
   /** No animation (`DELPHI_REDUCE_MOTION=1`, `NO_COLOR`, `TERM=dumb`): every badge on its static frame. */
   still?: boolean;
+  /** Ctrl+C was pressed once and the two seconds to confirm have not passed: the title-bar badges show crossed eyes. */
+  quitArmed?: boolean;
   /** The knowledge window on the left deck (`archives.ts`); the app owns it and makes the `kb.get` calls. */
   arch?: A.Arch;
   /** Link mode in the chat (`specs/029`, `ctrl+o`): the pointers and addresses in the transcript can be focused and followed. */
@@ -69,7 +71,7 @@ export function titleRow(m: Model, w: number): string {
  */
 export function header(m: Model, w: number): string[] {
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
-  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame); }).join(' ');
+  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame, m.quitArmed ?? false); }).join(' ');
   return [T.clip(strip, w), titleRow(m, w)];
 }
 
@@ -284,7 +286,7 @@ function layout_(m: Model, w: number, dense: boolean): Laid {
   if (m.state.live) { out.push(liveBlock(m, w, tools)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
   else {
     const ty = typingOf(m.state);
-    const frame = ty ? typingFrame(ty.since, ty.id, m.now) : -1;
+    const frame = ty ? typingFrame(ty.since, ty.id, m.now, m.still ?? false) : -1;
     if (ty && frame >= 0) { out.push(typingBlock(m, w, tools, frame)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
     else flush();
   }
@@ -367,7 +369,7 @@ const KEYS = [
   'ctrl+o  follow links (tab next · enter read here · p pin · esc leave)',
   '/  commands   @role …  one role   @specs/…  a file   ?  this help',
   'shift+tab  approval mode (default → accept edits → auto → optimistic)',
-  'inbox:  y approve · n reject · a all amber · d payload · tab list/focus',
+  'decisions:  enter open · space tick · a tick all · f filter · 1-9 choose',
   'ctrl+k  search knowledge  ctrl+s  sources  ctrl+c  leave (daemon stays)',
 ];
 
@@ -380,7 +382,7 @@ function helpOverlay(m: Model, w: number): string[] {
 
 function deckBody(m: Model, w: number, h: number): string[] {
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
-  if (m.deck === 0) return A.view(m.arch ?? A.emptyArch(), w, h, m.pal);
+  if (m.deck === 0) return A.view(m.arch ?? A.emptyArch(), w, h, m.pal, m.info, m.now > 0 ? m.now : undefined);
   if (m.deck === 2) return I.view(m.state, m.inbox, m.info, m.pal, m.now, w, h);
   return pad([]);
 }
@@ -395,8 +397,6 @@ export function tooSmall(w: number, h: number): string[] {
   return out;
 }
 
-const SPIN = ['◐', '◓', '◑', '◒'];
-
 function statusRow(m: Model, w: number): string {
   if (m.search) {
     const hit = m.search.match;
@@ -409,9 +409,9 @@ function statusRow(m: Model, w: number): string {
   if (m.state.live && m.deck === 1) { // in the chat, a reply is being written: say who and what
     const pending = [...m.state.blocks].reverse().find((b) => b.kind === 'tool' && b.status === 'pending');
     const what = pending ? ` ${pending.text}` : '';
-    return T.spread(T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);
+    return T.spread(T.accent(spinner(m.now, m.still ?? false)) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);
   }
-  const left = T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` working · ${secs}s${n > 1 ? ` · ${n} tasks` : ''}${m.queue.length ? ` · ${m.queue.length} queued` : ''}`);
+  const left = T.accent(spinner(m.now, m.still ?? false)) + T.dim(` working · ${secs}s${n > 1 ? ` · ${n} tasks` : ''}${m.queue.length ? ` · ${m.queue.length} queued` : ''}`);
   return T.spread(left, T.dim('esc to stop'), w);
 }
 

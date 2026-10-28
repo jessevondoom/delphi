@@ -21,4 +21,4 @@ delphi v0.5 · epic
   ✔ settled  Competitor onboarding 9.3k
                                                              pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────────────────────────────────────────────
-1 running  ·  71.5k tokens                             ← →  ·  ○ ○ ● ○ ○ ○ ○ ○ ○
+1 running  ·  71.5k tokens                                   ← →  ·  ○ ○ ● ○ ○ ○

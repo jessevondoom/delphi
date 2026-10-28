@@ -83,7 +83,7 @@ Delphi's runtime updates each agent's visual state via incoming event stream tra
 | State | Event Trigger | 1-Line Badge | 3-Line Mascot (General) | Scout (`scout`) | Behavior |
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | **Idle** | Default resting / standby | `⟦•_•⟧` | `  •_•  ` | ` • • • ` | Calm, larger bullet eyes (`•`) |
-| **Blink** | Periodic (every 4–5 s) | `⟦-_-⟧` | `  -_-  ` *(Orchestrator: `-─-`, Builder: `-───-`)* | ` - - - ` | 150 ms eyelid closure. `red-team` blinks alert (`•_•`). |
+| **Blink** | Random, 7–30 s apart per badge | `⟦-_-⟧` | `  -_-  ` *(Orchestrator: `-─-`, Builder: `-───-`)* | ` - - - ` | 150 ms eyelid closure. `red-team` blinks alert (`•_•`). |
 | **Thinking** | `agent.thinking.delta` | `⟦•• ⟧` $\leftrightarrow$ `⟦ ••⟧` *(Scout: `⟦…  ⟧` $\leftrightarrow$ `⟦  …⟧`)* | `  ••   ` $\leftrightarrow$ `   ••  ` | `• • •  ` $\leftrightarrow$ `  • • •` | Eyes pan left and right synchronously across the face. |
 | **Working** | Tool call / worktree build | `⟦•─•⟧` | `  •─•  ` | ` · · · ` | Focused intense gaze; `scout` narrows to pinpoint sensors. |
 | **Waiting Approval**| `approval.requested` (Amber/Red) | `⟦x?x⟧` | ` x ? x ` | ` x ? x ` | **Attention state:** Spaced `x` eyes with bold question mark (`?`). 1-line badge uses tight light `x` (`⟦x?x⟧`). |
@@ -133,7 +133,7 @@ The 1-line badge strip is now the only place an agent's state shows in a window 
 
 | State | Rule |
 | :-- | :-- |
-| Idle blink | `⟦-_-⟧` for 150 ms about every 5 s (§2 INV-AVATAR-07 still holds) |
+| Idle blink | `⟦-_-⟧` for 150 ms at random, 7-30 s apart (§2 INV-AVATAR-07 still holds) |
 | Thinking | the two pan frames swap every 600 ms while a reasoning delta arrived in the last 1.5 s |
 | Working, Waiting, Escalated | static frames |
 | Success | `⟦^─^⟧` held for 3 s, then idle |
