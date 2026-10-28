@@ -153,7 +153,7 @@ Approved by the operator 2026-10-28 with the mockups ("the decision pages are pe
 | D2 | detail view, choices, accept, advance, empty state (the prompt bar moves to D4 with typed replies) | built (cards and provisional decisions; the "decided in the last hour" list of the empty-state mockup is not built; unproven in a real terminal) |
 | D3 | brief cache and the one-time card brief | not started |
 | D4 | prompt bar bound to the decision, typed replies: READ AS, confirm, conditions, saved thread | not started |
-| D5 | ticks, confirm page, batch accept with re-checks | not started |
+| D5 | ticks, confirm page, batch accept with re-checks | built (builds only, since only builds are tickable; the daemon re-checks each payload hash; unproven in a real terminal) |
 | D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
 | D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |
 

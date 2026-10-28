@@ -22,6 +22,7 @@ export type Action =
   | { t: 'chat' }
   | { t: 'resolve'; card: Approval; decision: Decision }
   | { t: 'review'; d: D.Decision; resolution: 'ratified' | 'rejected' }
+  | { t: 'accept'; ds: D.Decision[] }
   | { t: 'resolve-all'; cards: Approval[] };
 
 /** The guard from spec 005: keys that answer a card are ignored for this long after it appears or the deck opens. */
@@ -53,6 +54,7 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
   if (paned(inb)) {
     const r = D.key(inb.pane, inb.items, e, now);
     if (r.action.t === 'chat') return { inbox: { ...inb, pane: r.pane }, action: { t: 'chat' } };
+    if (r.action.t === 'accept-all') return { inbox: { ...inb, pane: r.pane }, action: { t: 'accept', ds: r.action.ds } };
     if (r.action.t === 'answer') {
       const { d, choice } = r.action;
       if (d.source === 'card') {
