@@ -85,7 +85,7 @@ const model = (over: Partial<Model> = {}): Model => ({
   info, pal: { dark: true, bg: [15, 23, 42] }, state: stateWorld(), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'mission-auto', panel: null, help: false, ...over,
 });
-const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, arch: emptyArch(), live: {}, connected: true });
+const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, live: {}, connected: true });
 
 /** True when any SGR sequence in `s` sets a colour (foreground, background, bright or extended). */
 function hasColour(s: string): boolean {

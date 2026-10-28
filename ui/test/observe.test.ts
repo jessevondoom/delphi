@@ -29,7 +29,7 @@ function sample(): OState {
   s.builds = [{ task_id: 't_1', branch: 'delphi/t_1', attempts: ['attempt 1: red'], sha: 'abc1234', gates: [{ name: 'tests', state: 'green', detail: '12 passed' }, { name: 'audit', state: 'red', detail: '1 finding' }], findings: [['P1', 'unchecked unwrap']], flaky: true, merge: '' }];
   return s;
 }
-const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st: sample(), view, pick: 0, scroll: 0, selNode: 1, arch: emptyArch(), live: {}, connected: true, ...over });
+const model = (view: (typeof VIEWS)[number], over: Partial<OModel> = {}): OModel => ({ info, pal: { dark: true }, st: sample(), view, pick: 0, scroll: 0, selNode: 1, live: {}, connected: true, ...over });
 
 test('every view fits the window exactly, with no boxes and no money-free surprises', () => {
   for (const view of VIEWS) for (const [w, h] of [[110, 34], [70, 20], [40, 12]] as const) {
@@ -37,7 +37,7 @@ test('every view fits the window exactly, with no boxes and no money-free surpri
     assert.equal(lines.length, h, `${view} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= w, `${view}: line wider than ${w}: ${plain(l)}`);
     // The council's cards are tinted blocks; without a tint (these models have no known background) each row is a rail `│`.
-    assert.ok(!(view === 'council' || view === 'archives' ? /[┌┐└┘]/ : /[┌┐└┘│]/).test(lines.map(plain).join('\n')), `${view}: no box characters`);
+    assert.ok(!(view === 'council' ? /[┌┐└┘]/ : /[┌┐└┘│]/).test(lines.map(plain).join('\n')), `${view}: no box characters`);
   }
 });
 
@@ -48,7 +48,7 @@ test('the chrome: a badges-only strip, the title row right under it, a blank row
   assert.equal(l[2], '', 'one blank row');
   assert.match(l[3]!, /^ ▼ needs you/, 'an approval is waiting in the sample, so the slot is the band');
   assert.match(l.at(-2)!, /^─+$/);
-  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ○ ● ○ ○ ○ ○ ○$/);
+  assert.match(l.at(-1)!, /^1 running  ·  [\d.]+k? tokens\s+← →  ·  ○ ○ ○ ● ○ ○ ○ ○$/);
   const all = l.join('\n');
   assert.ok(!/\$\d/.test(all) && !/spend|\bcost\b/i.test(all), 'no money anywhere');
   assert.ok(!/ \/ |\?|mission 2026/.test(l.at(-1)!) && !all.includes('2026-10-24-ui'), 'no / or ? in the footer, no mission id');
@@ -58,8 +58,8 @@ test('the title row drops the version below 48 columns, the footer drops the arr
   const narrow = observeFrame(model('epic'), 40, 14).map(plain);
   assert.equal(narrow[1]!.trimEnd(), 'delphi · epic');
   assert.doesNotMatch(narrow.at(-1)!, /←/);
-  assert.match(narrow.at(-1)!, /○ ○ ● ○ ○ ○ ○ ○ ○$/);
-  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ○ ● ○ ○ ○ ○ ○ ○$/);
+  assert.match(narrow.at(-1)!, /○ ○ ● ○ ○ ○ ○ ○$/);
+  assert.match(observeFrame(model('epic'), 70, 20).map(plain).at(-1)!, /← →  ·  ○ ○ ● ○ ○ ○ ○ ○$/);
 });
 
 test('the attention slot is body row 1 of every view: "nothing needs you" or the band, with what and where', () => {
@@ -81,7 +81,7 @@ test('the attention slot is body row 1 of every view: "nothing needs you" or the
 });
 
 test('views: six, in order; spend, dag, telemetry and digits are gone; the arrows stop at the ends', () => {
-  assert.deepEqual([...VIEWS], ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'archives', 'changes']);
+  assert.deepEqual([...VIEWS], ['dashboard', 'council', 'epic', 'agents', 'pulse', 'timeline', 'tools', 'changes']);
   for (const gone of ['spend', 'dag', 'telemetry', '1', '4', '7']) assert.equal(parseView(gone), null, gone);
   assert.equal(stepView('dashboard', -1), 'dashboard');
   assert.equal(stepView('council', -1), 'dashboard');
@@ -148,23 +148,11 @@ test('epic: threads of work with a a few lines each and the critical path (the p
   assert.match(t, / ▌ critical path {2}Deck router/);
 });
 
-test('archives: the knowledge window, a search box at rest and ranked results after a search', () => {
-  const rest = observeFrame(model('archives'), 110, 34).map(plain).join('\n');
-  assert.match(rest, /knowledge/);
-  assert.match(rest, /search what Delphi knows/);
-  assert.match(rest, /● offline/);
-  const hit = { path: 'specs/003.md', collection: 'specs', trust: 'internal_generated', heading: 'Retry ladder', preview: 'three attempts\nthen escalate' };
-  const a = observeFrame(model('archives', { arch: { ...emptyArch(), q: 'retry', searched: 'retry', hits: [hit], took: 400, engine: 'hybrid' } }), 110, 34).map(plain).join('\n');
-  assert.match(a, /1 result · 0\.4 s · hybrid/);
-  assert.match(a, /1\s+specs\/003\.md › Retry ladder\s+specs/);
-  assert.match(a, /three attempts/);
-});
-
 test('model text cannot move the cursor, and view names parse', () => {
   const s = sample(); s.narrative = ['evil \x1b[2J\x1b]0;x\x07done'];
   const t = observeFrame(model('epic', { st: s }), 110, 34).join('\n');
   assert.ok(!t.includes('\x1b[2J') && !t.includes('\x1b]0;'));
-  assert.deepEqual([parseView('Council'), parseView('roster'), parseView('kb'), parseView('nope')], ['council', 'agents', 'archives', null]);
+  assert.deepEqual([parseView('Council'), parseView('roster'), parseView('kb'), parseView('nope')], ['council', 'agents', null, null]);
 });
 
 test('the reasoning view is gone: its old names land on the change log, and nothing of an agent\'s reasoning is drawn', () => {
