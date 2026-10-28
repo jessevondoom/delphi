@@ -136,7 +136,7 @@ Asked for by the operator on 2026-10-28: every `claude` and `agy` command and th
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | coverage manifests, help-snapshot test, doctor drift check, probes | not started |
+| S0 | coverage manifests, help-snapshot test, doctor drift check, probes | built (this PR); probes in spec 043 §10 |
 | S1 | Claude narrowing and hygiene flags | not started |
 | S2 | read-only introspection (`auth status`, `agy models`, `mcp list`, ...) | not started |
 | S3 | agy `--project`, `--log-file`, `--agent` | not started |
@@ -151,7 +151,7 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | manifest from the real `--help`, probes (approval events, app-server stability) | not started; needs `codex` installed |
+| S0 | manifest from the real `--help`, probes (approval events, app-server stability) | manifest and first probe built (this PR); approval events and app-server not yet probed |
 | S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | not started |
 | S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |

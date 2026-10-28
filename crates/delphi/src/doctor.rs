@@ -170,6 +170,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
+    check_coverage_drift(&cfg, &help_page, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
     // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
@@ -272,6 +273,36 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             },
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
+        }
+    }
+}
+
+/// A CLI's `--help` page for the words given (stdout and stderr together: some print usage to stderr); `None` if it cannot be started.
+fn help_page(program: &str, words: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(program).args(words).arg("--help").stdin(std::process::Stdio::null()).output().ok()?;
+    Some(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+/// For every CLI a `path = "harness"` endpoint uses: does it show flags or commands that `coverage/<cli>.cov` has no
+/// disposition for (`specs/043` §6)? The CLIs ship weekly, so this is the alarm that a release added surface. Read-only:
+/// it runs `--help` pages only, never a command.
+fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<String>, r: &mut Report) {
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let mut seen = std::collections::BTreeSet::new();
+    for e in list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness")) {
+        let Some(cli) = e.get("harness").and_then(|h| h.as_str()).filter(|c| delphi_engine::coverage::CLIS.contains(c)) else { continue };
+        if !seen.insert(cli.to_string()) {
+            continue;
+        }
+        let run = |words: &[&str]| help(cli, words);
+        let Some(items) = delphi_engine::coverage::drift(cli, &run) else { continue }; // not installed: check 10 says so
+        if items.is_empty() {
+            r.push(Level::Ok, "10 harness", format!("{} surface", cli), "every flag and command in its --help has a disposition in the coverage manifest (specs/043)");
+        } else {
+            let shown: Vec<String> = items.iter().take(6).map(|i| i.describe()).collect();
+            let more = if items.len() > 6 { format!(" and {} more", items.len() - 6) } else { String::new() };
+            r.warn("10 harness", format!("{} surface", cli), format!("the installed {} shows {}{} with no disposition in crates/delphi-engine/coverage/{}.cov: it is newer than this Delphi knows. Nothing breaks (Delphi passes only the flags it uses); a Delphi update classifies it", cli, shown.join(", "), more, cli));
         }
     }
 }
@@ -720,6 +751,25 @@ mod tests {
         Command::new("git").args(["init", "-q"]).current_dir(&proj).status().unwrap();
         let ws = init(&InitOptions { home: home.clone(), workspace: "w".into(), projects: vec![proj.clone()], theme: "greek".into() }).unwrap();
         (t, home, ws, proj)
+    }
+
+    // specs/043 §6: a CLI whose --help shows something the manifest does not know is a warning; a CLI not installed is check 10's business.
+    #[test]
+    fn coverage_drift_warns_on_new_surface_and_is_quiet_when_classified() {
+        let cfg = "[[endpoints]]\nid = \"c\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\n";
+        let newer = |_: &str, w: &[&str]| -> Option<String> { w.is_empty().then(|| "Options:\n  --print   print\n  --brand-new-flag   x\n".to_string()) };
+        let mut r = Report::default();
+        check_coverage_drift(cfg, &newer, &mut r);
+        let f = r.findings.iter().find(|f| f.check == "10 harness" && f.location == "claude surface").expect("a finding");
+        assert!(f.level == Level::Warn && f.message.contains("--brand-new-flag") && !f.message.contains("`--print`"), "{:?}", f.message);
+        let none = |_: &str, _: &[&str]| -> Option<String> { None };
+        let mut r2 = Report::default();
+        check_coverage_drift(cfg, &none, &mut r2);
+        assert!(r2.findings.iter().all(|f| f.location != "claude surface"));
+        let quiet = |_: &str, w: &[&str]| -> Option<String> { w.is_empty().then(|| "Options:\n  --print   print\n".to_string()) };
+        let mut r3 = Report::default();
+        check_coverage_drift(cfg, &quiet, &mut r3);
+        assert!(r3.findings.iter().any(|f| f.location == "claude surface" && f.level == Level::Ok));
     }
 
     // specs/006 §6 test 6 (doctor part): a fresh offline init passes doctor with exit 0.

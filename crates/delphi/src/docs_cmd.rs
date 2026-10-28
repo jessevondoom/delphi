@@ -15,8 +15,12 @@ pub fn docs(args: &[String]) -> i32 {
             print!("{}", man_page());
             0
         }
+        Some("coverage") => {
+            print!("{}", delphi_engine::coverage::markdown());
+            0
+        }
         _ => {
-            eprintln!("usage:\n  delphi docs cli     the command reference, as Markdown\n  delphi docs man     the same as a man page (roff)");
+            eprintln!("usage:\n  delphi docs cli     the command reference, as Markdown\n  delphi docs man     the same as a man page (roff)\n  delphi docs coverage  what Delphi does with every flag and command of the claude, agy and codex CLIs");
             2
         }
     }

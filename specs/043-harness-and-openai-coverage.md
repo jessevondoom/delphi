@@ -51,7 +51,7 @@ The abstraction is deliberately thin: a flag with no neutral meaning (`--betas`,
 | Flag | Disposition |
 | :-- | :-- |
 | `-p`, `--input-format stream-json`, `--output-format stream-json`, `--verbose`, `--permission-prompt-tool stdio`, `--setting-sources ""`, `--no-session-persistence`, `--resume`, `--fork-session`, `--strict-mcp-config`, `--mcp-config`, `--model`, `--append-system-prompt`, `--tools`, `--effort`, `--max-budget-usd`, `--json-schema`, `--fallback-model`, `--settings`, `--include-partial-messages`, `--agents`, `--add-dir`, `--permission-mode` (`auto`, `manual`) | **used** (specs 009, 020, 021) |
-| `--max-turns` | **used, but absent from `--help`** in 2.1.312: S0 probes it; if gone, `max_turns` falls back to the token cap and says so |
+| `--max-turns` | **used; absent from `--help` but still accepted** in 2.1.312 (probed 2026-10-28: a bogus flag errors, this one runs). Whether it still ends a tool-using span with `error_max_turns` is not yet shown; the manifest marks it `hidden:` |
 | `--permission-mode acceptEdits`, `plan`, `dontAsk` | **S1**: `plan` for read-only roles (reviewer, red team) in place of today's "no tools"; `acceptEdits` for a Builder whose cards were already granted; `dontAsk` for headless runs (spec 016). `bypassPermissions` and `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`: **refused**, always |
 | `--permission-prompts none` | **S1**: spans with no bridge (a role with `bridge = false`) deny whatever would prompt instead of hanging on an unanswerable request |
 | `--allowedTools`, `--disallowedTools` | **S1**: narrowing only; a profile may name tools it denies (for example `Bash(rm *)`), never ones it adds beyond the span's `Tools` |
@@ -80,7 +80,7 @@ The abstraction is deliberately thin: a flag with no neutral meaning (`--betas`,
 
 | Command | Disposition |
 | :-- | :-- |
-| `auth status [--json]` | **read-only, S2**: `delphi doctor` shows login state, method and provider (verified live 2026-10-28: prints `loggedIn`, `authMethod`, `apiProvider`); replaces probing by failed launch |
+| `auth status [--json]` | **read-only, used by doctor today** (check 10, `crates/delphi/src/doctor.rs`): login state and method. Verified live 2026-10-28: prints `loggedIn`, `authMethod`, `apiProvider`. (An earlier draft of this spec listed it as new.) |
 | `auth login`, `auth logout`, `setup-token` | **operator-only**. `delphi doctor` prints the exact command to type when the login is gone; Delphi never runs them. `setup-token` output is a long-lived token the operator may store as `keychain:` and use as a credential source (spec 009 §4); S2 documents that path |
 | `doctor` | **read-only, S2**: summarized in the doctor report (installed version vs the pinned minimum, settings files that fail validation) |
 | `auto-mode config`, `defaults` | **read-only, S2**: Delphi's default Claude posture is `--permission-mode auto`, so the classifier's effective rules decide what Delphi never sees; `delphi capabilities` reports them. `critique` calls a model, so **refused**; `reset` changes state, **operator-only** |
@@ -163,15 +163,15 @@ The OpenAI surface *as the operator should expect it in 2026* (to be verified in
 
 Three pieces, built in **S0**:
 
-1. **A coverage manifest per backend** (`harness/coverage/claude.toml`, `agy.toml`, `openai.toml`): one row per flag, subcommand or API feature, with `disposition`, `slice` and `reason`. Sections 3-5 are its human-readable form; the manifest is the source and the tables are generated from it into `docs/reference/harness-coverage.md` (regenerated like `docs/reference/cli.md`).
-2. **A checked-in help snapshot** (`harness/coverage/snapshots/claude-2.1.312.help`, `agy-1.4.8.help`, and the OpenAI reference date). A test parses the snapshot and fails if any flag or subcommand in it has no manifest row, or any `used` row names a flag `harness.rs` does not emit (the first direction catches new CLI surface at snapshot-update time; the second catches code that regressed).
+1. **A coverage manifest per backend** (`crates/delphi-engine/coverage/claude.cov`, `agy.cov`, `codex.cov`, `openai.cov` once S5 begins; embedded in the binary so `delphi doctor` can use them): one row per flag, subcommand or API feature, with `disposition`, `slice` and `reason`; a `group` row covers everything beneath a command. Sections 3-5 are its human-readable form; the manifest is the source and the tables are generated from it into `docs/reference/harness-coverage.md` (`delphi docs coverage`, checked like `docs/reference/cli.md`).
+2. **A checked-in help snapshot** (`crates/delphi-engine/coverage/snapshots/<cli>.help`, with the version on its first line, and the OpenAI reference date). A test parses the snapshot and fails if any flag or subcommand in it has no manifest row, or any `used` row names a flag `harness.rs` does not emit (the first direction catches new CLI surface at snapshot-update time; the second catches code that regressed).
 3. **`delphi doctor` runs the installed CLI's `--help`** (read-only, no model call) and reports flags and subcommands that are in neither the snapshot nor the manifest: "claude 2.1.320 has `--foo`; Delphi has no disposition for it". This is the drift alarm for the weekly releases.
 
 ## 7. Slices
 
 | Slice | Delivers | Needs |
 | :-- | :-- | :-- |
-| **S0** | manifests, snapshot test, doctor drift check, generated reference; probes: `--max-turns`, `--system-prompt-snapshot`, `--restricted`, the control-channel subtypes (§3.3), `agy --project`; OpenAI snapshot against current docs | this spec approved |
+| **S0** (built) | manifests, snapshot test, doctor drift check, generated reference; probes (see §10 for the results): `--max-turns`, `--system-prompt-snapshot`, `--restricted`, the control-channel subtypes (§3.3), `agy --project`; OpenAI snapshot against current docs | this spec approved |
 | **S1** | Claude narrowing and hygiene flags (§3.1 S1 rows), `[harness.claude]` keys, schema and `docs/reference/config.md` | S0 |
 | **S2** | read-only introspection: `claude auth status`, `doctor`, `auto-mode config`, `mcp list`, `plugin list`, `agents --json`; `agy models`, `mcp list`, `plugin list`; into `delphi doctor` and `delphi capabilities` (spec 038); `agy models` into the tier probe | S0 |
 | **S3** | agy: `--project`, `--log-file`, `--agent` | S0 probes |
@@ -200,7 +200,22 @@ Every slice is one pull request with its own `Implements-Spec: specs/043-*.md`, 
 | OD-5 | Build embeddings and batch (S7)? | Defer until a measured need (the local embedder works; batch only matters at training-experiment scale). |
 | OD-6 | Is "read-only half in Delphi, writing half left to the operator's terminal" the right line for the CLIs' admin groups (`mcp`, `plugin`, `auth`)? | Yes (principle 3). A `delphi harness <cli> -- …` passthrough would be a way around the sandbox and the cards. |
 
-## 10. What this spec does not claim
+## 10. S0 results (2026-10-28)
+
+Built: `crates/delphi-engine/src/coverage.rs`, the three manifests and snapshots in `crates/delphi-engine/coverage/`, `delphi docs coverage` and `docs/reference/harness-coverage.md`, and the drift check in `delphi doctor` (check 10, "`<cli>` surface"). The tests fail when a snapshot shows a flag or command no row covers, when a row names something the snapshot no longer shows, when `harness.rs` passes a flag no manifest calls `used`, and when a `used` row names a flag `harness.rs` does not pass. Refresh a snapshot after upgrading a CLI with `cargo test -p delphi-engine --lib coverage::tests::refresh_snapshots -- --ignored`, then classify what is new.
+
+Probes, run once against the installed CLIs:
+
+| Probe | Result |
+| :-- | :-- |
+| `claude 2.1.312 --max-turns 1` | accepted; a bogus flag is rejected with `unknown option`, so `--max-turns` is hidden, not removed |
+| `claude --restricted` | accepted; a span with no tools answers normally. Its effect on a tool-using span is S1's test |
+| `claude --permission-prompt-tool` | not in `--help`, accepted (every Delphi span depends on it); marked `hidden:` |
+| `agy` version | 1.4.9 on 2026-10-28; the spec was written against 1.4.8. The CLI moved within a day |
+| `agy models` | works headless: one `id<TAB>label` per line, e.g. `gemini-4-argon-high`, `gemini-3.8-flash-high`, `claude-opus-5-5-high`, `claude-sonnet-5-5-medium`. Shows what the account lists, not what is exhausted |
+| Not yet probed | `--disable-slash-commands` on Claude with a `/`-prefixed first turn; `--system-prompt-snapshot`; the stream-json control subtypes (§3.3); `agy --project` |
+
+## 11. What this spec does not claim
 
 - That every item in §3-§4 behaves as its help line says: only flags already used are proven (specs 020, 021). Each new flag is probed in S0 or its own slice before it is turned on.
 - That §5 is current. It is from knowledge, not a fetch; S0 replaces it with a dated snapshot.

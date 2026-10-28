@@ -1,0 +1,72 @@
+# Coverage of the `codex` CLI, 0.165.0 (specs/044). Format and rules: crates/delphi-engine/src/coverage.rs.
+# Nothing is used yet: Codex is not a Delphi harness until spec 044 S1 lands.
+# kind | path | names | disposition | slice | reason
+
+# ── Flags that appear on several pages: one disposition wherever they appear ──
+flag | * | --help, --version | na | | every CLI prints its help and version
+flag | * | --config | planned | S1 | `-c key=value` only from a short allow-list (model_reasoning_effort, model_reasoning_summary, web_search); any other key could widen authority, so it is refused
+flag | * | --enable, --disable | refused | | flips a feature flag, which could turn on surface Delphi has not classified
+flag | * | --strict-config | planned | S1 | passed so an unknown key in the config is an error, not a silent no-op
+flag | * | --model | planned | S1 | the span's model
+flag | * | --sandbox | planned | S1 | `read-only` for no-tools roles; `workspace-write` for a Builder in its worktree only once the approval bridge is proven; `danger-full-access` refused
+flag | * | --cd | planned | S1 | the span's working directory
+flag | * | --add-dir | planned | S1 | only for a span with tools, from the ratified block (as spec 021)
+flag | * | --ask-for-approval | planned | S2 | `never` for a reader; `on-request` once the app-server bridge answers the requests
+flag | * | --image | planned | S3 | vision, off by default
+flag | * | --search | planned | S1 | live web search; ratified, off by default, results untrusted (spec 020)
+flag | * | --no-daemon | planned | S1 | a span never attaches to the operator's shared background server
+flag | * | --approve-for-me | refused | | routes approvals to the CLI's own automatic reviewer; Delphi's approvals stay Delphi's (spec 044 §1.1)
+flag | * | --dangerously-bypass-approvals-and-sandbox, --dangerously-bypass-hook-trust | refused | | skips approvals, sandbox or hook trust; never passed
+flag | * | --profile | refused | | layers the operator's own config file over the span's
+flag | * | --oss, --local-provider | refused | | the local-model route; Delphi has `family = "local"`
+flag | * | --worktree | refused | | Delphi owns worktrees (specs 003, 008)
+flag | * | --remote, --remote-auth-token-env | refused | | connects to a remote app server outside Delphi's
+flag | * | --no-alt-screen | na | | interactive display
+
+# ── Top level and `exec` ──
+cmd | . | exec | planned | S1 | `codex exec --json` for read-only roles, structured output, API-key mode
+flag | exec | --json, --output-schema, --output-last-message, --ephemeral, --ignore-user-config, --skip-git-repo-check | planned | S1 | the span's launch (spec 044 §2.2): events on stdout, the schema written to a scratch file, nothing persisted, the operator's config ignored, a git check skipped only in Delphi's scratch directory
+flag | exec | --ignore-rules | refused | | skips the user's execpolicy rules, a safety layer
+flag | exec | --cyber-access-program | refused | | requests an experimental access program
+flag | exec | --color, --thread-source | na | | display, thread classification
+cmd | exec | resume, fork | planned | S1 | resume or fork by id; --last and --all are refused (directory-dependent)
+cmd | exec | review | planned | S3 | a cheap read-only review lane
+cmd | . | review | planned | S3 | as `exec review`
+flag | review | --uncommitted, --base, --commit, --title | planned | S3 | the review target
+
+# ── Commands that change global state or the account ──
+cmd | . | logout, update | operator-only | | changes stored credentials or the installed CLI
+cmd | . | migrate-rollouts, migrate-nfs-db | operator-only | | migrates the operator's saved sessions or databases
+
+group | login | | operator-only | | signs in (ChatGPT, API key, access token, device code)
+cmd | login | status | read-only | S2 | exit 0 when credentials exist; doctor's login check
+
+group | mcp | | operator-only | | writes ~/.codex/config.toml
+cmd | mcp | list, get | read-only | S2 | the configured servers
+
+group | plugin | | operator-only | | installs or removes plugins and marketplaces
+cmd | plugin | list | read-only | S2 | `--json`
+
+group | features | | operator-only | | writes feature flags in config.toml
+cmd | features | list | read-only | S2 | the feature flags and their state
+
+# ── Read-only diagnostics ──
+cmd | . | doctor | read-only | S2 | summarized in `delphi doctor`
+group | debug | | na | | developer tooling
+cmd | debug | models | read-only | S2 | the account's model catalog as JSON; feeds tier discovery as `agy models` does
+cmd | debug | prompt-input | read-only | S2 | the model-visible prompt, to prove Delphi's governance text arrives
+
+# ── The approval bridge ──
+group | app-server | | planned | S2 | the bidirectional JSONL protocol that could answer approval requests like Claude's permission-prompt-tool; experimental, so S0 recorded its version and S2 decides if it is stable enough
+flag | app-server | --listen, --stdio | planned | S2 | stdio only: no listener on a port or socket
+flag | app-server | --ws-audience, --ws-auth, --ws-issuer, --ws-max-clock-skew-seconds, --ws-shared-secret-file, --ws-token-file, --ws-token-sha256 | refused | | websocket listener authentication; Delphi uses stdio
+flag | app-server | --analytics-default-enabled, --cloud-skills-snapshot, --code-mode-host, --print-startup-config, --startup-client-info, --startup-sign-out | refused | | reaches the vendor's cloud or changes the account's state
+cmd | app-server | generate-json-schema, generate-ts | read-only | S2 | emit the protocol's schema; S2 records it in the snapshot to detect protocol drift
+cmd | app-server | daemon, proxy | refused | | a long-running server outside Delphi's daemon
+
+# ── Refused: the vendor's cloud, remote sessions, session management ──
+cmd | . | agents, queue, archive, unarchive, delete, resume, fork, apply, app, exec-server | refused | | manages the vendor's sessions, applies a cloud diff, opens the desktop app, or runs a server outside Delphi's
+group | cloud | | refused | | hands work to OpenAI's infrastructure
+group | remote-control | | refused | | leaves a session running outside the daemon
+cmd | . | completion | na | | shell completion
+group | sandbox | | na | | runs a command under Codex's own sandbox; Delphi has its own sandbox crate

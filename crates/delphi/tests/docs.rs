@@ -267,7 +267,7 @@ fn delphi(args: &[&str]) -> String {
 
 #[test]
 fn the_checked_in_reference_is_what_the_program_generates() {
-    for (args, file) in [(&["docs", "cli"][..], "docs/reference/cli.md"), (&["docs", "man"][..], "docs/reference/delphi.1")] {
+    for (args, file) in [(&["docs", "cli"][..], "docs/reference/cli.md"), (&["docs", "man"][..], "docs/reference/delphi.1"), (&["docs", "coverage"][..], "docs/reference/harness-coverage.md")] {
         let want = delphi(args);
         let have = std::fs::read_to_string(root().join(file)).unwrap_or_default();
         assert!(want == have, "{} is out of date; regenerate it with `delphi {} > {}`", file, args.join(" "), file);

@@ -7,7 +7,7 @@ status: approved   # by the operator, 2026-10-28 ("ratify any spec changes"); un
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
-confidence: low   # `codex` is NOT installed on this machine. Everything below is from OpenAI's published documentation (read 2026-10-28), whose flag tables did not render in full. S0 replaces it with the installed CLI's own `--help`.
+confidence: medium   # §2 is from OpenAI's documentation; §5 is from the installed `codex-cli 0.165.0` (manifest and snapshot) and one live `exec --json` probe
 source_mission: 2026-10-23-foundational-design
 tags: [spec, harness, codex, openai, coverage]
 ---
@@ -16,7 +16,7 @@ tags: [spec, harness, codex, openai, coverage]
 
 Extends [`specs/043`](043-harness-and-openai-coverage.md) (the classification method and the manifest format of its §6), [`020`](020-harness-tool-bridge.md) and [`021`](021-harness-cli-features.md). Delphi drives `claude` and `agy` as subscription "harness" seats; this adds the Codex CLI (`codex`) as a third, on a ChatGPT login or a `CODEX_API_KEY`.
 
-**Nothing is built, and the CLI is not installed here.** Section 2 is what OpenAI's docs say; it is a plan to probe, not a verified fact.
+**S0 is built (§5); S1 onward is not.** Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
 
 ## 1. Principles
 
@@ -83,7 +83,7 @@ Those of spec 043 §1, unchanged: a disposition for every item; narrow or read, 
 
 | Slice | Delivers | Needs |
 | :-- | :-- | :-- |
-| **S0** | install `codex`; snapshot its real `--help` into the manifest (`harness/coverage/codex.toml`, spec 043 §6); probe: does `exec --json` expose approval events, is `app-server` stable, what do `--output-schema` and `--ignore-user-config` really do, does a headless span need a git repo, can a PreToolUse-like gate exist | operator installs `codex` and logs in (or supplies a key) |
+| **S0** (built; see §5) | install `codex`; snapshot its real `--help` into the manifest (`crates/delphi-engine/coverage/codex.cov`, spec 043 §6); probe: does `exec --json` expose approval events, is `app-server` stable, what do `--output-schema` and `--ignore-user-config` really do, does a headless span need a git repo, can a PreToolUse-like gate exist | operator installs `codex` and logs in (or supplies a key) |
 | **S1** | `Cli::Codex` in `harness.rs`; `exec --json` driver, read-only roles only; structured output; API-key mode; tests with a stand-in CLI | S0 |
 | **S2** | read-only introspection (`login status`, `doctor`, `debug models`, `mcp list`); the approval bridge over `app-server` if S0 says it is stable; only then may a Codex seat run a Builder | S0 |
 | **S3** | `review` lane, vision, `execpolicy` lint | S1 |
@@ -98,8 +98,21 @@ Each slice is one pull request with the usual trailer, a tracker row, and tests 
 | OD-2 | Which login backs the seat: ChatGPT subscription, or an API key? | Whichever the operator has; both are supported (S1 keys; the login needs nothing). Please install `codex` and say which, so S0 can probe it. |
 | OD-3 | Is `--search` allowed at all? | Off by default, ratified opt-in, results untrusted. |
 
-## 5. What this spec does not claim
+## 5. S0 results (2026-10-28, `codex-cli 0.165.0`, ChatGPT login)
 
-- That any flag below behaves as the docs say. OpenAI's reference rendered without its flag tables, so even the flag list is incomplete; S0 corrects it from `codex --help`.
+The manifest is `crates/delphi-engine/coverage/codex.cov`, built from the installed CLI's own `--help` (not the docs), with the snapshot checked in. Differences from §2, which was written from the docs:
+
+- `--approve-for-me` exists: it routes approvals to the CLI's own automatic reviewer. Refused (§1.1: Delphi's approvals stay Delphi's).
+- `-a/--ask-for-approval` accepts only `on-request` and `never` in this version.
+- `app-server` has `daemon`, `proxy`, `generate-json-schema` and `generate-ts` subcommands and websocket-auth flags; Delphi would use stdio only. `generate-json-schema` gives S2 a way to record the protocol and detect drift.
+- `--no-daemon`: Codex shares a background server across sessions; a Delphi span must not attach to the operator's. Planned S1.
+- `exec` has `--cyber-access-program` (an experimental access program): refused.
+- `debug models` and `debug prompt-input` exist as read-only introspection.
+
+Probe: `codex exec --json --ephemeral --sandbox read-only --skip-git-repo-check --ignore-user-config --output-schema schema.json "<prompt>"` returned exactly four JSONL events: `thread.started {thread_id}`, `turn.started`, `item.completed {item:{id,type:"agent_message",text}}` (the text was the schema-conforming JSON), and `turn.completed {usage:{input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens}}`. Progress text goes to stderr (`Reading additional input from stdin...`). That is enough for `parse_codex_line` and a usage meter. Not yet probed: a tool-using span's `command_execution` and approval events, and whether `app-server` can answer approvals.
+
+## 6. What this spec does not claim
+
+- That any flag below behaves as the docs say beyond what §5 probed.
 - That the `app-server` protocol is stable. The docs say it may change without notice.
 - That Codex models behave like the Claude or Gemini ones on Delphi's tasks. That is a question for the training experiments (spec 037), not for this spec.
