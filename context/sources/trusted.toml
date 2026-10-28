@@ -9,22 +9,9 @@
 # share_alike  the licence requires derivative text to carry the same licence
 # images       true: every picture served from this host carries this entry's licence, so a full-text entry may keep them
 #              (default false; a picture otherwise needs a licence of its own: the Wikimedia Commons record of its file, or a
-#              Creative Commons link on its figure; specs/028 section 11). Pictures are fetched only from listed hosts, so for
-#              Wikipedia's pictures the operator also lists the two hosts below (kept summary-only: they widen nothing for text):
-#
-#   [[source]]
-#   host = "upload.wikimedia.org"
-#   publisher = "Wikimedia Commons"
-#   kind = "encyclopedia"
-#   licence = "unknown"
-#   reuse = "summary-only"
-#
-#   [[source]]
-#   host = "commons.wikimedia.org"
-#   publisher = "Wikimedia Commons"
-#   kind = "encyclopedia"
-#   licence = "unknown"
-#   reuse = "summary-only"
+#              Creative Commons link on its figure; specs/028 section 11). Pictures are fetched only from listed hosts, so
+#              Wikipedia's pictures need the two Wikimedia entries below. They are summary-only: no Wikimedia page is ever
+#              stored whole because of them (a Commons page the search returns can be kept as a summary and facts).
 
 [[source]]
 host = "en.wikipedia.org"
@@ -33,6 +20,22 @@ kind = "encyclopedia"
 licence = "CC-BY-SA-4.0"
 reuse = "full"
 share_alike = true
+
+# Where Wikipedia's pictures are served (upload) and where each file's licence and author are recorded (commons); needed for a
+# Wikipedia entry to keep a picture (specs/028 section 11.1). A picture is kept only when its Commons record allows it.
+[[source]]
+host = "upload.wikimedia.org"
+publisher = "Wikimedia Commons"
+kind = "encyclopedia"
+licence = "unknown"
+reuse = "summary-only"
+
+[[source]]
+host = "commons.wikimedia.org"
+publisher = "Wikimedia Commons"
+kind = "encyclopedia"
+licence = "unknown"
+reuse = "summary-only"
 
 [[source]]
 host = "developer.mozilla.org"

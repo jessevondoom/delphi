@@ -223,5 +223,5 @@ The operator asked for a half-block image renderer (not `ink-picture`: 136 packa
 | :-- | :-- | :-- |
 | I1 | PNG/JPEG/GIF decoders in `delphi-docs`, `/v1/image`, half-block painter, reader draws whole-line pictures | built |
 | I2 | check pictures in the chat reader and the change feed | not started |
-| I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | built; operator must list `upload.wikimedia.org` and `commons.wikimedia.org` for Wikipedia pictures; not run live |
+| I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | built; the two Wikimedia hosts are on the default list (2026-10-28); not run live |
 | Q1 | quadrant pictures as the default (spec 029-A2), half blocks kept: `DELPHI_PICTURE`, `/pictures` | built; font support in the operator's terminal unproven |
