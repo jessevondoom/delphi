@@ -62,6 +62,7 @@ pub mod policy;
 pub mod pool;
 pub mod probe;
 pub mod provisional;
+pub mod decision_model;
 pub mod provisional_run;
 pub mod hostmap;
 pub mod recovery;

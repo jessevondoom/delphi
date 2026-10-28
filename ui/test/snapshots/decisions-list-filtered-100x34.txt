@@ -1,0 +1,34 @@
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · /proj · decisions
+
+
+  2 builds · hiding 3 other decisions                          a  tick every recommended item here
+  show  ○ all 5   ○ actions 1   ○ specs 1   ● builds 2   ○ questions 1                    f change
+
+  ❯ [x] DEC-082  Raise the rate-limit burst from 20 to 50 per second            AMBER · build  9 m
+        Provisional change from optimistic build t_014 (rate.rs, +12 -4) to stop telemetry drops
+        in benchmark loops. 28 tests and the load suite pass.
+        ✔ recommend ratify · routine risk, second seat (scout) concurred
+
+    [x] DEC-085  Reuse stored vectors when a document is unchanged              AMBER · build  9 m
+        Provisional change from optimistic build t_015 (index.rs, +41 -9). Re-indexing 1,200
+        documents drops from 40 s to 6 s, and a changed file is still re-embedded.
+        ✔ recommend ratify · routine risk, second seat (red-team) concurred
+
+
+
+
+
+
+
+
+
+
+
+
+
+● working · 1793181597s                                                                  esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+↑ ↓ move · enter open · space tick · a tick recommended · f filter · esc clear the filter · red: op…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ○ ●

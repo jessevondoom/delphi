@@ -1339,7 +1339,7 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
     c.type_keys("\x1b[1;2C");
-    c.wait_for("Pending decisions (1)");
+    c.wait_for("1 decision");
     std::thread::sleep(Duration::from_millis(500));
     c.type_keys("\r");
     c.wait_for("Approval required · 1 of 1 pending");
@@ -1536,7 +1536,7 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     line(&mut c, "@architect Draft a spec called 009-e2e");
     c.wait_for("approval needed [amber]");
     c.type_keys("\x1b[C"); // Right, with nothing typed: the next deck
-    c.wait_for("Pending decisions (1)");
+    c.wait_for("1 decision");
     std::thread::sleep(Duration::from_millis(400)); // the 300 ms guard
     c.type_keys("n");
     c.wait_for("nothing needs you");
