@@ -331,6 +331,37 @@ pub fn apply(home: &Path, ws_dir: &Path, id: &str, expected_blake3: &str) -> Res
     .map_err(io)?
 }
 
+/// Edit one pinned rules file (`heuristics.md` of a scope) as an operator-approved change, in one step under the scope's
+/// lock: the live file must match its pin (or both must be absent), `edit` turns its text into the new text, and the live
+/// file, the ratified copy and the pin are written together. A file with unratified edits is refused, so ratifying one
+/// rule never blesses another edit nobody reviewed (`specs/004` §2.1, no lost updates).
+pub fn edit_pinned(home: &Path, ws_dir: &Path, scope: Scope, logical: &str, edit: impl FnOnce(Option<&str>) -> Result<String, String>) -> Result<String, RatifyError> {
+    let l = layout(home, ws_dir, scope);
+    let live = live_files(home, ws_dir, scope).get(logical).cloned().unwrap_or_else(|| match scope {
+        Scope::Workspace => ws_dir.join("local").join(logical),
+        Scope::Operator => home.join("operator").join(logical),
+    });
+    lock::with_lock(&l.lock_guard, || -> Result<String, RatifyError> {
+        let mut lockfile: LockFile = lock::read(&l.lock).map_err(RatifyError::Io)?;
+        let current = live.is_file().then(|| read_text(&live));
+        match (&current, lockfile.files.get(logical)) {
+            (None, None) => {}
+            (Some(t), Some(pin)) if &hash(t.as_bytes()) == pin => {}
+            (Some(t), pin) => return Err(RatifyError::Stale { reviewed: pin.cloned().unwrap_or_default(), now: hash(t.as_bytes()) }),
+            (None, Some(pin)) => return Err(RatifyError::Stale { reviewed: pin.clone(), now: String::new() }),
+        }
+        let new = edit(current.as_deref()).map_err(RatifyError::Unsupported)?;
+        let h = hash(new.as_bytes());
+        // Live first: until the pin moves, the new text is only a pending proposal, so a failure here loads nothing.
+        lock::write_atomic(&live, new.as_bytes()).map_err(io)?;
+        lock::write_atomic(&l.ratified.join(logical), new.as_bytes()).map_err(io)?;
+        lockfile.files.insert(logical.to_string(), h.clone());
+        lock::write(&l.lock, &lockfile).map_err(io)?;
+        Ok(h)
+    })
+    .map_err(io)?
+}
+
 /// Reject a proposal by putting the live file back the way the pin says it should be.
 pub fn reject(home: &Path, ws_dir: &Path, id: &str, expected_blake3: &str) -> Result<(), RatifyError> {
     let p = find(home, ws_dir, id)?;

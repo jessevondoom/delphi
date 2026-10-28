@@ -68,6 +68,7 @@ pub mod hostmap;
 pub mod recovery;
 pub mod route;
 pub mod ratify;
+pub mod retro;
 pub mod service;
 pub mod status;
 pub mod timers;
