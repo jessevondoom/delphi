@@ -4,7 +4,9 @@
 import type { Agent } from './fold.ts';
 import { capabilities, type AgentState } from './theme.ts';
 
-export const BLINK_EVERY_MS = 5000;
+/** Blinks are random per badge: one per slot, at a hashed offset, so the gap between two blinks is 7-30 s (SLOT - SPREAD .. SLOT + SPREAD). */
+export const BLINK_SLOT_MS = 18_500;
+export const BLINK_SPREAD_MS = 11_500;
 export const BLINK_FOR_MS = 150;
 export const PAN_MS = 600;
 export const THINKING_WINDOW_MS = 1500;
@@ -23,8 +25,17 @@ export type Face = { frame: string; state: AgentState };
 export const stillMotion = (env: Record<string, string | undefined> = process.env): boolean =>
   env.DELPHI_REDUCE_MOTION === '1' || capabilities(env).color === 'none';
 
-/** Roles blink out of step, so the strip does not wink all at once. */
-const phase = (role: string) => [...role].reduce((n, c) => n + c.charCodeAt(0) * 31, 0) % BLINK_EVERY_MS;
+/** Where in slot `slot` the role blinks: 0..BLINK_SPREAD_MS, a pure function of both so a repaint never moves it and a test can pin it. */
+export function blinkOffset(role: string, slot: number): number {
+  const h = [...role].reduce((n, c) => Math.imul(n ^ c.charCodeAt(0), 16777619), 2166136261 ^ slot);
+  return (Math.imul(h ^ (h >>> 15), 2246822519) >>> 0) % (BLINK_SPREAD_MS + 1);
+}
+
+const blinking = (role: string, now: number): boolean => {
+  const slot = Math.floor(now / BLINK_SLOT_MS);
+  const t = now - slot * BLINK_SLOT_MS - blinkOffset(role, slot);
+  return t >= 0 && t < BLINK_FOR_MS;
+};
 
 export function faceOf(a: Agent | undefined, role: string, now: number, still: boolean): Face {
   const st = a?.state ?? 'idle';
@@ -36,7 +47,7 @@ export function faceOf(a: Agent | undefined, role: string, now: number, still: b
     return { frame: still || Math.floor(now / PAN_MS) % 2 === 0 ? 'thinking_left' : 'thinking_right', state: 'running' };
   }
   if (a?.successAt !== undefined && now - a.successAt < SUCCESS_MS) return { frame: 'success', state: 'idle' };
-  if (!still && (now + phase(role)) % BLINK_EVERY_MS < BLINK_FOR_MS) return { frame: 'blink', state: 'idle' };
+  if (!still && blinking(role, now)) return { frame: 'blink', state: 'idle' };
   return { frame: 'idle', state: 'idle' };
 }
 
