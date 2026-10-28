@@ -263,6 +263,9 @@ pub struct Engine {
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
+    /// How the team is spread over the providers for now (`/pace`, `specs/035` D-21). Kept in memory on purpose: it lasts until the
+    /// operator sets it back or the daemon stops.
+    pub pace: Mutex<crate::route::Pace>,
     /// Single-use and rate-limit state for step-up codes.
     pub(crate) totp: delphi_core::totp::Verifier,
 }
@@ -1359,6 +1362,7 @@ impl Engine {
     /// with an approval bridge.
     fn route_request(&self, sc: &SpanCtx, turn_by_turn: bool) -> RouteRequest {
         RouteRequest {
+            pace: *self.pace.lock().unwrap(),
             role: sc.role.clone(),
             tier: sc.tier.clone(),
             prefer_family: Some(sc.family.clone()),

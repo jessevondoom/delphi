@@ -381,6 +381,35 @@ impl EngineService {
         Ok(json!({"mission_id": m.id, "decisions": ds.iter().map(|d| d.to_json()).collect::<Vec<_>>(), "pending": pending}))
     }
 
+    /// `decision.list`: every decision the operator owes (`specs/044` §4), built by `decision_model` from the pending
+    /// approval cards and the provisional decisions that await review. Read-only: it calls no model.
+    async fn decision_list(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let list = self.decision_records(&m)?;
+        let tickable = list.iter().filter(|d| d["tickable"] == true).count();
+        Ok(json!({"mission_id": m.id, "count": list.len(), "tickable": tickable, "decisions": list}))
+    }
+
+    /// `decision.get`: one entry of `decision.list`, by its `id`.
+    async fn decision_get(&self, p: Value) -> RpcOutcome {
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let Some(id) = p["id"].as_str() else {
+            return Err(err(code::INVALID_PARAMS, "`id` is required"));
+        };
+        match self.decision_records(&m)?.into_iter().find(|d| d["id"] == id) {
+            Some(d) => Ok(json!({"mission_id": m.id, "decision": d})),
+            None => Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id))),
+        }
+    }
+
+    fn decision_records(&self, m: &MissionState) -> Result<Vec<Value>, RpcError> {
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let at: std::collections::HashMap<u64, String> = events.iter().filter(|e| e.kind == "decision.provisional").map(|e| (e.seq, e.timestamp.clone())).collect();
+        let ledger: Vec<_> = crate::provisional::ledger_all(&events).into_iter().map(|d| { let t = at.get(&d.seq).cloned().unwrap_or_default(); (d, t) }).collect();
+        let cards: Vec<Value> = self.engine.broker.pending().iter().map(|r| r.event_payload()).collect();
+        Ok(crate::decision_model::list(&cards, &ledger))
+    }
+
     /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
     /// decision's payload hash, so a review of one thing cannot ratify another, and only an allowed decision (the
     /// kind that enabled work) is reviewed.
@@ -633,7 +662,44 @@ impl EngineService {
         v["mission_id"] = json!(m.id);
         v["budget"] = Self::budget_json(&m);
         v["pending_proposals"] = json!(crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len());
+        v["providers"] = json!(self.providers());
+        v["pace_mode"] = json!(self.engine.pace.lock().unwrap().as_str());
         Ok(v)
+    }
+
+    /// How each connected provider (endpoint) stands: of its models, how many can be used now, how many are cooling down after a
+    /// throttle and how many are out of quota, and when the soonest comes back (Unix ms). Names and counts only (`specs/035` D-21).
+    fn providers(&self) -> Vec<Value> {
+        let cfg = self.engine.cfg.get();
+        let now = (self.engine.clock_unix)();
+        let state = self.engine.pool.snapshot();
+        let mut order: Vec<String> = Vec::new();
+        let mut rows: std::collections::BTreeMap<String, (String, u32, u32, u32, Option<i64>)> = Default::default();
+        for k in cfg.pool_entries() {
+            if !order.contains(&k.endpoint_id) {
+                order.push(k.endpoint_id.clone());
+            }
+            let row = rows.entry(k.endpoint_id.clone()).or_insert_with(|| (k.family.clone(), 0, 0, 0, None));
+            row.1 += 1;
+            if let Some(e) = state.iter().find(|e| e.endpoint_id == k.endpoint_id && e.model_id == k.model_id) {
+                let live = e.until.is_none_or(|t| t > now);
+                match e.state {
+                    crate::pool::State::CoolingDown if live => row.2 += 1,
+                    crate::pool::State::Exhausted if live || e.until.is_none() => row.3 += 1,
+                    _ => {}
+                }
+                if live && e.state != crate::pool::State::Available {
+                    if let Some(t) = e.until {
+                        row.4 = Some(row.4.map_or(t, |b| b.min(t)));
+                    }
+                }
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|id| rows.remove(&id).map(|r| (id, r)))
+            .map(|(id, (family, models, cooling, out, back))| json!({"endpoint": id, "family": family, "models": models, "cooling": cooling, "out": out, "back_ms": back.map(|t| t * 1000)}))
+            .collect()
     }
 
     /// `kb.search`: pointers and previews from the workspace's knowledge base (read-only). `kb.index` refreshes it.
@@ -1000,7 +1066,7 @@ impl EngineService {
             })
             .collect();
         let pending: Vec<Value> = crate::settings_store::pending(&events).iter().map(|s| json!({"id": s.id, "key": s.key, "value": s.value, "reason": s.reason, "by": s.by})).collect();
-        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m), "reduce_motion": o.reduce_motion}))
+        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m), "reduce_motion": o.reduce_motion, "pace": self.engine.pace.lock().unwrap().as_str()}))
     }
 
     /// `settings.set`: the operator changes one setting by command. `{key, value}`.
@@ -1163,6 +1229,8 @@ impl Extension for ServiceExt {
                 "build.start" => svc.build_start(params, ctx).await,
                 "build.merge" => svc.build_merge(params, ctx).await,
                 "decisions.list" => svc.decisions_list(params).await,
+                "decision.list" => svc.decision_list(params).await,
+                "decision.get" => svc.decision_get(params).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
@@ -1479,6 +1547,35 @@ mod tests {
         assert!(events_of(&f, "task.created")[0].payload["prompt"].as_str().unwrap().contains("cost the cron job"));
         let by_label = svc.council_follow(json!({"option": "proceed"}), console()).await.unwrap();
         assert_eq!(by_label["started"].as_u64(), Some(2), "a label works as well as a number");
+    }
+
+    // specs/035 D-21: the pace is set by command, told exactly, held in memory, and the narrator is told how each provider stands.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_operator_sets_a_pace_and_the_narrator_is_told_it_and_how_each_provider_stands() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let console = || CallContext { scope: Scope::Console, client_id: 7 };
+        assert_eq!(svc.settings_get(json!({}), console()).await.unwrap()["pace"], "balanced");
+        let set = svc.settings_set(json!({"key": "pace", "value": "sprint"}), console()).await.unwrap();
+        assert_eq!((set["old"].as_str(), set["new"].as_str()), (Some("balanced"), Some("sprint")));
+        assert!(set["text"].as_str().unwrap().contains("No role starts on a lower model"), "{}", set["text"]);
+        assert_eq!(*f.engine.pace.lock().unwrap(), crate::route::Pace::Sprint);
+        assert_eq!(events_of(&f, "setting.changed").last().unwrap().payload["key"], "pace");
+        assert!(svc.settings_set(json!({"key": "pace", "value": "reckless"}), console()).await.is_err());
+        assert!(svc.settings_set(json!({"key": "pace", "value": "frugal"}), CallContext { scope: Scope::Narrator, client_id: 1 }).await.is_err(), "only a console sets the pace");
+        let st = svc.observe_state(json!({})).await.unwrap();
+        assert_eq!(st["pace_mode"], "sprint");
+        for p in st["providers"].as_array().unwrap() {
+            assert!(p["models"].as_u64().unwrap() >= p["cooling"].as_u64().unwrap() + p["out"].as_u64().unwrap(), "{}", p);
+        }
+        // A model out of quota shows against its provider, with when it is back.
+        let ep = f.engine.cfg.get().pool_entries().into_iter().next().expect("the test workspace has a model");
+        let reset = (f.engine.clock_unix)() + 3600;
+        f.engine.pool.record_exhausted(&ep.endpoint_id, &ep.model_id, &delphi_adapter::exhaust::Exhaustion { reason: "quota reached".into(), reset_at: Some(reset), raw: String::new() });
+        let st = svc.observe_state(json!({})).await.unwrap();
+        let row = st["providers"].as_array().unwrap().iter().find(|p| p["endpoint"] == ep.endpoint_id.as_str()).unwrap();
+        assert_eq!((row["out"].as_u64(), row["back_ms"].as_i64()), (Some(1), Some(reset * 1000)), "{}", row);
     }
 
     // specs/035 D-17..D-19: the operator's own commands for settings, and the suggestions waiting for them.
@@ -2155,6 +2252,39 @@ mod tests {
         let reviewed = events_of(&f, "decision.reviewed");
         assert_eq!(reviewed.len(), 1);
         assert!(reviewed[0].payload["by"].as_str().unwrap().starts_with("console-") && reviewed[0].task_id.as_deref() == Some("t_0001"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_decision_list_holds_what_awaits_the_operator_and_only_a_console_can_ask_for_it() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let hash_a = seed_decision(&f, "dec_a", true).await;
+        let _ = seed_decision(&f, "dec_b", false).await;
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let l = c.call("decision.list", json!({})).unwrap();
+            assert_eq!(l["count"], 1, "the refusal needs nothing from the operator: {}", l);
+            let d = &l["decisions"][0];
+            assert_eq!((d["id"].as_str(), d["kind"].as_str(), d["tier"].as_str(), d["source_id"].as_str()), (Some("provisional:dec_a"), Some("build"), Some("amber"), Some("dec_a")));
+            assert_eq!(d["payload_blake3"], hash_a.as_str());
+            assert_eq!(d["brief"]["state"], "authored");
+            let one = c.call("decision.get", json!({"id": "provisional:dec_a"})).unwrap();
+            assert_eq!(one["decision"]["id"], "provisional:dec_a");
+            assert_eq!(rpc_code(c.call("decision.get", json!({"id": "provisional:nope"}))), Some(code::NOT_FOUND));
+            assert_eq!(rpc_code(c.call("decision.get", json!({}))), Some(code::INVALID_PARAMS));
+            c.call("decisions.review", json!({"decision_id": "dec_a", "payload_blake3": hash_a, "resolution": "ratified"})).unwrap();
+            assert_eq!(c.call("decision.list", json!({})).unwrap()["count"], 0, "a reviewed decision is no longer owed");
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                assert_eq!(rpc_code(c.call("decision.list", json!({}))), Some(code::FORBIDDEN));
+            }
+        })
+        .await;
     }
 
     // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──

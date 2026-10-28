@@ -1,4 +1,4 @@
-// The monitoring panes (`specs/034`): pulse, timeline and tools. Goldens at three sizes, then what each one says.
+// The monitoring page (`specs/034`): the timeline with the tools board below it. Goldens at three sizes, then what each one says.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import stringWidth from 'string-width';
@@ -9,9 +9,9 @@ import { info, NOW } from './epic-fixture.ts';
 
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const text = (m: OModel, w = 110, h = 34) => observeFrame(m, w, h).map(plain).join('\n');
-const PANES = ['pulse', 'timeline', 'tools'] as const;
+const PANES = ['timeline'] as const;
 
-test('goldens: pulse, timeline and tools at 100x34, 80x24 and 40x12', () => {
+test('goldens: the timeline page (tools below) at 100x34, 80x24 and 40x12', () => {
   for (const view of PANES) for (const [w, h] of [[100, 34], [80, 24], [40, 12]] as const) {
     const r = snapshot(`monitors-${view}-${w}x${h}`, observeFrame(monitorsModel(view), w, h));
     assert.ok(r.ok, r.message);
@@ -27,32 +27,8 @@ test('every pane fits every size exactly, with a full world and an empty one, an
   }
 });
 
-test('pulse: a meter per working agent with pace, cap share, quiet note and loop flag; calm when nothing runs', () => {
-  const t = text(monitorsModel('pulse'));
-  assert.match(t, /hephaestus\s+[▁-█]{10,}\s+[\d.]+k\/min\s+● running/);
-  assert.match(t, /▓{7}░ 82%\s+cap in ~2m\s+·\s+in run_command 12m\s+·\s+⟳ run_command ×7\s+·\s+→ run_command/);
-  assert.match(t, /ares[\s\S]*► waiting on you/);
-  assert.ok(!/daedalus/.test(t), 'an idle agent has no meter');
-  assert.match(t, /all agents\s+[▁-█]+/);
-  assert.match(text(monitorsModel('pulse', { st: emptyState() })), /nothing is working right now/);
-  // Not silent, not over the cap: no warnings, no meter without a live total.
-  const calm = text(monitorsModel('pulse', { liveTokens: {}, lastSeen: { n3: NOW - 1000 }, st: { ...monitorsWorld(), tools: {} } }));
-  assert.ok(!/quiet|⟳|%|in run_command/.test(calm));
-});
-
-test('pulse: the digest for coming back, and how long each approval has waited', () => {
-  const t = text(monitorsModel('pulse'));
-  assert.match(t, /since you last acted, 18m ago:\s+3 changes · 2 tasks done · 1 approval raised/);
-  assert.match(t, /► waiting on you\s+6m\s+ares · run cargo test --workspace/);
-  // Nothing happened since, or it happened a moment ago: no digest. A long wait is an alert, not a warning.
-  assert.ok(!/since you last acted/.test(text(monitorsModel('pulse', { st: { ...monitorsWorld(), since_you: { since_ms: NOW - 20_000, changes: 2, done: 0, failed: 0, approvals: 0 } } }))));
-  assert.ok(!/since you last acted/.test(text(monitorsModel('pulse', { st: { ...monitorsWorld(), since_you: { since_ms: NOW - 600_000, changes: 0, done: 0, failed: 0, approvals: 0 } } }))));
-  const old = text(monitorsModel('pulse', { st: { ...monitorsWorld(), approvals: { ap_1: { role: 'red-team', summary: 'x', since_ms: NOW - 25 * 60_000 } } } }));
-  assert.match(old, /waiting on you\s+25m/);
-});
-
 test('state decides what silence means: inside a tool it takes ten minutes, thinking two, waiting on you never', () => {
-  const at = (over: Partial<OModel>, tools?: unknown, approvals?: unknown) => text(monitorsModel('pulse', { st: { ...monitorsWorld(), tools: tools as never, approvals: approvals as never }, ...over }));
+  const at = (over: Partial<OModel>, tools?: unknown, approvals?: unknown) => text(monitorsModel('agents', { st: { ...monitorsWorld(), tools: tools as never, approvals: approvals as never }, ...over }));
   const open = { builder: { calls: 4, errors: 0, last: 'run_command', streak: { tool: 'run_command', n: 1, failed: 0 }, open: { tool: 'run_command', since_ms: NOW - 5 * 60_000 }, by_tool: {} } };
   assert.ok(!/quiet|in run_command \d+m/.test(at({ lastSeen: { n3: NOW - 5 * 60_000 } }, open)), 'five silent minutes inside a build is fine');
   assert.match(at({ lastSeen: { n3: NOW - 11 * 60_000 } }, open), /in run_command 5m/);
@@ -63,11 +39,11 @@ test('state decides what silence means: inside a tool it takes ten minutes, thin
 });
 
 test('the cap meter forecasts when the cap is reached at the last minute\'s pace, only when that is near', () => {
-  const t = text(monitorsModel('pulse'));
+  const t = text(monitorsModel('agents'));
   assert.match(t, /82%\s+cap in ~2m/);
   const slow = { builder: Array<number>(36).fill(10) };
-  assert.ok(!/cap in/.test(text(monitorsModel('pulse', { pulse: slow }))), 'at 10 tokens per 5 s the cap is hours away');
-  assert.ok(!/cap in/.test(text(monitorsModel('pulse', { pulse: undefined }))), 'no samples, no forecast');
+  assert.ok(!/cap in/.test(text(monitorsModel('agents', { pulse: slow }))), 'at 10 tokens per 5 s the cap is hours away');
+  assert.ok(!/cap in/.test(text(monitorsModel('agents', { pulse: undefined }))), 'no samples, no forecast');
 });
 
 test('an API seat shows a live estimate with the logged tokens, and no cap meter', () => {
@@ -88,14 +64,14 @@ test('timeline: a lane per role across the window, runs drawn where they happene
   assert.match(text(monitorsModel('timeline', { st: emptyState() })), /no work has started yet/);
 });
 
-test('tools: busiest first with failures, who reports their work, who is going round in circles', () => {
-  const t = text(monitorsModel('tools'));
+test('the timeline page carries the tools board below the lanes: busiest first with failures, who reports their work, who is going round in circles', () => {
+  const t = text(monitorsModel('timeline'), 110, 80);
   assert.ok(t.indexOf('read_file') < t.indexOf('run_command') && t.indexOf('run_command') < t.indexOf('edit_file'), 'by calls');
   assert.match(t, /run_command\s+▓+░*\s+12\s+✗ 5/);
   assert.match(t, /claude-sonnet-5-5\s+▓+\s+100%\s+5\/5 runs/);
   assert.match(t, /gemini-flash\s+▓+░+\s+25%\s+1\/4 runs/);
   assert.match(t, /going round in circles: hephaestus run_command ×7/);
-  assert.match(text(monitorsModel('tools', { st: emptyState() })), /no tool has been called yet/);
+  assert.match(text(monitorsModel('timeline', { st: emptyState() }), 110, 80), /no tool has been called yet/);
 });
 
 test('the panes show names, counts and times only: nothing a model wrote or an argument', () => {

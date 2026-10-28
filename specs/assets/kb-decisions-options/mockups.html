@@ -1,0 +1,409 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Knowledge base and decisions pane mockups</title>
+<!-- Round 2 mockups. render.sh turns each screen into a PNG with headless Chrome (?shot=<id>). Nothing here is built. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+:root{--t-bg:#15171c;--t-fg:#dcdfe4;--t-dim:#6d727d;--t-tint:#242830;--t-ok:#6fcf97;--t-amb:#ff8a4c;--t-acc:#62c4d6;--t-arch:#62c4d6;--t-build:#b9a3f5;--t-strat:#e58fb8;--t-red:#ef6b6b;--t-scout:#6fd1b9;--t-warn:#e8b94e;--t-rule:#3a3f49}
+body{margin:0;background:var(--t-bg);color:var(--t-fg);font:400 13px/1.32 "JetBrains Mono",ui-monospace,Menlo,monospace;font-variant-ligatures:none}
+.term{padding:14px 16px;width:max-content}
+.page .term{margin:0 0 28px;border-bottom:1px solid var(--t-rule)}
+.ln{white-space:pre;height:1.32em}
+.dim{color:var(--t-dim)}.b{font-weight:700}.ok{color:var(--t-ok)}.acc{color:var(--t-acc)}.amb{color:var(--t-amb)}.warn{color:var(--t-warn)}
+.arch{color:var(--t-arch)}.build{color:var(--t-build)}.strat{color:var(--t-strat)}.red{color:var(--t-red)}.scout{color:var(--t-scout)}
+.rule{color:var(--t-rule)}.tint{background:var(--t-tint)}.hl{color:var(--t-acc);font-weight:700}
+.btn{background:var(--t-acc);color:var(--t-bg);font-weight:700}
+.btnr{background:var(--t-red);color:var(--t-bg);font-weight:700}
+</style>
+<body><div id="out"></div>
+<script>
+(function(){
+var W=100,H=34,overflow=[];
+var T=function(t,c){return {t:t,c:c||''}};
+var len=function(l){var n=0;l.forEach(function(x){n+=x.t.length});return n};
+var rep=function(ch,n){return n>0?new Array(Math.floor(n)+1).join(ch):''};
+var pad=function(l,w){var n=w-len(l);return n>0?l.concat([T(rep(' ',n))]):l};
+var cls=function(l,c){return l.map(function(x){return T(x.t,((x.c||'')+' '+c).trim())})};
+var blank=function(){return [T('')]};
+function mk(s){var o=[],re=/\{([^|}]*)\|([^}]*)\}/g,i=0,m;
+  while((m=re.exec(s))){if(m.index>i)o.push(T(s.slice(i,m.index)));o.push(T(m[2],m[1]));i=re.lastIndex}
+  if(i<s.length)o.push(T(s.slice(i)));return o}
+function lr(a,b,w){a=mk(a);b=mk(b);var g=(w||W)-len(a)-len(b);return a.concat([T(rep(' ',Math.max(1,g)))],b)}
+function ctr(s){var l=mk(s);return [T(rep(' ',Math.floor((W-len(l))/2)))].concat(l)}
+function fit(s,n){return s.length>n?s.slice(0,n-1)+'…':s+rep(' ',n-s.length)}
+function wrap(s,w){var out=[],cur='';s.split(' ').forEach(function(word){var t=cur?cur+' '+word:word;if(t.length>w){out.push(cur);cur=word}else cur=t});if(cur)out.push(cur);return out}
+function hlm(t,words,base){var re=new RegExp('\\b('+words.join('|')+')\\w*','gi'),o='',i=0,m;
+  while((m=re.exec(t))){if(m.index>i)o+='{'+base+'|'+t.slice(i,m.index)+'}';o+='{hl|'+m[0]+'}';i=re.lastIndex}
+  if(i<t.length)o+='{'+base+'|'+t.slice(i)+'}';return o}
+var RULE=[T(rep('─',W),'rule')];
+var STRIP='{|⟦•_•⟧} {arch|⟦•_•⟧} {build|⟦•_•⟧} {red|⟦•_•⟧} {strat|⟦•_•⟧} {scout|⟦•••⟧}';
+function card(lines){return lines.map(function(s){return [T('  ')].concat(cls(pad(mk('  '+s),W-4),'tint'))})}
+
+function frame(o){
+  var L=[mk(o.head1),mk('{dim|delphi v0.2.7 · ~/projects/app · '+o.pane+'}'),blank()];
+  var foot=[mk('{dim|'+o.hint+'}'),RULE];
+  if(o.prompt){foot.push(mk('{acc b|❯ }'+(o.prompt===true?'':o.prompt)));foot.push(RULE)}
+  foot.push(lr('{dim|12.4k tokens}','{dim|'+o.dots+'}'));
+  var room=H-L.length-foot.length,body=o.body;
+  if(body.length>room)overflow.push(o.id+' body '+body.length+'>'+room);
+  while(body.length<room)body.push(blank());
+  return L.concat(body.slice(0,room),foot);
+}
+
+/* ============================ KNOWLEDGE BASE ============================ */
+var KDOTS='shift+tab  expand  ·  ← →  ·  ○ ○ ○ ○ ● ○';
+var KDOTSE='shift+tab  search  ·  ← →  ·  ○ ○ ○ ○ ● ○';
+var KHEAD=STRIP;
+var KTITLE='{|⟦•_•⟧} {b|search the archives}';
+var KLABEL='{scout|⟦•••⟧} {b|expand knowledge base: research a topic}';
+var KC={spec:'arch',lesson:'strat',code:'build',mission:'scout',skill:'dim',memory:'dim',docs:'ok',research:'warn',pdf:'dim',png:'dim'};
+function boxTop(q,ph){
+  var inner=60;
+  return [
+    mk('  {dim|╭'+rep('─',inner)+'╮}'),
+    mk('  {dim|│} {acc b|›}  '+(ph?'{dim|'+fit(ph,inner-5)+'}':fit(q,inner-5))+' {dim|│}'),
+    mk('  {dim|╰'+rep('─',inner)+'╯}')
+  ];
+}
+function chips(active,items){
+  var s='  {dim|show}  ';
+  items.forEach(function(it,i){var on=i===active;s+='{'+(on?(it[2]?it[2]+' b':'b'):(it[2]||'dim'))+'|'+(on?'●':'○')+' '+it[0]+' '+it[1]+'}   '});
+  return mk(s);
+}
+var CH=[['all',14,''],['research',5,'warn'],['docs',4,'ok'],['specs',3,'arch'],['lessons',1,'strat'],['missions',1,'scout']];
+function krow(sel,rank,title,kind,trust,age,snip,mark,words){
+  var out='',kk=kind.replace(' ↗','');
+  out+=(sel?'{acc b|❯}':' ')+' {'+(sel?'acc b':'dim')+'|'+String(rank).padStart(2)+'}  {'+(sel?'b':'')+'|'+fit(title,56)+'}  {'+KC[kk]+'|'+fit(kind,8)+'}  {'+(trust==='untrusted'?'warn':'dim')+'|'+fit(trust,9)+'} {dim|'+age.padStart(6)+'}';
+  if(mark)out+='  {acc b|'+mark+'}';
+  return [mk('  '+out),mk('       '+hlm(fit(snip,86).replace(/\s+$/,''),words||KW,'dim')),blank()];
+}
+function listHead(){return mk('  {dim|   #  title                                                    kind      trust       edited}')}
+var KW=['byzantine','fault','quorum','vote','tolerat'];
+function rows(sel,marks){
+  var R=[
+    ['knowledge/web/arxiv.org/castro-liskov-pbft.md › Abstract','research','listed','2 d','a state machine replication algorithm that tolerates Byzantine faults and works in asynchronous …'],
+    ['context/lessons/council-deadlock.md › Model-family tiebreakers','lesson','trusted','5 d','two seats of one model family are one vote: they tend to share the same fault …'],
+    ['docs/reference/council.md › Quorum and votes','docs','trusted','1 w','a quorum needs three agreeing votes; two seats of one model family count as one vote'],
+    ['specs/003-collaboration-and-council.md › 4 Quorum','spec','trusted','2 w','the council decides by quorum; a seat that cannot be reached counts as a fault, not a vote']
+  ],out=[];
+  R.forEach(function(r,i){out=out.concat(krow(sel===i,i+2,r[0],r[1],r[2],r[3],r[4],marks&&marks[i]))});
+  return out;
+}
+var SCREENS={};
+function cardHead(l,r){return [T('  ')].concat(cls(pad([T('  ')].concat(lr(l,r,92)),96),'tint'))}
+
+SCREENS['kb-1-resting']=function(){
+  var b=[];for(var i=0;i<6;i++)b.push(blank());
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  {dim|search what Delphi knows…}'+rep(' ',19)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  b.push(blank());b.push(blank());b.push(blank());b.push(blank());b.push(blank());
+  b.push(ctr('{warn|research 214}   {ok|docs 87}   {arch|specs 31}   {strat|lessons 42}   {scout|missions 19}   {dim|skills 48}   {dim|memory 64}'));
+  b.push(blank());
+  b.push(ctr('{dim|1,204 documents · 8,931 passages · updated 2 min ago}'));
+  return frame({id:'kb-1',head1:KHEAD,pane:'knowledge',body:b,hint:'type to search · ↑ earlier searches · tab filter by kind · ctrl+t trusted only',dots:KDOTS});
+};
+
+SCREENS['kb-2-results']=function(){
+  var b=boxTop('byzantine fault tolerance');
+  b.push(lr('  {dim|14 results · 0.04 s · 0 tokens}','{acc b|s}  summarize for me {dim|· uses the model, about 1.2k tokens}  '));
+  b.push(chips(0,CH));
+  var c=['{acc b|knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md › Overview}'];
+  wrap('A Byzantine fault is a condition in which components fail in arbitrary ways, including sending conflicting information to different parts of the system. A system is Byzantine fault tolerant when it keeps working correctly despite such failures, usually by reaching agreement among the healthy nodes.',88).forEach(function(l){c.push(hlm(l,KW,''))});
+  c.push('');c.push('{dim|en.wikipedia.org · lines 12–31 · cited again by results 2, 3 and 5}');
+  c.push('{acc b|enter} read   {acc b|o} open file   {acc b|m} more like this');
+  var cc=card(c);
+  cc.unshift(cardHead('{dim b|BEST MATCH}','{warn|research} {dim|· full text · CC BY-SA · retrieved 2 d ago}'));
+  b=b.concat(cc);b.push(blank());
+  b.push(listHead());
+  b=b.concat(rows(0,null).slice(0,11));
+  b.push(mk('  {dim|   + 9 more below}'));
+  return frame({id:'kb-2',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick · enter open · s summarize · m more like this · tab filter · / edit the search · esc clear',dots:KDOTS});
+};
+
+SCREENS['kb-3-summary']=function(){
+  var b=boxTop('byzantine fault tolerance');
+  b.push(lr('  {dim|14 results · 0.04 s}','{ok|✔} summarized · 1,180 tokens spent · cached, reopening is free  '));
+  b.push(chips(0,CH));
+  var c=[];
+  wrap('A Byzantine fault is a component failing in arbitrary ways, including telling different nodes different things [1]. A system tolerates such faults by reaching agreement among the healthy nodes, which PBFT does while fewer than a third of the nodes are faulty [2]. Delphi’s council uses a small version of this: three agreeing votes make a quorum [3], and two seats of one model family count as one vote [4].',88).forEach(function(l){c.push(l)});
+  c.push('');
+  c.push('{dim|sources}  {acc|[1]} wikipedia   {acc|[2]} castro-liskov-pbft   {acc|[3]} docs/reference/council   {acc|[4]} lessons/deadlock');
+  c.push('{acc b|c} copy summary   {acc b|esc} back to the best match');
+  var cc=card(c);
+  cc.unshift(cardHead('{b|SUMMARY}  {warn|written by the model, not checked}','{dim|from results 1–5}'));
+  b=b.concat(cc);b.push(blank());
+  b.push(listHead());
+  b=b.concat([mk('    {dim| 1}  '+fit('knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md › Overview',56)+'  {warn|research}  {dim|listed   }  {dim|  2 d}  {acc b|◂ [1]}'),blank()]);
+  b=b.concat(rows(-1,['◂ [2]','◂ [4]','◂ [3]',null]).slice(0,8));
+  return frame({id:'kb-3',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick a source · enter open it · c copy summary · esc back to the best match',dots:KDOTS});
+};
+
+SCREENS['kb-4-reader']=function(){
+  var b=[];
+  b.push(lr('  {warn b|knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md}','{warn|research} {dim|· full text · CC BY-SA 4.0}  '));
+  b.push(mk('  {dim|en.wikipedia.org · retrieved 2026-10-26 · share-alike · listed source, not curated by you}'));
+  b.push([T('  '+rep('─',W-4),'rule')]);b.push(blank());
+  b.push(mk('  {acc b|Byzantine fault tolerance}'));b.push(blank());
+  wrap('Byzantine fault tolerance is the resilience of a distributed system to Byzantine faults: components that fail in arbitrary ways, including sending conflicting information to different parts of the system. The name comes from the Byzantine Generals Problem.',92).forEach(function(l){b.push(mk('  '+hlm(l,KW,'')))});
+  b.push(blank());
+  b.push(mk('  {b|Properties}'));
+  b.push(mk('   {dim|1.}  safety: healthy nodes never decide different values'));
+  b.push(mk('   {dim|2.}  liveness: healthy nodes eventually decide, if fewer than a third are faulty'));
+  b.push(mk('   {dim|3.}  practical algorithms, such as {acc b|[1] PBFT}, trade messages for fault tolerance'));
+  b.push(blank());
+  b.push(mk('  {b|See also}'));
+  b.push(mk('   {acc b|[1]} {acc|knowledge/web/arxiv.org/castro-liskov-pbft.md › Abstract}'));
+  b.push(mk('   {acc|[2]} docs/reference/council.md › Quorum and votes'));
+  b.push(mk('   {acc|[3]} specs/003-collaboration-and-council.md › 4 Quorum'));
+  b.push(mk('   {dim|[4]} en.wikipedia.org/wiki/Paxos_(computer_science)  {dim|seen, not read: not on your list}'));
+  b.push(blank());b.push(lr('  {dim|─── end of Overview ───}','{dim|lines 12–58 of 214  ·  26%}  '));
+  return frame({id:'kb-4',head1:KHEAD,pane:'knowledge › reading',body:b,hint:'tab next link · enter follow · [ ] back / forward · ↑ ↓ scroll · y copy path · esc back to results',dots:KDOTS});
+};
+
+SCREENS['kb-5-pdf']=function(){
+  var b=boxTop('pbft message flow diagram');
+  b.push(lr('  {dim|3 results · 0.01 s · 0 tokens}','{dim|↗ opens in your browser, everything else opens here}  '));
+  b.push(chips(0,[['all',3,''],['docs',3,'ok']]));
+  var c=[
+    '{acc b|docs/diagrams/pbft-message-flow.pdf}',
+    '{dim|page 1 text}  “PBFT message flow: request, pre-prepare, prepare, commit, reply.”',
+    '{dim|page 2 text}  “A replica waits for 2f + 1 matching prepares before it commits.”','',
+    '{ok|✔} opened in your browser {dim|· read-only, Delphi never runs it}',
+    '{acc b|enter} open again   {acc b|o} show in Finder   {acc b|c} copy path'
+  ];
+  var cc=card(c);cc.unshift(cardHead('{dim b|BEST MATCH}','{ok|docs} {dim|· pdf ↗ · trusted · 1.4 MB · 2 pages}'));
+  b=b.concat(cc);b.push(blank());
+  b.push(listHead());
+  b.push(mk('    '+'{dim| 2}  '+fit('docs/diagrams/pbft-message-flow.png',56)+'  {dim|png ↗   }  {dim|trusted  }  {dim|  1 w}'));
+  b.push(mk('       {dim|image 1920 × 1080 · 420 KB · enter opens it in your browser}'));b.push(blank());
+  b.push(mk('  '+'{acc b|❯}'+' {acc b| 3}  {b|'+fit('docs/reference/council.md › Message flow',56)+'}  {ok|docs    }  {dim|trusted }  {dim|  1 w}'));
+  b.push(mk('       '+hlm('text description of the PBFT message flow that the diagram shows',['pbft','message','flow','diagram'],'dim')));
+  b.push(mk('       {dim|enter reads it here}'));
+  return frame({id:'kb-5',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick · enter open (↗ in the browser, else here) · o show in Finder · c copy path · esc clear',dots:KDOTS});
+};
+
+SCREENS['kb-6-empty']=function(){
+  var b=boxTop('zyzzyva consensus');
+  b.push(lr('  {dim|0 results · 0.12 s}',''));b.push(blank());b.push(blank());
+  b.push(mk('  {b|Nothing in the archives matches} “zyzzyva consensus”.'));b.push(blank());
+  b.push(mk('  {dim|try}'));
+  b.push(mk('   {acc b|fewer words}     “consensus” alone matches 41 documents'));
+  b.push(mk('   {acc b|ctrl+t}          include untrusted documents (3 more would match)'));
+  b.push(mk('   {acc b|shift+tab}       expand the archive: research this topic from trusted sources'));
+  b.push(blank());
+  b.push(mk('  {dim|expanding needs a [search] provider in config.toml (specs/028 §6)}'));
+  return frame({id:'kb-6',head1:KHEAD,pane:'knowledge',body:b,hint:'type to change the search · tab filter by kind · ctrl+t trusted only · esc clear',dots:KDOTS});
+};
+
+SCREENS['kb-7-expand']=function(){
+  var b=[];for(var i=0;i<6;i++)b.push(blank());
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr(KLABEL));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  {dim|a topic to research…}'+rep(' ',22)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  return frame({id:'kb-7',head1:KHEAD,pane:'knowledge',body:b,hint:'type a topic · enter research it · esc back',dots:KDOTSE});
+};
+
+SCREENS['kb-8-researching']=function(){
+  var b=[];for(var i=0;i<4;i++)b.push(blank());
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr(KLABEL));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  byzantine fault tolerance'+rep(' ',20)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  b.push(blank());b.push(blank());
+  b.push(mk('    {b|researching} “byzantine fault tolerance”'));
+  b.push(mk('    reading {b|7} sources · {b|12} found · {dim|3 skipped (not on the trusted list)}'));
+  b.push(blank());
+  b.push(mk('    {ok|✔} {warn|en.wikipedia.org}       full text         CC BY-SA'));
+  b.push(mk('    {ok|✔} {warn|nist.gov}               full text         public domain'));
+  b.push(mk('    {ok|✔} {warn|arxiv.org}              summary and facts  {dim|summary-only source}'));
+  b.push(mk('    {acc|●} {warn|britannica.com}         reading…'));
+  b.push(mk('    {dim|○ pubmed.ncbi.nlm.nih.gov · acm.org · …}'));
+  return frame({id:'kb-8',head1:KHEAD,pane:'knowledge',body:b,hint:'esc cancel · entries already written stay · nothing leaves the trusted list',dots:KDOTSE});
+};
+
+SCREENS['kb-9-expanded']=function(){
+  var b=[];
+  b.push(ctr(KTITLE));b.push(blank());
+  b.push(ctr(KLABEL));b.push(blank());
+  b.push(ctr('{dim|╭'+rep('─',47)+'╮}'));
+  b.push(ctr('{dim|│} {acc b|›}  byzantine fault tolerance'+rep(' ',20)+'{dim|│}'));
+  b.push(ctr('{dim|╰'+rep('─',47)+'╯}'));
+  b.push(blank());
+  b.push(mk('  {ok b|the archive has been expanded to include 6 new entries}'));
+  b.push(blank());
+  b.push(mk('  {dim|   #  new entry                                                   form        licence}'));
+  var R=[['knowledge/web/en.wikipedia.org/byzantine-fault-tolerance.md','full','CC BY-SA'],['knowledge/web/nist.gov/fault-tolerance-glossary.md','full','public domain'],['knowledge/web/arxiv.org/castro-liskov-pbft.md','summary','summary-only'],['knowledge/web/acm.org/lamport-byzantine-generals.md','summary','summary-only'],['knowledge/web/britannica.com/distributed-computing.md','summary','summary-only'],['knowledge/web/ietf.org/rfc-4251-byzantine-note.md','full','IETF Trust']];
+  R.forEach(function(r,i){b.push(mk('  '+(i===0?'{acc b|❯}':' ')+' {'+(i===0?'acc b':'dim')+'|'+String(i+1).padStart(2)+'}  {'+(i===0?'b':'')+'|'+fit(r[0],60)+'}  {warn|'+fit(r[1],10)+'}  {dim|'+r[2]+'}'))});
+  b.push(blank());
+  b.push(mk('  {dim|read, not kept: britannica.com/… (nothing pertinent) · acm.org/dl/… (duplicate of 4)}'));
+  b.push(mk('  {dim|seen, not read: 4 links to hosts that are not on your list}'));
+  return frame({id:'kb-9',head1:KHEAD,pane:'knowledge',body:b,hint:'↑ ↓ pick · enter read it · esc back to the clean page · they are searchable now',dots:KDOTSE});
+};
+
+/* ============================== DECISIONS ============================== */
+var DDOTS='← / ? → · ○ ○ ●';
+var DH='{red b|⟦x?x⟧ red-team: 5 decisions needed · 09:14 remaining}';
+var DEC=[
+ {id:'DEC-081',tier:'red',tag:'RED · action',title:'Run a migration on the host staging.db, outside the sandbox',age:'18 m',
+  sum:'builder wants to run scripts/migrate_0.2.7.sql on /var/data/staging.db. It rewrites about 420 KB of host data that git cannot roll back, and it leaves the sandbox.',
+  rec:'{dim|no recommendation: your call. Red actions are decided one at a time.}',box:false},
+ {id:'DEC-083',tier:'red',tag:'RED · spec',title:'Approve spec 042: chunked bundle streaming over IPC',age:'12 m',
+  sum:'Streams bundle manifests over IPC in 64 KB chunks with backpressure, so large repositories stop spiking memory. Approving it lets builder start t_016.',
+  rec:'{ok|✔ recommend accept} {dim|· architect review done, no new authority. Red: decide individually.}',box:false},
+ {id:'DEC-082',tier:'amb',tag:'AMBER · build',title:'Raise the rate-limit burst from 20 to 50 per second',age:'9 m',
+  sum:'Provisional change from optimistic build t_014 (rate.rs, +12 −4) to stop telemetry drops in benchmark loops. 28 tests and the load suite pass.',
+  rec:'{ok|✔ recommend accept} {dim|· routine risk, second seat (scout) concurred}',box:true},
+ {id:'DEC-085',tier:'amb',tag:'AMBER · build',title:'Reuse stored vectors when a document is unchanged',age:'6 m',
+  sum:'Provisional change from optimistic build t_015 (index.rs, +41 −9). Re-indexing 1,200 documents drops from 40 s to 6 s, and a changed file is still re-embedded.',
+  rec:'{ok|✔ recommend accept} {dim|· routine risk, second seat (red-team) concurred}',box:true},
+ {id:'DEC-084',tier:'q',tag:'OPEN · question',title:'OD-2: which search API powers online mode?',age:'2 h',
+  sum:'Online search needs one provider first. Brave Search has a plain JSON API and a free tier; self-hosted SearXNG sends nothing to a vendor but needs setup.',
+  rec:'{ok|✔ recommend Brave Search} {dim|· the client is provider-neutral, so switching later is cheap}',box:true}
+];
+var TC={red:'red',amb:'amb',q:''};
+var DCH=[['all',5,''],['actions',1,'red'],['specs',1,'red'],['builds',2,'amb'],['questions',1,'']];
+function dchips(active){
+  var s='  {dim|show}  ';
+  DCH.forEach(function(it,i){var on=i===active;s+='{'+(on?(it[2]?it[2]+' b':'b'):(it[2]||'dim'))+'|'+(on?'●':'○')+' '+it[0]+' '+it[1]+'}   '});
+  return lr(s,'{dim|summaries cached · 0 tokens   f change}  ');
+}
+function ditem(d,sel,ticked){
+  var c=TC[d.tier],box=d.box?(ticked?'{ok b|[x]}':'{dim|[ ]}'):'   ';
+  var o=[lr('{'+(sel?'acc b':'dim')+'|'+(sel?'❯':' ')+'} '+box+' {dim|'+d.id+'}  {'+(c?c+' b':'b')+'|'+d.title+'}','{'+(c||'dim')+'|'+d.tag+'}  {dim|'+d.age+'}  ',W)];
+  wrap(d.sum,90).forEach(function(l){o.push(mk('        {|'+l+'}'))});
+  o.push(mk('        '+d.rec));o.push(blank());
+  return o;
+}
+function dlist(items,sel,ticks){var b=[];items.forEach(function(d,i){b=b.concat(ditem(d,i===sel,ticks&&ticks[d.id]))});return b}
+
+SCREENS['dec-1-queue']=function(){
+  var b=[lr('  {b|5 decisions}{dim| · 2 can take the recommendation}','{acc b|a}  tick every recommended item  '),dchips(0),blank()];
+  b=b.concat(dlist(DEC,0,null));
+  return frame({id:'dec-1',head1:DH,pane:'decisions',body:b,hint:'↑ ↓ move · enter open · space tick · a tick recommended · f filter · red: open to decide',dots:DDOTS});
+};
+
+SCREENS['dec-2-filtered']=function(){
+  var b=[lr('  {b|2 builds}{dim| · hiding 3 other decisions}','{acc b|a}  tick both  '),dchips(3),blank()];
+  var items=DEC.filter(function(d){return d.id==='DEC-082'||d.id==='DEC-085'});
+  b=b.concat(dlist(items,0,{'DEC-082':true,'DEC-085':true}));
+  b.push(blank());
+  b.push(cls(pad(mk('  {ok b|2 ticked} · press {acc b|enter} on this bar to review and accept them'),W-4),'tint').slice(0,0).concat([T('  ')],cls(pad(mk('  {ok b|2 ticked} · press {acc b|y} to review and accept them · {dim|each is signed as you}'),W-4),'tint')));
+  return frame({id:'dec-2',head1:DH,pane:'decisions',body:b,hint:'↑ ↓ move · enter open · space tick · y review ticked · f filter · esc clear the filter',dots:DDOTS});
+};
+
+SCREENS['dec-3-confirm']=function(){
+  var b=[mk('  {b|Accept 2 recommendations?}'),[T('  '+rep('─',W-4),'rule')],blank()];
+  b.push(mk('  {ok|✔} {dim|DEC-082}  {amb b|Raise the rate-limit burst from 20 to 50 per second}'));
+  b.push(mk('        {dim|builds keep commit b7f28a; builder marks t_014 done}'));b.push(blank());
+  b.push(mk('  {ok|✔} {dim|DEC-085}  {amb b|Reuse stored vectors when a document is unchanged}'));
+  b.push(mk('        {dim|builds keep commit c41d09e; builder marks t_015 done}'));b.push(blank());
+  b.push([T('  '+rep('─',W-4),'rule')]);
+  b.push(mk('  {dim|not included: these need you one at a time}'));
+  b.push(mk('   {dim|DEC-081}  {red|Run a migration on the host staging.db, outside the sandbox}'));
+  b.push(mk('   {dim|DEC-083}  {red|Approve spec 042: chunked bundle streaming over IPC}'));
+  b.push(blank());
+  b.push(mk('  {dim|Each acceptance is signed as you and logged. A build can still be reverted later with /decisions.}'));
+  b.push(blank());
+  b.push(mk('  {btn| Accept 2 }  {dim|enter}      {dim|go back}  {dim|esc}'));
+  return frame({id:'dec-3',head1:DH,pane:'decisions › confirm',body:b,hint:'enter accept 2 · esc back to the list',dots:DDOTS});
+};
+
+function detailHead(d,pos){
+  var c=TC[d.tier];
+  return [
+    lr('  {dim|‹ decisions}','{dim|'+pos+' · ↑ previous · ↓ next}  '),blank(),
+    mk('  {dim|'+d.id+'}  {'+c+' b|'+d.title+'}'),
+    mk('  {'+c+'|'+d.tag+'} {dim|· requested by '+d.by+' · task '+d.task+' · waiting '+d.age+'}')
+  ];
+}
+SCREENS['dec-4-detail']=function(){
+  var d=DEC[1];d.by='architect';d.task='t_016';
+  var b=detailHead(d,'2 of 5');
+  b.push(mk('  {dim|specs/042-bundle-streaming.md · +212 −0 · d shows the diff · summary cached, 0 tokens}'));b.push(blank());
+  b.push(mk('  {b|WHAT IT IS}'));
+  wrap('Spec 042 defines how bundle manifests move between processes. Today a large repository sends one multi-megabyte frame and memory spikes. The spec streams it in 64 KB chunks with backpressure.',94).forEach(function(l){b.push(mk('  '+l))});
+  b.push(blank());
+  b.push(mk('  {b|WHAT IT ADDS OR CHANGES}'));
+  b.push(mk('   {dim|▪} spec 042 goes from draft to approved; the spec tracker row changes state'));
+  b.push(mk('   {dim|▪} builder can start t_016: a StreamChunker in crates/delphi-bundle'));
+  b.push(mk('   {dim|▪} nothing outside that crate changes, and no new authority is granted'));
+  b.push(blank());
+  var c=['{b|RECOMMENDATION}  {red|Red: you decide, nothing is ticked for you}',''];
+  wrap('Accept. The architect review is complete, the design keeps the zero-allocation charter, and it widens no authority.',90).forEach(function(l){c.push(l)});
+  c.push('');
+  c.push('{btn| Accept recommendation }  {dim|enter, while the prompt is empty}');
+  c.push('{dim|other choices}   {acc b|2} red-team reviews first   {acc b|3} defer   {acc b|4} reject');
+  b=b.concat(card(c));b.push(blank());
+  b.push(mk('  {acc b|Prompt for more:} {dim|type below to ask about this decision. Nothing is decided until you choose.}'));
+  return frame({id:'dec-4',head1:DH,pane:'decisions › DEC-083',body:b,hint:'tab / enter choose · 2 – 4 other choices · or type below · d diff · esc back to the list',prompt:'{dim|or type here to answer in your own words}',dots:DDOTS});
+};
+
+SCREENS['dec-7-typed']=function(){
+  var d=DEC[1];d.by='architect';d.task='t_016';
+  var b=detailHead(d,'2 of 5');
+  b.push(mk('  {dim|specs/042-bundle-streaming.md · +212 −0 · d shows the diff · summary cached, 0 tokens}'));b.push(blank());
+  b.push(mk('  {b|EARLIER ON THIS DECISION}  {dim|saved with it, 0 tokens to reopen}'));
+  b.push(mk('  {acc b|you}  why 64 KB chunks?  {dim|· 09:03}'));
+  wrap('architect: 64 KB keeps one frame under the 128 KB pipe buffer, so a reader never blocks a writer. Larger chunks would bring the memory spikes back.',90).forEach(function(l,i){b.push(mk('       {dim|'+l+'}'))});
+  b.push(blank());
+  var c=['{b|READ AS}  {dim|your words are turned into a choice; nothing is decided yet}','',
+    '{acc b|2}  ask red-team to review first {dim|· scope: the IPC frame limits only}',
+    '{acc b|+}  keep t_016 paused until the review returns','',
+    '{btn| Confirm this }  {dim|enter}     {dim|keep typing to change it · esc to discard}',
+    '{dim|this reply costs about 600 tokens, then it is saved with the decision}'];
+  b=b.concat(card(c));
+  return frame({id:'dec-7',head1:DH,pane:'decisions › DEC-083',body:b,hint:'enter confirm the reading · keep typing to change it · tab back to the choices · esc discard',prompt:'Accept, but red-team checks only the frame limits first; keep t_016 paused until they report{acc|█}',dots:DDOTS});
+};
+
+SCREENS['dec-5-norec']=function(){
+  var d=DEC[0];d.by='builder';d.task='t_012';
+  var b=detailHead(d,'1 of 5');
+  b.push(mk('  {dim|scripts/migrate_0.2.7.sql → /var/data/staging.db · blake3 9f8a3c… · d script · summary cached}'));b.push(blank());
+  b.push(mk('  {b|WHAT IT IS}'));
+  wrap('builder hit schema drift while checking the v0.2.6 to v0.2.7 migration and asks to run the script on the real staging database, which sits on the host outside the sandbox.',94).forEach(function(l){b.push(mk('  '+l))});
+  b.push(blank());
+  b.push(mk('  {b|WHAT IT ADDS OR CHANGES}'));
+  b.push(mk('   {red|▪} writes about 420 KB of table changes to a host file git does not track'));
+  b.push(mk('   {red|▪} runs a script that came from outside Delphi, so it is {warn|untrusted}'));
+  b.push(mk('   {red|▪} leaves the sandbox once; there is no automatic undo'));
+  b.push(blank());
+  var c=['{b|NO RECOMMENDATION}  {dim|your call}'];
+  wrap('Red actions that leave the sandbox never get a default: there is no accept button and nothing is preselected. builder says its sandbox fixture does not reproduce the drift.',90).forEach(function(l){c.push(l)});
+  c.push('');
+  c.push('{acc b|1} deny, and ask builder to reproduce it in the sandbox');
+  c.push('{acc b|2} allow once, after a backup copy of staging.db');
+  c.push('{acc b|3} allow once, as it is');
+  c.push('{acc b|4} stop task t_012');
+  b=b.concat(card(c));b.push(blank());
+  b.push(mk('  {acc b|Prompt for more:} {dim|ask builder why the sandbox fixture is not enough.}'));
+  return frame({id:'dec-5',head1:DH,pane:'decisions › DEC-081',body:b,hint:'tab / 1 – 4 choose · or type below · d script · esc back to the list',prompt:'{dim|or type here to answer in your own words}',dots:DDOTS});
+};
+
+SCREENS['dec-6-empty']=function(){
+  var b=[mk('  {ok|✔} {b|DEC-081 decided:} denied, builder will reproduce the drift in the sandbox {dim|· signed receipt r_0944}'),blank(),blank(),blank()];
+  b.push(ctr('{b|Nothing needs you.}'));b.push(blank());
+  b.push(ctr('{dim|3 tasks are running · 0 are waiting on you}'));b.push(blank());b.push(blank());
+  b.push(mk('  {dim|decided in the last hour}'));
+  [['DEC-081','denied the host migration; reproduce it in the sandbox','red','just now'],
+   ['DEC-083','approved spec 042: chunked bundle streaming over IPC','red','2 m ago'],
+   ['DEC-082','raised the rate-limit burst from 20 to 50 per second','amb','3 m ago'],
+   ['DEC-085','reuse stored vectors when a document is unchanged','amb','3 m ago'],
+   ['DEC-084','online search API: Brave Search','','4 m ago']].forEach(function(r){
+    b.push(lr('  {ok|✔} {dim|'+r[0]+'}  {'+(r[2]||'')+'|'+r[1]+'}','{dim|'+r[3]+'}  ',W))});
+  return frame({id:'dec-6',head1:STRIP,pane:'decisions',body:b,hint:'← chat · / search decided items · u undo the last decision',dots:DDOTS});
+};
+
+/* ============================== page ============================== */
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function html(lines){return lines.map(function(l){return '<div class="ln">'+l.map(function(s){return '<span class="'+s.c+'">'+esc(s.t)+'</span>'}).join('')+'</div>'}).join('')}
+var qs=new URLSearchParams(location.search),shot=qs.get('shot'),out=document.getElementById('out');
+if(shot){out.innerHTML='<div class="term">'+html(SCREENS[shot]())+'</div>'}
+else{document.body.className='page';out.innerHTML=Object.keys(SCREENS).map(function(k){return '<div class="term">'+html(SCREENS[k]())+'</div>'}).join('')}
+document.title=overflow.length?'OVERFLOW '+overflow.join('; '):'ok';
+})();
+</script>

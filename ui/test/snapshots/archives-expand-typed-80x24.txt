@@ -1,0 +1,24 @@
+
+                           ⟦•─•⟧ search the archives
+
+                 ⟦•••⟧ expand knowledge base: research a topic
+
+          ╭──────────────────────────────────────────────────────────╮
+          │ ›  byzantine fault tolerance                             │
+          ╰──────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ type a topic · enter research it · esc clear · shift+tab  search

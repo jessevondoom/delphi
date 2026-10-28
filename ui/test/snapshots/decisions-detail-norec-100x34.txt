@@ -1,0 +1,34 @@
+⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
+delphi v0.5 · /proj · decisions
+
+
+  ‹ decisions                                                         1 of 5 · ↑ previous · ↓ next
+
+  DEC-081  Run a migration on the host staging.db, outside the sandbox
+  RED · action · requested by builder · task t_1 · waiting 9 m
+  d shows the changes
+
+  WHAT IT IS
+  builder wants to run scripts/migrate_0.2.7.sql on /var/data/staging.db. It rewrites about 420 KB
+  of host data that git cannot roll back, and it leaves the sandbox.
+
+  WHAT IT ADDS OR CHANGES
+   nothing listed
+
+   NO RECOMMENDATION  your call
+
+   There is no default for this one, so there is no accept button and nothing is preselected.
+   Red actions are decided one at a time.
+
+     1  Ratify
+     2  Reject
+
+
+
+
+
+● working · 1793181597s                                                                  esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+tab / 1-9 choose · d diff · ↑ ↓ other decisions · esc back to the list
+────────────────────────────────────────────────────────────────────────────────────────────────────
+0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ○ ●

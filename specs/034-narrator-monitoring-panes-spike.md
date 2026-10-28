@@ -19,7 +19,7 @@ tags: [spec, narrator, monitoring, visualization, spike, draft]
 ## 1. What this is
 `specs/033` made usage and tool calls available live. This spike asks what an operator watching real work would want to *see*, in AI work and in creative work, tries three panes on the narrator, and sketches the rest. **Expect to cut some of them**: the operator will test them and trim. Nothing here shows reasoning or anything a model wrote; every pane shows names, counts, times and states.
 
-Try them: `delphi observe pulse|timeline|tools`, or without a daemon `cd ui && node --import tsx dev/sketch-panes.ts [pulse|timeline|tools|agents] [w] [h] [--color]` (a fixture mission with a builder in a loop, quiet and near its cap).
+Try them: `delphi observe timeline`, or without a daemon `cd ui && node --import tsx dev/sketch-panes.ts [timeline|agents] [w] [h] [--color]` (a fixture mission with a builder in a loop, quiet and near its cap).
 
 ## 2. What people watch
 **AI-agent work** (observability tools and agent dashboards):
@@ -44,6 +44,8 @@ What carries over: *meters you never have to ask for*, *a timeline with markers*
 | `tools` | Tools by calls with failures; **which models report their work** (share of working runs that recorded a change, red under 50 %, amber under 80 %); agents going round in circles. | `tools` and `adoption` in `observe.state` |
 
 Also in the agents pane (from `specs/033`): the cap meter, `quiet Nm` after two minutes of silence (a frame or event; the clock starts when the window opens), `⟳ tool ×N` after six identical calls in a row in one span or three failures in a row, and `✎ 0` for an agent that changed something and recorded nothing.
+
+**`pulse` removed, `timeline` and `tools` merged (2026-10-28, the operator's request).** The `pulse` view is gone (`delphi observe pulse`, `meters` and `tools` now open the timeline page). The `timeline` page leads with the lanes, momentum and files, and the `tools` board follows below it; the page scrolls. The agents pane keeps the cap meter, its forecast and the quiet note, so those still work; what `pulse` alone showed (the *waiting on you* durations and *since you left* digest above) is no longer drawn, the attention row at the top of every page still says what needs the operator.
 
 **Two columns, withdrawn (2026-10-28, the operator's request).** The agents view had the roster beside the `tools` board from 116 columns; the board took the room the agents' summaries need. The agents view is one full-width column again and `tools` is its own view. The tool counters (`41 calls · ✎ 2 · ✗ 6 · → run_command`, and the loop warning) take a row of their own under each agent's summary at every width. Goldens: `agents-rows-130x34`, `-160x40`.
 

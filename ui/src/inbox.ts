@@ -5,15 +5,24 @@ import type { Approval, State } from './fold.ts';
 import type { Ev } from './input.ts';
 import * as T from './theme.ts';
 import { highlightLine } from './highlight.ts';
+import * as D from './decisions-pane.ts';
 
-export type Inbox = { mode: 'list' | 'focus'; sel: number; opt: number; payload: boolean; confirmAll: boolean; since: number };
-export const newInbox = (now: number): Inbox => ({ mode: 'list', sel: 0, opt: 0, payload: false, confirmAll: false, since: now });
+/**
+ * `items` is the daemon's `decision.list` (specs/044) and `loaded` says it has arrived, so an empty list means
+ * "nothing is owed" and not "the daemon did not answer". Until it has, the inbox is the cards alone, as it was.
+ */
+export type Inbox = { mode: 'list' | 'focus'; sel: number; opt: number; payload: boolean; confirmAll: boolean; since: number; items: D.Decision[]; loaded: boolean; pane: D.Pane };
+export const newInbox = (now: number, items: D.Decision[] = [], pane: D.Pane = D.newPane(), loaded = items.length > 0): Inbox => ({ mode: 'list', sel: 0, opt: 0, payload: false, confirmAll: false, since: now, items, loaded, pane: D.reconcile(pane, items) });
+/** The pane (list, detail, empty state) owns the deck once the daemon's list has arrived. */
+const paned = (inb: Inbox): boolean => inb.loaded || inb.items.length > 0;
 
 export type Decision = 'allow' | 'allow_similar' | 'deny';
 export type Action =
   | { t: 'none' }
   | { t: 'chat' }
   | { t: 'resolve'; card: Approval; decision: Decision }
+  | { t: 'review'; d: D.Decision; resolution: 'ratified' | 'rejected' }
+  | { t: 'accept'; ds: D.Decision[] }
   | { t: 'resolve-all'; cards: Approval[] };
 
 /** The guard from spec 005: keys that answer a card are ignored for this long after it appears or the deck opens. */
@@ -40,6 +49,24 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
   const guarded = now - inb.since < GUARD_MS || (card ? now - card.at < GUARD_MS : false);
   const k = e.t === 'key' ? e.k : e.s;
   const answer = (decision: Decision) => (card && !guarded ? { inbox: { ...inb, sel, confirmAll: false, payload: false, opt: 0 }, action: { t: 'resolve', card, decision } as Action } : none());
+  // The pane of specs/044: the keys belong to it. An answer is the operator choosing in the detail view (never from the
+  // list), and the console turns it into the call for the decision's source: a card's own resolution, or a review.
+  if (paned(inb)) {
+    const r = D.key(inb.pane, inb.items, e, now);
+    if (r.action.t === 'chat') return { inbox: { ...inb, pane: r.pane }, action: { t: 'chat' } };
+    if (r.action.t === 'accept-all') return { inbox: { ...inb, pane: r.pane }, action: { t: 'accept', ds: r.action.ds } };
+    if (r.action.t === 'answer') {
+      const { d, choice } = r.action;
+      if (d.source === 'card') {
+        const c = list.find((x) => x.id === d.source_id);
+        if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id } };
+      } else if (d.source === 'provisional' && (choice.id === 'ratified' || choice.id === 'rejected')) {
+        return { inbox: { ...inb, pane: r.pane }, action: { t: 'review', d, resolution: choice.id } };
+      }
+      return none({ ...inb, pane: D.unsent(r.pane) });
+    }
+    return none({ ...inb, pane: r.pane });
+  }
   if (k === 'esc') return { inbox: { ...inb, confirmAll: false }, action: { t: 'chat' } };
   if (k === 'tab') return none({ ...inb, mode: inb.mode === 'list' ? 'focus' : 'list', confirmAll: false });
   if (k === 'up' || k === 'down') {
@@ -77,6 +104,14 @@ const tier = (a: Approval) => (a.tier === 'red' ? T.crimson('RED') : T.warn('AMB
 /** The deck's body: exactly `h` lines. */
 export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number, w: number, h: number): string[] {
   const list = cards(s);
+  if (paned(inb)) {
+    const at = (d: D.Decision): number | null => (d.source === 'card' ? s.approvals[d.source_id]?.at ?? null : d.raised_at ? Date.parse(d.raised_at) || null : null);
+    const payload = (d: D.Decision): string[] | null => {
+      const a = d.source === 'card' ? s.approvals[d.source_id] : undefined;
+      return a ? a.preview.split('\n').slice(0, 200) : null;
+    };
+    return D.render(inb.items, inb.pane, { pal, now, w, h, at, payload });
+  }
   const pad = (a: string[]) => [...a, ...Array(Math.max(0, h - a.length)).fill('')].slice(0, h);
   if (!list.length) return pad(['', '  ' + chalk.bold(T.text(pal)('Decision inbox')), '', '  ' + T.dim('nothing needs you'), '', '  ' + T.dim('Approvals from every agent arrive here; the header shows an alert when one is waiting.')]);
   const sel = Math.min(inb.sel, list.length - 1);
@@ -114,6 +149,7 @@ export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number
 }
 
 export const hint = (inb: Inbox, n: number): string =>
-  n === 0 ? 'nothing to decide · esc for chat'
+  paned(inb) ? D.hint(inb.items, inb.pane)
+    : n === 0 ? 'nothing to decide · esc for chat'
     : inb.mode === 'list' ? 'enter open card · y approve · n reject · a approve all amber · tab focus mode · esc chat'
       : 'enter select · 1-3 choose · ←→ other cards · d payload · tab list mode · esc chat';

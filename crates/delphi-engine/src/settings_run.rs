@@ -95,6 +95,16 @@ impl Engine {
                 };
                 Applied { key: s.key(), old: word(old), new: word(*on), text }
             }
+            Setting::Pace { pace } => {
+                let old = std::mem::replace(&mut *self.pace.lock().unwrap(), *pace);
+                let text = match (old == *pace, pace) {
+                    (true, _) => format!("The pace is already {}; nothing changed.", pace.as_str()),
+                    (_, crate::route::Pace::Balanced) => "The pace is balanced again: work goes where it usually does. ".to_string(),
+                    (_, crate::route::Pace::Sprint) => "Sprint: work goes to the providers that are running freely, and away from one that is being throttled. No role starts on a lower model. Undo: /pace balanced.".to_string(),
+                    (_, crate::route::Pace::Frugal) => "Frugal: subscription and local providers are used first, so the metered ones are kept for when they are needed. No role starts on a lower model. Undo: /pace balanced.".to_string(),
+                };
+                Applied { key: s.key(), old: old.as_str().into(), new: pace.as_str().into(), text: text.trim().to_string() }
+            }
         };
         let _ = m.append(EventEnvelope::new(&m.id, "setting.changed", json!({"key": applied.key, "old": applied.old, "new": applied.new, "by": by, "quote": quote, "reason": reason, "suggestion": suggestion, "text": applied.text}))).await;
         Ok(applied)

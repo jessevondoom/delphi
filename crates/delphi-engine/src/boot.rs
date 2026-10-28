@@ -330,6 +330,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         inventory: Arc::new(crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json"))),
         toolless: Default::default(),
         approver_calls: Default::default(),
+        pace: Default::default(),
         totp: Default::default(),
     });
     let day = &now_rfc3339()[..10];

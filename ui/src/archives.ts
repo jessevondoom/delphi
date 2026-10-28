@@ -8,10 +8,10 @@ import { renderMarkdownLinks } from './markdown.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 
-export type Hit = { path: string; collection: string; trust: string; status?: string; heading: string; preview: string; start_line?: number; end_line?: number };
+export type Hit = { path: string; collection: string; /** Where it lives, as a label (specs/043 §4): research, docs, spec, lesson, mission, skill, memory, other. */ kind: string; /** When the document last changed (ISO), or ''. */ updated: string; trust: string; status?: string; heading: string; preview: string; start_line?: number; end_line?: number };
 export type Shelf = {
-  collections: { name: string; documents: number; updated: string }[];
-  recent: { path: string; collection: string; updated: string }[];
+  /** The store counted by kind (`/v1/kinds`). */
+  kinds: { kind: string; documents: number; updated: string }[];
   stats: { documents: number; passages: number; vectors: number } | null;
 };
 /** One document in the reader, with where the operator is in it. */
@@ -33,8 +33,10 @@ export type Arch = {
   /** The reader's history and the place in it; `at` is -1 when the reader is closed. */
   trail: Entry[];
   at: number;
-  /** Search only this collection (tab cycles it); null is all of them. */
-  scope: string | null;
+  /** Show only this kind (tab walks the chips; specs/043 §3.2); null is all of them. */
+  kind: string | null;
+  /** The number of results of each kind among the candidates of the last search (the chips), or null. */
+  facets: Record<string, number> | null;
   /** Hide documents whose provenance is untrusted or inactive (ctrl+t). They show, tagged, by default: this is a person reading. */
   trustedOnly: boolean;
   /** The queries searched in this window, oldest first, and which one up and down have recalled (null: none). */
@@ -42,12 +44,14 @@ export type Arch = {
   hist: number | null;
   /** The console can pin a passage to the operator's notebook (`p`); the narrator is read-only and cannot. */
   pins: boolean;
+  /** `search` is the page as it was (local, zero-token); `expand` is the clean research page of spec 028-A1 (`shift+tab` switches). Remembered for the session. */
+  mode: 'search' | 'expand';
 };
 
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, scope: null, trustedOnly: false, history: [], hist: null, pins });
+export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search' });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
@@ -62,13 +66,12 @@ export type Action =
   | { t: 'copy'; text: string }
   | { t: 'pin'; target: Extract<Target, { k: 'doc' | 'pointer' }> };
 
-type Row = { k: 'hit'; hit: Hit } | { k: 'doc'; path: string; collection: string; updated: string } | { k: 'collection'; name: string; documents: number; updated: string };
+type Row = { k: 'hit'; hit: Hit } | { k: 'kind'; kind: string; documents: number; updated: string };
 
-/** What the list under the box holds: the results, or (at rest) the collections and the recently changed documents. */
+/** What the list under the box holds: the results, or (at rest) the kinds of document the store holds. */
 export function rows(a: Arch): Row[] {
   if (a.searched !== null) return a.hits.map((hit) => ({ k: 'hit', hit }));
-  const s = a.shelf;
-  return s ? [...s.collections.map((c) => ({ k: 'collection' as const, name: c.name, documents: c.documents, updated: c.updated })), ...s.recent.map((d) => ({ k: 'doc' as const, ...d }))] : [];
+  return a.shelf ? a.shelf.kinds.map((c) => ({ k: 'kind' as const, ...c })) : [];
 }
 
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -121,21 +124,20 @@ function startRow(e: Entry, w: number, target: Target | null): number {
 
 // ── results from the daemon ─────────────────────────────────────────────────
 
-const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
+const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), kind: String(r.kind ?? 'other'), updated: String(r.updated ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
 
 export function gotHits(a: Arch, q: string, body: any): Arch {
   if (a.q.trim() !== q) return a; // the box has moved on
-  return { ...a, searched: q, hits: (body.results ?? []).map(asHit), sel: 0, focus: (body.results ?? []).length ? 'list' : 'box', took: body.took_ms ?? null, engine: body.mode ?? null, browse: null, note: '' };
+  return { ...a, searched: q, hits: (body.results ?? []).map(asHit), sel: 0, focus: (body.results ?? []).length ? 'list' : 'box', took: body.took_ms ?? null, engine: body.mode ?? null, browse: null, note: '', facets: body.facets && typeof body.facets === 'object' ? Object.fromEntries(Object.entries(body.facets).map(([k, n]) => [String(k), Number(n)])) : a.facets };
 }
 
 export function gotBrowse(a: Arch, name: string, docs: any[]): Arch {
-  return { ...a, searched: '', browse: name, hits: docs.map((d) => ({ path: d.rel_path, collection: d.zone, trust: d.source_type, status: d.status, heading: '', preview: day(d.updated_at) })), sel: 0, focus: 'list', took: null, engine: null, note: '' };
+  return { ...a, searched: '', browse: name, hits: docs.map((d) => ({ path: d.rel_path, collection: d.zone, trust: d.source_type, status: d.status, kind: String(d.kind ?? 'other'), updated: String(d.updated_at ?? ''), heading: '', preview: day(d.updated_at) })), sel: 0, focus: 'list', took: null, engine: null, note: '' };
 }
 
-export function gotShelf(a: Arch, collections: any[], recent: any[], health: any): Arch {
+export function gotShelf(a: Arch, kinds: any[], health: any): Arch {
   const shelf: Shelf = {
-    collections: collections.map((c) => ({ name: String(c.name), documents: Number(c.documents), updated: String(c.updated ?? '') })),
-    recent: recent.map((d) => ({ path: String(d.rel_path), collection: String(d.zone), updated: String(d.updated_at ?? '') })),
+    kinds: kinds.map((c) => ({ kind: String(c.kind), documents: Number(c.documents), updated: String(c.updated ?? '') })),
     stats: health?.ok ? { documents: health.documents, passages: health.passages, vectors: health.vectors } : null,
   };
   return { ...a, shelf };
@@ -164,6 +166,7 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   const used = (next: Arch, action: Action = none) => ({ a: next, action, used: true });
   if (a.at >= 0) return reader(a, e, w, h, used);
   const list = rows(a);
+  if (a.mode === 'expand') return expandKey(a, e, used);
   if (e.t === 'text' || e.t === 'paste') {
     const s = e.t === 'paste' ? e.s.replace(/\s+/g, ' ') : e.s;
     if (/[\x00-\x1f\x7f]/.test(s)) return NOT_USED(a);
@@ -193,14 +196,15 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
       return a.sel > 0 ? used({ ...a, sel: a.sel - 1 }) : used({ ...a, focus: 'box' });
     case 'pgdn': return list.length ? used({ ...a, focus: 'list', sel: Math.min(list.length - 1, a.sel + 5) }) : used(a);
     case 'pgup': return used({ ...a, sel: Math.max(0, a.sel - 5) });
-    case 'tab': case 'shift-tab': {
-      // The scope: all collections, then each in turn. (Online search is not built; this is what tab is for until it is.)
-      const names: (string | null)[] = [null, ...(a.shelf?.collections.map((c) => c.name) ?? [])];
-      const at = Math.max(0, names.indexOf(a.scope));
-      const scope = names[(at + (e.k === 'tab' ? 1 : names.length - 1)) % names.length] ?? null;
+    case 'shift-tab': return used({ ...a, mode: 'expand', focus: 'box', note: '' });
+    case 'tab': {
+      // The kind chips: all, then each kind that has results (or, at rest, each kind the store holds), in turn.
+      if (a.searched === null) return list.length ? used({ ...a, focus: 'list', sel: a.focus === 'list' ? (a.sel + 1) % list.length : 0 }) : used(a);
+      const kinds: (string | null)[] = [null, ...chipKinds(a)];
+      const kind = kinds[(Math.max(0, kinds.indexOf(a.kind)) + 1) % kinds.length] ?? null;
       const q = a.q.trim();
-      const next = { ...a, scope, note: scope ? `searching in ${scope}` : 'searching in every collection' };
-      return a.searched !== null && !a.browse && q ? used({ ...next, note: 'searching…' }, { t: 'search', q }) : used(next);
+      const next = { ...a, kind };
+      return !a.browse && q ? used({ ...next, note: 'searching…', sel: 0 }, { t: 'search', q }) : used(next);
     }
     case 'esc':
       if (a.searched !== null) return used({ ...a, searched: null, hits: [], browse: null, note: '', sel: 0, focus: 'box', took: null });
@@ -209,10 +213,29 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   }
 }
 
+/** Expand mode (spec 028-A1): a box and a topic. The research job is slice E3; until then `enter` says so. */
+function expandKey(a: Arch, e: Ev, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
+  if (e.t === 'text' || e.t === 'paste') {
+    const s = e.t === 'paste' ? e.s.replace(/\s+/g, ' ') : e.s;
+    if (/[\x00-\x1f\x7f]/.test(s)) return NOT_USED(a);
+    return used({ ...a, q: (a.q + s).slice(0, 200), note: '' });
+  }
+  if (e.t === 'ctrl' && e.c === 'u') return used({ ...a, q: '' });
+  if (e.t !== 'key' || e.alt || e.ctrl) return NOT_USED(a);
+  switch (e.k) {
+    case 'shift-tab': return used({ ...a, mode: 'search', focus: 'box', note: '' }, a.shelf ? none : { t: 'reload' });
+    case 'backspace': return used({ ...a, q: [...a.q].slice(0, -1).join(''), note: '' });
+    case 'enter': return used({ ...a, note: a.q.trim() ? 'researching a topic is not built yet (spec 028-A1, slice E3)' : '' });
+    case 'tab': case 'up': case 'down': case 'pgup': case 'pgdn': return used(a); // no scope, history or list here
+    case 'esc': return a.q ? used({ ...a, q: '', note: '' }) : NOT_USED(a);
+    default: return NOT_USED(a); // left and right change the view
+  }
+}
+
 function open(a: Arch, r: Row, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
-  if (r.k === 'collection') return used({ ...a, note: 'opening…' }, { t: 'browse', name: r.name });
-  const path = r.k === 'hit' ? r.hit.path : r.path;
-  const target: Target = r.k === 'hit' && r.hit.start_line ? { k: 'pointer', path, from: r.hit.start_line, to: r.hit.end_line ?? r.hit.start_line } : { k: 'doc', path };
+  if (r.k === 'kind') return used({ ...a, note: 'opening…' }, { t: 'browse', name: r.kind });
+  const path = r.hit.path;
+  const target: Target = r.hit.start_line ? { k: 'pointer', path, from: r.hit.start_line, to: r.hit.end_line ?? r.hit.start_line } : { k: 'doc', path };
   return used({ ...a, note: 'opening…' }, { t: 'open', target });
 }
 
@@ -266,63 +289,161 @@ const center = (s: string, w: number) => ' '.repeat(Math.max(0, Math.floor((w - 
 const pad = (lines: string[], h: number) => [...lines.slice(0, h), ...Array(Math.max(0, h - lines.length)).fill('')];
 const hint = (s: string) => T.dim(' ' + s);
 
-function box(a: Arch, w: number): string[] {
+function box(a: Arch, w: number, placeholder = 'search what Delphi knows…'): string[] {
   const cursor = a.focus === 'box' ? chalk.inverse(' ') : '';
   const inner = Math.min(58, Math.max(10, w - 8));
   const q = [...a.q].slice(-(inner - 6)).join('');
   if (w < 40) return [' ' + T.accent('›') + ' ' + (q || T.dim('search')) + cursor, T.dim('─'.repeat(Math.max(0, w - 2)).padStart(w - 1))];
-  const body = ` ${T.accent('›')}  ${q || (a.focus === 'box' ? '' : '')}${q ? '' : T.dim('search what Delphi knows…')}${cursor}`;
+  const body = ` ${T.accent('›')}  ${q || (a.focus === 'box' ? '' : '')}${q ? '' : T.dim(placeholder)}${cursor}`;
   const fill = ' '.repeat(Math.max(0, inner - 1 - T.width(body)));
   return [center('╭' + '─'.repeat(inner) + '╮', w), center('│' + body + fill + ' │', w), center('╰' + '─'.repeat(inner) + '╯', w)];
 }
 
-const modeLine = (a: Arch, w: number) => center(`${T.accent('●')} offline    ${T.dim('○ online (not set up)')}${a.scope ? `    in: ${chalk.bold(a.scope)}` : ''}${a.trustedOnly ? `    ${T.dim('trusted only')}` : ''}`, w);
+/** What narrows the search, when anything does. There are no offline/online indicators (spec 028-A1 §10.1): this page always searches the local store. */
+const narrowLine = (a: Arch, w: number) => (a.trustedOnly ? center(T.dim('trusted only'), w) : '');
+
+/** A role's badge, as the roster draws it, or its plain face when the console's roster is not at hand. */
+const roleBadge = (role: string, face: string, info: T.Info | undefined, pal: T.Pal) => (info ? T.badge(role, 'idle', info, pal) : T.dim(`⟦${face}⟧`));
+const titleRow = (w: number, info: T.Info | undefined, pal: T.Pal) => center(`${roleBadge('orchestrator', '•_•', info, pal)} ${chalk.bold('search the archives')}`, w);
+const SWITCH = { search: 'shift+tab  expand', expand: 'shift+tab  search' } as const;
+
+// ── kinds, the best match and the result list (specs/043) ───────────────────
+
+export const KIND_ORDER = ['research', 'docs', 'spec', 'lesson', 'mission', 'skill', 'memory', 'other'];
+const KIND_LABEL: Record<string, string> = { research: 'research', docs: 'docs', spec: 'specs', lesson: 'lessons', mission: 'missions', skill: 'skills', memory: 'memory', other: 'other' };
+const kindStyle = (k: string): ((s: string) => string) => (k === 'research' ? T.warn : k === 'docs' ? T.ok : k === 'spec' ? T.accent : k === 'lesson' ? chalk.magenta : k === 'mission' ? chalk.blue : T.dim);
+
+/** The kinds that have results, in the spec's order: the chips after `all`. */
+export function chipKinds(a: Arch): string[] {
+  const f = a.facets ?? {};
+  const known = KIND_ORDER.filter((k) => (f[k] ?? 0) > 0);
+  return [...known, ...Object.keys(f).filter((k) => !KIND_ORDER.includes(k) && f[k]! > 0).sort()];
+}
+
+/** How long ago, as the list shows it: `today`, `3 d`, `2 w`, `4 mo`. */
+export function ago(iso: string, now: number): string {
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const d = Math.max(0, now - t) / 86_400_000;
+  return d < 1 ? 'today' : d < 14 ? `${Math.round(d)} d` : d < 70 ? `${Math.round(d / 7)} w` : `${Math.round(d / 30)} mo`;
+}
+
+/** `trusted`, `listed` (from an allow-listed source), `untrusted` or `inactive` (specs/043 §4.3). */
+export const trustWord = (h: { trust: string; status?: string }): string => caveat(h).split(' · ')[0] || (h.trust === 'trusted_source' ? 'listed' : 'trusted');
+
+/**
+ * The best-match summary (specs/043 §3.2): the passage's own words, trimmed by code. Up to three sentences that hold the
+ * most words of the query, in document order, at most 300 characters. No model is called, and nothing is paraphrased.
+ */
+export function bestSummary(preview: string, q: string): string {
+  const text = sanitize(preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean).join(' ');
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (!sentences.length) return '';
+  const ts = terms(q);
+  const score = (s: string) => ts.filter((t) => s.toLowerCase().includes(t)).length;
+  const picked = sentences.map((s, i) => ({ s, i, n: score(s) })).sort((x, y) => y.n - x.n || x.i - y.i).slice(0, 3).sort((x, y) => x.i - y.i).map((x) => x.s);
+  const out = picked.join(' ');
+  return out.length > 300 ? out.slice(0, 299).replace(/\s+\S*$/, '') + '…' : out;
+}
+
+const wrapText = (s: string, w: number): string[] => {
+  const out: string[] = [];
+  let cur = '';
+  for (const word of s.split(/\s+/).filter(Boolean)) {
+    if (cur && T.width(cur + ' ' + word) > w) { out.push(cur); cur = word; } else cur = cur ? cur + ' ' + word : word;
+  }
+  return cur ? [...out, cur] : out;
+};
+const lastHeading = (h: string) => h.split(' > ').pop() ?? '';
+const titleOf = (x: Hit) => `${x.path}${x.heading ? ' › ' + lastHeading(x.heading) : ''}`;
 
 function mark(sel: boolean, a: Arch) { return sel && a.focus === 'list' ? T.accent('›') : ' '; }
 
-function home(a: Arch, w: number, h: number): string[] {
-  const out: string[] = ['', center(chalk.bold('knowledge'), w), ...box(a, w), modeLine(a, w), ''];
+/** The resting page (specs/043 §3.1): the title, the box, one line of counts by kind, and the totals. Nothing else. */
+function home(a: Arch, w: number, h: number, info: T.Info | undefined, pal: T.Pal): string[] {
+  const out: string[] = Array(Math.max(1, Math.floor((h - 14) / 3))).fill('');
+  out.push(titleRow(w, info, pal), '', ...box(a, w), narrowLine(a, w), '');
   const list = rows(a);
   if (!a.shelf) out.push(T.dim(center('reading the index…', w)));
   else if (!list.length) out.push(T.dim(center('the knowledge base is empty', w)));
   else {
-    const cols = list.filter((r) => r.k === 'collection') as Extract<Row, { k: 'collection' }>[];
-    const docs = list.filter((r) => r.k === 'doc') as Extract<Row, { k: 'doc' }>[];
-    out.push(T.dim('  collections'));
-    cols.forEach((r, i) => out.push(` ${mark(a.sel === i, a)} ${a.sel === i && a.focus === 'list' ? chalk.bold(r.name.padEnd(12)) : r.name.padEnd(12)} ${T.dim(`${r.documents} documents · changed ${day(r.updated)}`)}`));
-    if (docs.length) {
-      out.push('', T.dim('  recently changed'));
-      docs.forEach((r, j) => { const i = cols.length + j; out.push(T.clip(` ${mark(a.sel === i, a)} ${a.sel === i && a.focus === 'list' ? chalk.bold(r.path) : r.path}  ${T.dim(day(r.updated))}`, w)); });
-    }
+    const kinds = list.filter((r) => r.k === 'kind') as Extract<Row, { k: 'kind' }>[];
+    const ordered = [...KIND_ORDER.flatMap((k) => kinds.filter((r) => r.kind === k)), ...kinds.filter((r) => !KIND_ORDER.includes(r.kind))];
+    out.push('', center(ordered.map((r) => { const on = a.focus === 'list' && list[a.sel] === r; const t = `${KIND_LABEL[r.kind] ?? r.kind} ${r.documents}`; return on ? chalk.bold.underline(kindStyle(r.kind)(t)) : kindStyle(r.kind)(t); }).join('   '), w), '');
     const s = a.shelf.stats;
-    if (s) out.push('', T.dim(`  ${s.documents} documents · ${s.passages} passages · ${s.vectors > 0 ? 'hybrid (keyword + vector)' : 'keyword'} search`));
+    if (s) out.push(T.dim(center(`${s.documents} documents · ${s.passages} passages · ${s.vectors > 0 ? 'hybrid (keyword + vector)' : 'keyword'} search`, w)));
   }
   if (a.note) out.push('', T.dim(center(a.note, w)));
-  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · esc back · ← → views' : 'type to search · enter search · ↓ browse · ↑ history · tab scope · ctrl+t trust'));
+  return pad(out, h - 1).concat(hint(a.focus === 'list' ? `↑ ↓ pick a kind · enter browse it · esc back · ${SWITCH.search} · ← → views` : `type to search · ↑ earlier searches · tab pick a kind · ctrl+t trusted only · ${SWITCH.search}`));
 }
 
-function results(a: Arch, w: number, h: number): string[] {
+/** Expand mode (spec 028-A1 §10.1): the title, the scout's label and the box, and nothing else: no shelf, counts, recent list or totals. */
+function expandView(a: Arch, w: number, h: number, info: T.Info | undefined, pal: T.Pal): string[] {
+  const out: string[] = ['', titleRow(w, info, pal), '', center(`${roleBadge('scout', '•••', info, pal)} ${chalk.bold('expand knowledge base: research a topic')}`, w), '', ...box(a, w, 'a topic to research…')];
+  if (a.note) out.push('', T.dim(center(a.note, w)));
+  return pad(out, h - 1).concat(hint(`type a topic · enter research it · esc clear · ${SWITCH.expand}`));
+}
+
+/** One result of the list (specs/043 §5): a title row in fixed columns and one line of the passage. */
+function listRow(a: Arch, x: Hit, i: number, w: number, now: number): string[] {
+  const on = i === a.sel && a.focus === 'list';
+  const mid = w >= 90, full = w >= 80;
+  const tw = trustWord(x);
+  const tail = kindStyle(x.kind)(x.kind.padEnd(8)) + (full ? '  ' + (tw === 'trusted' || tw === 'listed' ? T.dim : T.warn)(tw.padEnd(9)) : tw === 'trusted' || tw === 'listed' ? '' : T.warn('!')) + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
+  const room = Math.max(10, w - 8 - 10 - (full ? 11 : 0) - (mid ? 7 : 0) - 1);
+  const title = T.clip(titleOf(x), Math.min(64, room));
+  const first = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean)[0] ?? '';
+  const q = a.browse ? '' : a.searched ?? '';
+  return [
+    T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${a.browse ? (on ? chalk.bold(title) : title) : emphasize(title, q, on ? chalk.bold : (z) => z)}`, tail + ' ', w),
+    first ? '       ' + emphasize(T.clip(first, w - 9), q, T.dim) : '',
+    '',
+  ];
+}
+
+/** The best match (specs/043 §3.2): a soft-fill card with the passage's own words, trimmed by code. */
+function bestCard(a: Arch, x: Hit, w: number, h: number, now: number, pal: T.Pal): string[] {
+  const t = T.tint(pal.bg ?? null, pal.dark);
+  const fill = (s: string) => { const row = ' ' + s + ' '.repeat(Math.max(0, w - 7 - T.width(s))) + ' '; return '  ' + (t ? t.fill(row) : row); };
+  const on = a.sel === 0 && a.focus === 'list';
+  const edited = ago(x.updated, now);
+  const compact = h < 30;
+  const sum = wrapText(bestSummary(x.preview, a.searched ?? ''), w - 11).slice(0, compact ? 2 : 4);
+  const L = [
+    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind) + T.dim(` · ${trustWord(x)}${edited ? ` · edited ${edited}` : ''}`), w - 7),
+    (on ? T.accent('❯ ') : '') + chalk.bold(T.accent(T.clip(titleOf(x), w - 11))),
+    ...sum.map((l) => emphasize(l, a.searched ?? '')),
+  ];
+  if (!compact) L.push('', T.dim(x.start_line ? `lines ${x.start_line}–${x.end_line ?? x.start_line}` : x.collection));
+  L.push(T.accent('enter') + ' read');
+  return L.map(fill);
+}
+
+function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string[] {
   const out: string[] = [...box(a, w).slice(w < 40 ? 0 : 1, w < 40 ? 2 : 2)];
-  const where = `${a.scope ? ` · in ${a.scope}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
+  const where = `${a.kind ? ` · ${KIND_LABEL[a.kind] ?? a.kind}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
   const head = a.browse
-    ? `${a.hits.length} documents in ${a.browse}, newest first${a.trustedOnly ? ' · trusted only' : ''}`
-    : a.hits.length ? `${a.hits.length >= RESULTS ? 'top ' : ''}${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(1)} s` : ''}${a.engine ? ` · ${a.engine}` : ''}${where}` : `nothing in the knowledge base matches${where}`;
-  out.push(T.dim('  ' + head), '');
-  const per = 4, room = Math.max(1, Math.floor((h - out.length - 1) / per));
-  const top = Math.max(0, Math.min(a.sel - room + 1, a.hits.length - room), a.sel >= room ? a.sel - room + 1 : 0);
-  a.hits.slice(top, top + room).forEach((x, k) => {
-    const i = top + k, on = i === a.sel && a.focus === 'list';
-    const title = `${x.path}${x.heading ? ' › ' + x.heading.split(' > ').pop() : ''}`;
-    const tag = [x.collection, caveat(x)].filter(Boolean).join(' · ');
-    const shown = T.clip(title, Math.max(10, w - T.width(tag) - 10));
-    out.push(T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${a.browse ? (on ? chalk.bold(shown) : shown) : emphasize(shown, a.searched ?? '', on ? chalk.bold : (z) => z)}`, T.dim(tag + ' '), w));
-    // A preview opens with the section's own heading, which the title row already says.
-    const prev = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean).slice(0, 2);
-    for (let n = 0; n < 2; n++) out.push(prev[n] ? '       ' + emphasize(T.clip(prev[n]!, w - 9), a.browse ? '' : a.searched ?? '', T.dim) : '');
-    out.push('');
-  });
+    ? `${a.hits.length} documents · ${KIND_LABEL[a.browse] ?? a.browse}, newest first${a.trustedOnly ? ' · trusted only' : ''}`
+    : a.hits.length ? `${a.hits.length >= RESULTS ? 'top ' : ''}${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(2)} s` : ''} · 0 tokens${where}`
+      : `nothing in the knowledge base matches${where}`;
+  out.push(T.dim('  ' + head));
+  if (!a.browse && a.facets && Object.keys(a.facets).length) {
+    const total = Object.values(a.facets).reduce((s, n) => s + n, 0);
+    const chip = (k: string | null, label: string, n: number) => { const on = a.kind === k; const t = `${on ? '●' : '○'} ${label} ${n}`; return k === null ? (on ? chalk.bold(t) : T.dim(t)) : on ? chalk.bold(kindStyle(k)(t)) : kindStyle(k)(t); };
+    out.push('  ' + T.dim('show  ') + [chip(null, 'all', total), ...chipKinds(a).map((k) => chip(k, KIND_LABEL[k] ?? k, a.facets![k]!))].join('   '));
+  }
+  out.push('');
+  const useCard = !a.browse && a.hits.length > 0;
+  if (useCard) out.push(...bestCard(a, a.hits[0]!, w, h, now, pal), '');
+  if (a.hits.length > (useCard ? 1 : 0)) out.push(T.dim(`   #  title${' '.repeat(Math.max(1, w - 46))}kind${w >= 80 ? '      trust' : ''}${w >= 90 ? '    edited' : ''}`));
+  const start = useCard ? 1 : 0, per = 3;
+  const room = Math.max(1, Math.floor((h - out.length - 2) / per));
+  const top = Math.max(start, Math.min(a.sel - room + 1, a.hits.length - room), a.sel >= start + room ? a.sel - room + 1 : start);
+  a.hits.slice(top, top + room).forEach((x, k) => out.push(...listRow(a, x, top + k, w, now)));
+  const rest = a.hits.length - (top + room);
+  if (rest > 0) out.push(T.dim(`   + ${rest} more below`));
   if (a.note) out.push(T.dim('  ' + a.note));
-  return pad(out, h - 1).concat(hint(a.focus === 'list' ? '↑ ↓ pick · enter open · tab scope · ctrl+t trust · esc clear · ← → views' : 'enter search · ↓ pick · ↑ history · tab scope · ctrl+t trust · esc clear'));
+  return pad(out, h - 1).concat(hint(a.focus === 'list' ? `↑ ↓ pick · enter open · tab filter · ctrl+t trust · esc clear · ${SWITCH.search}` : `enter search · ↓ pick · ↑ history · tab filter · ctrl+t trust · esc clear · ${SWITCH.search}`));
 }
 
 function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
@@ -345,8 +466,8 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
 }
 
 /** The pane's body: `h` rows of at most `w` columns. */
-export function view(a: Arch, w: number, h: number, pal: T.Pal): string[] {
-  const lines = a.at >= 0 ? readerView(a, w, h, pal) : a.searched !== null ? results(a, w, h) : home(a, w, h);
+export function view(a: Arch, w: number, h: number, pal: T.Pal, info?: T.Info, now: number = Date.now()): string[] {
+  const lines = a.at >= 0 ? readerView(a, w, h, pal) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.searched !== null ? results(a, w, h, now, pal) : home(a, w, h, info, pal);
   return pad(lines, h).map((l) => T.clip(l, w));
 }
 

@@ -135,7 +135,7 @@ test('the Observer window is exactly w by h and no wider, in every view', () => 
   const st = emptyState();
   st.agents.architect = { role: 'architect', state: 'running', task_id: 't1', endpoint: 'direct', tier: 'fast', model: 'haiku', upscaled: false, tokens: { input: 1, cache_read: 0, cache_write: 0, output: 1, thinking: 0 }, cost_usd: 0.01, calls: 1 };
   for (const [w, h] of SIZES) for (const view of VIEWS) {
-    const m: OModel = { info, pal: { dark: true }, st, view, pick: 0, scroll: 0, selNode: 0, arch: emptyArch(), live: {}, connected: true };
+    const m: OModel = { info, pal: { dark: true }, st, view, pick: 0, scroll: 0, selNode: 0, live: {}, connected: true };
     const lines = observeFrame(m, w, h);
     assert.equal(lines.length, h, `${view} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= w, `${view} ${w}x${h}: ${plain(l)}`);

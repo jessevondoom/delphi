@@ -12,6 +12,7 @@ import { contextReport, exportAll, exportHead } from './session.ts';
 import { loadHistory } from './attach.ts';
 import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
+import * as D from './decisions-pane.ts';
 import * as P from './panel.ts';
 import * as A from './archives.ts';
 import { openExternal } from './external.ts';
@@ -94,6 +95,19 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   useEffect(() => () => { if (quitTimer.current) clearTimeout(quitTimer.current); }, []);
   const searchRef = useRef(search);
   const inboxRef = useRef(inbox);
+  /** The daemon's list of everything the operator owes (specs/044), kept beside the cards. A failed call leaves the cards-only list. */
+  const loadDecisions = () => {
+    cmd.call('decision.list', { mission_id: mission }).then((r: any) => {
+      const items = D.parse(r);
+      const next = { ...inboxRef.current, items, loaded: true, pane: D.reconcile(inboxRef.current.pane, items) };
+      inboxRef.current = next; setInbox(next);
+    }).catch(() => {});
+  };
+  /** An answer failed: let the operator send it again. */
+  const unsend = () => { const next = { ...inboxRef.current, pane: D.unsent(inboxRef.current.pane) }; inboxRef.current = next; setInbox(next); };
+  const decisionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadDecisionsSoon = () => { decisionsTimer.current ??= setTimeout(() => { decisionsTimer.current = null; loadDecisions(); }, 150); };
+  useEffect(() => { cmd.whenReady().then(loadDecisions).catch(() => {}); return () => { if (decisionsTimer.current) clearTimeout(decisionsTimer.current); }; }, []);
   const deckRef = useRef<0 | 1 | 2>(1);
   deckRef.current = deck;
   const panelRef = useRef<P.Panel | null>(null);
@@ -135,6 +149,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const onNote = (n: any) => {
       queued.push(n); timer ??= setTimeout(flush, 33);
       if (n?.method === 'event' && n.params?.type === 'model.recovered') checkModels();
+      if (n?.method === 'event' && /^(approval\.(requested|resolved|parked)|decision\.(provisional|reviewed|reverted))$/.test(String(n.params?.type))) loadDecisionsSoon();
     };
     ev.on('notification', onNote);
     const onClosed = () => setState((s) => addBlock(s, { kind: 'note', text: 'the daemon connection closed; trying to reconnect…', at: Date.now() }));
@@ -270,8 +285,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const setArch = setArchOf;
   const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
   const enc = encodeURIComponent;
-  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(archRef.current).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(archRef.current)}`), kb('/v1/health')])
-    .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
+  const loadShelf = () => Promise.all([kb(`/v1/kinds?${A.trustParam(archRef.current).slice(1)}`), kb('/v1/health')])
+    .then(([k, h]) => setArch((a) => A.gotShelf(a, Array.isArray(k.body) ? k.body : [], h.body)))
     .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
   const setRdr = (f: (a: A.Arch) => A.Arch) => { const n = f(rdrRef.current); rdrRef.current = n; setRdrState(n); };
   const setLm = (f: (l: { focus: number | null; note: string } | null) => { focus: number | null; note: string } | null) => { const n = f(lmRef.current); lmRef.current = n; setLmState(n); };
@@ -290,8 +305,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); if (on === 'rdr') setLm((l) => (l ? { ...l, note: msg } : l)); };
     const a0 = on === 'arch' ? archRef.current : rdrRef.current, tp = A.trustParam(a0);
     if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) runKb({ t: 'search', q: a0.q.trim() }, on); else if (a0.browse) runKb({ t: 'browse', name: a0.browse }, on); }
-    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
-    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?kind=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that kind'));
     else if (act.t === 'open') {
       const t = act.target;
       kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => {
@@ -306,7 +321,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
   };
-  useEffect(() => { if (deck === 0 && !archRef.current.shelf) void loadShelf(); }, [deck]);
+  useEffect(() => { if (deck === 0 && !archRef.current.shelf && archRef.current.mode === 'search') void loadShelf(); }, [deck]);
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
   // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs
@@ -451,7 +466,28 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
         inboxRef.current = next; setInbox(next);
         if (action.t === 'chat') { setDeck(1); deckRef.current = 1; }
-        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => bad && note(bad, 'error'));
+        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => { if (bad) { note(bad, 'error'); unsend(); } });
+        else if (action.t === 'accept') {
+          // Each ticked recommendation goes through its own call, one at a time; a failure does not stop the others, and the
+          // daemon re-checks each payload hash (a decision that changed since it was shown is refused, specs/044 §5.5).
+          void (async () => {
+            let ok = 0; const bad: string[] = [];
+            for (const d of action.ds) {
+              const resolution = d.brief.recommendation?.choice_id;
+              if (d.source !== 'provisional' || (resolution !== 'ratified' && resolution !== 'rejected')) { bad.push(`${d.label}: nothing to call for this kind yet`); continue; }
+              try { await cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution }); ok++; }
+              catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
+            }
+            note(`accepted ${ok} of ${action.ds.length}${bad.length ? ' · ' + bad.join(' · ') : ''}`, bad.length ? 'error' : 'ok');
+            loadDecisionsSoon();
+          })();
+        }
+        else if (action.t === 'review') {
+          const d = action.d;
+          cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution: action.resolution })
+            .then(() => loadDecisionsSoon())
+            .catch((er: any) => { note('could not record the review: ' + (er?.message ?? JSON.stringify(er)), 'error'); unsend(); loadDecisionsSoon(); });
+        }
         else if (action.t === 'resolve-all') for (const c of action.cards) void resolveCard(cmd, c, 'allow').then((bad) => bad && note(bad, 'error'));
         return;
       }
@@ -493,7 +529,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           const d = deckTarget(deckRef.current as Deck, e, comp.current.chars.length === 0);
           if (d !== null) {
             deckRef.current = d; setDeck(d);
-            if (d === 2) { const fresh = I.newInbox(Date.now()); inboxRef.current = fresh; setInbox(fresh); }
+            if (d === 2) { const fresh = I.newInbox(Date.now(), inboxRef.current.items, inboxRef.current.pane); inboxRef.current = fresh; setInbox(fresh); loadDecisions(); }
             return;
           }
           const pick = (n: number) => { selRef.current = n; setSel(n); };
