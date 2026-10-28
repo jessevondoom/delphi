@@ -1383,29 +1383,9 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
-    // Only the arrows change the view: Right to archives (pulse, timeline and tools lie between), Left back to epic. In the
-    // other views digits, Tab and q do nothing; in archives, the knowledge window, they are text for the search box.
-    for _ in 0..4 {
-        o.type_keys("\x1b[C");
-        std::thread::sleep(Duration::from_millis(120));
-    }
-    o.wait_for("search what Delphi knows");
-    o.wait_for("collections"); // the shelf: read through `kb.get` on the narrator socket
-    o.type_keys("council");
-    o.type_keys("\r");
-    o.wait_for("result"); // "N results · 0.4 s · lexical": the daemon's own search, with no model installed here
-    o.type_keys("\x14"); // ctrl+t: trusted documents only, asked of the daemon again
-    o.wait_for("trusted only");
-    o.type_keys("\x14"); // and every document again
-    o.type_keys("\r"); // the first result opens in the reader
-    o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
-    o.type_keys("\x7f"); // backspace goes back to the results
-    o.wait_for("enter open");
-    for _ in 0..5 {
-        // archives to epic: tools, timeline, pulse and agents lie between them
-        o.type_keys("\x1b[D");
-        std::thread::sleep(Duration::from_millis(120));
-    }
+    // Only the arrows change the view: digits, Tab and q do nothing. Left goes back to epic.
+    o.type_keys("\x1b[D");
+    std::thread::sleep(Duration::from_millis(120));
     o.wait_for("· epic");
     o.wait_for("settled"); // the threads view: the finished task is one settled line
     for _ in 0..9 {

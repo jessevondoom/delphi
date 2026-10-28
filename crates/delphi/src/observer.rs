@@ -21,7 +21,6 @@ pub enum View {
     Pulse,
     Timeline,
     Tools,
-    Archives,
     Changes,
 }
 
@@ -36,7 +35,6 @@ impl View {
             View::Pulse => "pulse",
             View::Timeline => "timeline",
             View::Tools => "tools",
-            View::Archives => "archives",
             View::Changes => "changes",
         }
     }
@@ -50,7 +48,6 @@ impl View {
             "pulse" | "meters" => Some(View::Pulse),
             "timeline" | "lanes" => Some(View::Timeline),
             "tools" => Some(View::Tools),
-            "archives" | "kb" => Some(View::Archives),
             "changes" | "changelog" | "log" | "thinking" | "reasoning" => Some(View::Changes), // the reasoning pane was dropped for the change log
             _ => None,
         }
@@ -208,7 +205,6 @@ mod tests {
     fn views_parse_by_name_and_the_retired_ones_do_not() {
         assert_eq!(View::parse("Council"), Some(View::Council));
         assert_eq!(View::parse("roster"), Some(View::Agents));
-        assert_eq!(View::parse("kb"), Some(View::Archives));
         for gone in ["spend", "telemetry", "dag", "1", "5"] {
             assert_eq!(View::parse(gone), None, "{}", gone);
         }
