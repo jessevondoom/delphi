@@ -296,6 +296,10 @@ pub fn view(ws: &WorkspacePaths, projects: &[(String, PathBuf)], today: &str) ->
             }
         }
     }
+    let (agents, unlisted) = crate::bundle_load::catalog_counts(ws);
+    if unlisted > 0 {
+        open.push(format!("{} bundle agents are active but the orchestrator's list shows {}; the other {} can still be dispatched by name", agents, agents - unlisted, unlisted));
+    }
     let built = build(ws, projects, today);
     for t in &built.trimmed {
         open.push(format!("{} gave up lines to fit the prompt slice ({} of {} bytes)", clean(t), built.text.len(), SLICE_BYTES));

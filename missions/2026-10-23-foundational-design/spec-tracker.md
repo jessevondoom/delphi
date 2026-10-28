@@ -123,7 +123,7 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| S0 | report truncation of the 20-agent catalog | not started |
+| S0 | report truncation of the 20-agent catalog | built (this PR): the slice ends with the "... and N more" note; `/org` open items and `delphi doctor` check 12 give the count |
 | S1 | registry entry, `[domains]`, validation | not started |
 | S2 | index, `search_agent_registry`, `delphi route`, eval set | not started |
 | S3 | `[extends.<role>]`: skills, guidance, team | not started |
