@@ -172,3 +172,13 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
 - Builder: red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`).
+
+## Pictures in the reader and in research saves (specs 029-A1 and 028-A2, approved 2026-10-28)
+
+The operator asked for a half-block image renderer (not `ink-picture`: 136 packages against a gate of 60, and it fetches URLs itself) and for pictures to be saved with full-text research when their own licence allows. Slice I1 is built; the rest follows spec 028's E2/E3.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| I1 | PNG/JPEG/GIF decoders in `delphi-docs`, `/v1/image`, half-block painter, reader draws whole-line pictures | built |
+| I2 | check pictures in the chat reader and the change feed | not started |
+| I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | not started; after E2/E3 |

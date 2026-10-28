@@ -52,6 +52,10 @@ pub fn kind_of(rel_path: &str, zone: &str) -> &'static str {
 const REFRESH_EVERY: Duration = Duration::from_secs(10);
 /// A document larger than this is not served whole (the indexer's own cap is 512 KiB).
 const MAX_DOC_BYTES: u64 = 512 * 1024;
+/// An image file larger than this is not drawn (`specs/029` §9); the reader shows its alt text instead.
+const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// The most pixels a side of the picture sent to the console has: the reader shrinks it to the window, so more is waste.
+const IMAGE_SIDE: usize = 160;
 
 pub struct Reply {
     pub status: u16,
@@ -131,7 +135,8 @@ impl Reader<'_> {
             "/v1/documents" => self.documents(&q),
             "/v1/search" => self.search(&q),
             "/v1/doc" => self.doc(&q),
-            _ => return fail(404, "no such endpoint: /v1/health /v1/collections /v1/kinds /v1/documents /v1/search /v1/doc"),
+            "/v1/image" => self.image(&q),
+            _ => return fail(404, "no such endpoint: /v1/health /v1/collections /v1/kinds /v1/documents /v1/search /v1/doc /v1/image"),
         };
         r.unwrap_or_else(|e| fail(500, &e))
     }
@@ -244,6 +249,45 @@ impl Reader<'_> {
         let live = blake3::hash(text.as_bytes()).to_hex().to_string();
         let links = extract_links(&info.rel_path, &text, &|p| self.kb.document(p, &self.view(q)).ok().flatten().is_some());
         Ok(reply(200, json!({"path": info.rel_path, "collection": info.zone, "trust": info.source_type, "status": info.status, "blake3": live, "indexed_blake3": info.blake3, "stale": live != info.blake3, "text": text, "links": links})))
+    }
+}
+
+impl Reader<'_> {
+    /// `GET /v1/image?path=<document>&src=<href as written in it>`: a picture the document points at, decoded and
+    /// shrunk to at most 160 pixels a side, as `{width, height, rgba}` (base64, four bytes a pixel). The reader paints
+    /// it in half-block cells. The file must sit inside the document's own directory (no `..`, no absolute path, no
+    /// symlink out of it) and be a PNG, JPEG or GIF of at most 8 MiB; the document must be one this view may read.
+    fn image(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
+        let (Some(path), Some(href)) = (q.get("path").filter(|p| !p.is_empty()), q.get("src").filter(|s| !s.is_empty())) else {
+            return Ok(fail(400, "`path` and `src` are required"));
+        };
+        let href = href.split(['#', '?']).next().unwrap_or("");
+        let lower = href.to_ascii_lowercase();
+        let named_ok = !href.is_empty()
+            && !href.starts_with('/')
+            && !href.contains(['\0', '\\', ':'])
+            && href.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
+            && [".png", ".jpg", ".jpeg", ".gif"].iter().any(|e| lower.ends_with(e));
+        if !named_ok {
+            return Ok(fail(400, "`src` must be a relative path to a .png, .jpg, .jpeg or .gif file below the document's directory"));
+        }
+        let Some(info) = self.kb.document(path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
+        let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
+        let Some(dir) = src.path.parent().and_then(|d| d.canonicalize().ok()) else { return Ok(fail(404, "no longer on disk")) };
+        let Ok(file) = dir.join(href).canonicalize() else { return Ok(fail(404, "no such image next to the document")) };
+        if !file.starts_with(&dir) || !file.is_file() {
+            return Ok(fail(404, "no such image next to the document"));
+        }
+        if std::fs::metadata(&file).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_IMAGE_BYTES {
+            return Ok(fail(413, "image too large to draw"));
+        }
+        let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+        let img = match delphi_docs::pixels::decode(&bytes) {
+            Ok(i) => delphi_docs::pixels::fit(&i, IMAGE_SIDE, IMAGE_SIDE),
+            Err(e) => return Ok(fail(415, &e.0)),
+        };
+        use base64::Engine as _;
+        Ok(reply(200, json!({"width": img.width, "height": img.height, "rgba": base64::engine::general_purpose::STANDARD.encode(&img.rgba)})))
     }
 }
 
@@ -606,6 +650,36 @@ mod tests {
         assert_eq!(get(&mut api, &format!("/v1/search?q={}", "a".repeat(501))).0, 400);
         let (_, lim) = get(&mut api, "/v1/search?q=zebra&limit=1&rerank=0");
         assert_eq!(lim["results"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn images_come_from_beside_a_visible_document_and_nowhere_else() {
+        let (home, ws) = workspace();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../delphi-docs/tests/images");
+        let specs = ws.path().join("base/specs");
+        std::fs::create_dir_all(specs.join("img")).unwrap();
+        std::fs::copy(fixtures.join("grad.png"), specs.join("img/grad.png")).unwrap();
+        std::fs::copy(fixtures.join("grad_420.jpg"), specs.join("photo.JPG")).unwrap();
+        std::fs::write(specs.join("notes.txt"), "not an image").unwrap();
+        std::fs::write(specs.join("broken.png"), b"\x89PNG not really").unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::copy(fixtures.join("grad.png"), elsewhere.path().join("secret.png")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path().join("secret.png"), specs.join("leak.png")).unwrap();
+        let mut api = Api::new(home.path(), ws.path()).unwrap();
+        let (s, b) = get(&mut api, "/v1/image?path=specs/alpha.md&src=img/grad.png");
+        assert_eq!(s, 200, "{b}");
+        assert_eq!((b["width"].as_u64(), b["height"].as_u64()), (Some(40), Some(24)));
+        use base64::Engine as _;
+        let px = base64::engine::general_purpose::STANDARD.decode(b["rgba"].as_str().unwrap()).unwrap();
+        assert_eq!(px.len(), 40 * 24 * 4);
+        assert_eq!(get(&mut api, "/v1/image?path=specs/alpha.md&src=photo.JPG").0, 200, "the extension is matched without regard to case");
+        for (src, want) in [("../web.png", 400), ("/etc/passwd", 400), ("img/../photo.JPG", 400), ("notes.txt", 400), ("file:///x.png", 400), ("img%5Cgrad.png", 400), ("missing.png", 404), ("leak.png", 404), ("broken.png", 415)] {
+            let (s, b) = get(&mut api, &format!("/v1/image?path=specs/alpha.md&src={src}"));
+            assert_eq!(s, want, "{src}: {b}");
+        }
+        assert_eq!(get(&mut api, "/v1/image?path=specs/web.md&src=img/grad.png").0, 404, "an untrusted document is not served over this view, nor are its images");
+        assert_eq!(get(&mut api, "/v1/image?path=specs/alpha.md").0, 400);
+        assert_eq!(get(&mut api, "/v1/image?path=specs/nope.md&src=img/grad.png").0, 404);
     }
 
     #[test]

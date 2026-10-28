@@ -100,3 +100,33 @@ The crate was considered (the operator's suggestion) and **not adopted**:
 2. **Sources from the narrator:** documents opened in the narrator's reader are **not** recorded as sources. The narrator is for human access and research, and is read-only; only the console records sources (§6).
 
 Nothing is open. What is unproven is how the keys feel in use.
+
+## 10. Amendment 029-A1: pictures in the reader (operator, 2026-10-28)
+
+**Status: approved by the operator, 2026-10-28** ("write a half-block renderer for us instead ... consider any specs ratified and start building"). Slice I1 below is built; I2 and I3 wait on spec 028 §11. The operator asked whether `ink-picture` could draw images in the reader.
+
+### 10.1 Decision: an in-tree half-block renderer, not `ink-picture`
+`ink-picture` (MIT, Ink `>=5`) would work, but it brings 136 production packages against the supply-chain gate's 60 (`ui/dev/check-deps.mjs`: six allowed packages, pinned, script-free), it fetches remote URLs itself (D-7 says Delphi never fetches an external link, and §10.3 below says the same of pictures), and its fallback to Kitty, iTerm2 and Sixel escape sequences is exactly what the operator's terminal handles worst (seams, line spacing; see the painted-mascot decision, PR #165). So:
+- **The daemon decodes.** `delphi-docs` gains decoders for PNG (every colour type and bit depth, palettes, `tRNS`, Adam7), JPEG (baseline, extended-sequential and progressive Huffman; grey and YCbCr/RGB; no arithmetic coding, 12-bit, lossless or CMYK) and GIF (first frame, transparency, interlacing). They use only `flate2` and `crc32fast`, which the crate already has; WebP and SVG are not drawn. Size limits: 16384 pixels a side, 25 million pixels for JPEG and GIF, 8 MiB of file.
+- **The console paints.** It receives at most 160 pixels a side, shrinks them to the window (box average, colour weighted by alpha), and writes two pixels to a cell: `▀` with the upper pixel as foreground and the lower as background. A pixel at least half transparent leaves the terminal's own background. A picture is at most 72 columns and 20 rows.
+- **No colour, no picture.** With `NO_COLOR` or `TERM=dumb` there is no half-block drawing; the picture stands in as `[image: alt text]`. A picture is static, so it has no clock and reduce motion (`stillMotion`) does not apply to it.
+
+### 10.2 What the reader draws
+- A Markdown image (an exclamation mark, the alt text in square brackets, the relative file in round brackets) that is alone in its paragraph is drawn where it is written. An image inside a sentence, a list item, a table cell or a link is a note (`[image: alt]`) in the text: only whole-line pictures are drawn.
+- Until the picture arrives, and whenever it cannot be had (missing, too large, not a PNG, JPEG or GIF, damaged), the note shows. The text opens first; pictures fill in, one request each, at most 8 per document.
+- Link rows and columns are unchanged: the picture is only more rows between the links' rows.
+
+### 10.3 Safety (this adds no authority)
+- **Read-only, local only.** `GET /v1/image?path=<document>&src=<href as written>` (the same routes as `kb.get`, also served by `delphi kb serve`) reads a file; it writes nothing. A web image (`http(s)`, any scheme) and an absolute path are never requested: the reader shows `[image: alt <url>]` and, as for links, the operator's browser is the only way to see it.
+- **Beside the document only.** `src` is relative, has no `..`, `.` or empty segment, no backslash, no colon, and ends in `.png`, `.jpg`, `.jpeg` or `.gif`; the resolved file must sit below the document's own directory after symlinks are resolved, so a link planted in the knowledge base cannot lead outside it. The document must be one this view may read: the HTTP API still serves trusted, active documents only, so an untrusted document's pictures stay out of it too.
+- **Decoders are untrusted-input code.** Every length is checked, every dimension is capped before anything is allocated for it, and the tests feed truncated and corrupted files of each format and require an error or a partial picture, never a panic.
+- **Picture text is not read as instructions.** Only pixels are decoded; metadata chunks (PNG text, EXIF, GIF comments) are skipped, not shown and not given to a model.
+
+### 10.4 Slices
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| I1 | decoders in `delphi-docs`; `/v1/image`; `ui/src/image.ts` painter; the reader draws whole-line pictures; tests with Pillow-made fixtures | **built** |
+| I2 | pictures in the main chat's reader and the change feed (they open the same reader, so this is only checking) | not started |
+| I3 | pictures saved with web research, per `specs/028` §11 | waits on 028 slice E2 |
+
+Unproven: how pictures look in the operator's own terminal (seams between rows are possible where a terminal spaces its lines), and decoding of unusual files in the wild (CMYK and arithmetic JPEG are refused; the tests cover files from one encoder).

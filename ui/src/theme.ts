@@ -113,6 +113,21 @@ export const GENERIC_CROWN = '#cbd5e1';
  * glyph `▄` is the fallback when the terminal's background is not known.
  */
 export const crownCell = (hex: string, bg: Rgb | null | undefined): string => (caps.color !== 'none' && bg ? chalk.bgHex(hex).rgb(...bg)('▀') : tone(hex)('▄'));
+/** A pixel: red, green, blue, alpha (0 to 255). */
+export type Px = readonly [number, number, number, number];
+/**
+ * One cell of a picture (`specs/029` §9): two pixels, the upper as the foreground of a `▀` and the lower as its
+ * background. A pixel at least half transparent is left to the terminal's own background. Only called where there
+ * is colour: a picture is not drawn without it (`pictureOk`).
+ */
+export function pixelCell(top: Px, bottom: Px): string {
+  const [t, b] = [top[3] >= 128, bottom[3] >= 128];
+  if (t && b) return chalk.rgb(top[0], top[1], top[2]).bgRgb(bottom[0], bottom[1], bottom[2])('▀');
+  if (t) return chalk.rgb(top[0], top[1], top[2])('▀');
+  return b ? chalk.rgb(bottom[0], bottom[1], bottom[2])('▄') : ' ';
+}
+/** Whether the terminal can show a picture: it needs colour, and `NO_COLOR` and a dumb terminal have none. */
+export const pictureOk = (): boolean => caps.color !== 'none';
 /** A mascot's chin: seven cells of a darker shade of the body, painted, not drawn with `▀`. Glyphs where there is no colour. */
 export const chin = (chassis: string): string => {
   if (caps.color === 'none') return '▀▀▀▀▀▀▀';

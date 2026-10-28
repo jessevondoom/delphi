@@ -34,4 +34,4 @@ Each schema's `$id` is stable and its `description` names the specification and 
 
 ## Not covered
 
-The event *payloads* (each event type's `payload` object) are not yet individually specified here, and neither are the JSON-RPC methods between the clients and the daemon; the envelope schema constrains only the common fields. The `delphi kb serve` HTTP API (`/v1/search`, `/v1/doc`, `/v1/documents`, `/v1/collections`, `/v1/health`) is described in [`specs/004`](../../specs/004-memory-and-coaching.md) and [`028`](../../specs/028-knowledge-window.md) and has no OpenAPI file yet.
+The event *payloads* (each event type's `payload` object) are not yet individually specified here, and neither are the JSON-RPC methods between the clients and the daemon; the envelope schema constrains only the common fields. The `delphi kb serve` HTTP API (`/v1/search`, `/v1/doc`, `/v1/image`, `/v1/documents`, `/v1/collections`, `/v1/health`) is described in [`specs/004`](../../specs/004-memory-and-coaching.md) and [`028`](../../specs/028-knowledge-window.md) and has no OpenAPI file yet.

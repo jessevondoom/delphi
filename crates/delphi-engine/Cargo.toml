@@ -13,6 +13,8 @@ delphi-adapter = { path = "../delphi-adapter" }
 delphi-sandbox = { path = "../delphi-sandbox" }
 delphi-docs = { path = "../delphi-docs" }
 delphi-bundle = { path = "../delphi-bundle" }
+# Already in the workspace's tree (core, adapter, xenia): the reader's images travel as base64 pixels.
+base64 = "0.22"
 serde ={ version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.9"
