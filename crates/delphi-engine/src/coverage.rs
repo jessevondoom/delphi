@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-pub const CLIS: &[&str] = &["claude", "agy", "codex"];
+pub const CLIS: &[&str] = &["claude", "agy", "codex", "copilot"];
 
 /// The pages (beyond the top level) whose `--help` is walked. Only groups and flag-only commands are listed: a leaf
 /// command is never run, because a CLI that does not understand `--help` might run the command.
@@ -19,6 +19,7 @@ pub fn groups(cli: &str) -> &'static [&'static [&'static str]] {
         "claude" => &[&["agents"], &["auth"], &["auth", "status"], &["auto-mode"], &["mcp"], &["plugin"], &["plugin", "marketplace"]],
         "agy" => &[&["mcp"], &["plugin"], &["remote-control"]],
         "codex" => &[&["exec"], &["app-server"], &["debug"], &["login"], &["mcp"], &["plugin"], &["features"], &["cloud"], &["remote-control"], &["sandbox"], &["review"]],
+        "copilot" => &[&["login"], &["workflow"], &["sessions"], &["memories"], &["plugin"], &["plugin", "marketplace"], &["mcp"], &["skill"], &["instruction"], &["lsp"], &["sandbox"]],
         _ => &[],
     }
 }
@@ -28,6 +29,7 @@ pub fn manifest_text(cli: &str) -> &'static str {
         "claude" => include_str!("../coverage/claude.cov"),
         "agy" => include_str!("../coverage/agy.cov"),
         "codex" => include_str!("../coverage/codex.cov"),
+        "copilot" => include_str!("../coverage/copilot.cov"),
         _ => "",
     }
 }
@@ -37,6 +39,7 @@ pub fn snapshot_text(cli: &str) -> &'static str {
         "claude" => include_str!("../coverage/snapshots/claude.help"),
         "agy" => include_str!("../coverage/snapshots/agy.help"),
         "codex" => include_str!("../coverage/snapshots/codex.help"),
+        "copilot" => include_str!("../coverage/snapshots/copilot.help"),
         _ => "",
     }
 }

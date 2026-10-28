@@ -156,6 +156,17 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
 
+## GitHub Copilot CLI harness (spec 051, approved 2026-10-28)
+
+Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. Only S0 is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | built (#307): `copilot.cov`, snapshot, quota reads of both CLIs, probes a-f, h, i (spec 051 §6.4: stdin prompt, tool narrowing, fail-closed writes, ACP approval bridge, model catalog with multipliers, `COPILOT_HOME` isolation); plus round 3 (§6.5): `allow_once`, MCP tool bridge via `--additional-mcp-config`, Codex `app-server` approvals; open: g (exhausted-quota text), `session/cancel`, ACP `session/new` `mcpServers` ignored |
+| S1 | `Cli::Copilot`, `-p --output-format json` for read-only roles, request ledger, token mode | not started |
+| S2 | read-only introspection; approval bridge; Builder only after it is proven | not started |
+| S3 | `--plan` lane, vision | not started |
+
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)
 
 Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
