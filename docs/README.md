@@ -4,6 +4,7 @@ Delphi is a team of AI agents in your terminal that plans, builds and reviews so
 
 ## Start here
 
+- [Thesis](thesis.md): why Delphi exists, the claim it makes, and how to judge a change to it.
 - [Getting started](getting-started.md): install, the first session, your first build.
 
 ## Guides
