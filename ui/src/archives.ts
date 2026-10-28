@@ -21,7 +21,9 @@ export type Entry = { path: string; collection: string; trust: string; stale: bo
 export type Made = { path: string; title: string; publisher: string; url: string; form: string; licence: string };
 export type Report = { new: Made[]; updated: Made[]; unchanged: number; notKept: [string, string][]; unlisted: string[]; provider: string | null; tokens: number; stopped: string | null };
 /** The research job as the pane shows it (spec 028-A1 §10.6): progress while it runs, the report when it ends. */
-export type Research = { topic: string; phase: 'starting' | 'searching' | 'reading' | 'done' | 'failed' | 'cancelled'; found: number; read: number; skipped: number; hosts: string[]; tokens: number; error: string | null; report: Report | null; sel: number };
+/** One page of the job: queued, being read, written (with its form and licence), not readable, or read and not kept (specs/043 §3.7). */
+export type Source = { url: string; host: string; status: 'queued' | 'reading' | 'done' | 'skipped' | 'not kept'; form: string | null; licence: string | null; why: string | null };
+export type Research = { topic: string; phase: 'starting' | 'searching' | 'reading' | 'done' | 'failed' | 'cancelled'; found: number; read: number; skipped: number; hosts: string[]; sources: Source[]; tokens: number; error: string | null; report: Report | null; sel: number };
 export const researchRunning = (r: Research | null): boolean => !!r && (r.phase === 'starting' || r.phase === 'searching' || r.phase === 'reading');
 
 export type Arch = {
@@ -171,6 +173,9 @@ export const MAX_IMAGES = 8;
 
 const asMade = (m: any): Made => ({ path: String(m.path), title: sanitize(String(m.title ?? m.path)), publisher: sanitize(String(m.publisher ?? '')), url: String(m.url ?? ''), form: String(m.form ?? ''), licence: String(m.licence ?? '') });
 
+const STATUSES = ['queued', 'reading', 'done', 'skipped', 'not kept'] as const;
+const asSource = (l: any): Source => ({ url: String(l.url ?? ''), host: sanitize(String(l.host ?? '')), status: STATUSES.find((x) => x === l.status) ?? 'queued', form: l.form ? String(l.form) : null, licence: l.licence ? sanitize(String(l.licence)) : null, why: l.why ? sanitize(String(l.why)) : null });
+
 /** The daemon's `research.status` as the pane's state. A status for another topic than the one on screen is ignored. */
 export function gotResearch(a: Arch, body: any): Arch {
   const r = a.research;
@@ -178,7 +183,7 @@ export function gotResearch(a: Arch, body: any): Arch {
   const rep = body.report;
   const report: Report | null = rep ? { new: (rep.new ?? []).map(asMade), updated: (rep.updated ?? []).map(asMade), unchanged: Number(rep.unchanged ?? 0), notKept: (rep.not_kept ?? []).map((p: any) => [String(p[0]), sanitize(String(p[1]))]), unlisted: (rep.unlisted_hosts ?? []).map(String), provider: rep.provider ?? null, tokens: Number(rep.tokens ?? 0), stopped: rep.stopped ?? null } : null;
   const phase = (['searching', 'reading', 'done', 'failed', 'cancelled'] as const).find((p) => p === body.phase) ?? r.phase;
-  return { ...a, research: { ...r, phase, found: Number(body.found ?? 0), read: Number(body.read ?? 0), skipped: Number(body.skipped ?? 0), hosts: (body.hosts ?? []).map(String), tokens: Number(body.tokens ?? 0), error: body.error ? sanitize(String(body.error)) : null, report } };
+  return { ...a, research: { ...r, phase, found: Number(body.found ?? 0), read: Number(body.read ?? 0), skipped: Number(body.skipped ?? 0), hosts: (body.hosts ?? []).map(String), sources: (body.sources ?? []).map(asSource), tokens: Number(body.tokens ?? 0), error: body.error ? sanitize(String(body.error)) : null, report } };
 }
 
 /** The job could not be started (no search engine configured, one already running): the page goes back to the box with the reason. */
@@ -282,7 +287,7 @@ function expandKey(a: Arch, e: Ev, used: (n: Arch, act?: Action) => ReturnType<t
       const topic = a.q.trim();
       if (!topic) return used({ ...a, note: '' });
       if (!a.pins) return used({ ...a, note: 'research runs from the console: this window only reads' }); // the narrator is read-only
-      return used({ ...a, note: '', research: { topic, phase: 'starting', found: 0, read: 0, skipped: 0, hosts: [], tokens: 0, error: null, report: null, sel: 0 } }, { t: 'research', topic });
+      return used({ ...a, note: '', research: { topic, phase: 'starting', found: 0, read: 0, skipped: 0, hosts: [], sources: [], tokens: 0, error: null, report: null, sel: 0 } }, { t: 'research', topic });
     }
     case 'tab': case 'up': case 'down': case 'pgup': case 'pgdn': return used(a); // no scope, history or list here
     case 'esc': return a.q ? used({ ...a, q: '', note: '' }) : NOT_USED(a);
@@ -451,47 +456,68 @@ export function banner(r: Research): string {
   return n === 0 ? 'no new entries: the archive already covers this' : `the archive has been expanded to include ${plural(n, 'new entry', 'new entries')}`;
 }
 
-/** The job's page (spec 028-A1 §10.6): a live count while it runs, then the banner and the entries it wrote. */
+const FORM_WORD: Record<string, string> = { full: 'full text', summary: 'summary and facts' };
+/** The licence as the page says it: unknown licences are summary-only sources. */
+const licenceWord = (licence: string | null, form: string | null) => (!licence || licence === 'unknown' ? (form === 'summary' ? 'summary-only source' : 'licence unknown') : licence);
+
+/** The clean page's top, kept while a job runs and after it: the title, the scout's label and the box holding the topic (specs/043 §3.7). */
+function expandTop(a: Arch, w: number, info: T.Info | undefined, pal: T.Pal, topic: string): string[] {
+  return ['', titleRow(w, info, pal), '', center(`${roleBadge('scout', '•••', info, pal)} ${chalk.bold('expand knowledge base: research a topic')}`, w), '', ...box({ ...a, q: topic, focus: 'list' }, w, 'a topic to research…'), ''];
+}
+
+/** What a skipped or not-kept page looked like, short: `britannica.com/…`. */
+const shortUrl = (s: Source) => `${s.host}${/^https?:\/\/[^/]+\/./.test(s.url) ? '/…' : ''}`;
+
+/** The job's page (specs/043 §3.7, spec 028-A1 §10.6): a live count and one line per source while it runs, then the banner and the entries it wrote. */
 function researchView(a: Arch, w: number, h: number, info: T.Info | undefined, pal: T.Pal): string[] {
   const r = a.research!;
-  const scout = roleBadge('scout', '•••', info, pal);
-  const out: string[] = ['', titleRow(w, info, pal), ''];
+  const out = expandTop(a, w, info, pal, r.topic);
+  const ind = '  ';
   if (researchRunning(r)) {
-    out.push(center(`${scout} ${chalk.bold(`researching "${r.topic}"`)}`, w), '');
-    out.push(center(r.phase === 'reading' ? `reading ${plural(r.read, 'source', 'sources')} · ${r.found} found · ${r.skipped} skipped` : 'searching the trusted sources…', w));
-    if (r.hosts.length) out.push(T.dim(center(r.hosts.join(' · '), w)));
-    if (a.note) out.push('', T.dim(center(a.note, w)));
-    return pad(out, h - 1).concat(hint(`esc cancel · ${SWITCH.expand}`));
+    out.push(ind + chalk.bold(`researching “${r.topic}”`));
+    out.push(ind + (r.phase === 'reading' ? `reading ${chalk.bold(String(r.read))} ${r.read === 1 ? 'source' : 'sources'} · ${chalk.bold(String(r.found))} found · ${T.dim(`${r.skipped} skipped`)}` : T.dim('searching the trusted sources…')), '');
+    const lines = r.sources.filter((x) => x.status !== 'queued');
+    const queued = r.sources.filter((x) => x.status === 'queued');
+    const room = Math.max(2, h - out.length - 4);
+    const shown = lines.slice(Math.max(0, lines.length - (queued.length ? room - 1 : room)));
+    for (const x of shown) {
+      const mark = x.status === 'done' ? T.ok('✔') : x.status === 'reading' ? T.accent('●') : x.status === 'skipped' ? T.alert('✖') : T.dim('–');
+      const what = x.status === 'done' ? `${FORM_WORD[x.form ?? ''] ?? x.form ?? ''}`.padEnd(19) + T.dim(licenceWord(x.licence, x.form)) : x.status === 'reading' ? 'reading…' : T.dim(`${x.status}: ${x.why ?? ''}`);
+      out.push(T.clip(`${ind}${mark} ${T.warn(x.host.padEnd(24))} ${what}`, w));
+    }
+    if (queued.length) out.push(T.dim(T.clip(`${ind}○ ${queued.map((x) => x.host).join(' · ')}`, w)));
+    if (a.note) out.push('', T.dim(ind + a.note));
+    return pad(out, h - 1).concat(hint('esc cancel · entries already written stay · nothing leaves the trusted list'));
   }
   if (r.phase === 'failed' || !r.report) {
-    out.push(center(`${scout} ${T.alert(`research failed: ${r.error ?? 'no answer from the daemon'}`)}`, w));
+    out.push(ind + T.alert(`research failed: ${r.error ?? 'no answer from the daemon'}`));
     return pad(out, h - 1).concat(hint(`esc back · ${SWITCH.expand}`));
   }
   const rep = r.report, made = madeOf(r);
-  out.push(center(chalk.bold(T.ok(banner(r))), w));
-  const sub: string[] = [];
-  if (rep.updated.length) sub.push(`${rep.updated.length} updated`);
-  if (rep.unchanged) sub.push(`${rep.unchanged} already there`);
-  if (rep.stopped) sub.push(`stopped: ${rep.stopped}`);
-  if (sub.length) out.push(T.dim(center(sub.join(' · '), w)));
+  out.push(ind + chalk.bold(T.ok(banner(r))));
+  const extra: string[] = [];
+  if (rep.updated.length) extra.push(`${rep.updated.length} updated`);
+  if (rep.unchanged) extra.push(`${rep.unchanged} already there`);
+  if (rep.stopped) extra.push(`stopped: ${rep.stopped}`);
+  if (extra.length) out.push(T.dim(ind + extra.join(' · ')));
   out.push('');
-  const room = Math.max(1, Math.floor((h - out.length - 6) / 2));
-  const top = Math.max(0, Math.min(r.sel - room + 1, made.length - room));
-  made.slice(top, top + room).forEach((m, k) => {
-    const i = top + k, on = i === r.sel;
-    const tag = `${m.form} · ${m.licence === 'unknown' ? 'licence unknown' : m.licence}`;
-    const title = T.clip(`${m.title}`, Math.max(10, w - T.width(tag) - 12));
-    out.push(T.spread(` ${on ? T.accent('›') : ' '} ${String(i + 1).padStart(2)}  ${on ? chalk.bold(title) : title}`, T.dim(tag + ' '), w));
-    out.push(T.dim(T.clip(`       ${m.publisher} · ${m.url}`, w)));
-  });
-  const why = new Map<string, number>();
-  for (const [, reason] of rep.notKept) why.set(reason, (why.get(reason) ?? 0) + 1);
-  const rest = [...why].map(([reason, n]) => `${n} ${reason}`).join(', ');
+  if (made.length) {
+    const pw = Math.max(20, Math.min(Math.max(...made.map((m) => m.path.length)), w - 38));
+    out.push(T.dim(`${ind}   #  ${'new entry'.padEnd(pw)}  ${'form'.padEnd(8)} licence`));
+    const room = Math.max(1, h - out.length - 6);
+    const top = Math.max(0, Math.min(r.sel - room + 1, made.length - room));
+    made.slice(top, top + room).forEach((m, k) => {
+      const i = top + k, on = i === r.sel;
+      const path = T.clip(m.path, pw).padEnd(pw);
+      out.push(T.clip(`${ind}${on ? T.accent('❯') : ' '} ${String(i + 1).padStart(2)}  ${on ? chalk.bold(path) : path}  ${T.warn(m.form.padEnd(8))} ${T.dim(licenceWord(m.licence, m.form))}`, w));
+    });
+  }
+  const pages = r.sources.filter((x) => x.status === 'not kept' || x.status === 'skipped');
   out.push('');
-  if (rest) out.push(T.dim(T.clip(`  read, not kept: ${rest}`, w)));
-  if (rep.unlisted.length) out.push(T.dim(T.clip(`  not read, not on the trusted lists: ${rep.unlisted.slice(0, 6).join(', ')}${rep.unlisted.length > 6 ? ` and ${rep.unlisted.length - 6} more` : ''}`, w)));
-  if (a.note) out.push(T.dim('  ' + a.note));
-  return pad(out, h - 1).concat(hint(`${made.length ? '↑ ↓ pick · enter open · ' : ''}esc back · ${SWITCH.expand}`));
+  if (pages.length) out.push(T.dim(T.clip(`${ind}read, not kept: ${pages.map((x) => `${shortUrl(x)} (${x.why ?? x.status})`).join(' · ')}`, w)));
+  if (rep.unlisted.length) out.push(T.dim(T.clip(`${ind}seen, not read: ${rep.unlisted.length} ${rep.unlisted.length === 1 ? 'host that is' : 'hosts that are'} not on your lists (${rep.unlisted.slice(0, 4).join(', ')}${rep.unlisted.length > 4 ? ', …' : ''})`, w)));
+  if (a.note) out.push(T.dim(ind + a.note));
+  return pad(out, h - 1).concat(hint(`${made.length ? '↑ ↓ pick · enter read it · ' : ''}esc back to the clean page · they are searchable now`));
 }
 
 /** One result of the list (specs/043 §5): a title row in fixed columns and one line of the passage. */
@@ -529,6 +555,13 @@ function bestCard(a: Arch, x: Hit, w: number, h: number, now: number, pal: T.Pal
   return L.map(fill);
 }
 
+/** A search that found fewer than 3 reference documents (kinds `research` or `docs`) offers to research the topic (specs/043 §8.2). Only a window that can run research offers it. */
+export function thinOnReference(a: Arch): boolean {
+  if (!a.pins || a.browse || a.searched === null) return false;
+  const n = a.facets ? (a.facets.research ?? 0) + (a.facets.docs ?? 0) : a.hits.filter((x) => x.kind === 'research' || x.kind === 'docs').length;
+  return n < 3;
+}
+
 function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string[] {
   const out: string[] = [...box(a, w).slice(w < 40 ? 0 : 1, w < 40 ? 2 : 2)];
   const where = `${a.kind ? ` · ${KIND_LABEL[a.kind] ?? a.kind}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
@@ -536,7 +569,7 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
     ? `${a.hits.length} documents · ${KIND_LABEL[a.browse] ?? a.browse}, newest first${a.trustedOnly ? ' · trusted only' : ''}`
     : a.hits.length ? `${a.hits.length >= RESULTS ? 'top ' : ''}${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(2)} s` : ''} · 0 tokens${where}`
       : `nothing in the knowledge base matches${where}`;
-  out.push(T.dim('  ' + head));
+  out.push(T.dim('  ' + head + (thinOnReference(a) ? ' · thin on reference: shift+tab to research this topic' : '')));
   if (!a.browse && a.facets && Object.keys(a.facets).length) {
     const total = Object.values(a.facets).reduce((s, n) => s + n, 0);
     const chip = (k: string | null, label: string, n: number) => { const on = a.kind === k; const t = `${on ? '●' : '○'} ${label} ${n}`; return k === null ? (on ? chalk.bold(t) : T.dim(t)) : on ? chalk.bold(kindStyle(k)(t)) : kindStyle(k)(t); };

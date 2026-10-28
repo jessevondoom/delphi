@@ -197,9 +197,25 @@ pub struct State {
     pub skipped: usize,
     /// The last few hosts read.
     pub hosts: Vec<String>,
+    /// One line per page the job has queued, in order: what the console draws as `✔ ● ○` (`specs/043` §3.7).
+    pub sources: Vec<Line>,
     pub tokens: u64,
     pub error: Option<String>,
     pub report: Option<Report>,
+}
+
+/// One page of the job and where it has got to.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Line {
+    pub url: String,
+    pub host: String,
+    /// `queued`, `reading`, `done` (written or already there), `skipped` (could not be read) or `not kept` (read, and not worth keeping).
+    pub status: &'static str,
+    /// For `done`: `full` or `summary`, and the licence the entry carries.
+    pub form: Option<&'static str>,
+    pub licence: Option<String>,
+    /// For `skipped` and `not kept`: why.
+    pub why: Option<String>,
 }
 
 /// What the console polls and what cancels the job.
@@ -210,13 +226,24 @@ pub struct Shared {
 
 impl Shared {
     pub fn new(topic: &str) -> Arc<Shared> {
-        Arc::new(Shared { state: Mutex::new(State { topic: topic.into(), phase: "searching", found: 0, read: 0, skipped: 0, hosts: Vec::new(), tokens: 0, error: None, report: None }), cancel: AtomicBool::new(false) })
+        Arc::new(Shared { state: Mutex::new(State { topic: topic.into(), phase: "searching", found: 0, read: 0, skipped: 0, hosts: Vec::new(), sources: Vec::new(), tokens: 0, error: None, report: None }), cancel: AtomicBool::new(false) })
     }
 
     fn with(&self, f: impl FnOnce(&mut State)) {
         if let Ok(mut s) = self.state.lock() {
             f(&mut s);
         }
+    }
+
+    /// Set where a page has got to, adding its line when it is new.
+    fn line(&self, url: &str, status: &'static str, form: Option<&'static str>, licence: Option<String>, why: Option<String>) {
+        self.with(|s| {
+            let host = host_of(url);
+            match s.sources.iter_mut().find(|l| l.url == url) {
+                Some(l) => (l.status, l.form, l.licence, l.why) = (status, form, licence, why),
+                None => s.sources.push(Line { url: url.to_string(), host, status, form, licence, why }),
+            }
+        });
     }
 
     pub fn snapshot(&self) -> State {
@@ -358,6 +385,12 @@ fn host_of(url: &str) -> String {
     reqwest_url(url).and_then(|u| u.host_str().map(str::to_ascii_lowercase)).unwrap_or_default()
 }
 
+/// A page that was read and is not being kept: say why in the report and on its line.
+fn drop_page(rep: &mut Report, sh: &Shared, url: &str, why: String) {
+    sh.line(url, "not kept", None, None, Some(why.clone()));
+    rep.not_kept.push((url.to_string(), why));
+}
+
 fn clean_topic(t: &str) -> Result<String, String> {
     let t = crate::observe::sanitize(t).split_whitespace().collect::<Vec<_>>().join(" ");
     if t.is_empty() {
@@ -437,6 +470,9 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         }
     }
     let mut seen: std::collections::HashSet<String> = queue.iter().cloned().collect();
+    for u in &queue {
+        sh.line(u, "queued", None, None, None);
+    }
     sh.with(|s| {
         s.phase = "reading";
         s.found = queue.len();
@@ -459,6 +495,7 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
             break;
         }
         reads += 1;
+        sh.line(&url, "reading", None, None, None);
         sh.with(|s| {
             s.read = reads;
             let h = host_of(&url);
@@ -474,6 +511,7 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         let page = match tokio::task::spawn_blocking(move || fetch::fetch(&*tr, &l, &u)).await.map_err(|_| "the fetch stopped unexpectedly".to_string())? {
             Ok(p) => p,
             Err(e) => {
+                sh.line(&url, "skipped", None, None, Some(e.to_string()));
                 rep.not_kept.push((url, e.to_string()));
                 sh.with(|s| s.skipped += 1);
                 continue;
@@ -500,6 +538,7 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
             }
             *n += 1;
             added += 1;
+            sh.line(&l, "queued", None, None, None);
             queue.push_back(l);
         }
         sh.with(|s| s.found = seen.len());
@@ -509,12 +548,12 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         let text_md = html::strip_images(&conv.markdown); // the scout reads, and a summary keeps, the words only
         let full_text = html::plain_text(&text_md);
         if full_text.chars().count() < 200 {
-            rep.not_kept.push((page.url, "almost no text".into()));
+            drop_page(&mut rep, sh, &page.url, "almost no text".into());
             continue;
         }
         if rep.tokens >= lim.max_scout_tokens {
             rep.stopped.get_or_insert_with(|| "the scout's token limit".into());
-            rep.not_kept.push((page.url, "the scout's token limit".into()));
+            drop_page(&mut rep, sh, &page.url, "the scout's token limit".into());
             continue;
         }
         let input = JudgeInput { topic: topic.clone(), url: page.url.clone(), publisher: page.source.publisher.clone(), title: conv.title.clone(), text: full_text.chars().take(lim.scout_page_chars).collect(), full_text: full_text.clone() };
@@ -525,14 +564,14 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
                 if rep.new.is_empty() && rep.updated.is_empty() && rep.unchanged == 0 {
                     return Err(e);
                 }
-                rep.not_kept.push((page.url, e));
+                drop_page(&mut rep, sh, &page.url, e);
                 continue;
             }
         };
         rep.tokens += judged.tokens;
         sh.with(|s| s.tokens = rep.tokens);
         if !judged.relevant {
-            rep.not_kept.push((page.url, "not relevant to the topic".into()));
+            drop_page(&mut rep, sh, &page.url, "not relevant to the topic".into());
             continue;
         }
         let form = fetch::decide_form(&page.source, &page.body);
@@ -556,13 +595,14 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         match write_entry(&d.ws_dir, &store) {
             Ok((wrote, path)) => {
                 let e = Entry { path, title, publisher: if page.source.publisher.is_empty() { page.source.host.clone() } else { page.source.publisher.clone() }, url: page.url.clone(), form: if form == Form::Full { "full" } else { "summary" }, licence: page.source.licence.clone(), pictures: saved.len() };
+                sh.line(&page.url, "done", Some(e.form), Some(e.licence.clone()), None);
                 match wrote {
                     Wrote::New => rep.new.push(e),
                     Wrote::Updated => rep.updated.push(e),
                     Wrote::Unchanged => rep.unchanged += 1,
                 }
             }
-            Err(e) => rep.not_kept.push((page.url, e)),
+            Err(e) => drop_page(&mut rep, sh, &page.url, e),
         }
     }
     Ok(rep)
@@ -620,7 +660,7 @@ impl Judge for EngineJudge {
 /// The result as the console's JSON.
 pub fn status_json(s: &State) -> Value {
     json!({
-        "topic": s.topic, "phase": s.phase, "found": s.found, "read": s.read, "skipped": s.skipped, "hosts": s.hosts,
+        "topic": s.topic, "phase": s.phase, "found": s.found, "read": s.read, "skipped": s.skipped, "hosts": s.hosts, "sources": s.sources,
         "tokens": s.tokens, "error": s.error, "report": s.report,
     })
 }
@@ -700,6 +740,8 @@ mod tests {
         assert_eq!((rep.new[0].form, rep.new[1].form), ("full", "summary"), "Wikipedia is kept whole, W3C as a summary");
         assert!(rep.unlisted_hosts.contains(&"blog.example.com".to_string()) && rep.unlisted_hosts.contains(&"evil.example".to_string()));
         assert_eq!((s.read, rep.tokens), (2, 200));
+        assert_eq!(s.sources.iter().map(|l| (l.host.as_str(), l.status, l.form)).collect::<Vec<_>>(), [("en.wikipedia.org", "done", Some("full")), ("www.w3.org", "done", Some("summary"))], "one line per page, in the order it was queued");
+        assert_eq!(s.sources[0].licence.as_deref(), Some("CC-BY-SA-4.0"));
         let full = std::fs::read_to_string(dir.path().join("local/knowledge/web/en.wikipedia.org/wiki-byzantine-fault.md")).unwrap();
         assert!(full.contains("source_type: federated_verified") && full.contains("share_alike: true") && full.contains("# Byzantine fault"), "{}", full);
         let sum = std::fs::read_to_string(dir.path().join("local/knowledge/web/www.w3.org/tr-x.md")).unwrap();
