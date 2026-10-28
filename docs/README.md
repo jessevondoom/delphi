@@ -15,6 +15,7 @@ Delphi is a team of AI agents in your terminal that plans, builds and reviews so
 | run a task from a script or CI | [Headless runs and CI](guides/headless-and-ci.md) |
 | answer approval cards from my phone, or wake an agent later | [Away mode](guides/away-mode.md) |
 | share knowledge, skills and goals across a team | [Org bundles](guides/org-bundles.md) |
+| build a bundle with an agent and an operator | [Building a bundle with an operator](guides/building-a-bundle.md) |
 | join, run or troubleshoot the org's shared memory store (Xenia) | [Xenia operator guide](guides/xenia-operator.md), or `delphi xenia help` |
 | find out why something does not work | [Troubleshooting](troubleshooting.md) |
 | read the error log, or share a session for debugging | [Debugging with the error log](guides/debugging.md) |

@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
 import { tintCard } from './blocks.ts';
-import { faceOf } from './motion.ts';
+import { faceOf, pulseOn } from './motion.ts';
 import type { OModel, OState } from './observe-screen.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
@@ -78,7 +78,7 @@ function elapsed(m: OModel, c: Council, phase: Phase): number {
   return Math.max(0, end - start);
 }
 
-const pulse = (m: OModel) => (m.still ?? true) || Math.floor((m.now ?? 0) / 600) % 2 === 0;
+const pulse = (m: OModel) => pulseOn(m.now ?? 0, m.still ?? true);
 
 function track(m: OModel, c: Council, w: number, phase: Phase): string {
   const idx = { blind: 0, debate: 1, verdict: 2 }[phase];

@@ -31,6 +31,7 @@ mod logs_cmd;
 mod missions;
 mod changelog;
 mod learn_cmd;
+mod retro_cmd;
 mod train_run;
 mod train_arms;
 mod train_hidden;
@@ -93,13 +94,14 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--staged]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|pulse|timeline|tools|archives|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
+    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|timeline|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
     Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
     Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
+    Cmd { group: "Inspect", name: "retro", about: "rules the Orchestrator proposed, waiting for your review", synopsis: "  delphi retro list [--mission <id>] [--json]\n  delphi retro show <mission>/<id> [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. This command only reads; ratifying comes with the `/retro` review." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "capabilities", about: "what each model CLI here can use: connectors, skills, models", synopsis: "  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--project <dir>]... [--home <dir>]", detail: "Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.\nSetup and update refresh it in the background. --ask also asks the claude and agy models what they can\nuse; that answer is shown apart and is not verified. Calls no model otherwise." },
     Cmd { group: "Inspect", name: "logs", about: "the error log: what went wrong, with context", synopsis: "  delphi logs [--lines <n>] [--since 1h] [--level error|warn|debug] [--component <name>] [--mission <id>] [--json] [--follow] [--path] [--home <dir>]", detail: "Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the console: errors and panics by default, redacted, 10 MB x 3 files.\nDELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read-only and offline. --path prints the file's location.\nComponents: cli, daemon, engine, harness, provider, ui, xenia, relay, tool." },
@@ -112,7 +114,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
     Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--resume] [--pace-window <0-1>] [--allow-sleep] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
     Cmd { group: "Maintain", name: "xenia", about: "the org's shared, signed memory store: join, sync, status, publish, endorse", synopsis: "  delphi xenia whoami | help [topic] | explain <slug or message>   [--json]\n  delphi xenia join <url> --org <o> --store <s> --admin <fingerprint> --head <epoch>:<hash> [--allow-local]\n  delphi xenia sync [--auto-update-bundles] | status [--store <org>/<store>] [--json]\n  delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]\n  delphi xenia publish --bundle <dir> --url <https url> --pin <git-tree|git-commit>:<sha> [--id <record>]\n  delphi xenia endorse|dispute|retract|withdraw|restore <id> [--scope a,b] [--note <n>] [--reason <r>]\n  delphi xenia republish --old <did> | admin add|remove|rotate|show|sign|publish|refresh|genesis ...", detail: "Commands that sign show the exact bytes and want the card's code typed at a terminal. Start: `delphi xenia help`." },
-    Cmd { group: "Maintain", name: "docs", about: "print the command reference or a man page", synopsis: "  delphi docs cli | man | coverage", detail: "Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/046)." },
+    Cmd { group: "Maintain", name: "docs", about: "print the command reference or a man page", synopsis: "  delphi docs cli | man | catalog [--repo <dir>] | coverage", detail: "Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI\'s --help (specs/046)." },
     Cmd { group: "Maintain", name: "completions", about: "print a shell completion script", synopsis: "  delphi completions bash|zsh|fish", detail: "For example: `delphi completions zsh > ~/.zfunc/_delphi`." },
     Cmd { group: "Maintain", name: "help", about: "this list, or one command's options", synopsis: "  delphi help [<command>]", detail: "`delphi <command> --help` says the same." },
 ];
@@ -123,7 +125,7 @@ const ENV: &[(&str, &str)] = &[
     ("DELPHI_UI", "the delphi-ui program to use (default: next to delphi)"),
     ("DELPHI_THEME", "dark or light, when the terminal cannot say"),
     ("NO_COLOR", "no colour at all; TERM=dumb also drops styling"),
-    ("DELPHI_REDUCE_MOTION", "1 stops the badge animation"),
+    ("DELPHI_REDUCE_MOTION", "1 stops every console animation (also /reduce-motion)"),
     ("DELPHI_NO_ONBOARD", "1 skips the first-run questions"),
     ("DELPHI_LOG", "off, error (default), warn or debug: what `delphi logs` keeps"),
 ];
@@ -266,6 +268,7 @@ fn main() {
         Some("capabilities") => host_caps::cli(&args, &home::delphi_home(flag(&args, "--home").as_deref())),
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
+        Some("retro") => cmd_retro(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -325,7 +328,7 @@ fn log_exit(cmd: Option<&str>, args: &[String], code: i32) {
     let shape = format!("{} word(s) {}", words, flags.join(" "));
     let ctx = serde_json::json!({"command": name, "exit_code": code, "args_shape": shape});
     let msg = format!("delphi {} exited with code {}", name, code);
-    let finding = code == 1 && matches!(name, "doctor" | "lint" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "decisions" | "xenia");
+    let finding = code == 1 && matches!(name, "doctor" | "lint" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "retro" | "decisions" | "xenia");
     if code == 2 || finding {
         delphi_core::elog::warn("cli", "cli_exit", &msg, ctx);
     } else {
@@ -801,7 +804,7 @@ fn cmd_narrator(args: &[String]) -> i32 {
         Some(v) => match observer::View::parse(v) {
             Some(v) => Some(v),
             None => {
-                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, pulse, timeline, tools, archives or changes)", v);
+                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, timeline or changes)", v);
                 return 2;
             }
         },
@@ -951,6 +954,14 @@ fn cmd_sessions(args: &[String]) -> i32 {
 fn cmd_learn(args: &[String]) -> i32 {
     match resolve_ws("learn", args) {
         Ok((_home, ws)) => learn_cmd::cli(&ws.dir, args, &learn_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi retro list|show`: the proposals the Orchestrator made, waiting for review (see `retro_cmd.rs`).
+fn cmd_retro(args: &[String]) -> i32 {
+    match resolve_ws("retro", args) {
+        Ok((_home, ws)) => retro_cmd::cli(&ws.dir, args, &retro_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }

@@ -11,7 +11,7 @@ delphi v0.5 · /proj · chat
   /y approve once · /n reject · /d view all
 
 ❯ one more thing  (queued)
-◐ working · 2s · 1 queued            esc to stop
+● working · 2s · 1 queued            esc to stop
 ────────────────────────────────────────────────
 ❯ and then?
 ────────────────────────────────────────────────

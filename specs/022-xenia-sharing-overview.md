@@ -184,7 +184,7 @@ Effort is focused build hours including tests, ±30%, estimated before any code 
 | B-1 | Bundle = Claude Code plugin superset? | **Resolved: yes** (OD-2) |
 | B-2 | Knowledge tier for unsigned local bundles | **Resolved: $L_2$; unsigned bundles must feed the knowledge base; provenance level shown** (OD-3) |
 | B-3 | Role guidance as a bounded prompt block (IPR slot) | **Resolved: yes, and it loads on add with no ratification** (OD-1; D-P3) |
-| B-4 | Xenia kind `bundle` supersedes provisional `skill` | **Proposed, open** (D-P8); decide with the Phase 2 re-review |
+| B-4 | Xenia kind `bundle` supersedes provisional `skill` | **Built as proposed** in B8; the Phase 2 re-review of `specs/011` §11 was approved by the operator 2026-10-26 |
 | B-5 | Transport order directory → archive → store | **Proposed, open** (D-P7) |
 | B-6 | Person-scope bundles | **Open, recommend later** (024 §5.1) |
 | B-7 | Scripts in bundle skills | **Resolved by OD-1's schema limits: never executed; copied inert** |

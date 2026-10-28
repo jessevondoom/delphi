@@ -13,11 +13,13 @@ use std::path::{Path, PathBuf};
 pub const FILE: &str = "local/settings.toml";
 pub const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
 /// What the tool and the command say can be set, so a refusal tells the operator what to do instead.
-pub const SETTABLE: &str = "role_tier.<role> (fast, workhorse, frontier, or default to go back to the shipped one) and mission_budget_usd (a number up to 10000). Permissions, endpoints, access, hooks and the relay are changed with their own commands, never by a prompt";
+pub const SETTABLE: &str = "role_tier.<role> (fast, workhorse, frontier, or default to go back to the shipped one) mission_budget_usd (a number up to 10000) and reduce_motion (on or off: stops the console's animations, an accessibility setting) and pace (sprint, frugal or balanced: how work is spread over the providers for now, never a lower model tier). Permissions, endpoints, access, hooks and the relay are changed with their own commands, never by a prompt";
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Overrides {
     pub role_tier: BTreeMap<String, String>,
+    /// Accessibility: the console draws no animation (`[display] reduce_motion`).
+    pub reduce_motion: bool,
 }
 
 pub fn path(ws_dir: &Path) -> PathBuf {
@@ -36,6 +38,7 @@ pub fn load(ws_dir: &Path) -> Overrides {
             }
         }
     }
+    out.reduce_motion = v.get("display").and_then(|d| d.get("reduce_motion")).and_then(|x| x.as_bool()).unwrap_or(false);
     out
 }
 
@@ -55,6 +58,11 @@ pub fn save(ws_dir: &Path, o: &Overrides) -> std::io::Result<()> {
     if !roles.is_empty() {
         root.insert("roles".into(), toml::Value::Table(roles));
     }
+    if o.reduce_motion {
+        let mut d = toml::value::Table::new();
+        d.insert("reduce_motion".into(), toml::Value::Boolean(true));
+        root.insert("display".into(), toml::Value::Table(d));
+    }
     let body = toml::to_string(&toml::Value::Table(root)).map_err(std::io::Error::other)?;
     let tmp = p.with_extension("toml.tmp");
     std::fs::write(&tmp, format!("# Written by Delphi when you change a setting (`/settings`, or by asking). You may edit it by hand.\n{}", body))?;
@@ -67,6 +75,10 @@ pub enum Setting {
     /// A role's starting tier; `None` goes back to the shipped one.
     RoleTier { role: String, tier: Option<String> },
     MissionBudget { usd: f64 },
+    /// Accessibility: no animation in the console.
+    ReduceMotion { on: bool },
+    /// How the team is spread over the providers for now: `balanced`, `sprint` or `frugal` (`specs/035` D-21). Not saved: it lasts until set back or the daemon stops.
+    Pace { pace: crate::route::Pace },
 }
 
 impl Setting {
@@ -74,6 +86,8 @@ impl Setting {
         match self {
             Setting::RoleTier { role, .. } => format!("role_tier.{}", role),
             Setting::MissionBudget { .. } => "mission_budget_usd".into(),
+            Setting::ReduceMotion { .. } => "reduce_motion".into(),
+            Setting::Pace { .. } => "pace".into(),
         }
     }
 
@@ -82,6 +96,8 @@ impl Setting {
         match self {
             Setting::RoleTier { tier, .. } => tier.clone().unwrap_or_else(|| "default".into()),
             Setting::MissionBudget { usd } => format!("{}", usd),
+            Setting::ReduceMotion { on } => if *on { "on" } else { "off" }.into(),
+            Setting::Pace { pace } => pace.as_str().into(),
         }
     }
 }
@@ -108,6 +124,16 @@ pub fn parse(key: &str, value: &Value, enabled: &[String]) -> Result<Setting, St
             Ok(usd) if usd.is_finite() && usd > 0.0 && usd <= 10_000.0 => Ok(Setting::MissionBudget { usd }),
             _ => Err("mission_budget_usd must be a number above 0 and at most 10000".into()),
         };
+    }
+    if key == "reduce_motion" {
+        return match text.to_lowercase().as_str() {
+            "on" | "true" | "yes" | "1" => Ok(Setting::ReduceMotion { on: true }),
+            "off" | "false" | "no" | "0" => Ok(Setting::ReduceMotion { on: false }),
+            _ => Err("reduce_motion must be on or off".into()),
+        };
+    }
+    if key == "pace" {
+        return crate::route::Pace::parse(&text).map(|pace| Setting::Pace { pace }).ok_or_else(|| "pace must be sprint (fastest progress), frugal (token efficiency) or balanced".into());
     }
     Err(format!("`{}` cannot be changed this way. Settable: {}", key, SETTABLE))
 }
@@ -201,6 +227,37 @@ mod tests {
             let e = parse(k, &json!("anything"), &enabled()).unwrap_err();
             assert!(e.contains("cannot be changed this way") && e.contains("never by a prompt"), "{}: {}", k, e);
         }
+    }
+
+    #[test]
+    fn pace_is_a_setting_by_name_and_is_not_saved() {
+        use crate::route::Pace;
+        assert_eq!(parse("pace", &json!("sprint"), &enabled()).unwrap(), Setting::Pace { pace: Pace::Sprint });
+        assert_eq!(parse("pace", &json!("frugal"), &enabled()).unwrap().value_text(), "frugal");
+        assert_eq!(parse("pace", &json!("balanced"), &enabled()).unwrap().key(), "pace");
+        assert!(parse("pace", &json!("reckless"), &enabled()).unwrap_err().contains("sprint"));
+        assert!(SETTABLE.contains("pace"));
+    }
+
+    #[test]
+    fn reduce_motion_is_a_setting_that_survives_a_restart() {
+        for (word, on) in [("on", true), ("true", true), ("Yes", true), ("off", false), ("0", false)] {
+            assert_eq!(parse("reduce_motion", &json!(word), &enabled()).unwrap(), Setting::ReduceMotion { on }, "{}", word);
+        }
+        assert!(parse("reduce_motion", &json!("sideways"), &enabled()).is_err());
+        assert_eq!(Setting::ReduceMotion { on: true }.key(), "reduce_motion");
+        let dir = std::env::temp_dir().join(format!("delphi-settings-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!load(&dir).reduce_motion, "off unless asked for");
+        let mut o = load(&dir);
+        o.role_tier.insert("builder".into(), "fast".into());
+        o.reduce_motion = true;
+        save(&dir, &o).unwrap();
+        assert_eq!(load(&dir), o, "it sits beside the tiers without disturbing them");
+        o.reduce_motion = false;
+        save(&dir, &o).unwrap();
+        assert!(!load(&dir).reduce_motion);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

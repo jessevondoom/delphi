@@ -30,8 +30,8 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 008 Ambient watch and rewind | yes | no (HITL tiers only) | n/a | watches and `/rewind` (Step 6, gated) |
 | 009 Model access and auth | yes | yes (keychain, env, command, aws, gcloud-adc, oauth2, probing) | **live Gemini OAuth unverified** | operator's Google OAuth client; `oauth2.rs` device-code and refresh fixes |
 | 010 Connectors and tool access (+010-A1) | yes | slice 1 (catalog, `rmcp`, pins, pipeline, `delphi connectors`) | **never run against Google, Slack or Zoom** | first live Drive read; formatters, promotion card (§5.3), harness bridge; Slack and Zoom (need admin steps) |
-| 011 Xenia trust model | yes (text, by "ratify all") | no | n/a | Phase 1 build: X0-X7 merged, X9 (status, doctor, needs, events, approval card) built, PR open; X8 admin ops library merged and its CLI (X8b: `xenia admin`, admin card) built, PR open; X10-X11 open (plan: xenia-phase-1-plan.md) |
-| 012 Xenia record schema | yes (text, by "ratify all") | no | n/a | same; Phase 1 is kinds `memory`, `endorsement`, `tombstone`; built through X7 |
+| 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
+| 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
 | 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155) | no | n/a | B0: apply the 022 §5 amendments; then the slices below |
 | 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25) | no | n/a | B1 |
@@ -69,7 +69,7 @@ Drafted at the operator's request; text merged on their "go" 2026-10-26 (renumbe
 | :-- | :-- | :-- | :-- | --: | :-- |
 | L0 | `snapshot.loaded` event; `learn::task_records` (outcome, attempts, denials, cost per task); skill IDs wait for L3 | 031 §3.4, §7.1 | none | 10 | built (#184); as-built in 031 §7.1 |
 | L1 | staging tier: `staged_notes`, kb zone `staged`, `note` tool, triggers 1-5, caps, taint stamping | 031 §3.1-3.2 | L0; OD-1 | 16 | L1a merged (#196): `learn.staged` events, triggers 1-5, taint, caps, `[learning]`, `delphi learn`; L1b built (PR open): kb zone `staged` (opt-in search), `note` tool (see 031 §7.1) |
-| L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | not started |
+| L2 | `propose` tool, `/retro` deck, ratification apply path, dedupe, scope routing | 031 §3.5; 004 §4.2 | L1 | 20 | L2a built (PR open): `suggest_rule` tool, `learn.proposed` events, `delphi retro list/show`; apply, dedupe, scope lint and the console deck not started |
 | L3 | skill candidates (trigger 6), patch proposals, trigger-test check | 031 §3.3 | L2 | 18 | not started |
 | L4 | `rule_stats`, `skill_stats`, scores, exposure randomization, decay | 031 §3.4; 004 §5.6 | L0, L2; OD-2 | 14 | not started |
 | L5 | `delphi customize note/rule/skill/profile`, bounded `[learning]` config | 031 §3.5-3.6 | L2 | 12 | not started |
@@ -156,13 +156,40 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
 
+## Knowledge window round 2 (spec 043, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisions-options/`. It builds on 028 and on amendment 028-A1 (PR #263: the `shift+tab` expand mode, which replaces the offline/online indicators); K1 waits for 028-A1's E1. Adds the `research` and `docs` kinds. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | built (resting counts by kind, chips, the best match as the passage's own words, uniform rows; `/v1/kinds`, `kind` and `facets` in the API). Kinds in effect today: spec, lesson, docs (`context/`), mission, skill, memory, other; `research` arrives with E3 and `docs/` with K2. Unproven in a real terminal. Stacked on E1 |
+| K2 | index PDF, DOCX, EPUB text; list media by name | not started |
+| K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
+| K4 | summarize for me, with the cache | not started |
+| K5 | thin-reference hint, query carried into expand, expand pages' visuals | not started (needs 028-A1 E3, E4) |
+| K6 | docs regenerated, tracker | not started |
+
+## The decisions pane (spec 044, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 with the mockups ("the decision pages are perfect"). One pane for every decision owed (cards, provisional decisions, raised decisions), a brief and recommendation each, tick boxes only where a default is safe, a filter, a detail view with the only prompt bar, typed replies, and a cache so tokens are spent once. Nothing is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | built (cards and provisional decisions; raised decisions come with D6; unproven in a real terminal) |
+| D2 | detail view, choices, accept, advance, empty state (the prompt bar moves to D4 with typed replies) | built (cards and provisional decisions; the "decided in the last hour" list of the empty-state mockup is not built; unproven in a real terminal) |
+| D3 | brief cache and the one-time card brief | not started |
+| D4 | prompt bar bound to the decision, typed replies: READ AS, confirm, conditions, saved thread | not started |
+| D5 | ticks, confirm page, batch accept with re-checks | built (builds only, since only builds are tickable; the daemon re-checks each payload hash; unproven in a real terminal) |
+| D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
+| D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |
+
 ## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
 
 Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | not started |
+| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
 | E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | not started |
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |
@@ -171,3 +198,13 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
 - Builder: red-team sweep findings (`oauth2.rs`, `credential.rs`, `harness.rs`, `finalize.rs`, `setup.rs`).
+
+## Pictures in the reader and in research saves (specs 029-A1 and 028-A2, approved 2026-10-28)
+
+The operator asked for a half-block image renderer (not `ink-picture`: 136 packages against a gate of 60, and it fetches URLs itself) and for pictures to be saved with full-text research when their own licence allows. Slice I1 is built; the rest follows spec 028's E2/E3.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| I1 | PNG/JPEG/GIF decoders in `delphi-docs`, `/v1/image`, half-block painter, reader draws whole-line pictures | built |
+| I2 | check pictures in the chat reader and the change feed | not started |
+| I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | not started; after E2/E3 |

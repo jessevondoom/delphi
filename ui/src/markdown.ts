@@ -1,19 +1,20 @@
 // Markdown to ANSI lines: the part of the UI where a library (marked) does the parsing and we only style.
-import { Lexer, type Token, type Tokens } from 'marked';
+import { Lexer, walkTokens, type Token, type Tokens } from 'marked';
 import chalk from 'chalk';
 import * as T from './theme.ts';
-import { sanitize } from './theme.ts';
+import { pictureOk, sanitize } from './theme.ts';
 import { highlightLine } from './highlight.ts';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import { isPointerText, parseTarget, POINTER_RE, type Link, type Target } from './links.ts';
+import { paint, type Raster } from './image.ts';
 
 /**
  * While `renderMarkdownLinks` runs, links are wrapped in zero-width OSC 8 markers (`delphi-link:<id>`). They survive
  * the wrap, so that afterwards each link's rows and columns can be read off the finished lines (spec 029 §3); the markers
  * are then removed. Outside that call `ctx` is null and rendering is exactly what it was.
  */
-type Ctx = { base?: string; focus?: number | null; links: Link[] };
+type Ctx = { base?: string; focus?: number | null; links: Link[]; width: number; images?: Record<string, Raster | null> };
 let ctx: Ctx | null = null;
 const OPEN = (id: number) => `\x1b]8;;delphi-link:${id}\x1b\\`;
 const CLOSE = '\x1b]8;;\x1b\\';
@@ -39,6 +40,28 @@ function withPointers(text: string): string {
   return out + text.slice(last);
 }
 
+/** The file an image points at, as the daemon is asked for it: no fragment or query. Null for the web and absolute paths (never fetched). */
+export function imageSrc(href: string): string | null {
+  const h = href.trim().split(/[#?]/)[0]!;
+  return h === '' || h.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(h) ? null : h;
+}
+
+/** What stands for a picture that is not drawn: its alt text, and where it points when that is the web. */
+const imageNote = (i: Tokens.Image): string => chalk.dim(`[image: ${i.text || 'no description'}${imageSrc(i.href) === null ? ` <${i.href}>` : ''}]`);
+
+/** The picture as rows of half-block cells when the reader has it (and the terminal has colour), else its note. */
+function picture(i: Tokens.Image): string[] {
+  const src = ctx && imageSrc(i.href), r = src ? ctx!.images?.[src] : null;
+  return r && pictureOk() ? paint(r, Math.min(ctx!.width, 72)) : [imageNote(i)];
+}
+
+/** The relative image files a document points at, in order, once each: what the reader asks the daemon for. */
+export function imageRefs(src: string): string[] {
+  const seen = new Set<string>();
+  walkTokens(new Lexer().lex(sanitize(src)), (t) => { if (t.type === 'image') { const h = imageSrc((t as Tokens.Image).href); if (h) seen.add(h); } });
+  return [...seen];
+}
+
 const inline = (toks: Token[] | undefined): string =>
   (toks ?? []).map((t) => {
     switch (t.type) {
@@ -56,6 +79,7 @@ const inline = (toks: Token[] | undefined): string =>
         return T.link(l.text) + chalk.dim(` <${l.href}>`);
       }
       case 'br': return '\n';
+      case 'image': return imageNote(t as Tokens.Image);
       case 'text': return (t as Tokens.Text).tokens ? inline((t as Tokens.Text).tokens) : withPointers((t as Tokens.Text).text);
       default: return (t as any).raw ?? '';
     }
@@ -64,7 +88,11 @@ const inline = (toks: Token[] | undefined): string =>
 function block(t: Token, indent = ''): string[] {
   switch (t.type) {
     case 'heading': return ['', T.heading(inline((t as Tokens.Heading).tokens)), ''];
-    case 'paragraph': return inline((t as Tokens.Paragraph).tokens).split('\n').concat('');
+    case 'paragraph': {
+      const only = (t as Tokens.Paragraph).tokens.filter((x) => !(x.type === 'text' && (x as Tokens.Text).text.trim() === ''));
+      if (only.length === 1 && only[0]!.type === 'image') return [...picture(only[0] as Tokens.Image), ''];
+      return inline((t as Tokens.Paragraph).tokens).split('\n').concat('');
+    }
     case 'code': {
       const c = t as Tokens.Code;
       const lang = (c.lang ?? '').split(/\s/)[0]!;
@@ -135,11 +163,12 @@ function collect(lines: string[], links: Link[]): string[] {
 /**
  * `renderMarkdown`, and the links in it: `[label](target)` links and logical paths written as plain text (in prose or in
  * code spans), each with the rows and columns it occupies in the returned lines. `base` is the logical path of the
- * document, for relative links; `focus` is the link to draw reversed. Fenced code is left alone.
+ * document, for relative links; `focus` is the link to draw reversed; `images` holds the pictures the reader has fetched,
+ * by the file they were written as (an image not in it shows as a note with its alt text). Fenced code is left alone.
  */
-export function renderMarkdownLinks(src: string, width: number, opts: { base?: string; focus?: number | null } = {}): { lines: string[]; links: Link[] } {
+export function renderMarkdownLinks(src: string, width: number, opts: { base?: string; focus?: number | null; images?: Record<string, Raster | null> } = {}): { lines: string[]; links: Link[] } {
   const links: Link[] = [];
-  ctx = { ...opts, links };
+  ctx = { ...opts, links, width };
   try {
     const lines = new Lexer().lex(sanitize(src)).flatMap((t) => block(t));
     return { lines: collect(lines.flatMap((l) => (l === '' ? [''] : wrapLine(l, width))), links), links };

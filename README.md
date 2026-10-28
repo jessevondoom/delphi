@@ -75,7 +75,7 @@ Taint is computed, not declared: every span carries the lowest trust tier of any
 
 ### Knowledge search
 
-`delphi kb search` combines FTS5 keyword matching (so `[REV-SEC-04]` still hits exactly), a local `bge-base` embedding search (sqlite-vec) and a MiniLM cross-encoder that reads the best few results with your question. The two models (about 146 MB) are compiled into release builds and run on your machine; nothing is sent anywhere. The index covers `context/`, `specs/`, `missions/`, agent memory and the agents and skills themselves, is refreshed on every search, ships with vectors for the built-in documents, and returns `path#L10-L40` pointers. Untrusted or inactive material is left out unless you ask, and an agent sees only its own private memory. `delphi kb serve` exposes the same search as a read-only local HTTP API (`/v1/search`, `/v1/doc`, `/v1/documents`, `/v1/collections`, `/v1/health`), which the narrator's knowledge window also uses over its socket ([`specs/004`](specs/004-memory-and-coaching.md), [`specs/028`](specs/028-knowledge-window.md)).
+`delphi kb search` combines FTS5 keyword matching (so `[REV-SEC-04]` still hits exactly), a local `bge-base` embedding search (sqlite-vec) and a MiniLM cross-encoder that reads the best few results with your question. The two models (about 146 MB) are compiled into release builds and run on your machine; nothing is sent anywhere. The index covers `context/`, `specs/`, `missions/`, agent memory and the agents and skills themselves, is refreshed on every search, ships with vectors for the built-in documents, and returns `path#L10-L40` pointers. Untrusted or inactive material is left out unless you ask, and an agent sees only its own private memory. `delphi kb serve` exposes the same search as a read-only local HTTP API (`/v1/search`, `/v1/doc`, `/v1/image`, `/v1/documents`, `/v1/collections`, `/v1/health`), which the narrator's knowledge window also uses over its socket ([`specs/004`](specs/004-memory-and-coaching.md), [`specs/028`](specs/028-knowledge-window.md)).
 
 ### Documents and data visualization
 
@@ -257,7 +257,7 @@ This is an early project built mostly by its own agents under one operator. The 
 - Failover to the Ollama local endpoint mid-task; Linux CPU search speed.
 
 **Specified, not built**
-- `bundle serve`, evaluation (slices B11, B12; the store transport, B8, is built as `bundle publish|store|add --from-xenia` (archive tree pointers are not); authoring and `package --vectors`, B10, and alignment, B9, are built; compatibility, B7, is built except `connectors map`, `references/` indexing and the handoff `AGENTS.md` pointer; adding, signing, archives, update and rollback, B2 and B6, and vectors, B3, are built); the Librarian role (013); the Xenia member commands and a live store (X8 and a real run).
+- Org bundles (specs 022-027) are built through B12, `bundle serve` and the evaluation gate included; deferred are archive tree pointers, `i8` vectors, vectors in `serve`, the blind grader and any live paid evaluation run. The Librarian role (013); Xenia Phase 2 and 3 (signed invites, skill adoption, the pointer resolver, requests and claims); the Xenia dogfood gate, an independent red-team sweep and a live store with real admin identities.
 - Step 6, deliberately gated on recorded need (`delphi needs`): coaching automation and `/retro`, diff3 updates of customized files, team sync, ambient watches, `/rewind`.
 - Deferred (D-06): federation planes 1 and 2, a direct OpenAI API driver, multi-terminal auto-spawn.
 

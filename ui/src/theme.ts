@@ -113,6 +113,21 @@ export const GENERIC_CROWN = '#cbd5e1';
  * glyph `▄` is the fallback when the terminal's background is not known.
  */
 export const crownCell = (hex: string, bg: Rgb | null | undefined): string => (caps.color !== 'none' && bg ? chalk.bgHex(hex).rgb(...bg)('▀') : tone(hex)('▄'));
+/** A pixel: red, green, blue, alpha (0 to 255). */
+export type Px = readonly [number, number, number, number];
+/**
+ * One cell of a picture (`specs/029` §9): two pixels, the upper as the foreground of a `▀` and the lower as its
+ * background. A pixel at least half transparent is left to the terminal's own background. Only called where there
+ * is colour: a picture is not drawn without it (`pictureOk`).
+ */
+export function pixelCell(top: Px, bottom: Px): string {
+  const [t, b] = [top[3] >= 128, bottom[3] >= 128];
+  if (t && b) return chalk.rgb(top[0], top[1], top[2]).bgRgb(bottom[0], bottom[1], bottom[2])('▀');
+  if (t) return chalk.rgb(top[0], top[1], top[2])('▀');
+  return b ? chalk.rgb(bottom[0], bottom[1], bottom[2])('▄') : ' ';
+}
+/** Whether the terminal can show a picture: it needs colour, and `NO_COLOR` and a dumb terminal have none. */
+export const pictureOk = (): boolean => caps.color !== 'none';
 /** A mascot's chin: seven cells of a darker shade of the body, painted, not drawn with `▀`. Glyphs where there is no colour. */
 export const chin = (chassis: string): string => {
   if (caps.color === 'none') return '▀▀▀▀▀▀▀';
@@ -199,14 +214,16 @@ export function eyeColor(role: string, state: AgentState, info: Info, p: Pal): s
  * `⟦•─•⟧`: brackets and mouth in the role's colour, eyes bright on a dark terminal and deep slate on a light one.
  * Which cell is the mouth comes from the library's data, not from the character: the red-team's `-_-` has `-` eyes.
  * `frame` is the library's activity name when the badge animates (`motion.ts`); without it, the state's own frame.
+ * `crossed` swaps the eyes for dim `x`s (the "press Ctrl+C again" window).
  */
-export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string): string {
+export function badge(role: string, state: AgentState, info: Info, p: Pal, frame?: string, crossed = false): string {
   const chassis = roleColor(role, info);
   // The library's eye colours need true colour; below it the eyes are the terminal's own foreground, bold (`005e` §12).
   const eye = caps.color === 'truecolor' ? chalk.hex(eyeColor(role, state, info, p))
     : state === 'waiting on you' && info.avatar?.roles[role]?.alert_eye && caps.color !== 'none' ? chalk.bold.yellow : chalk.bold;
   const { cells, mouth } = badgeCells(role, state, info, frame);
-  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : eye(c))).join('') + chassis('⟧');
+  // `crossed` (Ctrl+C pressed once): every eye becomes a lightly drawn `x`; the mouth and any blank cell stay.
+  return chassis('⟦') + cells.map((c, i) => (i === mouth ? chassis(c) : crossed && c !== ' ' ? chalk.dim(eye('x')) : eye(c))).join('') + chassis('⟧');
 }
 
 /**

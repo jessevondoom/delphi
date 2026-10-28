@@ -884,6 +884,7 @@ name = "delphi-engine"
 version = "0.1.0"
 dependencies = [
  "accelerate-src",
+ "base64 0.22.1",
  "blake3",
  "candle-core",
  "candle-nn",

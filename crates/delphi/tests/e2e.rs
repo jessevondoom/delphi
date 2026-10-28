@@ -1339,15 +1339,15 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     c.wait_for("1 waiting"); // the badge and the footer count carry it; the card is in the chat
     // Open the inbox (Shift+Right), wait out the guard, open the card, approve with option 1.
     c.type_keys("\x1b[1;2C");
-    c.wait_for("Pending decisions (1)");
+    c.wait_for("1 decision");
     std::thread::sleep(Duration::from_millis(500));
     c.type_keys("\r");
-    c.wait_for("Approval required · 1 of 1 pending");
-    c.wait_for("1. Approve once");
+    c.wait_for("NO RECOMMENDATION");
+    c.wait_for("Approve once");
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "nothing is written before the answer");
-    std::thread::sleep(Duration::from_millis(150));
+    std::thread::sleep(Duration::from_millis(400)); // the guard, from when the detail opened
     c.type_keys("1");
-    c.wait_for("nothing needs you");
+    c.wait_for("Nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Drafted specs/009-e2e.md.");
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
@@ -1383,29 +1383,9 @@ fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket(
     let roster = o.visible();
     assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
     assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
-    // Only the arrows change the view: Right to archives (pulse, timeline and tools lie between), Left back to epic. In the
-    // other views digits, Tab and q do nothing; in archives, the knowledge window, they are text for the search box.
-    for _ in 0..4 {
-        o.type_keys("\x1b[C");
-        std::thread::sleep(Duration::from_millis(120));
-    }
-    o.wait_for("search what Delphi knows");
-    o.wait_for("collections"); // the shelf: read through `kb.get` on the narrator socket
-    o.type_keys("council");
-    o.type_keys("\r");
-    o.wait_for("result"); // "N results · 0.4 s · lexical": the daemon's own search, with no model installed here
-    o.type_keys("\x14"); // ctrl+t: trusted documents only, asked of the daemon again
-    o.wait_for("trusted only");
-    o.type_keys("\x14"); // and every document again
-    o.type_keys("\r"); // the first result opens in the reader
-    o.wait_for("[ back"); // the reader's hint row, whether or not the document has links
-    o.type_keys("\x7f"); // backspace goes back to the results
-    o.wait_for("enter open");
-    for _ in 0..5 {
-        // archives to epic: tools, timeline, pulse and agents lie between them
-        o.type_keys("\x1b[D");
-        std::thread::sleep(Duration::from_millis(120));
-    }
+    // Only the arrows change the view: digits, Tab and q do nothing. Left goes back to epic.
+    o.type_keys("\x1b[D");
+    std::thread::sleep(Duration::from_millis(120));
     o.wait_for("· epic");
     o.wait_for("settled"); // the threads view: the finished task is one settled line
     for _ in 0..9 {
@@ -1556,10 +1536,13 @@ fn a_scripted_session_through_the_full_screen_console_ends_with_the_terminal_giv
     line(&mut c, "@architect Draft a spec called 009-e2e");
     c.wait_for("approval needed [amber]");
     c.type_keys("\x1b[C"); // Right, with nothing typed: the next deck
-    c.wait_for("Pending decisions (1)");
+    c.wait_for("1 decision");
     std::thread::sleep(Duration::from_millis(400)); // the 300 ms guard
-    c.type_keys("n");
-    c.wait_for("nothing needs you");
+    c.type_keys("\r"); // open the decision
+    c.wait_for("NO RECOMMENDATION");
+    std::thread::sleep(Duration::from_millis(400)); // the guard again, from when the detail opened
+    c.type_keys("3"); // an Amber card: 1 Approve once, 2 Allow similar, 3 Reject
+    c.wait_for("Nothing needs you");
     c.type_keys("\x1b");
     c.wait_for("Understood, nothing was written.");
     c.wait_for("Daedalus · ");

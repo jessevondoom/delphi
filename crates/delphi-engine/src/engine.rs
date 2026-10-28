@@ -260,6 +260,9 @@ pub struct Engine {
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
+    /// How the team is spread over the providers for now (`/pace`, `specs/035` D-21). Kept in memory on purpose: it lasts until the
+    /// operator sets it back or the daemon stops.
+    pub pace: Mutex<crate::route::Pace>,
     /// Single-use and rate-limit state for step-up codes.
     pub(crate) totp: delphi_core::totp::Verifier,
 }
@@ -1324,6 +1327,7 @@ impl Engine {
     /// with an approval bridge.
     fn route_request(&self, sc: &SpanCtx, turn_by_turn: bool) -> RouteRequest {
         RouteRequest {
+            pace: *self.pace.lock().unwrap(),
             role: sc.role.clone(),
             tier: sc.tier.clone(),
             prefer_family: Some(sc.family.clone()),
@@ -3254,6 +3258,16 @@ mod tests {
         let f = ask_for_a_setting(vec![Step::tool("s1", "change_setting", json!({"key": "mission_budget_usd", "value": "20", "quote": "raise the budget to 20 dollars"})), Step::text("Done.")], "Raise the budget to 20 dollars, I want a longer run.").await;
         assert_eq!(f.m.budget.lock().unwrap().cap_micro(), 20_000_000);
         assert!(f.model.requests()[1].body.to_string().contains("budget ceiling is now $20.00 (it was $5.00)"));
+    }
+
+    // Accessibility: "reduce motion" asked for in the operator's words is saved and announced; it does not widen any authority.
+    #[tokio::test]
+    async fn the_operator_can_turn_reduce_motion_on_by_asking() {
+        let f = ask_for_a_setting(vec![Step::tool("s1", "change_setting", json!({"key": "reduce_motion", "value": "on", "quote": "please reduce motion"})), Step::text("Done.")], "Please reduce motion, the blinking bothers me.").await;
+        assert!(crate::settings_store::load(&f.engine.ws.dir).reduce_motion);
+        let changed = &events_of(&f, "setting.changed")[0].payload;
+        assert_eq!((changed["key"].as_str(), changed["new"].as_str(), changed["by"].as_str()), (Some("reduce_motion"), Some("on"), Some("prompt")));
+        assert!(f.model.requests()[1].body.to_string().contains("Reduce motion is on"));
     }
 
     // specs/035 D-17: nothing the operator did not say, and nothing from untrusted content, changes a setting; it waits as a suggestion.

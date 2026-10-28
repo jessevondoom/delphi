@@ -18,10 +18,7 @@ pub enum View {
     Council,
     Epic,
     Agents,
-    Pulse,
     Timeline,
-    Tools,
-    Archives,
     Changes,
 }
 
@@ -33,10 +30,7 @@ impl View {
             View::Council => "council",
             View::Epic => "epic",
             View::Agents => "agents",
-            View::Pulse => "pulse",
             View::Timeline => "timeline",
-            View::Tools => "tools",
-            View::Archives => "archives",
             View::Changes => "changes",
         }
     }
@@ -47,10 +41,7 @@ impl View {
             "council" | "chamber" => Some(View::Council),
             "epic" | "forge" | "diffs" => Some(View::Epic), // the forge view folded into the epic pane (`005g`)
             "agents" | "roster" => Some(View::Agents),
-            "pulse" | "meters" => Some(View::Pulse),
-            "timeline" | "lanes" => Some(View::Timeline),
-            "tools" => Some(View::Tools),
-            "archives" | "kb" => Some(View::Archives),
+            "timeline" | "lanes" | "pulse" | "meters" | "tools" => Some(View::Timeline), // pulse is gone and tools sits under the timeline
             "changes" | "changelog" | "log" | "thinking" | "reasoning" => Some(View::Changes), // the reasoning pane was dropped for the change log
             _ => None,
         }
@@ -208,7 +199,6 @@ mod tests {
     fn views_parse_by_name_and_the_retired_ones_do_not() {
         assert_eq!(View::parse("Council"), Some(View::Council));
         assert_eq!(View::parse("roster"), Some(View::Agents));
-        assert_eq!(View::parse("kb"), Some(View::Archives));
         for gone in ["spend", "telemetry", "dag", "1", "5"] {
             assert_eq!(View::parse(gone), None, "{}", gone);
         }

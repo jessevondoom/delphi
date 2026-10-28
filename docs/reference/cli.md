@@ -191,7 +191,7 @@ The knowledge base: index it, search it.
 The read-only live window (also: delphi narrator).
 
 ```
-  delphi observe [dashboard|council|epic|agents|pulse|timeline|tools|archives|changes]
+  delphi observe [dashboard|council|epic|agents|timeline|changes]
     [--once] [--workspace <name>] [--home <dir>]
 ```
 
@@ -259,6 +259,18 @@ How tools are used, and how often models record their changes.
 ```
 
 Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only.
+
+### `delphi retro`
+
+Rules the Orchestrator proposed, waiting for your review.
+
+```
+  delphi retro list [--mission <id>] [--json]
+  delphi retro show <mission>/<id> [--json]
+    [--workspace <name>] [--home <dir>]
+```
+
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. This command only reads; ratifying comes with the `/retro` review.
 
 ### `delphi learn`
 
@@ -400,10 +412,10 @@ Commands that sign show the exact bytes and want the card's code typed at a term
 Print the command reference or a man page.
 
 ```
-  delphi docs cli | man | coverage
+  delphi docs cli | man | catalog [--repo <dir>] | coverage
 ```
 
-Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/046).
+Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/046).
 
 ### `delphi completions`
 
@@ -434,7 +446,7 @@ This list, or one command's options.
 | `DELPHI_UI` | the delphi-ui program to use (default: next to delphi) |
 | `DELPHI_THEME` | dark or light, when the terminal cannot say |
 | `NO_COLOR` | no colour at all; TERM=dumb also drops styling |
-| `DELPHI_REDUCE_MOTION` | 1 stops the badge animation |
+| `DELPHI_REDUCE_MOTION` | 1 stops every console animation (also /reduce-motion) |
 | `DELPHI_NO_ONBOARD` | 1 skips the first-run questions |
 | `DELPHI_LOG` | off, error (default), warn or debug: what `delphi logs` keeps |
 

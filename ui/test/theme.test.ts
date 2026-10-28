@@ -85,7 +85,7 @@ const model = (over: Partial<Model> = {}): Model => ({
   info, pal: { dark: true, bg: [15, 23, 42] }, state: stateWorld(), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'mission-auto', panel: null, help: false, ...over,
 });
-const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, arch: emptyArch(), live: {}, connected: true });
+const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, live: {}, connected: true });
 
 /** True when any SGR sequence in `s` sets a colour (foreground, background, bright or extended). */
 function hasColour(s: string): boolean {
@@ -172,4 +172,10 @@ test('the approval mode auto is warning-red and bold, never reverse video', () =
     assert.equal(T.auto('auto'), '\x1b[1mauto\x1b[22m', 'bold alone under NO_COLOR');
     assert.ok(!BG(T.auto('auto')) && !T.auto('auto').includes('[7m'));
   } finally { T.useCapabilities(prev); }
+});
+
+test('a crossed badge swaps the eyes for x and leaves the mouth and brackets', () => {
+  const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+  assert.equal(plain(T.badge('builder', 'running', info, { dark: true }, undefined, true)), '⟦x─x⟧');
+  assert.equal(plain(T.badge('builder', 'running', info, { dark: true })), '⟦•─•⟧');
 });

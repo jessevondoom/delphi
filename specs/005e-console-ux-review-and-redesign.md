@@ -652,7 +652,7 @@ delphi v0.5 · ~/projects/app · chat
 
   | State | Trigger | Frames (5 cells) | Cadence |
   | :-- | :-- | :-- | :-- |
-  | idle | resting | `⟦•_•⟧` (scout `⟦•••⟧`) | blinks to `⟦-_-⟧` (scout `⟦---⟧`) for 150 ms about every 5 s |
+  | idle | resting | `⟦•_•⟧` (scout `⟦•••⟧`) | blinks to `⟦-_-⟧` (scout `⟦---⟧`) for 150 ms at random, 7-30 s apart |
   | thinking | reasoning deltas in the last 1.5 s | `⟦•• ⟧` ↔ `⟦ ••⟧` (scout `⟦…  ⟧` ↔ `⟦  …⟧`) | swap every 600 ms |
   | working | a tool call or build is running | `⟦•─•⟧` (scout `⟦···⟧`) | static |
   | waiting on you | `approval.requested` | `⟦x?x⟧` | static; the alert banner in the console header (005b) is unchanged |
@@ -671,7 +671,7 @@ delphi v0.5 · ~/projects/app · chat
 `COMMANDS` in `ui/src/commands.ts` becomes the single list, generated into the Rust `HELP` at build time (or the Rust list is exported as JSON and read by the UI; either way one source). `/models` and `/agents` are added to the Ink console (`run.ts`: `models.get` → text; `/agents` from the fold's `agents` map). `/observe` (alias `/narrator`) in the Ink console opens one narrator window: a tmux window when `$TMUX` is set, else a new terminal window (amended 2026-10-25, §16.1; this said tmux splits). The slash menu shows up to 8 items and a `· N more` line when truncated; descriptions wrap to a second dim line at < 100 columns rather than clipping mid-word (finding 14).
 
 ### 10.5 Consistent leave and stop (findings 7, 18)
-`Ctrl+C`: both consoles ask once when there is text, a queue or a running task, and leave at once otherwise. `Esc`: both clear the prompt first; with it empty, both stop the running task (the inline console gains `task.cancel`). `Ctrl+D` on an empty prompt leaves in both. The narrator leaves on `Ctrl+C` only.
+`Ctrl+C`: both consoles need it twice within two seconds to leave, whatever is on screen (changed 2026-10-28, as in Claude Code); the first press crosses the eyes of the strip's badges until the window lapses. `Esc`: both clear the prompt first; with it empty, both stop the running task (the inline console gains `task.cancel`). `Ctrl+D` on an empty prompt leaves in both. The narrator leaves on `Ctrl+C` only.
 
 ### 10.6 Notes have marks (finding 15)
 Information notes start with `·`, errors with `✖` in the alert colour, successes (exported, pinned) with `✔` in the success colour. The text stays `dim` except the mark.
@@ -787,7 +787,7 @@ Differences between this spec's mockups and the product, each decided while buil
 - **Council:** the agreement meter is proportional (a 2-1 split fills seven of ten cells); seats that have not yet spoken in the debate read `waiting`; the old open-column view with findings, minority report and saved path is gone (the record file keeps them).
 - **Command list:** `ui/src/commands.json` is the single list; the Rust consoles generate their help from it, and `/exit`, `/narrator` (unlisted) and `/perm` are aliases of `/quit`, `/observe` and `/permissions`.
 - **forge, agents, archives, thinking (slice 10):** lowercase section rules; a tinted band (bold without a tint) marks the running gate, agent or thought; the `agents` roster shows name, role, state in words, model, task and one token total (the endpoint, call count and the input/cache/output split are gone); `archives` points to `Ctrl+K` and `Ctrl+S` in the console.
-- **Inline console:** `Esc` clears the prompt, then stops the running task; `Ctrl+C` asks once when text is typed or a task runs.
+- **Inline console:** `Esc` clears the prompt, then stops the running task; `Ctrl+C` must be pressed twice within two seconds to leave.
 
 ## 17. Notes from the external seat (Gemini 3.8 Flash through `agy`, plan mode, 2026-10-25)
 
