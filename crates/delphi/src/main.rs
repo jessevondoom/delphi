@@ -31,6 +31,7 @@ mod logs_cmd;
 mod missions;
 mod changelog;
 mod learn_cmd;
+mod retro_cmd;
 mod train_run;
 mod train_arms;
 mod train_hidden;
@@ -100,6 +101,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "release", about: "whether this build is a signed release", synopsis: "  delphi release [status]", detail: "Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal." },
     Cmd { group: "Inspect", name: "sessions", about: "the finished console sessions, to review later", synopsis: "  delphi sessions [--mission <id>] [--limit <n>] [--full] [--json] [--home <dir>]", detail: "Written when a session ends (/new, or a daemon restart): the first words of what was asked, the changes recorded, and the summary when [session] summary is on. Reads the central log; calls no model." },
     Cmd { group: "Inspect", name: "tools", about: "how tools are used, and how often models record their changes", synopsis: "  delphi tools [--mission <id> | --all] [--json | --prom] [--workspace <name>] [--home <dir>]", detail: "Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only." },
+    Cmd { group: "Inspect", name: "retro", about: "rules the Orchestrator proposed, waiting for your review", synopsis: "  delphi retro list [--mission <id>] [--json]\n  delphi retro show <mission>/<id> [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. This command only reads; ratifying comes with the `/retro` review." },
     Cmd { group: "Inspect", name: "learn", about: "notes staged from denials, corrections, retries and escalations", synopsis: "  delphi learn list [--mission <id>] [--json]\n  delphi learn show <mission>/<id> [--json]\n  delphi learn drop <mission>/<id>\n    [--workspace <name>] [--home <dir>]", detail: "Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. Capture is set in [learning] in config.toml." },
     Cmd { group: "Inspect", name: "capabilities", about: "what each model CLI here can use: connectors, skills, models", synopsis: "  delphi capabilities [--refresh] [--ask] [--json] [--quiet] [--project <dir>]... [--home <dir>]", detail: "Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.\nSetup and update refresh it in the background. --ask also asks the claude and agy models what they can\nuse; that answer is shown apart and is not verified. Calls no model otherwise." },
     Cmd { group: "Inspect", name: "logs", about: "the error log: what went wrong, with context", synopsis: "  delphi logs [--lines <n>] [--since 1h] [--level error|warn|debug] [--component <name>] [--mission <id>] [--json] [--follow] [--path] [--home <dir>]", detail: "Reads $DELPHI_HOME/logs/delphi.log.jsonl, written by the CLI, the daemon and the console: errors and panics by default, redacted, 10 MB x 3 files.\nDELPHI_LOG=off|error|warn|debug or [logging] level in <home>/operator/config.toml sets what is kept. Read-only and offline. --path prints the file's location.\nComponents: cli, daemon, engine, harness, provider, ui, xenia, relay, tool." },
@@ -266,6 +268,7 @@ fn main() {
         Some("capabilities") => host_caps::cli(&args, &home::delphi_home(flag(&args, "--home").as_deref())),
         Some("tools") => cmd_tools(&args),
         Some("learn") => cmd_learn(&args),
+        Some("retro") => cmd_retro(&args),
         Some("chat") => cmd_chat(&args),
         Some("run") => cmd_run(&args),
         Some("relay") => cmd_relay(&args),
@@ -325,7 +328,7 @@ fn log_exit(cmd: Option<&str>, args: &[String], code: i32) {
     let shape = format!("{} word(s) {}", words, flags.join(" "));
     let ctx = serde_json::json!({"command": name, "exit_code": code, "args_shape": shape});
     let msg = format!("delphi {} exited with code {}", name, code);
-    let finding = code == 1 && matches!(name, "doctor" | "lint" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "decisions" | "xenia");
+    let finding = code == 1 && matches!(name, "doctor" | "lint" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "retro" | "decisions" | "xenia");
     if code == 2 || finding {
         delphi_core::elog::warn("cli", "cli_exit", &msg, ctx);
     } else {
@@ -951,6 +954,14 @@ fn cmd_sessions(args: &[String]) -> i32 {
 fn cmd_learn(args: &[String]) -> i32 {
     match resolve_ws("learn", args) {
         Ok((_home, ws)) => learn_cmd::cli(&ws.dir, args, &learn_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
+        Err(code) => code,
+    }
+}
+
+/// `delphi retro list|show`: the proposals the Orchestrator made, waiting for review (see `retro_cmd.rs`).
+fn cmd_retro(args: &[String]) -> i32 {
+    match resolve_ws("retro", args) {
+        Ok((_home, ws)) => retro_cmd::cli(&ws.dir, args, &retro_cmd::Options { mission: flag(args, "--mission"), json: args.iter().any(|a| a == "--json") }),
         Err(code) => code,
     }
 }

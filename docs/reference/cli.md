@@ -260,6 +260,18 @@ How tools are used, and how often models record their changes.
 
 Per model: runs that changed something and recorded a change. --prom: Prometheus text. Counts only.
 
+### `delphi retro`
+
+Rules the Orchestrator proposed, waiting for your review.
+
+```
+  delphi retro list [--mission <id>] [--json]
+  delphi retro show <mission>/<id> [--json]
+    [--workspace <name>] [--home <dir>]
+```
+
+Proposals are made with the Orchestrator's `suggest_rule` tool and are never loaded into a prompt until you ratify them. This command only reads; ratifying comes with the `/retro` review.
+
 ### `delphi learn`
 
 Notes staged from denials, corrections, retries and escalations.

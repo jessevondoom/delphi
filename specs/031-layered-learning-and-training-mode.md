@@ -223,6 +223,14 @@ Total about **182 h**. Critical path for the operator layer: L0 → L1 → L2 �
 - **Differences:** the cap is still per mission; projection reads a mission's whole log when it changed, which is slow for a very large mission (a per-mission offset would fix it); the zone is listed under `kb stats` documents like any other and the kb console shows it by name.
 - **Unverified:** no live daemon run; whether models call `note` at all, and with what quality, is unknown.
 
+**L2a (proposals, read half; `learn.rs`, `tools.rs`, `crates/delphi/src/retro_cmd.rs`).** The first third of L2; apply and the console deck are not built.
+- **`suggest_rule` tool** (Orchestrator only, Green, never asks). `op` is `add`, `merge` or `demote`; `scope` is `workspace` or `operator`; `text` is at most 350 characters, `rationale` at most 280; `merge` and `demote` need a `target`. It logs `learn.proposed`, with a tier that is the span's ceiling capped at `L3`, so a task that read the web proposes at `L0`. Nothing is loaded into any prompt.
+- **Projection.** `learn::live_proposals` lists every `learn.proposed` minus every `learn.proposal_resolved` (written by the apply slice). A proposal's id is `p<seq>` of its event. Out-of-vocabulary events are ignored.
+- `delphi retro list|show [--mission] [--json]`: read-only.
+- **Differences from the design:** the tool is `suggest_rule`, not `propose`, because the Xenia guard test (`xenia_recover_tests.rs`) bans `propose` in any tool name; proposals are events in the mission log, as notes are, not files in `local/proposals/<mission-id>/`; there is no dedupe, no operator-scope privacy-identifier lint, no per-mission cap and no dedupe against existing rules yet (all L2b).
+- **Not built:** the apply path (`ratify.rs`, CAS writes), `/retro` in the console (`ui/src/commands.json` has no entry yet), and the prompt that tells the Orchestrator when to call the tool. Until that last one lands, nothing calls `suggest_rule` on its own.
+- Unverified: no real model has called the tool.
+
 **Suggested order of first merges:** L0, then L6 and L1 in parallel, then L2 and L7, then L3 and L4, then L9, L5, L8, L10. After L1 and L2, run the loop on real work for a few weeks before L3; the staged notes will show which triggers produce signal.
 
 ## 8. Decisions for the Operator
