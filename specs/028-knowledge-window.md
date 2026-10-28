@@ -225,6 +225,7 @@ The spec 040 validator is for **chat prompts that bring in research**: arbitrary
 5. **Removal.** Recommended: entries are never deleted automatically; a `delphi kb forget <path>` is a later slice.
 
 ### 10.9 Slices and tests
+
 | Slice | Content |
 | :-- | :-- |
 | E1 | `shift+tab` mode toggle in the archives window, role badges, indicators removed, the clean expand page (UI only, no job) |
@@ -233,3 +234,34 @@ The spec 040 validator is for **chat prompts that bring in research**: arbitrary
 | E4 | progress and results pages, the banner, cancel, failure states; a pty test against a fixture server |
 
 Acceptance tests (automated, no live network): `shift+tab` toggles modes and expand mode hides every shelf element; the offline/online indicators are absent in both modes; an unlisted host is never fetched, including by redirect or by a link in a fetched page; a `summary-only` or `unknown`-licence source never yields a body copy; nothing is written outside `knowledge/web/`; an injected instruction in a fixture page changes nothing; the banner count equals the entries written, and a repeated run says `no new entries`; a failed scout call writes nothing; the pane never calls the validator, and the validator applies when an agent cites a `knowledge/web/` entry in a deliverable.
+
+## 11. Amendment 028-A2: pictures saved with full-text research (operator, 2026-10-28)
+
+**Status: approved by the operator, 2026-10-28** ("pull images with full doc research saves for the knowledge base as long as their licensing allows"). Nothing is built; it rides on slice E2 (§10.9) and shows in the reader built by `specs/029` §10.
+
+### 11.1 The rule
+A picture is saved **only** with an entry of `kind: full`, and only when **the picture itself** has a licence that allows reuse. The page's licence is not the picture's: many pages under CC BY embed third-party pictures that are not. So, in order:
+1. The picture's own licence is **declared by the source in a machine-readable way**: a Wikimedia Commons file page (the `LicenseShortName` and `Artist` fields of its API), a `<figure>` or `<img>` with an explicit `license` / `cc:license` link, or a government host whose list entry says `reuse = "full"` for images and that is public domain by statute (US federal works).
+2. The licence is one of the §10.5 seed set (CC BY, CC BY-SA, CC0, public domain). `unknown`, "all rights reserved", `NC` and `ND` licences are **not saved**: the entry keeps the text and the picture shows as `[image: alt]`. The job never guesses a licence from the look of a page.
+3. A picture on a `summary-only` entry is never saved.
+
+### 11.2 What is saved, and where
+- Only what the reader can draw: **PNG, JPEG and GIF**, by their bytes (not the extension or the `Content-Type`), at most 8 MiB, at most 16384 pixels a side. SVG and WebP are not fetched at all.
+- The file is `knowledge/web/images/<blake3 of the bytes>.<png|jpg|gif>`; the entry's Markdown points at it as a Markdown image whose target is the relative path `images/<hash>.png`, which is the only form the reader draws (`specs/029` §10.3).
+- The entry's frontmatter gains `images:`, one item per saved picture: `file`, `source_url`, `licence` (SPDX), `author`, `attribution` (the line to show), `share_alike` (true for CC BY-SA), `sha256` of the bytes. There is no sidecar file: a sidecar `.md` would be indexed as a document.
+- The attribution line is written under the picture in the entry's text (`*Image: <author>, <licence>, <source_url>*`), so it travels with the text and survives a copy.
+- Pictures embedded in an entry that are **not** saved are replaced by their alt text and a line `image not saved: <reason>` in the results page's "read but not kept" list.
+
+### 11.3 Fetching, deterministically (no model tokens)
+- A picture is fetched only from a host on the trusted-source list (§10.3) and only when the page that references it is itself being kept; the same GET-only, no-redirect-off-host, response-size and time caps as page fetches apply, and the fetch counts against the job's page budget (at most 6 pictures an entry, 24 a job).
+- The bytes are validated by the decoders of `specs/029` §10.1 (a file that does not decode is dropped), re-encoded nowhere, and written by the daemon after the scout returns, like the text.
+- The scout never sees pixels and is not asked about pictures; deciding to save is code: licence found, licence allowed, bytes valid.
+- Export: `knowledge/web/images/` follows the collection's export rule (§10.8 Q4): off by default; when on, a share-alike picture carries its licence and attribution in the bundle.
+
+### 11.4 Tests (no live network)
+A fixture server serves: a CC BY page with a CC BY picture (saved, attribution written), a CC BY page with an undeclared third-party picture (text kept, picture not), an NC picture, a picture on a host off the list, a redirect to another host, an SVG, a WebP, a `.png` that is really HTML, a 9 MiB file, a truncated PNG and a decompression-bomb PNG header. Expected: only the first is saved; the rest are refused with a reason in the results; no file exists outside `knowledge/web/images/`; a repeated run saves nothing new (same hash).
+
+### 11.5 Slice
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| I3 | picture licence detection, picture fetch, `images:` frontmatter, attribution line, results-page reasons | not started; after E2 and E3 |

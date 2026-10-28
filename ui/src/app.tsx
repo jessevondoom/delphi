@@ -14,6 +14,8 @@ import { resolveCard, runSlash } from './run.ts';
 import * as I from './inbox.ts';
 import * as P from './panel.ts';
 import * as A from './archives.ts';
+import { imageRefs } from './markdown.ts';
+import { rasterOf } from './image.ts';
 import { openExternal } from './external.ts';
 import * as O from './org.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
@@ -300,6 +302,9 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           setState((st) => ({ ...st, sources: noteSources(st.sources, [t.path], 'read', 'operator', Date.now()) }));
         }
         setArch((a) => (r.status === 200 ? A.gotDoc(a, r.body, t, sizeRef.current.w) : A.withNote(a, r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it')));
+        if (r.status === 200) for (const src of imageRefs(String(r.body?.text ?? '')).slice(0, A.MAX_IMAGES)) { // pictures arrive after the text, and fill in
+          kb(`/v1/image?path=${enc(String(r.body.path))}&src=${enc(src)}${tp}`).then((im) => setArch((a) => A.gotImage(a, String(r.body.path), src, im.status === 200 ? rasterOf(im.body) : null))).catch(() => setArch((a) => A.gotImage(a, String(r.body.path), src, null)));
+        }
         if (r.status !== 200 && on === 'rdr') fail(r.status === 404 ? `${t.path} is not in the knowledge base` : r.body?.error ?? 'could not open it');
       }).catch(() => fail('could not open it'));
     } else if (act.t === 'pin') pinTarget(act.target);

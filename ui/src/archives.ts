@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import type { Ev } from './input.ts';
 import { copyText, describe, firstVisible, stepFocus, type Link, type Target } from './links.ts';
 import { renderMarkdownLinks } from './markdown.ts';
+import type { Raster } from './image.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 
@@ -15,7 +16,7 @@ export type Shelf = {
   stats: { documents: number; passages: number; vectors: number } | null;
 };
 /** One document in the reader, with where the operator is in it. */
-export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
+export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
 export type Arch = {
   q: string;
   /** Where the keys go: the search box, or the list under it. */
@@ -101,7 +102,7 @@ const day = (iso: string) => (iso || '').slice(0, 10);
 const READER_MARGIN = 4;
 
 /** The reader's body: the document rendered at `w`, and the links in it (focus is drawn by the caller's `focus`). */
-export const layout = (e: Entry, w: number, focus: number | null = null) => renderMarkdownLinks(e.text, Math.max(10, w - READER_MARGIN), { base: e.path, focus });
+export const layout = (e: Entry, w: number, focus: number | null = null) => renderMarkdownLinks(e.text, Math.max(10, w - READER_MARGIN), { base: e.path, focus, images: e.images });
 const bodyRows = (h: number) => Math.max(1, h - 5); // the header, two rules, the status row and the hint
 
 /** The row a section or a line range starts on, in the rendered document: by heading text, or by how far down the source it is. */
@@ -148,6 +149,12 @@ export function gotDoc(a: Arch, body: any, target: Target | null, w: number): Ar
   const trail = [...a.trail.slice(0, a.at + 1), entry];
   return { ...a, trail, at: trail.length - 1, note: '' };
 }
+
+/** A picture arrived (or could not be had) for the document `path`: every copy of it in the history is told. */
+export const gotImage = (a: Arch, path: string, src: string, r: Raster | null): Arch => ({ ...a, trail: a.trail.map((x) => (x.path === path ? { ...x, images: { ...x.images, [src]: r } } : x)) });
+
+/** The most pictures the reader fetches for one document. */
+export const MAX_IMAGES = 8;
 
 export const withNote = (a: Arch, note: string): Arch => ({ ...a, note });
 
