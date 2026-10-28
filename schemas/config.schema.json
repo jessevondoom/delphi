@@ -68,6 +68,16 @@
         "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
       }
     },
+    "loop": {
+      "type": "object",
+      "properties": {
+        "nudge": { "type": "boolean" },
+        "nudge_edits": { "type": "integer", "minimum": 1, "description": "Writes to one file before the nudge; twice this ends the span." },
+        "budget_warnings": { "type": "boolean" },
+        "verify_gate": { "type": "boolean" },
+        "workspace_bootstrap": { "type": "boolean" }
+      }
+    },
     "hitl": { "type": "object", "properties": { "approval_timeout_sec": { "type": "integer", "minimum": 1, "description": "Unanswered approvals resolve to deny." } } },
     "exec": {
       "type": "object",
@@ -80,6 +90,19 @@
       }
     },
     "update": { "type": "object", "properties": { "require_signed": { "type": "boolean" } } },
+    "search": {
+      "type": "object",
+      "description": "Web search engines for the archives pane's research mode (specs/028 section 10), tried in order, one at a time. Unset means research cannot run.",
+      "additionalProperties": false,
+      "properties": {
+        "providers": { "type": "array", "items": { "enum": ["brave", "mojeek", "searxng", "kagi", "google"] }, "uniqueItems": true },
+        "brave": { "$ref": "#/$defs/searchEngine" },
+        "mojeek": { "$ref": "#/$defs/searchEngine" },
+        "searxng": { "$ref": "#/$defs/searchEngine" },
+        "kagi": { "$ref": "#/$defs/searchEngine" },
+        "google": { "$ref": "#/$defs/searchEngine" }
+      }
+    },
     "rag": {
       "type": "object",
       "properties": {
@@ -124,6 +147,15 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "searchEngine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential": { "type": "string", "description": "Where the key comes from, as for an endpoint." },
+        "url": { "type": "string", "description": "SearXNG only: the instance." },
+        "cx": { "type": "string", "description": "Google only: the Programmable Search engine id." }
+      }
+    },
     "tierMap": {
       "type": "object",
       "properties": {

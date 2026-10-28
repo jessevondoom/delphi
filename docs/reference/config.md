@@ -64,6 +64,17 @@ Defaults are those of the template; "—" means no default.
 | `[exec] test_command`, `check_command` ◆ | — | the two merge gates, as argument lists |
 | `[update] require_signed` ◆ | `false` | refuse any build that is not a signed release |
 
+## Research (the archives pane's expand mode) ◆
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[search] providers` ◆ | — (none) | the web search engines to ask, in order, one at a time: the next only if the last failed. `brave`, `mojeek`, `searxng`, `kagi`, `google`. `google` needs a Gemini endpoint. Unset: research cannot run |
+| `[search.<engine>] credential` ◆ | — | where the key comes from, as for an endpoint (`env:BRAVE_API_KEY`, `keychain:…`, `command:…`); every engine but `searxng` needs one |
+| `[search.searxng] url` ◆ | — | the SearXNG instance (https, or http to loopback) |
+| `[search.google] cx` ◆ | — | the Programmable Search engine id |
+
+Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`.
+
 ## Away mode and hooks ◆
 
 | Section | Meaning |
@@ -79,6 +90,7 @@ Defaults are those of the template; "—" means no default.
 | `[session] summary` | `off`, `local` or `fast`: how a finished console session is summarized for `delphi sessions` ([`specs/030`](../../specs/030-console-sessions-and-conversation-context.md)) |
 | `[session] conversation_tokens` | how much of your session a task is told; `0` tells nothing |
 | `[learning] capture`, `max_notes`, `triggers` | whether notes are staged from denials, corrections, retries and escalations, how many, and which triggers. Staged notes are never loaded into a prompt ([`specs/031`](../../specs/031-layered-learning-and-training-mode.md)) |
+| `[loop] nudge`, `nudge_edits`, `budget_warnings`, `verify_gate`, `workspace_bootstrap` | what the engine adds around a role's model calls: a nudge when it goes round in circles (and a stop if it carries on), a warning at 75 % and 90 % of its turns, one check against the task before a role that writes or runs commands may finish, and a map of its worktree. All on by default; `nudge_edits` is 4 ([`specs/045`](../../specs/045-harness-loop-techniques.md)) |
 | `[optimistic] approver`, `second_seat`, `max_decisions`, `max_approver_calls`, `unseconded`, `review_wait_sec` | how `/build --optimistic` records and reviews provisional decisions ([`specs/015`](../../specs/015-provisional-decisions.md)) |
 
 ## Search and federation

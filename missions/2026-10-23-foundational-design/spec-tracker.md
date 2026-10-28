@@ -164,9 +164,25 @@ Approved by the operator 2026-10-28, with two allow lists (default in the repo, 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | E1 | `shift+tab` modes, badges, indicators removed, clean expand page | built (the console's left deck; `enter` in expand says the job is not built yet; unproven in a real terminal) |
-| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | not started |
+| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | built (PR pending): `delphi-adapter/src/research/`, `context/sources/trusted.toml`, `[search]` ratified. Not wired to the daemon or the console yet (that is E3); `delphi sources` command not built |
 | E3 | research job, scout decision, `knowledge/web/` writes | not started |
 | E4 | progress, results page and banner, failure states | not started |
+
+## Harness loop techniques (spec 045, approved 2026-10-28)
+
+Approved by the operator 2026-10-28 ("make a plan, write a spec, and let's go"). From a research pass over published harness work; every slice is measured on the spec 037 suites before its default moves (H9). Only H1 is built.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| H1 | loop nudge and hard stop, budget warnings, verification gate (API spans), workspace bootstrap, `[loop]` | built (draft PR); tests only, no live run; not yet measured (H9) |
+| H2 | tool-result offload and clearing, cache accounting | not started |
+| H3 | compaction with flush and its check | not started |
+| H4 | phase reasoning (037 arm first) | not started |
+| H5 | progressive tools (`find_tool`) | not started |
+| H6 | verification gate for CLI seats (stop hook, if a probe allows) | not started |
+| H7 | family overlays | not started |
+| H8 | trace review skill | not started |
+| H9 | measure H1 to H5; set defaults | not started |
 
 ## Open items that are not specs
 

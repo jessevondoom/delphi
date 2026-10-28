@@ -32,10 +32,10 @@ pub fn is_protected(logical: &str) -> bool {
 
 /// The `[[endpoints]]`, `[access]`, `[auth.*]`, `[harness.*]`, `[connectors.*]`, `[exec]`, `[relay.*]` and `[update]` blocks pinned by `specs/009` §5,
 /// `specs/008` §4 and `specs/014` §4, re-serialized deterministically so the hash doesn't depend on formatting or comments.
-/// The `config.toml` tables the daemon trusts only from the ratified copy. `[update]` is here so that `require_signed = true` cannot be taken out by
+/// The `config.toml` tables the daemon trusts only from the ratified copy. `[search]` is here because it names who receives the operator's research queries (`specs/028` §10.8 Q2): a local edit must not be able to add an engine. `[update]` is here so that `require_signed = true` cannot be taken out by
 /// editing a file (`specs/036`): the setting counts if either the live file or the ratified copy has it. `[hooks]` is here because it names commands that run on the operator's machine. `[relay]` is here because it names who may
 /// answer an approval card from outside the terminal: a local edit must not be able to add an address.
-pub const ACCESS_KEYS: [&str; 9] = ["endpoints", "access", "auth", "harness", "connectors", "exec", "relay", "hooks", "update"];
+pub const ACCESS_KEYS: [&str; 10] = ["endpoints", "access", "auth", "harness", "connectors", "exec", "relay", "hooks", "update", "search"];
 
 pub fn access_blocks(config: &str) -> String {
     let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));
