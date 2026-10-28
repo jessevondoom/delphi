@@ -103,4 +103,4 @@ delphi bundle export acme-platform --agents-md [file]   # a knowledge-only AGENT
 
 ## What is not built yet
 
-`bundle serve`, the evaluation runner (B11) and distribution slice B12 are specified, not built; see the README's [Status and limitations](../../README.md#status-and-limitations).
+Archive tree pointers for store records, `i8` vectors, vectors in `bundle serve`, the evaluation's blind grader and any live paid evaluation run, and the agent registry and role extensions of [`specs/041`](../../specs/041-agent-registry-routing-and-role-extensions.md). Building a bundle with an agent: [Building a bundle with an operator](building-a-bundle.md).

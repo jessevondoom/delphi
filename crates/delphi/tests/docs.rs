@@ -267,10 +267,15 @@ fn delphi(args: &[&str]) -> String {
 
 #[test]
 fn the_checked_in_reference_is_what_the_program_generates() {
-    for (args, file) in [(&["docs", "cli"][..], "docs/reference/cli.md"), (&["docs", "man"][..], "docs/reference/delphi.1")] {
-        let want = delphi(args);
+    let repo = root().to_string_lossy().to_string();
+    for (args, file) in [
+        (vec!["docs", "cli"], "docs/reference/cli.md"),
+        (vec!["docs", "man"], "docs/reference/delphi.1"),
+        (vec!["docs", "catalog", "--repo", repo.as_str()], "docs/reference/catalog.md"),
+    ] {
+        let want = delphi(&args);
         let have = std::fs::read_to_string(root().join(file)).unwrap_or_default();
-        assert!(want == have, "{} is out of date; regenerate it with `delphi {} > {}`", file, args.join(" "), file);
+        assert!(want == have, "{} is out of date; regenerate it with `delphi {} > {}`", file, args[..2].join(" "), file);
     }
 }
 

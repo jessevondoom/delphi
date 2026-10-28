@@ -13,6 +13,8 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [Headless runs and CI](docs/guides/headless-and-ci.md): `delphi run`, card policies, exit codes
 - [Away mode](docs/guides/away-mode.md): the email/Telegram relay, timers, hooks
 - [Org bundles](docs/guides/org-bundles.md): share knowledge, skills and goals; Claude Code plugin interchange
+- [Building a bundle with an operator](docs/guides/building-a-bundle.md): START HERE to build a bundle interactively: what to read, the interview, where each answer goes, where to stop
+- [Xenia operator guide](docs/guides/xenia-operator.md): join, run and recover the org's signed memory store
 - [Troubleshooting](docs/troubleshooting.md)
 
 ## Reference
@@ -20,7 +22,10 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [Command reference](docs/reference/cli.md): every command and option (generated from the program)
 - [Man page](docs/reference/delphi.1)
 - [Configuration reference](docs/reference/config.md); annotated template at [config.example.toml](crates/delphi/config.example.toml)
+- [Roles and skills catalog](docs/reference/catalog.md): every built-in role and skill, the skills each role may use (generated)
 - [Schemas guide](docs/reference/schemas.md)
+- [Golden bundle](dev/bundles/acme-platform): a complete bundle that passes `delphi bundle validate`; copy its shapes
+- [Skills catalog](skills/CATALOG.md) and [bundle authoring skill](skills/org-bundle-authoring/SKILL.md)
 - [Changelog](CHANGELOG.md)
 
 ## Machine-readable formats (JSON Schema)
@@ -35,7 +40,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 ## Design
 
 - [Charter](GOVERNANCE.md) and [review rubric](REVIEW.md)
-- [specs/](specs/): governance and manifests (001), adapter and routing (002), Council (003), memory and search (004), console (005*), installer (006), model access (009), connectors (010), Xenia (011-013), documents and charts (014), headless run (016), org bundles (022-027), layered learning (031), signed releases (036), training experiments (037)
+- [specs/](specs/): governance and manifests (001), adapter and routing (002), Council (003), memory and search (004), console (005*), installer (006), model access (009), connectors (010), Xenia trust, records and librarian (011-013, 022), documents and charts (014), headless run (016), org bundles (023-027), agent registry (041, approved, not built), layered learning (031), signed releases (036), training experiments (037)
 
 ## For contributors and coding agents
 
