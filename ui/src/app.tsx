@@ -332,8 +332,24 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     } else if (act.t === 'pin') pinTarget(act.target);
     else if (act.t === 'browser') fail(openExternal(act.url) ? `opened ${act.url} in your browser` : 'could not open the browser');
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
+    else if (act.t === 'research') startResearch(act.topic);
+    else if (act.t === 'research-cancel') void cmd.call('research.cancel', {}).catch(() => {});
   };
   useEffect(() => { if (deck === 0 && !archRef.current.shelf && archRef.current.mode === 'search') void loadShelf(); }, [deck]);
+  // The expand page's research job (spec 028-A1 §10.6): the daemon runs it; the console asks how it is going until it ends, then refreshes
+  // the shelf so the new entries count under `research`.
+  const researchPoll = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopPolling = () => { if (researchPoll.current) clearInterval(researchPoll.current); researchPoll.current = null; };
+  const tickResearch = () => cmd.call('research.status', {}).then((body: any) => {
+    setArch((a) => A.gotResearch(a, body));
+    if (['done', 'failed', 'cancelled'].includes(String(body?.phase))) { stopPolling(); void loadShelf(); }
+  }).catch(() => {});
+  const startResearch = (topic: string) => {
+    stopPolling();
+    cmd.call('research.start', { topic }).then(() => { researchPoll.current = setInterval(tickResearch, 700); void tickResearch(); })
+      .catch((er: any) => setArch((a) => A.researchRefused(a, er?.message ?? 'could not start the research')));
+  };
+  useEffect(() => stopPolling, []);
 
   const openPanel = (p: P.Panel | null) => { panelRef.current = p; setPanel(p); if (p) { deckRef.current = 1; setDeck(1); } };
   // The organization deck: `org.view` is a read; `org.action` is the operator's own add, update or remove, which runs

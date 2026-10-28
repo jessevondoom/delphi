@@ -17,6 +17,13 @@ export type Shelf = {
 };
 /** One document in the reader, with where the operator is in it. */
 export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
+/** One entry the research job wrote (`delphi-engine/src/research.rs`). */
+export type Made = { path: string; title: string; publisher: string; url: string; form: string; licence: string };
+export type Report = { new: Made[]; updated: Made[]; unchanged: number; notKept: [string, string][]; unlisted: string[]; provider: string | null; tokens: number; stopped: string | null };
+/** The research job as the pane shows it (spec 028-A1 §10.6): progress while it runs, the report when it ends. */
+export type Research = { topic: string; phase: 'starting' | 'searching' | 'reading' | 'done' | 'failed' | 'cancelled'; found: number; read: number; skipped: number; hosts: string[]; tokens: number; error: string | null; report: Report | null; sel: number };
+export const researchRunning = (r: Research | null): boolean => !!r && (r.phase === 'starting' || r.phase === 'searching' || r.phase === 'reading');
+
 export type Arch = {
   q: string;
   /** Where the keys go: the search box, or the list under it. */
@@ -47,12 +54,14 @@ export type Arch = {
   pins: boolean;
   /** `search` is the page as it was (local, zero-token); `expand` is the clean research page of spec 028-A1 (`shift+tab` switches). Remembered for the session. */
   mode: 'search' | 'expand';
+  /** The research job started from the expand page, running or finished; null on the clean page. */
+  research: Research | null;
 };
 
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search' });
+export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', research: null });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
@@ -62,6 +71,8 @@ export type Action =
   | { t: 'search'; q: string }
   | { t: 'reload' }
   | { t: 'browse'; name: string }
+  | { t: 'research'; topic: string }
+  | { t: 'research-cancel' }
   | { t: 'open'; target: Extract<Target, { k: 'doc' | 'pointer' }> }
   | { t: 'browser'; url: string }
   | { t: 'copy'; text: string }
@@ -158,6 +169,21 @@ export const gotImage = (a: Arch, path: string, src: string, r: Raster | null): 
 /** The most pictures the reader fetches for one document. */
 export const MAX_IMAGES = 8;
 
+const asMade = (m: any): Made => ({ path: String(m.path), title: sanitize(String(m.title ?? m.path)), publisher: sanitize(String(m.publisher ?? '')), url: String(m.url ?? ''), form: String(m.form ?? ''), licence: String(m.licence ?? '') });
+
+/** The daemon's `research.status` as the pane's state. A status for another topic than the one on screen is ignored. */
+export function gotResearch(a: Arch, body: any): Arch {
+  const r = a.research;
+  if (!r || String(body?.topic ?? '') !== r.topic) return a;
+  const rep = body.report;
+  const report: Report | null = rep ? { new: (rep.new ?? []).map(asMade), updated: (rep.updated ?? []).map(asMade), unchanged: Number(rep.unchanged ?? 0), notKept: (rep.not_kept ?? []).map((p: any) => [String(p[0]), sanitize(String(p[1]))]), unlisted: (rep.unlisted_hosts ?? []).map(String), provider: rep.provider ?? null, tokens: Number(rep.tokens ?? 0), stopped: rep.stopped ?? null } : null;
+  const phase = (['searching', 'reading', 'done', 'failed', 'cancelled'] as const).find((p) => p === body.phase) ?? r.phase;
+  return { ...a, research: { ...r, phase, found: Number(body.found ?? 0), read: Number(body.read ?? 0), skipped: Number(body.skipped ?? 0), hosts: (body.hosts ?? []).map(String), tokens: Number(body.tokens ?? 0), error: body.error ? sanitize(String(body.error)) : null, report } };
+}
+
+/** The job could not be started (no search engine configured, one already running): the page goes back to the box with the reason. */
+export const researchRefused = (a: Arch, why: string): Arch => ({ ...a, research: null, note: sanitize(why) });
+
 export const withNote = (a: Arch, note: string): Arch => ({ ...a, note });
 
 // ── keys ────────────────────────────────────────────────────────────────────
@@ -220,8 +246,28 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   }
 }
 
-/** Expand mode (spec 028-A1): a box and a topic. The research job is slice E3; until then `enter` says so. */
+/** The entries of a finished report, in the order the page lists them: new first, then updated. */
+export const madeOf = (r: Research | null): Made[] => (r?.report ? [...r.report.new, ...r.report.updated] : []);
+
+/** Expand mode (spec 028-A1): a box and a topic; with a job, its progress and then its results. */
 function expandKey(a: Arch, e: Ev, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
+  const r = a.research;
+  if (r) {
+    if (e.t === 'wheel') return used(r.phase === 'done' || r.phase === 'cancelled' ? { ...a, research: { ...r, sel: Math.max(0, Math.min(madeOf(r).length - 1, r.sel + (e.dir === 'up' ? -1 : 1))) } } : a);
+    if (e.t !== 'key' || e.alt || e.ctrl) return e.t === 'ctrl' && e.c === 'c' ? NOT_USED(a) : used(a); // a stray letter changes nothing while a job is on screen
+    const made = madeOf(r);
+    switch (e.k) {
+      case 'shift-tab': return used({ ...a, mode: 'search', focus: 'box', note: '' }, a.shelf ? none : { t: 'reload' });
+      case 'esc':
+        if (researchRunning(r)) return used({ ...a, note: 'cancelling…' }, { t: 'research-cancel' });
+        return used({ ...a, research: null, q: '', note: '' });
+      case 'down': return used({ ...a, research: { ...r, sel: Math.min(Math.max(0, made.length - 1), r.sel + 1) } });
+      case 'up': return used({ ...a, research: { ...r, sel: Math.max(0, r.sel - 1) } });
+      case 'enter': return made[r.sel] ? used({ ...a, note: 'opening…' }, { t: 'open', target: { k: 'doc', path: made[r.sel]!.path } }) : used(a);
+      case 'left': case 'right': return NOT_USED(a); // the view keys still work
+      default: return used(a);
+    }
+  }
   if (e.t === 'text' || e.t === 'paste') {
     const s = e.t === 'paste' ? e.s.replace(/\s+/g, ' ') : e.s;
     if (/[\x00-\x1f\x7f]/.test(s)) return NOT_USED(a);
@@ -232,7 +278,12 @@ function expandKey(a: Arch, e: Ev, used: (n: Arch, act?: Action) => ReturnType<t
   switch (e.k) {
     case 'shift-tab': return used({ ...a, mode: 'search', focus: 'box', note: '' }, a.shelf ? none : { t: 'reload' });
     case 'backspace': return used({ ...a, q: [...a.q].slice(0, -1).join(''), note: '' });
-    case 'enter': return used({ ...a, note: a.q.trim() ? 'researching a topic is not built yet (spec 028-A1, slice E3)' : '' });
+    case 'enter': {
+      const topic = a.q.trim();
+      if (!topic) return used({ ...a, note: '' });
+      if (!a.pins) return used({ ...a, note: 'research runs from the console: this window only reads' }); // the narrator is read-only
+      return used({ ...a, note: '', research: { topic, phase: 'starting', found: 0, read: 0, skipped: 0, hosts: [], tokens: 0, error: null, report: null, sel: 0 } }, { t: 'research', topic });
+    }
     case 'tab': case 'up': case 'down': case 'pgup': case 'pgdn': return used(a); // no scope, history or list here
     case 'esc': return a.q ? used({ ...a, q: '', note: '' }) : NOT_USED(a);
     default: return NOT_USED(a); // left and right change the view
@@ -386,9 +437,61 @@ function home(a: Arch, w: number, h: number, info: T.Info | undefined, pal: T.Pa
 
 /** Expand mode (spec 028-A1 §10.1): the title, the scout's label and the box, and nothing else: no shelf, counts, recent list or totals. */
 function expandView(a: Arch, w: number, h: number, info: T.Info | undefined, pal: T.Pal): string[] {
+  if (a.research) return researchView(a, w, h, info, pal);
   const out: string[] = ['', titleRow(w, info, pal), '', center(`${roleBadge('scout', '•••', info, pal)} ${chalk.bold('expand knowledge base: research a topic')}`, w), '', ...box(a, w, 'a topic to research…')];
   if (a.note) out.push('', T.dim(center(a.note, w)));
   return pad(out, h - 1).concat(hint(`type a topic · enter research it · esc clear · ${SWITCH.expand}`));
+}
+
+const plural = (n: number, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+
+/** The banner of a finished job (spec 028-A1 §10.6). */
+export function banner(r: Research): string {
+  const n = r.report?.new.length ?? 0;
+  return n === 0 ? 'no new entries: the archive already covers this' : `the archive has been expanded to include ${plural(n, 'new entry', 'new entries')}`;
+}
+
+/** The job's page (spec 028-A1 §10.6): a live count while it runs, then the banner and the entries it wrote. */
+function researchView(a: Arch, w: number, h: number, info: T.Info | undefined, pal: T.Pal): string[] {
+  const r = a.research!;
+  const scout = roleBadge('scout', '•••', info, pal);
+  const out: string[] = ['', titleRow(w, info, pal), ''];
+  if (researchRunning(r)) {
+    out.push(center(`${scout} ${chalk.bold(`researching "${r.topic}"`)}`, w), '');
+    out.push(center(r.phase === 'reading' ? `reading ${plural(r.read, 'source', 'sources')} · ${r.found} found · ${r.skipped} skipped` : 'searching the trusted sources…', w));
+    if (r.hosts.length) out.push(T.dim(center(r.hosts.join(' · '), w)));
+    if (a.note) out.push('', T.dim(center(a.note, w)));
+    return pad(out, h - 1).concat(hint(`esc cancel · ${SWITCH.expand}`));
+  }
+  if (r.phase === 'failed' || !r.report) {
+    out.push(center(`${scout} ${T.alert(`research failed: ${r.error ?? 'no answer from the daemon'}`)}`, w));
+    return pad(out, h - 1).concat(hint(`esc back · ${SWITCH.expand}`));
+  }
+  const rep = r.report, made = madeOf(r);
+  out.push(center(chalk.bold(T.ok(banner(r))), w));
+  const sub: string[] = [];
+  if (rep.updated.length) sub.push(`${rep.updated.length} updated`);
+  if (rep.unchanged) sub.push(`${rep.unchanged} already there`);
+  if (rep.stopped) sub.push(`stopped: ${rep.stopped}`);
+  if (sub.length) out.push(T.dim(center(sub.join(' · '), w)));
+  out.push('');
+  const room = Math.max(1, Math.floor((h - out.length - 6) / 2));
+  const top = Math.max(0, Math.min(r.sel - room + 1, made.length - room));
+  made.slice(top, top + room).forEach((m, k) => {
+    const i = top + k, on = i === r.sel;
+    const tag = `${m.form} · ${m.licence === 'unknown' ? 'licence unknown' : m.licence}`;
+    const title = T.clip(`${m.title}`, Math.max(10, w - T.width(tag) - 12));
+    out.push(T.spread(` ${on ? T.accent('›') : ' '} ${String(i + 1).padStart(2)}  ${on ? chalk.bold(title) : title}`, T.dim(tag + ' '), w));
+    out.push(T.dim(T.clip(`       ${m.publisher} · ${m.url}`, w)));
+  });
+  const why = new Map<string, number>();
+  for (const [, reason] of rep.notKept) why.set(reason, (why.get(reason) ?? 0) + 1);
+  const rest = [...why].map(([reason, n]) => `${n} ${reason}`).join(', ');
+  out.push('');
+  if (rest) out.push(T.dim(T.clip(`  read, not kept: ${rest}`, w)));
+  if (rep.unlisted.length) out.push(T.dim(T.clip(`  not read, not on the trusted lists: ${rep.unlisted.slice(0, 6).join(', ')}${rep.unlisted.length > 6 ? ` and ${rep.unlisted.length - 6} more` : ''}`, w)));
+  if (a.note) out.push(T.dim('  ' + a.note));
+  return pad(out, h - 1).concat(hint(`${made.length ? '↑ ↓ pick · enter open · ' : ''}esc back · ${SWITCH.expand}`));
 }
 
 /** One result of the list (specs/043 §5): a title row in fixed columns and one line of the passage. */
