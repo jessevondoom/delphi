@@ -285,8 +285,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   const setArch = setArchOf;
   const kb = (target: string): Promise<{ status: number; body: any }> => cmd.call('kb.get', { target });
   const enc = encodeURIComponent;
-  const loadShelf = () => Promise.all([kb(`/v1/collections?${A.trustParam(archRef.current).slice(1)}`), kb(`/v1/documents?limit=6${A.trustParam(archRef.current)}`), kb('/v1/health')])
-    .then(([c, d, h]) => setArch((a) => A.gotShelf(a, c.body ?? [], d.body ?? [], h.body)))
+  const loadShelf = () => Promise.all([kb(`/v1/kinds?${A.trustParam(archRef.current).slice(1)}`), kb('/v1/health')])
+    .then(([k, h]) => setArch((a) => A.gotShelf(a, Array.isArray(k.body) ? k.body : [], h.body)))
     .catch(() => setArch((a) => A.withNote(a, 'the knowledge base is not available')));
   const setRdr = (f: (a: A.Arch) => A.Arch) => { const n = f(rdrRef.current); rdrRef.current = n; setRdrState(n); };
   const setLm = (f: (l: { focus: number | null; note: string } | null) => { focus: number | null; note: string } | null) => { const n = f(lmRef.current); lmRef.current = n; setLmState(n); };
@@ -305,8 +305,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const fail = (msg: string) => { setArch((a) => A.withNote(a, msg)); if (on === 'rdr') setLm((l) => (l ? { ...l, note: msg } : l)); };
     const a0 = on === 'arch' ? archRef.current : rdrRef.current, tp = A.trustParam(a0);
     if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) runKb({ t: 'search', q: a0.q.trim() }, on); else if (a0.browse) runKb({ t: 'browse', name: a0.browse }, on); }
-    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}${a0.scope ? `&collection=${enc(a0.scope)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
-    else if (act.t === 'browse') kb(`/v1/documents?collection=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that collection'));
+    else if (act.t === 'search') kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+    else if (act.t === 'browse') kb(`/v1/documents?kind=${enc(act.name)}&limit=50${tp}`).then((r) => setArch((a) => A.gotBrowse(a, act.name, r.body ?? []))).catch(() => fail('could not list that kind'));
     else if (act.t === 'open') {
       const t = act.target;
       kb(`/v1/doc?path=${enc(t.path)}${tp}`).then((r) => {

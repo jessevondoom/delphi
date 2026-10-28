@@ -136,7 +136,7 @@ Approved by the operator 2026-10-28 with the mockups in `specs/assets/kb-decisio
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | not started (needs 028-A1 E1) |
+| K1 | page chrome, kind filter row with counts, uniform rows, best-match card, `facets` in the search API | built (resting counts by kind, chips, the best match as the passage's own words, uniform rows; `/v1/kinds`, `kind` and `facets` in the API). Kinds in effect today: spec, lesson, docs (`context/`), mission, skill, memory, other; `research` arrives with E3 and `docs/` with K2. Unproven in a real terminal. Stacked on E1 |
 | K2 | index PDF, DOCX, EPUB text; list media by name | not started |
 | K3 | reader provenance banner, `↗` rows, browser handoff with allow-list | not started |
 | K4 | summarize for me, with the cache | not started |
