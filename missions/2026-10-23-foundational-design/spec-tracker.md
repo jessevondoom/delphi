@@ -153,7 +153,7 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, probes (approval events, app-server stability) | manifest and first probe built (this PR); approval events and app-server not yet probed |
 | S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | built (this PR): stand-in CLI tests plus one live `exec --json` probe on `codex-cli 0.165.0` (prompt on stdin via `-`, effort via `-c`); the seat is unproven until `delphi endpoints test --probe` has run it; `family = "openai"` is now accepted in `[access]` |
-| S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
+| S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | S2a built (stacked on S1): setup and doctor detect `codex` and its sign-in (`login status` exit code), `delphi setup` offers a `codex-sub` seat on the first model `codex debug models` lists, `delphi capabilities` lists its MCP servers and models; `live_codex_round_trip` (ignored test) passed against `codex-cli 0.165.0`. S2b (approval bridge over `app-server`, Builder) not started: needs a probe of tool-using `exec --json` events and of whether `app-server` can answer approvals |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
 
 ## Knowledge window round 2 (spec 043, approved 2026-10-28)

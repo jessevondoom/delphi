@@ -1310,4 +1310,29 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         }
         assert!(result && text.to_lowercase().contains("pong") && metered > 0, "text={:?} metered={}", text, metered);
     }
+
+    /// Against the real `codex` on its login (a few thousand tokens; run with `--ignored`). The model is a slug from
+    /// `codex debug models`, given in `DELPHI_LIVE_CODEX_MODEL`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_codex_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let model = std::env::var("DELPHI_LIVE_CODEX_MODEL").expect("set DELPHI_LIVE_CODEX_MODEL to a slug from `codex debug models`");
+        let opts = Opts { effort: Some("low".into()), json_schema: Some(r#"{"type":"object","properties":{"word":{"type":"string"}},"required":["word"],"additionalProperties":false}"#.into()), ..Default::default() };
+        let l = Launch { cli: Cli::Codex, program: "codex".into(), model, system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Answer with the word pong.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env(), profile: Default::default(), opts };
+        let mut s = Session::start(&l).await.unwrap();
+        let (mut init, mut structured, mut metered) = (false, None, 0);
+        while let Some(ev) = s.next(Duration::from_secs(90)).await {
+            match ev {
+                Event::Init { .. } => init = true,
+                Event::Result { is_error, structured: st, usage, text, .. } => {
+                    assert!(!is_error, "{}", text);
+                    (structured, metered) = (st, usage.metered());
+                }
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(init && metered > 0 && structured.as_ref().is_some_and(|v| v["word"].as_str().is_some_and(|w| w.to_lowercase().contains("pong"))), "structured={:?} metered={}", structured, metered);
+    }
 }
