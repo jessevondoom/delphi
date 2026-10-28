@@ -13,6 +13,7 @@ import { copyToClipboard, useSelection } from './select.ts';
 import type { Term } from './terminal.ts';
 import type { Info } from './theme.ts';
 import { stillMotion } from './motion.ts';
+import { useReduceMotion } from './reduce-motion.ts';
 
 type Props = { cmd: Rpc; ev: Rpc; term: Term; info: Info; dark: boolean; themeForced?: boolean; view: View | null };
 
@@ -34,7 +35,8 @@ export function Observer({ cmd, ev, term, info, dark, themeForced, view: first }
   const [liveTokens, setLiveTokens] = useState<Record<string, number>>({});
   const [liveEst, setLiveEst] = useState<Record<string, number>>({});
   const [connected, setConnected] = useState(true);
-  const still = useMemo(() => stillMotion(), []);
+  const asked = useReduceMotion(cmd, ev);
+  const still = useMemo(() => stillMotion(process.env, asked), [asked]);
   const [now, setNow] = useState(Date.now());
   // One clock for the badges. It only runs while something is working (thinking faces swap every 600 ms), so an
   // idle window does not repaint.

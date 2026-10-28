@@ -19,10 +19,11 @@ import * as O from './org.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
 import { copyText, firstVisible, stepFocus, type Target } from './links.ts';
 import { execFile } from 'node:child_process';
-import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, type Model } from './screen.ts';
+import { anchorBack, backShowing, bodyHeight, chatLinks, frame, replyAnchor, transcriptCount, typingOf, type Model } from './screen.ts';
 import { helpKey } from './help.ts';
 import { modeNote, nextMode } from './mode.ts';
-import { STRIP_ROLES, stillMotion, tickKey, TICK_MS } from './motion.ts';
+import { STRIP_ROLES, stillMotion, tickKey, TICK_MS, typingFrame } from './motion.ts';
+import { useReduceMotion } from './reduce-motion.ts';
 import type { Ev } from './input.ts';
 import { copyToClipboard, useSelection } from './select.ts';
 import type { Rpc } from './rpc.ts';
@@ -88,6 +89,9 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   stateRef.current = state;
   const queueRef = useRef<string[]>([]);
   const quitAskedAt = useRef(0); // when Ctrl+C last asked "again to quit"; a second press within 2 s leaves
+  const [quitArmed, setQuitArmed] = useState(false);
+  const quitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (quitTimer.current) clearTimeout(quitTimer.current); }, []);
   const searchRef = useRef(search);
   const inboxRef = useRef(inbox);
   const deckRef = useRef<0 | 1 | 2>(1);
@@ -109,14 +113,16 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [stdout]);
 
   const running = Object.keys(state.running).length;
-  const still = useMemo(() => stillMotion(), []);
+  const asked = useReduceMotion(cmd, ev);
+  const still = useMemo(() => stillMotion(process.env, asked), [asked]);
   // One timer for everything that moves with time (badge frames, the clock, the spinner). It looks every 150 ms and
   // asks for a repaint only when something on screen would differ, so an idle window does not redraw.
   useEffect(() => {
     let last = '';
     const t = setInterval(() => {
       const n = Date.now(), s = stateRef.current;
-      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0);
+      const ty = typingOf(s);
+      const key = tickKey(s.agents, STRIP_ROLES.filter((r) => info.roles[r]), n, still, Object.keys(s.running).length > 0, ty ? String(typingFrame(ty.since, ty.id, n, still)) : '');
       if (key !== last) { last = key; setNow(n); }
     }, TICK_MS);
     return () => clearInterval(t);
@@ -462,11 +468,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           follow(); upd((c) => C.insert(c, e.s)); return;
         case 'ctrl':
           if (e.c === 'c') {
-            // Leave at once when nothing would be lost; otherwise ask once (`005e` §10.5).
-            const busy = comp.current.chars.length > 0 || queueRef.current.length > 0 || Object.keys(stateRef.current.running).length > 0;
+            // Always twice within 2 s, as in Claude Code; the badges' eyes are crossed while the second press would leave.
             const now = Date.now();
-            if (!busy || now - quitAskedAt.current < 2000) { exit(); return; }
+            if (now - quitAskedAt.current < 2000) { exit(); return; }
             quitAskedAt.current = now;
+            setQuitArmed(true);
+            if (quitTimer.current) clearTimeout(quitTimer.current);
+            quitTimer.current = setTimeout(() => { quitTimer.current = null; setQuitArmed(false); }, 2000);
             note('press Ctrl+C again to quit' + (Object.keys(stateRef.current.running).length ? ' (the running task is left to the daemon)' : ''));
             return;
           }
@@ -568,8 +576,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   }, [lineCount]);
 
   const comps = search ? null : completions(composer.chars, composer.cur, info, listDir);
-  const model: Model = { ...base, still, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
-  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still]);
+  const model: Model = { ...base, still, quitArmed, now, back, arch, links: lm ?? undefined, reader: rdr, help, menu: comps ? { items: comps.items, sel } : null, search: search ? { q: search.q, match: search.match } : null };
+  const lines = useMemo(() => frame(model, size.w, size.h), [state, now, deck, composer, back, arch, lm, rdr, sel, help, size, pal, expandTools, queue, search, inbox, mode, panel, noModel, still, quitArmed]);
   const shown = useSelection(term, lines);
   return (
     <Box flexDirection="column" height={size.h} width={size.w}>

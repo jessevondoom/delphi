@@ -1000,7 +1000,7 @@ impl EngineService {
             })
             .collect();
         let pending: Vec<Value> = crate::settings_store::pending(&events).iter().map(|s| json!({"id": s.id, "key": s.key, "value": s.value, "reason": s.reason, "by": s.by})).collect();
-        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m)}))
+        Ok(json!({"roles": roles, "pending": pending, "budget": Self::budget_json(&m), "reduce_motion": o.reduce_motion}))
     }
 
     /// `settings.set`: the operator changes one setting by command. `{key, value}`.

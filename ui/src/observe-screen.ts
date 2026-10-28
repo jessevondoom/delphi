@@ -8,7 +8,6 @@ import { faceOf, STRIP_ROLES } from './motion.ts';
 import { current as councilNow, phaseOf, seatsNow, weave } from './weave.ts';
 import { epicThreads } from './epic-threads.ts';
 import { dashboard, needs } from './dashboard.ts';
-import { joinColumns, leftWidth, TWO_COLUMNS_AT } from './columns.ts';
 import * as V from './tiers.ts';
 import * as A from './archives.ts';
 import { describe as describeLink, paintFocus, scanLinks, type Link } from './links.ts';
@@ -194,7 +193,7 @@ function toolsLine(m: OModel, a: AgentRow, lead = true): string {
 }
 
 /** The roster: a mascot per agent that is working, with its name, role, state in words, model, task and tokens. With none working, the orchestrator alone, and a line saying the system is idle. */
-function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
+function agents(m: OModel, w: number, _h: number): string[] {
   const out: string[] = [];
   const active = activeAgents(m.st);
   const idle = active.length === 0;
@@ -214,10 +213,10 @@ function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
     const meta = [
       roleCol(m, a.role).bold(nm) + dim(`  ${nm === a.role ? '' : a.role + '  '}`) + colored(`${glyph(a.state)} ${a.state}`, stateColor(a.state)) + (a.state === 'running' ? quietNote(m, a.role) : ''),
       text(m)(model) + (a.task_id && a.state !== 'idle' ? dim(` · ${a.task_id}`) : '') + versusNote,
-      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role) + (stacked ? '' : toolsLine(m, a)),
+      dim(`${live > 0 ? '~' : ''}${kilo(total)} tokens`) + capMeter(m, a.role),
     ];
-    // In a half-width column the counters wait for a fourth row under the mascot instead of running off the edge.
-    const extra = stacked ? toolsLine(m, a, false) : '';
+    // The tool counters take a row of their own under the summary, so the summary keeps the width.
+    const extra = toolsLine(m, a, false);
     // The running agent's facts sit on a tinted band; the mascot keeps its own colours.
     mk.forEach((line, i) => {
       const tail = '   ' + meta[i]!;
@@ -228,12 +227,6 @@ function agents(m: OModel, w: number, _h: number, stacked = false): string[] {
   }
   if (idle) out.push(dim('  nothing is running: the system is idle. agents appear here while they work.'));
   return out;
-}
-
-/** The agents and the tools side by side, on a window wide enough for both (`specs/034`: what each agent does, and what all of them call). */
-function agentsAndTools(m: OModel, w: number, h: number): string[] {
-  const lw = leftWidth(w), rw = Math.max(0, w - lw - 3);
-  return joinColumns(agents(m, lw, h, true), toolsBoard(m, rw, h), w, m.pal);
 }
 
 
@@ -355,7 +348,7 @@ export function observeFrame(m: OModel, w: number, h: number): string[] {
   const inner = Math.max(1, bodyH - 2); // the attention slot and a blank row sit above every view
   const fn = { dashboard, council, epic, agents, pulse, timeline, tools: toolsBoard, changes }[m.view];
   if (m.reader && m.reader.at >= 0) return [...head, slot(m, w), '', ...A.view(m.reader, w, Math.max(1, bodyH - 2), m.pal), ...foot].slice(0, h).map((l) => T.clip(l, w));
-  let body = m.view === 'agents' && w >= TWO_COLUMNS_AT ? agentsAndTools(m, w, inner) : fn(m, w, inner);
+  let body = fn(m, w, inner);
   if (m.view !== 'dashboard' && m.view !== 'council' && m.view !== 'epic') body = body.slice(m.scroll);
   body = [slot(m, w), feedStatus(m, w), ...body.slice(0, inner)].slice(0, bodyH).map((l) => T.clip(l, w));
   while (body.length < bodyH) body.push('');

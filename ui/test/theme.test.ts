@@ -173,3 +173,9 @@ test('the approval mode auto is warning-red and bold, never reverse video', () =
     assert.ok(!BG(T.auto('auto')) && !T.auto('auto').includes('[7m'));
   } finally { T.useCapabilities(prev); }
 });
+
+test('a crossed badge swaps the eyes for x and leaves the mouth and brackets', () => {
+  const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+  assert.equal(plain(T.badge('builder', 'running', info, { dark: true }, undefined, true)), '⟦x─x⟧');
+  assert.equal(plain(T.badge('builder', 'running', info, { dark: true })), '⟦•─•⟧');
+});

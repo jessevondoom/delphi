@@ -6,7 +6,7 @@ import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { classify } from './attention.ts';
 import { speakerOf, type Block, type Done, type Span, type State } from './fold.ts';
-import { faceOf, STRIP_ROLES } from './motion.ts';
+import { faceOf, spinner, STRIP_ROLES, typingFrame } from './motion.ts';
 import * as T from './theme.ts';
 import { kilo } from './meters.ts';
 import * as I from './inbox.ts';
@@ -32,6 +32,8 @@ export type Model = {
   noModel?: boolean;
   /** No animation (`DELPHI_REDUCE_MOTION=1`, `NO_COLOR`, `TERM=dumb`): every badge on its static frame. */
   still?: boolean;
+  /** Ctrl+C was pressed once and the two seconds to confirm have not passed: the title-bar badges show crossed eyes. */
+  quitArmed?: boolean;
   /** The knowledge window on the left deck (`archives.ts`); the app owns it and makes the `kb.get` calls. */
   arch?: A.Arch;
   /** Link mode in the chat (`specs/029`, `ctrl+o`): the pointers and addresses in the transcript can be focused and followed. */
@@ -69,7 +71,7 @@ export function titleRow(m: Model, w: number): string {
  */
 export function header(m: Model, w: number): string[] {
   const roles = STRIP_ROLES.filter((r) => m.info.roles[r]);
-  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame); }).join(' ');
+  const strip = roles.map((r) => { const f = faceOf(m.state.agents[r], r, m.now, m.still ?? false); return T.badge(r, f.state, m.info, m.pal, f.frame, m.quitArmed ?? false); }).join(' ');
   return [T.clip(strip, w), titleRow(m, w)];
 }
 
@@ -238,6 +240,29 @@ function liveBlock(m: Model, w: number, tools: Block[]): string[] {
   return ['', ...message(m, w, label, [...body, ...tools.flatMap((t) => toolRows(t, m, tw))])];
 }
 
+/**
+ * The prompt the operator just sent, while it waits for its reply to begin: the block's `at` and id when the typing
+ * bubble belongs on screen (a task runs, nothing is streaming, and nothing but tool calls followed the prompt).
+ */
+export function typingOf(s: State): { since: number; id: number } | null {
+  if (s.live || !Object.keys(s.running).length) return null;
+  for (let i = s.blocks.length - 1; i >= 0; i--) {
+    const b = s.blocks[i]!;
+    if (b.kind === 'user') return { since: b.at, id: b.id };
+    if (b.kind !== 'tool') return null;
+  }
+  return null;
+}
+
+/** Three dots in an agent's bubble, like a messaging app's "typing": the page-indicator dots, one lit at a time. The reply's own block replaces it. */
+function typingBlock(m: Model, w: number, tools: Block[], frame: number): string[] {
+  const { text: tw } = blockWidths(w);
+  const role = speakerOf(m.state);
+  const label = T.badge(role, 'running', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(' · typing');
+  const dots = [0, 1, 2].map((i) => (m.still || frame === i ? T.accent('●') : T.dim('○'))).join(' ');
+  return ['', ...message(m, w, label, [dots, ...tools.flatMap((t) => toolRows(t, m, tw))])];
+}
+
 type Laid = { parts: string[][]; reply: { part: number; id: 'live' | number } | null };
 
 /** The transcript as pieces (each finished block is cached), and which piece is the newest reply. */
@@ -259,7 +284,12 @@ function layout_(m: Model, w: number, dense: boolean): Laid {
     if (b.kind === 'attention') reply = { part: out.length - 1, id: b.id };
   }
   if (m.state.live) { out.push(liveBlock(m, w, tools)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
-  else flush();
+  else {
+    const ty = typingOf(m.state);
+    const frame = ty ? typingFrame(ty.since, ty.id, m.now, m.still ?? false) : -1;
+    if (ty && frame >= 0) { out.push(typingBlock(m, w, tools, frame)); tools = []; reply = { part: out.length - 1, id: 'live' }; }
+    else flush();
+  }
   for (const q of m.queue) out.push(['', T.dim('❯ ' + q.split('\n')[0] + '  (queued)')]);
   // The frame puts one blank row under the title, so the first message does not bring its own; a short window drops them all.
   const lead = (p: string[], i: number) => p[0] === '' && !(fresh(m) && i === 0) && (dense || i === 0);
@@ -367,8 +397,6 @@ export function tooSmall(w: number, h: number): string[] {
   return out;
 }
 
-const SPIN = ['◐', '◓', '◑', '◒'];
-
 function statusRow(m: Model, w: number): string {
   if (m.search) {
     const hit = m.search.match;
@@ -381,9 +409,9 @@ function statusRow(m: Model, w: number): string {
   if (m.state.live && m.deck === 1) { // in the chat, a reply is being written: say who and what
     const pending = [...m.state.blocks].reverse().find((b) => b.kind === 'tool' && b.status === 'pending');
     const what = pending ? ` ${pending.text}` : '';
-    return T.spread(T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);
+    return T.spread(T.accent(spinner(m.now, m.still ?? false)) + T.dim(` ${T.roleName(speakerOf(m.state), m.info)} · writing${what}`), T.dim('esc to stop'), w);
   }
-  const left = T.accent(SPIN[Math.floor(m.now / 250) % 4]!) + T.dim(` working · ${secs}s${n > 1 ? ` · ${n} tasks` : ''}${m.queue.length ? ` · ${m.queue.length} queued` : ''}`);
+  const left = T.accent(spinner(m.now, m.still ?? false)) + T.dim(` working · ${secs}s${n > 1 ? ` · ${n} tasks` : ''}${m.queue.length ? ` · ${m.queue.length} queued` : ''}`);
   return T.spread(left, T.dim('esc to stop'), w);
 }
 

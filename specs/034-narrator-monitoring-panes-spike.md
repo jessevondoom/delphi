@@ -45,7 +45,7 @@ What carries over: *meters you never have to ask for*, *a timeline with markers*
 
 Also in the agents pane (from `specs/033`): the cap meter, `quiet Nm` after two minutes of silence (a frame or event; the clock starts when the window opens), `⟳ tool ×N` after six identical calls in a row in one span or three failures in a row, and `✎ 0` for an agent that changed something and recorded nothing.
 
-**Two columns (2026-10-26, the operator's request).** On a window 116 columns or wider the agents view shows the roster on the left and the `tools` board on the right, so the operator sees who is working and what everyone is calling without switching views (`ui/src/columns.ts`; the left column is half the width, at most 64; each is clipped to its own column so neither pushes the other). In the half-width roster the tool counters (`41 calls · ✎ 2 · ✗ 6 · → run_command`) take a row of their own under the tokens; the loop warning stays on the roster row and is repeated in full on the board. Below 116 columns the agents view is the single column it was and `tools` is its own view. Goldens: `agents-two-columns-130x34`, `-160x40`.
+**Two columns, withdrawn (2026-10-28, the operator's request).** The agents view had the roster beside the `tools` board from 116 columns; the board took the room the agents' summaries need. The agents view is one full-width column again and `tools` is its own view. The tool counters (`41 calls · ✎ 2 · ✗ 6 · → run_command`, and the loop warning) take a row of their own under each agent's summary at every width. Goldens: `agents-rows-130x34`, `-160x40`.
 
 Thresholds are constants (`ui/src/meters.ts`): quiet 120 s, loop 6 calls or 3 failures, cap meter amber at 80 %, red at 95 %.
 

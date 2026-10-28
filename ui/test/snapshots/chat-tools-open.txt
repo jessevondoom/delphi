@@ -17,7 +17,7 @@ delphi v0.5 · /proj · chat
   Ratify spec 011 into the canonical repository
     ratify specs/011
   /y approve once · /n reject · /d view all
-◐ working · 2s                                                                           esc to stop
+● working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯
 ────────────────────────────────────────────────────────────────────────────────────────────────────
