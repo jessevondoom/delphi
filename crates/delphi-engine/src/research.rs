@@ -40,12 +40,15 @@ pub struct Limits {
     pub scout_page_chars: usize,
     pub max_stored_chars: usize,
     pub max_scout_tokens: u64,
+    /// Pictures fetched for one entry and for the whole job (`specs/028` §11.3).
+    pub images_per_entry: usize,
+    pub images_per_job: usize,
     pub job: Duration,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_sources: 15, per_host: 5, follow_per_page: 3, max_queries: 4, sites_per_query: 8, scout_page_chars: 8000, max_stored_chars: 200_000, max_scout_tokens: 80_000, job: Duration::from_secs(180) }
+        Limits { max_sources: 15, per_host: 5, follow_per_page: 3, max_queries: 4, sites_per_query: 8, scout_page_chars: 8000, max_stored_chars: 200_000, max_scout_tokens: 80_000, images_per_entry: 6, images_per_job: 24, job: Duration::from_secs(180) }
     }
 }
 
@@ -163,6 +166,8 @@ pub struct Entry {
     pub url: String,
     pub form: &'static str,
     pub licence: String,
+    /// Pictures kept with it (`specs/028` §11).
+    pub pictures: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -176,6 +181,8 @@ pub struct Report {
     pub unlisted_hosts: Vec<String>,
     pub provider: Option<String>,
     pub tokens: u64,
+    /// Picture files this job wrote that were not there before.
+    pub pictures: usize,
     /// Why the job ended early, when it did (`cancelled`, `the time limit`, `the scout's token limit`).
     pub stopped: Option<String>,
 }
@@ -264,6 +271,8 @@ pub struct ToStore<'a> {
     /// `Full`: the page as markdown. `Summary`: unused.
     pub markdown: &'a str,
     pub judged: &'a Judged,
+    /// Pictures kept with a `Full` entry; their files are beside it and their licences go in its frontmatter.
+    pub images: &'a [crate::research_images::Saved],
 }
 
 fn render(t: &ToStore) -> (String, String) {
@@ -297,6 +306,12 @@ fn render(t: &ToStore) -> (String, String) {
         q(&clip(t.topic, 200)),
         hash
     );
+    let front = if t.images.is_empty() {
+        front
+    } else {
+        let list: String = t.images.iter().map(|i| format!("  - file: {}\n    source_url: {}\n    licence: {}\n    author: {}\n    attribution: {}\n    share_alike: {}\n    blake3: {}\n", q(&i.file), q(&i.source_url), q(&i.licence), q(&i.author), q(&i.attribution), i.share_alike, q(&i.blake3))).collect();
+        front.replacen("\n---\n\n", &format!("\nimages:\n{}---\n\n", list), 1)
+    };
     (format!("{}{}", front, body), hash)
 }
 
@@ -430,6 +445,7 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
 
     // 3. Read, judge and write one page at a time, so a cancelled or timed-out job keeps what it finished.
     let mut reads = 0usize;
+    let mut pictures_fetched = 0usize;
     while let Some(url) = queue.pop_front() {
         if sh.cancel.load(Ordering::Relaxed) {
             rep.stopped = Some("cancelled".into());
@@ -489,8 +505,9 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         sh.with(|s| s.found = seen.len());
 
         // Decide what to keep.
-        let conv = html::to_markdown(&page.body, &page.url, lim.max_stored_chars);
-        let full_text = html::plain_text(&conv.markdown);
+        let conv = html::to_markdown_with_images(&page.body, &page.url, lim.max_stored_chars);
+        let text_md = html::strip_images(&conv.markdown); // the scout reads, and a summary keeps, the words only
+        let full_text = html::plain_text(&text_md);
         if full_text.chars().count() < 200 {
             rep.not_kept.push((page.url, "almost no text".into()));
             continue;
@@ -520,10 +537,25 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
         }
         let form = fetch::decide_form(&page.source, &page.body);
         let title = if conv.title.is_empty() { page.url.clone() } else { conv.title.clone() };
-        let store = ToStore { url: &page.url, title: &title, topic: &topic, source: &page.source, date: &d.date, form, markdown: &conv.markdown, judged: &judged };
+        // Pictures come with a full-text entry only, each on a licence of its own (`specs/028` §11).
+        let host = rel_name(&page.url).and_then(|r| r.split('/').next().map(String::from)).unwrap_or_default();
+        let (md, saved) = if form == Form::Full && !host.is_empty() {
+            let left = if started.elapsed() > lim.job { 0 } else { lim.images_per_job.saturating_sub(pictures_fetched) };
+            let (tr, l, ws, pu, body, with_images, per) = (d.transport.clone(), d.list.clone(), d.ws_dir.clone(), page.url.clone(), page.body.clone(), conv.markdown.clone(), lim.images_per_entry);
+            let out = tokio::task::spawn_blocking(move || crate::research_images::process(&*tr, &l, &ws, &host, &pu, &body, &with_images, per, left)).await.map_err(|_| "the picture step stopped unexpectedly".to_string())?;
+            pictures_fetched += out.fetched;
+            rep.pictures += out.saved.iter().filter(|s| s.new_file).count();
+            for (u, why) in out.not_saved {
+                rep.not_kept.push((u, format!("image not saved: {}", why)));
+            }
+            (out.markdown, out.saved)
+        } else {
+            (text_md.clone(), Vec::new())
+        };
+        let store = ToStore { url: &page.url, title: &title, topic: &topic, source: &page.source, date: &d.date, form, markdown: &md, judged: &judged, images: &saved };
         match write_entry(&d.ws_dir, &store) {
             Ok((wrote, path)) => {
-                let e = Entry { path, title, publisher: if page.source.publisher.is_empty() { page.source.host.clone() } else { page.source.publisher.clone() }, url: page.url.clone(), form: if form == Form::Full { "full" } else { "summary" }, licence: page.source.licence.clone() };
+                let e = Entry { path, title, publisher: if page.source.publisher.is_empty() { page.source.host.clone() } else { page.source.publisher.clone() }, url: page.url.clone(), form: if form == Form::Full { "full" } else { "summary" }, licence: page.source.licence.clone(), pictures: saved.len() };
                 match wrote {
                     Wrote::New => rep.new.push(e),
                     Wrote::Updated => rep.updated.push(e),
@@ -789,6 +821,89 @@ mod tests {
         assert_eq!((r.new.len(), r.stopped.as_deref()), (1, Some("the scout's token limit")));
     }
 
+    const IMG_HOSTS: &str = "[[source]]\nhost = \"upload.wikimedia.org\"\nlicence = \"unknown\"\nreuse = \"summary-only\"\n[[source]]\nhost = \"commons.wikimedia.org\"\nlicence = \"unknown\"\nreuse = \"summary-only\"\n";
+
+    fn picture() -> Vec<u8> {
+        let rgba = (0..64 * 64).flat_map(|i| [(i % 64 * 4) as u8, (i / 64 * 4) as u8, 120, 255]).collect();
+        delphi_docs::png::encode(&delphi_docs::png::Image { width: 64, height: 64, rgba }, &[])
+    }
+
+    #[tokio::test]
+    async fn a_full_entry_keeps_a_picture_under_its_own_licence_and_a_summary_keeps_none() {
+        use delphi_adapter::research::images::commons_api_url;
+        let dir = tempfile::tempdir().unwrap();
+        let wiki = "https://en.wikipedia.org/wiki/Byzantine_fault";
+        let std = "https://www.w3.org/TR/x";
+        let img = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Generals.png";
+        let tag = "<a href=\"/wiki/File:Generals.png\"><img alt=\"The generals\" src=\"//upload.wikimedia.org/wikipedia/commons/a/ab/Generals.png\" width=\"220\" height=\"140\"></a>";
+        let commons = Response { status: 200, body: br#"{"query":{"pages":{"1":{"imageinfo":[{"extmetadata":{"LicenseShortName":{"value":"CC BY-SA 4.0"},"Artist":{"value":"Ann"}}}]}}}}"#.to_vec(), ..Default::default() };
+        let w = web(vec![
+            ("search", search_result(&[wiki, std])),
+            (wiki, html(&format!("<p>{}</p><p>{}</p>", PROSE, tag))),
+            (std, html(&format!("<p>{}</p><p>{}</p>", PROSE, tag.replace("Generals.png", "Other.png")))),
+            (img, Response { status: 200, body: picture(), ..Default::default() }),
+            (&commons_api_url("File:Generals.png").unwrap(), commons),
+        ]);
+        let mut d = deps(w, judge(vec![]), dir.path());
+        d.list = Arc::new(TrustedList::parse(&format!("{}{}", LIST, IMG_HOSTS), None).unwrap());
+        let sh = Shared::new("byzantine fault");
+        run(d, "byzantine fault", sh.clone()).await;
+        let rep = sh.snapshot().report.unwrap();
+        assert_eq!((rep.new.len(), rep.pictures), (2, 1), "{:?}", rep);
+        assert_eq!((rep.new[0].form, rep.new[0].pictures, rep.new[1].form, rep.new[1].pictures), ("full", 1, "summary", 0));
+        assert!(rep.not_kept.is_empty(), "the summary entry's pictures are not even considered: {:?}", rep.not_kept);
+
+        let text = std::fs::read_to_string(dir.path().join("local/knowledge/web/en.wikipedia.org/wiki-byzantine-fault.md")).unwrap();
+        let file = text.split("![The generals](").nth(1).and_then(|r| r.split(')').next()).unwrap().to_string();
+        assert!(file.starts_with("images/") && text.contains("*Image: Ann, CC-BY-SA-4.0, https://commons.wikimedia.org/wiki/File:Generals.png*"), "{}", text);
+        let (fm, _) = crate::workspace::split_frontmatter(&text);
+        let images = fm.unwrap();
+        let first = &images["images"][0];
+        assert_eq!((first["file"].as_str(), first["licence"].as_str(), first["share_alike"].as_bool(), first["author"].as_str()), (Some(file.as_str()), Some("CC-BY-SA-4.0"), Some(true), Some("Ann")), "{:?}", first);
+        assert_eq!(first["blake3"].as_str().map(str::len), Some(64));
+        let other = std::fs::read_to_string(dir.path().join("local/knowledge/web/www.w3.org/tr-x.md")).unwrap();
+        assert!(!other.contains("![") && !other.contains("images:") && !other.contains("The generals"), "{}", other);
+
+        // the reader can draw it: the route finds the file beside the entry
+        let mut kb = crate::kb::Kb::open_in_memory().unwrap();
+        kb.refresh(dir.path(), "").unwrap();
+        let r = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true }.get(&format!("/v1/image?path=knowledge/web/en.wikipedia.org/wiki-byzantine-fault.md&src={}", file));
+        assert_eq!((r.status, r.body["width"].as_u64(), r.body["height"].as_u64()), (200, Some(64), Some(64)), "{}", r.body);
+
+        // a second run saves nothing new and changes no entry
+        let w2 = web(vec![("search", search_result(&[wiki])), (wiki, html(&format!("<p>{}</p><p>{}</p>", PROSE, tag))), (img, Response { status: 200, body: picture(), ..Default::default() }), (&commons_api_url("File:Generals.png").unwrap(), Response { status: 200, body: br#"{"query":{"pages":{"1":{"imageinfo":[{"extmetadata":{"LicenseShortName":{"value":"CC BY-SA 4.0"},"Artist":{"value":"Ann"}}}]}}}}"#.to_vec(), ..Default::default() })]);
+        let mut d2 = deps(w2, judge(vec![]), dir.path());
+        d2.list = Arc::new(TrustedList::parse(&format!("{}{}", LIST, IMG_HOSTS), None).unwrap());
+        let again = Shared::new("byzantine fault");
+        run(d2, "byzantine fault", again.clone()).await;
+        let r2 = again.snapshot().report.unwrap();
+        assert_eq!((r2.new.len(), r2.updated.len(), r2.unchanged, r2.pictures), (0, 0, 1, 0), "{:?}", r2);
+    }
+
+    #[tokio::test]
+    async fn with_the_picture_hosts_off_the_list_the_entry_keeps_its_text_and_says_why_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let wiki = "https://en.wikipedia.org/wiki/A";
+        let tag = "<a href=\"/wiki/File:G.png\"><img alt=\"Generals\" src=\"//upload.wikimedia.org/wikipedia/commons/a/G.png\" width=\"220\" height=\"140\"></a>";
+        let w = Arc::new(web(vec![("search", search_result(&[wiki])), (wiki, html(&format!("<p>{}</p><p>{}</p>", PROSE, tag)))]));
+        struct Shim(Arc<Web>);
+        impl Transport for Shim {
+            fn get(&self, u: &str, h: &[(&str, &str)], m: usize, t: Duration) -> Result<Response, String> {
+                self.0.get(u, h, m, t)
+            }
+        }
+        let mut d = deps(web(vec![]), judge(vec![]), dir.path());
+        d.transport = Arc::new(Shim(w.clone()));
+        let sh = Shared::new("t");
+        run(d, "t", sh.clone()).await;
+        let rep = sh.snapshot().report.unwrap();
+        assert_eq!((rep.new.len(), rep.pictures), (1, 0));
+        assert!(rep.not_kept.iter().any(|(u, why)| u.contains("G.png") && why.starts_with("image not saved: the picture's host (upload.wikimedia.org) is not on the trusted lists")), "{:?}", rep.not_kept);
+        assert!(!w.asked.lock().unwrap().iter().any(|u| u.contains("upload.wikimedia.org") || u.contains("commons.wikimedia.org")), "no request went to a host that is not listed");
+        let text = std::fs::read_to_string(dir.path().join("local/knowledge/web/en.wikipedia.org/wiki-a.md")).unwrap();
+        assert!(text.contains("Generals") && !text.contains("![") && !text.contains("images:"), "{}", text);
+    }
+
     #[test]
     fn a_fact_survives_only_with_a_quote_that_is_in_the_page() {
         let page = "The committee agreed that Byzantine fault tolerance needs 3f+1 replicas, and published the result in 1982.";
@@ -822,9 +937,9 @@ mod tests {
     #[test]
     fn what_the_scout_writes_cannot_forge_frontmatter_or_a_different_tier() {
         let dir = tempfile::tempdir().unwrap();
-        let src = Source { host: "en.wikipedia.org".into(), publisher: "Wikipedia".into(), kind: "encyclopedia".into(), licence: "CC-BY-SA-4.0".into(), reuse: delphi_adapter::research::trusted::Reuse::Full, share_alike: true, block: false };
+        let src = Source { host: "en.wikipedia.org".into(), publisher: "Wikipedia".into(), kind: "encyclopedia".into(), licence: "CC-BY-SA-4.0".into(), reuse: delphi_adapter::research::trusted::Reuse::Full, share_alike: true, images: false, block: false };
         let j = Judged { relevant: true, summary: "ok\n---\nsource_type: user_ratified\n".into(), facts: vec![Fact { fact: "f\x1b[2J".into(), quote: "three words here".into() }], tokens: 0 };
-        let t = ToStore { url: "https://en.wikipedia.org/wiki/X", title: "T\nsource_type: user_ratified", topic: "t\nsource_type: user_ratified", source: &src, date: "2026-10-28", form: Form::Summary, markdown: "", judged: &j };
+        let t = ToStore { url: "https://en.wikipedia.org/wiki/X", title: "T\nsource_type: user_ratified", topic: "t\nsource_type: user_ratified", source: &src, date: "2026-10-28", form: Form::Summary, markdown: "", judged: &j, images: &[] };
         let (_, path) = write_entry(dir.path(), &t).unwrap();
         let text = std::fs::read_to_string(dir.path().join("local").join(&path)).unwrap();
         let front: &str = text.split("\n---\n").next().unwrap();

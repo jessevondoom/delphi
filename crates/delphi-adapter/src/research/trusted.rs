@@ -27,6 +27,10 @@ pub struct Source {
     pub reuse: Reuse,
     #[serde(default)]
     pub share_alike: bool,
+    /// Pictures served from this host carry the entry's licence (`specs/028` §11.1): set only where that is true of every picture the host
+    /// serves, such as a host of public-domain works. Without it a picture needs a licence of its own, declared where the page shows it.
+    #[serde(default)]
+    pub images: bool,
     /// Operator list only: remove this host (and its subdomains) for this install, though the default list names it.
     #[serde(default)]
     pub block: bool,

@@ -7,6 +7,24 @@
 # licence      an SPDX id, or "unknown" (treated as summary-only)
 # reuse        "full" may store the page as markdown (when the page carries no stricter notice); "summary-only" stores a summary and facts
 # share_alike  the licence requires derivative text to carry the same licence
+# images       true: every picture served from this host carries this entry's licence, so a full-text entry may keep them
+#              (default false; a picture otherwise needs a licence of its own: the Wikimedia Commons record of its file, or a
+#              Creative Commons link on its figure; specs/028 section 11). Pictures are fetched only from listed hosts, so for
+#              Wikipedia's pictures the operator also lists the two hosts below (kept summary-only: they widen nothing for text):
+#
+#   [[source]]
+#   host = "upload.wikimedia.org"
+#   publisher = "Wikimedia Commons"
+#   kind = "encyclopedia"
+#   licence = "unknown"
+#   reuse = "summary-only"
+#
+#   [[source]]
+#   host = "commons.wikimedia.org"
+#   publisher = "Wikimedia Commons"
+#   kind = "encyclopedia"
+#   licence = "unknown"
+#   reuse = "summary-only"
 
 [[source]]
 host = "en.wikipedia.org"
