@@ -3,18 +3,18 @@ id: spec-039-error-log
 title: "039: The central error log"
 author: architect
 timestamp: 2026-10-27T12:00:00Z
-status: draft   # built in one pull request; awaiting the operator's approval
+status: approved   # by the operator, 2026-10-27; built in #256
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
 confidence: medium   # exercised by tests with temporary homes; not yet run through a long live session
 source_mission: 2026-10-23-foundational-design
-tags: [spec, logging, debugging, security, draft]
+tags: [spec, logging, debugging, security]
 ---
 
 # 039: The central error log
 
-**Status:** built, awaiting approval. **Commands:** `delphi logs`, `delphi debug bundle`; `delphi doctor` check 14.
+**Status:** approved by the operator (2026-10-27) and built (#256). **Commands:** `delphi logs`, `delphi debug bundle`; `delphi doctor` check 14.
 **Code:** `crates/delphi-core/src/elog.rs` (writer, reader, redaction), `crates/delphi/src/logs_cmd.rs` (the two commands),
 `ui/src/elog.ts` and `ui/src/boundary.tsx` (the console). **Guide:** `docs/guides/debugging.md`.
 
