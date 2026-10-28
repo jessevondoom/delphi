@@ -29,6 +29,7 @@
   { "name": "/permissions", "aliases": ["/perm"], "args": "[default|accept-edits|mission-auto|optimistic]", "desc": "Approval mode (Shift+Tab cycles it)", "ink": true, "rust": true, "local": false },
   { "name": "/decisions", "args": "[show|ratify|reject]", "desc": "Review an optimistic build's provisional decisions (/decisions ratify all-routine)", "ink": true, "rust": true, "local": false },
   { "name": "/merge", "args": "<task>", "desc": "Run the gates and the merge card again for a kept branch, after review", "ink": true, "rust": true, "local": false },
+  { "name": "/retro", "args": "[list | show <n> | accept <n…> [workspace|operator] | reject <n…> | run]", "desc": "Rules the Orchestrator proposed: review, accept or reject; `run` asks it to look at this mission now", "ink": true, "rust": false, "local": false },
   { "name": "/ratify", "desc": "Pending proposals (config, manifests, specs): review and approve", "ink": true, "rust": true, "local": false },
   { "name": "/resume", "args": "[task…]", "desc": "After a restart: continue the tasks it interrupted", "ink": true, "rust": true, "local": false },
   { "name": "/pause", "desc": "After a restart: leave the interrupted tasks as they are", "ink": true, "rust": true, "local": false },

@@ -240,6 +240,15 @@ Total about **182 h**. Critical path for the operator layer: L0 → L1 → L2 �
 - **Not built:** the console `/retro` deck and its `commands.json` entry; the prompt that makes the Orchestrator call `suggest_rule`; lessons files (only `heuristics.md` is written).
 - Unverified: no live run; the checks are unit-tested on fixtures. Whether the 60% threshold is right needs real proposals.
 
+**L2c (the console `/retro` and the Orchestrator's instructions; `service.rs`, `retro.rs`, `ui/src/run.ts`, `agents/orchestrator/AGENT.md`).** Completes L2 for lessons and rules.
+- **Daemon methods** `retro.list`, `retro.accept`, `retro.reject`, console scope only (not on the narrator or relay lists; the refusal tests name them). `retro.list` returns every unresolved proposal of every mission in the workspace, each with `blocked` (what `retro::problems` finds). `accept` takes `ref` and an optional `scope`, calls `retro::accept`, stamps the rules file L5 as `ratify.apply` does, and the proposal's own mission records `learn.proposal_resolved` (with `by: console-<n>`). No model is called.
+- **`/retro` in the Ink console:** `list` (default), `show <n>`, `accept <n…> [workspace|operator]`, `reject <n…>`, `run`. Several numbers at once is the batched review. Numbers stay what the listing showed: a decided proposal is marked, not removed, so a number never changes meaning. Proposal text is model-written, so it is stripped of terminal escapes before it is shown. The Rust console does not have `/retro` (`rust: false` in `commands.json`).
+- **`/retro run`** submits a task to the Orchestrator whose prompt asks for a retrospective and at most three `suggest_rule` calls. The prompt carries no staged note: staged text still never enters a prompt (§3.1), so the Orchestrator reasons from the mission itself.
+- **`agents/orchestrator/AGENT.md`** now names `suggest_rule` (replacing the old `propose` and `local/proposals/` text), with its limits and when to use it: at mission close or on `/retro run`.
+- **Differences from the design:** no automatic retrospective at mission close; only the manifest says "when a mission closes" and `/retro run` starts one, because the engine has no mission-close hook yet. The Orchestrator cannot read staged notes. Operator-scope proposals are checked against the workspace's `[privacy]` names, not those of every workspace. No dashboard count of waiting proposals.
+- **Not built:** the skill and patch queues of the deck (L3), `PROMOTE`, lessons files, embedding dedupe.
+- Unverified: no real model has called `suggest_rule`; whether the instructions get it to propose sensible rules (and not too many) is the first thing to read in `/retro` after a real mission.
+
 **Suggested order of first merges:** L0, then L6 and L1 in parallel, then L2 and L7, then L3 and L4, then L9, L5, L8, L10. After L1 and L2, run the loop on real work for a few weeks before L3; the staged notes will show which triggers produce signal.
 
 ## 8. Decisions for the Operator

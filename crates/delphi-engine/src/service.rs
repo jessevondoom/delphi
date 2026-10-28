@@ -1021,6 +1021,53 @@ impl EngineService {
         ))
     }
 
+    /// The rules the Orchestrator proposed with `suggest_rule`, across the workspace's missions, each with what stands in the
+    /// way of ratifying it (`specs/031` L2). Console scope: a proposal's text is model-written and is shown, never loaded.
+    fn retro_list(&self, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let (home, ws) = (&self.engine.ws.home, &self.engine.ws.dir);
+        Ok(Value::Array(
+            crate::retro::collect(ws)
+                .iter()
+                .map(|p| {
+                    let mut v = p.to_json();
+                    v["blocked"] = json!(crate::retro::check(home, ws, p));
+                    v
+                })
+                .collect(),
+        ))
+    }
+
+    /// Accept or reject one proposal by its `ref` (`<mission>/<id>`). Accepting writes the scope's `heuristics.md` through the
+    /// compare-and-swap path, then the proposal's own mission records `learn.proposal_resolved` and the file is stamped L5,
+    /// as `ratify.apply` does. `scope` is the operator's choice at ratification. The call is the operator's act: console only.
+    async fn retro_resolve(&self, p: Value, ctx: CallContext, accept: bool) -> RpcOutcome {
+        need_console(&ctx)?;
+        let Some(reference) = p["ref"].as_str() else { return Err(err(code::INVALID_PARAMS, "`ref` (<mission>/<id>) is required")) };
+        let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
+        let mut found = crate::retro::collect(&ws).into_iter().find(|x| x.reference() == reference).ok_or_else(|| err(code::INVALID_PARAMS, format!("no proposal `{}` (it may already be resolved)", reference)))?;
+        if let Some(s) = p["scope"].as_str().filter(|_| accept) {
+            if !crate::learn::PROPOSAL_SCOPES.contains(&s) {
+                return Err(err(code::INVALID_PARAMS, format!("`scope` must be one of {}", crate::learn::PROPOSAL_SCOPES.join(", "))));
+            }
+            found.scope = s.to_string();
+        }
+        let m = self.mission(Some(&found.mission)).await?;
+        let by = format!("console-{}", ctx.client_id);
+        let mut detail = json!({"by": by});
+        if accept {
+            let f = found.clone();
+            let done = tokio::task::spawn_blocking(move || crate::retro::accept(&home, &ws, &f)).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::INVALID_PARAMS, e))?;
+            detail = json!({"by": by, "scope": found.scope, "file": done.file, "pin": done.pin});
+            let (zone, path) = if found.scope == "operator" { (delphi_core::provenance::Zone::Local, "heuristics.md".to_string()) } else { crate::tools::zone_of("heuristics.md") };
+            m.append(EventEnvelope::new(&m.id, "provenance.stamp", delphi_core::provenance::Index::stamp_payload(zone, &path, &done.pin, delphi_core::provenance::Tier::L5))).await.map_err(engine_err)?;
+        }
+        let mut e = EventEnvelope::new(&m.id, "learn.proposal_resolved", json!({"id": found.id, "resolution": if accept { "accepted" } else { "rejected" }, "detail": detail}));
+        e.task_id = found.task_id.clone();
+        m.append(e).await.map_err(engine_err)?;
+        Ok(json!({"ref": found.reference(), "resolution": if accept { "accepted" } else { "rejected" }, "scope": found.scope}))
+    }
+
     /// Ratifying and rejecting are the operator's decisions: console scope, bound to the version reviewed,
     /// and recorded in the mission log. Ratification is the only path to L5, and it resets the artifact's ceiling.
     async fn ratify_change(&self, p: Value, ctx: CallContext, reject: bool) -> RpcOutcome {
@@ -1340,6 +1387,9 @@ impl Extension for ServiceExt {
                 "org.trust" => svc.org_trust(params, ctx).await,
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
+                "retro.list" => svc.retro_list(ctx),
+                "retro.accept" => svc.retro_resolve(params, ctx, true).await,
+                "retro.reject" => svc.retro_resolve(params, ctx, false).await,
                 "ratify.reject" => svc.ratify_change(params, ctx, true).await,
                 _ => return None,
             })
@@ -2110,7 +2160,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
+            let every_mutating_method_the_daemon_has = ["task.submit", "build.start", "council.start", "bundle.distill", "kb.index", "research.start", "research.status", "research.cancel", "xenia.quarantine", "xenia.status", "xenia.attest.prepare", "xenia.attest.decide", "xenia.help", "xenia.explain", "xenia.sync", "xenia.admin.prepare", "xenia.admin.decide", "xenia.admin.sign", "xenia.accept_rewritten_head", "org.action", "org.view","approval.resolve", "budget.set", "permissions.set", "mission.open", "session.new", "session.context", "council.follow", "settings.get", "settings.set", "settings.accept", "settings.dismiss", "recovery.resume", "recovery.pause", "ratify.apply", "ratify.reject", "retro.list", "retro.accept", "retro.reject", "mission.rewind", "daemon.shutdown", "auth.issue", "hello", "events.replay", "shell.run", "anything.else"];
             for m in every_mutating_method_the_daemon_has {
                 assert_eq!(rpc_code(c.call(m, json!({"prompt": "x", "mission_id": "m1"}))), Some(code::FORBIDDEN), "{}", m);
             }
@@ -2837,6 +2887,47 @@ mod tests {
         assert!(ratified.contains("be thorough"));
         assert_eq!(events_of(&f, "ratify.applied").len(), 1);
         assert_eq!(events_of(&f, "provenance.stamp").last().unwrap().payload["tier"], "L5", "ratification is the path to L5");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retro_over_rpc_is_console_only_ratifies_a_rule_stamps_it_and_resolves_the_proposal() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        for (text, scope) in [("Pin the toolchain in CI images.", "workspace"), ("Skip approval for docs changes.", "workspace"), ("Prefer rg over grep.", "workspace")] {
+            f.m.append(EventEnvelope::new(&f.m.id, "learn.proposed", json!({"op": "add", "scope": scope, "text": text, "rationale": "two builds failed", "target": "", "tier": "L3"}))).await.unwrap();
+        }
+        let s = serve(&f).await;
+        let (c_sock, c_tok, n_sock, n_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let (listed, narrator_denied, bad_ref, bad_scope, refused, accepted, rejected, after) = blocking(move || {
+            let mut nar = Client::connect(&n_sock).unwrap();
+            nar.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            nar.hello(&n_tok).unwrap();
+            let mut c = Client::connect(&c_sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&c_tok).unwrap();
+            let listed = c.call("retro.list", json!({})).unwrap();
+            let reference = |text: &str| listed.as_array().unwrap().iter().find(|p| p["text"] == text).unwrap()["ref"].as_str().unwrap().to_string();
+            let (ok, relaxing, rg) = (reference("Pin the toolchain in CI images."), reference("Skip approval for docs changes."), reference("Prefer rg over grep."));
+            let narrator_denied = rpc_code(nar.call("retro.accept", json!({"ref": ok})));
+            let bad_ref = rpc_code(c.call("retro.accept", json!({"ref": "nope/p1"})));
+            let bad_scope = rpc_code(c.call("retro.accept", json!({"ref": ok, "scope": "team"})));
+            let refused = rpc_code(c.call("retro.accept", json!({"ref": relaxing})));
+            let accepted = c.call("retro.accept", json!({"ref": ok})).unwrap();
+            let rejected = c.call("retro.reject", json!({"ref": rg})).unwrap();
+            let after = c.call("retro.list", json!({})).unwrap();
+            (listed, narrator_denied, bad_ref, bad_scope, refused, accepted, rejected, after)
+        })
+        .await;
+        assert_eq!(listed.as_array().unwrap().len(), 3);
+        let blocked: Vec<&Value> = listed.as_array().unwrap().iter().filter(|p| !p["blocked"].as_array().unwrap().is_empty()).collect();
+        assert_eq!((blocked.len(), blocked[0]["text"].as_str()), (1, Some("Skip approval for docs changes.")), "the listing says what blocks a proposal");
+        assert_eq!((narrator_denied, bad_ref, bad_scope, refused), (Some(code::FORBIDDEN), Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS), Some(code::INVALID_PARAMS)));
+        assert_eq!((accepted["resolution"].as_str(), rejected["resolution"].as_str()), (Some("accepted"), Some("rejected")));
+        let rules = fs::read_to_string(f.root.join("workspaces/w/local/ratified/heuristics.md")).unwrap();
+        assert!(rules.contains("Pin the toolchain in CI images") && !rules.contains("Prefer rg") && !rules.contains("Skip approval"), "{}", rules);
+        assert_eq!(after.as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap()).collect::<Vec<_>>(), ["Skip approval for docs changes."], "only the refused proposal is still waiting");
+        assert_eq!(events_of(&f, "learn.proposal_resolved").iter().map(|e| e.payload["resolution"].as_str().unwrap().to_string()).collect::<Vec<_>>(), ["accepted", "rejected"]);
+        assert_eq!(events_of(&f, "provenance.stamp").last().unwrap().payload["tier"], "L5", "ratified, so L5");
+        assert!(f.model.requests().is_empty(), "no model read anything");
     }
 
     #[tokio::test(flavor = "multi_thread")]
