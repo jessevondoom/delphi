@@ -177,8 +177,8 @@ Approved by the operator 2026-10-28 with the mockups ("the decision pages are pe
 | :-- | :-- | :-- |
 | D1 | `decision.list`/`get` read model, list screen, tiers and colour, filter, tick rule | built (cards and provisional decisions; raised decisions come with D6; unproven in a real terminal) |
 | D2 | detail view, choices, accept, advance, empty state (the prompt bar moves to D4 with typed replies) | built (cards and provisional decisions; the "decided in the last hour" list of the empty-state mockup is not built; unproven in a real terminal) |
-| D3 | brief cache and the one-time card brief | not started |
-| D4 | prompt bar bound to the decision, typed replies: READ AS, confirm, conditions, saved thread | not started |
+| D3 | brief cache and the one-time card brief | built (a card's brief is one capped `fast`-tier call, made in the background when the card first shows in `decision.list`, stored under the mission keyed by decision + payload hash; failure keeps the plain brief, tried once, `ctrl+r` asks again; the key leaves the model id out so a failover does not make a second call; never run against a real model) |
+| D4 | prompt bar bound to the decision, typed replies: READ AS, confirm, conditions, saved thread | built (`decision.reply`, `decision.confirm`, `decision.retry_brief`, console only; a choice that is not the decision's own is refused in code; `d` is now `ctrl+d` so a sentence can start with it; conditions are saved in the thread and logged as `decision.conditions`, **not yet delivered to the requester** (D6); never run against a real model) |
 | D5 | ticks, confirm page, batch accept with re-checks | built (builds only, since only builds are tickable; the daemon re-checks each payload hash; unproven in a real terminal) |
 | D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
 | D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |

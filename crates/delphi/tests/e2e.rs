@@ -1212,7 +1212,9 @@ fn esc_stops_a_task_waiting_on_an_approval_in_the_full_screen_console_and_nothin
     let screen = c.visible();
     assert!(!screen.contains("esc to stop") && screen.contains("delphi v"), "{}", screen);
     assert!(!e.ws.join("team/specs/009-e2e.md").exists(), "the action that was waiting never ran");
-    assert_eq!(m.seen.lock().unwrap().len(), 1, "the queued message was never sent");
+    // The card's own one-time brief (specs/044 §7) is a request too; the queued message is the one that must not have been sent.
+    let chat = m.seen.lock().unwrap().iter().filter(|s| !s.body.to_string().contains("You write the brief of one decision")).count();
+    assert_eq!(chat, 1, "the queued message was never sent");
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }

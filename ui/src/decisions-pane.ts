@@ -7,7 +7,12 @@ import * as T from './theme.ts';
 
 type Style = (s: string) => string;
 export type Choice = { id: string; label: string; effect: string; reversible: boolean };
-export type Brief = { summary: string; changes: string[]; recommendation: { choice_id: string; why: string } | null; state: string };
+export type Brief = { summary: string; changes: string[]; recommendation: { choice_id: string; why: string } | null; state: string; /** Tokens a model spent writing it (0 when it was not written by one). */ tokens?: number };
+/** One line of what was said about a decision (the daemon's thread, specs/044 §7.3). */
+export type Entry = { role: string; kind: string; text: string; choice_id: string | null; conditions: string[]; tokens: number };
+/** A model's reading of what the operator typed: one of the decision's own choices and the notes that go with it. Nothing is decided by it. */
+export type Reading = { choice_id: string; label: string; conditions: string[] };
+export const TYPED_MAX = 600;
 export type Decision = {
   id: string; source: string; source_id: string; label: string; kind: string; tier: 'red' | 'amber' | 'open'; title: string;
   requester: string; task: string; raised_at: string | null; payload_blake3: string; brief: Brief; choices: Choice[];
@@ -19,11 +24,17 @@ export type Decision = {
  * how a decision with no recommendation starts); `answered` is the decision an answer has been sent for, so a second
  * press cannot send it twice; `note` is the line that confirms the last answer.
  */
-export type Pane = { sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string; /** The confirm page for the ticked decisions is showing, since `confirmedAt`. */ confirm: boolean; confirmedAt: number };
-export const newPane = (): Pane => ({ sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '', confirm: false, confirmedAt: 0 });
+export type Pane = { /** What is being typed in the detail view's prompt, the saved thread of the open decision, a model's reading awaiting confirmation, a reply in flight, and the cost line of the last reply. */ draft: string; thread: Entry[]; reading: Reading | null; busy: boolean; rnote: string; sel: number; filter: string | null; ticks: string[]; open: string | null; opt: number | null; payload: boolean; openedAt: number; answered: string | null; note: string; /** The confirm page for the ticked decisions is showing, since `confirmedAt`. */ confirm: boolean; confirmedAt: number };
+export const newPane = (): Pane => ({ draft: '', thread: [], reading: null, busy: false, rnote: '', sel: 0, filter: null, ticks: [], open: null, opt: null, payload: false, openedAt: 0, answered: null, note: '', confirm: false, confirmedAt: 0 });
 
 /** `answer` is the operator choosing; `accept-all` is the ticked recommendations accepted together (specs/044 §5.5). The console turns each into the existing call for the decision's source. */
-export type Action = { t: 'none' } | { t: 'chat' } | { t: 'answer'; d: Decision; choice: Choice } | { t: 'accept-all'; ds: Decision[] };
+export type Action =
+  | { t: 'none' } | { t: 'chat' }
+  /** `conditions` is set when the operator confirmed a reading of what they typed: the notes are saved and delivered, never executed. */
+  | { t: 'answer'; d: Decision; choice: Choice; conditions?: string[] }
+  | { t: 'accept-all'; ds: Decision[] }
+  /** A decision was opened: load its saved thread. `reply`: the operator typed words about it. `retry`: write its brief again. */
+  | { t: 'thread'; d: Decision } | { t: 'reply'; d: Decision; text: string } | { t: 'retry'; d: Decision };
 
 /** The keys that answer are ignored for this long after a decision opens (spec 005's guard). */
 export const GUARD_MS = 300;
@@ -46,6 +57,7 @@ export function parse(r: any): Decision[] {
       tier: d.tier === 'red' ? 'red' : d.tier === 'amber' ? 'amber' : 'open', title: str(d.title, 100),
       requester: str(d.requester, 40), task: str(d.task, 40), raised_at: typeof d.raised_at === 'string' ? d.raised_at : null, payload_blake3: str(d.payload_blake3, 128),
       brief: {
+        tokens: typeof d.brief.tokens === 'number' ? d.brief.tokens : 0,
         summary: str(d.brief.summary, 400), changes: (Array.isArray(d.brief.changes) ? d.brief.changes : []).slice(0, 5).map((c: unknown) => str(c, 120)),
         recommendation: rec && typeof rec.choice_id === 'string' ? { choice_id: str(rec.choice_id, 40), why: str(rec.why, 200) } : null, state: str(d.brief.state, 20),
       },
@@ -85,24 +97,42 @@ export function reconcile(p: Pane, items: Decision[]): Pane {
   if (at >= 0) return { ...base, sel: at };
   // The decision being read is gone (it was answered): move to the next one in this filter, or leave the detail view.
   const next = rows[sel];
-  return next ? { ...base, open: next.id, opt: initialOpt(next), payload: false, answered: null } : { ...base, open: null, opt: null, payload: false, answered: null };
+  return next ? { ...base, ...fresh, open: next.id, opt: initialOpt(next), payload: false, answered: null } : { ...base, ...fresh, open: null, opt: null, payload: false, answered: null };
 }
 
+/** Typing state of a decision that was just opened. */
+const fresh = { draft: '', thread: [] as Entry[], reading: null as Reading | null, busy: false, rnote: '' };
 const recIndex = (d: Decision): number => (d.brief.recommendation ? d.choices.findIndex((c) => c.id === d.brief.recommendation!.choice_id) : -1);
 /** The focus starts on the recommended choice; a decision with no recommendation starts with none selected. */
 export const initialOpt = (d: Decision): number | null => { const i = recIndex(d); return i >= 0 ? i : null; };
-const openAt = (p: Pane, rows: Decision[], i: number, now: number): Pane => ({ ...p, sel: i, open: rows[i]!.id, opt: initialOpt(rows[i]!), payload: false, openedAt: now, answered: null });
+const openAt = (p: Pane, rows: Decision[], i: number, now: number): Pane => ({ ...p, ...fresh, sel: i, open: rows[i]!.id, opt: initialOpt(rows[i]!), payload: false, openedAt: now, answered: null });
 
 /** Clear the sent mark after a failed answer so the operator can try again. */
-export const unsent = (p: Pane): Pane => ({ ...p, answered: null, note: '' });
+export const unsent = (p: Pane): Pane => ({ ...p, answered: null, note: '', busy: false });
+
+const entries = (v: unknown): Entry[] => (Array.isArray(v) ? v : []).slice(-40).filter((e: any) => e && typeof e.text === 'string').map((e: any) => ({
+  role: str(e.role, 10), kind: str(e.kind, 12), text: str(e.text, 700), choice_id: typeof e.choice_id === 'string' ? str(e.choice_id, 40) : null,
+  conditions: (Array.isArray(e.conditions) ? e.conditions : []).slice(0, 3).map((c: unknown) => str(c, 120)), tokens: typeof e.tokens === 'number' ? e.tokens : 0,
+}));
+/** The saved thread of decision `id` arrived (from `decision.get`); ignored if another decision is open now. */
+export const withThread = (p: Pane, id: string, thread: unknown): Pane => (p.open === id ? { ...p, thread: entries(thread) } : p);
+/** The daemon's answer to typed words: a reply to a question, or a reading to confirm. The thread now includes both. */
+export function replied(p: Pane, id: string, r: any): Pane {
+  if (p.open !== id) return p;
+  const reading = r?.intent === 'answer' && r.reading && typeof r.reading.choice_id === 'string'
+    ? { choice_id: str(r.reading.choice_id, 40), label: str(r.reading.label, 80), conditions: (Array.isArray(r.reading.conditions) ? r.reading.conditions : []).slice(0, 3).map((c: unknown) => str(c, 120)) }
+    : null;
+  const tokens = typeof r?.tokens === 'number' ? r.tokens : 0;
+  return { ...p, busy: false, thread: entries(r?.thread), reading, rnote: `that reply used ${tokens} tokens and is saved with the decision` };
+}
 
 export function key(p: Pane, items: Decision[], e: Ev, now = 0): { pane: Pane; action: Action } {
   const none = (q: Pane = p) => ({ pane: q, action: { t: 'none' } as Action });
-  if (e.t !== 'key' && e.t !== 'text') return none();
+  if (e.t !== 'key' && e.t !== 'text' && e.t !== 'ctrl' && e.t !== 'paste') return none();
   const rows = visible(items, p.filter);
   const sel = Math.max(0, Math.min(p.sel, rows.length - 1));
   const d = rows[sel];
-  const k = e.t === 'key' ? e.k : e.s;
+  const k = e.t === 'key' ? e.k : e.t === 'text' ? e.s : '';
   if (p.confirm) {
     // The confirm page (specs/044 §5.5): enter accepts what was ticked, esc goes back. The guard applies to the accept.
     if (k === 'esc' || (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl)) return none({ ...p, confirm: false });
@@ -118,30 +148,56 @@ export function key(p: Pane, items: Decision[], e: Ev, now = 0): { pane: Pane; a
     const at = rows.findIndex((x) => x.id === p.open);
     const cur = rows[at];
     if (!cur) return none({ ...p, open: null });
-    const answer = (c: Choice | undefined) => {
+    const answer = (c: Choice | undefined, conditions?: string[]) => {
       if (!c || p.answered === cur.id || now - p.openedAt < GUARD_MS) return none();
-      return { pane: { ...p, answered: cur.id, note: `✔ ${cur.label} decided: ${c.label.toLowerCase()}` }, action: { t: 'answer', d: cur, choice: c } as Action };
+      return { pane: { ...p, answered: cur.id, draft: '', reading: null, note: `✔ ${cur.label} decided: ${c.label.toLowerCase()}` }, action: { t: 'answer', d: cur, choice: c, ...(conditions ? { conditions } : {}) } as Action };
     };
-    if (k === 'esc' || (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl)) return none({ ...p, open: null, opt: null, payload: false });
+    const leave = (): Pane => ({ ...p, ...fresh, open: null, opt: null, payload: false });
+    if (e.t === 'ctrl') {
+      if (e.c === 'd') return none({ ...p, payload: !p.payload });
+      if (e.c === 'u') return none({ ...p, draft: '' });
+      if (e.c === 'r' && cur.source === 'card' && cur.brief.state === 'plain') return { pane: p, action: { t: 'retry', d: cur } };
+      return none();
+    }
+    if (e.t === 'paste') return none({ ...p, draft: (p.draft + e.s.replace(/\s+/g, ' ')).slice(0, TYPED_MAX) });
+    // Esc takes back what was started: the words, then the reading, then the view.
+    if (k === 'esc') return p.draft ? none({ ...p, draft: '' }) : p.reading ? none({ ...p, reading: null }) : none(leave());
+    if (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl) return p.draft ? none() : none(leave());
     if (k === 'up' || k === 'down') {
       const to = at + (k === 'up' ? -1 : 1);
-      return to < 0 || to >= rows.length ? none() : none(openAt(p, rows, to, now));
+      return to < 0 || to >= rows.length ? none() : { pane: openAt(p, rows, to, now), action: { t: 'thread', d: rows[to]! } };
     }
     if (k === 'tab' || k === 'shift-tab') {
       const n = cur.choices.length;
       if (!n) return none();
       const back = k === 'shift-tab';
-      return none({ ...p, opt: p.opt === null ? (back ? n - 1 : 0) : (p.opt + (back ? n - 1 : 1)) % n });
+      return none({ ...p, reading: null, opt: p.opt === null ? (back ? n - 1 : 0) : (p.opt + (back ? n - 1 : 1)) % n });
     }
-    if (k === 'enter') return answer(p.opt === null ? undefined : cur.choices[p.opt]);
-    if (/^[1-9]$/.test(k)) return answer(cur.choices[Number(k) - 1]);
-    if (k === 'd') return none({ ...p, payload: !p.payload });
+    if (k === 'backspace') return none({ ...p, draft: p.draft.slice(0, -1) });
+    if (k === 'enter') {
+      const text = p.draft.trim();
+      if (text) {
+        // A bare choice (`2`, `accept`, a choice's own name) is the choice itself, not a question for a model.
+        const low = text.toLowerCase();
+        const rec = cur.brief.recommendation;
+        const bare = /^[1-9]$/.test(low) ? cur.choices[Number(low) - 1] : (low === 'accept' || low === 'accept recommendation') && rec ? cur.choices.find((c) => c.id === rec.choice_id) : cur.choices.find((c) => c.id === low || c.label.toLowerCase() === low);
+        if (bare) return answer(bare);
+        if (p.busy) return none();
+        return { pane: { ...p, draft: '', busy: true, reading: null, rnote: '' }, action: { t: 'reply', d: cur, text } };
+      }
+      if (p.reading) return answer(cur.choices.find((c) => c.id === p.reading!.choice_id), p.reading.conditions);
+      return answer(p.opt === null ? undefined : cur.choices[p.opt]);
+    }
+    if (e.t === 'text') {
+      if (!p.draft && /^[1-9]$/.test(k)) return answer(cur.choices[Number(k) - 1]);
+      return none({ ...p, draft: (p.draft + k).slice(0, TYPED_MAX) });
+    }
     return none();
   }
   if (k === 'esc') return p.filter ? none({ ...p, filter: null, sel: 0 }) : { pane: p, action: { t: 'chat' } };
   if (e.t === 'key' && k === 'left' && !e.alt && !e.ctrl) return { pane: p, action: { t: 'chat' } };
   if (k === 'up' || k === 'down') return none({ ...p, sel: Math.max(0, Math.min(rows.length - 1, sel + (k === 'up' ? -1 : 1))) });
-  if (k === 'enter') return d ? none(openAt(p, rows, sel, now)) : none();
+  if (k === 'enter') return d ? { pane: openAt(p, rows, sel, now), action: { t: 'thread', d } } : none();
   if (k === 'f') {
     const kinds = chips(items).map((c) => c.kind);
     const at = p.filter ? kinds.indexOf(p.filter) : -1;
@@ -271,7 +327,7 @@ export function detail(items: Decision[], p: Pane, c: Ctx): string[] {
     '',
     '  ' + T.dim(d.label) + '  ' + chalk.bold(style(d.title)),
     '  ' + (d.tier === 'open' ? T.dim : style)(`${TIER_WORD[d.tier]} · ${KIND_WORD[d.kind] ?? d.kind}`) + T.dim(` · requested by ${d.requester || 'an agent'}${d.task ? ` · task ${d.task}` : ''}${when === null ? '' : ` · waiting ${age(c.now - when)}`}`),
-    '  ' + T.dim(T.clip(`d shows ${d.source === 'card' ? 'the diff or payload' : 'the changes'}${d.brief.state === 'plain' ? ' · written from the card’s own facts, not by a model' : ''}`, w - 4)),
+    '  ' + T.dim(T.clip(`ctrl+d shows ${d.source === 'card' ? 'the diff or payload' : 'the changes'}${d.brief.state === 'plain' ? ' · written from the card’s own facts, not by a model' + (d.source === 'card' ? ' · ctrl+r asks a model once' : '') : d.brief.state === 'generated' ? ` · summary cached, written once (${d.brief.tokens ?? 0} tokens)` : ''}`, w - 4)),
     '',
   ];
   if (p.payload) {
@@ -307,8 +363,30 @@ export function detail(items: Decision[], p: Pane, c: Ctx): string[] {
       ...d.choices.map((ch, i) => (p.opt === i ? T.accent('❯ ') : '  ') + T.accent(String(i + 1)) + '  ' + (p.opt === i ? chalk.bold(ch.label) : ch.label)),
     ]));
   }
+  if (p.reading) {
+    const ci = d.choices.findIndex((x) => x.id === p.reading!.choice_id);
+    L.push('', ...card(c, [
+      chalk.bold('READ AS') + T.dim('  nothing is decided yet'),
+      '',
+      T.accent(String(ci + 1)) + '  ' + chalk.bold(p.reading.label),
+      ...p.reading.conditions.map((x) => T.accent('+') + '  ' + T.clip(x, w - 14)),
+      '',
+      chalk.inverse('[ Confirm this ]') + T.dim('  enter') + T.dim('   keep typing to change it   esc discard'),
+    ]));
+  }
+  if (p.rnote) L.push('', '  ' + T.dim(p.rnote));
+  if (p.thread.length) {
+    L.push('', '  ' + chalk.bold('EARLIER ON THIS DECISION') + T.dim(' · saved with it, 0 tokens to reopen'));
+    for (const e of p.thread.slice(-4)) {
+      const who = e.role === 'you' ? T.accent('you  ') : T.dim('model');
+      const what = e.kind === 'reading' ? `read as: ${e.text}${e.conditions.length ? ' + ' + e.conditions.join(' + ') : ''}` : e.kind === 'confirmed' ? 'confirmed the reading' : e.text;
+      L.push('   ' + who + ' ' + T.clip(what, w - 12));
+    }
+  }
   if (p.answered === d.id) L.push('', '  ' + T.dim('sent…'));
-  return pad(L);
+  const out = pad(L);
+  out[out.length - 1] = '  ' + T.dim(T.clip(hint(items, p), w - 4));
+  return out;
 }
 
 /** Nothing is owed: the last answer, if this console just gave one, and the plain statement of the spec (§6.2). */
@@ -350,12 +428,23 @@ export function confirm(items: Decision[], p: Pane, c: Ctx): string[] {
 /** The pane's body: the confirm page, the detail of the open decision, the list, or the empty state. */
 export const render = (items: Decision[], p: Pane, c: Ctx): string[] => (!items.length ? empty(p, c) : p.confirm ? confirm(items, p, c) : p.open !== null ? detail(items, p, c) : view(items, p, c));
 
+/** The prompt bar of the detail view, bound to the open decision (specs/044 §6.3); null in the list and everywhere else. */
+export const promptLine = (p: Pane, w: number): string | null => {
+  if (p.open === null || p.confirm) return null;
+  if (p.busy) return T.dim('reading your words… (a few hundred tokens, then it is saved with the decision)');
+  const room = Math.max(8, w - 6);
+  if (!p.draft) return T.dim('❯ ') + chalk.inverse(' ') + T.dim('or type here to answer in your own words');
+  const shown = p.draft.length > room ? '…' + p.draft.slice(-(room - 1)) : p.draft;
+  return T.dim('❯ ') + shown + chalk.inverse(' ');
+};
+
 export const hint = (items: Decision[], p: Pane): string => {
   if (!items.length) return 'nothing to decide · esc for chat';
   if (p.confirm) return `enter accept ${ticked(p, items).length} · esc back to the list`;
   if (p.open !== null) {
     const d = visible(items, p.filter).find((x) => x.id === p.open);
-    return `${d && d.brief.recommendation ? 'tab / enter choose · 1-9 pick' : 'tab / 1-9 choose'} · d diff · ↑ ↓ other decisions · esc back to the list`;
+    if (p.reading) return 'enter confirm the reading · keep typing to change it · tab back to the choices · esc discard';
+    return `${d && d.brief.recommendation ? 'tab / enter choose · 1-9 pick' : 'tab / 1-9 choose'} · or type in your own words · ctrl+d diff · ↑ ↓ other decisions · esc back`;
   }
   return `↑ ↓ move · enter open · space tick · a tick recommended${p.ticks.length ? ' · y review ticked' : ''} · f filter${p.filter ? ' · esc clear the filter' : ''}`;
 };

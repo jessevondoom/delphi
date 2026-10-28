@@ -6,7 +6,7 @@ delphi v0.5 · /proj · decisions
 
   DEC-082  Raise the rate-limit burst from 20 to 50 per second
   AMBER · build · requested by builder · task t_1 · waiting 9 m
-  d shows the changes
+  ctrl+d shows the changes
 
   WHAT IT IS
   Provisional change from optimistic build t_014 (rate.rs, +12 -4) to stop
@@ -16,9 +16,9 @@ delphi v0.5 · /proj · decisions
    nothing listed
 
    RECOMMENDATION
-
+  tab / enter choose · 1-9 pick · or type in your own words · ctrl+d diff · ↑…
 ● working · 1793181597s                                              esc to stop
 ────────────────────────────────────────────────────────────────────────────────
-tab / enter choose · 1-9 pick · d diff · ↑ ↓ other decisions · esc back to the …
+❯  or type here to answer in your own words
 ────────────────────────────────────────────────────────────────────────────────
 0 tokens  ·  default  ·  2 waiting                             ← / ? →  ·  ○ ○ ●

@@ -6,7 +6,7 @@ delphi v0.5 · /proj · decisions
 
   DEC-083  Approve spec 042: chunked bundle streaming over IPC
   RED · spec · requested by builder · task t_1 · waiting 9 m
-  d shows the changes
+  ctrl+d shows the changes
 
   WHAT IT IS
   Streams bundle manifests over IPC in 64 KB chunks with backpressure, so large repositories stop
@@ -26,9 +26,9 @@ delphi v0.5 · /proj · decisions
 
 
 
-
+  tab / enter choose · 1-9 pick · or type in your own words · ctrl+d diff · ↑ ↓ other decisions ·…
 ● working · 1793181597s                                                                  esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-tab / enter choose · 1-9 pick · d diff · ↑ ↓ other decisions · esc back to the list
+❯  or type here to answer in your own words
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 0 tokens  ·  default  ·  2 waiting                                                 ← / ? →  ·  ○ ○ ●
