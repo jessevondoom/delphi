@@ -3256,6 +3256,16 @@ mod tests {
         assert!(f.model.requests()[1].body.to_string().contains("budget ceiling is now $20.00 (it was $5.00)"));
     }
 
+    // Accessibility: "reduce motion" asked for in the operator's words is saved and announced; it does not widen any authority.
+    #[tokio::test]
+    async fn the_operator_can_turn_reduce_motion_on_by_asking() {
+        let f = ask_for_a_setting(vec![Step::tool("s1", "change_setting", json!({"key": "reduce_motion", "value": "on", "quote": "please reduce motion"})), Step::text("Done.")], "Please reduce motion, the blinking bothers me.").await;
+        assert!(crate::settings_store::load(&f.engine.ws.dir).reduce_motion);
+        let changed = &events_of(&f, "setting.changed")[0].payload;
+        assert_eq!((changed["key"].as_str(), changed["new"].as_str(), changed["by"].as_str()), (Some("reduce_motion"), Some("on"), Some("prompt")));
+        assert!(f.model.requests()[1].body.to_string().contains("Reduce motion is on"));
+    }
+
     // specs/035 D-17: nothing the operator did not say, and nothing from untrusted content, changes a setting; it waits as a suggestion.
     #[tokio::test]
     async fn without_the_operators_own_words_a_change_waits_as_a_suggestion_and_nothing_is_changed() {

@@ -157,6 +157,17 @@ Approved by the operator 2026-10-28 with the mockups ("the decision pages are pe
 | D6 | `raise_decision`, records, `decision.resolve`, delivery to the requester | not started |
 | D7 | docs regenerated, `/decisions` opens the pane, tracker | not started |
 
+## Knowledge window modes and "expand the archive" (spec 028-A1, approved 2026-10-28)
+
+Approved by the operator 2026-10-28, with two allow lists (default in the repo, operator's own in the operator space). The search API and the Wikipedia entry are still open. Nothing is built. It supersedes spec 028 D-2 and §9.3 for the archives pane and relaxes validation for trusted-source research only (§10.4).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| E1 | `shift+tab` modes, badges, indicators removed, clean expand page | not started |
+| E2 | `[search]` client, `trusted.toml`, deterministic fetch and licence logic | not started |
+| E3 | research job, scout decision, `knowledge/web/` writes | not started |
+| E4 | progress, results page and banner, failure states | not started |
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".

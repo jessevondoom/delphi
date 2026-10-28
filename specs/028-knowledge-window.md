@@ -130,3 +130,106 @@ Any letter types into the box · `enter` search / open · `↑ ↓` move through
 2. ~~Opening a result~~ Settled by the operator: inline, navigated like hyperlinks (`specs/029`).
 3. **Saving:** can an online result be saved into the knowledge base from the window, through the scout's verification? Recommended: read-only in the first version.
 4. **Build order:** recommended slices: (a) the box, offline results and the §3 shelf, using the existing search RPC; (b) browse a collection and `m` more-like-this, which needs the RPC to accept a passage as the query; (c) the `[search]` client and online mode; (d) the scout's skill and tool.
+
+## 10. Amendment 028-A1: two modes, and "expand the archive" (proposed 2026-10-28)
+
+**Status: approved by the operator, 2026-10-28** (with the clarification of §10.3: two allow lists, both operator-owned). The design below is the operator's, given in chat on 2026-10-28. It supersedes D-2 (online is an explicit query choice, `●/○` toggle), §3's mode line, and §9.3 (saving is read-only) for the archives pane, and it relaxes validation for one narrow path (§10.4). Nothing is built. Decisions of 2026-10-28: Wikipedia is on the default list as recommended (§10.8 Q1); search goes through Brave with an ordered fallback list of privacy-friendly engines, and Google only when Gemini is in use (§10.8 Q2). No open questions remain for E1-E4.
+
+### 10.1 What changes
+The archives pane has **two modes**, switched by `shift+tab` (it already cycles the approval mode in the chat; here the pane owns the key):
+
+| Mode | Title row | Label above the box | What the page shows |
+| :-- | :-- | :-- | :-- |
+| **search** (default; the page as it is today) | the orchestrator badge, a space, `search the archives` (replaces the word `knowledge`) | none beyond the title | the shelf: collection counts, recently changed, most used, totals |
+| **expand** | the same title | the scout badge, a space, `expand knowledge base: research a topic` | a clean page: the title, the label and the box only. No shelf, no collection counts, no recent list, no totals, no metadata |
+
+- The `● offline ○ online ○ both` indicators are **removed** from both modes. `tab` no longer cycles them; search mode is always the local, offline search (the zero-token path of §6a). Searching the web from this pane exists only through expand mode.
+- The badges are the roles' faces as the roster draws them (`ui/src/theme.ts`; role IDs `orchestrator` and `scout`, never theme names).
+- The mode starts on `search`, is remembered per window for the session, and `shift+tab` toggles it. The footer names the other mode: `shift+tab  expand` / `shift+tab  search`.
+- In expand mode the shelf's data is not fetched either (no `kb.get` for `/v1/collections` while the clean page shows).
+
+### 10.2 What expand mode does
+On `enter`, the daemon runs a **research job** for the topic. It is bounded and mostly code, with a model only where judgement is needed:
+
+1. **Query only trusted sources.** The search is restricted to the **trusted-source list** (§10.3): a site-restricted query to the search API of §6, plus direct fetches from the encyclopedic sources' own APIs where they have one. No open-web result enters the job.
+2. **Read, and follow references.** The job reads the top pages, extracts each page's references and external links, and follows only those whose host is also on the list (depth 1, capped; §10.6). A reference to an unlisted host is recorded as `seen, not read` and never fetched.
+3. **Decide what to bring back.** The scout (one `fast`-tier model call) reads the extracted text and, per source, chooses: **full text as markdown** if the source's licence allows reuse (§10.5); **summary and facts** (each fact with its source URL and a short quote) if the page is pertinent but the licence does not allow copying; or **nothing** if it is not relevant to the topic.
+4. **Write entries.** Each kept item becomes one document in a new collection, `knowledge/web/`, with frontmatter `source_url`, `publisher`, `retrieved`, `licence`, `kind: full | summary`, `topic`, `trust: trusted_source`. The index refreshes, so the entries are searchable by the local vector search at once.
+
+The scout's call is the only token spend. Fetching, parsing, link filtering, licence lookup and writing are deterministic code.
+
+### 10.3 The trusted-source lists: two allow lists, both the operator's choice
+A source is trusted for this pane **only because the operator put it on a list**. The lists are what lets the archive grow quickly in a subject while the operator still decides, source by source, what counts. There are two:
+
+| List | Where | Who changes it |
+| :-- | :-- | :-- |
+| **Default list** | `context/sources/trusted.toml`, committed to the main repo and shipped in the release | a ratified proposal (a change is a pull request the operator approves; a signed release ratifies it) |
+| **Operator list** | `$DELPHI_HOME/operator/trusted-sources.toml`, in the operator's space | the operator only, by editing the file or by `delphi sources add <host>` (a later slice). Agents cannot read it for write: `$DELPHI_HOME/operator/**` is never writable by agent file tools (`specs/001` §2.2). |
+
+- The job's allow list is the **union** of the two, read fresh at each job. An operator entry adds a host (or, with `block = true`, removes a default one for this install). Adding a source is the operator's act of validating it.
+- Each entry: `host`, `publisher`, `kind` (`standards`, `government`, `journal`, `encyclopedia`, `documentation`, `news`), `licence` (an SPDX id or `unknown`), `reuse` (`full` or `summary-only`).
+- **The default list is seeded from Appendix A of the validator spec** (`specs/040`, classes A.1 Primary and A.2 Reputable secondary, which the operator approved in principle on 2026-10-26; that spec is on branch `worktree-horkos-validator-040` and not yet on main). The two lists are meant to become **one registry**: when spec 040 or the primary-sources plan builds its registry (`missions/2026-10-23-foundational-design/primary-sources-plan-2026-10-26.md` §3), it reads this file instead of keeping a second copy, and gains the per-claim tier. Until then this file stands alone, with no tier field. A source that spec 040 marks Weak (A.3) is not in the default list; the operator may still add it to the operator list (§10.8 Q1).
+- **The scout and the job cannot add a host, and a page's content cannot:** a link is followed only if its host is on the union. This keeps "content read from outside cannot raise its own trust" (`specs/001` §5) true.
+- A host matches by exact registrable domain over HTTPS. A wildcard entry (`*.gov`) matches by suffix; a subdomain the daemon cannot classify under a wildcard is skipped (the A.5 caution). Redirects are followed only between listed hosts; a redirect off the lists stops the fetch.
+
+### 10.4 Why validation is not invoked (and what still holds)
+The spec 040 validator is for **chat prompts that bring in research**: arbitrary web content, chosen by a model, shaping an answer. Here the sources are fixed in advance by a ratified list, the pane is a deliberate operator action, and every stored item says where it came from. So the job does **not** call the validator. This relaxes validation only; it does not widen authority:
+- **Taint.** The job runs as an untrusted-content span (`specs/001` §5.1, $L_2$–$L_3$ while it reads): no worktree writes outside `knowledge/web/`, no code execution, no outbound call except GET to listed hosts, no dispatch. The daemon, not the scout, writes `knowledge/web/` after the scout returns.
+- **Provenance stays.** Entries are `trust: trusted_source`, not operator-trusted. The explorer shows a `web` tag with publisher and date; agent retrieval ranks them below `specs/`, `context/` and the operator's documents, and cites the URL. When an agent relies on a `knowledge/web/` entry for a factual assertion in a deliverable, the validator applies there as it would anywhere (that is an agent use, not this pane).
+- **Storing never raises trust.** An entry cannot become `specs/`, `context/` or operator memory by being stored; promotion is a ratified proposal.
+- **Instructions in pages are data.** Page text reaches the scout inside the spotlighted untrusted block, and the job's tool surface is fixed (§10.2), so an injected instruction has nothing to call.
+
+### 10.5 Licensing
+- **Full text as markdown** only when the list entry has `reuse = "full"` and the page carries no stricter notice. Seed: CC BY, CC BY-SA, CC0 and public-domain sources (US government works). The entry keeps the licence, an attribution line (author and URL) and a `share-alike` flag where required.
+- **Everything else** is stored as a summary plus facts, each with a source URL and a quote of at most one sentence. No page body is copied.
+- An `unknown` licence is `summary-only`. The job does not guess a licence from page text.
+- Share-alike entries are marked, because a bundle that exports the collection (`specs/023`) must carry the licence; export of `knowledge/web/` is off by default (§10.8 Q4).
+
+### 10.6 Progress and the results page
+**While running**, the page shows a live count from the job's own counters (no model call):
+```
+ researching "mitochondrial calcium uniporter"
+ reading 7 sources · 12 found · 3 skipped (not on the trusted list)
+ en.wikipedia.org · pubmed.ncbi.nlm.nih.gov · …
+```
+`esc` cancels; entries already written stay.
+
+**Limits** (provisional, in `[research]`): at most 15 sources read per job, link depth 1, 20 s per fetch, 2 MB per page, 90 s per job, one job at a time.
+
+**After it completes**, a results page replaces the progress page. Near the top, a banner:
+
+> **the archive has been expanded to include N new entries**
+
+(`1` reads `1 new entry`; `0` reads `no new entries: the archive already covers this`.) Under it, the new entries as result rows in the §4 shape (path, publisher, `full` or `summary`, licence), opening in the reader of `specs/029` on `enter`. A line below lists sources read but not kept, with the reason (not relevant, licence, duplicate). An entry identical to an existing one (same URL and content hash) is not counted. `esc` returns to the clean expand page.
+
+### 10.7 Failure and risk
+| Case | Behaviour |
+| :-- | :-- |
+| no `[search]` provider configured | one line naming the config key (§6); expand cannot run |
+| no network | `can't reach the sources`; nothing is written |
+| one source fetch fails | skipped and counted; the job continues |
+| the scout call fails or the quota is out | nothing is written; the page says so and offers a retry |
+| a listed site serves wrong or poisoned content | stored with provenance, ranked below curated documents, checked by the validator where an agent relies on it (§10.4). This residual risk is the cost of skipping validation here. |
+| the query text | leaves the machine to the search API on `enter` in expand mode only, never while typing |
+
+### 10.8 Open questions (recommended answers)
+1. **Seed list and Wikipedia.** The default list is Appendix A.1 and A.2 of `specs/040`, restricted to hosts a fetch can read: standards bodies (`ietf.org`, `rfc-editor.org`, `w3.org`, `whatwg.org`, `unicode.org`, `nist.gov`), government (`*.gov`, `*.gov.uk`, `legislation.gov.uk`, `europa.eu`), `sec.gov`, research (`pubmed.ncbi.nlm.nih.gov`, `clinicaltrials.gov`, `arxiv.org` as summary-only, `doi.org` landing pages), software documentation (`docs.rs`, `doc.rust-lang.org`, `crates.io`, `pypi.org`), reference (`britannica.com` as summary-only, `loc.gov`, `si.edu`), news wires as summary-only (`apnews.com`, `reuters.com`, `bbc.com`, `npr.org`). **Wikipedia:** spec 040 A.3 classes `wikipedia.org` as Weak (a pointer to sources, not evidence), but you named it as an example for this pane, and it is the fastest way to find the references the job then follows. Recommended: put `en.wikipedia.org` on the **default list** with `reuse = "full"` (CC BY-SA, share-alike) and mark entries from it `kind: encyclopedia` so spec 040 can still treat it as a pointer when it reads this file. **Decided (operator, 2026-10-28): yes, on the default list as described.**
+2. **Which search API. Decided (operator, 2026-10-28): Brave first, then an ordered fallback list of privacy-friendly engines.**
+   - `[search] providers = ["brave", "mojeek", "searxng"]` is tried in order, **one at a time**: the next only when the previous fails (network error, rate limit, no key). A query is never sent to several engines at once, so it leaves the machine to one third party per job.
+   - The list holds only engines with a documented API that do not sell query data: Brave Search API, Mojeek, a configured SearXNG instance (keyless), and Kagi where the operator has a key. No engine without an API is scraped (DuckDuckGo, Startpage): that would break their terms and be fragile.
+   - `google` (Programmable Search JSON API) is allowed **only when a Gemini endpoint is configured** in `[[endpoints]]`, since Google then already receives the operator's prompts. It is never in the default order; the operator adds it. Gemini's built-in grounding is not used for this job: it runs the search inside the model call, where the allow-list restriction cannot be enforced in code.
+   - Keys are handled as the model endpoints' are (`specs/009`). Results from every engine are filtered by the allow lists (§10.3) in code after they return, whichever engine answered.
+   - `providers` is a ratified `[search]` setting; a new provider is a proposal.
+3. **Does the scout need a model-facing web tool?** Recommended no: the daemon does the fetches; the scout gets extracted text and returns a structured decision (`keep`, `form`, `summary`, `facts`). Tool surface stays zero and the job is testable with a fake model.
+4. **Export of `knowledge/web/` in bundles.** Recommended off by default.
+5. **Removal.** Recommended: entries are never deleted automatically; a `delphi kb forget <path>` is a later slice.
+
+### 10.9 Slices and tests
+| Slice | Content |
+| :-- | :-- |
+| E1 | `shift+tab` mode toggle in the archives window, role badges, indicators removed, the clean expand page (UI only, no job) |
+| E2 | `[search]` client (§6), `context/sources/trusted.toml` with parser and lint, deterministic fetch, link filter and licence logic, tested with a fake search and fake pages |
+| E3 | the research job: daemon method, scout decision call, `knowledge/web/` writes, index refresh, counters |
+| E4 | progress and results pages, the banner, cancel, failure states; a pty test against a fixture server |
+
+Acceptance tests (automated, no live network): `shift+tab` toggles modes and expand mode hides every shelf element; the offline/online indicators are absent in both modes; an unlisted host is never fetched, including by redirect or by a link in a fetched page; a `summary-only` or `unknown`-licence source never yields a body copy; nothing is written outside `knowledge/web/`; an injected instruction in a fixture page changes nothing; the banner count equals the entries written, and a repeated run says `no new entries`; a failed scout call writes nothing; the pane never calls the validator, and the validator applies when an agent cites a `knowledge/web/` entry in a deliverable.
