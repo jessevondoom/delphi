@@ -230,7 +230,7 @@ var DCH=[['all',5,''],['actions',1,'red'],['specs',1,'red'],['builds',2,'amb'],[
 function dchips(active){
   var s='  {dim|show}  ';
   DCH.forEach(function(it,i){var on=i===active;s+='{'+(on?(it[2]?it[2]+' b':'b'):(it[2]||'dim'))+'|'+(on?'●':'○')+' '+it[0]+' '+it[1]+'}   '});
-  return lr(s,'{dim|f to change}  ');
+  return lr(s,'{dim|summaries cached · 0 tokens   f change}  ');
 }
 function ditem(d,sel,ticked){
   var c=TC[d.tier],box=d.box?(ticked?'{ok b|[x]}':'{dim|[ ]}'):'   ';
@@ -284,7 +284,7 @@ function detailHead(d,pos){
 SCREENS['dec-4-detail']=function(){
   var d=DEC[1];d.by='architect';d.task='t_016';
   var b=detailHead(d,'2 of 5');
-  b.push(mk('  {dim|specs/042-bundle-streaming.md · +212 −0 · d shows the diff}'));b.push(blank());
+  b.push(mk('  {dim|specs/042-bundle-streaming.md · +212 −0 · d shows the diff · summary cached, 0 tokens}'));b.push(blank());
   b.push(mk('  {b|WHAT IT IS}'));
   wrap('Spec 042 defines how bundle manifests move between processes. Today a large repository sends one multi-megabyte frame and memory spikes. The spec streams it in 64 KB chunks with backpressure.',94).forEach(function(l){b.push(mk('  '+l))});
   b.push(blank());
@@ -300,13 +300,30 @@ SCREENS['dec-4-detail']=function(){
   c.push('{dim|other choices}   {acc b|2} red-team reviews first   {acc b|3} defer   {acc b|4} reject');
   b=b.concat(card(c));b.push(blank());
   b.push(mk('  {acc b|Prompt for more:} {dim|type below to ask about this decision. Nothing is decided until you choose.}'));
-  return frame({id:'dec-4',head1:DH,pane:'decisions › DEC-083',body:b,hint:'enter accept · 2 – 4 other choices · d diff · esc back to the list',prompt:true,dots:DDOTS});
+  return frame({id:'dec-4',head1:DH,pane:'decisions › DEC-083',body:b,hint:'tab / enter choose · 2 – 4 other choices · or type below · d diff · esc back to the list',prompt:'{dim|or type here to answer in your own words}',dots:DDOTS});
+};
+
+SCREENS['dec-7-typed']=function(){
+  var d=DEC[1];d.by='architect';d.task='t_016';
+  var b=detailHead(d,'2 of 5');
+  b.push(mk('  {dim|specs/042-bundle-streaming.md · +212 −0 · d shows the diff · summary cached, 0 tokens}'));b.push(blank());
+  b.push(mk('  {b|EARLIER ON THIS DECISION}  {dim|saved with it, 0 tokens to reopen}'));
+  b.push(mk('  {acc b|you}  why 64 KB chunks?  {dim|· 09:03}'));
+  wrap('architect: 64 KB keeps one frame under the 128 KB pipe buffer, so a reader never blocks a writer. Larger chunks would bring the memory spikes back.',90).forEach(function(l,i){b.push(mk('       {dim|'+l+'}'))});
+  b.push(blank());
+  var c=['{b|READ AS}  {dim|your words are turned into a choice; nothing is decided yet}','',
+    '{acc b|2}  ask red-team to review first {dim|· scope: the IPC frame limits only}',
+    '{acc b|+}  keep t_016 paused until the review returns','',
+    '{btn| Confirm this }  {dim|enter}     {dim|keep typing to change it · esc to discard}',
+    '{dim|this reply costs about 600 tokens, then it is saved with the decision}'];
+  b=b.concat(card(c));
+  return frame({id:'dec-7',head1:DH,pane:'decisions › DEC-083',body:b,hint:'enter confirm the reading · keep typing to change it · tab back to the choices · esc discard',prompt:'Accept, but red-team checks only the frame limits first; keep t_016 paused until they report{acc|█}',dots:DDOTS});
 };
 
 SCREENS['dec-5-norec']=function(){
   var d=DEC[0];d.by='builder';d.task='t_012';
   var b=detailHead(d,'1 of 5');
-  b.push(mk('  {dim|scripts/migrate_0.2.7.sql → /var/data/staging.db · payload blake3 9f8a3c… · d shows the script}'));b.push(blank());
+  b.push(mk('  {dim|scripts/migrate_0.2.7.sql → /var/data/staging.db · blake3 9f8a3c… · d script · summary cached}'));b.push(blank());
   b.push(mk('  {b|WHAT IT IS}'));
   wrap('builder hit schema drift while checking the v0.2.6 to v0.2.7 migration and asks to run the script on the real staging database, which sits on the host outside the sandbox.',94).forEach(function(l){b.push(mk('  '+l))});
   b.push(blank());
@@ -324,7 +341,7 @@ SCREENS['dec-5-norec']=function(){
   c.push('{acc b|4} stop task t_012');
   b=b.concat(card(c));b.push(blank());
   b.push(mk('  {acc b|Prompt for more:} {dim|ask builder why the sandbox fixture is not enough.}'));
-  return frame({id:'dec-5',head1:DH,pane:'decisions › DEC-081',body:b,hint:'1 – 4 choose · d script · esc back to the list',prompt:true,dots:DDOTS});
+  return frame({id:'dec-5',head1:DH,pane:'decisions › DEC-081',body:b,hint:'tab / 1 – 4 choose · or type below · d script · esc back to the list',prompt:'{dim|or type here to answer in your own words}',dots:DDOTS});
 };
 
 SCREENS['dec-6-empty']=function(){
