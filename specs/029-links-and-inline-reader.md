@@ -108,7 +108,7 @@ Nothing is open. What is unproven is how the keys feel in use.
 ### 10.1 Decision: an in-tree half-block renderer, not `ink-picture`
 `ink-picture` (MIT, Ink `>=5`) would work, but it brings 136 production packages against the supply-chain gate's 60 (`ui/dev/check-deps.mjs`: six allowed packages, pinned, script-free), it fetches remote URLs itself (D-7 says Delphi never fetches an external link, and §10.3 below says the same of pictures), and its fallback to Kitty, iTerm2 and Sixel escape sequences is exactly what the operator's terminal handles worst (seams, line spacing; see the painted-mascot decision, PR #165). So:
 - **The daemon decodes.** `delphi-docs` gains decoders for PNG (every colour type and bit depth, palettes, `tRNS`, Adam7), JPEG (baseline, extended-sequential and progressive Huffman; grey and YCbCr/RGB; no arithmetic coding, 12-bit, lossless or CMYK) and GIF (first frame, transparency, interlacing). They use only `flate2` and `crc32fast`, which the crate already has; WebP and SVG are not drawn. Size limits: 16384 pixels a side, 25 million pixels for JPEG and GIF, 8 MiB of file.
-- **The console paints.** It receives at most 160 pixels a side, shrinks them to the window (box average, colour weighted by alpha), and writes two pixels to a cell: `▀` with the upper pixel as foreground and the lower as background. A pixel at least half transparent leaves the terminal's own background. A picture is at most 72 columns and 20 rows.
+- **The console paints.** It receives at most 160 pixels a side, shrinks them to the window (box average, colour weighted by alpha), and paints them in cells: in the half-block style two pixels to a cell, `▀` with the upper pixel as foreground and the lower as background; since §11 the default is the quadrant style, which splits the cell into 2x2. A pixel at least half transparent leaves the terminal's own background. A picture is at most 72 columns and 20 rows.
 - **No colour, no picture.** With `NO_COLOR` or `TERM=dumb` there is no half-block drawing; the picture stands in as `[image: alt text]`. A picture is static, so it has no clock and reduce motion (`stillMotion`) does not apply to it.
 
 ### 10.2 What the reader draws
@@ -130,3 +130,23 @@ Nothing is open. What is unproven is how the keys feel in use.
 | I3 | pictures saved with web research, per `specs/028` §11 | waits on 028 slice E2 |
 
 Unproven: how pictures look in the operator's own terminal (seams between rows are possible where a terminal spaces its lines), and decoding of unusual files in the wild (CMYK and arithmetic JPEG are refused; the tests cover files from one encoder).
+
+## 11. Amendment 029-A2: quadrant pictures, the default, with half blocks kept (operator, 2026-10-28)
+
+**Status: approved by the operator, 2026-10-28** ("let's make it the default option but allow both ... ratify them, and build it"). Built in slice Q1 below. It changes how §10.1 paints, not what is drawn or where it comes from: the daemon, the route and the safety rules of §10.3 are untouched.
+
+### 11.1 What a quadrant picture is
+- A cell is split into 2x2 quadrants and drawn with one of the sixteen quadrant glyphs (`▘▝▀▖▌▞▛▗▚▐▜▄▙▟█` and a space), a foreground colour for the covered quadrants and a background colour for the rest. A cell is about twice as tall as it is wide, so a quadrant is half a cell wide and as tall as a half-block pixel: **quadrants double the horizontal detail and keep the vertical detail** (the grid is the half-block grid made twice as wide; it is not twice as fine both ways). A picture takes the same cells across and down in either style.
+- **Choosing the glyph.** With four opaque pixels the cell takes the split into two colours, out of the seven there are (the lower right pixel stays in the background group, since a split and its mirror are one), with the least squared colour error; each group is drawn in its mean colour. A cell that is one colour, or that no split improves by at least a tenth, is a **space on a background colour**, so it has no glyph to leave a seam (the lesson of the painted mascots, PR #165). Fewer than four opaque pixels (transparency, alpha under 128): the glyph covers the opaque ones in their mean colour with nothing behind it, and a cell with none is a space.
+- The cost is colour: two colours for four pixels, where half blocks show both pixels exactly. Quadrants win on edges and fine lines; half blocks win on smooth gradients. A small picture, shown without shrinking, gains nothing from quadrants (its pixels are already coarser than a quadrant).
+
+### 11.2 The setting
+- **Quadrant is the default.** `DELPHI_PICTURE=half` (or `half-block`) at start makes half blocks the default; any other value, or none, is quadrant.
+- `/pictures` says which is in use; `/pictures quadrant` and `/pictures half` change it for the session, and the reader draws the next time it is shown. It is a console command with no daemon state: it is not saved, so a lasting choice is the environment variable. (A saved setting in the workspace, like reduce motion, is possible later; it was not asked for.)
+- `NO_COLOR` and `TERM=dumb` still draw no picture at all (§10.1).
+- **Font support is the risk.** The quadrant glyphs (U+2596 to U+259F) are in fewer fonts than the half blocks and some draw them with different metrics. The terminal cannot be asked, so the operator's eyes are the test, and `/pictures half` is the way back.
+
+### 11.3 Slices
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| Q1 | quadrant painter (`ui/src/image.ts`), `paintedCell` in the theme, the `PictureStyle` setting, `/pictures`, tests | **built** |

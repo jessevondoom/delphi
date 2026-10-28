@@ -16,7 +16,7 @@ import * as D from './decisions-pane.ts';
 import * as P from './panel.ts';
 import * as A from './archives.ts';
 import { imageRefs } from './markdown.ts';
-import { rasterOf } from './image.ts';
+import { pictureStyle, rasterOf, styleOf, usePictureStyle } from './image.ts';
 import { openExternal } from './external.ts';
 import * as O from './org.ts';
 import { noteSources, passageOf, pin, previewOf, readNotes } from './research.ts';
@@ -230,6 +230,13 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       cmd.call('session.new', { mission_id: mission })
         .then(() => setState((s) => fold(s, { method: 'event', params: { type: 'session.started', payload: {} } }, Date.now())))
         .catch((e) => note('could not start a new session: ' + (e?.message ?? JSON.stringify(e)), 'error'));
+      return;
+    }
+    if (name === '/pictures') {
+      const word = line.slice(name.length).trim().toLowerCase();
+      if (word && !/^(quadrant|half(-block)?)$/.test(word)) { note('/pictures [quadrant | half]', 'error'); return; }
+      if (word) usePictureStyle(styleOf(word));
+      note(`pictures are drawn in ${pictureStyle()} blocks${word ? '' : ' (/pictures quadrant · /pictures half)'}`, 'ok');
       return;
     }
     if (name === '/context') {
