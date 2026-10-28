@@ -117,6 +117,19 @@ Asked for by the operator on 2026-10-27. Built in one slice and approved after t
 | 6 Usage-gated (coaching, diff3, sync, watches, rewind) | deliberately not built; `delphi needs` reports every rule "not yet". Vectors and the reranker were pulled forward by the operator on 2026-10-24 (D-01) and are built |
 | 7 Deferred (federation 1 to 2, OpenAI driver) | not scheduled |
 
+## Agent registry, routing and role extensions (spec 041, approved 2026-10-27)
+
+Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by the operator 2026-10-27 (OD-1 accepted, OD-2..OD-5 recommendations followed). Nothing is built. Limits and pass bars are provisional until S4.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| S0 | report truncation of the 20-agent catalog | not started |
+| S1 | registry entry, `[domains]`, validation | not started |
+| S2 | index, `search_agent_registry`, `delphi route`, eval set | not started |
+| S3 | `[extends.<role>]`: skills, guidance, team | not started |
+| S4 | evidence run against the flat list; default-on decision | not started |
+| S5 | domain leads (spec 042) | only if the gate in §7 trips |
+
 ## Open items that are not specs
 
 - Operator: try the Narrator and the console in real terminals; create the Google OAuth client; refresh `ratified.lock` with `delphi update` after the 2026-10-24 "ratify all".
