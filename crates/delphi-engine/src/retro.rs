@@ -167,6 +167,20 @@ fn current_rules(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<Rule> {
     parse_rules(&std::fs::read_to_string(path).unwrap_or_default()).1
 }
 
+/// Every unresolved proposal of every mission in the workspace, newest first. Reads the logs and nothing else, so it is
+/// safe while the daemon holds a mission open.
+pub fn collect(ws_dir: &Path) -> Vec<LiveProposal> {
+    let mut all = Vec::new();
+    for entry in std::fs::read_dir(ws_dir.join("local/missions")).into_iter().flatten().flatten() {
+        let Some(id) = entry.file_name().to_str().map(String::from) else { continue };
+        if let Ok(events) = delphi_core::log::replay(&entry.path()) {
+            all.extend(crate::learn::live_proposals(&id, &events));
+        }
+    }
+    all.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.reference().cmp(&a.reference())));
+    all
+}
+
 /// What stands in the way of ratifying `p`, for `delphi retro show`.
 pub fn check(home: &Path, ws_dir: &Path, p: &LiveProposal) -> Vec<String> {
     problems(p, &crate::distill::privacy(ws_dir), &current_rules(home, ws_dir, p))

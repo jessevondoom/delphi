@@ -89,7 +89,7 @@ An org bundle is a directory an organization publishes so every install starts f
 
 ### Learning without memory poisoning
 
-Lessons, rules, config changes, imported skills and release-refreshed files all arrive as **proposals** and only take effect when you `/ratify` them. Always-loaded rule files stay small (D-09), and only test-verified or ratified content can be promoted. Coaching automation, diff3 updates, team sync, ambient watches and `/rewind` are deliberately not built until `delphi needs` records evidence for them (roadmap Step 6).
+Lessons, rules, config changes, imported skills and release-refreshed files all arrive as **proposals** and only take effect when you `/ratify` them; rules the Orchestrator proposes after a mission wait in `/retro`. Always-loaded rule files stay small (D-09), and only test-verified or ratified content can be promoted. Coaching automation, diff3 updates, team sync, ambient watches and `/rewind` are deliberately not built until `delphi needs` records evidence for them (roadmap Step 6).
 
 ## Install
 
