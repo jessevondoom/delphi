@@ -17,7 +17,7 @@ delphi v0.5 · /proj · decisions
 
 
 
-◐ working · 2s                                                                           esc to stop
+● working · 2s                                                                           esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 enter open card · y approve · n reject · a approve all amber · tab focus mode · esc chat
 ────────────────────────────────────────────────────────────────────────────────────────────────────

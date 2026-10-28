@@ -80,6 +80,21 @@ impl Engine {
                 m.append(EventEnvelope::new(&m.id, "budget.cap", json!({"cap": delphi_core::budget::usd_to_micro(*usd), "usd": usd, "by": by}))).await.map_err(|e| e.to_string())?;
                 Applied { key: s.key(), old: format!("{}", old), new: format!("{}", usd), text: format!("The mission's budget ceiling is now ${:.2} (it was ${:.2}).", usd, old) }
             }
+            Setting::ReduceMotion { on } => {
+                let mut o = settings_store::load(&self.ws.dir);
+                let old = o.reduce_motion;
+                o.reduce_motion = *on;
+                settings_store::save(&self.ws.dir, &o).map_err(|e| format!("could not save the setting: {}", e))?;
+                let word = |b: bool| if b { "on" } else { "off" }.to_string();
+                let text = if old == *on {
+                    format!("Reduce motion is already {}; nothing changed.", word(*on))
+                } else if *on {
+                    "Reduce motion is on: the badges, faces and spinners stand still. Undo: /reduce-motion off.".to_string()
+                } else {
+                    "Reduce motion is off: the animations are back (DELPHI_REDUCE_MOTION and NO_COLOR still stop them).".to_string()
+                };
+                Applied { key: s.key(), old: word(old), new: word(*on), text }
+            }
         };
         let _ = m.append(EventEnvelope::new(&m.id, "setting.changed", json!({"key": applied.key, "old": applied.old, "new": applied.new, "by": by, "quote": quote, "reason": reason, "suggestion": suggestion, "text": applied.text}))).await;
         Ok(applied)

@@ -20,7 +20,7 @@ How it is put together: `terminal.ts` owns stdin (bracketed paste, wheel, mouse,
 - **Knowledge deck** (`←`): the knowledge window (`archives.ts`, the same one as the narrator's `archives` view): a search box, the shelf, results and an inline reader, read through `kb.get`. The keyboard belongs to it while it shows; `←`/`→` still move between decks. The activity log (who is working, finished work, recorded changes) is read-only in the Observer (`/observe changes`, `agents`, `timeline`), so the console is for interaction and the Observer purely for watching.
 - **Keys:** `?` on an empty prompt lists them. `Esc` clears the prompt, then stops the running task; `Ctrl+C` leaves at once when nothing would be lost and otherwise asks once; `Ctrl+D` leaves on an empty prompt.
 - **Narrator** (`delphi observe`, or `/observe`): see `skills/tui-design` §4. `delphi observe --once` prints one frame without a terminal.
-- **Environment:** `NO_COLOR` or `TERM=dumb` (no colour, rail instead of tint, static badges), `DELPHI_REDUCE_MOTION=1` (static badges), `DELPHI_THEME=dark|light` (overrides the terminal's answer), `DELPHI_NO_MOUSE=1`, `DELPHI_NO_TITLE=1`.
+- **Environment:** `NO_COLOR` or `TERM=dumb` (no colour, rail instead of tint, static badges), `DELPHI_REDUCE_MOTION=1` (no animation at all; the saved form is `/reduce-motion`, which also works by asking), `DELPHI_THEME=dark|light` (overrides the terminal's answer), `DELPHI_NO_MOUSE=1`, `DELPHI_NO_TITLE=1`.
 
 ## Terminals, keys and limits
 

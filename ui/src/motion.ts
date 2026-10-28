@@ -19,9 +19,19 @@ export const STRIP_ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 
 /** What a badge shows: the library's activity name, and the console state it belongs to (eye colour, fallback faces). */
 export type Face = { frame: string; state: AgentState };
 
-/** No animation: `DELPHI_REDUCE_MOTION=1`, `NO_COLOR` and `TERM=dumb` pin every badge to its static frame. */
-export const stillMotion = (env: Record<string, string | undefined> = process.env): boolean =>
-  env.DELPHI_REDUCE_MOTION === '1' || capabilities(env).color === 'none';
+/**
+ * No animation: `DELPHI_REDUCE_MOTION=1`, `NO_COLOR`, `TERM=dumb`, or the operator's reduce-motion setting (`asked`).
+ * Every animation, now or later, takes its answer from here (AGENTS.md): faces, spinners, pulses, anything on a timer.
+ */
+export const stillMotion = (env: Record<string, string | undefined> = process.env, asked = false): boolean =>
+  asked || env.DELPHI_REDUCE_MOTION === '1' || capabilities(env).color === 'none';
+
+/** The "working" spinner. Standing still it is one fixed glyph: the words beside it already say the work is going on. */
+const SPIN = ['◐', '◓', '◑', '◒'];
+export const spinner = (now: number, still: boolean): string => (still ? '●' : SPIN[Math.floor(now / 250) % SPIN.length]!);
+
+/** A two-state flash (a live dot, a shimmer): steady in its first state when motion is reduced. */
+export const pulseOn = (now: number, still: boolean, everyMs = 600): boolean => still || Math.floor(now / everyMs) % 2 === 0;
 
 /** Roles blink out of step, so the strip does not wink all at once. */
 const phase = (role: string) => [...role].reduce((n, c) => n + c.charCodeAt(0) * 31, 0) % BLINK_EVERY_MS;
@@ -47,5 +57,5 @@ export const stripFaces = (agents: Record<string, Agent>, roles: string[], now: 
  * (a second when idle, a quarter second while something runs, for the spinner). An idle window does not repaint.
  */
 export function tickKey(agents: Record<string, Agent>, roles: string[], now: number, still: boolean, running: boolean): string {
-  return `${Math.floor(now / (running ? 250 : 1000))}|${stripFaces(agents, roles, now, still).map((f) => f.frame).join(',')}`;
+  return `${Math.floor(now / (running && !still ? 250 : 1000))}|${stripFaces(agents, roles, now, still).map((f) => f.frame).join(',')}`;
 }
