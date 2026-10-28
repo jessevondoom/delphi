@@ -1,5 +1,5 @@
 // The dashboard view (`specs/030`): sessions as chips, everything running now grouped by session (earlier sessions'
-// running work stays on screen), what needs the operator, the pace, and the latest happenings in the space left.
+// running work stays on screen), what needs the operator, how the providers are, and the pace.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyArch } from '../src/archives.ts';
@@ -41,11 +41,11 @@ test('work is grouped by the session that asked for it: the current one first, e
   assert.match(text, /session 3 \(current\)[\s\S]*session 2 \(earlier, still running\)/);
   assert.match(text, /► .*t_2 .*2:14 .*waiting for a model: claude is out/, 'what is stuck says why, with how long it has run');
   assert.match(text, /t_1 .*build/, 'a build keeps its tag');
-  assert.match(text, /✔ t_3 +s3 +summarise the design +→ +Use a visibility timeout\./, 'finished work says which session asked and what it said');
+  assert.ok(!/finished lately|── recent|Use a visibility timeout/.test(text), 'neither finished work nor the feed is on the dashboard');
   assert.match(text, /● session 3 · 3 asks · 1 running/, 'the current session is a chip');
 });
 
-test('a mission with no sessions yet is one group; idle says so; the pace and the feed fill the space', () => {
+test('a mission with no sessions yet is one group; idle says so; the pace is the last section and nothing follows it', () => {
   const quiet = world();
   quiet.sessions = []; quiet.tasks = {}; quiet.nodes = {}; quiet.pending_approvals = {}; quiet.councils = []; quiet.pending_proposals = 0;
   const text = observeFrame(model(quiet), 100, 34).map(plain).join('\n');
@@ -53,7 +53,7 @@ test('a mission with no sessions yet is one group; idle says so; the pace and th
   assert.match(text, /this mission · 0 asks/);
   assert.match(text, /tokens\/min/);
   assert.match(text, /cache 42%/);
-  assert.match(text, /── recent/);
+  assert.ok(!/── recent|── finished lately/.test(text), 'no feed and no finished list');
 });
 
 test('hostile text in a prompt or a feed line cannot widen the screen or move the cursor', () => {
@@ -79,4 +79,25 @@ test('goldens: the dashboard at 80x24, 100x34 and 40x12, busy and idle', () => {
       assert.ok(r.ok, r.message);
     }
   }
+});
+
+test('providers: a ring and a bar for the share of each provider\'s models in use; the pace switch only with more than one', () => {
+  const st = world();
+  st.providers = [
+    { endpoint: 'claude', family: 'claude', models: 4, cooling: 0, out: 0, back_ms: null },
+    { endpoint: 'gemini', family: 'gemini', models: 4, cooling: 1, out: 1, back_ms: NOW + 90 * 60_000 },
+    { endpoint: 'ollama', family: 'local', models: 1, cooling: 0, out: 1, back_ms: null },
+  ];
+  const text = observeFrame(model(st), 100, 34).map(plain).join('\n');
+  assert.match(text, /── providers ─+/);
+  assert.match(text, /● claude\s+▓{12}\s+4\/4 models/, 'all in use: a full ring and bar');
+  assert.match(text, /◑ gemini\s+▓{6}░{6}\s+2\/4 models · 1 out of quota · back in 1h 30m|◑ gemini\s+▓{6}░{6}\s+2\/4 models · 1 out of quota/, 'half in use: a half ring');
+  assert.match(text, /○ ollama\s+░{12}\s+0\/1 model · 1 out of quota/, 'none in use: an empty ring');
+  assert.match(text, /○ frugal\s+·\s+◉ balanced\s+·\s+○ sprint\s+\/pace sprint · \/pace frugal/, 'the switch shows where it stands');
+  assert.match(observeFrame(model({ ...st, pace_mode: 'sprint' }), 100, 34).map(plain).join('\n'), /○ frugal\s+·\s+○ balanced\s+·\s+◉ sprint\s+work goes where it runs freely/);
+  st.providers = st.providers.slice(0, 1);
+  const one = observeFrame(model(st), 100, 34).map(plain).join('\n');
+  assert.match(one, /● claude/);
+  assert.ok(!/sprint|frugal/.test(one), 'one provider has nothing to balance');
+  for (const [w, h] of [[80, 24], [40, 12], [28, 9]] as const) assert.equal(observeFrame(model(world()), w, h).length, h);
 });

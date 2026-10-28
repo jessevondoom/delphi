@@ -21,9 +21,42 @@
 use crate::pool::{Entry, State};
 use delphi_adapter::config::{Config, PoolKey};
 
+/// How the operator has asked the team to be spread over the providers for now (`specs/035` D-21). It decides only which
+/// pair serves a request among those at the wanted tier; it never moves a request to a lower tier.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Pace {
+    /// The usual order: the role's own family first, then the operator's failover order.
+    #[default]
+    Balanced,
+    /// Fastest progress: a provider that is being throttled goes last, so work goes where it will run now.
+    Sprint,
+    /// Token efficiency: the subscription and local providers go first, so the metered ones are kept for when they are needed.
+    Frugal,
+}
+
+impl Pace {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Pace::Balanced => "balanced",
+            Pace::Sprint => "sprint",
+            Pace::Frugal => "frugal",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Pace> {
+        match s.trim().to_lowercase().as_str() {
+            "balanced" | "default" | "normal" | "off" => Some(Pace::Balanced),
+            "sprint" | "fast" | "speed" => Some(Pace::Sprint),
+            "frugal" | "efficient" | "save" => Some(Pace::Frugal),
+            _ => None,
+        }
+    }
+}
+
 /// What a dispatch asks for.
 #[derive(Debug, Clone, Default)]
 pub struct RouteRequest {
+    /// The operator's pace for now.
+    pub pace: Pace,
     pub role: String,
     /// `fast`, `workhorse` or `frontier`.
     pub tier: String,
@@ -194,7 +227,16 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
     let policy_index = |k: &PoolKey| if explicit { 0 } else { cfg.endpoints_for(&k.family).iter().position(|e| e.id == k.endpoint_id).unwrap_or(usize::MAX) };
     // After the preferred family the operator's failover order decides (`specs/035` D-2); an explicit pool order is the operator's word on it too.
     let failover = |k: &PoolKey| if explicit { 0 } else { cfg.failover_rank(&k.family) };
-    let order = |k: &PoolKey, i: usize| (avoided(k) as u8, (req.prefer_family.as_deref() != Some(k.family.as_str())) as u8, failover(k), policy_index(k), i);
+    // The pace (`specs/035` D-21) sits after the avoided families and before the preferred one. It only reorders pairs: the tier asked
+    // for still decides the ideal, so a pace never lowers a request.
+    let pace_rank = |k: &PoolKey| -> u8 {
+        match req.pace {
+            Pace::Balanced => 0,
+            Pace::Sprint => find(k).is_some_and(|e| e.state != State::Available || !e.throttles.is_empty()) as u8,
+            Pace::Frugal => !cfg.endpoint(&k.endpoint_id).is_some_and(|e| e.is_metered_by_subscription() || e.is_local()) as u8,
+        }
+    };
+    let order = |k: &PoolKey, i: usize| (avoided(k) as u8, pace_rank(k), (req.prefer_family.as_deref() != Some(k.family.as_str())) as u8, failover(k), policy_index(k), i);
     let mut by_preference = eligible.clone();
     by_preference.sort_by_key(|(i, k)| order(k, *i));
 
@@ -383,6 +425,37 @@ order = { claude = ["direct", "bedrock"] }
 
     fn picked(r: &Route) -> String {
         r.key().map(|k| format!("{}/{}", k.endpoint_id, k.model_id)).unwrap_or_else(|| "none".into())
+    }
+
+    #[test]
+    fn the_pace_reorders_providers_at_the_wanted_tier_and_never_lowers_it() {
+        let c = cfg();
+        let throttled = Entry { throttles: vec![NOW - 30], ..entry("direct", "sonnet-x", State::Available, None) };
+        let at = |pace: Pace, state: &[Entry], tier: &str| resolve_route(&c, state, NOW, &RouteRequest { pace, ..req("builder", tier) });
+        // Balanced is the usual order, throttled or not.
+        assert_eq!(picked(&at(Pace::Balanced, std::slice::from_ref(&throttled), "workhorse")), "direct/sonnet-x");
+        // Sprint moves off a provider that is being throttled, to the same tier elsewhere.
+        assert_eq!(picked(&at(Pace::Sprint, std::slice::from_ref(&throttled), "workhorse")), "bedrock/bedrock-sonnet-x");
+        assert_eq!(picked(&at(Pace::Sprint, &[], "workhorse")), "direct/sonnet-x", "nothing strained: the usual order");
+        // Frugal puts the subscription provider first; the model it serves is at the wanted tier.
+        let r = at(Pace::Frugal, &[], "workhorse");
+        assert_eq!(picked(&r), "agy-sub/gem-agy");
+        assert!(matches!(r, Route::Target { .. }), "no card, no step down: {:?}", r);
+        // Whatever the pace, a model that is out is still replaced the usual way, never by a weaker one while an equal one is up.
+        for pace in [Pace::Balanced, Pace::Sprint, Pace::Frugal] {
+            let r = at(pace, &down(&c, &["opus-x"]), "frontier");
+            assert!(!matches!(r, Route::Weaker { .. } | Route::NoModel { .. }), "{:?} {:?}", pace, r);
+        }
+    }
+
+    #[test]
+    fn a_pace_is_named_by_the_words_an_operator_would_try() {
+        for (word, want) in [("sprint", Pace::Sprint), ("FRUGAL", Pace::Frugal), ("balanced", Pace::Balanced), ("default", Pace::Balanced), ("fast", Pace::Sprint)] {
+            assert_eq!(Pace::parse(word), Some(want), "{}", word);
+            assert_eq!(Pace::parse(want.as_str()), Some(want));
+        }
+        assert_eq!(Pace::parse("reckless"), None);
+        assert_eq!(Pace::default(), Pace::Balanced);
     }
 
     #[test]

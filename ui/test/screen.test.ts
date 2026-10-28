@@ -131,7 +131,7 @@ test('the left deck is the knowledge window: titled for it, its results drawn, a
   assert.match(rest[1]!, /· knowledge$/, 'the title row names the pane');
   assert.ok(!rest.join('\n').includes('weighing'), 'what agents think is not drawn');
   assert.match(rest.join('\n'), /type to search the knowledge base/, 'the prompt row is the key hint');
-  const arch = { ...A.emptyArch(), q: 'retry', searched: 'retry', hits: [{ path: 'specs/003.md', collection: 'specs', trust: 'trusted', heading: 'Retry ladder', preview: 'three attempts, then escalate' }] };
+  const arch = { ...A.emptyArch(), q: 'retry', searched: 'retry', hits: [{ path: 'specs/003.md', collection: 'specs', kind: 'spec', updated: '', trust: 'trusted', heading: 'Retry ladder', preview: 'three attempts, then escalate' }] };
   const found = frame(model({ deck: 0, arch }), 100, 30).map(plain).join('\n');
   assert.match(found, /Retry ladder/);
   assert.match(found, /specs\/003\.md/);

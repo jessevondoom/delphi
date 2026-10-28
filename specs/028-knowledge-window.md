@@ -104,10 +104,11 @@ The same routes are also served to the narrator over its socket as the read-only
 
 | Endpoint | Returns |
 | :-- | :-- |
-| `GET /v1/search?q=&limit=&collection=&rerank=0` | ranked results: `pointer`, `path`, `collection`, `trust`, `heading`, `preview`, `start_line`, `end_line`, `blake3`, `score`; and `mode` (`hybrid` or `lexical` when no model is installed) |
+| `GET /v1/search?q=&limit=&collection=&kind=&facets=1&rerank=0` | ranked results: `pointer`, `path`, `collection`, `kind`, `updated`, `trust`, `heading`, `preview`, `start_line`, `end_line`, `blake3`, `score`; and `mode` (`hybrid` or `lexical` when no model is installed). `kind` (`specs/043` §4) filters after ranking; `facets=1` adds `facets` (the results of each kind among up to 200 ranked candidates, counted before the `kind` filter), `candidates` and `capped` |
 | `GET /v1/doc?path=` | the document's text, its `links` (each resolved to a logical path, or marked `missing`, `anchor`, `external`, `other`) and whether it changed since it was indexed |
 | `GET /v1/collections` | each collection with its document count and newest change |
-| `GET /v1/documents?collection=&limit=&offset=` | documents, newest first |
+| `GET /v1/kinds` | the visible documents counted by kind (`specs/043` §4), with the newest change of each |
+| `GET /v1/documents?collection=&kind=&limit=&offset=` | documents, newest first, each with its `kind` |
 | `GET /v1/health` | counts, the model in use, whether a reranker is installed |
 
 - **Read-only:** only `GET` and `HEAD`; nothing is written to the workspace. A document is served only if the index lists it as visible, by logical path, so `..` and absolute paths find nothing.

@@ -11,4 +11,4 @@ delphi · epic
 ▌  ○ audit
  ↑ ↓  more           pace  ▁▁▂▃▄▆█▇▅▄▃▂
 ────────────────────────────────────────
-1 running  ·  71.5k t… ○ ○ ● ○ ○ ○ ○ ○ ○
+1 running  ·  71.5k tokens   ○ ○ ● ○ ○ ○
