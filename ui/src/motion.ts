@@ -44,8 +44,22 @@ export const stripFaces = (agents: Record<string, Agent>, roles: string[], now: 
 
 /**
  * Changes exactly when something on screen must be redrawn because time passed: a badge frame, or the coarse clock
- * (a second when idle, a quarter second while something runs, for the spinner). An idle window does not repaint.
+ * (a second when idle, a quarter second while something runs, for the spinner, and the typing bubble's own frame). An idle window does not repaint.
  */
-export function tickKey(agents: Record<string, Agent>, roles: string[], now: number, still: boolean, running: boolean): string {
-  return `${Math.floor(now / (running ? 250 : 1000))}|${stripFaces(agents, roles, now, still).map((f) => f.frame).join(',')}`;
+export function tickKey(agents: Record<string, Agent>, roles: string[], now: number, still: boolean, running: boolean, typing = ''): string {
+  return `${Math.floor(now / (running ? 250 : 1000))}|${typing}|${stripFaces(agents, roles, now, still).map((f) => f.frame).join(',')}`;
+}
+
+/** The typing bubble (the operator sent a prompt, no reply has started): it waits a random 500-850 ms, then three dots pulse in turn. */
+export const TYPING_MIN_MS = 500;
+export const TYPING_SPAN_MS = 350;
+export const TYPING_STEP_MS = 300;
+
+/** The wait for one prompt. Random per prompt but a pure function of its id, so a repaint never changes it and a test can pin it. */
+export const typingDelay = (id: number): number => TYPING_MIN_MS + (Math.imul(id + 1, 2654435761) >>> 0) % (TYPING_SPAN_MS + 1);
+
+/** Which frame the typing bubble shows `now`: -1 while it is still waiting, then 0..3 (dot 0, 1, 2 lit, then a rest). */
+export function typingFrame(since: number, id: number, now: number): number {
+  const t = now - since - typingDelay(id);
+  return t < 0 ? -1 : Math.floor(t / TYPING_STEP_MS) % 4;
 }
