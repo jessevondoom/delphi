@@ -67,7 +67,7 @@ pub async fn ratify_fact(deps: &Deps<'_>, eff: &Effective, workspace: &Path, sub
             write_dry_run(workspace, &fact_id(&done.report.findings.claim), &ev);
         }
         ValidatorMode::Ratify => {
-            let store = FactStore::new(workspace);
+            let store = FactStore::new(workspace).with_batch(&crate::fact_audit::current_batch(&state_dir(workspace)));
             match done.report.verdict {
                 Verdict::Ratifiable | Verdict::Attributed | Verdict::Refuted => match store.record(&done.report, now_rfc3339, mission, &sub.needed_for) {
                     Ok(w) => done.written = Some(w),
