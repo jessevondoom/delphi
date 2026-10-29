@@ -112,7 +112,58 @@ pub fn check_provenance(m: &Mapping) -> Vec<String> {
             errs.push("`tags` must be a list of non-empty strings".into());
         }
     }
+    errs.extend(check_entry_meta(m));
     errs
+}
+
+/// The kinds of a memory entry (`specs/050` ML-1).
+pub const KINDS: [&str; 3] = ["fact", "episode", "procedure"];
+/// The optional entry-metadata keys. They are metadata: they never count toward a rule file's byte cap (ML-1, OD-2).
+pub const ENTRY_META_KEYS: [&str; 4] = ["kind", "created", "last_confirmed", "valid_until"];
+
+/// `YYYY-MM-DD`, or a full UTC timestamp, with a real month and day.
+fn entry_date_ok(s: &str) -> bool {
+    let re = regex::Regex::new(r"^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}:\d{2}(\.\d+)?Z)?$").unwrap();
+    re.captures(s).is_some_and(|c| matches!(c[2].parse::<u32>(), Ok(1..=12)) && matches!(c[3].parse::<u32>(), Ok(1..=31)))
+}
+
+/// Validate the optional ML-1 fields: `kind` is one of [`KINDS`], dates are dates, and neither `last_confirmed` nor
+/// `valid_until` is before `created`. A file without them is valid: the kind then comes from its store.
+pub fn check_entry_meta(m: &Mapping) -> Vec<String> {
+    let mut errs = Vec::new();
+    check_enum(m, "kind", &KINDS, &mut errs);
+    for k in ["created", "last_confirmed", "valid_until"] {
+        if has(m, k) && !get_str(m, k).is_some_and(entry_date_ok) {
+            errs.push(format!("`{}` must be a date (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)", k));
+        }
+    }
+    if let Some(created) = get_str(m, "created").filter(|c| entry_date_ok(c)) {
+        for k in ["last_confirmed", "valid_until"] {
+            if get_str(m, k).is_some_and(|v| entry_date_ok(v) && v[..10] < created[..10]) {
+                errs.push(format!("`{}` is before `created`", k));
+            }
+        }
+    }
+    errs
+}
+
+/// The kind a staged note has when it does not say: what the capture trigger records (`specs/050` ML-1). An agent's own
+/// `note` is a claim about the world (`fact`); everything the daemon saw happen is an `episode`.
+pub fn kind_for_trigger(trigger: &str) -> &'static str {
+    if trigger == "agent_note" {
+        "fact"
+    } else {
+        "episode"
+    }
+}
+
+/// The kind an entry has when its frontmatter does not say: rules, lessons and skills are `procedure`.
+pub fn default_kind(zone: &str, trigger: Option<&str>) -> &'static str {
+    match (zone, trigger) {
+        ("staged", Some(t)) => kind_for_trigger(t),
+        ("staged", None) => "fact",
+        _ => "procedure",
+    }
 }
 
 fn check_enum(m: &Mapping, key: &str, allowed: &[&str], errs: &mut Vec<String>) {
@@ -157,5 +208,33 @@ mod tests {
         let s = GOOD.replace("status: draft", "status: superseded");
         let errs = check_provenance(&parse(&s).unwrap().frontmatter.unwrap());
         assert_eq!(errs.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod entry_meta_tests {
+    use super::*;
+
+    fn fm(yaml: &str) -> Mapping {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn entry_metadata_is_optional_and_checked_when_present() {
+        assert!(check_entry_meta(&fm("id: x\n")).is_empty(), "old entries stay valid");
+        assert!(check_entry_meta(&fm("kind: fact\ncreated: 2026-10-01\nlast_confirmed: 2026-10-20\nvalid_until: 2027-01-01T00:00:00Z\n")).is_empty());
+        assert!(check_entry_meta(&fm("kind: opinion\n")).iter().any(|e| e.contains("kind")));
+        assert!(check_entry_meta(&fm("created: yesterday\n")).iter().any(|e| e.contains("created")));
+        assert!(check_entry_meta(&fm("created: 2026-13-40\n")).iter().any(|e| e.contains("created")));
+        assert!(check_entry_meta(&fm("created: 2026-10-10\nvalid_until: 2026-10-01\n")).iter().any(|e| e.contains("before `created`")));
+        assert!(check_entry_meta(&fm("last_confirmed: 5\n")).iter().any(|e| e.contains("last_confirmed")));
+    }
+
+    #[test]
+    fn kinds_default_from_the_store_and_the_trigger() {
+        assert_eq!(default_kind("agents", None), "procedure");
+        assert_eq!(default_kind("memory", None), "procedure");
+        assert_eq!(default_kind("staged", Some("agent_note")), "fact");
+        assert_eq!(default_kind("staged", Some("denied_card")), "episode");
     }
 }

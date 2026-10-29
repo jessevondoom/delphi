@@ -292,8 +292,15 @@ pub fn envelope_errors(text: &str) -> Vec<String> {
 
 pub fn cap_errors(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if text.len() > RULE_BYTES {
-        out.push(format!("{} bytes exceeds the {}-byte cap", text.len(), RULE_BYTES));
+    // The entry-metadata lines (`specs/050` ML-1, OD-2) are metadata: they do not count toward the byte cap.
+    let meta_bytes = if let Some(rest) = text.strip_prefix("---\n") {
+        let head_end = rest.find("\n---\n").map_or(0, |i| i + 4);
+        text[..head_end].lines().filter(|l| crate::frontmatter::ENTRY_META_KEYS.iter().any(|k| l.strip_prefix(k).is_some_and(|r| r.starts_with(':')))).map(|l| l.len() + 1).sum()
+    } else {
+        0
+    };
+    if text.len() - meta_bytes > RULE_BYTES {
+        out.push(format!("{} bytes exceeds the {}-byte cap", text.len() - meta_bytes, RULE_BYTES));
     }
     let doc = match frontmatter::parse(text) {
         Ok(d) => d,
@@ -398,6 +405,18 @@ mod tests {
         assert!(run("provenance", "no frontmatter\n").fails[0].contains("missing"));
         assert!(!run("handoff", "handoff_id: x\n").passed());
         assert!(!run("rules", "---\nactive_rules: 1\n---\n### r\nbody\n").passed());
+    }
+
+    #[test]
+    fn entry_metadata_does_not_count_toward_the_byte_cap() {
+        let pad = "p".repeat(300);
+        let rule = |n: usize| (0..n).map(|i| format!("### `[H-{i}]` X\n- **T:** {pad}\n- **D:** b\n- **F:** c\n")).collect::<String>();
+        let bare = format!("---\nactive_rules: 17\n---\n{}", rule(17));
+        assert!(bare.len() > 5600 && bare.len() < 6144, "{}", bare.len());
+        let meta = "kind: procedure\ncreated: 2026-10-01\nlast_confirmed: 2026-10-20\nvalid_until: 2027-01-01\n".repeat(8);
+        let with = bare.replacen("active_rules: 17\n", &format!("active_rules: 17\n{}", meta), 1);
+        assert!(with.len() > 6144 && cap_errors(&with).iter().all(|e| !e.contains("-byte cap")), "metadata is not counted: {:?}", cap_errors(&with));
+        assert!(cap_errors(&format!("{}{}", bare, "z".repeat(600))).iter().any(|e| e.contains("-byte cap")), "prose still is");
     }
 
     #[test]

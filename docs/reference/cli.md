@@ -172,6 +172,16 @@ The wakes the daemon is keeping for roles.
     [--mission <id>] [--workspace <name>] [--home <dir>]
 ```
 
+### `delphi validation`
+
+Score the labelled claim set: counts and rates only.
+
+```
+  delphi validation score [--set <file>] [--results <file>] [--home <dir>]
+```
+
+Operator-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run. With --results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation-set.md.
+
 ### `delphi needs`
 
 What the roadmap is waiting on evidence for.

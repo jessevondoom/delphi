@@ -244,7 +244,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 049 | CX5 | structured session digest (amends 030 §4.3) | not started |
 | 049 | CX6 | compaction threshold arms; default decisions | not started |
 | 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | built: `delphi-engine/src/memory_audit.rs` lists every memory write path with its proof tests; `delphi lint --repo` rule `memory-write-sites` fails on an unlisted write or a missing proof |
-| 050 | ML2 | entry types and dates, schemas | not started |
+| 050 | ML2 | entry types and dates, schemas | built: `kind`/`created`/`last_confirmed`/`valid_until` validated in `frontmatter.rs`, written on staged notes, excluded from the rule byte cap, `schemas/memory-entry.schema.json` |
 | 050 | ML3 | validity, stale list in `/retro`, type-aware selection | not started |
 | 050 | ML4 | supersession candidates and ratification | not started |
 | 050 | ML5 | trace mining report; wires 045 T11 / H8 | not started |
@@ -259,7 +259,7 @@ Approved by the operator 2026-10-28 with the revision in §23 (aligned with 052;
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels on handoff-pointer slices, the not-validated-is-a-lead prompt rule, advisory skill, `validator` role entry with `context/facts/**` read-deny) built 2026-10-28; the §8 record moves to V2; search-result labels shipped with KS1; V1b scoring: the operator finished the labelled set 2026-10-28 (040 §23.6); needs an operator-run scoring command and the §19.6 Council pass |
-| V1b | `delphi validation score` (operator-run, counts only; D-11) | not started (after V1a) |
+| V1b | `delphi validation score` (operator-run, counts only; D-11) | built 2026-10-28 (`delphi validation score [--set] [--results]`: counts and rates only, refuses in an agent seat, no claim text in output, errors or logs; set and results formats in `docs/reference/validation-set.md` and `schemas/validation-set.schema.json`); the operator's real set is not read by agents; no validator exists yet, so scoring takes a results file; §19.6 Council pass still gates V2b |
 | V2a | daemon fetcher with snapshots, `context/facts/**` zone | fetcher built 2026-10-28 (`delphi-engine::fact_fetch`: SSRF checks on every hop with pinned addresses, size cap, cross-origin redirects recorded not followed, text-only, hash-pinned snapshots under `<home>/validation/snapshots`, `Tainted` text and opaque `Pointer`, cloaking check); the zone and read-deny were V1a's; not yet called by any tool (V2b) |
 | V2b | `check fact`, `ratify_fact`, stamp L3 `web_corroborated` | not started; stand-in Council pass done (040 §24, REVISE); amendments are acceptance tests |
 | V2c | latch, audit cards, report, retract, hash chain | not started |

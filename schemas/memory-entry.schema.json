@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://delphi.dev/schemas/memory-entry.schema.json",
+  "title": "Delphi memory entry metadata",
+  "description": "The optional entry-type and date fields (specs/050 ML-1) in the frontmatter of a staged note, a lesson file or a rules file. Every field is optional; an entry without them stays valid and its kind comes from its store (rules, lessons and skills are `procedure`; a staged note is `fact` when an agent wrote it with `note` and `episode` otherwise). Other frontmatter keys (specs/001 section 5) are allowed. Implemented by `delphi-engine/src/frontmatter.rs` (`check_entry_meta`); the program also checks that `last_confirmed` and `valid_until` are not before `created`. These lines do not count toward a rules file's byte cap.",
+  "type": "object",
+  "properties": {
+    "kind": { "enum": ["fact", "episode", "procedure"] },
+    "created": { "$ref": "#/$defs/date" },
+    "last_confirmed": { "$ref": "#/$defs/date" },
+    "valid_until": { "$ref": "#/$defs/date" }
+  },
+  "$defs": {
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])(T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z)?$"
+    }
+  }
+}
