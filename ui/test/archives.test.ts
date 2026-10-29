@@ -167,7 +167,7 @@ test('a result says when its provenance is not the usual', () => {
   assert.equal(A.statusLabel({ trust: 'user_ratified', knowledge: 'validated', vouched: 'acme' }), 'validated · vouched by acme');
   assert.equal(A.statusLabel({ trust: 'user_ratified', knowledge: 'contested' }), 'contested');
   const a = A.gotHits(type(shelf(), 'zebra'), 'zebra', { results: [{ path: 'specs/web.md', collection: 'specs', kind: 'spec', trust: 'external_untrusted', status: 'active', heading: '', preview: 'zebra from the web' }], took_ms: 10, mode: 'lexical' });
-  assert.match(A.view(a, 100, 27, { dark: true }).map(plain).join('\n'), /spec · noted/);
+  assert.match(A.view(a, 100, 27, { dark: true }).map(plain).join('\n'), /spec · ○ noted/);
 });
 
 test('tab walks the kind chips, and a search in progress is run again with that kind', () => {
@@ -343,16 +343,16 @@ test('the results page: a count with its cost, the kind chips, a best-match card
   const t = shown(found());
   assert.match(t, /5 results · 0\.04 s · 0 tokens/);
   assert.match(t, /show {2}● all 14 {3}○ research 5 {3}○ docs 4 {3}○ specs 3 {3}○ lessons 1 {3}○ missions 1/);
-  assert.match(t, /BEST MATCH\s+research · noted · edited 2 d/);
+  assert.match(t, /BEST MATCH\s+research · ○ noted · edited 2 d/);
   assert.match(t, /knowledge\/web\/en\.wikipedia\.org\/byzantine-fault-tolerance\.md › Overview/);
   assert.match(t, /A Byzantine fault is a condition/);
   assert.ok(!t.includes('Colour themes'), 'the card holds the best sentences only');
   assert.match(t, /lines 12–31/);
   assert.match(t, /enter read/);
-  assert.match(t, / 2 {2}knowledge\/web\/arxiv\.org\/castro-liskov-pbft.md › Abstract\s+research\s+noted\s+2 d/);
-  assert.match(t, / 3 {2}context\/lessons\/council-deadlock\.md › Model-family tiebreakers\s+lesson\s+noted\s+5 d/);
-  assert.match(t, / 4 {2}context\/reference\/council\.md › Quorum and votes\s+docs\s+noted\s+9 d/);
-  assert.match(t, / 5 {2}specs\/003-collaboration-and-council\.md › 4 Quorum\s+spec\s+validated\s+2 w/);
+  assert.match(t, / 2 {2}knowledge\/web\/arxiv\.org\/castro-liskov-pbft.md › Abstract\s+research\s+○ noted\s+2 d/);
+  assert.match(t, / 3 {2}context\/lessons\/council-deadlock\.md › Model-family tiebreake\S*\s+lesson\s+○ noted\s+5 d/);
+  assert.match(t, / 4 {2}context\/reference\/council\.md › Quorum and votes\s+docs\s+○ noted\s+9 d/);
+  assert.match(t, / 5 {2}specs\/003-collaboration-and-council\.md › 4 Quorum\s+spec\s+● validated\s+2 w/);
   assert.ok(!/ 1 {2}knowledge/.test(t), 'the best match is not repeated in the list');
   assert.match(t, /shift\+tab {2}expand/);
 });
@@ -368,16 +368,16 @@ test('the card is selected first, the list follows, and the kind is always print
   assert.match(shown({ ...found(), kind: 'lesson' }), /○ research 5.*● lessons 1/, 'the active chip is filled, the others keep their counts');
 });
 
-test('under 90 columns the edited column goes, under 80 the status column goes', () => {
+test('under 90 columns the edited column goes, under 80 the status word goes to its glyph', () => {
   const a = A.gotHits(type(shelf(), 'zebra'), 'zebra', { results: [
     { path: 'specs/a.md', kind: 'spec', trust: 'internal_generated', updated: day(2), heading: '', preview: 'zebra one' },
     { path: 'specs/b.md', kind: 'spec', trust: 'internal_generated', updated: day(3), heading: '', preview: 'zebra two' },
     { path: 'specs/web.md', kind: 'spec', trust: 'external_untrusted', updated: day(4), heading: '', preview: 'zebra from the web' }], facets: { spec: 3 } });
   const row = (w: number, p: string) => shown(a, w, 30).split('\n').find((l) => l.includes(p))!;
-  assert.match(row(100, 'specs/web.md'), /spec\s+noted\s+4 d\s*$/);
-  assert.match(row(85, 'specs/web.md'), /spec\s+noted\s*$/);
+  assert.match(row(100, 'specs/web.md'), /spec\s+○ noted\s+4 d\s*$/);
+  assert.match(row(85, 'specs/web.md'), /spec\s+○ noted\s*$/);
   assert.match(row(100, 'specs/b.md'), /spec\s+3 d\s*$/, 'the daemon has said nothing of a document: no status is invented');
-  assert.ok(!/noted/.test(row(70, 'specs/web.md')) && /spec/.test(row(70, 'specs/web.md')));
+  assert.ok(!/noted/.test(row(70, 'specs/web.md')) && /spec +○\s*$/.test(row(70, 'specs/web.md')), 'under 80 the glyph stays and the word goes');
 });
 
 test('golden screens: results with the best match, at 100x34 and 80x24', () => {
@@ -515,4 +515,13 @@ test('shift+tab from a thin result carries the query into the expand box and sta
   assert.deepEqual(r.action, { t: 'none' }, 'nothing is started or sent');
   assert.equal(r.a.research, null);
   assert.match(text(r.a), /›\s+byzantine/);
+});
+
+test('every status has its own glyph, and the reader says the status and age of what it opened', () => {
+  const g = (k: string) => plain(A.view(A.gotHits(type(shelf(), 'zebra'), 'zebra', { results: [{ path: 'specs/z.md', kind: 'spec', trust: 'internal_generated', knowledge_status: k, updated: day(3), heading: '', preview: 'zebra' }] }), 100, 27, { dark: true }, undefined, NOW).join('\n').match(/spec · (\S) /)![1]!);
+  const glyphs = ['noted', 'checking', 'validated', 'contested', 'disproved', 'retired'].map(g);
+  assert.equal(new Set(glyphs).size, 6, `no two statuses share a glyph: ${glyphs}`);
+  let a = A.gotHits(type(shelf(), 'zebra'), 'zebra', { results: [{ path: 'bundles/acme/x.md', kind: 'docs', trust: 'external_untrusted', knowledge_status: 'validated', vouched_by: 'acme', updated: day(2), heading: '', preview: 'zebra' }] });
+  a = A.gotDoc(a, { path: 'bundles/acme/x.md', collection: 'bundles', trust: 'external_untrusted', text: '# X\n' }, null, 100);
+  assert.match(plain(A.view(a, 100, 27, { dark: true }, undefined, NOW).join('\n')), /bundles · ● validated · vouched by acme · edited 2 d/);
 });

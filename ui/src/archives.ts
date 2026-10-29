@@ -16,7 +16,7 @@ export type Shelf = {
   stats: { documents: number; passages: number; vectors: number } | null;
 };
 /** One document in the reader, with where the operator is in it. */
-export type Entry = { path: string; collection: string; trust: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
+export type Entry = { path: string; collection: string; trust: string; /** The status the result it was opened from carried (specs/052), and when it last changed. */ knowledge?: string; vouched?: string; status?: string; updated?: string; stale: boolean; text: string; scroll: number; focus: number | null; /** The pictures fetched for it, by the file they were written as; null where one could not be drawn. */ images?: Record<string, Raster | null>; /** The lines a pointer cited, when the document was opened by one. */ range?: { from: number; to: number } };
 /** One entry the research job wrote (`delphi-engine/src/research.rs`). */
 export type Made = { path: string; title: string; publisher: string; url: string; form: string; licence: string };
 export type Report = { new: Made[]; updated: Made[]; unchanged: number; notKept: [string, string][]; unlisted: string[]; provider: string | null; tokens: number; stopped: string | null };
@@ -111,7 +111,7 @@ export function emphasize(text: string, q: string, base: (s: string) => string =
 }
 
 const OUTSIDE = new Set(['external_untrusted', 'federated_peer']);
-export type KStatus = 'noted' | 'checking' | 'validated' | 'contested' | 'disproved' | 'retired';
+export type KStatus = T.KnowledgeStatus;
 const KSTATUSES: KStatus[] = ['noted', 'checking', 'validated', 'contested', 'disproved', 'retired'];
 /** The knowledge status of a result (specs/052 §3.1): the daemon's own word, else what the provenance alone shows (content from outside is noted, a document no longer active is retired), else null. */
 export const statusOf = (h: { trust: string; status?: string; knowledge?: string }): KStatus | null =>
@@ -167,7 +167,8 @@ export function gotShelf(a: Arch, kinds: any[], health: any): Arch {
 
 /** A document arrived: show it, after the entry now on screen (anything forward of it in the history is dropped). */
 export function gotDoc(a: Arch, body: any, target: Target | null, w: number): Arch {
-  const entry: Entry = { path: String(body.path), collection: String(body.collection ?? ''), trust: String(body.trust ?? ''), stale: !!body.stale, text: String(body.text ?? ''), scroll: 0, focus: null, ...(target?.k === 'pointer' ? { range: { from: target.from, to: target.to } } : {}) };
+  const from = a.hits.find((h) => h.path === String(body.path));
+  const entry: Entry = { path: String(body.path), collection: String(body.collection ?? ''), trust: String(body.trust ?? ''), status: body.status ? String(body.status) : undefined, knowledge: from?.knowledge, vouched: from?.vouched, updated: from?.updated, stale: !!body.stale, text: String(body.text ?? ''), scroll: 0, focus: null, ...(target?.k === 'pointer' ? { range: { from: target.from, to: target.to } } : {}) };
   entry.scroll = startRow(entry, w, target);
   const trail = [...a.trail.slice(0, a.at + 1), entry];
   return { ...a, trail, at: trail.length - 1, note: '' };
@@ -384,6 +385,8 @@ export const KIND_ORDER = ['research', 'docs', 'spec', 'lesson', 'mission', 'ski
 const KIND_LABEL: Record<string, string> = { research: 'research', docs: 'docs', spec: 'specs', lesson: 'lessons', mission: 'missions', skill: 'skills', memory: 'memory', other: 'other' };
 /** The status as the list column shows it: the word alone, so a vouched label keeps to its width. */
 const statusWord = (h: Hit) => statusOf(h) ?? '';
+/** The status glyph of a result, or a blank of the same width where the daemon has said nothing. */
+const statusGlyph = (h: Hit) => { const k = statusOf(h); return k ? T.statusMark(k) : ' '; };
 const kindStyle = (k: string): ((s: string) => string) => (k === 'research' ? T.warn : k === 'docs' ? T.ok : k === 'spec' ? T.accent : k === 'lesson' ? T.lesson : k === 'mission' ? T.mission : T.dim);
 
 /** The kinds that have results, in the spec's order: the chips after `all`. */
@@ -533,8 +536,8 @@ function listRow(a: Arch, x: Hit, i: number, w: number, now: number): string[] {
   const on = i === a.sel && a.focus === 'list';
   const mid = w >= 90, full = w >= 80;
   const tw = statusWord(x);
-  const tail = kindStyle(x.kind)(x.kind.padEnd(8)) + (full ? '  ' + T.dim(tw.padEnd(9)) : '') + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
-  const room = Math.max(10, w - 8 - 10 - (full ? 11 : 0) - (mid ? 7 : 0) - 1);
+  const tail = kindStyle(x.kind)(x.kind.padEnd(8)) + (full ? '  ' + statusGlyph(x) + ' ' + T.dim(tw.padEnd(9)) : ' ' + statusGlyph(x)) + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
+  const room = Math.max(10, w - 8 - 10 - (full ? 13 : 2) - (mid ? 7 : 0) - 1);
   const title = T.clip(titleOf(x), Math.min(64, room));
   const first = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean)[0] ?? '';
   const q = a.browse ? '' : a.searched ?? '';
@@ -554,7 +557,7 @@ function bestCard(a: Arch, x: Hit, w: number, h: number, now: number, pal: T.Pal
   const compact = h < 30;
   const sum = wrapText(bestSummary(x.preview, a.searched ?? ''), w - 11).slice(0, compact ? 2 : 4);
   const L = [
-    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind) + T.dim([statusLabel(x), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
+    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind) + T.dim([...(statusOf(x) ? [`${statusGlyph(x)}${T.dim(' ' + statusLabel(x))}`] : []), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
     (on ? T.accent('❯ ') : '') + chalk.bold(T.accent(T.clip(titleOf(x), w - 11))),
     ...sum.map((l) => emphasize(l, a.searched ?? '')),
   ];
@@ -586,7 +589,7 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
   out.push('');
   const useCard = !a.browse && a.hits.length > 0;
   if (useCard) out.push(...bestCard(a, a.hits[0]!, w, h, now, pal), '');
-  if (a.hits.length > (useCard ? 1 : 0)) out.push(T.dim(`   #  title${' '.repeat(Math.max(1, w - 46))}kind${w >= 80 ? '      status' : ''}${w >= 90 ? '    edited' : ''}`));
+  if (a.hits.length > (useCard ? 1 : 0)) out.push(T.dim(`   #  title${' '.repeat(Math.max(1, w - 46))}kind${w >= 80 ? '        status' : ''}${w >= 90 ? '    edited' : ''}`));
   const start = useCard ? 1 : 0, per = 3;
   const room = Math.max(1, Math.floor((h - out.length - 2) / per));
   const top = Math.max(start, Math.min(a.sel - room + 1, a.hits.length - room), a.sel >= start + room ? a.sel - room + 1 : start);
@@ -597,18 +600,19 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
   return pad(out, h - 1).concat(hint(a.focus === 'list' ? `↑ ↓ pick · enter open · tab filter · ctrl+t trust · esc clear · ${SWITCH.search}` : `enter search · ↓ pick · ↑ history · tab filter · ctrl+t trust · esc clear · ${SWITCH.search}`));
 }
 
-function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
+function readerView(a: Arch, w: number, h: number, pal: T.Pal, now: number): string[] {
   const cur = a.trail[a.at]!;
   const { lines, links } = layout(cur, w, cur.focus);
   const rowsHigh = bodyRows(h), top = Math.min(cur.scroll, Math.max(0, lines.length - rowsHigh));
   const where = `${cur.path}`;
-  const tags = [cur.collection, cur.trust, cur.stale ? 'changed since indexed' : ''].filter(Boolean).join(' · ');
+  const k = statusOf(cur), age = ago(cur.updated ?? '', now);
+  const tags = [cur.collection, k ? `${T.statusMark(k)}${T.dim(' ' + statusLabel(cur))}` : '', age ? `edited ${age}` : '', cur.stale ? 'changed since indexed' : ''].filter(Boolean).join(T.dim(' · '));
   const f = cur.focus === null ? null : links.find((l) => l.id === cur.focus);
   const body = lines.slice(top, top + rowsHigh).map((l) => '  ' + l);
   const pct = lines.length <= rowsHigh ? 100 : Math.round(((top + rowsHigh) / lines.length) * 100);
   const status = f ? `${describe(f.target)}${f.target.k === 'external' ? '  (enter opens it in your browser)' : ''}` : links.length ? `${links.length} link${links.length === 1 ? '' : 's'} · tab to focus` : 'no links in this document';
   return [
-    T.spread(' ' + chalk.bold(where), T.dim(tags + ' '), w),
+    T.spread(' ' + chalk.bold(where), tags + ' ', w),
     T.hairline(pal, w),
     ...pad(body, rowsHigh),
     T.hairline(pal, w),
@@ -618,7 +622,7 @@ function readerView(a: Arch, w: number, h: number, pal: T.Pal): string[] {
 
 /** The pane's body: `h` rows of at most `w` columns. */
 export function view(a: Arch, w: number, h: number, pal: T.Pal, info?: T.Info, now: number = Date.now()): string[] {
-  const lines = a.at >= 0 ? readerView(a, w, h, pal) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.searched !== null ? results(a, w, h, now, pal) : home(a, w, h, info, pal);
+  const lines = a.at >= 0 ? readerView(a, w, h, pal, now) : a.mode === 'expand' ? expandView(a, w, h, info, pal) : a.searched !== null ? results(a, w, h, now, pal) : home(a, w, h, info, pal);
   return pad(lines, h).map((l) => T.clip(l, w));
 }
 
