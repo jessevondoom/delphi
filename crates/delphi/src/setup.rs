@@ -41,7 +41,15 @@ pub trait Ui {
 pub struct Detected {
     pub claude: Option<ClaudeState>,
     pub agy_version: Option<String>,
+    pub codex: Option<CodexState>,
     pub gcloud: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexState {
+    pub version: String,
+    /// `codex login status` exits 0 when signed in (it prints to stderr, which is not read).
+    pub signed_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +64,8 @@ pub fn detect(env: &dyn Env) -> Detected {
         let status = env.run("claude", &["auth", "status", "--json"]).and_then(|(_, o)| serde_json::from_str::<Value>(&o).ok());
         ClaudeState { version: v.trim().to_string(), logged_in: status.as_ref().is_some_and(|s| s["loggedIn"] == true), plan: status.as_ref().and_then(|s| s["subscriptionType"].as_str()).unwrap_or("").to_string() }
     });
-    Detected { claude, agy_version: env.run("agy", &["--version"]).map(|(_, v)| v.trim().to_string()), gcloud: env.run("gcloud", &["--version"]).is_some() }
+    let codex = env.run("codex", &["--version"]).map(|(_, v)| CodexState { version: v.trim().trim_start_matches("codex-cli").trim().to_string(), signed_in: matches!(env.run("codex", &["login", "status"]), Some((0, _))) });
+    Detected { claude, codex, agy_version: env.run("agy", &["--version"]).map(|(_, v)| v.trim().to_string()), gcloud: env.run("gcloud", &["--version"]).is_some() }
 }
 
 /// What the project's own toolchain suggests for the merge gates and the commands that need no approval.
@@ -295,6 +304,11 @@ fn report_detection(ui: &mut dyn Ui, d: &Detected) {
         Some(v) => ui.say(&format!("  ✓ agy (Gemini subscription CLI) {} — installed", v)),
         None => ui.say("  • agy (Antigravity CLI) — not installed"),
     }
+    match &d.codex {
+        Some(c) if c.signed_in => ui.say(&format!("  ✓ Codex CLI {} — signed in", c.version)),
+        Some(c) => ui.say(&format!("  • Codex CLI {} — installed, not signed in (`codex login`)", c.version)),
+        None => {}
+    }
     ui.say(&format!("  {} gcloud — {}", if d.gcloud { "✓" } else { "•" }, if d.gcloud { "installed" } else { "not installed" }));
 }
 
@@ -319,6 +333,33 @@ fn claude_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut Docume
     }
     add_endpoint(doc, "claude", "claude-sub", &[("path", "harness"), ("harness", "claude"), ("credential", "harness-login"), ("cost_model", "subscription")], &[("fast", "haiku"), ("workhorse", "sonnet"), ("frontier", "opus")]);
     Some("claude-sub")
+}
+
+/// From `codex debug models` (JSON): the models the CLI lists for the signed-in account, best-ranked first.
+/// Hidden ones (internal reviewers and the like) are left out.
+pub fn pick_codex_models(json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return vec![] };
+    let mut listed: Vec<(i64, String)> = v["models"].as_array().into_iter().flatten().filter(|m| m["visibility"] == "list").filter_map(|m| Some((m["priority"].as_i64().unwrap_or(i64::MAX), m["slug"].as_str()?.to_string()))).collect();
+    listed.sort();
+    listed.into_iter().map(|(_, s)| s).collect()
+}
+
+/// ChatGPT subscription through `codex`: read-only roles.
+fn codex_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut DocumentMut) -> Option<&'static str> {
+    if has_endpoint(doc, "codex-sub") || !d.codex.as_ref().is_some_and(|c| c.signed_in) {
+        return None;
+    }
+    if !ui.yes_no("Use your ChatGPT subscription through `codex`? (read-only roles like reviewers and Council seats; its output is treated as untrusted)", true) {
+        return None;
+    }
+    // Every tier gets the CLI's first listed model: which one is cheap or strong is not stated, so it is left for the operator to edit.
+    let models = env.run("codex", &["debug", "models"]).map(|(_, o)| pick_codex_models(&o)).unwrap_or_default();
+    let Some(m) = models.first() else {
+        ui.say("  `codex` listed no models for this account; skipped. Run `codex debug models` to see why.");
+        return None;
+    };
+    add_endpoint(doc, "openai", "codex-sub", &[("path", "harness"), ("harness", "codex"), ("credential", "harness-login"), ("cost_model", "subscription")], &[("fast", m), ("workhorse", m), ("frontier", m)]);
+    Some("codex-sub")
 }
 
 /// Gemini subscription through `agy`: read-only roles.
@@ -587,6 +628,9 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
     if let Some(id) = agy_harness(ui, env, &detected, &mut doc) {
         added.push(id.into());
     }
+    if let Some(id) = codex_harness(ui, env, &detected, &mut doc) {
+        added.push(id.into());
+    }
     // A step that fails late (after its secret is already in the keychain) must not throw away the endpoints the
     // earlier steps set up: the config is written first and the error is returned after.
     let mut late: Option<anyhow::Error> = None;
@@ -765,6 +809,8 @@ mod tests {
         /// A keychain name whose `secret_set` fails.
         failing_secret: &'static str,
         tty_runs: RefCell<Vec<String>>,
+        /// The exit code of `codex login status`.
+        codex_login_code: i32,
     }
 
     impl Env for FakeEnv {
@@ -772,6 +818,9 @@ mod tests {
             let out = self.programs.get(&format!("{} {}", program, args.first().copied().unwrap_or("")))?;
             if program == "claude" && args.first() == Some(&"auth") {
                 return Some((0, format!("{{\"loggedIn\":{},\"subscriptionType\":\"pro\",\"email\":\"private@example.com\"}}", self.logged_in)));
+            }
+            if program == "codex" && args.first() == Some(&"login") {
+                return Some((self.codex_login_code, String::new()));
             }
             Some((0, out.clone()))
         }
@@ -865,6 +914,34 @@ mod tests {
         let k = project_kind(&project(t.path(), true)).unwrap();
         assert_eq!((k.name, k.test.join(" ")), ("Rust", "cargo test".to_string()));
         assert_eq!(project_kind(&project(tempfile::tempdir().unwrap().path(), false)), None);
+    }
+
+    fn codex_machine(logged_in: bool) -> FakeEnv {
+        let mut e = FakeEnv::default();
+        e.programs.insert("codex --version".into(), "codex-cli 0.165.0\n".into());
+        e.programs.insert("codex login".into(), String::new());
+        e.programs.insert("codex debug".into(), r#"{"models":[{"slug":"hidden","visibility":"hide","priority":1},{"slug":"gpt-b","visibility":"list","priority":9},{"slug":"gpt-a","visibility":"list","priority":5}]}"#.into());
+        e.codex_login_code = if logged_in { 0 } else { 1 };
+        e
+    }
+
+    #[test]
+    fn a_signed_in_codex_is_detected_and_offered_as_a_read_only_seat_on_its_first_listed_model() {
+        let d = detect(&codex_machine(true));
+        assert_eq!(d.codex, Some(CodexState { version: "0.165.0".into(), signed_in: true }));
+        assert_eq!(detect(&codex_machine(false)).codex.map(|c| c.signed_in), Some(false));
+        assert_eq!(pick_codex_models(r#"{"models":[{"slug":"x","visibility":"hide"}]}"#), Vec::<String>::new());
+        assert!(pick_codex_models("not json").is_empty());
+        let mut doc = DocumentMut::new();
+        let mut ui = Script::default();
+        assert_eq!(codex_harness(&mut ui, &codex_machine(true), &d, &mut doc), Some("codex-sub"));
+        let text = doc.to_string();
+        assert!(text.contains("harness = \"codex\"") && text.contains("family = \"openai\"") && text.contains("credential = \"harness-login\""), "{}", text);
+        assert!(text.matches("gpt-a").count() == 3 && !text.contains("gpt-b") && !text.contains("hidden"), "{}", text);
+        // Signed out: nothing is offered and nothing is asked.
+        let mut ui2 = Script::default();
+        assert_eq!(codex_harness(&mut ui2, &codex_machine(false), &detect(&codex_machine(false)), &mut DocumentMut::new()), None);
+        assert!(ui2.asked.is_empty());
     }
 
     #[test]

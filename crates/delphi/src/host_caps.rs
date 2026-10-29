@@ -262,6 +262,19 @@ fn discover_agy(r: &dyn Runner, user: &Path) -> CliEntry {
     e
 }
 
+/// `codex mcp list --json`: a JSON array of servers. Only the name and transport are kept, never `env` or `args`.
+pub fn parse_codex_mcp(out: &str) -> Vec<Item> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(out) else { return vec![] };
+    v.as_array().into_iter().flatten().filter_map(|s| Some(item(s["name"].as_str()?, s["transport"]["type"].as_str().unwrap_or(""), "cli"))).collect()
+}
+
+fn discover_codex(r: &dyn Runner) -> CliEntry {
+    let Some(mut e) = entry(r, "codex") else { return CliEntry { cli: "codex".into(), ..Default::default() } };
+    e.mcp = listed(r, &mut e, &["mcp", "list", "--json"]).map(|o| parse_codex_mcp(&o)).unwrap_or_default();
+    e.models = listed(r, &mut e, &["debug", "models"]).map(|o| crate::setup::pick_codex_models(&o).into_iter().map(|m| item(m, "", "cli")).collect()).unwrap_or_default();
+    e
+}
+
 fn discover_gemini(r: &dyn Runner, user: &Path) -> CliEntry {
     let Some(mut e) = entry(r, "gemini") else { return CliEntry { cli: "gemini".into(), ..Default::default() } };
     e.mcp = listed(r, &mut e, &["mcp", "list"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
@@ -291,7 +304,7 @@ fn ask(r: &dyn Runner, e: &mut CliEntry) {
 }
 
 pub fn collect(r: &dyn Runner, user_home: &Path, now: i64, with_ask: bool) -> Snapshot {
-    let mut clis = vec![discover_claude(r, user_home), discover_agy(r, user_home), discover_gemini(r, user_home), discover_ollama(r)];
+    let mut clis = vec![discover_claude(r, user_home), discover_agy(r, user_home), discover_codex(r), discover_gemini(r, user_home), discover_ollama(r)];
     if with_ask {
         clis.iter_mut().filter(|c| c.installed).for_each(|c| ask(r, c));
     }
@@ -449,6 +462,22 @@ mod tests {
     }
 
     #[test]
+    fn codex_is_discovered_from_its_own_json_listings_without_arguments_or_environment() {
+        let mut f = Fake { on_path: vec!["codex"], ..Default::default() };
+        f.answers.insert("codex --version".into(), done("codex-cli 0.165.0\n"));
+        f.answers.insert("codex mcp list --json".into(), done(r#"[{"name":"docs","transport":{"type":"stdio","command":"npx","args":["--token","SECRET"],"env":{"K":"SECRET"}}}]"#));
+        f.answers.insert("codex debug models".into(), done(r#"{"models":[{"slug":"hidden-one","visibility":"hide","priority":1},{"slug":"gpt-b","visibility":"list","priority":9},{"slug":"gpt-a","visibility":"list","priority":5}]}"#));
+        let home = tempfile::tempdir().unwrap();
+        let s = collect(&f, home.path(), 1, false);
+        let c = s.clis.iter().find(|c| c.cli == "codex").unwrap();
+        assert!(c.installed);
+        assert_eq!((c.mcp[0].name.as_str(), c.mcp[0].detail.as_str()), ("docs", "stdio"));
+        assert_eq!(c.models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["gpt-a", "gpt-b"], "hidden models are left out, best-ranked first");
+        assert!(!format!("{:?}", s).contains("SECRET"));
+        assert!(parse_codex_mcp("[]").is_empty() && parse_codex_mcp("No MCP servers configured yet.").is_empty());
+    }
+
+    #[test]
     fn claude_connectors_parse_with_status() {
         let v = parse_claude_mcp("Checking MCP server health…\n\nclaude.ai Claude Docs: https://api.anthropic.com/v1/pages/mcp - ✔ Connected\nlocal: npx x - ✗ Failed to connect\n");
         assert_eq!(v.len(), 2);
@@ -540,7 +569,8 @@ mod tests {
         f.answers.insert("gemini --version".into(), done("0.63.0\n"));
         f.answers.insert("gemini mcp list".into(), Ran::Done { code: 0, out: String::new(), err: "innerError Error: Cannot find module 'pty.node'\n".into() });
         let home = tempfile::tempdir().unwrap();
-        let g = &collect(&f, home.path(), 1, false).clis[2];
+        let snap = collect(&f, home.path(), 1, false);
+        let g = snap.clis.iter().find(|c| c.cli == "gemini").unwrap();
         assert!(g.mcp.is_empty());
         assert!(g.notes.iter().any(|n| n.contains("printed only an error") && n.contains("pty.node")), "{:?}", g.notes);
     }
