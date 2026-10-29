@@ -62,4 +62,4 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
 | Improve the team | `/retro` | Shows the staged lessons for one batch ratification |
 | Check health | `delphi doctor` | Schemas, taint, caps, links, sandbox, gitignore, provider keys |
 
-**Deferred from v1 (D-06):** federation (A2A and `delphi://` pointers), the OpenAI/local drivers, the CLI harness drivers, and multi-terminal auto-spawn. These specs remain as designs. DPO export was removed (D-14).
+**Deferred from v1 (D-06):** federation (A2A and `xenia://cap/` pointers), the OpenAI/local drivers, the CLI harness drivers, and multi-terminal auto-spawn. These specs remain as designs. DPO export was removed (D-14).

@@ -295,6 +295,15 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
                     r.push(Level::Ok, "10 harness", id.to_string(), format!("agy {} is installed; it has no status command, so run `delphi endpoints test --probe` to prove it is signed in. {}", ver.trim(), what))
                 }
             },
+            Some("codex") => match run("codex", &["--version"]) {
+                None => missing(r, id, "the `codex` program was not found on PATH; install the Codex CLI".into()),
+                // `codex login status` exits 0 when signed in and prints to stderr; the account is never read or shown.
+                Some((_, ver)) => match run("codex", &["login", "status"]) {
+                    Some((0, _)) => r.push(Level::Ok, "10 harness", id.to_string(), format!("{} is signed in. A Codex seat is read-only and its output untrusted (L0); a Builder is refused until its approvals are bridged (specs/047 S2). Run `delphi endpoints test --probe` to prove it answers.", ver.trim())),
+                    Some(_) => missing(r, id, "`codex` is installed but not signed in: run `codex login`".into()),
+                    None => r.warn("10 harness", id.to_string(), "`codex login status` could not be run; run `delphi endpoints test --probe`"),
+                },
+            },
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
         }
@@ -1084,6 +1093,31 @@ mod tests {
         // Nothing to say without a Claude harness endpoint, or with the bridge turned off.
         assert!(run(McpPolicy::NotListed, "[[endpoints]]\nid=\"a\"\nfamily=\"claude\"\npath=\"api\"\ncredential=\"env:K\"\n").is_empty());
         assert!(run(McpPolicy::NotListed, &format!("{}\n[harness.claude]\nbridge = false\n", cfg)).is_empty());
+    }
+
+    #[test]
+    fn a_codex_endpoint_is_checked_by_its_version_and_login_status_exit_code() {
+        let cfg = "[[endpoints]]\nid=\"x\"\nfamily=\"openai\"\npath=\"harness\"\nharness=\"codex\"\ncredential=\"harness-login\"\n";
+        let run = |login: Option<i32>| move |p: &str, a: &[&str]| -> Option<(i32, String)> {
+            match (p, a.first().copied()) {
+                ("codex", Some("--version")) => Some((0, "codex-cli 0.165.0\n".into())),
+                ("codex", Some("login")) => login.map(|c| (c, String::new())),
+                _ => None,
+            }
+        };
+        let level = |cfg: &str, f: &dyn Fn(&str, &[&str]) -> CliRun, require: bool| {
+            let mut r = Report::default();
+            check_harnesses(cfg, f, require, &mut r);
+            r.findings.iter().map(|f| (f.level, f.message.clone())).collect::<Vec<_>>()
+        };
+        let ok = level(cfg, &run(Some(0)), false);
+        assert!(ok.len() == 1 && ok[0].0 == Level::Ok && ok[0].1.contains("signed in") && ok[0].1.contains("read-only"), "{:?}", ok);
+        let out = level(cfg, &run(Some(1)), true);
+        assert!(out[0].0 == Level::Fail && out[0].1.contains("codex login"), "{:?}", out);
+        assert_eq!(level(cfg, &run(Some(1)), false)[0].0, Level::Warn);
+        assert_eq!(level(cfg, &run(None), false)[0].0, Level::Warn);
+        let gone = level(cfg, &|_: &str, _: &[&str]| None, false);
+        assert!(gone[0].0 == Level::Warn && gone[0].1.contains("not found on PATH"), "{:?}", gone);
     }
 
     #[test]

@@ -20,7 +20,7 @@ tags: [spec]
 This specification emerged from our research into multi-operator collaboration and defines how multiple independent Delphi installations interact with each other—allowing agent teams to collaborate with other agent teams and share context directly or via cryptographic pointers to private files:
 1. **Three-Plane Federation Architecture (Mediated by `Gateway`):**
    - **Plane 1 (Delegation):** Cross-instance task delegation via an **A2A (Agent2Agent) JSON-RPC 2.0 + SSE** profile.
-   - **Plane 2 (Pointer Resolution):** Direct, line-scoped context sharing via **`delphi://` URI Pointers** and **Ed25519 Capability Tokens (`DelphiCap` — UCAN/Biscuit profile)**.
+   - **Plane 2 (Pointer Resolution):** Direct, line-scoped context sharing via **`xenia://cap/` URI Pointers** and **Ed25519 Capability Tokens (`DelphiCap` — UCAN/Biscuit profile)**.
    - **Plane 3 (Durable Team Sync):** Git-backed team registry synchronization (`delphi sync`) with AST rule merging and ExpeL conflict resolution.
 2. **Zero-Server Peer Transport:** Native support for **Tailscale (`tsnet` / MagicDNS)**, **SSH Multiplexed Unix Socket Forwarding**, and **LAN mDNS**.
 3. **The 6-Tier Security Taint Lattice & Ingress Firewall:** Preventing transitive prompt injection or memory poisoning across federated peers (`source_type: federated_peer` vs. `federated_verified`).
@@ -45,7 +45,7 @@ flowchart TB
 
     subgraph Mesh ["Authenticated Peer Transport (Tailscale / SSH UDS / mDNS)"]
         A2A["Plane 1: A2A Task Delegation\n(JSON-RPC 2.0 + SSE over Mutual Ed25519)"]
-        URI["Plane 2: Scoped Pointer Resolution\ndelphi://bob.tailnet/repo/context/doc.md#L10-L50\n(DelphiCap in header, never in the URI)"]
+        URI["Plane 2: Scoped Pointer Resolution\nxenia://cap/bob.tailnet/repo/context/doc.md#L10-L50\n(DelphiCap in header, never in the URI)"]
         GitSync["Plane 3: Durable Team Registry Sync\n(`delphi sync` AST Rule & Domain Merge)"]
     end
 
@@ -69,10 +69,10 @@ Each `delphi-core` daemon exposes a signed **Agent Card** (`/.well-known/delphi-
 - Bob's **Orchestrator** dispatches its local **Scout**/**Investigator** and returns a pointer-based synthesis.
 - **Inbound tasks are not free.** Every inbound A2A task lands in Bob's console approval queue unless the sending peer has a standing grant (`.delphi/config.toml` `[peers.<did>] auto_accept = ["query-domain-kb"]`). Each peer also has a budget (`max_usd_per_day`, `max_concurrent_tasks`) that `delphi-core` enforces. Inbound task spans start at taint $L_1$, so the tool table in `specs/001` §5.2 applies: read-only, no outbound calls.
 
-### 2.2 Plane 2: Scoped `delphi://` URI Pointers & Capability Tokens (`DelphiCap`)
-To share context via pointer without copying huge files or granting full repo access, Delphi defines the **`delphi://` URI scheme**:
+### 2.2 Plane 2: Scoped `xenia://cap/` URI Pointers & Capability Tokens (`DelphiCap`)
+To share context via pointer without copying huge files or granting full repo access, Delphi defines the **reserved `xenia://cap/` URI authority** (named for the protocol, decided 2026-10-29; `cap` is never a record kind and Phase 1 parsers reject it, `specs/012` §4):
 ```text
-delphi://<peer-host>/<workspace>/<zone>/<rel-path>[?rev=<git-sha>][#L<start>-L<end>]
+xenia://cap/<peer-host>/<workspace>/<zone>/<rel-path>[?rev=<git-sha>][#L<start>-L<end>]
 ```
 The capability token is **never** part of the URI. URIs end up in logs, `events.jsonl`, shell history, and pasted text, and a bearer token in any of those places can be replayed. Tokens travel in an `Authorization: DelphiCap <token>` header over the mutually authenticated peer channel. They are bound to the presenting peer's DID (`aud` must equal the transport-authenticated identity), so a leaked token is useless to anyone else.
 #### The `DelphiCap` Object-Capability Token (Ed25519 UCAN/Biscuit Profile)
@@ -84,7 +84,7 @@ When Operator B shares a pointer to a private file in `context/` or `missions/`,
   "exp": 1792761600,
   "att": [
     {
-      "with": "delphi://bob.tailnet/payments/missions/014-webhook/research/stripe-notes.md",
+      "with": "xenia://cap/bob.tailnet/payments/missions/014-webhook/research/stripe-notes.md",
       "can": "delphi/read_slice",
       "nb": {
         "git_rev": "a8f91c2",
@@ -113,7 +113,7 @@ To prevent a compromised or hallucinating peer instance from poisoning another o
 | **$L_4$** | `internal_empirical` | Verified locally by **Builder** deterministic tests/scripts in this workspace. | **Yes** |
 | **$L_3$** | `internal_generated` | Written locally by an agent with no test evidence (D-08). | **No** (requires local test → $L_4$, or the **operator** ratification → $L_5$). |
 | **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. **Or** (amendment 007-A1, ratified 2026-10-25 with `specs/011`): a xenia `memory` record validly endorsed by a steward other than its author's person, under a current freshness statement (`specs/011` §4 and §5.1). | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
-| **$L_1$** | `federated_peer` | Unattested A2A response or `delphi://` slice from a federated peer, or a file that `delphi sync` merged from a shared repository without a verified signature (amendment 007-A2). | **Strictly Forbidden (`[H-004]`)** |
+| **$L_1$** | `federated_peer` | Unattested A2A response or `xenia://cap/` slice from a federated peer, or a file that `delphi sync` merged from a shared repository without a verified signature (amendment 007-A2). | **Strictly Forbidden (`[H-004]`)** |
 | **$L_0$** | `external_untrusted` | Scraped web pages, third-party repos, or transitive `external_untrusted` data forwarded by a peer. | **Strictly Forbidden (`[H-004]`)** |
 
 ### 3.1 Transitive Taint Preservation (Anti-Laundering Rule)
@@ -146,9 +146,9 @@ For teams sharing a team registry, a separate git repository cloned into the wor
 
 ## 5. Verification Plan
 1. **Capability Token Attenuation & Expiry Test:** Mint a `DelphiCap` token for `#L10-L50` expiring in 10 seconds; verify requests for `#L1-L60` or requests at $t=11\text{s}$ are rejected with `403 Forbidden`.
-2. **Zone 3 Chroot Rejection Test:** Mint a validly signed `DelphiCap` token pointing to `delphi://peer/ws/memory/agents/orchestrator/lessons.md`; verify `Gateway` rejects the request at the hard path-allowlist gate.
+2. **Zone 3 Chroot Rejection Test:** Mint a validly signed `DelphiCap` token pointing to `xenia://cap/peer/ws/memory/agents/orchestrator/lessons.md`; verify `Gateway` rejects the request at the hard path-allowlist gate.
 3. **Transitive Taint Laundering Test:** Forward an `external_untrusted` ($L_0$) note across a `federated_verified` ($L_2$) peer connection and verify the receiving instance assigns `source_type: external_untrusted` ($L_0$).
-4. **Token-in-URI Rejection Test:** A `delphi://` URI carrying `?cap=` is rejected outright; a valid token presented by a peer whose transport DID differs from `aud` is rejected with `403`.
+4. **Token-in-URI Rejection Test:** A `xenia://cap/` URI carrying `?cap=` is rejected outright; a valid token presented by a peer whose transport DID differs from `aud` is rejected with `403`.
 5. **Allowlist Test:** With a valid token, requests for `missions/<id>/events.jsonl`, `.git/config`, and a symlink in `comms/shared/` pointing to `memory/` are all refused.
 6. **Revocation Test:** A token works, is revoked via `delphi cap revoke <jti>`, and the next resolve fails.
 7. **Inbound Budget Test:** A peer without a standing grant sends an A2A task; it waits in the console queue and spends zero tokens until approved.

@@ -19,11 +19,11 @@ To allow multiple independent Delphi installations (run by different operators o
 1. **Plane 1 — Agent-Team-to-Agent-Team Delegation (Google A2A Profile):**
    - Each `delphi-core` instance exposes a signed Agent Card (`/.well-known/delphi-card.json`) with its Ed25519 DID (`did:key:z6Mk...`) and high-level team skills.
    - Peer instances delegate bounded tasks via A2A JSON-RPC 2.0 + SSE over **Tailscale (`tsnet`)**, **SSH Multiplexed Unix Sockets**, or **LAN mDNS**.
-2. **Plane 2 — Scoped `delphi://` URI Pointers & Capability Tokens (`DelphiCap`):**
+2. **Plane 2 — Scoped `xenia://cap/` URI Pointers & Capability Tokens (`DelphiCap`):**
    - Instead of copying massive files across instances (violating `[H-002]`), instances exchange compact pointers:
-     `delphi://bob.tailnet/payments/context/domains/stripe.md?rev=a8f91c2&cap=<token>#L40-L120`
+     `xenia://cap/bob.tailnet/payments/context/domains/stripe.md?rev=a8f91c2&cap=<token>#L40-L120`
    - Access is governed by **Ed25519 Object-Capability (OCap) tokens** (UCAN/Biscuit profile) that cryptographically restrict the holder to an exact file path, Git commit SHA, line range (`#L40-L120`), byte limit, and expiration timestamp.
-   - **Hard Chroot Allowlist:** `delphi-core` enforces a compile-time block preventing `memory/**`, `.delphi/config.toml`, `.delphi/state.db`, or `.env*` from ever being served over `delphi://`.
+   - **Hard Chroot Allowlist:** `delphi-core` enforces a compile-time block preventing `memory/**`, `.delphi/config.toml`, `.delphi/state.db`, or `.env*` from ever being served over `xenia://cap/`.
 3. **Plane 3 — The 6-Tier Security Taint Lattice (`[H-004]` Extension):**
    - $L_5$ (`user_ratified`) $>$ $L_4$ (`internal_empirical`) $>$ $L_3$ (`internal_generated`) $>$ $L_2$ (`federated_verified`) $>$ $L_1$ (`federated_peer`) $>$ $L_0$ (`external_untrusted`).
    - **Transitive Anti-Laundering Rule:** $\text{EffectiveTaint} = \min(\text{PayloadTaint}, \text{PeerTrustCeiling})$. If a teammate ($L_2$) forwards web-scraped data ($L_0$), it remains $L_0$ (`external_untrusted`) and can never auto-promote into `heuristics.md`, `REVIEW.md`, or `lessons.md`.

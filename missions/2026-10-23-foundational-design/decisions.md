@@ -52,7 +52,7 @@ These are the decisions that belong to **the operator (the operator)**: value tr
 
 ## 🔴 D-06 — v1 scope cuts
 **Context:** Eight specs, nine agents, four provider dialects, and five terminal integrations, all before the first end-to-end loop runs. Each item below is independent; tick the ones you accept.
-- [x] Defer **spec 007 Planes 1–2** (A2A delegation, `delphi://` tokens). Keep Plane 3 (Git plus ratified rule proposals).
+- [x] Defer **spec 007 Planes 1–2** (A2A delegation, `xenia://cap/` tokens). Keep Plane 3 (Git plus ratified rule proposals).
 - [x] Defer **spec 008 §5 DPO export** (see D-14).
 - [x] Defer the **OpenAI and local/DeepSeek drivers**. v1 ships Claude and Gemini only.
 - [x] Defer the **headless CLI harness drivers** (`claude`/`gemini`/`codex`). They bypass the IPR and have uneven permission bridges (spec 002 §5).
@@ -420,3 +420,14 @@ Supersedes 005c's no-alternate-screen premise for the default console. **Status:
 **Status:** ✅ APPROVED 2026-10-25 by the operator.
 
 - **2026-10-25:** the operator asked to set timers directly in chat, since only the orchestrator could. Approved as **017-A1** (`specs/017` §5): `/timer` in the full-screen console and in `delphi chat --inline`, over the existing console-only `timer.*` calls. Also at the operator's request, the full-screen console and the Observer select text themselves (drag to select and copy, double-click a word, triple-click a line), because mouse reporting, which the wheel needs, stops the terminal selecting; `/mouse` still hands selection back to the terminal. No new dependency.
+
+## ✅ D-32 — One URI scheme, named for the protocol: `xenia://`
+**Decided 2026-10-29 by the operator** (intent: the scheme matches the protocol, not the project).
+- **Record-store references** are full URIs: `xenia://<kind>/<id>[@rev]` (`specs/012` §4), replacing the bare `<kind>/<id>[@rev]` locator. The bare form is no longer accepted. Xenia Phase 1 is in build and no records are deployed, so there is no compatibility shim and no migration.
+- **Deferred Plane 2 capability URIs** (`specs/007` §2.2) are renamed from `delphi://` to the reserved `xenia://cap/<peer-host>/...`. They stay unbuilt. `cap` is a reserved authority and is never a record kind (`specs/012` §5); Phase 1 parsers reject `xenia://cap/...` as a locator with "reserved, not built". The plan's rule that Plane 2 must not become the Xenia pointer surface (`xenia-phase-1-plan.md` §5.2 item 5) stands: sharing a scheme does not share a resolver, a trust tier or an authority.
+- **`delphi://` is accepted nowhere.** The parsers refuse it with "use xenia://".
+- **`delphi-bundle://` is unchanged.** It is the local MCP resource scheme for knowledge files of an added bundle (`specs/025` MCP resources, `bundle_serve.rs`); it is served by the local process, never appears in a record, and is not a Xenia pointer.
+- **Flag:** `specs/007` is under federation review; the operator may revisit the Plane 2 name (`xenia://cap/`) there. The reservation costs nothing to change while Plane 2 is unbuilt.
+- **Why not leave `delphi://` for Plane 2:** two schemes for one protocol, and a project-named scheme in a protocol that is meant to outlive the project.
+
+**Status:** ✅ APPROVED 2026-10-29 by the operator. Implements-Spec: `specs/012`.
