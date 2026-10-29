@@ -16,6 +16,7 @@ const USAGE: &str = "usage:
     [--title <t>] [--rights-holder <name>] [--attribution <text>] [--max-text-mib <n>] [--max-source-mib <n>] [--home <dir>]
   delphi sources list [--json] [--home <dir>]
   delphi sources show <id> [--json] [--offline] [--home <dir>]
+  delphi sources history <id> [--json] [--home <dir>]
   delphi sources excerpt add <id> --locator <where> --purpose <why> (--text <passage> | --file <file>) [--prefix <t>] [--suffix <t>]
     [--work-bytes <n>] [--home <dir>]
   delphi sources excerpt list <id> [--json] [--home <dir>]
@@ -84,6 +85,7 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("list") => list(&lib, rest),
         Some("show") => show(&lib, rest),
         Some("purge") => purge(&lib, rest),
+        Some("history") => history(&lib, rest),
         Some("excerpt") => excerpt(&lib, rest),
         Some("bib") => bibliography(&lib, rest),
         _ => {
@@ -230,6 +232,31 @@ fn show(lib: &Library, args: &[String]) -> i32 {
     let versions = std::fs::read_dir(dir.join("versions")).map(|d| d.flatten().count()).unwrap_or(0);
     if versions > 0 {
         println!("  earlier versions: {}", versions);
+    }
+    0
+}
+
+/// Every kept capture, oldest first, with the change note and the claims anchored in it. Read only.
+fn history(lib: &Library, args: &[String]) -> i32 {
+    let pos = positional(args);
+    let [id] = pos[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    let Some(h) = lib.history(id) else {
+        eprintln!("delphi sources history: no source `{}`", clean(id, 80));
+        return 1;
+    };
+    if args.iter().any(|a| a == "--json") {
+        let v: Vec<Value> = h.iter().map(|e| e.to_json()).collect();
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return 0;
+    }
+    for e in &h {
+        let day = e.retrieved.as_deref().map(|r| clean(r.get(..10).unwrap_or(r), 10)).unwrap_or_else(|| "?".into());
+        let size = e.bytes.map_or("no text".to_string(), |b| format!("{} bytes", b));
+        println!("v{}{}  {}  {}  {} anchor(s)", e.version, if e.current { " (current)" } else { "" }, day, size, e.anchors);
+        println!("    {}", clean(e.change_note.as_deref().unwrap_or(if e.version == 1 { "first capture" } else { "no change note" }), 200));
     }
     0
 }
