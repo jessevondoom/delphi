@@ -16,6 +16,8 @@ tags: [spec, routing, models, discovery, effort, promote, nerf]
 
 Extends [`specs/002`](002-adapter-and-routing.md) §4 (the scaler and the pool), and builds on [`045`](045-harness-loop-techniques.md), [`046`](046-harness-and-openai-coverage.md), [`047`](047-codex-harness-and-coverage.md) and the Copilot seat in 051. It **amends** the operator decision of 2026-10-26 ([`specs/035`](035-failover-without-a-driver.md) D-14, D-15) in one place, §3.2, and only if §7 OD-1 is approved.
 
+**Revision 2026-10-29 (operator direction, recorded here; still a draft).** Model assignment was too strict and too firm. Tying a role to a capability level is fine, but Delphi must not be Claude-first and must not lean on operator input. This revision replaces the role *default* with a role **floor** and a **preferred** class (§3.1), makes quota a live input to ranking (§3.3), prefers provider diversity in councils (§3.4), puts every provider behind one capability record (§3.5), and trials unclassified models instead of refusing them (OD-4). The operator ratifies the pool once; after that assignment is automatic.
+
 The operator's direction, 2026-10-28: Delphi must not hard-code favorites. It discovers what is available and assigns the best model for each agent and task. Planning and specs get higher effort and quality; following a build plan gets the lowest acceptable quality; an agent can be promoted or nerfed. The knowledge of which model suits what is widely published and belongs in the core knowledge base ([`context/model-selection-evidence.md`](../context/model-selection-evidence.md)).
 
 ## 1. Principles
@@ -24,8 +26,10 @@ The operator's direction, 2026-10-28: Delphi must not hard-code favorites. It di
 2. **Discover, then classify, then measure.** The seat reports what it has; rules place each model in a class; Delphi's own results move it. Measurement outranks the knowledge base, which outranks a rule.
 3. **Quality is bought where ambiguity is.** A plan or spec is the artifact every later step copies, so it gets the strongest model and effort. A step that follows a written plan gets the cheapest model that passes the plan's gates.
 4. **Cost is per accepted result, not per token.** A cheaper model that fails the gate and is retried is not cheaper.
-5. **Authority does not widen.** Choosing a model changes quality and cost, never what a role may do. A model from outside the ratified pool is never used; a seat's tools stay as its spec says (020, 047, 051).
-6. **The operator can always override.** Promote, nerf, pin and exclude are ratified configuration; the Orchestrator may raise one task but never change a grade.
+5. **No provider is the default.** Nothing in the order of preference favors a vendor; ranking is by measured accepted results per cost, then availability (§3.1).
+6. **Authority does not widen.** Choosing a model changes quality and cost, never what a role may do. A model from outside the ratified pool is never used; a seat's tools stay as its spec says (020, 047, 051).
+7. **The operator can override, and need not.** The pool is ratified once; after that assignment is automatic. The operator gets a card only when no pool member meets a role's floor (§3.1).
+8. **The operator can always override.** Promote, nerf, pin and exclude are ratified configuration; the Orchestrator may raise one task but never change a grade.
 
 ## 2. Discovery and classification
 
@@ -39,7 +43,7 @@ A candidate is refreshed at `delphi setup`, `delphi doctor`, daemon start, and o
 
 The classes are those in `context/model-selection-evidence.md` §2: `deep`, `steady`, `quick`, `wide`, `local`. A rule table maps attributes to classes (for example: top vendor rank in its family and an effort level at or above `high` is `deep`; the smallest hosted tier is `quick`; a context window several times its family's median is also `wide`; open weights on this machine is `local`). The table is a ratified data file, not code, so a new vendor needs a row, not a release.
 
-A model that no rule places stays `unclassified` and is used only if the operator assigns it or a calibration run (§5) has measured it.
+A model that no rule places stays `unclassified`. With no evidence it is **trialled on low-risk tasks** (a task with a plan and a deterministic gate, never a plan-making or Red-tier role) and its results then place it; the operator may also assign it, or run calibration (§5) first (§7 OD-4).
 
 ### 2.3 Evidence
 
@@ -51,19 +55,35 @@ Delphi's own results adjust a class: first-pass success, gate failures, retries,
 
 For a dispatch `(role, task)`:
 
-1. The **requirement** is a class and an effort from the role's default and the task signals (the table in `specs/002` §4, restated in classes). Then the role's **grade** (§4) shifts it.
-2. The **eligible set** is every ready candidate in the ratified pool whose class meets the requirement and which has the tools and bridge the role needs (the existing `resolve_model_route` filter, 002-A1).
-3. Choose among them by, in order: measured fitness for this task kind; family diversity where a rule asks for it (Council, review by a different family); headroom left on the seat; cost per accepted result; pool order.
+1. Each role has a **floor**, the minimum class that can do the job, and a **preferred** class. The task signals (the table in `specs/002` §4, restated in classes) and the role's **grade** (§4) move the requirement between them, never below the floor.
+2. The **eligible set** is every ready candidate in the ratified pool whose class meets the floor and which has the tools and bridge the role needs (the existing `resolve_model_route` filter, 002-A1). Any such model may be picked; no provider is the default.
+3. Rank them by, in order: measured accepted results per cost for this task kind; availability and quota headroom (§3.3); family diversity where a rule asks for it (§3.4); preferred class; pool order. A model in the preferred class ranks above one at the floor only on a tie of the evidence.
 4. Record the choice and why in the existing routing event (`scaling_rationale`), naming the class and the evidence it used.
-
-If nothing is eligible, the existing promotion and exhaustion rules apply unchanged.
+5. **The operator is asked only when no pool member meets a floor.** Then the existing promotion and exhaustion rules apply, and the card says which floor and why.
 
 ### 3.2 Planning is bought; following a plan is rationed
 
-- **Plan-making roles** (`architect`, `strategist`, `red-team`, the Council, and the Orchestrator when it writes a plan): start in `deep` at a high effort, drawn from at least two families. This is a raise over the `workhorse` default of D-14. The effort is the highest the evidence supports for that task kind, not the highest available: vendors warn that more effort can regress quality, and a ratified per-kind ceiling applies (§7 OD-2).
-- **Plan-following roles** (`builder` with a plan attached, `integrator`, mechanical `investigator` and `scout` work): start at the lowest class that has met the success bar on this task kind, which is `steady` until evidence says `quick` will do. Without evidence they start at the role's default and move down by the ratchet below. This **amends D-15** ("never lowered below the default to save cost") for tasks that carry a plan and a deterministic gate; the Orchestrator's own discretion to lower a model remains withdrawn.
+- **Plan-making roles** (`architect`, `strategist`, `red-team`, the Council, and the Orchestrator when it writes a plan): start in `deep` at a high effort, drawn from at least two families where the pool allows (§3.4). This is a raise over the `workhorse` default of D-14. The effort is the highest the evidence supports for that task kind, not the highest available: vendors warn that more effort can regress quality, and a ratified per-kind ceiling applies (§7 OD-2).
+- **Plan-following roles** (`builder` with a plan attached, `integrator`, mechanical `investigator` and `scout` work): start at the lowest class that has met the success bar on this task kind, which is `steady` until evidence says `quick` will do. Without evidence they start at the preferred class and move down by the ratchet below, never below the floor. This **amends D-15** ("never lowered below the default to save cost") for tasks that carry a plan and a deterministic gate, and more broadly replaces the role default with a floor and a preferred class (§3.1; recorded in OD-1); the Orchestrator's own discretion to lower a model remains withdrawn.
 - **The ratchet.** After `K` consecutive first-pass successes at a class, with the gate passing and no retry, the next dispatch of that task kind tries the class below. One failure puts it back and records a lesson; two failures in a row on a class stop trying it for that task kind until the operator clears it. `K` is ratified (§7 OD-3).
 - **A failed gate** still raises one class or effort step and then changes family (`[H-007]`), unchanged.
+
+### 3.3 Quota is a live input
+
+Quota comes from the seat's meter (051 `Event::Meter`) and quota probe, not from a guess.
+
+- A **nearly exhausted** seat drops in rank before it fails, so work moves to other pool members while the seat still has headroom.
+- **At the cap**, dispatch fails over to the next member meeting the floor, and the routing event records why (`quota_exhausted`, the seat, the next choice).
+- If **only a lower class** remains, the task waits, or degrades only where the role floor allows, and says so in the event and to the operator. A role is never served below its floor.
+- Each role has a **reserve slice** of the pool's tokens, so planning cannot starve the validator (040 §20). The slice sizes are ratified settings.
+
+### 3.4 Councils prefer diversity
+
+A Council prefers seats from different providers and families where the pool allows. A single-family council still runs but is labelled **low-diversity** in its record and verdict. Spec 040's Council review was Claude-family only, and is an example of the label, not a model to copy.
+
+### 3.5 A provider array
+
+Providers are adapters behind one **capability record**: class, context, tools, cost, quota, and measured results. Adding a provider needs an adapter and evidence, and no routing change. Where sources disagree, **measured results outrank the knowledge base, which outranks a class rule.**
 
 ## 4. Promote and nerf
 
@@ -96,16 +116,20 @@ Each is one pull request with the usual trailer and tracker row.
 
 | # | Question | Recommendation |
 | :-- | :-- | :-- |
-| OD-1 | Amend D-15 so that plan-following work may start below the role's default, by the ratchet? | **Yes**, limited to tasks that carry a plan and a deterministic gate. Everything else keeps D-15. |
+| OD-1 | Amend D-15 (035): replace the role default with a role **floor** and a **preferred** class, any ratified pool model meeting the floor eligible, no provider default, ranked by measured accepted results per cost then availability; and let plan-following work start below preferred by the ratchet? | **Yes.** The floor is never crossed; ratchet lowering is limited to tasks that carry a plan and a deterministic gate. |
 | OD-2 | Planning effort: the highest available, or the highest the evidence supports, with a per-kind ceiling? | The evidence-supported level with a ceiling; vendors report regressions from overthinking. Start at `high`. |
 | OD-3 | The ratchet's `K` and the count that makes evidence "enough" | `K = 5`, evidence = 8 results per `(role, kind, model)`; both ratified settings. |
-| OD-4 | A model with no evidence and no class: refuse, or allow at the role's default? | Refuse until calibrated or assigned by the operator. |
+| OD-4 | A model with no evidence and no class: refuse, or trial? | **Trial** on low-risk tasks (changed 2026-10-29 from "refuse"); results then classify it. |
+| OD-6 | Operator input: ratify the pool once, then automatic, with a card only when no member meets a floor; per-role reserve slices (§3.3)? | **Yes**; slice sizes are ratified settings. |
 | OD-5 | Should `assignment = "discovered"` become the default after M2 is measured? | Not until a benchmark (048) shows it no worse than `static` on the same suite. |
 
 ## 8. Tests
 
 - No source file or spec outside `context/` names a model (a lint over `crates/`, like the theme-name lint).
-- A fixture of three seats with invented model ids and attributes is classified by the rule table alone; an id the table does not place stays `unclassified` and is never chosen.
+- A fixture of three seats with invented model ids and attributes is classified by the rule table alone; an id the table does not place stays `unclassified` and is chosen only for low-risk trial tasks.
+- Two members meet a floor: the one with better measured accepted results per cost wins, whatever its provider; a seat near its cap ranks below one with headroom, and at the cap dispatch fails over with the reason recorded. With only a lower class left, the task waits and says so; it is never served below the floor.
+- A role's reserve slice cannot be consumed by another role.
+- A one-family council runs and is labelled low-diversity; with two families available it uses both.
 - The same dispatch on `static` and `discovered` with one family returns the static choice when the pool has a single eligible model.
 - A plan-making role gets `deep` and two families when both exist, and one family marked `homogeneous_retry` when not.
 - The ratchet steps down after `K` successes, up after one failure, and stops after two failures in a row; a grade of -1 on top of the ratchet is bounded at the pool's lowest class.
