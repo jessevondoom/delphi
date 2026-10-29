@@ -1236,6 +1236,31 @@ impl EngineService {
         Ok(json!({"ok": true, "message": msg}))
     }
 
+    /// `validation.latch` `{to, reason, force?, confirm?}` (`specs/040` §25 V2d-3): the operator's raise of the validator's
+    /// latch, or the `--force` past PROMOTE, as a card in two steps like `org.trust`. Console scope only. Without
+    /// `confirm` the call returns the card text and the word to type; with the exact word it applies the raise,
+    /// journaled as confirmed in the console. The terminal command stays as it was.
+    async fn validation_latch(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        use delphi_adapter::config::ValidatorMode;
+        let to = match ValidatorMode::parse(p["to"].as_str().unwrap_or("")) {
+            Some(m @ (ValidatorMode::Advisory | ValidatorMode::Ratify)) => m,
+            _ => return Err(err(code::INVALID_PARAMS, "`to` is advisory or ratify")),
+        };
+        let force = p["force"].as_bool().unwrap_or(false);
+        let state = crate::fact_mode::state_dir(&self.engine.ws.dir);
+        let card = crate::fact_audit::latch_card(&state, to, force).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        match p["confirm"].as_str() {
+            None => return Ok(json!({"ok": true, "needs_confirm": true, "text": card.text, "expect": card.expect})),
+            Some(typed) if typed.trim() == card.expect => {}
+            Some(_) => return Ok(json!({"ok": false, "message": format!("that is not `{}`: nothing changed", card.expect)})),
+        }
+        let reason = p["reason"].as_str().unwrap_or("");
+        let now = delphi_core::time::parse_rfc3339(&self.engine.now()).unwrap_or(0);
+        let batch = crate::fact_audit::raise_latch_by(&state, to, reason, force, now, "console").map_err(|e| err(code::INVALID_PARAMS, e))?;
+        Ok(json!({"ok": true, "message": format!("latch raised to {}; a new audit batch ({batch}) starts", to.as_str())}))
+    }
+
     fn ratify_list(&self) -> RpcOutcome {
         let ps = crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir);
         let today = self.engine.now()[..10].to_string();
@@ -1629,6 +1654,7 @@ impl Extension for ServiceExt {
                 "org.view" => svc.org_view(&ctx),
                 "org.action" => svc.org_action(params, ctx).await,
                 "org.trust" => svc.org_trust(params, ctx).await,
+                "validation.latch" => svc.validation_latch(params, ctx).await,
                 "ratify.list" => svc.ratify_list(),
                 "ratify.apply" => svc.ratify_change(params, ctx, false).await,
                 "retro.list" => svc.retro_list(ctx),
@@ -2305,6 +2331,44 @@ mod tests {
         assert!(delphi_core::bundles::read(&f.engine.ws.dir).unwrap().bundle[0].raised());
     }
 
+    // specs/040 §25 V2d-3: the latch is raised by the operator in the console after typing the word, never by anything else.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn validation_latch_raises_only_for_the_console_after_the_word_is_typed_and_force_needs_its_own_word() {
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let state = crate::fact_mode::state_dir(&f.engine.ws.dir);
+        crate::fact_mode::lower_latch(&state, delphi_adapter::config::ValidatorMode::Off, "a false audit").unwrap();
+        let s = serve(&f).await;
+        let (sock, tok, nsock, ntok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        let (card, wrong, no_reason, to_ratify, force_card, forced, narrator) = blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let card = c.call("validation.latch", json!({"to": "advisory", "reason": "the audit was my own mistake"})).unwrap();
+            let wrong = c.call("validation.latch", json!({"to": "advisory", "reason": "the audit was my own mistake", "confirm": "yes"})).unwrap();
+            let no_reason = rpc_code(c.call("validation.latch", json!({"to": "advisory", "reason": "x", "confirm": "advisory"})));
+            let to_ratify = rpc_code(c.call("validation.latch", json!({"to": "ratify", "reason": "the audit was my own mistake"})));
+            let force_card = c.call("validation.latch", json!({"to": "ratify", "force": true, "reason": "the audit was my own mistake"})).unwrap();
+            let forced = c.call("validation.latch", json!({"to": "ratify", "force": true, "reason": "the audit was my own mistake", "confirm": "force ratify"})).unwrap();
+            let mut n = Client::connect(&nsock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&ntok).unwrap();
+            let narrator = rpc_code(n.call("validation.latch", json!({"to": "advisory", "reason": "the audit was my own mistake", "confirm": "advisory"})));
+            (card, wrong, no_reason, to_ratify, force_card, forced, narrator)
+        })
+        .await;
+        assert_eq!((card["needs_confirm"].as_bool(), card["expect"].as_str()), (Some(true), Some("advisory")));
+        assert_eq!(wrong["ok"].as_bool(), Some(false));
+        assert_eq!(no_reason, Some(code::INVALID_PARAMS), "a raise needs a reason, even with the right word");
+        assert_eq!(to_ratify, Some(code::INVALID_PARAMS), "ratify needs PROMOTE or the forced card");
+        assert_eq!(force_card["expect"].as_str(), Some("force ratify"));
+        assert_eq!(forced["ok"].as_bool(), Some(true), "{forced}");
+        assert_eq!(narrator, Some(code::FORBIDDEN), "no other scope reaches it, even with the right word");
+        let journal = crate::fact_audit::Journal::new(&state).all();
+        let raises: Vec<_> = journal.iter().filter(|e| e["kind"] == "latch" && e["act"] == "raise").collect();
+        assert_eq!(raises.len(), 1, "only the confirmed act wrote anything: {raises:?}");
+        assert_eq!((raises[0]["by"].as_str(), raises[0]["forced"].as_bool()), (Some("console"), Some(true)));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn the_narrator_scope_can_read_but_never_change_anything() {
         let f = setup(vec![Step::text("x")], 5.0, |_| {});
@@ -2314,7 +2378,7 @@ mod tests {
             let mut c = Client::connect(&sock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             c.hello(&tok).unwrap();
-            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
+            for (m, p) in [("task.submit", json!({"prompt": "hi"})), ("task.cancel", json!({})), ("build.start", json!({"prompt": "hi"})), ("council.start", json!({"proposition": "hi"})), ("bundle.distill", json!({})), ("kb.index", json!({})), ("xenia.quarantine", json!({"query": "x"})), ("xenia.status", json!({})), ("xenia.attest.prepare", json!({"action": "endorse"})), ("xenia.attest.decide", json!({"code": "x", "decision": "sign"})), ("xenia.admin.prepare", json!({"action": "refresh"})), ("xenia.admin.decide", json!({"code": "x", "decision": "sign"})), ("org.action", json!({"action": "remove", "name": "x"})), ("org.trust", json!({"action": "raise", "name": "x", "confirm": "x"})), ("validation.latch", json!({"to": "advisory", "reason": "a good reason", "confirm": "advisory"})), ("org.view", json!({})), ("approval.resolve", json!({"approval_id": "a", "payload_blake3": "b", "decision": "allow"})), ("budget.set", json!({"usd": 99})), ("permissions.set", json!({"mode": "mission-auto"})), ("mission.open", json!({})), ("session.new", json!({})), ("session.context", json!({})), ("council.follow", json!({})), ("settings.get", json!({})), ("settings.set", json!({})), ("settings.accept", json!({})), ("settings.dismiss", json!({}))] {
                 assert_eq!(rpc_code(c.call(m, p)), Some(code::FORBIDDEN), "{}", m);
             }
             for m in ["usage.get", "approval.list", "permissions.get", "budget.get", "session.snapshot", "observe.snapshot", "observe.state"] {

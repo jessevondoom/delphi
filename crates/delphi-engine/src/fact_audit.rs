@@ -331,21 +331,50 @@ pub fn unquarantine(state: &Path, store: &FactStore, fact: &str, reason: &str, n
 /// Operator act: raise the latch again. Needs a reason; to `ratify` it needs PROMOTE or an explicit `force`. A new
 /// batch begins, and the act is logged as the operator's (L5).
 pub fn raise_latch(state: &Path, to: ValidatorMode, reason: &str, force: bool, now: i64) -> Result<String, String> {
-    if reason.trim().chars().count() < 8 {
-        return Err("a reason of at least a few words is required".into());
-    }
-    let from = read_latch(state);
-    if to <= from.ceiling {
-        return Err(format!("the latch is already at {}; raising goes up, and lowering is automatic", from.ceiling.as_str()));
+    raise_latch_by(state, to, reason, force, now, "operator")
+}
+
+/// What the operator is shown before a console raise, and the word they must type (`specs/040` §25 V2d-3).
+pub struct LatchCard {
+    pub text: String,
+    pub expect: String,
+}
+
+fn check_raise(state: &Path, to: ValidatorMode, force: bool) -> Result<ValidatorMode, String> {
+    let from = read_latch(state).ceiling;
+    if to <= from {
+        return Err(format!("the latch is already at {}; raising goes up, and lowering is automatic", from.as_str()));
     }
     if to == ValidatorMode::Ratify && !force && !promote_is_yes(state) {
         return Err("PROMOTE is not yes (`delphi validation report`); --force is an operator act and is logged".into());
     }
+    Ok(from)
+}
+
+/// The approval card for a latch raise or `--force`: refused when the raise itself would be, otherwise the text and the
+/// exact word to type. Nothing is written; only [`raise_latch_by`] with the typed word does that.
+pub fn latch_card(state: &Path, to: ValidatorMode, force: bool) -> Result<LatchCard, String> {
+    if to == ValidatorMode::Off {
+        return Err("`to` is advisory or ratify".into());
+    }
+    let from = check_raise(state, to, force)?;
+    let expect = if force { format!("force {}", to.as_str()) } else { to.as_str().to_string() };
+    let forced = if force { " PROMOTE is not yes: forcing is logged as forced and is yours alone." } else { "" };
+    let text = format!("Raise the validator's latch from {} to {}.{forced} A new audit batch starts, so older facts stay with the old one. Nothing a source, a span or the daemon does can raise it. Type `{expect}` to confirm.", from.as_str(), to.as_str());
+    Ok(LatchCard { text, expect })
+}
+
+/// The raise itself, journaled with who confirmed it (`operator` at the terminal, `console` after the typed word).
+pub fn raise_latch_by(state: &Path, to: ValidatorMode, reason: &str, force: bool, now: i64, by: &str) -> Result<String, String> {
+    if reason.trim().chars().count() < 8 {
+        return Err("a reason of at least a few words is required".into());
+    }
+    let from = check_raise(state, to, force)?;
     let f = json!({"ceiling": to.as_str(), "reason": format!("raised by the operator: {}", reason.trim().chars().take(160).collect::<String>())});
     std::fs::create_dir_all(state).map_err(|e| e.to_string())?;
     std::fs::write(state.join("latch.json"), serde_json::to_vec_pretty(&f).unwrap_or_default()).map_err(|e| e.to_string())?;
     let batch = start_new_batch(state);
-    Journal::new(state).append("latch", json!({"act": "raise", "from": from.ceiling.as_str(), "to": to.as_str(), "reason": reason.trim(), "forced": force, "by": "operator", "level": "L5", "batch": batch}), now);
+    Journal::new(state).append("latch", json!({"act": "raise", "from": from.as_str(), "to": to.as_str(), "reason": reason.trim(), "forced": force, "by": by, "level": "L5", "batch": batch}), now);
     Ok(batch)
 }
 
