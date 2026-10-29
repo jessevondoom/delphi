@@ -345,7 +345,7 @@ Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | KB | `context/model-selection-evidence.md`: dated external evidence by family, capability classes, planner and executor results | written, status `draft` |
-| M0 | candidate inventory in `delphi capabilities` | not started |
+| M0 | candidate inventory in `delphi capabilities` | built (`delphi-engine/src/models.rs`, `delphi capabilities --models [--json]`): candidates from the configured pool and the CLIs' model lists (Codex, Claude, Agy, Ollama; Copilot seats appear as pool endpoints), attributes as reported, all `unclassified` until M1, a vanished model kept as `gone` in `local/model-candidates.json` |
 | M1 | class rules as a ratified data file, classifier | not started |
 | M2 | assignment in `resolve_model_route` behind `[routing] assignment` | not started |
 | M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | not started |
