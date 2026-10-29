@@ -659,6 +659,12 @@ fn check_bundles(ws: &Workspace, home: &Path, r: &mut Report) {
             r.warn("12 bundles", e.id(), format!("update available: {} -> {} at {}; `delphi bundle update {}` applies it", e.version, line, e.source.path, e.name));
         }
     }
+    // The orchestrator lists at most 20 bundle agents; the rest stay dispatchable by name (`specs/041` §3.3).
+    let paths = delphi_engine::workspace::WorkspacePaths { home: home.to_path_buf(), dir: ws.dir.clone() };
+    let (agents, unlisted) = delphi_engine::bundle_load::catalog_counts(&paths);
+    if unlisted > 0 {
+        r.warn("12 bundles", "local/bundles.lock", format!("{} bundle agents are active; the orchestrator's list shows {} and {} are not listed (they can still be dispatched by name)", agents, agents - unlisted, unlisted));
+    }
     // How far each bundle's vectors are (`specs/027` §5.4): search is lexical for a bundle until they are complete, which
     // is normal for a while after an add and so is information, not a warning. A cache that failed its spot check is
     // worth a look: its publisher's vectors did not match what this install's model makes from the same text.

@@ -590,7 +590,9 @@ fn args(l: &Launch) -> Vec<String> {
     if l.cli == Cli::Codex {
         // Nothing persisted, none of the operator's own configuration, and a read-only sandbox: this seat reads, it does
         // not act. The prompt arrives on stdin (`-`). The git check is skipped because a span runs in Delphi's scratch directory.
-        let mut a = strings(&["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--model", l.model.as_str()]);
+        // The read-only sandbox stops writes but not reads outside the directory (probe, specs/047 §5), so the shell is
+        // switched off: a reader seat has no way to run a command at all.
+        let mut a = strings(&["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--model", l.model.as_str(), "--config", "features.shell_tool=false"]);
         if let Some(e) = &o.effort {
             push_flag(&mut a, "--config", Some(format!("model_reasoning_effort=\"{}\"", e)));
         }
@@ -1324,7 +1326,7 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
     fn codex_is_launched_read_only_and_ephemeral_with_the_prompt_on_stdin() {
         let mk = |tools, opts| Launch { cli: Cli::Codex, program: "codex".into(), model: "gpt-x".into(), system_prompt: "SYS".into(), user_prompt: "hi".into(), cwd: PathBuf::from("/scratch"), tools, env: BTreeMap::new(), profile: Default::default(), opts };
         let a = args(&mk(Tools::None, Opts::default()));
-        assert_eq!(a, ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--model", "gpt-x", "-"]);
+        assert_eq!(a, ["exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only", "--model", "gpt-x", "--config", "features.shell_tool=false", "-"]);
         let o = Opts { effort: Some("low".into()), json_schema: Some("{}".into()), add_dirs: vec![PathBuf::from("/x")], sandbox: true, api_key: Some(delphi_adapter::credential::Secret::new("k".into(), None)), ..Default::default() };
         let a = args(&mk(Tools::Standard, o)).join(" ");
         assert!(a.contains("--config model_reasoning_effort=\"low\"") && a.contains("--output-schema /scratch/delphi-output-schema.json"), "{}", a);

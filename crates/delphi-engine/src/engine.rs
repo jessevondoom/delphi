@@ -701,6 +701,13 @@ impl Engine {
                     }
                 }
             }
+            // The operator's answers to decisions that were raised: told once to the role that raised them and once to the orchestrator.
+            if let Some((ids, text)) = m.replay().ok().and_then(|events| crate::decision_raised::undelivered(&events, &sc.role)) {
+                slices.push(ContextSlice { label: "@runtime/decision-answers".into(), tier: "L5".into(), text });
+                for id in ids {
+                    m.append(sc.ev("decision.delivered", json!({"id": id, "to": sc.role}))).await?;
+                }
+            }
             // Every role with tools reports finished work to the change log (`record_change`), not in its reply.
             if !sc.toolless {
                 slices.push(ContextSlice { label: "@runtime/change-log".into(), tier: "L3".into(), text: tools::CHANGE_LOG_NOTE.into() });
@@ -1546,6 +1553,19 @@ impl Engine {
             let r = self.tools.run(&mut ctx, name, args);
             (r, std::mem::take(&mut ctx.stamps), std::mem::take(&mut ctx.events))
         };
+        // A raised decision gets its id and meets the mission's limit here, against the log (`decision_raised::admit`).
+        let (mut result, mut asked) = (result, asked);
+        if let Some(i) = asked.iter().position(|(k, _)| k == "decision.raised") {
+            let (_, args) = asked.remove(i);
+            let admitted = crate::decision_raised::parse(&args).and_then(|r| sc.m.replay().map_err(|e| e.to_string()).and_then(|log| crate::decision_raised::admit(&log, &r)));
+            match admitted {
+                Ok((id, payload)) => {
+                    result = tools::ToolResult::ok(format!("raised as {}; the operator will answer in the decisions pane and you will be told the answer", id));
+                    asked.insert(i, ("decision.raised".into(), payload));
+                }
+                Err(e) => result = tools::ToolResult::err(e),
+            }
+        }
         let mut events: Vec<EventEnvelope> = stamps.iter().map(|s| sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(s.zone, &s.path, &s.blake3, s.tier))).collect();
         events.extend(asked.into_iter().map(|(kind, payload)| sc.ev(&kind, payload)));
         if sc.span.ceiling() != before {

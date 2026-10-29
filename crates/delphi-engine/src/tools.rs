@@ -184,6 +184,12 @@ impl Registry {
             exec: ToolExec::Local(name_thread),
         });
         r.register(ToolSpec {
+            def: read_def("raise_decision", "Put a decision in front of the operator's decisions pane, with its own brief, when only they can make it: a spec to approve, an open question, a Council deadlock, a release go/no-go, a budget call. `kind` is spec, question, council, release or budget. `title` is at most 100 characters; `summary` at most 400 (what it is); `changes` up to 5 lines of at most 120 (what accepting adds or changes); `choices` 2 to 5 of {id, label, reversible}; `recommendation` optional {choice_id, why} naming one of the choices; `related` an optional path or task id. Calling it again with the same kind, title and related updates the open decision. You cannot answer it: the operator does, and you are told the answer. At most 10 are open in a mission.", json!({"type": "object", "required": ["kind", "title", "summary", "choices"], "properties": {"kind": {"type": "string", "enum": ["spec", "question", "council", "release", "budget"]}, "title": {"type": "string"}, "summary": {"type": "string"}, "changes": {"type": "array", "items": {"type": "string"}}, "choices": {"type": "array", "items": {"type": "object", "required": ["id", "label"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "reversible": {"type": "boolean"}}}}, "recommendation": {"type": "object", "properties": {"choice_id": {"type": "string"}, "why": {"type": "string"}}}, "related": {"type": "string"}}})),
+            requires_write_scope: false,
+            classify: classify_raise_decision,
+            exec: ToolExec::Local(raise_decision),
+        });
+        r.register(ToolSpec {
             def: read_def("record_change", "Record one finished change in the operator's change log, as a plain sentence about the result and not your reasoning: `reworked the permission model to be less intrusive; removed ratify requirements for explicit updates`. Call it once per piece of work you finish (a fix, a feature, a decision carried out, a document written), right after it is done, instead of narrating it in your reply. The log is kept by session with timestamps, shown in the operator's window, and read back for the chat summary and pull request descriptions. Say what changed and, if short, why it matters. Never paste code, secrets or your reasoning.", json!({"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string", "maxLength": 300}, "files": {"type": "array", "items": {"type": "string"}, "maxItems": 20}}})),
             requires_write_scope: false,
             classify: classify_record_change,
@@ -316,6 +322,28 @@ fn name_thread(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
     ctx.events.push(("thread.named".into(), json!({"thread": thread, "label": label, "tasks": tasks})));
     ToolResult::ok(format!("thread `{}` is now \"{}\" with {} task(s)", thread, label, tasks.len()))
+}
+
+/// Raising a decision writes one event the operator reads; it decides nothing and touches no file, so it never asks.
+fn classify_raise_decision(tool: &str, args: &Value) -> Result<Classified, ToolError> {
+    let r = crate::decision_raised::parse(args).map_err(ToolError)?;
+    Ok(Classified { tool: tool.into(), tier: ToolTier::Green, kind: ActionKind::Read, summary: format!("{} {}", tool, r.title), payload: args.clone(), pattern: format!("{} {}", tool, r.kind) })
+}
+
+/// The call is checked and cleaned here; the engine gives it its id and enforces the limit against the log (`decision_raised::admit`).
+fn raise_decision(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
+    if !crate::decision_raised::RAISERS.contains(&ctx.role) {
+        return ToolResult::err("only the orchestrator, architect and strategist raise decisions; say what you need decided in your report instead");
+    }
+    // A span that read untrusted content cannot put a decision in front of the operator (specs/044 §4.4).
+    if ctx.span.ceiling() < Tier::L3 {
+        return ToolResult::err("this span has read untrusted content, so it cannot raise a decision; report what you found instead");
+    }
+    if let Err(e) = crate::decision_raised::parse(args) {
+        return ToolResult::err(e);
+    }
+    ctx.events.push(("decision.raised".into(), args.clone()));
+    ToolResult::ok("raised; the operator will answer in the decisions pane and you will be told the answer".to_string())
 }
 
 /// Recording a change touches nothing but the operator's change log, so it never asks.
@@ -900,8 +928,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -1466,7 +1494,7 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "xenia_search", "xenia_help", "external_available", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
     }
 }

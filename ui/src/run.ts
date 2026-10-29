@@ -15,6 +15,8 @@ export type Ctx = {
   started?: () => void;
   /** Opens a command in a new terminal window; null when it opened, else why not. Defaults to the real thing. */
   open?: (argv: string[]) => Promise<string | null>;
+  /** Opens the decisions pane (the right deck). `/decisions` with no argument uses it; without it (a script, a test) the text list is posted. */
+  openDecisions?: () => void;
 };
 
 const errText = (e: any): string => (e && typeof e === 'object' && 'message' in e ? String(e.message) : String(JSON.stringify(e)));
@@ -227,7 +229,11 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       ctx.post(running.length ? running.map((s) => `${'  '.repeat(s.depth)}${roleName(s.role, ctx.info)} · ${s.task} · ${s.tool ?? 'working'}`).join('\n') : 'Nothing is running.');
       return;
     }
-    case 'decisions': { ctx.post(await decisions(ctx.cmd, ctx.mission, rest)); return; }
+    case 'decisions': {
+      // No argument: the pane, with every decision owed (specs/044). `list`, `show`, `ratify` and `reject` keep their text forms.
+      if (!rest.length && ctx.openDecisions) { ctx.openDecisions(); return; }
+      ctx.post(await decisions(ctx.cmd, ctx.mission, rest)); return;
+    }
     case 'xenia': {
       // The org store: status, and the steward's card. The daemon builds the card and signs only on the code the operator types back.
       const x = parseXenia(arg);

@@ -32,7 +32,7 @@ pub fn clean(s: &str, max: usize) -> String {
     }
 }
 
-fn rank(tier: &str) -> u8 {
+pub fn rank(tier: &str) -> u8 {
     match tier {
         "red" => 0,
         "amber" => 1,

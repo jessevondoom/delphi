@@ -7,6 +7,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 ## Use it
 
 - [README](README.md): what it is, how it works, install, quick start, configuration, limitations
+- [Thesis](docs/thesis.md): why Delphi exists (research and strategy with shared, trusted knowledge), the claim, and how to judge a change
 - [Getting started](docs/getting-started.md): install, first session, first build
 - [Model access](docs/guides/model-access.md): endpoints, subscriptions, failover, local fallback
 - [Builds and Councils](docs/guides/builds-and-councils.md): the build ladder, gates, optimistic builds, Councils
