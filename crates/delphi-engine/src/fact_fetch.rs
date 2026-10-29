@@ -121,6 +121,12 @@ pub struct Tainted<T>(T);
 pub struct NotTainted;
 
 impl<T> Tainted<T> {
+    /// For the daemon's own code, which reduces the value to hashes, classes and counts and never prints it. The only
+    /// other consumer is the entailment judge's prompt, which is built from an extracted sentence (`fact_judge`).
+    pub(crate) fn for_daemon(&self) -> &T {
+        &self.0
+    }
+
     pub fn reveal(&self, span: &Span) -> Result<&T, NotTainted> {
         if span.ceiling().is_external() { Ok(&self.0) } else { Err(NotTainted) }
     }
@@ -182,6 +188,13 @@ impl Snapshot {
             cloaked: self.cloaked,
         }
     }
+}
+
+/// A snapshot the way a fetch would have built it, for tests of the checks that run over stored snapshots.
+#[cfg(test)]
+pub(crate) fn test_snapshot(url: &str, title: &str, paragraphs: &[&str]) -> Snapshot {
+    let body = format!("<html><head><title>{}</title></head><body>{}</body></html>", title, paragraphs.iter().map(|p| format!("<p>{}</p>", p)).collect::<String>());
+    build(Raw { final_url: Url::parse(url).unwrap(), status: 200, headers: vec![], content_type: "text/html".into(), body: body.into_bytes(), truncated: false, redirects: vec![] }, false)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

@@ -1,7 +1,12 @@
 //! `delphi-engine`: what runs inside the daemon: tools, approvals and the agent loop.
 
 pub mod approval;
+pub mod fact_check;
 pub mod fact_fetch;
+pub mod fact_judge;
+pub mod fact_mode;
+pub mod fact_run;
+pub mod fact_sources;
 pub mod session;
 pub mod settings_run;
 pub mod settings_store;
