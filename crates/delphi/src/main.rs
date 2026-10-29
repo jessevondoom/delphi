@@ -64,6 +64,7 @@ mod theme;
 mod timers_cmd;
 mod train;
 mod update;
+mod validation_audit_cmd;
 mod validation_cmd;
 
 use std::path::PathBuf;
@@ -95,7 +96,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "This is the text form for a shell. In the console, `/decisions` with no argument opens the decisions pane:\nevery approval card, provisional decision and agent-raised decision you owe, one at a time." },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "validation", about: "score the labelled claim set: counts and rates only", synopsis: "  delphi validation score [--set <file>] [--results <file>] [--home <dir>]", detail: "Operator-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run. With --results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation-set.md." },
+    Cmd { group: "Work", name: "validation", about: "score the labelled set; audit, report on and retract validated facts", synopsis: "  delphi validation score [--set <file>] [--results <file>] [--home <dir>]\n  delphi validation audit [--card <id>] [--workspace <name>]\n  delphi validation report [--workspace <name>]\n  delphi validation latch raise --to advisory|ratify --reason \"<text>\" [--force] [--workspace <name>]\n  delphi validation retract --all [--workspace <name>]", detail: "Operator-run; every subcommand refuses inside an agent seat, and `audit` needs a terminal. `score` reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run; it also keeps those counts for `report`. `audit` is the blind audit: it shows one claim from the validator's checks and nothing else, asks true, false or unsure, records your answer, and only then shows the sources and the verdict. A fact you call false trips the latch to advisory, withdraws PROMOTE and quarantines the facts of that batch; a would-ratify card left unanswered for seven days quarantines its fact. `report` prints the audit counts, the rule-of-three bound, the origin shares and the token use, then PROMOTE: yes or no with the conditions it missed, and writes promote.json; it never runs the validator. `latch raise` is the only way up from a tripped latch: it needs a reason, starts a new audit batch, and for ratify needs PROMOTE: yes or --force, which is logged as forced. `retract --all` marks every validated fact superseded by its retraction (nothing is deleted; disproved facts are left as they are) and lists the missions recorded as having read one; it does not mark them stale. Format: docs/reference/validation-set.md." },
     Cmd { group: "Work", name: "claims", about: "the library's claims: statements anchored in sources, pulled by pointer", synopsis: "  delphi claims add <text> [--kind fact|episode|procedure|attributed] [--scope personal|project|team|org] [--project <name>]\n    [--valid-until YYYY-MM-DD] [--supersedes <claim>] [--source <id> --locator <where> --quote <passage>] [--home <dir>]\n  delphi claims anchor <claim> --source <id> --quote <passage> [--locator <where>] [--prefix <t>] [--suffix <t>] [--home <dir>]\n  delphi claims list [--json] [--home <dir>]\n  delphi claims show <claim> [--json] [--home <dir>]\n  delphi claims validate <claim> [--home <dir>]\n  delphi claims pull <words...> [--project <name>] [--json] [--home <dir>]", detail: "A claim is a short statement kept once per install in <home>/library/claims/, with anchors into the library's sources: the source, version, locator, the exact quote and a little text on each side. Its status is derived by the daemon and never typed: a new claim reads not validated, and only `validate` (you, in a terminal; refused inside an agent seat) records a validation, which counts only while an anchor still holds. An attributed claim (an opinion) is never validated as a fact. A source held whole is anchored by quote in its text; one that is not (excerpts, pointer) only inside an excerpt you kept, so a claim cannot quote more of a restricted work than the excerpt bounds allow. When a source gets a new version each anchor is looked up again by its quote, then by its surroundings: found moves to the new version, not found marks the claim contested and leaves the old anchor readable under versions/; nothing is re-pointed to different text. A source marked retired contests the claims it alone supports; `sources purge` turns every anchor into it pointer-only (the quote goes with the capture, the citation and quote hash stay) and a claim no other source supports then reads not validated. `sources show` lists how many of a source's claims stood, were contested or disproved. Every mission start pulls claims from this one library by pointer, chosen by the words of the prompt and the project, ranked by status, recency and how often they were relied on; disproved and retired claims are not offered, and a project-scoped claim goes only to its project. The agent gets the id, status label, origin and score, never the text; opening it is a tainted, read-only read, and a claim that rests on a private source is withheld. `pull` shows what a mission start would be handed and records nothing. The library records which missions were handed a claim (`cited_by`). `add`, `anchor` and `validate` are refused inside an agent seat." },
     Cmd { group: "Work", name: "sources", about: "the library's sources: capture, excerpts, bibliography", synopsis: "  delphi sources add <url | file | doi> [--level full|excerpts|pointer] [--licence <id>] [--private]\n    [--title <t>] [--rights-holder <name>] [--attribution <text>] [--max-text-mib <n>] [--max-source-mib <n>] [--home <dir>]\n  delphi sources list [--json] [--home <dir>]\n  delphi sources show <id> [--json] [--offline] [--home <dir>]\n  delphi sources excerpt add <id> --locator <where> --purpose <why> (--text <passage> | --file <file>) [--prefix <t>] [--suffix <t>]\n    [--work-bytes <n>] [--home <dir>]\n  delphi sources excerpt list <id> [--json] [--home <dir>]\n  delphi sources bib [<id>...] [--format apa|mla|chicago|plain|csl-json|bibtex] [--home <dir>]\n  delphi sources purge <id> [--home <dir>]", detail: "One library per install, in <home>/library/. A URL is fetched by the validation fetcher (https only, no private addresses, size cap, cloaking check). The licence decides the level: open licences and your own material are kept whole, restricted ones as excerpts, an unknown one as a pointer; --private keeps a restricted source whole for your own use and it never leaves this install. Everything captured reads not validated. Limits: 64 MiB of text and 512 MiB per source, 20 GiB for the library; over a limit the capture falls back and says so. `purge` deletes the capture and keeps the citation and the content hash. Metadata is read by code, never guessed: Wikipedia (CC BY-SA, the revision from the ETag), a DOI's landing page (citation meta tags) and a Gutenberg header; a field the page does not state is left empty. `show` is an open: if the source was last checked more than 30 days ago it is fetched once through the same fetcher (no tokens; skipped offline or with --offline), an unchanged page only moves last_checked, a changed one becomes a new version with a change note and the old one kept, and a gone one (404/410) is marked retired. `excerpt add` keeps one quoted passage with its locator and purpose: at most 4 KiB each, and for a restricted source not held whole at most 10% of the work or 16 KiB in total (the work's length is recorded at capture, or give --work-bytes); each excerpt carries an anchor (quote, prefix and suffix, and a character range when the text is held) that is looked up again when the source changes, and one that cannot be found is marked contested, never re-pointed. `bib` writes a bibliography from the citation fields alone, in apa, mla, chicago or plain text, or as csl-json or bibtex for a reference manager; private sources are left out of every export. `add`, `purge`, `excerpt add` and `bib` are refused inside an agent seat." },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
@@ -853,13 +854,17 @@ fn cmd_narrator(args: &[String]) -> i32 {
 }
 
 fn cmd_validation(args: &[String]) -> i32 {
-    if args.first().map(String::as_str) != Some("score") {
-        eprintln!("usage: delphi validation score [--set <file>] [--results <file>] [--home <dir>]");
+    let sub = args.first().map(String::as_str);
+    if !matches!(sub, Some("score" | "audit" | "report" | "latch" | "retract")) {
+        eprintln!("usage: delphi validation score|audit|report|latch raise|retract --all (delphi help validation)");
         return 2;
     }
     if xenia_terminal::inside_an_agent_seat() {
-        eprintln!("delphi validation score: refused; the labelled set is the operator's and this process was started by an agent seat");
+        eprintln!("delphi validation {}: refused; this is the operator's and this process was started by an agent seat", sub.unwrap_or(""));
         return 2;
+    }
+    if sub != Some("score") {
+        return cmd_validation_audit(args);
     }
     let home = home::delphi_home(flag(args, "--home").as_deref());
     match validation_cmd::run(flag(args, "--set").map(PathBuf::from), flag(args, "--results").map(PathBuf::from), &home) {
@@ -871,6 +876,52 @@ fn cmd_validation(args: &[String]) -> i32 {
             log_cli_error("validation", "the labelled-set score failed");
             eprintln!("delphi validation score: {e}");
             2
+        }
+    }
+}
+
+fn cmd_validation_audit(args: &[String]) -> i32 {
+    let (home, ws) = match resolve_ws("validation", args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let done = |r: Result<String, String>| match r {
+        Ok(t) => {
+            print!("{t}");
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi validation: {e}");
+            2
+        }
+    };
+    match args[0].as_str() {
+        "report" => done(validation_audit_cmd::report(&ws.dir, &home)),
+        "retract" if args.iter().any(|a| a == "--all") => done(Ok(validation_audit_cmd::retract(&ws.dir))),
+        "retract" => {
+            eprintln!("usage: delphi validation retract --all");
+            2
+        }
+        "latch" if args.get(1).map(String::as_str) == Some("raise") => {
+            let (to, reason) = (flag(args, "--to").unwrap_or_default(), flag(args, "--reason").unwrap_or_default());
+            done(validation_audit_cmd::latch_raise(&ws.dir, &to, &reason, args.iter().any(|a| a == "--force")))
+        }
+        "latch" => {
+            eprintln!("usage: delphi validation latch raise --to advisory|ratify --reason \"<text>\" [--force]");
+            2
+        }
+        _ => {
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprintln!("delphi validation audit: needs a terminal; the answer is yours to give");
+                return 2;
+            }
+            match validation_audit_cmd::audit(&ws.dir, flag(args, "--card").as_deref(), &mut std::io::stdin().lock(), &mut std::io::stdout()) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("delphi validation audit: {e}");
+                    2
+                }
+            }
         }
     }
 }

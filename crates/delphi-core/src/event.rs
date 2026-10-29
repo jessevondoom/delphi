@@ -40,6 +40,12 @@ pub struct EventEnvelope {
     #[serde(rename = "type")]
     pub kind: String,
     pub payload: Value,
+    /// The hash chain (`specs/040` §21.6): the previous event's `h`, and `h = blake3(prev || canonical bytes of this event
+    /// without `h`)`. Written by the log, never by a caller; a log from before the chain has neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<String>,
 }
 
 impl EventEnvelope {
@@ -64,7 +70,20 @@ impl EventEnvelope {
             round: None,
             kind: kind.into(),
             payload,
+            prev: None,
+            h: None,
         }
+    }
+
+    /// The chain hash of this event given the previous one: over the event's own canonical JSON with `h` left out.
+    pub fn chain_hash(&self, prev: &str) -> String {
+        let mut bare = self.clone();
+        bare.h = None;
+        bare.prev = Some(prev.to_string());
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(prev.as_bytes());
+        hasher.update(&serde_json::to_vec(&bare).unwrap_or_default());
+        hasher.finalize().to_hex().to_string()
     }
 
     /// Required fields (`specs/005` §2.2): everywhere `mission_id`, `type`, an object `payload`; on

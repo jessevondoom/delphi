@@ -144,13 +144,17 @@ the wakes the daemon is keeping for roles.
     [\-\-mission <id>] [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .SS delphi validation
-score the labelled claim set: counts and rates only.
+score the labelled set; audit, report on and retract validated facts.
 .PP
 .nf
   delphi validation score [\-\-set <file>] [\-\-results <file>] [\-\-home <dir>]
+  delphi validation audit [\-\-card <id>] [\-\-workspace <name>]
+  delphi validation report [\-\-workspace <name>]
+  delphi validation latch raise \-\-to advisory|ratify \-\-reason "<text>" [\-\-force] [\-\-workspace <name>]
+  delphi validation retract \-\-all [\-\-workspace <name>]
 .fi
 .PP
-Operator\-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false\-ratified, poisoned passes, wrongly\-escalated rate, the rule\-of\-three bound and the claims new since the last scored run. With \-\-results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation\-set.md.
+Operator\-run; every subcommand refuses inside an agent seat, and `audit` needs a terminal. `score` reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false\-ratified, poisoned passes, wrongly\-escalated rate, the rule\-of\-three bound and the claims new since the last scored run; it also keeps those counts for `report`. `audit` is the blind audit: it shows one claim from the validator's checks and nothing else, asks true, false or unsure, records your answer, and only then shows the sources and the verdict. A fact you call false trips the latch to advisory, withdraws PROMOTE and quarantines the facts of that batch; a would\-ratify card left unanswered for seven days quarantines its fact. `report` prints the audit counts, the rule\-of\-three bound, the origin shares and the token use, then PROMOTE: yes or no with the conditions it missed, and writes promote.json; it never runs the validator. `latch raise` is the only way up from a tripped latch: it needs a reason, starts a new audit batch, and for ratify needs PROMOTE: yes or \-\-force, which is logged as forced. `retract \-\-all` marks every validated fact superseded by its retraction (nothing is deleted; disproved facts are left as they are) and lists the missions recorded as having read one; it does not mark them stale. Format: docs/reference/validation\-set.md.
 .SS delphi claims
 the library's claims: statements anchored in sources, pulled by pointer.
 .PP

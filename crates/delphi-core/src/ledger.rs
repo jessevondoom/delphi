@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     PRIMARY KEY (mission_id, seq)
 );
 CREATE INDEX IF NOT EXISTS usage_by_mission ON usage_ledger(mission_id, role, task_id);
+CREATE TABLE IF NOT EXISTS chain_head (
+    mission_id TEXT PRIMARY KEY,
+    seq        INTEGER NOT NULL,
+    h          TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS applied (
     mission_id TEXT PRIMARY KEY,
     last_seq   INTEGER NOT NULL
@@ -123,6 +128,17 @@ impl Ledger {
         Ok(n.unwrap_or(0) as u64)
     }
 
+    /// The head of a mission's chain as of the last applied event, kept here so a cut tail is caught (`specs/040` §21.6).
+    pub fn chain_head(&self, mission_id: &str) -> Option<(u64, String)> {
+        self.conn.query_row("SELECT seq, h FROM chain_head WHERE mission_id = ?1", [mission_id], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?))).ok()
+    }
+
+    /// [`Ledger::chain_head`] read straight from a `state.db` without opening it for writing; `None` when there is no such file or head.
+    pub fn stored_chain_head(db: &Path, mission_id: &str) -> Option<(u64, String)> {
+        let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row("SELECT seq, h FROM chain_head WHERE mission_id = ?1", [mission_id], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?))).ok()
+    }
+
     /// Apply one event. Events at or below the mission's `last_seq` are ignored (idempotent); a
     /// later event that skips ahead is an error. Only `agent.usage` events add rows, but every
     /// event advances `last_seq`, so the position always matches the log.
@@ -166,6 +182,9 @@ impl Ledger {
                     u.outcome,
                 ],
             )?;
+        }
+        if let Some(h) = &e.h {
+            tx.execute("INSERT INTO chain_head(mission_id, seq, h) VALUES (?1, ?2, ?3) ON CONFLICT(mission_id) DO UPDATE SET seq = excluded.seq, h = excluded.h", params![e.mission_id, e.seq as i64, h])?;
         }
         tx.execute("INSERT INTO applied(mission_id, last_seq) VALUES (?1, ?2) ON CONFLICT(mission_id) DO UPDATE SET last_seq = excluded.last_seq", params![e.mission_id, e.seq as i64])?;
         tx.commit()?;
@@ -260,6 +279,23 @@ mod tests {
     }
 
     // specs/005 §6 test 8
+    #[test]
+    fn a_cut_tail_is_caught_by_the_head_the_ledger_kept() {
+        let t = tempfile::tempdir().unwrap();
+        fill(t.path(), "m1");
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.catch_up(t.path()).unwrap();
+        let stored = l.chain_head("m1");
+        assert!(stored.is_some());
+        let whole = crate::log::verify_chain(t.path()).unwrap().against_stored_head(stored.clone());
+        assert_eq!(whole.broken, None);
+        let last = std::fs::read_dir(t.path().join("events")).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).max().unwrap();
+        std::fs::write(&last, "").unwrap();
+        let cut = crate::log::verify_chain(t.path()).unwrap();
+        assert_eq!(cut.broken, None, "the chain itself is intact");
+        assert!(cut.against_stored_head(stored).broken.unwrap().contains("cut"));
+    }
+
     #[test]
     fn deleting_state_db_and_replaying_gives_identical_totals() {
         let t = tempfile::tempdir().unwrap();

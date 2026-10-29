@@ -44,4 +44,4 @@ Verdicts are those of the `fact-validation` skill. `would_ratify` and `ratified`
 | rule-of-three bound | with 0 false-ratified in n scored claims, the error rate is under 3/n at about 95% confidence; with any false-ratified, the observed rate is shown instead |
 | new since the last scored run | claims whose text hash was not recorded by the last scored run |
 
-After a scored run (at least one claim scored) the command writes `last-score.json` beside the set: a list of blake3 hashes of claim text, no text. A set of 41 claims bounds the error rate only to about 7%; the report states that a small set measures regressions on failures someone thought of.
+After a scored run (at least one claim scored) the command writes `last-score.json` beside the set: a list of blake3 hashes of claim text, no text, and the counts (claims scored, false-ratified, poisoned passes) that `delphi validation report` reads for PROMOTE. A set of 41 claims bounds the error rate only to about 7%; the report states that a small set measures regressions on failures someone thought of.

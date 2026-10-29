@@ -128,6 +128,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         r.push(Level::Skipped, "6 retrieval-index", "", "no state.db yet");
     }
 
+    check_event_chains(&ws.dir, &mut r);
+
     // 7. Model access: offline, from config only (probing is `--probe`).
     let cfg = fs::read_to_string(ws.dir.join("config.toml")).unwrap_or_default();
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
@@ -194,6 +196,28 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 }
 
 /// `14 error-log`: read-only; says what is recorded and where, and warns when records were lost.
+/// The event hash chain of every mission (`specs/040` §21.6): a break or a cut tail is a failure, an unchained log is said so.
+fn check_event_chains(ws: &Path, r: &mut Report) {
+    let Ok(dir) = fs::read_dir(ws.join("local/missions")) else { return };
+    let (mut ok, mut unchained) = (0u64, 0u64);
+    for d in dir.flatten().filter(|d| d.path().join("events").is_dir()) {
+        let id = d.file_name().to_string_lossy().to_string();
+        let stored = delphi_core::ledger::Ledger::stored_chain_head(&ws.join("local/state.db"), &id);
+        match delphi_core::log::verify_chain(&d.path()).map(|c| c.against_stored_head(stored)) {
+            Err(e) => r.fail("8 event-chain", &id, format!("the log cannot be read: {e}")),
+            Ok(c) if c.broken.is_some() => r.fail("8 event-chain", &id, c.broken.unwrap_or_default()),
+            Ok(c) if c.chained == 0 => unchained += 1,
+            Ok(c) => {
+                ok += 1;
+                unchained += u64::from(c.unchained > 0);
+            }
+        }
+    }
+    if ok + unchained > 0 {
+        r.push(Level::Ok, "8 event-chain", "", format!("{ok} mission log(s) chain-verified; {unchained} with events from before the chain (unchained, not covered)"));
+    }
+}
+
 fn check_error_log(home: &Path, r: &mut Report) {
     let st = delphi_core::elog::status(home);
     let level = st.settings.level.as_str();
@@ -779,6 +803,25 @@ mod tests {
     }
 
     // specs/006 §6 test 6 (doctor part): a fresh offline init passes doctor with exit 0.
+    // specs/040 §21.6: an edited event log fails doctor; an intact one is said to be chain-verified.
+    #[test]
+    fn a_tampered_event_log_fails_the_chain_check_and_an_intact_one_passes() {
+        let (_t, home, ws, _p) = setup();
+        let m = ws.dir.join("local/missions/m1");
+        let mut log = delphi_core::log::EventLog::open(&m, Default::default()).unwrap();
+        for i in 0..3 {
+            log.append(delphi_core::event::EventEnvelope::new("m1", "mission.note", serde_json::json!({"i": i}))).unwrap();
+        }
+        drop(log);
+        let r = run(&home, &ws, &Options::default());
+        assert_eq!(r.exit_code(), 0);
+        assert!(r.findings.iter().any(|f| f.check == "8 event-chain" && f.level == Level::Ok && f.message.contains("1 mission log(s) chain-verified")));
+        let seg = m.join("events/000001.jsonl");
+        fs::write(&seg, fs::read_to_string(&seg).unwrap().replace("\"i\":1", "\"i\":9")).unwrap();
+        let r = run(&home, &ws, &Options::default());
+        assert!(r.findings.iter().any(|f| f.check == "8 event-chain" && f.level == Level::Fail), "{:?}", r.findings.iter().map(|f| &f.message).collect::<Vec<_>>());
+    }
+
     #[test]
     fn fresh_init_passes() {
         let (_t, home, ws, _p) = setup();
