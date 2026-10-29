@@ -16,6 +16,8 @@ const USAGE: &str = "usage:
   delphi claims list [--json] [--home <dir>]
   delphi claims show <claim> [--json] [--home <dir>]
   delphi claims validate <claim> [--home <dir>]
+  delphi claims confirm <claim> [--home <dir>]
+  delphi claims review [--json] [--home <dir>]
   delphi claims pull <words...> [--project <name>] [--json] [--home <dir>]";
 
 const WITH_VALUE: [&str; 13] = ["--kind", "--scope", "--project", "--valid-until", "--supersedes", "--source", "--locator", "--quote", "--prefix", "--suffix", "--home", "--workspace", "--limit"];
@@ -53,6 +55,8 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("list") => list(&lib, rest),
         Some("show") => show(&lib, rest),
         Some("validate") => validate(&lib, rest),
+        Some("confirm") => confirm(&lib, rest),
+        Some("review") => review(&lib, rest),
         Some("pull") => pull(&lib, rest),
         _ => {
             eprintln!("{}", USAGE);
@@ -175,6 +179,12 @@ fn show(lib: &Library, args: &[String]) -> i32 {
     for m in c["contested_by"].as_array().into_iter().flatten() {
         println!("  contested      {} ({})", m["reason"].as_str().unwrap_or("?"), m["source"].as_str().unwrap_or(""));
     }
+    for p in lib.contested_pairs().iter().filter(|p| p.a == *id || p.b == *id) {
+        println!("  possible conflict with {} (see `delphi claims review`)", if p.a == *id { &p.b } else { &p.a });
+    }
+    if let Some(d) = lib.review_due(&delphi_core::time::now_rfc3339()).iter().find(|d| d.id == *id) {
+        println!("  review due     {}", d.reason);
+    }
     let by = c["cited_by"].as_array().map_or(0, Vec::len);
     if by > 0 {
         println!("  relied on by   {} mission(s)", by);
@@ -201,6 +211,50 @@ fn validate(lib: &Library, args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// The operator says a claim still holds: only its `last_confirmed` date moves; no status can rise by it.
+fn confirm(lib: &Library, args: &[String]) -> i32 {
+    if !operator_only("confirm") {
+        return 2;
+    }
+    let pos = positional(args);
+    let [id] = pos[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    match lib.confirm_claim(id) {
+        Ok(c) => {
+            println!("{} confirmed today; its status is unchanged ({})", id, claims::status(&c).label());
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi claims confirm: {}", e);
+            1
+        }
+    }
+}
+
+/// Possible conflicts between claims and claims due for review. Read only; the daemon picks no winner.
+fn review(lib: &Library, args: &[String]) -> i32 {
+    let pairs = lib.contested_pairs();
+    let due = lib.review_due(&delphi_core::time::now_rfc3339());
+    if args.iter().any(|a| a == "--json") {
+        let v = serde_json::json!({"pairs": pairs.iter().map(|p| serde_json::json!({"a": p.a, "b": p.b})).collect::<Vec<_>>(), "due": due.iter().map(|d| serde_json::json!({"id": d.id, "reason": d.reason, "age_days": d.age_days})).collect::<Vec<_>>()});
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return 0;
+    }
+    if pairs.is_empty() && due.is_empty() {
+        println!("nothing to review");
+    }
+    let text = |id: &str| lib.claim(id).map(|c| clean(c["text"].as_str().unwrap_or(""), 100)).unwrap_or_default();
+    for p in &pairs {
+        println!("possible conflict (a word-overlap match, may be a false alarm; neither is picked)\n  {}  {}\n  {}  {}", p.a, text(&p.a), p.b, text(&p.b));
+    }
+    for d in &due {
+        println!("review due  {}  {}\n  {}", d.id, text(&d.id), d.reason);
+    }
+    0
 }
 
 /// What a mission start would be handed for these words: pointers, no text. It records nothing.

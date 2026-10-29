@@ -80,6 +80,7 @@ pub mod probe;
 pub mod provisional;
 pub mod decision_model;
 pub mod digest;
+pub mod digest_review;
 pub mod decision_brief;
 pub mod decision_run;
 pub mod decision_raised;
