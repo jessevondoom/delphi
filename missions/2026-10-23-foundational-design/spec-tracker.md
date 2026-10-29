@@ -250,13 +250,13 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 
 Suggested order if approved: 048 BM1, 050 ML1, 049 CX1 with 045 H2, 048 BM2/BM3, then the rest.
 
-## The validator role and fact ratification (spec 040, draft, merged 2026-10-28)
+## The validator role and fact ratification (spec 040, approved 2026-10-28)
 
-A draft, not approved: a proposal, so nothing is built from it. Decisions D-1 to D-10 are recorded (§22); open work is the operator labelling the 41-claim draft set, a Council pass on §19.6, and the operator's go for V1. Appendix A (the default source list) already seeds `context/sources/trusted.toml` for spec 028-A1; the two are meant to become one registry (see the primary-sources plan).
+Approved by the operator 2026-10-28 with the revision in §23 (aligned with 052; V1a may build now, advisory only; scoring and automatic promotion wait for the operator-labelled set). Decisions D-1 to D-10 are recorded (§22); open work is the operator labelling the 41-claim draft set, a Council pass on §19.6, and the operator's go for V1. Appendix A (the default source list) already seeds `context/sources/trusted.toml` for spec 028-A1; the two are meant to become one registry (see the primary-sources plan).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | not started (waits for approval) |
+| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels, advisory skill, role entry, records) not started, approved; V1b scoring waits for the labelled set |
 | V2 | fetcher, `fact` check, `ratify_fact`, dry-run in advisory, blind audit cards, hash chain | not started |
 
 ## Open items that are not specs
