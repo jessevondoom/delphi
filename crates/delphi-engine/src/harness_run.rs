@@ -432,9 +432,10 @@ impl Engine {
                 }
             }
             Cli::Codex => {
-                // Until the approval bridge over `app-server` is proven (`specs/047` S2, OD-1) a Codex seat is a reader.
+                // The approval bridge over `app-server` is built (`specs/047` S2b) but nothing is proven for a Builder: a file-change
+                // approval, a writable root and a conformance record are still missing (OD-1), so a Codex seat is a reader.
                 if builder {
-                    return Ok(Err(HarnessErr::retry("the codex harness cannot run a Builder yet: its approvals are not bridged (specs/047 S2); it serves read-only roles")));
+                    return Ok(Err(HarnessErr::retry("the codex harness cannot run a Builder yet: its file-change approvals and writable root are unprobed (specs/047 S2b, OD-1); it serves read-only roles")));
                 }
                 // Its own tools cannot be turned off and nothing here judges them, so what it returns is not vouched for.
                 if sc.span.observe_input(Tier::L0) {

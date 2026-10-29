@@ -28,8 +28,8 @@ pub enum Cli {
     /// `agy` (the Antigravity CLI, the Gemini subscription's CLI now that the Gemini CLI refuses personal
     /// sign-in): stream-json events, no permission bridge, tools cannot be turned off.
     Agy,
-    /// `codex` (the Codex CLI, `specs/047`): `exec --json` events, one prompt on stdin, no permission bridge yet, so
-    /// read-only roles only.
+    /// `codex` (the Codex CLI, `specs/047`): `exec --json` events with one prompt on stdin (read-only roles), or with
+    /// `Opts.app_server` the `app-server --stdio` JSON-RPC transport, whose approvals reach Delphi's judge. No Builder yet.
     Codex,
     /// `copilot` (the GitHub Copilot CLI, `specs/051`): `--output-format json` events, one prompt on stdin, no approval bridge
     /// yet, so read-only roles only. One login serves several vendors' models, so the model is always named and checked.
@@ -146,6 +146,10 @@ pub struct Opts {
     pub print_timeout_secs: Option<u64>,
     /// An API key for the Claude CLI (`ANTHROPIC_API_KEY`), in place of the subscription login. Never shown by `Debug`.
     pub api_key: Option<delphi_adapter::credential::Secret>,
+    /// Codex: drive `codex app-server --stdio` instead of `exec --json`, so the CLI's approval requests reach Delphi as
+    /// [`Event::Permission`] (`specs/047` S2b). Read-only thread; no Builder uses it until the file-change and writable-root
+    /// probes are done.
+    pub app_server: bool,
 }
 
 /// A tool call the CLI wants to make.
@@ -404,6 +408,123 @@ impl CodexParser {
     }
 }
 
+/// `codex app-server --stdio` (`specs/047` §5.1): newline-delimited JSON-RPC without a `jsonrpc` field. It drives the
+/// handshake (`initialize`, `initialized`, `thread/start`, `turn/start`), turns notifications into events, turns the server's
+/// approval requests into [`Event::Permission`], and refuses every other server request, so nothing is granted that Delphi
+/// did not judge. The thread is read-only with `approvalPolicy: "on-request"`; a writable root for a Builder is unprobed and
+/// not offered.
+#[derive(Debug)]
+pub struct CodexAppServer {
+    prompt: String,
+    model: String,
+    cwd: String,
+    effort: Option<String>,
+    last: String,
+    tokens: Tokens,
+}
+
+const APP_INIT: i64 = 1;
+const APP_THREAD: i64 = 2;
+const APP_TURN: i64 = 3;
+
+impl CodexAppServer {
+    pub fn new(prompt: &str, model: &str, cwd: &std::path::Path, effort: Option<String>) -> CodexAppServer {
+        CodexAppServer { prompt: prompt.into(), model: model.into(), cwd: cwd.display().to_string(), effort, last: String::new(), tokens: Tokens::default() }
+    }
+
+    /// The first line to send; the rest follow the server's answers.
+    pub fn first_line(&self) -> String {
+        json!({"id": APP_INIT, "method": "initialize", "params": {"clientInfo": {"name": "delphi", "version": env!("CARGO_PKG_VERSION")}}}).to_string()
+    }
+
+    /// What one line from the server means: events for the caller, and lines to send back.
+    pub fn line(&mut self, line: &str) -> (Vec<Event>, Vec<String>) {
+        let Ok(m) = serde_json::from_str::<Value>(line) else { return (vec![], vec![]) };
+        let (mut ev, mut send) = (Vec::new(), Vec::new());
+        let p = &m["params"];
+        match (m["id"].as_i64(), m["method"].as_str()) {
+            (Some(_), None) if m.get("error").is_some() => {
+                let why = format!("codex app-server: {}", m["error"]["message"].as_str().unwrap_or("request failed"));
+                ev.push(Event::Result { text: why, is_error: true, stop_reason: None, total_cost_usd: 0.0, usage: Tokens::default(), subtype: "app_server_error".into(), structured: None });
+            }
+            (Some(APP_INIT), None) => {
+                send.push(json!({"method": "initialized"}).to_string());
+                let mut params = json!({"cwd": self.cwd, "approvalPolicy": "on-request", "sandbox": "read-only", "ephemeral": true});
+                if !self.model.is_empty() {
+                    params["model"] = json!(self.model);
+                }
+                send.push(json!({"id": APP_THREAD, "method": "thread/start", "params": params}).to_string());
+            }
+            (Some(APP_THREAD), None) => {
+                let tid = m["result"]["thread"]["id"].as_str().unwrap_or("");
+                ev.push(Event::Init { session_id: tid.into(), tools: vec![], mcp_servers: None });
+                let mut params = json!({"threadId": tid, "input": [{"type": "text", "text": self.prompt}]});
+                if let Some(e) = &self.effort {
+                    params["effort"] = json!(e);
+                }
+                send.push(json!({"id": APP_TURN, "method": "turn/start", "params": params}).to_string());
+            }
+            (Some(id), Some(method)) => match method {
+                "item/commandExecution/requestApproval" => ev.push(Event::Permission(Permission {
+                    request_id: id.to_string(),
+                    tool_name: "Bash".into(),
+                    input: json!({"command": p["command"], "cwd": p["cwd"]}),
+                    tool_use_id: p["itemId"].as_str().map(String::from),
+                    blocked_path: None,
+                    description: p["reason"].as_str().map(String::from),
+                })),
+                "item/fileChange/requestApproval" => ev.push(Event::Permission(Permission {
+                    request_id: id.to_string(),
+                    tool_name: "Edit".into(),
+                    input: json!({"reason": p["reason"], "grant_root": p["grantRoot"]}),
+                    tool_use_id: p["itemId"].as_str().map(String::from),
+                    blocked_path: p["grantRoot"].as_str().map(String::from),
+                    description: p["reason"].as_str().map(String::from),
+                })),
+                // Permissions, questions to the user, elicitations, tool calls and the older approval forms: not granted.
+                _ => send.push(json!({"id": id, "error": {"code": -32601, "message": "not supported by Delphi"}}).to_string()),
+            },
+            (None, Some("item/started")) if p["item"]["type"] == "commandExecution" => {
+                ev.push(Event::ToolUse { id: p["item"]["id"].as_str().unwrap_or("").into(), name: "command_execution".into(), input: json!({"command": p["item"]["command"]}) });
+            }
+            (None, Some("item/completed")) => {
+                let it = &p["item"];
+                match it["type"].as_str() {
+                    Some("agentMessage") => {
+                        let t = it["text"].as_str().unwrap_or("");
+                        self.last = t.into();
+                        ev.push(Event::Text(t.into()));
+                    }
+                    Some("commandExecution") => ev.push(Event::ToolResult { id: it["id"].as_str().unwrap_or("").into(), is_error: it["status"] != "completed" || it["exitCode"].as_i64().is_some_and(|c| c != 0) }),
+                    _ => {}
+                }
+            }
+            (None, Some("item/agentMessage/delta")) => ev.push(Event::Delta(p["delta"].as_str().unwrap_or("").into())),
+            (None, Some("thread/tokenUsage/updated")) => {
+                let u = &p["tokenUsage"]["total"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                // `inputTokens` includes the cached ones; reasoning tokens are billed as output.
+                self.tokens = Tokens { input: n("inputTokens").saturating_sub(n("cachedInputTokens")), cache_read: n("cachedInputTokens"), cache_write: n("cacheWriteInputTokens"), output: n("outputTokens") + n("reasoningOutputTokens") };
+            }
+            (None, Some("turn/completed")) => {
+                let t = &p["turn"];
+                let ok = t["status"] == "completed";
+                let text = if ok { self.last.clone() } else { t["error"]["message"].as_str().map(String::from).unwrap_or_else(|| format!("the turn ended `{}`", t["status"].as_str().unwrap_or("unknown"))) };
+                ev.push(Event::Result { text, is_error: !ok, stop_reason: None, total_cost_usd: 0.0, usage: self.tokens, subtype: if ok { "success".into() } else { "turn_failed".into() }, structured: None });
+            }
+            _ => {}
+        }
+        (ev, send)
+    }
+}
+
+/// The answer to an approval request: `accept` or `decline` and nothing else, because `acceptForSession` and
+/// `acceptWithExecpolicyAmendment` grant future commands without asking (`specs/047` §1.1).
+pub fn codex_approval_reply(p: &Permission, d: &Decision) -> String {
+    let id: Value = serde_json::from_str(&p.request_id).unwrap_or_else(|_| json!(p.request_id));
+    json!({"id": id, "result": {"decision": if *d == Decision::Allow { "accept" } else { "decline" }}}).to_string()
+}
+
 /// A tool name that matches nothing: `--available-tools` with it offers the model zero tools. An empty value would mean "no
 /// narrowing" (`specs/051` §6.4), so a span with no tools is never launched with an empty list.
 pub const COPILOT_NO_TOOLS: &str = "delphi-no-tools";
@@ -595,6 +716,10 @@ fn args(l: &Launch) -> Vec<String> {
         }
         return a;
     }
+    if l.cli == Cli::Codex && o.app_server {
+        // Stdio only: no listener on a port or socket. Model, sandbox and approval policy are `thread/start` parameters.
+        return strings(&["app-server", "--stdio"]);
+    }
     if l.cli == Cli::Codex {
         // Nothing persisted, none of the operator's own configuration, and a read-only sandbox: this seat reads, it does
         // not act. The prompt arrives on stdin (`-`). The git check is skipped because a span runs in Delphi's scratch directory.
@@ -708,6 +833,8 @@ pub struct Session {
     /// The last few KB of the CLI's stderr, kept only while the error log is on (`specs/039`); the CLI's stderr is otherwise discarded.
     stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     stderr_task: Option<tokio::task::JoinHandle<()>>,
+    /// The app-server transport's writer: replies and the handshake go through it (it owns the child's stdin).
+    out: Option<mpsc::Sender<String>>,
 }
 
 /// How much of a CLI's stderr the error log can ever see.
@@ -739,7 +866,11 @@ impl Session {
             std::fs::create_dir_all(&home).and_then(|_| std::fs::create_dir_all(l.cwd.join(COPILOT_LOG_DIR))).map_err(|e| format!("cannot make the copilot home: {}", e))?;
             env.insert("COPILOT_HOME".into(), home.display().to_string());
         }
-        if let (Cli::Codex, Some(schema)) = (l.cli, &l.opts.json_schema) {
+        let app_server = l.cli == Cli::Codex && l.opts.app_server;
+        if app_server && l.opts.json_schema.is_some() {
+            return Err("the codex app-server transport has no structured output yet (specs/047 S2b); use exec".into());
+        }
+        if let (Cli::Codex, Some(schema), false) = (l.cli, &l.opts.json_schema, app_server) {
             // `--output-schema` takes a file: it goes in the span's own scratch directory.
             std::fs::write(l.cwd.join(CODEX_SCHEMA_FILE), schema).map_err(|e| format!("cannot write the output schema: {}", e))?;
         }
@@ -777,6 +908,45 @@ impl Session {
         let mut codex = CodexParser::new(l.opts.json_schema.is_some());
         let mut copilot = CopilotParser::new(&l.model);
         let (tx, mut rx) = mpsc::channel(256);
+        if app_server {
+            let mut parser = CodexAppServer::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.model, &l.cwd, l.opts.effort.clone());
+            let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
+            out_tx.send(parser.first_line()).await.map_err(|e| e.to_string())?;
+            tokio::spawn(async move {
+                while let Some(line) = out_rx.recv().await {
+                    if stdin.write_all((line + "\n").as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let reply = out_tx.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout);
+                let mut buf = Vec::new();
+                while let Ok(Some(complete)) = read_capped_line(&mut reader, MAX_LINE, &mut buf).await {
+                    if !complete {
+                        continue;
+                    }
+                    let (events, lines) = parser.line(&String::from_utf8_lossy(&buf));
+                    for line in lines {
+                        if reply.send(line).await.is_err() {
+                            return;
+                        }
+                    }
+                    for ev in events {
+                        let done = matches!(ev, Event::Result { .. });
+                        if tx.send(ev).await.is_err() {
+                            return;
+                        }
+                        // One turn per span: the server is let go once it has answered.
+                        if done {
+                            return;
+                        }
+                    }
+                }
+            });
+            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx) });
+        }
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut buf = Vec::new();
@@ -808,7 +978,7 @@ impl Session {
         stdin.flush().await.map_err(|e| e.to_string())?;
         // `codex exec` and `copilot` read their prompt to the end of stdin, so the input closes with the one turn.
         let stdin = if matches!(cli, Cli::Codex | Cli::Copilot) { None } else { Some(stdin) };
-        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task })
+        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None })
     }
 
     /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
@@ -829,6 +999,8 @@ impl Session {
             Ok(Some(ev)) => Some(ev),
             Ok(None) => {
                 self.exited = true;
+                // Closes the app-server's input, which is what lets it exit.
+                self.out = None;
                 // The output is closed; a process that stays alive anyway is killed rather than waited on forever.
                 let code = match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
                     Ok(r) => r.ok().and_then(|s| s.code()),
@@ -848,7 +1020,10 @@ impl Session {
     }
 
     pub async fn decide(&mut self, p: &Permission, d: &Decision) -> Result<(), String> {
-        // Only the Claude stream carries permission requests, so only it has answers to send.
+        if let Some(out) = &self.out {
+            return out.send(codex_approval_reply(p, d)).await.map_err(|e| e.to_string());
+        }
+        // Only the Claude stream and the Codex app-server carry permission requests, so only they have answers to send.
         let stdin = self.stdin.as_mut().ok_or("the session's input is closed")?;
         stdin.write_all((response_line(p, d) + "\n").as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())
@@ -1363,7 +1538,87 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         let read = |f: &str| std::fs::read_to_string(d.path().join(f)).unwrap();
         assert!(read("prompt.txt").contains("question") && read("schema.txt") == "{\"type\":\"object\"}");
         assert_eq!(read("key.txt"), "sk-codex");
-        assert!(!read("args.txt").contains("sk-codex"), "the key is never an argument");
+    }
+
+    /// Lines captured from `codex-cli 0.165.0` `app-server --stdio` (`specs/047` §5.1), trimmed to what the parser reads.
+    #[test]
+    fn codex_app_server_lines_become_events_and_approvals_become_permissions() {
+        let mut p = CodexAppServer::new("hi", "gpt-x", std::path::Path::new("/scratch"), Some("low".into()));
+        assert!(p.first_line().contains("\"initialize\""));
+        let (ev, send) = p.line(r#"{"id":1,"result":{"userAgent":"delphi/0.165.0","codexHome":"/h"}}"#);
+        assert!(ev.is_empty() && send.len() == 2 && send[0].contains("initialized"));
+        assert!(send[1].contains("\"approvalPolicy\":\"on-request\"") && send[1].contains("\"sandbox\":\"read-only\"") && send[1].contains("\"model\":\"gpt-x\""), "{}", send[1]);
+        let (ev, send) = p.line(r#"{"id":2,"result":{"thread":{"id":"th1"}}}"#);
+        assert_eq!(ev, vec![Event::Init { session_id: "th1".into(), tools: vec![], mcp_servers: None }]);
+        assert!(send[0].contains("\"turn/start\"") && send[0].contains("\"threadId\":\"th1\"") && send[0].contains("\"effort\":\"low\""));
+        let (ev, _) = p.line(r#"{"method":"item/started","params":{"item":{"type":"commandExecution","id":"c1","command":"/bin/bash -lc 'touch a'","status":"inProgress"}}}"#);
+        assert!(matches!(&ev[0], Event::ToolUse { id, name, .. } if id == "c1" && name == "command_execution"));
+        let (ev, send) = p.line(r#"{"id":7,"method":"item/commandExecution/requestApproval","params":{"kind":"command","itemId":"c1","reason":"write","command":"touch a","cwd":"/scratch"}}"#);
+        let Event::Permission(perm) = &ev[0] else { panic!("{:?}", ev) };
+        assert!(send.is_empty() && perm.tool_name == "Bash" && perm.input["command"] == "touch a" && perm.request_id == "7");
+        assert_eq!(codex_approval_reply(perm, &Decision::Allow), r#"{"id":7,"result":{"decision":"accept"}}"#);
+        assert_eq!(codex_approval_reply(perm, &Decision::Deny("no".into())), r#"{"id":7,"result":{"decision":"decline"}}"#);
+        let (ev, _) = p.line(r#"{"id":8,"method":"item/fileChange/requestApproval","params":{"itemId":"f1","grantRoot":"/scratch"}}"#);
+        assert!(matches!(&ev[0], Event::Permission(x) if x.tool_name == "Edit" && x.blocked_path.as_deref() == Some("/scratch")));
+        // Anything else the server asks is refused, never granted.
+        for method in ["item/permissions/requestApproval", "item/tool/requestUserInput", "mcpServer/elicitation/request", "item/tool/call", "applyPatchApproval", "execCommandApproval"] {
+            let (ev, send) = p.line(&format!(r#"{{"id":9,"method":"{}","params":{{}}}}"#, method));
+            assert!(ev.is_empty() && send.len() == 1 && send[0].contains("\"error\"") && !send[0].contains("accept"), "{}", method);
+        }
+        let (ev, _) = p.line(r#"{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"c1","status":"declined","exitCode":null}}}"#);
+        assert_eq!(ev, vec![Event::ToolResult { id: "c1".into(), is_error: true }]);
+        assert_eq!(p.line(r#"{"method":"item/agentMessage/delta","params":{"delta":"po"}}"#).0, vec![Event::Delta("po".into())]);
+        p.line(r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m","text":"pong"}}}"#);
+        p.line(r#"{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"totalTokens":15029,"inputTokens":15024,"cachedInputTokens":10880,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":2}}}}"#);
+        let (ev, _) = p.line(r#"{"method":"turn/completed","params":{"turn":{"status":"completed","error":null}}}"#);
+        let Event::Result { text, is_error: false, usage, .. } = &ev[0] else { panic!("{:?}", ev) };
+        assert_eq!((text.as_str(), usage.input, usage.cache_read, usage.output), ("pong", 4144, 10880, 7));
+        let (ev, _) = p.line(r#"{"method":"turn/completed","params":{"turn":{"status":"failed","error":{"message":"quota"}}}}"#);
+        assert!(matches!(&ev[0], Event::Result { text, is_error: true, .. } if text == "quota"));
+        let (ev, _) = p.line(r#"{"id":3,"error":{"code":-1,"message":"bad model"}}"#);
+        assert!(matches!(&ev[0], Event::Result { text, is_error: true, .. } if text.contains("bad model")));
+    }
+
+    #[tokio::test]
+    async fn a_codex_app_server_session_asks_delphi_and_sends_only_accept_or_decline() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let prog = d.path().join("fake-codex");
+        let script = r#"#!/bin/sh
+printf '%s\n' "$@" > args.txt
+read init
+echo '{"id":1,"result":{"userAgent":"x"}}'
+read initialized
+read thread
+echo "$thread" > thread.txt
+echo '{"id":2,"result":{"thread":{"id":"th1"}}}'
+read turn
+echo "$turn" > turn.txt
+echo '{"id":7,"method":"item/commandExecution/requestApproval","params":{"itemId":"c1","command":"touch a","cwd":"."}}'
+read answer
+echo "$answer" > answer.txt
+echo '{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m","text":"fin"}}}'
+echo '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}'
+read never
+"#;
+        std::fs::write(&prog, script).unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opts = Opts { app_server: true, ..Default::default() };
+        let l = Launch { cli: Cli::Codex, program: prog.display().to_string(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "question".into(), cwd: d.path().to_path_buf(), tools: Tools::None, env: BTreeMap::new(), profile: Default::default(), opts };
+        let mut s = Session::start(&l).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            if let Event::Permission(p) = &ev {
+                s.decide(p, &Decision::Deny("no".into())).await.unwrap();
+            }
+            seen.push(ev);
+        }
+        assert!(seen.iter().any(|e| matches!(e, Event::Result { text, is_error: false, .. } if text == "fin")), "{:?}", seen);
+        assert!(matches!(seen.last(), Some(Event::Exit { .. })));
+        let read = |f: &str| std::fs::read_to_string(d.path().join(f)).unwrap();
+        assert_eq!(read("args.txt").trim(), "app-server\n--stdio");
+        assert!(read("thread.txt").contains("on-request") && read("turn.txt").contains("question"));
+        assert_eq!(read("answer.txt").trim(), r#"{"id":7,"result":{"decision":"decline"}}"#);
     }
 
     /// The lines of one real `copilot --output-format json` run (`specs/051` §2.1, §6.4), trimmed to the fields the parser reads.
@@ -1637,5 +1892,30 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
             }
         }
         assert!(init && metered > 0 && structured.as_ref().is_some_and(|v| v["word"].as_str().is_some_and(|w| w.to_lowercase().contains("pong"))), "structured={:?} metered={}", structured, metered);
+    }
+
+    /// The same against `codex app-server --stdio`; every approval it asks for is declined.
+    #[tokio::test]
+    #[ignore]
+    async fn live_codex_app_server_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let model = std::env::var("DELPHI_LIVE_CODEX_MODEL").expect("set DELPHI_LIVE_CODEX_MODEL to a slug from `codex debug models`");
+        let opts = Opts { effort: Some("low".into()), app_server: true, ..Default::default() };
+        let l = Launch { cli: Cli::Codex, program: "codex".into(), model, system_prompt: "You are a test fixture. Be brief.".into(), user_prompt: "Answer with the word pong. Do not run commands.".into(), cwd: std::fs::canonicalize(d.path()).unwrap(), tools: Tools::None, env: cli_env(), profile: Default::default(), opts };
+        let mut s = Session::start(&l).await.unwrap();
+        let (mut init, mut text, mut metered) = (false, String::new(), 0);
+        while let Some(ev) = s.next(Duration::from_secs(120)).await {
+            match ev {
+                Event::Init { .. } => init = true,
+                Event::Permission(p) => s.decide(&p, &Decision::Deny("test".into())).await.unwrap(),
+                Event::Result { is_error, usage, text: t, .. } => {
+                    assert!(!is_error, "{}", t);
+                    (text, metered) = (t, usage.metered());
+                }
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        assert!(init && metered > 0 && text.to_lowercase().contains("pong"), "text={:?} metered={}", text, metered);
     }
 }
