@@ -155,7 +155,7 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, probes (approval events, app-server stability) | manifest and first probe built (this PR); approval events and app-server not yet probed |
 | S1 | `Cli::Codex`, `exec --json` for read-only roles, structured output, API-key mode | built (this PR): stand-in CLI tests plus one live `exec --json` probe on `codex-cli 0.165.0` (prompt on stdin via `-`, effort via `-c`); the seat is unproven until `delphi endpoints test --probe` has run it; `family = "openai"` is now accepted in `[access]` |
-| S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | not started |
+| S2 | read-only introspection; approval bridge over `app-server`; Builder only after it is proven | S2a built (stacked on S1): setup and doctor detect `codex` and its sign-in (`login status` exit code), `delphi setup` offers a `codex-sub` seat on the first model `codex debug models` lists, `delphi capabilities` lists its MCP servers and models; `live_codex_round_trip` (ignored test) passed against `codex-cli 0.165.0`. S2b probed 2026-10-28 (spec 047 §5.1): `app-server --stdio` delivers `item/commandExecution/requestApproval` and accepts `decline`; `exec --json` has no approval events; the read-only sandbox does not restrict reads, so reader seats run with the shell tool off (S1). The `app-server` transport and Builder are not built; file-change approval and `writableRoots` are still unprobed |
 | S3 | `review` lane, vision, `execpolicy` lint | not started |
 
 ## GitHub Copilot CLI harness (spec 051, approved 2026-10-28)
