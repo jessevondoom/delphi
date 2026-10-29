@@ -243,7 +243,7 @@ Drafted from a review of LangChain / LangSmith benchmarking, memory and context 
 | 049 | CX4 | result summary plus handles between seats | not started |
 | 049 | CX5 | structured session digest (amends 030 §4.3) | not started |
 | 049 | CX6 | compaction threshold arms; default decisions | not started |
-| 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | not started |
+| 050 | ML1 | memory write-path audit and lint (first, before 045 H3 adds a write path) | built: `delphi-engine/src/memory_audit.rs` lists every memory write path with its proof tests; `delphi lint --repo` rule `memory-write-sites` fails on an unlisted write or a missing proof |
 | 050 | ML2 | entry types and dates, schemas | not started |
 | 050 | ML3 | validity, stale list in `/retro`, type-aware selection | not started |
 | 050 | ML4 | supersession candidates and ratification | not started |
