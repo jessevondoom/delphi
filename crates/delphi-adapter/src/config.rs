@@ -280,11 +280,15 @@ pub struct HarnessProfile {
     pub settings: Option<toml::Value>,
     #[serde(default)]
     pub mode: Option<toml::Value>,
+    /// Copilot only (`specs/051` §8): `"gh"` lets `delphi doctor` read the account's quota snapshot through the operator's `gh`
+    /// login (a credential Delphi does not otherwise hold, on an undocumented endpoint). Off when absent or `"off"`.
+    #[serde(default)]
+    pub quota_source: Option<String>,
 }
 
 impl Default for HarnessProfile {
     fn default() -> Self {
-        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None, effort: None, json_schema: None, session: None, add_dirs: None, sandbox: None, print_timeout_secs: None, max_turns: None, max_budget_usd: None, fallback_models: None, partial_messages: None, agents: None, settings: None, mode: None }
+        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None, effort: None, json_schema: None, session: None, add_dirs: None, sandbox: None, print_timeout_secs: None, max_turns: None, max_budget_usd: None, fallback_models: None, partial_messages: None, agents: None, settings: None, mode: None, quota_source: None }
     }
 }
 
@@ -750,6 +754,11 @@ impl Config {
                     errs.push(format!("[harness.{}] env_allow entry `{}` must be an environment variable name (A-Z, 0-9, `_`); give names, never values", name, v));
                 }
             }
+            match h.quota_source.as_deref() {
+                None | Some("off") => {}
+                Some("gh") if name == "copilot" => {}
+                Some(other) => errs.push(format!("[harness.{}] quota_source `{}` is not valid: only the copilot block takes it, as \"gh\" or \"off\"", name, other)),
+            }
             // agy has no flag for an MCP config, a tool list or an approval bridge. Delphi gives it a plugin and a gate hook in the
             // span's own `.agents/` instead (`specs/020` §8), so from its block the engine reads `bridge`, `native_tools` (the
             // web tools the gate lets through; Claude names are translated) and `env_allow`. `approvals`, `claudeai_connectors`
@@ -1150,6 +1159,7 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         let h = &c.harness["claude"];
         assert_eq!((h.connector_reads.len(), h.env_allow.len()), (1, 2));
         assert_eq!(c.harness["agy"], HarnessProfile { env_allow: vec!["HTTPS_PROXY".into()], ..Default::default() });
+        assert_eq!(Config::parse(&format!("{}\n[harness.copilot]\nquota_source = \"gh\"\n", SAMPLE)).unwrap().harness["copilot"].quota_source.as_deref(), Some("gh"));
         for (bad, needle) in [
             ("[harness.claude]\nenv_allow = [\"aws_profile\"]\n", "environment variable name"),
             ("[harness.claude]\nenv_allow = [\"TOKEN=abc\"]\n", "give names, never values"),
@@ -1157,6 +1167,8 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
             ("[harness.claude]\nconnector_reads = [\"slack_search\"]\n", "exact tool name"),
             ("[harness.claude]\nsurprise = 1\n", "unknown field"),
             ("[harness.gemini]\n", "only `claude`, `agy`, `codex` and `copilot`"),
+            ("[harness.codex]\nquota_source = \"gh\"\n", "only the copilot block takes it"),
+            ("[harness.copilot]\nquota_source = \"yes\"\n", "only the copilot block takes it"),
         ] {
             let errs = Config::parse(&format!("{}\n{}", SAMPLE, bad)).unwrap_err().join("; ");
             assert!(errs.contains(needle), "{} -> {}", bad, errs);

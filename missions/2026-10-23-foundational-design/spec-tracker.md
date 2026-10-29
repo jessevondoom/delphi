@@ -160,13 +160,13 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 
 ## GitHub Copilot CLI harness (spec 051, approved 2026-10-28)
 
-Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. Only S0 is built.
+Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. S0, S1 and S1b are built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | built (#307): `copilot.cov`, snapshot, quota reads of both CLIs, probes a-f, h, i (spec 051 §6.4: stdin prompt, tool narrowing, fail-closed writes, ACP approval bridge, model catalog with multipliers, `COPILOT_HOME` isolation); plus round 3 (§6.5): `allow_once`, MCP tool bridge via `--additional-mcp-config`, Codex `app-server` approvals; open: g (exhausted-quota text), `session/cancel`, ACP `session/new` `mcpServers` ignored |
 | S1 | `Cli::Copilot`, the stdin + `--output-format json` driver for read-only roles, model check, token mode | built (stacked on #304 and #307): spec 051 §7; one live run passed on `claude-haiku-4.5` |
-| S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | not started |
+| S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | built: spec 051 §8. `quota.rs` (readers, `describe`, `exhaustion`), `Event::Meter` and `premium_requests`/`nano_aiu` in `harness.cost` (the log is the ledger), `[harness.copilot] quota_source = "gh"`, doctor lines. Routing does not read it yet (next slice); no live run |
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | not started |
 | S3 | `--plan` lane, vision | not started |
 
