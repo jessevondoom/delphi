@@ -5,7 +5,9 @@
 //! reads arguments and prints.
 
 use delphi_engine::fact_fetch::FetchPolicy;
-use delphi_engine::library::{AddOpts, Budgets, Level, Library, Outcome, Stored};
+use delphi_engine::library::bib::{self, Format};
+use delphi_engine::library::excerpts::ExcerptOpts;
+use delphi_engine::library::{AddOpts, Budgets, Level, Library, Outcome, Recheck, Stored};
 use serde_json::Value;
 use std::path::Path;
 
@@ -13,7 +15,11 @@ const USAGE: &str = "usage:
   delphi sources add <url | file | doi> [--level full|excerpts|pointer] [--licence <id>] [--private]
     [--title <t>] [--rights-holder <name>] [--attribution <text>] [--max-text-mib <n>] [--max-source-mib <n>] [--home <dir>]
   delphi sources list [--json] [--home <dir>]
-  delphi sources show <id> [--json] [--home <dir>]
+  delphi sources show <id> [--json] [--offline] [--home <dir>]
+  delphi sources excerpt add <id> --locator <where> --purpose <why> (--text <passage> | --file <file>) [--prefix <t>] [--suffix <t>]
+    [--work-bytes <n>] [--home <dir>]
+  delphi sources excerpt list <id> [--json] [--home <dir>]
+  delphi sources bib [<id>...] [--format apa|mla|chicago|plain|csl-json|bibtex] [--home <dir>]
   delphi sources purge <id> [--home <dir>]";
 
 /// A line for a terminal: external titles never carry control characters into it.
@@ -35,7 +41,7 @@ fn mib(args: &[String], name: &str) -> Result<Option<u64>, String> {
 
 /// The words that are not flags or flag values.
 fn positional(args: &[String]) -> Vec<&String> {
-    const WITH_VALUE: [&str; 9] = ["--level", "--licence", "--title", "--rights-holder", "--attribution", "--max-text-mib", "--max-source-mib", "--home", "--workspace"];
+    const WITH_VALUE: [&str; 17] = ["--level", "--licence", "--title", "--rights-holder", "--attribution", "--max-text-mib", "--max-source-mib", "--home", "--workspace", "--locator", "--purpose", "--text", "--file", "--prefix", "--suffix", "--work-bytes", "--format"];
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !WITH_VALUE.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
@@ -78,6 +84,8 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("list") => list(&lib, rest),
         Some("show") => show(&lib, rest),
         Some("purge") => purge(&lib, rest),
+        Some("excerpt") => excerpt(&lib, rest),
+        Some("bib") => bibliography(&lib, rest),
         _ => {
             eprintln!("{}", USAGE);
             2
@@ -164,10 +172,26 @@ fn show(lib: &Library, args: &[String]) -> i32 {
         eprintln!("{}", USAGE);
         return 2;
     };
-    let Some(m) = lib.read_meta(id) else {
+    if lib.read_meta(id).is_none() {
         eprintln!("delphi sources show: no source `{}`", clean(id, 80));
         return 1;
+    }
+    // opening a source is when the 30-day recheck runs (`specs/055` §3.5); its answer goes to stderr so --json stays clean
+    let checked = if args.iter().any(|a| a == "--offline") {
+        None
+    } else {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+        rt.ok().and_then(|rt| rt.block_on(lib.recheck_on_open(&FetchPolicy::default(), id, &Budgets::default())).map_err(|e| eprintln!("recheck: {}", clean(&e, 200))).ok())
     };
+    match checked {
+        Some(Recheck::Unchanged) => eprintln!("rechecked: unchanged (last_checked updated)"),
+        Some(Recheck::Changed(n)) => eprintln!("rechecked: the source changed; version {} stored, the earlier one is kept under versions/", n),
+        Some(Recheck::Retired) => eprintln!("rechecked: the source is gone; the last capture is kept and the source is marked retired"),
+        Some(Recheck::Offline) => eprintln!("recheck skipped: offline (nothing changed)"),
+        Some(Recheck::CapReached) => eprintln!("recheck skipped: the daily cap on rechecks was reached"),
+        Some(Recheck::Fresh) | Some(Recheck::NotApplicable(_)) | None => {}
+    }
+    let Some(m) = lib.read_meta(id) else { return 1 };
     if args.iter().any(|a| a == "--json") {
         println!("{}", serde_json::to_string_pretty(&m).unwrap_or_default());
         return 0;
@@ -175,7 +199,7 @@ fn show(lib: &Library, args: &[String]) -> i32 {
     let dir = lib.source_dir(id);
     let size = |p: &str| std::fs::metadata(dir.join(p)).map(|m| m.len()).ok();
     println!("{}  {}", id, clean(m["title"].as_str().unwrap_or("?"), 100));
-    for k in ["type", "licence", "rights_holder", "share_alike", "capture_level", "version", "retrieved", "last_checked", "canonical_url", "content_hash", "origin", "source_class", "status", "imported_from", "change_note", "purged"] {
+    for k in ["type", "licence", "rights_holder", "share_alike", "capture_level", "version", "retrieved", "last_checked", "canonical_url", "content_hash", "origin", "source_class", "status", "imported_from", "change_note", "retired", "purged"] {
         if !m[k].is_null() {
             let v = m[k].as_str().map(String::from).unwrap_or_else(|| m[k].to_string());
             println!("  {:<14} {}", k, clean(&v, 120));
@@ -186,6 +210,12 @@ fn show(lib: &Library, args: &[String]) -> i32 {
     }
     if let Some(n) = size("source.md") {
         println!("  text           {} bytes at {}", n, dir.join("source.md").display());
+    }
+    let kept = lib.excerpts(id);
+    if !kept.is_empty() {
+        let bytes: usize = kept.iter().map(|e| e["bytes"].as_u64().unwrap_or(0) as usize).sum();
+        let contested = kept.iter().filter(|e| e["contested"] == true).count();
+        println!("  excerpts       {} ({} bytes){}", kept.len(), bytes, if contested > 0 { format!(", {} contested", contested) } else { String::new() });
     }
     let versions = std::fs::read_dir(dir.join("versions")).map(|d| d.flatten().count()).unwrap_or(0);
     if versions > 0 {
@@ -214,6 +244,119 @@ fn purge(lib: &Library, args: &[String]) -> i32 {
         }
         Err(e) => {
             eprintln!("delphi sources purge: {}", e);
+            1
+        }
+    }
+}
+
+fn excerpt(lib: &Library, args: &[String]) -> i32 {
+    let rest = &args[args.len().min(1)..];
+    match args.first().map(String::as_str) {
+        Some("add") => excerpt_add(lib, rest),
+        Some("list") => excerpt_list(lib, rest),
+        _ => {
+            eprintln!("{}", USAGE);
+            2
+        }
+    }
+}
+
+fn excerpt_add(lib: &Library, args: &[String]) -> i32 {
+    if !operator_only("excerpt add") {
+        return 2;
+    }
+    let pos = positional(args);
+    let [id] = pos[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    let parsed = (|| -> Result<(String, ExcerptOpts), String> {
+        let text = match (value_of(args, "--text")?, value_of(args, "--file")?) {
+            (Some(t), None) => t,
+            (None, Some(f)) => {
+                use std::io::Read;
+                let mut s = String::new();
+                // one byte past the limit is enough for the bound to refuse it
+                std::fs::File::open(&f).and_then(|h| h.take(delphi_engine::library::excerpts::EXCERPT_MAX as u64 + 1).read_to_string(&mut s)).map_err(|e| format!("{}: {}", f, e))?;
+                s
+            }
+            _ => return Err("give the passage with --text or --file".into()),
+        };
+        let work_bytes = value_of(args, "--work-bytes")?.map(|v| v.parse::<u64>().map_err(|_| "--work-bytes must be a whole number".to_string())).transpose()?;
+        Ok((text, ExcerptOpts { locator: value_of(args, "--locator")?.unwrap_or_default(), purpose: value_of(args, "--purpose")?.unwrap_or_default(), prefix: value_of(args, "--prefix")?, suffix: value_of(args, "--suffix")?, work_bytes }))
+    })();
+    let (text, opts) = match parsed {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("delphi sources excerpt add: {}", e);
+            return 2;
+        }
+    };
+    match lib.add_excerpt(id, &text, &opts) {
+        Ok(e) => {
+            println!("{} kept excerpt {} ({} bytes) from {}", id, e["id"].as_str().unwrap_or("?"), e["bytes"], clean(&opts.locator, 60));
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi sources excerpt add: {}", clean(&e, 400));
+            1
+        }
+    }
+}
+
+fn excerpt_list(lib: &Library, args: &[String]) -> i32 {
+    let pos = positional(args);
+    let [id] = pos[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    if lib.read_meta(id).is_none() {
+        eprintln!("delphi sources excerpt list: no source `{}`", clean(id, 80));
+        return 1;
+    }
+    let all = lib.excerpts(id);
+    if args.iter().any(|a| a == "--json") {
+        println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+        return 0;
+    }
+    if all.is_empty() {
+        println!("{} has no excerpts", id);
+    }
+    for e in all {
+        let contested = if e["contested"] == true { " contested" } else { "" };
+        println!("  {:<4} {:<24} {:>5} bytes{}  {}", e["id"].as_str().unwrap_or("?"), clean(e["locator"].as_str().unwrap_or("?"), 24), e["bytes"], contested, clean(e["purpose"].as_str().unwrap_or(""), 60));
+    }
+    0
+}
+
+fn bibliography(lib: &Library, args: &[String]) -> i32 {
+    if !operator_only("bib") {
+        return 2;
+    }
+    let format = match value_of(args, "--format") {
+        Ok(f) => match f.as_deref().map_or(Some(Format::Apa), Format::parse) {
+            Some(f) => f,
+            None => {
+                eprintln!("delphi sources bib: --format must be apa, mla, chicago, plain, csl-json or bibtex");
+                return 2;
+            }
+        },
+        Err(e) => {
+            eprintln!("delphi sources bib: {}", e);
+            return 2;
+        }
+    };
+    let ids: Vec<String> = positional(args).into_iter().cloned().collect();
+    match bib::export(lib, &ids, format) {
+        Ok(x) => {
+            print!("{}", x.text);
+            if x.withheld > 0 {
+                eprintln!("{} private source(s) left out: a private source is never exported", x.withheld);
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi sources bib: {}", clean(&e, 200));
             1
         }
     }

@@ -14,6 +14,16 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[path = "library_bib.rs"]
+pub mod bib;
+#[path = "library_excerpts.rs"]
+pub mod excerpts;
+#[path = "library_meta.rs"]
+pub mod meta;
+#[path = "library_recheck.rs"]
+mod recheck;
+pub use recheck::Recheck;
+
 const MIB: u64 = 1024 * 1024;
 
 /// The budgets of `specs/055` §3.6. Full capture only; excerpts have their own bounds (SK2).
@@ -338,6 +348,9 @@ impl Library {
         let licence = p.meta.get("licence").and_then(Value::as_str).unwrap_or("unknown").to_string();
         let asset_bytes = p.assets.as_deref().map(dir_bytes).unwrap_or(0);
         let (level, notes) = self.decide(&p.meta, p.requested, p.text.as_deref(), asset_bytes, b)?;
+        if let Some(t) = &p.text {
+            p.meta.insert("work_bytes".into(), json!(t.len()));
+        }
         if level != Level::Full {
             p.text = None;
             p.assets = None;
@@ -372,6 +385,23 @@ impl Library {
         p.meta.insert("licence".into(), json!(licence));
         p.meta.insert("status".into(), json!("not validated"));
         p.meta.entry("cited_by").or_insert(json!([]));
+        if let Some(o) = &old {
+            // `cited_by` is the daemon's record of who relied on the source; a new capture keeps it
+            if let Some(c) = o.get("cited_by").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
+                p.meta.insert("cited_by".into(), c.clone());
+            }
+            if !p.meta.contains_key("work_bytes") {
+                if let Some(w) = o.get("work_bytes") {
+                    p.meta.insert("work_bytes".into(), w.clone());
+                }
+            }
+            if p.excerpts.is_none() && level != Level::Pointer {
+                let old_ex = self.excerpts(&p.id);
+                if !old_ex.is_empty() {
+                    p.excerpts = Some(Value::Array(excerpts::carry_forward(&old_ex, p.text.as_deref(), version)));
+                }
+            }
+        }
         if let (Some(ot), Some(nt)) = (&old_text, &p.text) {
             p.meta.insert("change_note".into(), json!(change_note(ot, nt)));
         }
@@ -510,8 +540,17 @@ impl Library {
                 if let Some((_, l)) = snap.headers.for_daemon().iter().find(|(k, _)| k == "content-language") {
                     meta.insert("language".into(), json!(l.split(',').next().unwrap_or("").trim()));
                 }
+                let found = meta::read(&canonical, snap.headers.for_daemon(), &String::from_utf8_lossy(snap.body_for_daemon()), snap.text.for_daemon(), opts.doi.as_deref());
+                for (k, v) in found.fields {
+                    let set_by_operator = (k == "title" && opts.title.is_some()) || (k == "licence" && opts.licence.is_some()) || (k == "rights_holder" && opts.rights_holder.is_some());
+                    if !set_by_operator {
+                        meta.insert(k, v);
+                    }
+                }
+                let licence = meta["licence"].as_str().unwrap_or("unknown").to_string();
+                meta.insert("share_alike".into(), json!(matches!(classify(&licence), Licence::Open { share_alike: true, .. })));
                 Self::attribute(&mut meta, opts.attribution_text.as_ref(), &snap.origin);
-                let mut notes = Vec::new();
+                let mut notes = found.notes;
                 let mut requested = opts.level;
                 if snap.cloaked {
                     meta.insert("cloaked".into(), json!(true));

@@ -319,7 +319,7 @@ Proposed from the operator's decisions of 2026-10-29: sources in the knowledge b
 | :-- | :-- | :-- |
 | SK0 | bundle `sources/` section: licence gate, size classes, schema, golden fixture (023 §2.1, 024 §4.1a) | built (`crates/delphi-bundle/src/sources.rs`, `schemas/source-meta.schema.json`, golden fixture in `dev/bundles/acme-platform/sources/`); unblocks the first org bundle |
 | SK1 | source record, `delphi sources`, capture via the V2a fetcher, metadata, licence classes | built (`crates/delphi-engine/src/library.rs`, `crates/delphi/src/sources_cmd.rs`; `bundle add` adopts a bundle's `sources/`); budgets are code defaults with per-source raises, config keys not yet |
-| SK2 | excerpts, anchors, bibliography export | not started |
+| SK2 | excerpts, anchors, bibliography export | built (`library_excerpts.rs`, `library_bib.rs`, `delphi sources excerpt add\|list`, `delphi sources bib`); also closes SK1's metadata readers (`library_meta.rs`: Wikipedia, DOI landing page, Gutenberg header) and the 30-day recheck on open (`library_recheck.rs`, run by `sources show`). **Not built:** the Sources view in the knowledge window (§11 lists it; UI slice to follow); APA/MLA/Chicago are compact renderings, with CSL-JSON and BibTeX for exact styles; the recheck's change test is a hash comparison, the fetcher takes no request headers |
 | SK3 | claim records, mission-start pull by pointer | not started |
 | SK4 | recheck on open, versions, anchor re-resolution | not started |
 | SK5 | generated pages, dispute | not started |
