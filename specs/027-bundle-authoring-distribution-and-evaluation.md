@@ -50,6 +50,9 @@ The organization already has knowledge in Delphi. `distill` asks the **writer** 
 - **Dedupe:** before proposing a knowledge file, the hybrid search over the current bundle shows the nearest existing files (the deterministic step the xenia publish preview also uses).
 - **It never invents goals or perspectives.** It may quote one a ratified document states, with the pointer.
 
+### 2.3a Sources and bibliographies (amendment, 2026-10-29)
+An author can add sources from the library to a bundle (`delphi bundle sources add <dir> <source-id>…`, built with `specs/055` SK7); the command copies only sources whose licence class allows redistribution, refuses the rest with the reason, and writes `meta.json` from the library record. By hand, an author writes `sources/<id>/{source.md, meta.json}` per `specs/023` §2.1. `delphi bundle validate --report` lists each source with its licence class and size and never prints source text.
+
 ### 2.4 `delphi bundle validate` with `--report`
 Runs `specs/023` §10 and, with `--report <path>`, writes the **redaction report** from `skills/org-bundle-authoring/templates/redaction-report.md`: every scan hit with file, line, class and the action taken. The human approves this report before `package` (§2.6). This is authoring-side review of content going out, distinct from the removed adoption-side ratification (OD-1).
 

@@ -224,7 +224,7 @@ const MINORITY_ITEMS: usize = 3;
 /// Seat claims of one verdict that become candidates.
 const MAX_SEAT_CLAIMS: usize = 8;
 
-fn is_contact(trigger: &str) -> bool {
+pub fn is_contact(trigger: &str) -> bool {
     matches!(trigger, "council_verdict" | "council_minority" | "decision_resolved" | "council_claim" | "accepted_answer" | "research_run")
 }
 

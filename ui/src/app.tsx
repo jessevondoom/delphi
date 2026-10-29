@@ -516,7 +516,9 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         }
         else if (action.t === 'record') {
           const d = action.d;
-          cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: action.choice_id, payload_blake3: d.payload_blake3, conditions: action.conditions ?? [] })
+          (d.source === 'digest'
+            ? cmd.call('digest.act', { mission_id: mission, id: d.id, choice_id: action.choice_id, payload_blake3: d.payload_blake3 })
+            : cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: action.choice_id, payload_blake3: d.payload_blake3, conditions: action.conditions ?? [] }))
             .then(() => loadDecisionsSoon())
             .catch((er: any) => { note('could not record the answer: ' + (er?.message ?? JSON.stringify(er)), 'error'); unsend(); loadDecisionsSoon(); });
         }
@@ -537,6 +539,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
             let ok = 0; const bad: string[] = [];
             for (const d of action.ds) {
               const resolution = d.brief.recommendation?.choice_id;
+              if (d.source === 'digest' && resolution) {
+                try { await cmd.call('digest.act', { mission_id: mission, id: d.id, choice_id: resolution, payload_blake3: d.payload_blake3 }); ok++; }
+                catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
+                continue;
+              }
               if (d.source === 'raised' && resolution) {
                 try { await cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: resolution, payload_blake3: d.payload_blake3, conditions: [] }); ok++; }
                 catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }

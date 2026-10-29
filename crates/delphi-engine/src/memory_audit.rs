@@ -57,6 +57,12 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "the digest's `promote` (the operator's act: a candidate becomes a proposal for `/retro`; nothing loads)",
+        files: &["crates/delphi-engine/src/digest.rs"],
+        events: &["learn.proposed"],
+        proofs: &[("crates/delphi-engine/src/digest.rs", "promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote")],
+    },
+    Site {
         name: "the checkpoint summary (`specs/030` §4.3): no model text for a task that read content that is not validated",
         files: &["crates/delphi-engine/src/checkpoint.rs"],
         events: &[],

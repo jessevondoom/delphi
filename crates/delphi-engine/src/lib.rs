@@ -76,6 +76,7 @@ pub mod pool;
 pub mod probe;
 pub mod provisional;
 pub mod decision_model;
+pub mod digest;
 pub mod decision_brief;
 pub mod decision_run;
 pub mod decision_raised;

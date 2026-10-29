@@ -64,7 +64,7 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
       if (d.source === 'card') {
         const c = list.find((x) => x.id === d.source_id);
         if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions, d } : {}) } };
-      } else if (d.source === 'raised') {
+      } else if (d.source === 'raised' || d.source === 'digest') {
         return { inbox: { ...inb, pane: r.pane }, action: { t: 'record', d, choice_id: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };
       } else if (d.source === 'provisional' && (choice.id === 'ratified' || choice.id === 'rejected')) {
         return { inbox: { ...inb, pane: r.pane }, action: { t: 'review', d, resolution: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };

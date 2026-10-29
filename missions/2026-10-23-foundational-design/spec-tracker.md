@@ -299,7 +299,7 @@ Approved by the operator 2026-10-28. Joins specs 050 (entry fields), 040 §18.2 
 | :-- | :-- | :-- |
 | KS1 | one status table (noted, checking, validated, contested, disproved, retired) and the labels everywhere | built (display only): `delphi-core/src/knowledge_status.rs` derives the status; `kb` results carry `status` and `label`; operator text says "not validated", not "untrusted". `checking`, `contested`, `disproved` are in the table but not yet derived (no records exist) |
 | KS2 | capture on contact: accepted answer, Council verdict, resolved decision, research run | built: triggers `council_verdict`, `council_minority`, `council_claim` (each seat's claim, on the verdict event), `decision_resolved`, `accepted_answer` (new `answer.accept` RPC, fired silently by `/pin` and `/export`; the daemon marks `answer.accepted`), `research_run` (daemon appends `research.finished`). Staged-only, `noted`, capped at 30 per mission, deduplicated. "Continue from an answer" is not captured (every message would count) |
-| KS3 | `learn` kind in the decisions pane (the daily digest) | not started |
+| KS3 | `learn` kind in the decisions pane (the daily digest) | built (`digest.rs`, RPC `digest.act`, pane kind `learn`); one candidate at a time, at most 10 a day; promote only proposes into `/retro` |
 | KS4 | contested pairs and review-due | not started |
 
 ## The first minute (spec 054, approved 2026-10-28)
@@ -310,3 +310,20 @@ Approved by the operator 2026-10-28. FR1 is small and buildable now; FR2 waits f
 | :-- | :-- | :-- |
 | FR1 | interactive `init` offers to continue into `setup`; non-interactive unchanged | built |
 | FR2 | first-question suggestion and first noted item | not started (needs timing and KS2) |
+
+## The central library (spec 055, approved: ratified 2026-10-29)
+
+Proposed from the operator's decisions of 2026-10-29: sources in the knowledge base (full, excerpts or pointer), claims that anchor into them, pages generated from claims, one library for every mission, a 30-day recheck on open, CSL-JSON metadata, and public-domain acquisition. Not approved; nothing is built from it.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| SK0 | bundle `sources/` section: licence gate, size classes, schema, golden fixture (023 §2.1, 024 §4.1a) | not started (first; unblocks the first org bundle) |
+| SK1 | source record, `delphi sources`, capture via the V2a fetcher, metadata, licence classes | not started |
+| SK2 | excerpts, anchors, bibliography export | not started |
+| SK3 | claim records, mission-start pull by pointer | not started |
+| SK4 | recheck on open, versions, anchor re-resolution | not started |
+| SK5 | generated pages, dispute | not started |
+| SK6 | acquisition and standing rules | not started |
+| SK7 | licence-gated sharing | not started |
+
+Amended with 055 (2026-10-29, additive): 012 §11 (`fact` kind, provisional), 022 §5, 023 §2.1 and step 7a, 024 §4.1a, 027 §2.3a, `schemas/bundle.schema.json` (`sections.sources`).

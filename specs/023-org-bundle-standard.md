@@ -69,6 +69,8 @@ What happens when a bundle meets an install (adding, provenance, tiers, preceden
 │   ├── glossary.md                    #   RECOMMENDED
 │   ├── decisions/                     #   RECOMMENDED: one decision record per file (§4.3)
 │   └── <any>/**.md
+├── sources/                           # §2.1: OPTIONAL full-text captures and images of redistributable sources; retrieved, never always-loaded
+│   └── <source-id>/{source.md, meta.json, excerpts.json, assets/}
 ├── skills/                            # §5A: Agent Skills, one <name>/SKILL.md per skill, Delphi fields in `metadata`
 │   └── <skill-name>/{SKILL.md, references/, templates/ | assets/}
 ├── agents/                            # §5B: Claude Code agent files, one <name>.md each, with a Delphi host-role mapping
@@ -86,13 +88,24 @@ What happens when a bundle meets an install (adding, provenance, tiers, preceden
 └── <anything else>                    # ignored by Delphi with a note (§10 step 3); must still pass the name and size rules
 ```
 
-**Rules that apply to the whole tree** (checked in §10, step 1–2):
+**Rules that apply to the whole tree** (the size rule below has a separate class for `sources/`, §2.1) (checked in §10, step 1–2):
 - Regular files only. No symbolic links, hard links, device nodes, FIFOs, sockets or submodule gitlinks. No `.git` segment at any depth. No absolute or `..` path. No two components that differ only by Unicode normalization or case. Names match `^[A-Za-z0-9._-]{1,64}$` per component.
 - **Never executable.** Files are written to the cache without the execute bit. A bundle has no `bin/` (Claude Code puts `bin/` on the Bash `PATH`; Delphi refuses a bundle that has one).
 - **Size.** At most 2,000 files outside `vectors/`, 1 MiB per file outside `vectors/`, 64 MiB for the tree outside `vectors/`; `vectors/` has its own caps (§8). Markdown bodies under `knowledge/` at most 256 KiB each (the existing `MAX_READ_BYTES`); `SKILL.md` under the 500-line cap of `specs/001` §3; agent files at most 8 KiB; behavior files under the caps in §6.
 - **Text.** UTF-8, NFC-normalized, LF line endings normalized by the packager before hashing (as `specs/012` §3), no control characters except `\n` and `\t`, no bidi controls, no `U+E0000`–`U+E007F` tag characters. Binary files are allowed only under `vectors/`, `skills/*/templates/`, `skills/*/assets/` and `knowledge/**` with the content types `image/png`, `image/svg+xml`, `application/pdf`, `text/csv`; they are never put in front of a model except through the document readers of `specs/014`.
 
 ---
+
+### 2.1 The `sources/` section (amendment, 2026-10-29, [`specs/055`](055-the-central-library-sources-claims-and-pages.md))
+An organization can ship the **full text** of the documents its knowledge rests on, so every install can retrieve from them, validate against them and read them. This is data, like `knowledge/`; it is never instructions.
+
+- **Layout.** `sources/<source-id>/` holds `source.md` (the capture as Markdown; absent for a pointer-only source), `meta.json` (CSL-JSON citation fields plus Delphi's: `licence`, `rights_holder`, `attribution_text`, `share_alike`, `capture_level`, `retrieved`, `canonical_url`, `content_hash`, `version`; field list in `specs/055` §3.2.1), `excerpts.json` (optional) and `assets/` (images and attachments). `<source-id>` matches `^[a-z0-9][a-z0-9-]{0,63}$`.
+- **Licence gate (fails `validate` and `add`).** `meta.json` must carry a `licence`. Only the classes that allow redistribution are accepted: an SPDX identifier of an open licence, `public-domain:<jurisdiction>:<basis>`, or `own`. **`all-rights-reserved`, `unknown` and `private` are refused**, with the source id and no content in the message. A share-alike licence requires `share_alike = true` and the share-alike notice in `attribution_text`; a licence that requires attribution requires a non-empty `attribution_text`.
+- **Size class (separate from the rule above).** `sources/` has its own caps: at most **20,000 files**, **16 MiB per file** for text and **32 MiB per file** for an asset, and **1 GiB** for the section, all outside the 2,000-file and 64 MiB tree limits. The Markdown body cap of §4 does not apply to `source.md`; the index chunks it by heading and every read is by range.
+- **Bytes.** `source.md` and `meta.json` follow the text rules (UTF-8, NFC, LF, no control, bidi or tag characters). Assets may be `image/png`, `image/jpeg`, `image/webp`, `image/svg+xml`, `application/pdf` and `text/csv`; they are never executed, rendered by a model, or served inline without the safe-reader rules of `specs/029`.
+- **Frontmatter and index.** `source.md` has no provenance frontmatter (the record is `meta.json`); `knowledge/**` documents may list `sources: [<source-id>…]` in their frontmatter (§4.2), and each id must exist.
+- **Trust.** Sources are federated, untrusted material. On `add` they land in the library as *not validated* at the shipped capture level, with the licence record intact (`specs/024` §4.1). A source never raises the tier of a knowledge file that cites it.
+- **No instructions.** The no-relaxation check of step 11 runs over `source.md` as a **warning**; sources legitimately quote instruction-shaped text.
 
 ## 3. The Manifest: `bundle.toml`
 TOML, because every other configuration in Delphi is TOML and the no-widening linter already reads it. Unknown keys are **errors**, not warnings: an ignored key is a smuggling channel (`specs/012` §5), and a typo in a manifest must not pass silently.
@@ -134,6 +147,7 @@ agents = true
 behavior = true
 evals = true
 vectors = true
+sources = true                             # 023 §2.1 (amended 2026-10-29): full-text captures for retrieval
 
 [agents.reviewer]                           # one table per agents/<name>.md (§5B); REQUIRED for an agent to be dispatchable in Delphi
 role = "red-team"                           # the HOST role: a canonical id (D-17). The agent runs as a span of this role and is capped by it
@@ -183,7 +197,7 @@ A workspace whose `projects` match none of `applies_to.repos` still indexes the 
 Anything the organization knows that an agent should be able to *find*: architecture, deployment, ownership by role or team (never personal data beyond a work handle), vocabulary, decisions and why, gotchas, runbooks, postmortem summaries. Prose, tables, Mermaid. Not transcripts, logs, secrets or customer data (§10 step 8 scans for them).
 
 ### 4.2 File format
-Markdown with the **provenance frontmatter of `specs/001` §5**, so `delphi lint` and `delphi check provenance` apply unchanged, plus four optional fields:
+Markdown with the **provenance frontmatter of `specs/001` §5**, so `delphi lint` and `delphi check provenance` apply unchanged, plus optional fields (`summary`, `domain`, `review_by`, `pointers`, and from 2026-10-29 `sources` and `licence`):
 ```yaml
 ---
 id: acme-platform/architecture/overview        # REQUIRED; unique within the bundle; `<bundle name>/<path without .md>` by convention
@@ -198,6 +212,8 @@ tags: [architecture, kubernetes]
 summary: "Three clusters, one control plane; services talk over mTLS; billing is the only stateful exception."   # <= 160 chars (specs/013 §5)
 domain: platform                                # OPTIONAL; from knowledge/glossary.md
 review_by: "2027-03-01"                         # OPTIONAL per file; defaults to the bundle's
+sources: [oecd-2024-report]                      # OPTIONAL: ids under sources/ that this file cites (§2.1)
+licence: "CC-BY-4.0"                            # OPTIONAL: for a file reproducing or adapting a source; the bundle licence applies otherwise
 pointers:                                       # OPTIONAL, <= 8, the xenia pointer format (specs/012 §4); display-only (§4.4)
   - { scheme: https, locator: "https://wiki.acme.example/platform/arch", pin: { kind: none }, label: "Full architecture wiki", content_type: text/markdown }
 ---
@@ -327,12 +343,13 @@ Deterministic, fail-closed, in this order. Steps 1–3 run on raw bytes and path
 
 | # | Check | Fails when |
 | :-: | :--- | :--- |
-| 1 | Tree shape | a non-regular file, `.git` segment, absolute or `..` path, name outside the regex, more than 2,000 files or 64 MiB outside `vectors/`, a file over 1 MiB outside `vectors/`, a `bin/` directory, no `README.md` |
+| 1 | Tree shape | (the limits below apply outside `sources/` and `vectors/`; `sources/` has the §2.1 caps) a non-regular file, `.git` segment, absolute or `..` path, name outside the regex, more than 2,000 files or 64 MiB outside `vectors/`, a file over 1 MiB outside `vectors/`, a `bin/` directory, no `README.md` |
 | 2 | Bytes | a text file that is not UTF-8/NFC/LF or has control, bidi or tag characters; a binary file outside the allowed places or content types |
 | 3 | Unknown top-level entries | notes only (`commands/`, `hooks/`, `output-styles/`, `workflows/`, `monitors/` are expected from a plugin and **ignored**, `specs/025` §2.3) |
 | 4 | `bundle.toml` | missing; parse error; unknown or rejected key (§3.1); regexes and semver; `audience` enum; `review_by` in the past at package time; `sections` naming a missing directory; `touches.network = true`; a role outside the canonical ids; `[agents.<name>]` for a file that does not exist |
 | 5 | `.delphi-bundle/files.json` | present but an entry's hash or size differs, a file missing, an extra entry, keys unsorted (a directory under development may omit it; `package` writes it) |
 | 6 | Signature | `sig.json` present but fails to verify under `specs/024` §2.1, or `publisher.did` differs from the key (absent `sig.json` passes with the note `unsigned`) |
+| 7a | Sources | `sources/` per §2.1: a `meta.json` that is missing or fails the CSL-JSON field checks, a licence outside the redistributable classes, a missing `attribution_text` where the licence needs one, a `knowledge` `sources:` id that does not exist, or a size over the §2.1 caps |
 | 7 | Frontmatter | every `knowledge/**.md` and `behavior/**.md` passes `delphi check provenance` plus §4.2; `id` unique; `summary` ≤ 160; pointers valid under `specs/012` §4 with `file:` and local paths refused; `knowledge/index.md` complete and dangling-free |
 | 8 | Secrets and identifiers | the `[REV-SEC-05]` path and secret scan over every text file; canaries for API keys, tokens, private keys, local user paths, e-mail addresses other than `publisher.contact`, roster handles and the workspace's `[privacy] identifiers` when run inside a workspace (`specs/004` §5.4); a hit is an error (handles and identifiers: a warning, §27 of `specs/027` §5) |
 | 9 | Skills and agents | each `SKILL.md` passes `delphi skills check`; `required_permissions` fit each role's built-in scope; each `agents/<name>.md` parses, is ≤ 8 KiB, has a host role or is marked "Claude Code only", and passes the no-relaxation check as an error; `touches.roles` covers every role named anywhere |
