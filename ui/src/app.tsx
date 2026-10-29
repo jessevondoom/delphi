@@ -177,6 +177,8 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
 
   useEffect(() => { cmd.call('permissions.get', {}).then((v: any) => v?.mode && setMode(String(v.mode))).catch(() => {}); }, []);
 
+  /** Tell the daemon the last answer was kept, so it can stage it as a noted candidate (specs/052 KS-2). Silent: nothing is shown, a failure changes nothing. */
+  const keepAnswer = (how: 'pin' | 'export') => { cmd.call('answer.accept', { mission_id: mission, how }).catch(() => {}); };
   // Does the workspace have any model at all? Asked on attach, when something is sent and when a model comes back
   // (`005e` §6.2). A daemon that does not say (older) is taken to have one.
   function checkModels() { cmd.call('models.get', {}).then((v: any) => setNoModel(v?.configured === false)).catch(() => {}); }
@@ -269,6 +271,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
           note(`exported to ${file.replace(info.workspace + '/', '')}`, 'ok');
         } catch (e: any) { note('could not export: ' + e.message, 'error'); }
       };
+      keepAnswer('export');
       if (!all) { write(exportMarkdown(stateRef.current, info, mission), 'conversation'); return; }
       cmd.call('observe.snapshot', { mission_id: mission })
         .then((r: any) => write(exportAll(r?.events ?? [], info, mission), 'mission'))
@@ -285,6 +288,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       const last = [...stateRef.current.blocks].reverse().find((b) => b.kind === 'reply');
       const text = arg || last?.text;
       if (!text) { note('nothing to pin yet: /pin keeps the last reply, or /pin <text>'); return; }
+      if (!arg) keepAnswer('pin');
       try { pin(info, mission, arg ? 'typed by the operator' : `${info.roles[last!.role ?? '']?.name ?? last!.role} (${last!.role})`, text); note('pinned to the mission notebook (/notes)', 'ok'); }
       catch (e: any) { note('could not pin: ' + e.message, 'error'); }
       return;

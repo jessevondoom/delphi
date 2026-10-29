@@ -213,7 +213,7 @@ pub const MAX_LIVE_PROPOSALS: usize = 20;
 
 /// The capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5, then the three capture-on-contact
 /// triggers of `specs/052` §3.2), by the name a note and `[learning] triggers` use.
-pub const TRIGGERS: [&str; 9] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision", "agent_note", "council_verdict", "council_minority", "decision_resolved"];
+pub const TRIGGERS: [&str; 12] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision", "agent_note", "council_verdict", "council_minority", "decision_resolved", "council_claim", "accepted_answer", "research_run"];
 
 /// Capture-on-contact candidates kept per mission (`specs/052` KS-2); the rest are not staged.
 pub const CONTACT_CAP: usize = 30;
@@ -221,8 +221,11 @@ pub const CONTACT_CAP: usize = 30;
 /// Unresolved findings of one verdict that join its minority-report candidate.
 const MINORITY_ITEMS: usize = 3;
 
+/// Seat claims of one verdict that become candidates.
+const MAX_SEAT_CLAIMS: usize = 8;
+
 fn is_contact(trigger: &str) -> bool {
-    matches!(trigger, "council_verdict" | "council_minority" | "decision_resolved")
+    matches!(trigger, "council_verdict" | "council_minority" | "decision_resolved" | "council_claim" | "accepted_answer" | "research_run")
 }
 
 /// The subject key a candidate is deduplicated by: its trigger and its words, case and spacing aside.
@@ -341,6 +344,21 @@ pub enum Capture {
     /// A live note pushed out by the cap: write `learn.dropped` with reason `evicted`.
     Evict(String),
 }
+
+/// The claim a reply or a seat opens with: its first sentence, markup and line breaks aside, at most 200 characters.
+pub fn first_sentence(text: &str) -> String {
+    let line = text.lines().map(|l| l.trim().trim_start_matches(['#', '*', '>', '-', ' '])).find(|l| !l.is_empty()).unwrap_or("");
+    let end = line.char_indices().find(|(i, c)| matches!(c, '.' | '!' | '?') && line[i + c.len_utf8()..].chars().next().is_none_or(char::is_whitespace)).map_or(line.len(), |(i, c)| i + c.len_utf8());
+    let s = scrub(&line[..end]);
+    if s.chars().count() > 200 {
+        format!("{}…", s.chars().take(199).collect::<String>())
+    } else {
+        s
+    }
+}
+
+/// Answers remembered for `answer.accepted`: the newest few tasks.
+const OUTPUTS_KEPT: usize = 40;
 
 /// Control characters out, so typed text cannot forge a line of the staged note's frontmatter.
 fn scrub(s: &str) -> String {
@@ -493,6 +511,8 @@ pub struct Stager {
     live: std::collections::VecDeque<String>,
     /// Subject keys of the capture-on-contact candidates already staged, so the same claim is not staged twice.
     contact_seen: std::collections::BTreeSet<String>,
+    /// The opening sentence of each task's last answer, newest last, for `answer.accepted`.
+    outputs: std::collections::VecDeque<(String, String)>,
 }
 
 impl Stager {
@@ -587,8 +607,39 @@ impl Stager {
                     .filter_map(|u| u["title"].as_str().map(|t| format!("{} ({})", t.trim(), u["severity"].as_str().unwrap_or("?"))))
                     .take(MINORITY_ITEMS)
                     .collect();
+                for (i, c) in e.payload["claims"].as_array().into_iter().flatten().take(MAX_SEAT_CLAIMS).enumerate() {
+                    let (seat, claim) = (c["seat"].as_str().unwrap_or("a seat"), c["claim"].as_str().unwrap_or("").trim());
+                    if !claim.is_empty() {
+                        let suffix: &'static str = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"][i];
+                        out.extend(self.contact(e, "council_claim", format!("{} said in Council: {}", seat, claim), Tier::L3, suffix));
+                    }
+                }
                 if !minority.is_empty() {
                     out.extend(self.contact(e, "council_minority", format!("The Council's Minority Report left unresolved: {}", minority.join("; ")), Tier::L3, "m"));
+                }
+            }
+            "task.output" => {
+                if let (Some(t), Some(text)) = (task, e.payload["text"].as_str().filter(|_| e.payload["status"] != "escalated")) {
+                    self.outputs.retain(|(id, _)| id != t);
+                    self.outputs.push_back((t.to_string(), first_sentence(text)));
+                    while self.outputs.len() > OUTPUTS_KEPT {
+                        self.outputs.pop_front();
+                    }
+                }
+            }
+            // The operator kept an answer (`/pin`, `/export`): its opening sentence is a candidate claim.
+            "answer.accepted" => {
+                let claim = task.and_then(|t| self.outputs.iter().find(|(id, _)| id == t)).map(|(_, c)| c.clone()).unwrap_or_default();
+                if !claim.is_empty() {
+                    out.extend(self.contact(e, "accepted_answer", format!("An answer the operator kept: {}", claim), Tier::L3, ""));
+                }
+            }
+            // A research run that kept something; the entries themselves are in the `research` zone.
+            "research.finished" => {
+                let (new, updated) = (e.payload["new"].as_u64().unwrap_or(0), e.payload["updated"].as_u64().unwrap_or(0));
+                let topic = e.payload["topic"].as_str().unwrap_or("").trim();
+                if new + updated > 0 && !topic.is_empty() {
+                    out.extend(self.contact(e, "research_run", format!("A research run on \"{}\" kept {} new and {} updated entries.", topic, new, updated), Tier::L3, ""));
                 }
             }
             "decision.resolved" => {
@@ -836,6 +887,34 @@ mod tests {
         assert!(again.observe(&at(9, None, "decision.resolved", json!({"choice_id": "a", "note": "reason 0"}))).is_empty(), "already staged before the restart");
         let off = LearningSettings { triggers: ["agent_note".to_string()].into(), ..Default::default() };
         assert!(Stager::new(off).observe(&many[0]).is_empty());
+    }
+
+    #[test]
+    fn a_kept_answer_a_research_run_and_each_seats_claim_are_staged_from_what_the_log_already_says() {
+        let evs = [
+            at(1, Some("t_1"), "task.output", json!({"text": "## Use a table. It survives restarts.\nMore detail.", "status": "done"})),
+            at(2, Some("t_1"), "answer.accepted", json!({"how": "pin", "output_seq": 1})),
+            at(3, Some("t_1"), "answer.accepted", json!({"how": "export", "output_seq": 1})),
+            at(4, None, "research.finished", json!({"topic": "queues", "new": 2, "updated": 0})),
+            at(5, None, "research.finished", json!({"topic": "nothing", "new": 0, "updated": 0})),
+            at(6, None, "council.verdict", json!({"claims": [{"seat": "architect", "claim": "A table is enough."}, {"seat": "red_team", "claim": "It needs an index."}]})),
+        ];
+        let n = stage(&evs);
+        let got: Vec<_> = n.iter().map(|n| (n.trigger, n.id())).collect();
+        assert_eq!(got, vec![("accepted_answer", "n2".to_string()), ("research_run", "n4".to_string()), ("council_claim", "n6c0".to_string()), ("council_claim", "n6c1".to_string())], "pin and export of one answer stage one claim; an empty run stages none");
+        assert_eq!(n[0].summary, "An answer the operator kept: Use a table.");
+        assert!(n[3].summary.contains("red_team said in Council: It needs an index."));
+        let esc = stage(&[at(1, Some("t"), "task.output", json!({"text": "Gave up.", "status": "escalated"})), at(2, Some("t"), "answer.accepted", json!({"how": "pin"}))]);
+        assert!(esc.is_empty(), "an escalation is not an answer");
+        let tainted = stage(&[at(1, Some("t"), "span.taint", json!({"ceiling": "L0"})), at(2, Some("t"), "task.output", json!({"text": "Web says x."})), at(3, Some("t"), "answer.accepted", json!({"how": "pin"}))]);
+        assert!(tainted[0].tier < Tier::L4);
+    }
+
+    #[test]
+    fn first_sentence_takes_one_clean_line() {
+        assert_eq!(first_sentence("# Title\n\nYes. And more."), "Title");
+        assert_eq!(first_sentence("v1.2 is fine. Next"), "v1.2 is fine.");
+        assert!(first_sentence(&"x".repeat(500)).chars().count() <= 200);
     }
 
     #[test]

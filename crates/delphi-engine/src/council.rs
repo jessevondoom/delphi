@@ -977,7 +977,7 @@ impl Engine {
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Invalid(e.to_string()))?;
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
         std::fs::write(dir.join(artifact_name(n, &slug)), self.secrets.redact(&doc)).map_err(|e| EngineError::Invalid(e.to_string()))?;
-        m.append(emit("council.verdict", json!({"n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>()}))).await?;
+        m.append(emit("council.verdict", json!({"n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>(), "claims": stances.iter().filter_map(|(r, s)| s.text().map(|t| json!({"seat": r, "claim": crate::learn::first_sentence(t)}))).collect::<Vec<_>>()}))).await?;
 
         let mut text = String::new();
         match &decision.escalation {
@@ -1297,6 +1297,7 @@ mod tests {
         assert!(doc.contains("## Decision and next steps") && doc.contains("**Decision:** build the queue as a table") && doc.contains("1. `architect`: write the schema") && doc.contains("## Accepted Risks & Minority Report"), "{}", doc);
         let v = &events_of(&f, "council.verdict")[0].payload;
         assert_eq!(v["decision"], "build the queue as a table in the existing store");
+        assert!(v["claims"].as_array().is_some_and(|c| !c.is_empty() && c.iter().all(|c| c["seat"].is_string() && c["claim"].as_str().is_some_and(|t| t.chars().count() <= 200))), "each seat's cited claim rides on the verdict");
         assert_eq!((v["steps"].as_array().unwrap().len(), v["steps"][1]["role"].as_str(), v["from_findings"].as_bool()), (2, Some("builder"), Some(false)));
         // The arbiter was told the shape to end with.
         let asked = f.model.requests().iter().find(|r| r.body.to_string().contains("COUNCIL, SYNTHESIS")).unwrap().body.to_string();
