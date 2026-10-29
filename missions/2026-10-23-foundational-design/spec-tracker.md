@@ -234,3 +234,14 @@ The operator asked for a half-block image renderer (not `ink-picture`: 136 packa
 | I2 | check pictures in the chat reader and the change feed | not started |
 | I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | built; the two Wikimedia hosts are on the default list (2026-10-28); not run live |
 | Q1 | quadrant pictures as the default (spec 029-A2), half blocks kept: `DELPHI_PICTURE`, `/pictures` | built; font support in the operator's terminal unproven |
+
+## Console visual language (spec 053, draft, 2026-10-28)
+
+A draft, not approved. One vocabulary of colour, glyph and weight; a status gutter; a composer that shows scope and what the session added to the library. Gives spec 052's status glyphs their home. Plan and coordination log: `knowledge-and-delight-plan-2026-10-28.md`.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| VL1 | semantic style table in `theme.ts`, migrate call sites, one-page doc, raw-colour test | draft |
+| VL2 | gutter bullets for transcript, tools and cards | draft |
+| VL3 | composer scope line and library counter | draft |
+| VL4 | claim glyphs and age in search and the reader | draft |
