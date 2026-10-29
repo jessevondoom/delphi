@@ -30,6 +30,7 @@ skills = true
 agents = true
 behavior = true
 evals = true
+sources = true
 
 [agents.reviewer]
 role = "red-team"

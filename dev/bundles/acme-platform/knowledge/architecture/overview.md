@@ -9,6 +9,7 @@ status: active
 source_mission: acme-platform
 tags: [architecture, kubernetes]
 summary: "Three clusters, one control plane; services talk over mTLS; billing is the only stateful exception."
+sources: [oecd-2024-report]
 pointers:
   - { scheme: https, locator: "https://wiki.acme.example/platform/arch", pin: { kind: none }, label: "Full architecture wiki", content_type: text/markdown }
 ---

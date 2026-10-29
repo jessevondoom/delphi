@@ -38,7 +38,7 @@ pub struct Manifest {
     pub supersedes: Vec<String>,
 }
 
-const SECTIONS: [&str; 6] = ["knowledge", "skills", "agents", "behavior", "evals", "vectors"];
+const SECTIONS: [&str; 7] = ["knowledge", "skills", "agents", "behavior", "evals", "vectors", "sources"];
 const AUDIENCES: [&str; 4] = ["org", "team", "project", "person"];
 /// Keys that state trust (`specs/012` §2.1) or grant authority (`specs/023` §3.1) are refused anywhere in the file.
 const REJECTED: [&str; 16] = [
@@ -283,7 +283,8 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
         }
     }
     for s in SECTIONS {
-        if tree.has_dir(s) && m.sections.get(s) != Some(&true) {
+        // An undeclared sources/ is a failure (step 7a), not a note: it must not travel unchecked.
+        if s != "sources" && tree.has_dir(s) && m.sections.get(s) != Some(&true) {
             r.note(4, "bundle.toml", format!("{}/ exists but [sections] does not list it; it is ignored", s));
         }
     }

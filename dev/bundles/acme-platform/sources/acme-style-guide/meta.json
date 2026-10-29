@@ -1,0 +1,8 @@
+{
+  "type": "webpage",
+  "title": "Acme style guide",
+  "licence": "own",
+  "rights_holder": "Acme",
+  "capture_level": "pointer",
+  "canonical_url": "https://wiki.acme.example/style"
+}

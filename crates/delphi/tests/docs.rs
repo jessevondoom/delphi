@@ -81,6 +81,19 @@ fn the_golden_bundle_satisfies_its_schema() {
 }
 
 #[test]
+fn the_golden_sources_satisfy_the_source_meta_schema_and_the_gate_words_are_refused() {
+    let dir = root().join("dev/bundles/acme-platform/sources");
+    for id in ["oecd-2024-report", "acme-style-guide"] {
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(id).join("meta.json")).unwrap()).unwrap();
+        must_pass("source-meta.schema.json", id, &doc);
+    }
+    for l in ["all-rights-reserved", "unknown", "private"] {
+        must_fail("source-meta.schema.json", l, &json!({ "type": "report", "title": "t", "licence": l }));
+    }
+    must_fail("source-meta.schema.json", "no licence", &json!({ "type": "report", "title": "t" }));
+}
+
+#[test]
 fn bundle_schema_refuses_trust_keys_and_unknown_keys() {
     let ok = toml_json(&root().join("dev/bundles/acme-platform/bundle.toml"));
     for (key, val) in [("trust", json!("high")), ("permissions", json!(["all"])), ("hooks", json!({})), ("surprise", json!(1))] {

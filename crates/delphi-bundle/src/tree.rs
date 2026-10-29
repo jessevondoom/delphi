@@ -1,6 +1,6 @@
 //! Steps 1 to 3 of `specs/023` §10: the shape of the tree, its bytes, and the entries a plugin brings that Delphi ignores.
 
-use crate::Report;
+use crate::{sources, Report};
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,8 +11,8 @@ pub const MAX_FILES: usize = 2000;
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 pub const MAX_TREE_BYTES: u64 = 64 * 1024 * 1024;
 /// Entries the standard defines at the top level; anything else is ignored with a note (step 3).
-const KNOWN_TOP: [&str; 13] = [
-    "bundle.toml", "README.md", "LICENSE", "CHANGELOG.md", ".delphi-bundle", ".claude-plugin", "knowledge", "skills", "agents", "behavior", "evals", "vectors", ".mcp.json",
+const KNOWN_TOP: [&str; 14] = [
+    "bundle.toml", "README.md", "LICENSE", "CHANGELOG.md", ".delphi-bundle", ".claude-plugin", "knowledge", "skills", "agents", "behavior", "evals", "vectors", ".mcp.json", "sources",
 ];
 /// What a Claude Code plugin brings that a bundle ignores (`specs/025` §2.3).
 const PLUGIN_IGNORED: [&str; 9] = ["commands", "hooks", "output-styles", "workflows", "monitors", "themes", ".lsp.json", "settings.json", "CLAUDE.md"];
@@ -67,9 +67,14 @@ impl Tree {
     }
 }
 
-/// Files outside `vectors/` are subject to the file and size caps; vectors have their own (step 12).
+/// Files outside `vectors/` and `sources/` are subject to the file and size caps; each of those has its own
+/// (step 12 and `specs/023` §2.1).
 pub fn in_vectors(path: &str) -> bool {
     path.starts_with("vectors/")
+}
+
+fn plain(path: &str) -> bool {
+    !in_vectors(path) && !sources::in_sources(path)
 }
 
 pub fn scan(dir: &Path, r: &mut Report) -> Tree {
@@ -80,7 +85,7 @@ pub fn scan(dir: &Path, r: &mut Report) -> Tree {
     walk(dir, "", &name_ok, &mut tree, &mut seen, &mut top, r);
     tree.entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let outside: Vec<&Entry> = tree.entries.iter().filter(|e| !in_vectors(&e.path)).collect();
+    let outside: Vec<&Entry> = tree.entries.iter().filter(|e| plain(&e.path)).collect();
     if outside.len() > MAX_FILES {
         r.fail(1, "", format!("{} files outside vectors/ (cap {})", outside.len(), MAX_FILES));
     }
@@ -91,6 +96,20 @@ pub fn scan(dir: &Path, r: &mut Report) -> Tree {
     for e in &outside {
         if e.bytes > MAX_FILE_BYTES {
             r.fail(1, &e.path, format!("{} bytes (cap {} bytes outside vectors/)", e.bytes, MAX_FILE_BYTES));
+        }
+    }
+    let src: Vec<&Entry> = tree.entries.iter().filter(|e| sources::in_sources(&e.path)).collect();
+    if src.len() > sources::MAX_FILES {
+        r.fail(1, "sources/", format!("{} files (cap {})", src.len(), sources::MAX_FILES));
+    }
+    let src_total: u64 = src.iter().map(|e| e.bytes).sum();
+    if src_total > sources::MAX_BYTES {
+        r.fail(1, "sources/", format!("{} MiB (cap {} MiB)", src_total / (1024 * 1024), sources::MAX_BYTES / (1024 * 1024)));
+    }
+    for e in &src {
+        let cap = if sources::is_asset(&e.path) { sources::MAX_ASSET_BYTES } else { sources::MAX_TEXT_BYTES };
+        if e.bytes > cap {
+            r.fail(1, &e.path, format!("{} bytes (cap {} bytes for a source {})", e.bytes, cap, if cap == sources::MAX_ASSET_BYTES { "asset" } else { "text file" }));
         }
     }
     if tree.get("README.md").is_none() {
@@ -193,14 +212,19 @@ fn check_bytes(tree: &Tree, r: &mut Report) {
         if in_vectors(&e.path) {
             continue;
         }
+        if sources::in_sources(&e.path) && sources::is_asset(&e.path) {
+            check_asset(e, r);
+            continue;
+        }
+        let cap = if sources::in_sources(&e.path) { sources::MAX_TEXT_BYTES } else { MAX_FILE_BYTES };
         let ext = e.path.rsplit('.').next().unwrap_or("");
-        if matches!(ext, "png" | "pdf") {
+        if !sources::in_sources(&e.path) && matches!(ext, "png" | "pdf") {
             if !binary_allowed(&e.path) {
                 r.fail(2, &e.path, format!("a .{} file outside knowledge/ and skills/*/{{templates,assets}}/", ext));
             }
             continue;
         }
-        if e.bytes > MAX_FILE_BYTES {
+        if e.bytes > cap {
             continue; // already reported by step 1; do not read it
         }
         let Ok(bytes) = fs::read(&e.abs) else { continue };
@@ -217,5 +241,33 @@ fn check_bytes(tree: &Tree, r: &mut Report) {
         if let Some((line, what)) = text.lines().enumerate().find_map(|(i, l)| l.chars().find_map(bad_char).map(|w| (i + 1, w))) {
             r.fail(2, &e.path, format!("line {} has {}", line, what));
         }
+    }
+}
+
+/// A source asset is never executed or decoded here; the check is that its bytes are what its extension says, and that
+/// an SVG carries no script.
+fn check_asset(e: &Entry, r: &mut Report) {
+    if e.bytes > sources::MAX_ASSET_BYTES {
+        return; // reported by step 1
+    }
+    let ext = e.path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let Ok(bytes) = fs::read(&e.abs) else { return };
+    let ok = match ext.as_str() {
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "jpg" | "jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+        "pdf" => bytes.starts_with(b"%PDF-"),
+        "svg" | "csv" => match std::str::from_utf8(&bytes) {
+            Ok(t) if ext == "svg" => {
+                let l = t.to_ascii_lowercase();
+                !(l.contains("<script") || l.contains("javascript:") || l.contains("<foreignobject") || l.contains("<!entity"))
+            }
+            Ok(t) => t.chars().all(|c| c == '\r' || bad_char(c).is_none()),
+            Err(_) => false,
+        },
+        _ => return, // an unknown extension is reported by step 7a
+    };
+    if !ok {
+        r.fail(2, &e.path, format!("the bytes are not a plain .{} (wrong signature, not UTF-8, or active content)", ext));
     }
 }

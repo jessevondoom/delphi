@@ -1,0 +1,17 @@
+{
+  "type": "report",
+  "title": "Platform resilience in practice",
+  "author": [{ "literal": "Example Institute" }],
+  "publisher": "Example Institute",
+  "issued": { "date-parts": [[2024, 5, 1]] },
+  "URL": "https://reports.example.org/platform-resilience",
+  "language": "en",
+  "licence": "CC-BY-4.0",
+  "rights_holder": "Example Institute",
+  "attribution_text": "\"Platform resilience in practice\", Example Institute, 2024, licensed CC BY 4.0.",
+  "share_alike": false,
+  "capture_level": "full",
+  "retrieved": "2026-10-20",
+  "canonical_url": "https://reports.example.org/platform-resilience",
+  "version": "1"
+}
