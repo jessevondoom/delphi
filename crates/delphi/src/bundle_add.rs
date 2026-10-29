@@ -492,6 +492,7 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
         Ok(v) => v,
         Err(e) => return fail(e),
     };
+    import_sources(home, &dest, &m);
     match delphi_engine::kb::sync_workspace(ws) {
         Ok(r) => println!("\n{} {}/{}@{}: indexed its knowledge ({} added, {} updated, {} removed)", verb, m.org, m.name, m.version, r.added, r.updated, r.removed),
         Err(e) => return fail(format!("added, but the index could not be updated: {} (run `delphi kb index`)", e)),
@@ -509,6 +510,24 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
     vectors(home, ws, &m.org, &m.name, o);
     println!("search it with `delphi kb search <words> --bundle {}/{}`; its files are @bundle/{}/{}/knowledge/**", m.org, m.name, m.org, m.name);
     0
+}
+
+/// Adopt the bundle's `sources/` into the install's central library (`specs/024` §4.1a, `specs/055` §7): *not validated*,
+/// at the capture level shipped, licence record intact. A source that fails the licence gate again here is refused by name.
+fn import_sources(home: &Path, cached: &Path, m: &delphi_bundle::Manifest) {
+    let label = format!("{}/{}@{}", m.org, m.name, m.version);
+    let results = delphi_engine::library::Library::in_home(home).import_bundle(cached, &label, &delphi_engine::library::Budgets::default());
+    if results.is_empty() {
+        return;
+    }
+    let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
+    println!("\nsources: {} of {} adopted into the library (not validated, licence records kept)", ok, results.len());
+    for (id, r) in &results {
+        match r {
+            Err(e) => println!("  {}: not adopted: {}", id, e),
+            Ok(s) => s.notes.iter().for_each(|n| println!("  {}: {}", id, n)),
+        }
+    }
 }
 
 /// Verify and apply a shipped vector cache, say how far the bundle's vectors are, and leave the rest to a detached
@@ -707,6 +726,21 @@ mod tests {
         assert_eq!(hits.first().map(String::as_str), Some("@bundle/acme/acme-platform/knowledge/decisions/0042-postgres-over-dynamo.md#L14-L15"), "{:?}", hits);
         // behavior, skills and agents are not readable as files (they load as what they are, in slice B4)
         assert!(!ws.join("team").exists(), "nothing was written into the team's own files");
+    }
+
+    #[test]
+    fn a_bundles_sources_enter_the_library_not_validated_with_their_licence_and_are_searchable() {
+        let (home, ws, src) = setup();
+        assert_eq!(add(home.path(), &ws, src.path(), &opts(), &Real), 0);
+        let lib = delphi_engine::library::Library::in_home(home.path());
+        let m = lib.read_meta("oecd-2024-report").expect("the source is in the library");
+        assert_eq!((m["licence"].as_str(), m["status"].as_str()), (Some("CC-BY-4.0"), Some("not validated")));
+        let hits = search(&ws, "synthetic capture used as a golden fixture");
+        assert!(hits.iter().any(|h| h.starts_with("library/sources/oecd-2024-report/source.md#")), "{:?}", hits);
+        // a dry run adopts nothing
+        let (home2, ws2, src2) = setup();
+        assert_eq!(add(home2.path(), &ws2, src2.path(), &AddOpts { dry_run: true, ..opts() }, &Real), 0);
+        assert!(delphi_engine::library::Library::in_home(home2.path()).list().is_empty());
     }
 
     #[test]
