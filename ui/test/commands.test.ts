@@ -154,3 +154,15 @@ test('/missions lists the workspace\'s missions newest first and says how to reo
   await runSlash('/missions', empty.c);
   assert.match(empty.out[0]!, /^no missions yet/);
 });
+
+test('/decisions with no argument opens the pane; list and the other forms keep the text', async () => {
+  const r = ctx(() => ledger);
+  let opened = 0;
+  r.c.openDecisions = () => { opened++; };
+  await runSlash('/decisions', r.c);
+  assert.equal(opened, 1);
+  assert.deepEqual(r.out, [], 'nothing is posted to the chat: the pane shows it');
+  await runSlash('/decisions list', r.c);
+  assert.equal(opened, 1, 'an explicit form stays text');
+  assert.match(r.out[0]!, /2 provisional decision\(s\)/);
+});

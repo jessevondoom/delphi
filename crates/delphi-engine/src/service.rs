@@ -47,6 +47,14 @@ pub struct EngineService {
     admin_card: Mutex<Option<service_xenia::ParkedAdmin>>,
     /// The archives pane's research job: the last one started, running or finished (`research.rs`). One at a time.
     research: Mutex<Option<Arc<crate::research::Shared>>>,
+    /// The briefs being written and the ones that failed, by cache key (`decision_run.rs`): each is tried once until `r` asks again.
+    briefs: Arc<Mutex<Briefs>>,
+}
+
+#[derive(Default)]
+struct Briefs {
+    inflight: std::collections::HashSet<String>,
+    failed: std::collections::HashSet<String>,
 }
 
 struct PlanState {
@@ -98,7 +106,7 @@ fn engine_err(e: EngineError) -> RpcError {
 
 impl EngineService {
     pub fn new(engine: Arc<Engine>, default_mission: &str) -> Arc<EngineService> {
-        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None) })
+        Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())) })
     }
 
     /// Run `org.action` through this binary instead of the current executable (tests, where that is the test binary).
@@ -388,6 +396,9 @@ impl EngineService {
     async fn decision_list(&self, p: Value) -> RpcOutcome {
         let m = self.mission(p["mission_id"].as_str()).await?;
         let list = self.decision_records(&m)?;
+        for d in list.iter().filter(|d| d["source"] == "card" && d["brief"]["state"] == "plain") {
+            self.spawn_brief(&m, d);
+        }
         let tickable = list.iter().filter(|d| d["tickable"] == true).count();
         Ok(json!({"mission_id": m.id, "count": list.len(), "tickable": tickable, "decisions": list}))
     }
@@ -399,9 +410,127 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`id` is required"));
         };
         match self.decision_records(&m)?.into_iter().find(|d| d["id"] == id) {
-            Some(d) => Ok(json!({"mission_id": m.id, "decision": d})),
+            Some(d) => Ok(json!({"mission_id": m.id, "decision": d, "thread": crate::decision_brief::read_thread(&crate::decision_brief::dir_of(&self.engine.ws.dir, &m.id, id))})),
             None => Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id))),
         }
+    }
+
+    /// `decision.reply`: the operator typed something about a decision (`specs/044` §6.3). One capped, tool-less model call reads it as a
+    /// question (answered) or as an answer (the decision's own choice, and conditions). Both are saved in the decision's thread. **Nothing
+    /// is decided**: a reading is shown and the operator confirms it.
+    async fn decision_reply(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let Some(id) = p["id"].as_str() else {
+            return Err(err(code::INVALID_PARAMS, "`id` is required"));
+        };
+        let text = crate::decision_brief::typed(p["text"].as_str().unwrap_or(""));
+        if text.is_empty() {
+            return Err(err(code::INVALID_PARAMS, "`text` is required"));
+        }
+        let Some(d) = self.decision_records(&m)?.into_iter().find(|d| d["id"] == id) else {
+            return Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id)));
+        };
+        let dir = crate::decision_brief::dir_of(&self.engine.ws.dir, &m.id, id);
+        let thread = crate::decision_brief::read_thread(&dir);
+        let (reply, tokens, model) = self.engine.make_reply(&d, &thread, &text).await.map_err(|e| err(-32000, e))?;
+        let at = self.engine.now();
+        let entry = |role: &str, kind: &str, text: String| crate::decision_brief::Entry { role: role.into(), kind: kind.into(), text, choice_id: None, conditions: vec![], tokens: 0, at: at.clone() };
+        let label = |cid: &str| d["choices"].as_array().into_iter().flatten().find(|c| c["id"] == cid).and_then(|c| c["label"].as_str()).unwrap_or(cid).to_string();
+        let save = |e: crate::decision_brief::Entry| crate::decision_brief::append_thread(&dir, &e).map_err(|e| err(-32000, e.to_string()));
+        let out = match &reply {
+            crate::decision_brief::Reply::Question { text: r } => {
+                save(entry("you", "question", text))?;
+                save(crate::decision_brief::Entry { tokens, ..entry("model", "reply", r.clone()) })?;
+                json!({"intent": "question", "reply": r})
+            }
+            crate::decision_brief::Reply::Answer { choice_id, conditions } => {
+                save(entry("you", "answer", text))?;
+                save(crate::decision_brief::Entry { tokens, choice_id: Some(choice_id.clone()), conditions: conditions.clone(), ..entry("model", "reading", label(choice_id)) })?;
+                json!({"intent": "answer", "reading": {"choice_id": choice_id, "label": label(choice_id), "conditions": conditions}})
+            }
+        };
+        let mut out = out;
+        out["tokens"] = json!(tokens);
+        out["model"] = json!(model);
+        out["thread"] = json!(crate::decision_brief::read_thread(&dir));
+        Ok(out)
+    }
+
+    /// `decision.confirm`: the operator confirmed a reading (`specs/044` §6.3 step 5). It records the confirmation and its conditions in
+    /// the thread and logs them (`decision.conditions`); the console then resolves the decision with that choice through the call for its
+    /// source. A condition is a note, never an effect: nothing here acts on it.
+    async fn decision_confirm(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let (Some(id), Some(choice)) = (p["id"].as_str(), p["choice_id"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`id` and `choice_id` are required"));
+        };
+        let Some(d) = self.decision_records(&m)?.into_iter().find(|d| d["id"] == id) else {
+            return Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id)));
+        };
+        if !d["choices"].as_array().into_iter().flatten().any(|c| c["id"] == choice) {
+            return Err(err(code::INVALID_PARAMS, "`choice_id` is not one of this decision's choices"));
+        }
+        let conditions: Vec<String> = p["conditions"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).map(|c| crate::decision_model::clean(c, 120)).filter(|c| !c.is_empty()).take(3).collect();
+        let by = format!("console-{}", ctx.client_id);
+        let dir = crate::decision_brief::dir_of(&self.engine.ws.dir, &m.id, id);
+        let e = crate::decision_brief::Entry { role: "you".into(), kind: "confirmed".into(), text: choice.to_string(), choice_id: Some(choice.to_string()), conditions: conditions.clone(), tokens: 0, at: self.engine.now() };
+        crate::decision_brief::append_thread(&dir, &e).map_err(|e| err(-32000, e.to_string()))?;
+        if !conditions.is_empty() {
+            m.append(EventEnvelope::new(&m.id, "decision.conditions", json!({"decision_id": id, "choice_id": choice, "conditions": conditions, "by": by}))).await.map_err(|e| err(-32000, e.to_string()))?;
+        }
+        Ok(json!({"ok": true, "conditions": conditions}))
+    }
+
+    /// `decision.resolve`: the operator answers a **raised** decision (`specs/044` §4.3, §4.4). The whole effect is `record`: the choice, the
+    /// note and the conditions are written to the log as `decision.resolved`, and the one that raised it is told on its next turn. It is
+    /// bound to the payload the operator saw, the choice must be one of the decision's own, and only a console can call it: the raiser
+    /// cannot resolve what it raised.
+    async fn decision_resolve(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let (Some(id), Some(choice), Some(hash)) = (p["id"].as_str(), p["choice_id"].as_str(), p["payload_blake3"].as_str()) else {
+            return Err(err(code::INVALID_PARAMS, "`id`, `choice_id` and `payload_blake3` are required"));
+        };
+        let Some(source_id) = id.strip_prefix("raised:") else {
+            return Err(err(code::INVALID_PARAMS, "only a raised decision is answered here; cards use approval.resolve and builds use decisions.review"));
+        };
+        let events = m.replay().map_err(|e| err(-32000, e.to_string()))?;
+        let Some(rec) = crate::decision_raised::fold(&events).into_iter().find(|r| r.id == source_id && r.resolved.is_none()) else {
+            return Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id)));
+        };
+        if rec.payload_blake3 != hash {
+            return Err(err(code::INVALID_PARAMS, "the decision changed since you looked at it; open it again"));
+        }
+        if !rec.raise.choices.iter().any(|(i, _, _)| i == choice) {
+            return Err(err(code::INVALID_PARAMS, "`choice_id` is not one of this decision's choices"));
+        }
+        let conditions: Vec<String> = p["conditions"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        let (note, conditions) = crate::decision_raised::clean_answer(p["note"].as_str().unwrap_or(""), &conditions);
+        let by = format!("console-{}", ctx.client_id);
+        m.append(EventEnvelope::new(&m.id, "decision.resolved", json!({"id": source_id, "choice_id": choice, "note": note, "conditions": conditions, "by": by, "surface": "console", "payload_blake3": hash})))
+            .await
+            .map_err(|e| err(-32000, e.to_string()))?;
+        Ok(json!({"ok": true, "id": id, "choice_id": choice}))
+    }
+
+    /// `decision.retry_brief`: try again to write a card's brief after it failed (`r` in the detail view). Once per call.
+    async fn decision_retry_brief(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let Some(id) = p["id"].as_str() else {
+            return Err(err(code::INVALID_PARAMS, "`id` is required"));
+        };
+        let Some(d) = self.decision_records(&m)?.into_iter().find(|d| d["id"] == id) else {
+            return Err(err(code::NOT_FOUND, format!("no outstanding decision `{}`", id)));
+        };
+        if d["source"] != "card" || d["brief"]["state"] != "plain" {
+            return Ok(json!({"started": false}));
+        }
+        self.briefs.lock().unwrap().failed.remove(&crate::decision_brief::key(id, d["payload_blake3"].as_str().unwrap_or("")));
+        self.spawn_brief(&m, &d);
+        Ok(json!({"started": true}))
     }
 
     fn decision_records(&self, m: &MissionState) -> Result<Vec<Value>, RpcError> {
@@ -409,7 +538,49 @@ impl EngineService {
         let at: std::collections::HashMap<u64, String> = events.iter().filter(|e| e.kind == "decision.provisional").map(|e| (e.seq, e.timestamp.clone())).collect();
         let ledger: Vec<_> = crate::provisional::ledger_all(&events).into_iter().map(|d| { let t = at.get(&d.seq).cloned().unwrap_or_default(); (d, t) }).collect();
         let cards: Vec<Value> = self.engine.broker.pending().iter().map(|r| r.event_payload()).collect();
-        Ok(crate::decision_model::list(&cards, &ledger))
+        let mut list = crate::decision_model::list(&cards, &ledger);
+        // What agents raised and the operator has not answered (`specs/044` §4.4), in the same order: Red, Amber, then the rest.
+        list.extend(crate::decision_raised::open_entries(&events));
+        list.sort_by_key(|d| crate::decision_model::rank(d["tier"].as_str().unwrap_or("")));
+        // A card whose brief was written (once, for this payload) shows it; the rest keep the plain brief.
+        for d in list.iter_mut().filter(|d| d["source"] == "card") {
+            let (id, payload) = (d["id"].as_str().unwrap_or("").to_string(), d["payload_blake3"].as_str().unwrap_or("").to_string());
+            if let Some(rec) = crate::decision_brief::read_brief(&crate::decision_brief::dir_of(&self.engine.ws.dir, &m.id, &id), &crate::decision_brief::key(&id, &payload)) {
+                crate::decision_brief::apply(d, &rec);
+            }
+        }
+        Ok(list)
+    }
+
+    /// Write a card's brief in the background, once: not when one is stored, being written, or has failed (`r` in the detail view asks
+    /// again). It is made when the card first shows up in this list, not when the pane is opened, and a console is told when it is ready.
+    fn spawn_brief(&self, m: &Arc<MissionState>, d: &Value) {
+        let (id, payload) = (d["id"].as_str().unwrap_or("").to_string(), d["payload_blake3"].as_str().unwrap_or("").to_string());
+        let k = crate::decision_brief::key(&id, &payload);
+        if id.is_empty() || self.engine.decision_key().is_none() {
+            return;
+        }
+        {
+            let mut b = self.briefs.lock().unwrap();
+            if b.inflight.contains(&k) || b.failed.contains(&k) {
+                return;
+            }
+            b.inflight.insert(k.clone());
+        }
+        let (engine, m2, briefs, d2) = (self.engine.clone(), m.clone(), self.briefs.clone(), d.clone());
+        tokio::spawn(async move {
+            let r = engine.make_brief(&engine.ws.dir, &m2.id, &d2).await;
+            {
+                let mut b = briefs.lock().unwrap();
+                b.inflight.remove(&k);
+                if r.is_err() {
+                    b.failed.insert(k);
+                }
+            }
+            if let Ok(rec) = r {
+                let _ = m2.append(EventEnvelope::new(&m2.id, "decision.brief_ready", json!({"id": id, "tokens": rec.tokens}))).await;
+            }
+        });
     }
 
     /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
@@ -1350,6 +1521,10 @@ impl Extension for ServiceExt {
                 "decisions.list" => svc.decisions_list(params).await,
                 "decision.list" => svc.decision_list(params).await,
                 "decision.get" => svc.decision_get(params).await,
+                "decision.reply" => svc.decision_reply(params, ctx).await,
+                "decision.confirm" => svc.decision_confirm(params, ctx).await,
+                "decision.retry_brief" => svc.decision_retry_brief(params, ctx).await,
+                "decision.resolve" => svc.decision_resolve(params, ctx).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
@@ -2407,6 +2582,126 @@ mod tests {
             }
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_typed_reply_is_read_saved_in_the_thread_and_confirmed_by_the_console_alone_and_nothing_is_decided_by_it() {
+        let f = setup(
+            vec![
+                Step::text(r#"{"intent": "question", "reply": "It edits one file in the worktree.", "choice_id": null, "conditions": []}"#),
+                Step::text(r#"{"intent": "answer", "reply": "", "choice_id": "rejected", "conditions": ["keep t_016 paused", "tell the architect"]}"#),
+                Step::text(r#"{"intent": "answer", "choice_id": "approve_everything", "conditions": []}"#),
+            ],
+            5.0,
+            |_| {},
+        );
+        let hash_a = seed_decision(&f, "dec_a", true).await;
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        let id = "provisional:dec_a";
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&tok).unwrap();
+            assert_eq!(rpc_code(c.call("decision.reply", json!({"id": id, "text": "   "}))), Some(code::INVALID_PARAMS), "empty words");
+            assert_eq!(rpc_code(c.call("decision.reply", json!({"id": "provisional:nope", "text": "hi"}))), Some(code::NOT_FOUND));
+            assert_eq!(rpc_code(c.call("decision.reply", json!({"text": "hi"}))), Some(code::INVALID_PARAMS));
+            let q = c.call("decision.reply", json!({"id": id, "text": "what does it touch?"})).unwrap();
+            assert_eq!((q["intent"].as_str(), q["reply"].as_str()), (Some("question"), Some("It edits one file in the worktree.")));
+            assert!(q["tokens"].as_u64().unwrap() > 0 && q["thread"].as_array().unwrap().len() == 2);
+            let a = c.call("decision.reply", json!({"id": id, "text": "reject it but keep t_016 paused and tell the architect"})).unwrap();
+            assert_eq!(a["intent"], "answer");
+            assert_eq!((a["reading"]["choice_id"].as_str(), a["reading"]["conditions"].as_array().unwrap().len()), (Some("rejected"), 2));
+            assert_eq!(a["thread"].as_array().unwrap().len(), 4);
+            let wrong = c.call("decision.reply", json!({"id": id, "text": "approve everything"})).unwrap();
+            assert_eq!(wrong["intent"], "question", "a choice that is not the decision's own is not read as an answer: {wrong}");
+            assert!(wrong["reply"].as_str().unwrap().contains("could not match"));
+            // Nothing was decided by any of it.
+            let l = c.call("decision.list", json!({})).unwrap();
+            assert_eq!(l["count"], 1, "the decision is still owed: {l}");
+            let g = c.call("decision.get", json!({"id": id})).unwrap();
+            assert_eq!(g["thread"].as_array().unwrap().len(), 6, "the thread is saved with the decision");
+            // Confirming records the confirmation and the conditions; a choice that is not the decision's own is refused.
+            assert_eq!(rpc_code(c.call("decision.confirm", json!({"id": id, "choice_id": "approve_everything"}))), Some(code::INVALID_PARAMS));
+            let ok = c.call("decision.confirm", json!({"id": id, "choice_id": "rejected", "conditions": ["keep t_016 paused", "", "tell the architect", "c", "dropped"]})).unwrap();
+            assert_eq!(ok["conditions"].as_array().unwrap().len(), 3, "at most three, none empty");
+            assert_eq!(c.call("decision.get", json!({"id": id})).unwrap()["thread"].as_array().unwrap().last().unwrap()["kind"], "confirmed");
+            assert_eq!(c.call("decision.list", json!({})).unwrap()["count"], 1, "confirming still resolves nothing: the console resolves through the decision's own call");
+            // Resolving is the existing review, bound to the payload hash.
+            c.call("decisions.review", json!({"decision_id": "dec_a", "payload_blake3": hash_a, "resolution": "rejected", "note": "keep t_016 paused"})).unwrap();
+            assert_eq!(c.call("decision.list", json!({})).unwrap()["count"], 0);
+            assert_eq!(rpc_code(c.call("decision.retry_brief", json!({"id": id}))), Some(code::NOT_FOUND), "once decided it is not owed any more");
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut c = Client::connect(sock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                c.hello(tok).unwrap();
+                for m in ["decision.reply", "decision.confirm", "decision.retry_brief"] {
+                    assert_eq!(rpc_code(c.call(m, json!({"id": id, "text": "x", "choice_id": "rejected"}))), Some(code::FORBIDDEN), "{m}");
+                }
+            }
+        })
+        .await;
+        let ev = events_of(&f, "decision.conditions");
+        assert_eq!(ev.len(), 1);
+        assert_eq!((ev[0].payload["choice_id"].as_str(), ev[0].payload["conditions"].as_array().unwrap().len()), (Some("rejected"), 3));
+        assert!(ev[0].payload["by"].as_str().unwrap().starts_with("console-"));
+        assert_eq!(f.model.requests().len(), 3, "one call per typed message that reached a model, none for listing, opening or confirming");
+    }
+
+    // specs/044 §4.4: an agent raises a decision, the operator answers it from a console, and the one that asked is told once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_raised_decision_is_listed_answered_by_the_console_alone_and_told_once_to_the_one_that_raised_it() {
+        let raise = json!({"kind": "question", "title": "Which search API powers online mode?", "summary": "Online search needs one provider first.", "changes": ["adds one provider"],
+                           "choices": [{"id": "brave", "label": "Brave Search", "reversible": true}, {"id": "searxng", "label": "Self-hosted SearXNG", "reversible": true}],
+                           "recommendation": {"choice_id": "brave", "why": "plain JSON API and a free tier"}, "related": "specs/028.md"});
+        let f = setup(
+            vec![Step::tool("r1", "raise_decision", raise.clone()), Step::text("Raised."), Step::tool("r2", "raise_decision", raise), Step::text("Not allowed."), Step::text("Noted the answer."), Step::text("Nothing new.")],
+            5.0,
+            |_| {},
+        );
+        f.engine.run_task(&f.m, "orchestrator", "decide the search API").await.unwrap();
+        f.engine.run_task(&f.m, "red-team", "also raise it").await.unwrap();
+        assert_eq!(events_of(&f, "decision.raised").len(), 1, "a role that may not raise has no effect");
+        assert_eq!(events_of(&f, "decision.raised")[0].payload["id"], "rd_001");
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok, r_sock, r_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone(), s.relay_sock.clone(), s.relay.clone());
+        let id = "raised:rd_001";
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            c.hello(&tok).unwrap();
+            let l = c.call("decision.list", json!({})).unwrap();
+            assert_eq!(l["count"], 1, "{l}");
+            let d = &l["decisions"][0];
+            assert_eq!((d["id"].as_str(), d["source"].as_str(), d["kind"].as_str(), d["tier"].as_str(), d["tickable"].clone(), d["brief"]["recommendation"]["choice_id"].as_str()), (Some(id), Some("raised"), Some("question"), Some("open"), json!(true), Some("brave")));
+            let hash = d["payload_blake3"].as_str().unwrap().to_string();
+            assert_eq!(rpc_code(c.call("decision.resolve", json!({"id": id, "choice_id": "brave"}))), Some(code::INVALID_PARAMS), "the payload hash is required");
+            assert_eq!(rpc_code(c.call("decision.resolve", json!({"id": id, "choice_id": "brave", "payload_blake3": "stale"}))), Some(code::INVALID_PARAMS), "an answer is bound to what was shown");
+            assert_eq!(rpc_code(c.call("decision.resolve", json!({"id": id, "choice_id": "approve_everything", "payload_blake3": hash}))), Some(code::INVALID_PARAMS), "a choice that is not the decision's own");
+            assert_eq!(rpc_code(c.call("decision.resolve", json!({"id": "raised:rd_099", "choice_id": "brave", "payload_blake3": hash}))), Some(code::NOT_FOUND));
+            assert_eq!(rpc_code(c.call("decision.resolve", json!({"id": "provisional:dec_a", "choice_id": "ratified", "payload_blake3": hash}))), Some(code::INVALID_PARAMS), "other sources have their own calls");
+            for (sock, tok) in [(&n_sock, &n_tok), (&r_sock, &r_tok)] {
+                let mut other = Client::connect(sock).unwrap();
+                other.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                other.hello(tok).unwrap();
+                assert_eq!(rpc_code(other.call("decision.resolve", json!({"id": id, "choice_id": "brave", "payload_blake3": hash}))), Some(code::FORBIDDEN));
+            }
+            assert_eq!(c.call("decision.list", json!({})).unwrap()["count"], 1, "nothing was decided by any refused call");
+            c.call("decision.resolve", json!({"id": id, "choice_id": "searxng", "payload_blake3": hash, "conditions": ["keep it self-hosted", "", "tell architect", "c", "dropped"]})).unwrap();
+            assert_eq!(c.call("decision.list", json!({})).unwrap()["count"], 0, "an answered decision leaves the list");
+            assert_eq!(rpc_code(c.call("decision.resolve", json!({"id": id, "choice_id": "brave", "payload_blake3": hash}))), Some(code::NOT_FOUND), "answered once");
+        })
+        .await;
+        let done = events_of(&f, "decision.resolved");
+        assert_eq!(done.len(), 1);
+        assert_eq!((done[0].payload["choice_id"].as_str(), done[0].payload["conditions"].as_array().unwrap().len(), done[0].payload["surface"].as_str()), (Some("searxng"), 3, Some("console")));
+        // The next turn of the one that raised it is told, once.
+        f.engine.run_task(&f.m, "orchestrator", "continue").await.unwrap();
+        let told = f.model.requests()[4].body.to_string();
+        assert!(told.contains("runtime/decision-answers") && told.contains("Self-hosted SearXNG") && told.contains("keep it self-hosted"), "{told}");
+        assert_eq!(events_of(&f, "decision.delivered").len(), 1);
+        f.engine.run_task(&f.m, "orchestrator", "and now?").await.unwrap();
+        assert!(!f.model.requests()[5].body.to_string().contains("runtime/decision-answers"), "told once");
     }
 
     // ── step-up: a Red answer through a relay needs the authenticator code (specs/014 §7) ──

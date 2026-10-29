@@ -263,8 +263,8 @@ pub fn agent(ws: &WorkspacePaths, target: &str) -> Result<LoadedAgent, String> {
     Ok(LoadedAgent { id: format!("{}:{}", e.id(), name), host_role, block, allowed_tools, unmapped })
 }
 
-/// The dispatchable bundle agents, one line each, for a role that can dispatch (`@runtime/bundle-agents`).
-pub fn catalog(ws: &WorkspacePaths) -> String {
+/// The dispatchable bundle agents, one line each, in bundle order then name order.
+fn catalog_lines(ws: &WorkspacePaths) -> Vec<String> {
     let mut lines = Vec::new();
     for e in bundles::active_entries(&ws.dir) {
         let mut names: Vec<String> = std::fs::read_dir(cache_of(ws, &e).join("agents")).into_iter().flatten().flatten().filter_map(|f| f.file_name().to_str()?.strip_suffix(".md").map(String::from)).collect();
@@ -276,9 +276,27 @@ pub fn catalog(ws: &WorkspacePaths) -> String {
             lines.push(format!("- bundle:{}/{} (runs as {}): {}", e.name, n, a.host_role, description));
         }
     }
-    lines.truncate(CATALOG_MAX);
+    lines
+}
+
+/// How many dispatchable bundle agents there are, and how many of them the orchestrator's slice does not list
+/// (`specs/041` §3.3). `/org` and `delphi doctor` say the second number; nothing is dropped without a note.
+pub fn catalog_counts(ws: &WorkspacePaths) -> (usize, usize) {
+    let total = catalog_lines(ws).len();
+    (total, total.saturating_sub(CATALOG_MAX))
+}
+
+/// The dispatchable bundle agents, one line each, for a role that can dispatch (`@runtime/bundle-agents`). Past
+/// `CATALOG_MAX` the list ends with a note saying how many were left out and that they can still be dispatched by name.
+pub fn catalog(ws: &WorkspacePaths) -> String {
+    let mut lines = catalog_lines(ws);
     if lines.is_empty() {
         return String::new();
+    }
+    let unlisted = lines.len().saturating_sub(CATALOG_MAX);
+    lines.truncate(CATALOG_MAX);
+    if unlisted > 0 {
+        lines.push(format!("... and {} more bundle agents not listed; ask for them with dispatch_agent role=bundle:<name>/<agent> if you know the name", unlisted));
     }
     format!("Agents your organization's bundles define. Dispatch one with `dispatch_agent` and `role` set to the name shown; it runs as the role in brackets, with that role's scope, and only the tools its file lists.\n{}", lines.join("\n"))
 }
@@ -559,6 +577,39 @@ pub(crate) mod tests {
         e.status = "removed".into();
         bundles::write(&ws.dir, &Lock { bundle: vec![e], ..Default::default() }).unwrap();
         assert_eq!(ws.load_snapshot("architect").unwrap(), baseline);
+    }
+
+    fn agents_bundle(ws: &WorkspacePaths, count: usize) {
+        let mut manifest = String::from("[bundle]\nschema = 1\n");
+        let mut files: Vec<(String, String)> = Vec::new();
+        for i in 0..count {
+            let n = format!("a{:02}", i);
+            manifest.push_str(&format!("\n[agents.{}]\nrole = \"red-team\"\n", n));
+            files.push((format!("agents/{}.md", n), format!("---\nname: {}\ndescription: Agent {}.\n---\nDo {}.\n", n, n, n)));
+        }
+        files.push(("bundle.toml".into(), manifest));
+        add_bundle(ws, "acme", "plat", 10, "2026-10-01", &refs(&files));
+    }
+
+    // specs/041 AC-1: the 5 agents past the cap are counted and named in a note, never dropped silently.
+    #[test]
+    fn past_the_cap_the_catalog_says_how_many_it_left_out() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        agents_bundle(&ws, 25);
+        assert_eq!(catalog_counts(&ws), (25, 5));
+        let text = catalog(&ws);
+        assert_eq!(text.matches("\n- bundle:").count(), CATALOG_MAX);
+        assert!(text.ends_with("... and 5 more bundle agents not listed; ask for them with dispatch_agent role=bundle:<name>/<agent> if you know the name"), "{}", text);
+    }
+
+    #[test]
+    fn at_or_under_the_cap_the_catalog_has_no_note() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        agents_bundle(&ws, CATALOG_MAX);
+        assert_eq!(catalog_counts(&ws), (CATALOG_MAX, 0));
+        assert!(!catalog(&ws).contains("not listed"));
     }
 
     fn rule(bundle: &str, added: &str, id: &str, len: usize) -> BundleRule {

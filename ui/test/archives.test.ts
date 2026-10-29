@@ -389,7 +389,7 @@ test('golden screens: results with the best match, at 100x34 and 80x24', () => {
 
 const console_ = (): A.Arch => A.key(shelf(A.emptyArch(true)), k('shift-tab'), W, H).a; // the console's window, on the expand page
 const made = (n: number, form = 'summary') => ({ path: `knowledge/web/en.wikipedia.org/page-${n}.md`, title: `Page ${n}`, publisher: 'Wikipedia', url: `https://en.wikipedia.org/wiki/Page_${n}`, form, licence: 'CC-BY-SA-4.0' });
-const status = (over: object = {}, rep: object | null = null) => ({ topic: 'raft', phase: 'reading', found: 12, read: 7, skipped: 3, hosts: ['en.wikipedia.org', 'pubmed.ncbi.nlm.nih.gov'], tokens: 0, error: null, report: rep, ...over });
+const status = (over: object = {}, rep: object | null = null) => ({ topic: 'raft', phase: 'reading', found: 12, read: 7, skipped: 3, hosts: ['en.wikipedia.org', 'pubmed.ncbi.nlm.nih.gov'], sources: [], tokens: 0, error: null, report: rep, ...over });
 const report = (over: object = {}) => ({ new: [made(1, 'full'), made(2)], updated: [], unchanged: 0, not_kept: [['https://x.org/a', 'not relevant to the topic'], ['https://x.org/b', 'not relevant to the topic']], unlisted_hosts: ['blog.example.com'], provider: 'brave', tokens: 900, stopped: null, ...over });
 const text = (a: A.Arch) => A.view(a, W, 30, { dark: true } as never).map(plain).join('\n');
 
@@ -408,9 +408,8 @@ test('enter on the console starts the job and shows the page for it; esc cancels
 test('while it runs the page counts the sources it is reading and names the hosts', () => {
   const a = A.gotResearch(A.key(type(console_(), 'raft'), k('enter'), W, H).a, status());
   const t = text(a);
-  assert.match(t, /researching "raft"/);
+  assert.match(t, /researching “raft”/);
   assert.match(t, /reading 7 sources · 12 found · 3 skipped/);
-  assert.match(t, /en\.wikipedia\.org · pubmed\.ncbi\.nlm\.nih\.gov/);
   assert.equal(A.researchRunning(a.research), true);
   assert.equal(A.gotResearch(a, status({ topic: 'something else' })), a, 'a status for another topic is ignored');
 });
@@ -420,10 +419,10 @@ test('when it ends a banner says how many entries were added, above the entries'
   const done = A.gotResearch(run, status({ phase: 'done' }, report()));
   const t = text(done);
   assert.match(t, /the archive has been expanded to include 2 new entries/);
-  assert.ok(t.indexOf('expanded to include') < t.indexOf('Page 1'), 'the banner is above the entries');
-  assert.match(t, /Page 1[\s\S]*full · CC-BY-SA-4\.0/);
-  assert.match(t, /read, not kept: 2 not relevant to the topic/);
-  assert.match(t, /not on the trusted lists: blog\.example\.com/);
+  assert.ok(t.indexOf('expanded to include') < t.indexOf('page-1.md'), 'the banner is above the entries');
+  assert.match(t, /new entry\s+form\s+licence/);
+  assert.match(t, /knowledge\/web\/en\.wikipedia\.org\/page-1\.md\s+full\s+CC-BY-SA-4\.0/);
+  assert.match(t, /seen, not read: 1 host that is not on your lists \(blog\.example\.com\)/);
   assert.equal(A.researchRunning(done.research), false);
   const one = A.gotResearch(run, status({ phase: 'done' }, report({ new: [made(1)] })));
   assert.match(text(one), /expanded to include 1 new entry\b/);
@@ -464,4 +463,54 @@ test('research text from the page and the scout is made safe to print', () => {
   const run = A.key(type(console_(), 'raft'), k('enter'), W, H).a;
   const rep = report({ new: [{ ...made(1), title: 'Evil \x1b[2J title', publisher: 'P\x07' }] });
   assert.doesNotMatch(text(A.gotResearch(run, status({ phase: 'done' }, rep))), /\x1b|\x07/);
+});
+
+// ── K5: the expand pages as drawn (specs/043 §3.7) and the thin-reference hint (§8.2) ─────────────────────
+
+const line = (host: string, status: string, over: object = {}) => ({ url: `https://${host}/wiki/x`, host, status, form: null, licence: null, why: null, ...over });
+
+test('the progress page keeps the box and shows one line per source: done with form and licence, reading, queued', () => {
+  const run = A.key(type(console_(), 'byzantine fault tolerance'), k('enter'), W, H).a;
+  const sources = [line('en.wikipedia.org', 'done', { form: 'full', licence: 'CC-BY-SA-4.0' }), line('arxiv.org', 'done', { form: 'summary', licence: 'unknown' }), line('blog.example.org', 'skipped', { why: 'answered 404' }), line('britannica.com', 'reading'), line('pubmed.ncbi.nlm.nih.gov', 'queued'), line('acm.org', 'queued')];
+  const t = text(A.gotResearch(run, status({ topic: 'byzantine fault tolerance', sources })));
+  assert.match(t, /expand knowledge base: research a topic/, 'the label stays');
+  assert.match(t, /›\s+byzantine fault tolerance/, 'the box holds the topic');
+  assert.match(t, /✔ en\.wikipedia\.org\s+full text\s+CC-BY-SA-4\.0/);
+  assert.match(t, /✔ arxiv\.org\s+summary and facts\s+summary-only source/);
+  assert.match(t, /✖ blog\.example\.org\s+skipped: answered 404/);
+  assert.match(t, /● britannica\.com\s+reading…/);
+  assert.match(t, /○ pubmed\.ncbi\.nlm\.nih\.gov · acm\.org/);
+  assert.match(t, /esc cancel · entries already written stay · nothing leaves the trusted list/);
+});
+
+test('the results page lists the entries as a table and says what was read and not kept, and what was seen and not read', () => {
+  const run = A.key(type(console_(), 'raft'), k('enter'), W, H).a;
+  const sources = [line('britannica.com', 'not kept', { why: 'not relevant to the topic' }), line('acm.org', 'not kept', { why: 'almost no text' }), line('en.wikipedia.org', 'done', { form: 'full', licence: 'CC-BY-SA-4.0' })];
+  const t = text(A.gotResearch(run, status({ phase: 'done', sources }, report())));
+  assert.match(t, /›\s+raft/, 'the box holds the topic');
+  assert.match(t, /read, not kept: britannica\.com\/… \(not relevant to the topic\) · acm\.org\/… \(almost no text\)/);
+  assert.match(t, /enter read it · esc back to the clean page · they are searchable now/);
+});
+
+test('a search with fewer than three reference documents offers research, and only a window that can run it', () => {
+  const hit = (kind: string) => ({ path: `${kind}/a.md`, collection: kind, kind, updated: '', trust: 'internal_generated', heading: '', preview: '' });
+  const searched = (a: A.Arch, kinds: string[], facets: Record<string, number> | null = null): A.Arch => ({ ...A.gotHits({ ...a, q: 'raft' }, 'raft', { results: kinds.map((x) => ({ ...hit(x) })) }), q: 'raft', facets });
+  const thin = searched(shelf(A.emptyArch(true)), ['spec', 'research']);
+  assert.equal(A.thinOnReference(thin), true);
+  assert.match(text(thin), /thin on reference: shift\+tab to research this topic/);
+  assert.equal(A.thinOnReference(searched(shelf(A.emptyArch(true)), ['research', 'docs', 'docs'])), false, 'three is enough');
+  assert.equal(A.thinOnReference(searched(shelf(A.emptyArch(true)), ['spec'], { spec: 9, research: 2, docs: 1 })), false, 'the counts of the whole candidate set decide when there are facets');
+  assert.equal(A.thinOnReference(searched(shelf(A.emptyArch(true)), ['spec'], { spec: 9, research: 1 })), true);
+  assert.equal(A.thinOnReference(searched(shelf(A.emptyArch(false)), ['spec'])), false, 'the narrator cannot run research, so it does not offer it');
+  assert.equal(A.thinOnReference(shelf(A.emptyArch(true))), false, 'nothing searched, nothing to say');
+});
+
+test('shift+tab from a thin result carries the query into the expand box and starts nothing', () => {
+  const thin = { ...A.gotHits(shelf(A.emptyArch(true)), 'byzantine', { results: [] }), q: 'byzantine' };
+  const r = A.key(thin, k('shift-tab', { shift: true }), W, H);
+  assert.equal(r.a.mode, 'expand');
+  assert.equal(r.a.q, 'byzantine', 'the query is in the box');
+  assert.deepEqual(r.action, { t: 'none' }, 'nothing is started or sent');
+  assert.equal(r.a.research, null);
+  assert.match(text(r.a), /›\s+byzantine/);
 });

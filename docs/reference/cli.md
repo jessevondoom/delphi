@@ -160,6 +160,9 @@ Review an optimistic build's provisional decisions.
     [--workspace <name>] [--home <dir>]
 ```
 
+This is the text form for a shell. In the console, `/decisions` with no argument opens the decisions pane:
+every approval card, provisional decision and agent-raised decision you owe, one at a time.
+
 ### `delphi timers`
 
 The wakes the daemon is keeping for roles.

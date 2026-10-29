@@ -20,8 +20,11 @@ export type Decision = 'allow' | 'allow_similar' | 'deny';
 export type Action =
   | { t: 'none' }
   | { t: 'chat' }
-  | { t: 'resolve'; card: Approval; decision: Decision }
-  | { t: 'review'; d: D.Decision; resolution: 'ratified' | 'rejected' }
+  | { t: 'resolve'; card: Approval; decision: Decision; /** Set when a reading of typed words was confirmed: the decision it belongs to, and its notes. */ d?: D.Decision; conditions?: string[] }
+  | { t: 'review'; d: D.Decision; resolution: 'ratified' | 'rejected'; conditions?: string[] }
+  /** A raised decision answered: the console records it with `decision.resolve`. */
+  | { t: 'record'; d: D.Decision; choice_id: string; conditions?: string[] }
+  | { t: 'thread'; d: D.Decision } | { t: 'reply'; d: D.Decision; text: string } | { t: 'retry'; d: D.Decision }
   | { t: 'accept'; ds: D.Decision[] }
   | { t: 'resolve-all'; cards: Approval[] };
 
@@ -43,11 +46,11 @@ const remaining = (a: Approval, now: number) => {
 
 export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: Inbox; action: Action } {
   const none = (i: Inbox = inb) => ({ inbox: i, action: { t: 'none' } as Action });
-  if (e.t !== 'key' && e.t !== 'text') return none();
+  if (e.t !== 'key' && e.t !== 'text' && !(paned(inb) && (e.t === 'ctrl' || e.t === 'paste'))) return none();
   const sel = Math.min(inb.sel, Math.max(0, list.length - 1));
   const card = list[sel];
   const guarded = now - inb.since < GUARD_MS || (card ? now - card.at < GUARD_MS : false);
-  const k = e.t === 'key' ? e.k : e.s;
+  const k = e.t === 'key' ? e.k : e.t === 'text' ? e.s : '';
   const answer = (decision: Decision) => (card && !guarded ? { inbox: { ...inb, sel, confirmAll: false, payload: false, opt: 0 }, action: { t: 'resolve', card, decision } as Action } : none());
   // The pane of specs/044: the keys belong to it. An answer is the operator choosing in the detail view (never from the
   // list), and the console turns it into the call for the decision's source: a card's own resolution, or a review.
@@ -55,13 +58,16 @@ export function key(inb: Inbox, list: Approval[], e: Ev, now: number): { inbox: 
     const r = D.key(inb.pane, inb.items, e, now);
     if (r.action.t === 'chat') return { inbox: { ...inb, pane: r.pane }, action: { t: 'chat' } };
     if (r.action.t === 'accept-all') return { inbox: { ...inb, pane: r.pane }, action: { t: 'accept', ds: r.action.ds } };
+    if (r.action.t === 'thread' || r.action.t === 'reply' || r.action.t === 'retry') return { inbox: { ...inb, pane: r.pane }, action: r.action };
     if (r.action.t === 'answer') {
       const { d, choice } = r.action;
       if (d.source === 'card') {
         const c = list.find((x) => x.id === d.source_id);
-        if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id } };
+        if (c && (choice.id === 'allow' || choice.id === 'allow_similar' || choice.id === 'deny') && now - c.at >= GUARD_MS) return { inbox: { ...inb, pane: r.pane }, action: { t: 'resolve', card: c, decision: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions, d } : {}) } };
+      } else if (d.source === 'raised') {
+        return { inbox: { ...inb, pane: r.pane }, action: { t: 'record', d, choice_id: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };
       } else if (d.source === 'provisional' && (choice.id === 'ratified' || choice.id === 'rejected')) {
-        return { inbox: { ...inb, pane: r.pane }, action: { t: 'review', d, resolution: choice.id } };
+        return { inbox: { ...inb, pane: r.pane }, action: { t: 'review', d, resolution: choice.id, ...(r.action.conditions ? { conditions: r.action.conditions } : {}) } };
       }
       return none({ ...inb, pane: D.unsent(r.pane) });
     }
@@ -147,6 +153,9 @@ export function view(s: State, inb: Inbox, info: T.Info, pal: T.Pal, now: number
   ];
   return pad(lines);
 }
+
+/** The detail view's own prompt bar (specs/044 §6.3), or null where the deck shows its key hint. */
+export const promptLine = (inb: Inbox, w: number): string | null => (paned(inb) ? D.promptLine(inb.pane, w) : null);
 
 export const hint = (inb: Inbox, n: number): string =>
   paned(inb) ? D.hint(inb.items, inb.pane)

@@ -105,6 +105,18 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       inboxRef.current = next; setInbox(next);
     }).catch(() => {});
   };
+  /** The saved thread of a decision that was just opened (`decision.get`); the pane ignores it if the operator has moved on. */
+  const loadThread = (d: D.Decision) => {
+    cmd.call('decision.get', { mission_id: mission, id: d.id }).then((r: any) => {
+      const next = { ...inboxRef.current, pane: D.withThread(inboxRef.current.pane, d.id, r?.thread) };
+      inboxRef.current = next; setInbox(next);
+    }).catch(() => {});
+  };
+  /** The operator confirmed a reading of typed words: record it with its notes before the decision resolves. Nothing here acts on a note. */
+  const confirmReading = async (d: D.Decision | undefined, choice: string, conditions: string[] | undefined): Promise<void> => {
+    if (!d || !conditions) return;
+    try { await cmd.call('decision.confirm', { mission_id: mission, id: d.id, choice_id: choice, conditions }); } catch (er: any) { note('could not save the notes: ' + (er?.message ?? 'failed'), 'error'); }
+  };
   /** An answer failed: let the operator send it again. */
   const unsend = () => { const next = { ...inboxRef.current, pane: D.unsent(inboxRef.current.pane) }; inboxRef.current = next; setInbox(next); };
   const decisionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -283,7 +295,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
       return;
     }
     // A command may have changed what the workspace can run on (`/ratify apply`), so ask again afterwards.
-    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note }).then(checkModels);
+    void runSlash(line, { cmd, mission, info, state: () => stateRef.current, post: note, openDecisions: () => { setDeck(2); deckRef.current = 2; loadDecisions(); } }).then(checkModels);
   };
 
   // The left deck is the knowledge window (`archives.ts`), reading through `kb.get` as the narrator's does. The ref moves
@@ -494,7 +506,26 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         const { inbox: next, action } = I.key(inboxRef.current, I.cards(stateRef.current), e, now);
         inboxRef.current = next; setInbox(next);
         if (action.t === 'chat') { setDeck(1); deckRef.current = 1; }
-        else if (action.t === 'resolve') void resolveCard(cmd, action.card, action.decision).then((bad) => { if (bad) { note(bad, 'error'); unsend(); } });
+        else if (action.t === 'resolve') {
+          const go = () => resolveCard(cmd, action.card, action.decision).then((bad) => { if (bad) { note(bad, 'error'); unsend(); } });
+          void confirmReading(action.d, action.decision, action.conditions).then(go);
+        }
+        else if (action.t === 'record') {
+          const d = action.d;
+          cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: action.choice_id, payload_blake3: d.payload_blake3, conditions: action.conditions ?? [] })
+            .then(() => loadDecisionsSoon())
+            .catch((er: any) => { note('could not record the answer: ' + (er?.message ?? JSON.stringify(er)), 'error'); unsend(); loadDecisionsSoon(); });
+        }
+        else if (action.t === 'thread') loadThread(action.d);
+        else if (action.t === 'retry') {
+          cmd.call('decision.retry_brief', { mission_id: mission, id: action.d.id }).then(() => note('asking a model for a brief, once…', 'ok')).catch((er: any) => note('could not ask: ' + (er?.message ?? 'failed'), 'error'));
+        }
+        else if (action.t === 'reply') {
+          const d = action.d;
+          cmd.call('decision.reply', { mission_id: mission, id: d.id, text: action.text })
+            .then((r: any) => { const next = { ...inboxRef.current, pane: D.replied(inboxRef.current.pane, d.id, r) }; inboxRef.current = next; setInbox(next); })
+            .catch((er: any) => { note('could not read that: ' + (er?.message ?? 'failed'), 'error'); unsend(); });
+        }
         else if (action.t === 'accept') {
           // Each ticked recommendation goes through its own call, one at a time; a failure does not stop the others, and the
           // daemon re-checks each payload hash (a decision that changed since it was shown is refused, specs/044 §5.5).
@@ -502,6 +533,11 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
             let ok = 0; const bad: string[] = [];
             for (const d of action.ds) {
               const resolution = d.brief.recommendation?.choice_id;
+              if (d.source === 'raised' && resolution) {
+                try { await cmd.call('decision.resolve', { mission_id: mission, id: d.id, choice_id: resolution, payload_blake3: d.payload_blake3, conditions: [] }); ok++; }
+                catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
+                continue;
+              }
               if (d.source !== 'provisional' || (resolution !== 'ratified' && resolution !== 'rejected')) { bad.push(`${d.label}: nothing to call for this kind yet`); continue; }
               try { await cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution }); ok++; }
               catch (er: any) { bad.push(`${d.label}: ${er?.message ?? 'failed'}`); }
@@ -512,7 +548,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
         }
         else if (action.t === 'review') {
           const d = action.d;
-          cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution: action.resolution })
+          void confirmReading(d, action.resolution, action.conditions).then(() => cmd.call('decisions.review', { mission_id: mission, decision_id: d.source_id, payload_blake3: d.payload_blake3, resolution: action.resolution }))
             .then(() => loadDecisionsSoon())
             .catch((er: any) => { note('could not record the review: ' + (er?.message ?? JSON.stringify(er)), 'error'); unsend(); loadDecisionsSoon(); });
         }

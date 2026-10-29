@@ -39,9 +39,11 @@ With the sandbox on (`sandbox-exec` on macOS, `bubblewrap` on Linux) sandboxed c
 `/build --optimistic …` lets the build decide its own worktree edits, records each as a **provisional decision**, and refuses to merge until you have reviewed them:
 
 ```
-› /decisions            # list and review; ratify routine ones, reject others
+› /decisions            # opens the decisions pane: everything you owe, one at a time
 › /merge <task>         # reruns the gates and shows the merge card
 ```
+
+The pane lists every decision you owe: approval cards, these provisional decisions, and the decisions agents raise (a spec to approve, an open question, a release call). Each has a short brief and, where the facts support one, a recommendation; open one to choose, or type in your own words and confirm how it was read. `/decisions list`, `show`, `ratify` and `reject` are the text forms ([`specs/044`](../../specs/044-decisions-pane.md)).
 
 From a shell the same review is `delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]]` ([`specs/015`](../../specs/015-provisional-decisions.md)).
 

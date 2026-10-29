@@ -3,7 +3,7 @@
 process.env.TZ = 'UTC';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chips, confirm, detail, isTicked, key, newPane, parse, reconcile, ticked, unsent, view, visible, type Decision, type Pane } from '../src/decisions-pane.ts';
+import { chips, confirm, detail, hint, isTicked, key, newPane, parse, promptLine, reconcile, replied, ticked, unsent, view, visible, withThread, type Decision, type Pane } from '../src/decisions-pane.ts';
 import { frame, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { fold, initial } from '../src/fold.ts';
@@ -165,7 +165,7 @@ test('answering: the guard, one answer only, a number takes that choice, and the
   assert.equal(unsent(r.pane).answered, null, 'a failed answer can be sent again');
 });
 
-test('tab and shift+tab walk the choices; up and down walk the decisions of the filter; esc and left go back; d shows the payload', () => {
+test('tab and shift+tab walk the choices; up and down walk the decisions of the filter; esc and left go back; ctrl+d shows the payload', () => {
   const items = five();
   let p = open(items, 0);
   assert.equal(p.opt, null);
@@ -182,7 +182,8 @@ test('tab and shift+tab walk the choices; up and down walk the decisions of the 
   assert.equal(key({ ...open(items, 2), filter: 'build', sel: 0 }, items, k('down'), 2000).pane.open, 'dec-085');
   assert.equal(key(p, items, k('esc'), 2000).pane.open, null);
   assert.equal(key(p, items, k('left'), 2000).pane.open, null);
-  assert.equal(key(p, items, ch('d'), 2000).pane.payload, true);
+  assert.equal(key(p, items, { t: 'ctrl', c: 'd' }, 2000).pane.payload, true);
+  assert.equal(key(p, items, ch('d'), 2000).pane.payload, false, 'a plain d is the start of a word the operator is typing');
 });
 
 test('when the open decision is answered the pane moves to the next in the filter, and leaves when none is left', () => {
@@ -266,7 +267,7 @@ test('enter on the confirm page accepts exactly what was ticked, after the guard
   assert.equal(r.action.t, 'accept-all');
   assert.deepEqual(r.action.t === 'accept-all' ? r.action.ds.map((d) => d.label) : [], ['DEC-082', 'DEC-085', 'DEC-084']);
   assert.deepEqual([r.pane.confirm, r.pane.ticks.length, r.pane.note], [false, 0, '✔ accepting 3 recommendations…']);
-  assert.equal(key(r.pane, items, k('enter'), 3000).action.t, 'none', 'nothing is ticked any more, so a second press accepts nothing');
+  assert.notEqual(key(r.pane, items, k('enter'), 3000).action.t, 'accept-all', 'nothing is ticked any more, so a second press accepts nothing');
 });
 
 test('the confirm page closes by itself when the ticks go away (a payload changed, or the decisions were answered elsewhere)', () => {
@@ -316,4 +317,133 @@ test('golden screens: the list, the filtered list and the list at 80x24', () => 
     const r = snapshot(name, frame(m, w, h));
     assert.ok(r.ok, r.message);
   }
+});
+
+// ── typing instead of choosing (specs/044 §6.3) ──
+const typeIn = (p: Pane, items: Decision[], text: string, now = 2000): Pane => [...text].reduce((q, c) => key(q, items, ch(c), now).pane, p);
+
+test('opening a decision asks for its saved thread, and the thread shows under EARLIER ON THIS DECISION', () => {
+  const items = five();
+  const r = key({ ...newPane(), sel: 1 }, items, k('enter'), 1000);
+  assert.deepEqual([r.action.t, r.action.t === 'thread' && r.action.d.id], ['thread', 'dec-083']);
+  const p = withThread(r.pane, 'dec-083', [{ role: 'you', kind: 'question', text: 'why 64 KB?', tokens: 0 }, { role: 'model', kind: 'reply', text: 'It keeps a frame under the buffer.', tokens: 600 }, { junk: true }]);
+  assert.equal(p.thread.length, 2, 'a malformed line is dropped');
+  const t = detail(items, p, { pal: { dark: true }, now: NOW, w: 100, h: 34, at: () => null }).map(plain).join('\n');
+  assert.match(t, /EARLIER ON THIS DECISION · saved with it, 0 tokens to reopen/);
+  assert.match(t, /you\s+why 64 KB\?/);
+  assert.match(t, /model It keeps a frame under the buffer\./);
+  assert.equal(withThread(p, 'dec-081', [{ role: 'you', kind: 'question', text: 'x' }]), p, 'a thread for a decision no longer open is ignored');
+  assert.equal(key(p, items, k('down'), 2000).pane.thread.length, 0, 'moving on clears it until the next one loads');
+});
+
+test('typing in the detail view fills the prompt bound to the decision; digits choose only while it is empty', () => {
+  const items = five();
+  let p = open(items, 2);
+  assert.match(plain(promptLine(p, 100)!), /^❯ +or type here to answer in your own words/);
+  assert.equal(promptLine(newPane(), 100), null, 'the list has no prompt');
+  p = typeIn(p, items, 'do it, but 2 weeks');
+  assert.equal(p.draft, 'do it, but 2 weeks', 'd and 2 inside a sentence are letters, not shortcuts');
+  assert.equal(p.payload, false);
+  assert.match(plain(promptLine(p, 100)!), /^❯ do it, but 2 weeks/);
+  p = key(p, items, k('backspace'), 2000).pane;
+  assert.equal(p.draft, 'do it, but 2 week');
+  assert.equal(key(p, items, { t: 'paste', s: ' s\n  here' }, 2000).pane.draft, 'do it, but 2 week s here');
+  assert.equal(key(p, items, { t: 'ctrl', c: 'u' }, 2000).pane.draft, '');
+  assert.equal(key(p, items, k('esc'), 2000).pane.draft, '', 'esc takes back the words first');
+  assert.equal(key(p, items, k('esc'), 2000).pane.open, p.open);
+  assert.equal(key(p, items, k('left'), 2000).pane.open, p.open, 'left does not leave while words are typed');
+  assert.equal(typeIn(open(items, 2), items, 'x'.repeat(700)).draft.length, 600);
+  assert.equal(key(open(items, 2), items, ch('1'), 2000).action.t, 'answer', 'an empty prompt: 1 picks the first choice');
+});
+
+test('enter sends the words once to be read; a bare choice is the choice itself and goes to no model', () => {
+  const items = five();
+  let p = typeIn(open(items, 2), items, 'what does this change?');
+  const sent = key(p, items, k('enter'), 2000);
+  assert.deepEqual([sent.action.t, sent.action.t === 'reply' && sent.action.text, sent.pane.draft, sent.pane.busy], ['reply', 'what does this change?', '', true]);
+  assert.match(plain(promptLine(sent.pane, 100)!), /reading your words/);
+  assert.equal(key({ ...sent.pane, draft: 'again' }, items, k('enter'), 2000).action.t, 'none', 'one reply at a time');
+  assert.equal(key(open(items, 2), items, ch('2'), 2000).action.t, 'answer', 'a lone digit picks at once: no model, no draft');
+  for (const bare of ['accept', 'Accept recommendation', 'reject', 'Ratify']) {
+    const r = key(typeIn(open(items, 2), items, bare), items, k('enter'), 2000);
+    assert.equal(r.action.t, 'answer', bare);
+  }
+  const rej = key(typeIn(open(items, 2), items, 'reject'), items, k('enter'), 2000);
+  assert.equal(rej.action.t === 'answer' && rej.action.choice.id, 'rejected');
+  assert.equal(rej.action.t === 'answer' && rej.action.conditions, undefined, 'a bare choice carries no conditions');
+  assert.equal(key(typeIn(open(items, 0), items, 'accept'), items, k('enter'), 2000).action.t, 'reply', 'no recommendation: "accept" is not a choice, so it is read');
+  p = unsent(sent.pane);
+  assert.equal(p.busy, false);
+});
+
+const withReading = (items: Decision[]) => {
+  const sent = key(typeIn(open(items, 2), items, 'reject it but keep t_016 paused'), items, k('enter'), 2000);
+  return replied(sent.pane, 'dec-082', { intent: 'answer', reading: { choice_id: 'rejected', label: 'Reject', conditions: ['keep t_016 paused', '\x1b[31mtell the architect'] }, tokens: 612, thread: [{ role: 'you', kind: 'answer', text: 'reject it', tokens: 0 }, { role: 'model', kind: 'reading', text: 'Reject', choice_id: 'rejected', conditions: ['keep t_016 paused'], tokens: 612 }] });
+};
+
+test('a reading shows as READ AS, decides nothing, and needs enter on an empty prompt to confirm', () => {
+  const items = five();
+  const p = withReading(items);
+  assert.deepEqual([p.busy, p.reading?.choice_id, p.reading?.conditions], [false, 'rejected', ['keep t_016 paused', 'tell the architect']]);
+  assert.equal(p.rnote, 'that reply used 612 tokens and is saved with the decision');
+  const t = detail(items, p, { pal: { dark: true }, now: NOW, w: 100, h: 34, at: () => null }).map(plain).join('\n');
+  assert.match(t, /READ AS +nothing is decided yet/);
+  assert.match(t, /2 +Reject/);
+  assert.match(t, /\+ +keep t_016 paused/);
+  assert.match(t, /\[ Confirm this \]/);
+  assert.equal(hint(items, p), 'enter confirm the reading · keep typing to change it · tab back to the choices · esc discard');
+  const c = key(p, items, k('enter'), 5000);
+  assert.deepEqual([c.action.t, c.action.t === 'answer' && c.action.choice.id, c.action.t === 'answer' && c.action.conditions], ['answer', 'rejected', ['keep t_016 paused', 'tell the architect']]);
+  assert.equal(c.pane.reading, null);
+});
+
+test('a reading is dropped by esc or tab, replaced by typing again, and never confirms itself', () => {
+  const items = five();
+  const p = withReading(items);
+  assert.equal(key(p, items, k('esc'), 5000).pane.reading, null);
+  assert.equal(key(p, items, k('esc'), 5000).pane.open, p.open, 'the first esc only discards the reading');
+  const tab = key(p, items, k('tab'), 5000).pane;
+  assert.deepEqual([tab.reading, tab.opt], [null, 1], 'tab goes back to the choices, moving the focus on');
+  const again = key(typeIn(p, items, 'actually ratify'), items, k('enter'), 5000);
+  assert.deepEqual([again.action.t, again.pane.reading], ['reply', null], 'typing and sending reads again; the old reading is gone');
+  assert.equal(replied(p, 'dec-081', { intent: 'answer', reading: { choice_id: 'rejected', label: 'Reject', conditions: [] } }), p, 'a reply for another decision is ignored');
+  assert.equal(replied({ ...p, reading: null }, 'dec-082', { intent: 'question', reply: 'x', tokens: 5, thread: [] }).reading, null, 'a question leaves nothing to confirm');
+  assert.equal(key(p, items, k('enter'), 1100).action.t, 'none', 'the guard counts from when the decision opened');
+  assert.equal(key(p, items, k('enter'), 1400).action.t, 'answer');
+});
+
+test('ctrl+r asks for a model brief only on a card that has the plain one', () => {
+  const items = parse({ decisions: [raw('c1', 'action', 'amber', 'write deck.rs', 's', null, false, { source: 'card', source_id: 'a1', choices: [{ id: 'allow', label: 'Approve once', effect: 'x', reversible: true }, { id: 'deny', label: 'Reject', effect: 'x', reversible: true }] })] });
+  const plainCard = { ...items[0]!, brief: { ...items[0]!.brief, state: 'plain' } };
+  const p = open([plainCard], 0);
+  assert.equal(key(p, [plainCard], { t: 'ctrl', c: 'r' }, 2000).action.t, 'retry');
+  assert.equal(key(p, items, { t: 'ctrl', c: 'r' }, 2000).action.t, 'none', 'an authored brief is not asked for again');
+  const gen = { ...plainCard, brief: { ...plainCard.brief, state: 'generated', tokens: 312 } };
+  const t = detail([gen], open([gen], 0), { pal: { dark: true }, now: NOW, w: 100, h: 34, at: () => null }).map(plain).join('\n');
+  assert.match(t, /summary cached, written once \(312 tokens\)/);
+});
+
+test('through the inbox the new actions pass, and a confirmed reading carries its notes to the call that resolves', () => {
+  const items = five().map((d) => ({ ...d, source: 'provisional' }));
+  const inb = newInbox(0, items);
+  const opened = inboxKey(inb, [], k('enter'), 1000);
+  assert.equal(opened.action.t, 'thread');
+  const typed = [...'hello'].reduce((i, c) => inboxKey(i, [], ch(c), 2000).inbox, opened.inbox);
+  assert.equal(typed.pane.draft, 'hello');
+  assert.equal(inboxKey(typed, [], k('enter'), 2000).action.t, 'reply');
+  assert.equal(inboxKey(typed, [], { t: 'ctrl', c: 'u' }, 2000).inbox.pane.draft, '');
+  const conf = inboxKey({ ...inb, pane: { ...open(items, 2), reading: { choice_id: 'rejected', label: 'Reject', conditions: ['hold t_016'] } } }, [], k('enter'), 5000);
+  assert.deepEqual([conf.action.t, conf.action.t === 'review' && conf.action.resolution, conf.action.t === 'review' && conf.action.conditions], ['review', 'rejected', ['hold t_016']]);
+});
+
+test('a raised decision is answered with decision.resolve, singly and in the batch of recommended defaults', () => {
+  const items = five().map((d) => ({ ...d, source: 'raised' }));
+  const opened = inboxKey(newInbox(0, items), [], k('enter'), 1000);
+  assert.equal(opened.action.t, 'thread');
+  const one = inboxKey(opened.inbox, [], ch('1'), 2000);
+  assert.deepEqual([one.action.t, one.action.t === 'record' && one.action.d.id, one.action.t === 'record' && one.action.choice_id], ['record', 'dec-081', 'ratified']);
+  const cond = inboxKey({ ...opened.inbox, pane: { ...opened.inbox.pane, reading: { choice_id: 'rejected', label: 'Reject', conditions: ['hold t_016'] } } }, [], k('enter'), 5000);
+  assert.deepEqual([cond.action.t, cond.action.t === 'record' && cond.action.conditions], ['record', ['hold t_016']]);
+  const batch = inboxKey(newInbox(0, items, { ...tickedPane(items), confirm: true, confirmedAt: 0 }), [], k('enter'), 5000);
+  assert.equal(batch.action.t, 'accept', 'the batch carries the raised ones too; the console calls decision.resolve for each');
 });

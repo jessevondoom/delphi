@@ -424,7 +424,7 @@ function promptOf(m: Model, w: number): string[] {
     (first + i === 0 ? T.dim('❯ ') : '  ') + T.text(m.pal)(r.before) + (r.at ? chalk.inverse(r.at) : '') + T.text(m.pal)(r.after));
   if (m.links && m.deck === 1) { prompt.length = 0; prompt.push(T.dim('link mode: tab next · shift+tab previous · enter open · y copy · p pin · esc leave')); }
   if (m.deck === 0) { prompt.length = 0; prompt.push(T.dim('type to search the knowledge base · enter opens · tab narrows to a collection · ← → move between decks')); }
-  if (m.deck === 2) { prompt.length = 0; prompt.push(T.dim(I.hint(m.inbox, I.cards(m.state).length))); }
+  if (m.deck === 2) { prompt.length = 0; prompt.push(I.promptLine(m.inbox, w) ?? T.dim(I.hint(m.inbox, I.cards(m.state).length))); }
   if (m.panel && m.deck === 1) { prompt.length = 0; prompt.push(T.dim(P.hint(m.panel))); }
   return prompt;
 }
