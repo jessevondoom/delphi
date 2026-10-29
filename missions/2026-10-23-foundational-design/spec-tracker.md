@@ -330,3 +330,17 @@ Proposed from the operator's decisions of 2026-10-29: sources in the knowledge b
 Amended with 055 (2026-10-29, additive): 012 §11 (`fact` kind, provisional), 022 §5, 023 §2.1 and step 7a, 024 §4.1a, 027 §2.3a, `schemas/bundle.schema.json` (`sections.sources`).
 
 Amended 2026-10-29 (operator decision: a bundle is trusted, licence is information): 023 §2.1 and step 7a, 024 §3.7 and §4.1a, 052 §3.1, 055 §3.2, §7, §11.1, 027 §2.3a, schemas. The Xenia `fact` kind is deferred by decision.
+
+## Discovered model assignment (spec 056, draft 2026-10-28)
+
+Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what is available and assign the best model per agent and task; more effort for planning and specs, the lowest acceptable model for following a build plan; promote and nerf an agent; the knowledge in the core knowledge base. Draft: it needs approval, and OD-1 amends D-15 (spec 035).
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| KB | `context/model-selection-evidence.md`: dated external evidence by family, capability classes, planner and executor results | written (this PR), status `draft` |
+| M0 | candidate inventory in `delphi capabilities` | not started |
+| M1 | class rules as a ratified data file, classifier | not started |
+| M2 | assignment in `resolve_model_route` behind `[routing] assignment` | not started |
+| M3 | `[grades]`, `delphi agent promote`, `nerf`, `grades` | not started |
+| M4 | ratchet and suggestions from retrospectives | not started |
+| M5 | `delphi models calibrate` | not started |
