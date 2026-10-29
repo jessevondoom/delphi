@@ -1,0 +1,119 @@
+---
+id: spec-056-discovered-model-assignment
+title: "056: Discovered Model Assignment: Capability Classes, Plan and Execute Split, Promote and Nerf"
+author: architect
+timestamp: 2026-10-28T20:00:00Z
+status: draft   # a proposal, not permission to build (AGENTS.md: No Spec, No Build). The operator approves or amends the decisions in §7.
+governed_by: "GOVERNANCE.md"
+review_rubric: "REVIEW.md"
+source_type: internal_generated
+confidence: medium   # the design follows the operator's direction of 2026-10-28; the evidence is `context/model-selection-evidence.md` (external, dated)
+source_mission: 2026-10-23-foundational-design
+tags: [spec, routing, models, discovery, effort, promote, nerf]
+---
+
+# Spec 056: Discovered Model Assignment
+
+Extends [`specs/002`](002-adapter-and-routing.md) §4 (the scaler and the pool), and builds on [`045`](045-harness-loop-techniques.md), [`046`](046-harness-and-openai-coverage.md), [`047`](047-codex-harness-and-coverage.md) and the Copilot seat in 051. It **amends** the operator decision of 2026-10-26 ([`specs/035`](035-failover-without-a-driver.md) D-14, D-15) in one place, §3.2, and only if §7 OD-1 is approved.
+
+The operator's direction, 2026-10-28: Delphi must not hard-code favorites. It discovers what is available and assigns the best model for each agent and task. Planning and specs get higher effort and quality; following a build plan gets the lowest acceptable quality; an agent can be promoted or nerfed. The knowledge of which model suits what is widely published and belongs in the core knowledge base ([`context/model-selection-evidence.md`](../context/model-selection-evidence.md)).
+
+## 1. Principles
+
+1. **No model name appears in code or in a spec.** Names live only in the knowledge base as dated examples. Code reads attributes and measured results.
+2. **Discover, then classify, then measure.** The seat reports what it has; rules place each model in a class; Delphi's own results move it. Measurement outranks the knowledge base, which outranks a rule.
+3. **Quality is bought where ambiguity is.** A plan or spec is the artifact every later step copies, so it gets the strongest model and effort. A step that follows a written plan gets the cheapest model that passes the plan's gates.
+4. **Cost is per accepted result, not per token.** A cheaper model that fails the gate and is retried is not cheaper.
+5. **Authority does not widen.** Choosing a model changes quality and cost, never what a role may do. A model from outside the ratified pool is never used; a seat's tools stay as its spec says (020, 047, 051).
+6. **The operator can always override.** Promote, nerf, pin and exclude are ratified configuration; the Orchestrator may raise one task but never change a grade.
+
+## 2. Discovery and classification
+
+### 2.1 Candidates
+
+A **candidate** is `(endpoint, model)` plus what the access path reported: family, context window, supported effort levels, input modalities, cost class (metered price, subscription, or free local), vendor rank if given, whether it is local, when it was seen, and by what command. Sources are the ones `delphi capabilities` and `delphi endpoints test` already run (specs 038, 046, 047, 051) plus each provider's list endpoint. Nothing here calls a model.
+
+A candidate is refreshed at `delphi setup`, `delphi doctor`, daemon start, and on a timer; a model that disappears is marked `gone`, not deleted. A new one is `unclassified` until §2.2 places it.
+
+### 2.2 Classes
+
+The classes are those in `context/model-selection-evidence.md` §2: `deep`, `steady`, `quick`, `wide`, `local`. A rule table maps attributes to classes (for example: top vendor rank in its family and an effort level at or above `high` is `deep`; the smallest hosted tier is `quick`; a context window several times its family's median is also `wide`; open weights on this machine is `local`). The table is a ratified data file, not code, so a new vendor needs a row, not a release.
+
+A model that no rule places stays `unclassified` and is used only if the operator assigns it or a calibration run (§5) has measured it.
+
+### 2.3 Evidence
+
+Delphi's own results adjust a class: first-pass success, gate failures, retries, tokens and wall time by `(role, task kind, model, effort)`, from the retrospectives (037) and benchmark runs (048). A model with enough results is scored by them alone; with fewer, by its class prior. "Enough" is a ratified count (§7 OD-3).
+
+## 3. Assignment
+
+### 3.1 The procedure
+
+For a dispatch `(role, task)`:
+
+1. The **requirement** is a class and an effort from the role's default and the task signals (the table in `specs/002` §4, restated in classes). Then the role's **grade** (§4) shifts it.
+2. The **eligible set** is every ready candidate in the ratified pool whose class meets the requirement and which has the tools and bridge the role needs (the existing `resolve_model_route` filter, 002-A1).
+3. Choose among them by, in order: measured fitness for this task kind; family diversity where a rule asks for it (Council, review by a different family); headroom left on the seat; cost per accepted result; pool order.
+4. Record the choice and why in the existing routing event (`scaling_rationale`), naming the class and the evidence it used.
+
+If nothing is eligible, the existing promotion and exhaustion rules apply unchanged.
+
+### 3.2 Planning is bought; following a plan is rationed
+
+- **Plan-making roles** (`architect`, `strategist`, `red-team`, the Council, and the Orchestrator when it writes a plan): start in `deep` at a high effort, drawn from at least two families. This is a raise over the `workhorse` default of D-14. The effort is the highest the evidence supports for that task kind, not the highest available: vendors warn that more effort can regress quality, and a ratified per-kind ceiling applies (§7 OD-2).
+- **Plan-following roles** (`builder` with a plan attached, `integrator`, mechanical `investigator` and `scout` work): start at the lowest class that has met the success bar on this task kind, which is `steady` until evidence says `quick` will do. Without evidence they start at the role's default and move down by the ratchet below. This **amends D-15** ("never lowered below the default to save cost") for tasks that carry a plan and a deterministic gate; the Orchestrator's own discretion to lower a model remains withdrawn.
+- **The ratchet.** After `K` consecutive first-pass successes at a class, with the gate passing and no retry, the next dispatch of that task kind tries the class below. One failure puts it back and records a lesson; two failures in a row on a class stop trying it for that task kind until the operator clears it. `K` is ratified (§7 OD-3).
+- **A failed gate** still raises one class or effort step and then changes family (`[H-007]`), unchanged.
+
+## 4. Promote and nerf
+
+A **grade** is a small signed integer per agent, optionally per task kind, that shifts the requirement of §3.1 along the ladder of `(class, effort)` pairs the pool actually offers. Positive is promote; negative is nerf. It is bounded to ±2 and cannot move a role past the top or bottom the pool has.
+
+- It lives in the ratified configuration, in a `[grades]` table (`architect = 1`, `builder.docs = -1`), so changing it is a Red-tier edit that shows a diff and needs the operator's approval like any access change.
+- `delphi agent promote <role> [--kind <task kind>]` and `delphi agent nerf <role>` write that edit through the same path; `delphi agent grades` lists them with the evidence beside each.
+- Each use logs `agent.graded {role, kind, from, to, reason}`.
+- Delphi may **suggest** a change from the evidence ("builder, docs tasks: 14 of 14 first-pass at `steady`; try -1"), shown in the console and `delphi agent grades`. It never applies one.
+- A grade never lets a role do more than its manifest allows, and never moves a plan-following role above `steady` unless the operator sets it explicitly.
+
+## 5. Calibration
+
+A model that is `unclassified`, or new in a family, can be measured before it serves real work: `delphi models calibrate <endpoint/model>` runs a small fixed set of tasks from the benchmark harness (048), once, on the operator's request or after approval of a card, within a token cap. The result moves the class prior and is kept with the model's attributes.
+
+## 6. Slices
+
+Each is one pull request with the usual trailer and tracker row.
+
+| Slice | Delivers | Needs |
+| :-- | :-- | :-- |
+| **M0** | the candidate inventory: a `models` view in `delphi capabilities` listing every discovered model with its attributes and class `unclassified`; Copilot and Codex lists included | 047 S2a, 051 S1 |
+| **M1** | the class rules as a ratified data file, the classifier, the knowledge base note linked from `model-capabilities.md`; doctor warns on unclassified | M0 |
+| **M2** | assignment in `resolve_model_route` behind `[routing] assignment = "static"` (today, the default) or `"discovered"`; the routing event names class and evidence | M1 |
+| **M3** | `[grades]`, `delphi agent promote`, `nerf`, `grades`, the `agent.graded` event | M2 |
+| **M4** | the ratchet and the suggestions, from retrospective results | M2, 037 |
+| **M5** | `delphi models calibrate` | 048 |
+
+## 7. Decisions for the operator
+
+| # | Question | Recommendation |
+| :-- | :-- | :-- |
+| OD-1 | Amend D-15 so that plan-following work may start below the role's default, by the ratchet? | **Yes**, limited to tasks that carry a plan and a deterministic gate. Everything else keeps D-15. |
+| OD-2 | Planning effort: the highest available, or the highest the evidence supports, with a per-kind ceiling? | The evidence-supported level with a ceiling; vendors report regressions from overthinking. Start at `high`. |
+| OD-3 | The ratchet's `K` and the count that makes evidence "enough" | `K = 5`, evidence = 8 results per `(role, kind, model)`; both ratified settings. |
+| OD-4 | A model with no evidence and no class: refuse, or allow at the role's default? | Refuse until calibrated or assigned by the operator. |
+| OD-5 | Should `assignment = "discovered"` become the default after M2 is measured? | Not until a benchmark (048) shows it no worse than `static` on the same suite. |
+
+## 8. Tests
+
+- No source file or spec outside `context/` names a model (a lint over `crates/`, like the theme-name lint).
+- A fixture of three seats with invented model ids and attributes is classified by the rule table alone; an id the table does not place stays `unclassified` and is never chosen.
+- The same dispatch on `static` and `discovered` with one family returns the static choice when the pool has a single eligible model.
+- A plan-making role gets `deep` and two families when both exist, and one family marked `homogeneous_retry` when not.
+- The ratchet steps down after `K` successes, up after one failure, and stops after two failures in a row; a grade of -1 on top of the ratchet is bounded at the pool's lowest class.
+- `promote` writes a diff and does nothing until ratified; an agent cannot write `[grades]`.
+- A model that disappears from a seat's list is `gone` and never selected; a dispatch with nothing eligible escalates under the existing rules.
+
+## 9. What this spec does not claim
+
+- That the class rules are right. They are starting points for the first run; the evidence note says which parts rest on third-party roundups that disagree with each other.
+- That a cheaper model passes a plan's gates. That is what the ratchet measures; the first runs pay for it.
+- That any benchmark number in the knowledge base predicts Delphi's tasks. Only Delphi's own results do.
