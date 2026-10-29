@@ -14,6 +14,8 @@ tags: [spec, xenia, security, post-v1]
 
 # Spec 011: Xenia Trust Model (v2)
 
+> **Outside amendments:** 007-A1 and 007-A2 (2026-10-25) amend `specs/007` §3 and §4 and are folded into it (A1's text is §5.1 below); 007-A3 (2026-10-29, D-32) `xenia://` scheme; §11.1 kind `skill` becomes `bundle` (`specs/022` §5, `specs/027` §4.3); `fact` kind deferred (`specs/055` SK7, 2026-10-29).
+
 > **Ratification record (D-29, 2026-10-24; superseded in part 2026-10-25).** The operator ratified the design basis of this spec and of [`specs/012`](012-xenia-record-schema.md) on 2026-10-24, and approved both documents as written ("ratify all", which waived the two-family confirming read). On 2026-10-25 the operator confirmed that this direction is approved, ratified amendments 007-A1 and 007-A2, and directed that implementation start without waiting for the core editor and harness (D-29 item 4 is lifted). The plan is [`xenia-phase-1-plan.md`](../missions/2026-10-23-foundational-design/xenia-phase-1-plan.md).
 >
 > **Status: v2.1, approved, Phase 1 in build.** Xenia is the org-level sharing layer (memory, and later skills and requests) described by the operator on 2026-10-24. This revision follows Council 008 (Gemini, three rounds) and Council 009 (Claude Opus and Sonnet), see `missions/2026-10-23-foundational-design/councils/008-verdict.md` and `009-verdict.md`. Its main change is a **smaller Phase 1**: the normative text covers only what Phase 1 builds; everything else is in §11 as provisional and is re-reviewed when its phase starts.

@@ -14,6 +14,8 @@ tags: [spec, skills, portability, security]
 
 # Spec 019: Skills Import and Export
 
+> **Outside amendments:** §3 an import inside a bundle add stages no Red proposal (ratified 2026-10-25). Lives in `specs/022` §5 and `specs/024` §3.
+
 ## 1. Scope & Objectives
 A skill written for another tool should be usable in Delphi, and a Delphi skill usable elsewhere, without Delphi giving up the rule that a skill is code-like text an agent will follow and so loads only after the operator has ratified it (`specs/001` §2.3, GOVERNANCE §5.7).
 

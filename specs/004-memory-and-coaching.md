@@ -14,6 +14,8 @@ tags: [spec]
 
 # Spec 004: Dual-Tier Memory, Zero-Server Hybrid RAG & Coaching Loop
 
+> **Outside amendments:** §3.3, §3.6 zone `bundles`, bundle `vectors/` cache, `[privacy] identifiers` in `bundle validate` (ratified 2026-10-25). Live in `specs/022` §5, `specs/024` §3.5, `specs/027` §5.
+
 ## 1. Scope & Objectives
 This specification defines Delphi's memory, local retrieval (Hybrid RAG), and self-improvement engine:
 1. **Dual-Tier Memory Architecture:** Isolated **Agent-Private Episodic Memory** (`memory/agents/<role>/lessons.md`) vs. the **Central Knowledge Base** (`context/` & `missions/`).
