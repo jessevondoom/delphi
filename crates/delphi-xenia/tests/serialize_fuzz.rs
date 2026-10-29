@@ -101,7 +101,7 @@ fn pointer(rng: &mut Rng, i: usize) -> Pointer {
         },
         _ => Pointer {
             scheme: Scheme::Xenia,
-            locator: format!("memory/01JBX3Q8T2M9Z4K7WYH5N6D0R{}", ["B", "C", "D", "E"][i % 4]),
+            locator: format!("xenia://memory/01JBX3Q8T2M9Z4K7WYH5N6D0R{}", ["B", "C", "D", "E"][i % 4]),
             pin: Pin { kind: PinKind::None, value: None },
             hash: None,
             range: None,

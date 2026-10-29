@@ -306,7 +306,7 @@ If a majority of admins is compromised, or a lost key deadlocks the roster ($n_{
 20. **Publish gate test:** a planted secret fails the scan (canaries for each `[REV-SEC-05]` class in summary, body and pointer labels); operator-scope content cannot be selected; a byte changed between preview and send aborts the send; the publish rebase re-verifies signatures.
 21. **Ingress test:** a summary with bidi controls, invisible tag characters and a fake `</governance>` tag is stripped and spotlighted, and the span ceiling is still lowered.
 22. **Taint gate test:** a span that quarantine-reads an $L_1$ record cannot write to the worktree or call out without a Red approval; a span that reads an $L_2$ summary can (per its HITL tier).
-23. **Pointer test:** `file:`, local paths, `delphi://` URIs, userinfo URLs and signed-URL query tokens are rejected at publish and ingest; no pointer is fetched at any point in Phase 1 (network-denied test run).
+23. **Pointer test:** `file:`, local paths, `delphi://` URIs (use `xenia://`), reserved `xenia://cap/` URIs, userinfo URLs and signed-URL query tokens are rejected at publish and ingest; no pointer is fetched at any point in Phase 1 (network-denied test run).
 24. **Clone location test:** the store clone is created under `$DELPHI_HOME/xenia/`, not under `team/` or any workspace zone, and agents cannot read it.
 25. **Strict signature test:** the published Ed25519 test vectors (including non-canonical S and small-order keys) are rejected by the verifier.
 26. **Join flow test:** `whoami` prints the DID; an admin adds it by epoch; `join` succeeds only with the correct admin fingerprint and pinned epoch pair, and a wrong fingerprint or pinned hash is refused with no state written.

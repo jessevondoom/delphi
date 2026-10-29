@@ -129,19 +129,22 @@ For each record `records/<kind>/<id>.md` there is a sidecar `records/<kind>/<id>
 | :--- | :--- | :--- |
 | `git` | `<remote-url>#<path>`; remote is `https://…` or `ssh://…` with no embedded credentials | `git-commit`, `git-tree` |
 | `https` | URL without userinfo or query tokens | `content-hash`, `none` |
-| `xenia` | `<kind>/<id>[@rev]`, another record in this store | none needed |
+| `xenia` | `xenia://<kind>/<id>[@rev]`, another record in this store (`<kind>` is a record kind; `<id>` a ULID) | none needed |
 | `drive` | Drive file ID (never a share URL with a token) | `drive-revision`, `content-hash` |
 
 - **Phase 1 never fetches a pointer target.** The client shows the fields as text; the operator opens the target with their own tools, and whatever they bring into a mission is external content under the usual rules ($L_0$, promotion through the existing flow). There is no resolver, hence no SSRF surface in Phase 1 (spec 011 §6, §11.2).
 - **A pin proves integrity, not trust,** and **no locator makes a target trusted**, including a URL that points at the org's own repository (a fork-PR commit is served through the same URL).
-- **Never publishable:** `file:`, relative or absolute local paths, `delphi://` capability URIs (spec 007 §2.2: tokens never appear in URIs), URLs containing credentials, tokens or signed-URL query parameters. The publish scan rejects them; ingest rejects them again.
+- **Never publishable:** `file:`, relative or absolute local paths, `delphi://` URIs of any form (refused with "use xenia://"), `xenia://cap/...` capability URIs (reserved for spec 007 §2.2 Plane 2, not built; tokens never appear in URIs), URLs containing credentials, tokens or signed-URL query parameters. The publish scan rejects them; ingest rejects them again.
 - A pointer's `pin` is covered by the record signature, so changing the target means a new `rev` (and a new endorsement).
 - `access_hint` is plain text. It never grants anything.
+- **URI scheme (decided 2026-10-29, `decisions.md` D-32):** the protocol's one URI scheme is `xenia://`. Record references are `xenia://<kind>/<id>[@rev]`; the bare `<kind>/<id>` form is **not accepted** (Phase 1 is in build and no records are deployed, so there is nothing to migrate). `delphi://` is accepted nowhere and is rejected with a message to use `xenia://`. The authority `cap` is reserved for the deferred spec 007 Plane 2 capability URIs (`xenia://cap/...`); it is rejected as a locator in Phase 1 ("reserved, not built"), and giving Plane 2 the same scheme gives it no resolver and no trust. `delphi-bundle://` (spec 025 MCP resources) is a different, local scheme and is unchanged.
 
 ---
 
 ## 5. Kinds (Phase 1)
 Unknown fields are rejected (strict schema), because an ignored field is a smuggling channel.
+
+**Reserved name:** `cap` is the `xenia://cap/` authority of the deferred Plane 2 capability URIs (spec 007 §2.2) and is **never a record kind**, in this phase or a later one (§11 included); a locator `xenia://cap/...` is refused.
 
 ### 5.1 `memory`: a finding, decision, gotcha or how-to
 ```yaml
@@ -280,7 +283,7 @@ The provenance index stamp is written by the daemon as a `provenance.stamp` even
 7. **Author state test:** an author's `withdrawn → active` is rejected; `active → superseded` with a valid `supersedes` is accepted.
 8. **Endorsement binding test:** an endorsement of `id@2` does not apply to `id@3`; one whose `target_hash` does not match the recomputed hash is ignored; one without `target_hash` is rejected; replacing a record's bytes at the same `rev` voids the endorsement.
 9. **Tombstone resolution test:** author beats stewards; stewards in disagreement give `contested` (hidden); a `sensitive` steward withdraw is reversed only by that steward; a far-future ULID gains no priority; a second tombstone record by the same signer for the same target is rejected unless it is a higher `rev` of the first; area coverage uses the union of tags across revisions.
-10. **Pointer rules test:** `file:`, local paths, `delphi://` URIs, userinfo URLs, signed-URL query tokens and a `drive` pointer in Phase 1 are rejected at publish and at ingest; a scheme outside the allowlist is rejected.
+10. **Pointer rules test:** `file:`, local paths, `delphi://` URIs (message: use `xenia://`), `xenia://cap/` (reserved, not built), a bare `<kind>/<id>` xenia locator, userinfo URLs, signed-URL query tokens and a `drive` pointer in Phase 1 are rejected at publish and at ingest; a scheme outside the allowlist is rejected.
 11. **No-fetch test:** a run with all network access denied ingests, displays and verifies records with pointers and makes no network attempt for any pointer target.
 12. **Verify-before-parse test:** an oversized file, a bad signature and a non-`active` signer each fail with the YAML parser never invoked (instrumented parser); a file that passes steps 1–3 and then fails the schema is quarantined with the schema reason.
 13. **Roster epoch schema test:** a wrong `prev_hash`, a different `store`, a numbering gap, an entry dropped from a later epoch, a `retired`/`removed` DID returned to `active`, or a changed `person` for an existing DID (a `successor` must inherit its predecessor's `person` exactly) is rejected; overwriting an existing epoch file is detected through the next epoch's `prev_hash` and the pinned epoch hashes.
