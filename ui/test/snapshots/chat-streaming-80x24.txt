@@ -1,17 +1,17 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
-                                                                 you · 09:03:38
+●                                                                you · 09:03:38
                                                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                   Now write it.
                                                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-⟦•─•⟧ hephaestus · writing
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- Starting in a worktree. Tests first.
- Schema and claim loop are in, running the su▊
- → write_file(crates/queue.rs) …
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+◐ ⟦•─•⟧ hephaestus · writing
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   Starting in a worktree. Tests first.
+   Schema and claim loop are in, running the su▊
+   ◐ write_file(crates/queue.rs)
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
 
 

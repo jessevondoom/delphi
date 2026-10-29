@@ -258,8 +258,11 @@ Approved by the operator 2026-10-28 with the revision in §23 (aligned with 052;
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels, advisory skill, role entry, records) not started, approved; V1b scoring waits for the labelled set |
-| V2 | fetcher, `fact` check, `ratify_fact`, dry-run in advisory, blind audit cards, hash chain | not started |
+| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels, advisory skill, role entry, records) not started, approved; V1b scoring: the operator finished the labelled set 2026-10-28 (040 §23.6); needs an operator-run scoring command and the §19.6 Council pass |
+| V1b | `delphi validation score` (operator-run, counts only; D-11) | not started (after V1a) |
+| V2a | daemon fetcher with snapshots, `context/facts/**` zone | not started |
+| V2b | `check fact`, `ratify_fact`, stamp L3 `web_corroborated` | not started; needs the §19.6 Council pass |
+| V2c | latch, audit cards, report, retract, hash chain | not started |
 
 ## Open items that are not specs
 
@@ -283,8 +286,8 @@ Approved by the operator 2026-10-28. One vocabulary of colour, glyph and weight;
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| VL1 | semantic style table in `theme.ts`, migrate call sites, one-page doc, raw-colour test | not started (first build slice) |
-| VL2 | gutter bullets for transcript, tools and cards | not started |
+| VL1 | semantic style table in `theme.ts`, migrate call sites, one-page doc, raw-colour test | built (`docs/console-visual-language.md`; one raw-colour site migrated; golden screens unchanged) |
+| VL2 | gutter bullets for transcript, tools and cards | built (`gutter()` in `ui/src/screen.ts`; golden screens regenerated; real-terminal check of OD-1 still open) |
 | VL3 | composer scope line and library counter | not started |
 | VL4 | claim glyphs and age in search and the reader | not started |
 
@@ -298,3 +301,12 @@ Approved by the operator 2026-10-28. Joins specs 050 (entry fields), 040 §18.2 
 | KS2 | capture on contact: accepted answer, Council verdict, resolved decision, research run | not started (waits for 050 ML1) |
 | KS3 | `learn` kind in the decisions pane (the daily digest) | not started |
 | KS4 | contested pairs and review-due | not started |
+
+## The first minute (spec 054, approved 2026-10-28)
+
+Approved by the operator 2026-10-28. FR1 is small and buildable now; FR2 waits for a human timing of the console's first minute and for 052 KS2.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| FR1 | interactive `init` offers to continue into `setup`; non-interactive unchanged | built |
+| FR2 | first-question suggestion and first noted item | not started (needs timing and KS2) |

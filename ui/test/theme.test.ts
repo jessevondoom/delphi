@@ -27,6 +27,60 @@ test('no colour is written as a hex literal outside theme.ts', () => {
   assert.deepEqual(offenders, [], 'colours come from theme.ts');
 });
 
+test('one home: no chalk colour call and no colour escape outside theme.ts', () => {
+  const colour = /\bchalk(?:\.\w+)*\.(?:black|red|green|yellow|blue|magenta|cyan|white|gray|grey|\w+Bright|bg[A-Z]\w*|ansi256|ansi|hex|rgb|overline)\b|\\x1b\[(?:[0-9;]*;)?(?:3[0-79]|4[0-79]|9[0-7]|10[0-7]|[34]8)[;m]/;
+  const offenders: string[] = [];
+  for (const f of readdirSync(SRC).filter((n) => /\.(ts|tsx)$/.test(n) && n !== 'theme.ts')) {
+    readFileSync(join(SRC, f), 'utf8').split('\n').forEach((l, i) => { if (colour.test(l)) offenders.push(`${f}:${i + 1}: ${l.trim()}`); });
+  }
+  assert.deepEqual(offenders, [], 'colours come from the semantic styles in theme.ts (docs/console-visual-language.md)');
+});
+
+const MEANINGS = Object.keys(T.VOCABULARY) as T.Meaning[];
+const withCaps = <R>(c: T.Capabilities, level: 0 | 1 | 2 | 3, f: () => R): R => {
+  const saved = T.currentCapabilities();
+  try { T.useCapabilities(c); chalk.level = level; return f(); } finally { T.useCapabilities(saved); }
+};
+
+test('never colour alone: with no colour every meaning still renders differently', () => {
+  withCaps({ color: 'none', attributes: true }, 1, () => {
+    const seen = new Map<string, string>();
+    for (const m of MEANINGS) {
+      const out = T.VOCABULARY[m].style(`${T.mark(m)} word`);
+      assert.ok(!/\x1b\[(?:3[0-79]|4[0-79]|9[0-7]|10[0-7]|[34]8)/.test(out), `${m} writes a colour`);
+      assert.ok(!seen.has(out), `${m} and ${seen.get(out)} look the same without colour: ${JSON.stringify(out)}`);
+      seen.set(out, m);
+    }
+    assert.ok(T.mark('needs-you').includes('!') && T.mark('working').includes('…') && T.mark('done').includes('✔'), 'the no-colour glyphs of the table');
+  });
+});
+
+test('16 colours: needs-you, done, working, contested and mode stay pairwise distinct', () => {
+  withCaps({ color: '16', attributes: true }, 1, () => {
+    const seen = new Map<string, string>();
+    for (const m of ['needs-you', 'done', 'working', 'contested', 'mode', 'link'] as T.Meaning[]) {
+      const out = T.VOCABULARY[m].style('x');
+      assert.ok(!seen.has(out), `${m} and ${seen.get(out)} are the same at 16 colours`);
+      seen.set(out, m);
+    }
+  });
+});
+
+test('role colours are pairwise distinct at 16 colours', () => {
+  const spec = JSON.parse(readFileSync(join(SRC, '..', 'test', 'fixtures', 'avatar-spec.json'), 'utf8')) as T.AvatarSpec;
+  const inf = { roles: {}, avatar: spec } as unknown as T.Info;
+  withCaps({ color: '16', attributes: true }, 1, () => {
+    const seen = new Map<string, string>();
+    for (const r of Object.keys(spec.roles)) {
+      const out = T.roleColor(r, inf)('x');
+      assert.ok(!seen.has(out), `${r} and ${seen.get(out)} share a colour at 16 colours`);
+      seen.set(out, r);
+    }
+    seen.set(T.alert('x'), 'alert'); seen.set(T.ok('x'), 'ok');
+    assert.equal(seen.size, Object.keys(spec.roles).length + 2, 'alert and ok are not any role\'s colour either');
+  });
+});
+
 test('capabilities: NO_COLOR (any value) and TERM=dumb mean no colour; dumb also means no attributes', () => {
   assert.deepEqual(T.capabilities({ NO_COLOR: '1' }), { color: 'none', attributes: true });
   assert.deepEqual(T.capabilities({ NO_COLOR: '' }), { color: 'none', attributes: true }, 'set to anything, even nothing');

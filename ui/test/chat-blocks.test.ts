@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
-import { anchorBack, bodyHeight, frame, replyAnchor, transcriptCount, type Model } from '../src/screen.ts';
+import { anchorBack, bodyHeight, frame, gutterWidth, replyAnchor, transcriptCount, type Model } from '../src/screen.ts';
 import { blockWidths, hugWidth, tintBlock } from '../src/blocks.ts';
 import * as C from '../src/composer.ts';
 import { fold, initial, type State } from '../src/fold.ts';
@@ -89,7 +89,7 @@ test('geometry at 120, 100, 80, 48, 40 and 28 columns: caps are full width, labe
       assert.equal(rows[b.bottom]!.length - rows[b.bottom]!.trimStart().length, b.col, `${w}: and start in the same column`);
       assert.ok(b.width <= max, `${w}: ${b.width} <= ${max}`);
       if (w >= 48) assert.ok(b.width <= Math.floor((w * 4) / 5), `${w}: at most 80 %`);
-      const label = rows[b.label]!;
+      const g = gutterWidth(w), label = ' '.repeat(g) + rows[b.label]!.slice(g); // the gutter's bullet is not the label
       assert.equal(label.length - label.trimStart().length, b.col, `${w}: the label starts in the block's first column`);
       for (let r = b.top + 1; r < b.bottom; r++) assert.ok(stringWidth(rows[r]!) <= b.col + b.width, `${w}: row ${r} stays inside the block`);
     }
@@ -103,15 +103,35 @@ test('the operator is flush right and dim, an agent flush left; the label carrie
   assert.ok(you > 0);
   const u = blocksIn(rows).find((b) => b.label === you)!;
   assert.equal(u.col + u.width, 100, 'the operator block ends at the right edge');
-  assert.ok(rows.some((l) => /^⟦.{3}⟧ daedalus · 09:00:05$/.test(l)), 'an agent label: badge, theme name, time, starting at column 0');
+  assert.ok(rows.some((l) => /^● ⟦.{3}⟧ daedalus · 09:00:05$/.test(l)), 'an agent label: badge, theme name, time, after the gutter bullet');
   const agent = blocksIn(rows).find((b) => rows[b.label]!.includes('hephaestus'))!;
-  assert.equal(agent.col, 0, 'an agent block is flush left');
+  assert.equal(agent.col, gutterWidth(100), 'an agent block is flush left, after the gutter');
   const prev = T.currentCapabilities(), lvl = chalk.level;
   T.useCapabilities(T.capabilities({ TERM: 'xterm' }));
   try {
     const raw = frame(model(conversation()), 100, 40);
     assert.match(raw.find((l) => plain(l).includes('Now write it.'))!, /\x1b\[2m[^\n]*Now write it\./, 'the operator\'s words are dim');
     assert.doesNotMatch(raw.find((l) => plain(l).includes('Schema and claim loop'))!, /\x1b\[2m[^\n]*Schema/, 'an agent\'s are not');
+  } finally { T.useCapabilities(prev); chalk.level = lvl; }
+});
+
+test('the status gutter (053 VL2): one bullet column by meaning, in role colour, status colour and plain glyphs; glyph only under 60 columns', () => {
+  const prev = T.currentCapabilities(), lvl = chalk.level;
+  try {
+    T.useCapabilities(T.capabilities({ COLORTERM: 'truecolor' }));
+    const raw = frame(model(conversation()), 80, 40);
+    const label = raw.find((l) => plain(l).includes('hephaestus · 09:03:41'))!;
+    assert.match(label, /^\x1b\[1m\x1b\[38;2;[\d;]+m●|^\x1b\[38;2;[\d;]+m\x1b\[1m●/, 'the role bullet is in the role colour, bold');
+    assert.match(raw.find((l) => plain(l).includes('write_file'))!, /\x1b\[32m●/, 'a finished tool step is the green done bullet');
+    T.useCapabilities(T.capabilities({ NO_COLOR: '1', TERM: 'xterm' }));
+    const none = lines(model(streaming(), { still: true }), 80, 24).join('\n');
+    assert.match(none, /^… ⟦.{3}⟧ hephaestus · writing$/m, 'the streaming reply: the working form, still, without colour');
+    assert.match(none, /^ {2}│ … write_file/m, 'a running tool step is … without colour');
+    for (const w of [28, 48, 59]) {
+      const narrow = lines(model(conversation()), w, 60);
+      assert.ok(narrow.some((l) => /^.⟦.{3}⟧ hephaestus/.test(l)), `${w}: the glyph takes one column, no padding`);
+      for (const l of narrow) assert.ok(stringWidth(l) <= w, `${w}: ${l}`);
+    }
   } finally { T.useCapabilities(prev); chalk.level = lvl; }
 });
 
@@ -154,15 +174,15 @@ test('without a tint the block is a rail: no caps, no fill, each text row starts
   } finally { T.useCapabilities(prev); }
 });
 
-test('tool calls are drawn inside the agent block that follows them, one dim line with a green check', () => {
+test('tool calls are drawn inside the agent block that follows them, one dim line led by its status mark', () => {
   const rows = lines(model(conversation()), 80, 40);
   const b = blocksIn(rows).find((x) => rows[x.label]!.includes('hephaestus'))!;
   const inside = rows.slice(b.top + 1, b.bottom).join('\n');
-  assert.match(inside, /→ write_file\(crates\/queue\.rs\) ✔/);
+  assert.match(inside, /● write_file\(crates\/queue\.rs\)/);
   assert.ok(!rows.slice(0, b.label).some((l) => l.includes('write_file')) , 'not floating above the block');
   const t = T.currentCapabilities();
   T.useCapabilities(T.capabilities({ TERM: 'xterm' }));
-  try { assert.match(frame(model(conversation()), 80, 40).join('\n'), /\x1b\[32m✔/, 'the check is green'); } finally { T.useCapabilities(t); }
+  try { assert.match(frame(model(conversation()), 80, 40).join('\n'), /\x1b\[32m●/, 'the done mark is green'); } finally { T.useCapabilities(t); }
 });
 
 test('streaming: the same block grows with a cursor, the label says writing, the status row says who and what', () => {
@@ -181,8 +201,8 @@ test('notes are marked: information, errors and successes', () => {
   add('nothing was running'); add('could not send: refused', 'error'); add('exported to local/missions/x.md', 'ok'); add('· approval mode: default');
   const out = lines(model(s), 80, 24).join('\n');
   assert.match(out, /· nothing was running/);
-  assert.match(out, /✖ could not send: refused/);
-  assert.match(out, /✔ exported to local\/missions\/x\.md/);
+  assert.match(out, /✕ could not send: refused/);
+  assert.match(out, /● exported to local\/missions\/x\.md/);
   assert.ok(!out.includes('· · approval'), 'a note that brings its own mark is not marked twice');
 });
 
