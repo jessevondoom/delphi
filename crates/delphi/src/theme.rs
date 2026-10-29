@@ -73,7 +73,7 @@ pub fn parse(text: &str) -> Result<Theme, Vec<String>> {
             }
             for r in ROLES.iter() {
                 if !roles.iter().any(|x| x.0 == *r) && !errs.iter().any(|e| e.contains(r)) {
-                    errs.push(format!("roles.{} is missing (all nine roles are required)", r));
+                    errs.push(format!("roles.{} is missing (all {} roles are required)", r, ROLES.len()));
                 }
             }
         }
@@ -217,6 +217,6 @@ mod tests {
     fn repo_greek_pack_is_valid() {
         let text = include_str!("../../../themes/greek/theme.md");
         let t = parse(text).unwrap_or_else(|e| panic!("{:?}", e));
-        assert_eq!(t.roles.len(), 9);
+        assert_eq!(t.roles.len(), 10);
     }
 }

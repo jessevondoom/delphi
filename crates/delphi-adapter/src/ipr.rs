@@ -93,7 +93,7 @@ impl Ipr {
                     attr(&self.nonce),
                     attr(&sl.label),
                     attr(&sl.tier),
-                    if delphi_core::validation::labelled_slice(&sl.label) { format!(" validation=\"{}\"", delphi_core::validation::label_for_tier(&sl.tier)) } else { String::new() },
+                    delphi_core::knowledge_status::slice_label(&sl.label, &sl.tier).map(|l| format!(" validation=\"{}\"", l)).unwrap_or_default(),
                     escape_section_tags(&sl.text)
                 ));
             }

@@ -45,4 +45,3 @@ pub mod xenia_scan;
 pub mod xenia_status;
 pub mod xenia_store;
 pub mod xenia_sync;
-pub mod validation;

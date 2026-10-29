@@ -258,7 +258,7 @@ Approved by the operator 2026-10-28 with the revision in §23 (aligned with 052;
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels, advisory skill, role entry, records) not started, approved; V1b scoring: the operator finished the labelled set 2026-10-28 (040 §23.6); needs an operator-run scoring command and the §19.6 Council pass |
+| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels on handoff-pointer slices, the not-validated-is-a-lead prompt rule, advisory skill, `validator` role entry with `context/facts/**` read-deny) built 2026-10-28; the §8 record moves to V2; search-result labels shipped with KS1; V1b scoring: the operator finished the labelled set 2026-10-28 (040 §23.6); needs an operator-run scoring command and the §19.6 Council pass |
 | V1b | `delphi validation score` (operator-run, counts only; D-11) | not started (after V1a) |
 | V2a | daemon fetcher with snapshots, `context/facts/**` zone | not started |
 | V2b | `check fact`, `ratify_fact`, stamp L3 `web_corroborated` | not started; stand-in Council pass done (040 §24, REVISE); amendments are acceptance tests |
