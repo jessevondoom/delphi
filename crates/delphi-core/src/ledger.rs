@@ -205,6 +205,12 @@ impl Ledger {
         Ok(applied)
     }
 
+    /// Every token the install used since `ts` (an RFC 3339 time), all roles and missions.
+    pub fn tokens_since(&self, ts: &str) -> Result<u64, LedgerError> {
+        let n: i64 = self.conn.query_row("SELECT COALESCE(SUM(input_tokens + output_tokens + thinking_tokens), 0) FROM usage_ledger WHERE ts >= ?1", [ts], |r| r.get(0))?;
+        Ok(n as u64)
+    }
+
     /// Totals grouped by mission, role, task or model, optionally limited to one mission.
     pub fn totals(&self, group: GroupBy, mission: Option<&str>) -> Result<Vec<Totals>, LedgerError> {
         let col = match group {
