@@ -22,6 +22,11 @@ pub mod claims;
 pub mod excerpts;
 #[path = "library_meta.rs"]
 pub mod meta;
+#[path = "library_export.rs"]
+mod export;
+pub use export::Exported;
+#[path = "library_pages.rs"]
+pub mod pages;
 #[path = "library_recheck.rs"]
 mod recheck;
 pub use recheck::Recheck;

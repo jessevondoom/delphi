@@ -136,7 +136,7 @@ impl Library {
         out
     }
 
-    fn save_claim(&self, c: &Value) -> Result<(), String> {
+    pub(super) fn save_claim(&self, c: &Value) -> Result<(), String> {
         let id = c["id"].as_str().ok_or("a claim has an id")?;
         self.ensure().map_err(|e| e.to_string())?;
         self.write_json(&self.claims_dir().join(format!("{}.json", id)), c)
@@ -446,7 +446,7 @@ impl Library {
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).find_map(|m| m["origin"].as_str().map(String::from)).unwrap_or_else(|| if anchors_of(c).is_empty() { "operator".into() } else { "library".into() })
     }
 
-    fn rests_on_private(&self, c: &Value) -> bool {
+    pub(super) fn rests_on_private(&self, c: &Value) -> bool {
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_private(&m))
     }
 
