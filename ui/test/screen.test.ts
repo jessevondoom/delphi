@@ -110,7 +110,7 @@ test('tool calls are one dim line, and ctrl+o opens their output', () => {
   s = fold(s, { method: 'event', params: { type: 'agent.block.complete', agent: 'architect', payload: { block: { type: 'tool_call', id: 'c1', name: 'read_file', arguments: { path: 'specs/005.md' } } } } }, 1);
   s = fold(s, { method: 'event', params: { type: 'tool.result', payload: { tool_call_id: 'c1', is_error: false, content: 'line a\nline b' } } }, 2);
   const shut = frame(model({ state: s }), 100, 30).map(plain).join('\n');
-  assert.match(shut, /→ read_file\(specs\/005\.md\) ✔/);
+  assert.match(shut, /^● read_file\(specs\/005\.md\)$/m);
   assert.ok(!shut.includes('line a'));
   assert.ok(frame(model({ state: s, expandTools: true }), 100, 30).map(plain).join('\n').includes('line b'));
 });

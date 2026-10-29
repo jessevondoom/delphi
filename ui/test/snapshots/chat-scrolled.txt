@@ -1,15 +1,15 @@
 ⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
- → read_file(specs/002-adapter-and-routing.md) ✔
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   ● read_file(specs/002-adapter-and-routing.md)
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                                                                                      you · 00:00:03
+●                                                                                     you · 00:00:03
                                                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                                        Now write it
                                                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-── approval needed [amber] · hephaestus
+▲ approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
     + fn enqueue()
                                              ↓ 6 more lines · pgdn or space · enter jumps to the end

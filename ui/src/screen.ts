@@ -1,7 +1,7 @@
 // The screen as data: a pure function from the console's model to exactly `h` lines of `w` columns. Ink only paints
 // what this returns, so the whole look is testable without a terminal (see test/screen.test.ts).
 import { renderMarkdown, wrapLine } from './markdown.ts';
-import { blockWidths, hugWidth, tintBlock } from './blocks.ts';
+import { blockWidths as outerWidths, hugWidth, tintBlock } from './blocks.ts';
 import { layout, type Composer } from './composer.ts';
 import type { Item } from './complete.ts';
 import { classify } from './attention.ts';
@@ -161,6 +161,24 @@ const trimBlank = (a: string[]): string[] => {
   return a.slice(i, j);
 };
 
+/** The status gutter (`053` §4): a one-column bullet at the left of a block, then one pad column; below 60 columns just the glyph. */
+export const gutterWidth = (w: number): number => (w >= 60 ? 2 : 1);
+function gutter(lines: string[], glyph: string, w: number): string[] {
+  const g = gutterWidth(w);
+  const pad = ' '.repeat(g);
+  const first = lines.findIndex((l) => l !== '');
+  return lines.map((l, i) => (l === '' ? l : (i === first && glyph ? glyph + ' '.repeat(g - 1) : pad) + l));
+}
+/** Block widths inside the gutter: the gutter and the block together keep to the window's 80 % (`005e` §11). */
+function blockWidths(inner: number): { max: number; text: number } {
+  const g = inner >= 58 ? 2 : 1;
+  const max = Math.max(10, outerWidths(inner + g).max - g);
+  return { max, text: max - 2 };
+}
+/** A step that is under way: the spinner while motion is allowed, the still mark otherwise. */
+const working = (m: Model): string => ((m.still ?? false) ? T.mark('working') : T.accent(spinner(m.now, false)));
+const toolMark = (t: Block, m: Model): string => (t.status === 'error' ? T.mark('disproved') : t.status === 'ok' ? T.mark('done') : working(m));
+
 /** A message: the label row, then the block, hugging its text and flush left (an agent) or right (the operator). */
 function message(m: Model, w: number, label: string, text: string[], right = false): string[] {
   const rows = text.map((l) => (l ? ' ' + l : ' '));
@@ -168,17 +186,29 @@ function message(m: Model, w: number, label: string, text: string[], right = fal
   return tintBlock({ label, rows, width, col: right ? Math.max(0, w - width) : 0, tint: tintOf(m) });
 }
 
-/** A tool call inside an agent's block: one dim line, a green ✔ (`Ctrl+O` shows what it returned). */
-function toolRows(t: Block, m: Model, tw: number): string[] {
-  const mark = t.status === 'error' ? T.alert('✖') : t.status === 'ok' ? T.ok('✔') : T.dim('…');
-  const head = T.clip(T.dim('→ ' + t.text) + ' ' + mark, tw);
+/** A tool call inside an agent's block: one dim line led by its status mark (`Ctrl+O` shows what it returned). Alone, the gutter carries the mark. */
+function toolRows(t: Block, m: Model, tw: number, inline = true): string[] {
+  const head = inline ? T.clip(toolMark(t, m) + ' ' + T.dim(t.text), tw) : T.clip(T.dim(t.text), tw);
   if (!m.expandTools || !t.detail) return [head];
   return [head, ...t.detail.split('\n').flatMap((l) => wrap(l, tw - 4)).map((l) => '    ' + T.dim(l))];
 }
 
-const MARK = { info: () => T.dim('·'), error: () => T.alert('✖'), ok: () => T.ok('✔') };
+const MARK = { info: () => T.dim('·'), error: () => T.mark('disproved'), ok: () => T.mark('done') };
+
+const roleBullet = (role: string, m: Model): string => T.roleColor(role, m.info).bold('●');
 
 function render(b: Block, m: Model, w: number, tools: Block[] = []): string[] {
+  const inner = w - gutterWidth(w);
+  const lines = renderIn(b, m, inner, tools);
+  if (b.kind === 'attention') return gutter(lines, T.mark('needs-you'), w);
+  if (b.kind === 'card') return gutter(lines, T.mark('needs-you'), w);
+  if (b.kind === 'tool') return gutter(lines, toolMark(b, m), w);
+  if (b.kind === 'user') return gutter(lines, T.dim('●'), w);
+  if (b.kind === 'note') return gutter(lines, /^[·✖✔■]/.test(b.text) ? '' : MARK[b.tone ?? 'info'](), w);
+  return gutter(lines, b.status === 'escalated' ? T.mark('needs-you') : roleBullet(b.role ?? 'orchestrator', m), w);
+}
+
+function renderIn(b: Block, m: Model, w: number, tools: Block[]): string[] {
   const { text: tw } = blockWidths(w);
   if (b.kind === 'attention') return attentionCard(b, m, w);
   if (b.kind === 'user') {
@@ -186,18 +216,18 @@ function render(b: Block, m: Model, w: number, tools: Block[] = []): string[] {
     return ['', ...message(m, w, T.dim(`you · ${clock(b.at)}`), lines.map((l) => T.operator(l)), true)];
   }
   if (b.kind === 'note') {
-    const own = /^[·✖✔■]/.test(b.text); // a note that brings its own mark keeps it
-    const lines = b.text.split('\n').flatMap((l) => wrapLine(l, w - 4));
-    return ['', ...lines.map((l, i) => '  ' + (i === 0 && !own ? MARK[b.tone ?? 'info']() + ' ' : '  ') + T.dim(l))];
+    const own = /^[·✖✔■]/.test(b.text); // a note that brings its own mark keeps it, in place of the gutter's
+    const lines = b.text.split('\n').flatMap((l) => wrapLine(l, w - 2));
+    return ['', ...lines.map((l) => T.dim(l))];
   }
   if (b.kind === 'card') {
     const red = b.status === 'red';
     const who = T.roleName(b.role ?? 'orchestrator', m.info);
-    const head = (red ? T.crimson : T.warn)(`── approval needed [${red ? 'RED — never auto-approved' : 'amber'}]`) + T.dim(` · ${who}`);
+    const head = (red ? T.crimson : T.warn)(`approval needed [${red ? 'RED — never auto-approved' : 'amber'}]`) + T.dim(` · ${who}`);
     const keys = T.dim(`/y approve once${red ? '' : ' · /a allow similar this task'} · /n reject · /d view all`);
-    return ['', head, ...b.text.split('\n').flatMap((l) => wrap(l, w - 2)).map((l) => '  ' + l), '  ' + keys];
+    return ['', head, ...b.text.split('\n').flatMap((l) => wrap(l, w - 2)), keys];
   }
-  if (b.kind === 'tool') return ['', ...toolRows(b, m, w - 4).map((l) => '  ' + l)];
+  if (b.kind === 'tool') return ['', ...toolRows(b, m, w - 2, false)];
   const role = b.role ?? 'orchestrator';
   const label = T.badge(role, b.status === 'escalated' ? 'escalated' : 'idle', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(` · ${clock(b.at)}`);
   return ['', ...message(m, w, label, [...trimBlank(renderMarkdown(b.text, tw)), ...tools.flatMap((t) => toolRows(t, m, tw))])];
@@ -209,7 +239,8 @@ const rolesKey = new WeakMap<object, string>();
 function block(b: Block, m: Model, w: number, tools: Block[] = []): string[] {
   let rk = rolesKey.get(m.info.roles);
   if (rk === undefined) { rk = JSON.stringify(m.info.roles); rolesKey.set(m.info.roles, rk); }
-  const tk = tools.map((t) => `${t.id}${t.status}${t.detail?.length ?? 0}`).join(',');
+  const spin = [b, ...tools].some((t) => t.kind === 'tool' && t.status !== 'ok' && t.status !== 'error') && spinner(m.now, m.still ?? false);
+  const tk = tools.map((t) => `${t.id}${t.status}${t.detail?.length ?? 0}`).join(',') + spin;
   const key = `${w}:${m.pal.dark}:${m.pal.bg?.join(',') ?? '-'}:${T.currentCapabilities().color}:${m.expandTools}:${b.status}:${b.detail?.length ?? 0}:${rk}:${tk}`;
   const hit = cache.get(b);
   if (hit && hit.key === key) return hit.lines;
@@ -230,14 +261,15 @@ export const WINDOW = 1500;
 const fresh = (m: Model) => !m.state.blocks.length && !m.state.started && !m.state.live && !m.queue.length;
 
 /** The reply being written: the lines so far, with the cursor `▊` after the last (`005e` §7.2, streaming). */
-function liveBlock(m: Model, w: number, tools: Block[]): string[] {
+function liveBlock(m: Model, outer: number, tools: Block[]): string[] {
+  const w = outer - gutterWidth(outer);
   const { text: tw } = blockWidths(w);
   const role = speakerOf(m.state);
   const label = T.badge(role, 'running', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(' · writing');
   const body = trimBlank(renderMarkdown(m.state.live.slice(-3000), tw));
   const last = body.length - 1;
   if (last >= 0 && T.width(body[last]!) < tw) body[last] += T.accent('▊'); else body.push(T.accent('▊'));
-  return ['', ...message(m, w, label, [...body, ...tools.flatMap((t) => toolRows(t, m, tw))])];
+  return gutter(['', ...message(m, w, label, [...body, ...tools.flatMap((t) => toolRows(t, m, tw))])], working(m), outer);
 }
 
 /**
@@ -255,12 +287,13 @@ export function typingOf(s: State): { since: number; id: number } | null {
 }
 
 /** Three dots in an agent's bubble, like a messaging app's "typing": the page-indicator dots, one lit at a time. The reply's own block replaces it. */
-function typingBlock(m: Model, w: number, tools: Block[], frame: number): string[] {
+function typingBlock(m: Model, outer: number, tools: Block[], frame: number): string[] {
+  const w = outer - gutterWidth(outer);
   const { text: tw } = blockWidths(w);
   const role = speakerOf(m.state);
   const label = T.badge(role, 'running', m.info, m.pal) + ' ' + T.roleColor(role, m.info).bold(T.roleName(role, m.info)) + T.dim(' · typing');
   const dots = [0, 1, 2].map((i) => (m.still || frame === i ? T.accent('●') : T.dim('○'))).join(' ');
-  return ['', ...message(m, w, label, [dots, ...tools.flatMap((t) => toolRows(t, m, tw))])];
+  return gutter(['', ...message(m, w, label, [dots, ...tools.flatMap((t) => toolRows(t, m, tw))])], working(m), outer);
 }
 
 type Laid = { parts: string[][]; reply: { part: number; id: 'live' | number } | null };
