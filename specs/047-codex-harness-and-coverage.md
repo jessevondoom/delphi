@@ -16,7 +16,7 @@ tags: [spec, harness, codex, openai, coverage]
 
 Extends [`specs/046`](046-harness-and-openai-coverage.md) (the classification method and the manifest format of its §6), [`020`](020-harness-tool-bridge.md) and [`021`](021-harness-cli-features.md). Delphi drives `claude` and `agy` as subscription "harness" seats; this adds the Codex CLI (`codex`) as a third, on a ChatGPT login or a `CODEX_API_KEY`.
 
-**S0 is built (§5); S1 onward is not.** Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
+**S0 (§5) and S1 are built; S2 onward is not.** S1: `Cli::Codex` in `harness.rs`, read-only `exec --json` seats, structured output, API-key mode (`CODEX_API_KEY`); a Builder is refused and every Codex span starts untrusted (L0). Section 2 is what OpenAI's docs say; §5 corrects it from the installed CLI.
 
 ## 1. Principles
 
@@ -109,7 +109,7 @@ The manifest is `crates/delphi-engine/coverage/codex.cov`, built from the instal
 - `exec` has `--cyber-access-program` (an experimental access program): refused.
 - `debug models` and `debug prompt-input` exist as read-only introspection.
 
-Probe: `codex exec --json --ephemeral --sandbox read-only --skip-git-repo-check --ignore-user-config --output-schema schema.json "<prompt>"` returned exactly four JSONL events: `thread.started {thread_id}`, `turn.started`, `item.completed {item:{id,type:"agent_message",text}}` (the text was the schema-conforming JSON), and `turn.completed {usage:{input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens}}`. Progress text goes to stderr (`Reading additional input from stdin...`). That is enough for `parse_codex_line` and a usage meter. Not yet probed: a tool-using span's `command_execution` and approval events, and whether `app-server` can answer approvals.
+Probe: `codex exec --json --ephemeral --sandbox read-only --skip-git-repo-check --ignore-user-config --output-schema schema.json "<prompt>"` returned exactly four JSONL events: `thread.started {thread_id}`, `turn.started`, `item.completed {item:{id,type:"agent_message",text}}` (the text was the schema-conforming JSON), and `turn.completed {usage:{input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens}}`. Progress text goes to stderr (`Reading additional input from stdin...`). That is enough for `parse_codex_line` and a usage meter. Probed 2026-10-28 (spec 051 §6.5): `app-server --stdio` **can** answer approvals. With `approvalPolicy: "untrusted"` a shell command arrives as the server request `item/commandExecution/requestApproval` (command, cwd, `availableDecisions`), the client answers `{decision: "accept" | "decline" | "cancel"}`, and a decline leaves the item `declined` and the file unwritten. So OD-1's condition (§1.1) has a candidate mechanism; it is unproven as a Delphi bridge (one accept in three runs left no file, undiagnosed). The same server answers `account/rateLimits/read` and pushes `account/rateLimits/updated` (spec 051 §6.1).
 
 ## 6. What this spec does not claim
 

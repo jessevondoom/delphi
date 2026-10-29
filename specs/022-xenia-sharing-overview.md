@@ -3,7 +3,7 @@ id: spec-022-xenia-sharing-overview
 title: "022: The Sharing Layer: Xenia, Org Bundles & Compatibility (Overview, Phasing & Decisions)"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges
+status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -70,7 +70,7 @@ This document:
 | Xenia identity (`did:key`, strict Ed25519, domains, sidecar) and `whoami` | **built (X1)** | `delphi-xenia`, `xenia_cmd.rs` |
 | Xenia records, roster, freshness, sync, publish, endorse, admin | **approved, in build (X2–X11)** | `specs/011`, `012`, `xenia-phase-1-plan.md` |
 | Xenia `skill` kind, pointer resolver, invites, multi-store | approved as provisional (Phase 2) | `specs/011` §11, `012` §11 |
-| Org bundle format, adding, precedence, compatibility, alignment, vectors, authoring skill, evaluation, MCP serving | **proposed here** | `specs/023`–`027`, `skills/org-bundle-authoring/` |
+| Org bundle format, adding, precedence, compatibility, alignment, vectors, authoring skill, evaluation, MCP serving | **approved and ratified (2026-10-28)** | `specs/023`–`027`, `skills/org-bundle-authoring/` |
 
 ---
 
@@ -113,7 +113,7 @@ This document:
 | OD-8 | Bundles **may ship precomputed vectors** as a verified cache; lexical search immediately, semantic as vectors load or embed; design on `specs/004` A1–A3 | 023 §8; 027 §5 |
 | OD-9 | An **org-knowledge-bundle authoring skill** in Agent Skills format, usable in Claude Code and Delphi | `skills/org-bundle-authoring/SKILL.md`; 027 §2.6 |
 
-### 4.2 Proposed in the set (marked proposed in their specs)
+### 4.2 Proposed in the set, ratified by the operator 2026-10-28 ("shift all org bundle specs to ratified"; D-P1..D-P14 as written)
 | # | Decision | Spec | Simpler alternative rejected |
 | :-: | :--- | :--- | :--- |
 | D-P1 | Delphi role overlays live in `behavior/roles/`; Claude Code agents live in `agents/` and map to a **host role** that caps them | 023 §5B, §6.3 | converting Claude Code agents into Delphi roles (a lossy claim of safety) |
@@ -178,26 +178,26 @@ Effort is focused build hours including tests, ±30%, estimated before any code 
 
 ---
 
-## 7. Questions: Resolved and Open
+## 7. Questions: Resolved (all, 2026-10-28)
 | # | Question | State (2026-10-25) |
 | :-: | :--- | :--- |
 | B-1 | Bundle = Claude Code plugin superset? | **Resolved: yes** (OD-2) |
 | B-2 | Knowledge tier for unsigned local bundles | **Resolved: $L_2$; unsigned bundles must feed the knowledge base; provenance level shown** (OD-3) |
 | B-3 | Role guidance as a bounded prompt block (IPR slot) | **Resolved: yes, and it loads on add with no ratification** (OD-1; D-P3) |
 | B-4 | Xenia kind `bundle` supersedes provisional `skill` | **Built as proposed** in B8; the Phase 2 re-review of `specs/011` §11 was approved by the operator 2026-10-26 |
-| B-5 | Transport order directory → archive → store | **Proposed, open** (D-P7) |
-| B-6 | Person-scope bundles | **Open, recommend later** (024 §5.1) |
+| B-5 | Transport order directory → archive → store | **Resolved 2026-10-28: as recommended** (D-P7; built B1-B8) |
+| B-6 | Person-scope bundles | **Resolved 2026-10-28: later** (024 §5.1); nothing is built until a `specs/004` §3.1 amendment is asked for |
 | B-7 | Scripts in bundle skills | **Resolved by OD-1's schema limits: never executed; copied inert** |
 | B-8 | Serve bundles as MCP | **Resolved: yes, read-only, late slice B12** (OD-5, D-P13) |
-| B-9 | `export --agents-md` default path outside the project, never committed by Delphi | **Proposed, open** (025 §5.2) |
-| B-10 | Org-context slice caps and role set | **Proposed, open**: start as written, measure trims (026 §3.2) |
-| B-11 | Add `summary`/`domain` to `specs/001` §5 | **Proposed, open** (reader-first) |
+| B-9 | `export --agents-md` default path outside the project, never committed by Delphi | **Resolved 2026-10-28: as recommended** (025 §5.2; built) |
+| B-10 | Org-context slice caps and role set | **Resolved 2026-10-28: the caps and roles as written stand**; trims are measured and the caps revisited only on evidence (026 §3.2) |
+| B-11 | Add `summary`/`domain` to `specs/001` §5 | **Resolved 2026-10-28: yes, as optional fields** (reader-first) |
 | B-12 | Rollback without a card | **Resolved: no cards exist; rollback uses the lock history** (OD-1) |
-| B-13 | Council lenses default on | **Open, recommend opt-in** until B11's telemetry speaks (026 §4) |
+| B-13 | Council lenses default on | **Resolved 2026-10-28: opt-in** (`--lenses`) until B11's telemetry speaks (026 §4) |
 | B-14 | Agent-run `distill` | **Resolved: yes, staging only, scan before package, human approves the redaction report** (OD-6) |
 | B-15 | Evaluation thresholds | **Resolved: retrieval gate frozen now (advisory); bench thresholds frozen after a pilot in a hash-pinned pre-registration; telemetry descriptive** (OD-7; 027 §6) |
 | B-16 | Default for shipping vectors | **Resolved: ship when the publisher's embedder is Delphi's default; local embedding always allowed; shipped vectors are a verified cache** (OD-8; D-P14) |
-| B-17 | Host-role default for a Claude Code agent file that names no `delphi-role` | **Proposed**: no default; such an agent is listed as "Claude Code only" and is not dispatchable in Delphi until the bundle or the operator maps it (023 §5B) |
+| B-17 | Host-role default for a Claude Code agent file that names no `delphi-role` | **Resolved 2026-10-28**: no default; such an agent is listed as "Claude Code only" and is not dispatchable in Delphi until the bundle or the operator maps it (023 §5B) |
 
 ---
 

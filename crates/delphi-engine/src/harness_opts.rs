@@ -95,6 +95,24 @@ pub fn parse(root: &toml::Value, cli: Cli) -> (Opts, Vec<String>) {
                 }
             }
         }
+        Cli::Codex => {
+            // Only the levels the CLI documents for `model_reasoning_effort`; the rest stay out until probed.
+            if o.effort.as_deref().is_some_and(|e| !matches!(e, "low" | "medium" | "high")) {
+                o.effort = None;
+                reject("effort", "expected low, medium or high for codex");
+            }
+        }
+        Cli::Copilot => {
+            // Each span runs in a scratch `COPILOT_HOME` that is not kept, and the CLI has no structured-output flag: a notice
+            // for each, not a silent drop (`specs/046` §1.4).
+            if o.json_schema.take().is_some() {
+                reject("json_schema", "copilot has no structured-output flag; use another seat for a span that needs one");
+            }
+            if o.session == SessionMode::Persist {
+                o.session = SessionMode::Ephemeral;
+                reject("session", "a copilot span's home is a scratch directory, so it cannot be resumed; use \"ephemeral\"");
+            }
+        }
         Cli::Agy => {
             if let Some(v) = t.get("mode") {
                 match v.as_str().filter(|m| AGY_MODES.contains(m)) {
@@ -109,7 +127,7 @@ pub fn parse(root: &toml::Value, cli: Cli) -> (Opts, Vec<String>) {
 
 /// Every rejected key across both blocks, for the attach notices.
 pub fn problems(root: &toml::Value) -> Vec<String> {
-    [Cli::Claude, Cli::Agy].into_iter().flat_map(|c| parse(root, c).1).collect()
+    [Cli::Claude, Cli::Agy, Cli::Codex, Cli::Copilot].into_iter().flat_map(|c| parse(root, c).1).collect()
 }
 
 #[cfg(test)]

@@ -131,7 +131,7 @@
     "connectors": { "type": "object", "additionalProperties": { "$ref": "#/$defs/connector" } },
     "harness": {
       "type": "object",
-      "description": "`[harness.claude]` and `[harness.agy]` narrow the subscription-CLI defaults; scalar keys on `[harness]` itself (for example connector_settle_secs, subscription_budget_tokens) apply to all.",
+      "description": "`[harness.claude]`, `[harness.agy]`, `[harness.codex]` and `[harness.copilot]` narrow the subscription-CLI defaults; scalar keys on `[harness]` itself (for example connector_settle_secs, subscription_budget_tokens) apply to all.",
       "properties": {
         "connector_settle_secs": { "type": "integer", "minimum": 0 },
         "subscription_budget_tokens": { "type": "integer", "minimum": 0 }
@@ -194,7 +194,7 @@
         "models": { "$ref": "#/$defs/tierMap" },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "cost_model": { "type": "string", "description": "`subscription` or `local`." },
-        "harness": { "type": "string", "description": "`claude` (default) or `agy`." },
+        "harness": { "type": "string", "description": "`claude` (default), `agy`, `codex` or `copilot`." },
         "betas": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": true
