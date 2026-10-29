@@ -63,7 +63,7 @@ For a dispatch `(role, task)`:
 
 ### 3.2 Planning is bought; following a plan is rationed
 
-- **Plan-making roles** (`architect`, `strategist`, `red-team`, the Council, and the Orchestrator when it writes a plan): start in `deep` at a high effort, drawn from at least two families where the pool allows (§3.4). This is a raise over the `workhorse` default of D-14. The effort is the highest the evidence supports for that task kind, not the highest available: vendors warn that more effort can regress quality, and a ratified per-kind ceiling applies (§7 OD-2).
+- **Plan-making roles** (`architect`, `strategist`, `red-team`, the Council, and the Orchestrator when it writes a plan): start in `deep` at a high effort, preferably drawn from more than one family where the pool allows (§3.4); one family is accepted and labelled. This is a raise over the `workhorse` default of D-14. The effort is the highest the evidence supports for that task kind, not the highest available: vendors warn that more effort can regress quality, and a ratified per-kind ceiling applies (§7 OD-2).
 - **Plan-following roles** (`builder` with a plan attached, `integrator`, mechanical `investigator` and `scout` work): start at the lowest class that has met the success bar on this task kind, which is `steady` until evidence says `quick` will do. Without evidence they start at the preferred class and move down by the ratchet below, never below the floor. This **amends D-15** ("never lowered below the default to save cost") for tasks that carry a plan and a deterministic gate, and more broadly replaces the role default with a floor and a preferred class (§3.1; recorded in OD-1); the Orchestrator's own discretion to lower a model remains withdrawn.
 - **The ratchet.** After `K` consecutive first-pass successes at a class, with the gate passing and no retry, the next dispatch of that task kind tries the class below. One failure puts it back and records a lesson; two failures in a row on a class stop trying it for that task kind until the operator clears it. `K` is ratified (§7 OD-3).
 - **A failed gate** still raises one class or effort step and then changes family (`[H-007]`), unchanged.
@@ -77,11 +77,25 @@ Quota comes from the seat's meter (051 `Event::Meter`) and quota probe, not from
 - If **only a lower class** remains, the task waits, or degrades only where the role floor allows, and says so in the event and to the operator. A role is never served below its floor.
 - Each role has a **reserve slice** of the pool's tokens, so planning cannot starve the validator (040 §20). The slice sizes are ratified settings.
 
-### 3.4 Councils prefer diversity
+### 3.4 Councils prefer diversity, and never fail for lack of it
 
-A Council prefers seats from different providers and families where the pool allows. A single-family council still runs but is labelled **low-diversity** in its record and verdict. Spec 040's Council review was Claude-family only, and is an example of the label, not a model to copy.
+A Council **prefers** seats from different providers and families where the pool allows. It never requires them, and an operator with one subscription is not penalized. With one provider, or when exhaustion leaves one model, the Council runs as a **single-model council**: the same model in different seats, with the differing prompts, seats and temperature the Council spec allows. It is labelled **low-diversity** in its record and verdict, and is never refused or failed for that reason. Spec 040's Council review was Claude-family only, and is an example of the label, not a model to copy.
 
-### 3.5 A provider array
+With one provider, failover has nowhere to go: the task waits or degrades where the floor allows, and says so (§3.3). That is acceptable; a Council still runs.
+
+### 3.5 The emergency stop-gap: a local model that saves state
+
+A local model may join the pool in a special **`emergency`** class. It sits **below every role floor**, so it is never used for normal work and never chosen by §3.1. Its one job is to let Delphi stop cleanly when quota is gone. It may be slow and weak; the job is read-and-record, not judgement.
+
+- **Trigger.** Every ratified seat is at its cap or unreachable (051 meter and quota probe), and the §3.3 wait has no seat to wait on. A single seat's exhaustion does not trigger it.
+- **What it may run.** Only read, summarise and write-state tasks, under the existing sandbox and authority rules. It never approves, ratifies, merges, spends, or acts outside the sandbox; its tools are read and the state write only.
+- **The save-state checklist.** It writes one hand-off record with: mission log pointers; open PRs; branches and their heads; uncommitted worktree state (changed files, as a list and a patch kept in the workspace, never pushed); what was in flight; the next step for each; the seats that were exhausted and when each reports quota back.
+- **Where.** In the workspace under the mission's handoff directory, through the existing hand-off path (`delphi-engine/src/handoff.rs`), as a record of kind `emergency`.
+- **Labels.** Everything it writes is marked `unverified, generated` until a capable model re-reads it against the repository and the journal.
+- **Recovery.** When a seat reports quota again, dispatch resumes through §3.1. First a floor-meeting model re-reads the emergency record, checks each claim against git and the journal, corrects it, and only then removes the label. Nothing resumes from an unverified record.
+- **Visibility.** `delphi doctor` and `delphi capabilities` print one line: `emergency model: configured (<endpoint>, local)` or `emergency model: not configured (a quota stop saves no summary; the journal and git state remain)`. Not being configured is a note, not a failure.
+
+### 3.6 A provider array
 
 Providers are adapters behind one **capability record**: class, context, tools, cost, quota, and measured results. Adding a provider needs an adapter and evidence, and no routing change. Where sources disagree, **measured results outrank the knowledge base, which outranks a class rule.**
 
@@ -111,6 +125,7 @@ Each is one pull request with the usual trailer and tracker row.
 | **M3** | `[grades]`, `delphi agent promote`, `nerf`, `grades`, the `agent.graded` event | M2 |
 | **M4** | the ratchet and the suggestions, from retrospective results | M2, 037 |
 | **M5** | `delphi models calibrate` | 048 |
+| **M6** | the `emergency` class, the save-state task and record, recovery re-verification, the doctor and capabilities line | M2, 051 meter |
 
 ## 7. Decisions for the operator
 
@@ -121,6 +136,8 @@ Each is one pull request with the usual trailer and tracker row.
 | OD-3 | The ratchet's `K` and the count that makes evidence "enough" | `K = 5`, evidence = 8 results per `(role, kind, model)`; both ratified settings. |
 | OD-4 | A model with no evidence and no class: refuse, or trial? | **Trial** on low-risk tasks (changed 2026-10-29 from "refuse"); results then classify it. |
 | OD-6 | Operator input: ratify the pool once, then automatic, with a card only when no member meets a floor; per-role reserve slices (§3.3)? | **Yes**; slice sizes are ratified settings. |
+| OD-7 | Single-model council when one provider is available or exhaustion leaves one: run and label low-diversity, never refuse (§3.4)? | **Yes.** |
+| OD-8 | The `emergency` local class (§3.5): below every floor, save-state tasks only, unverified until re-read; configured at setup and shown by doctor and capabilities? | **Yes**; optional, off if no local model. |
 | OD-5 | Should `assignment = "discovered"` become the default after M2 is measured? | Not until a benchmark (048) shows it no worse than `static` on the same suite. |
 
 ## 8. Tests
@@ -129,7 +146,10 @@ Each is one pull request with the usual trailer and tracker row.
 - A fixture of three seats with invented model ids and attributes is classified by the rule table alone; an id the table does not place stays `unclassified` and is chosen only for low-risk trial tasks.
 - Two members meet a floor: the one with better measured accepted results per cost wins, whatever its provider; a seat near its cap ranks below one with headroom, and at the cap dispatch fails over with the reason recorded. With only a lower class left, the task waits and says so; it is never served below the floor.
 - A role's reserve slice cannot be consumed by another role.
-- A one-family council runs and is labelled low-diversity; with two families available it uses both.
+- A one-family council runs and is labelled low-diversity; with two families available it uses both. A one-provider pool, and a pool reduced to one model by exhaustion, still run a single-model council; none fails.
+- An `emergency` model is never in the eligible set of §3.1, whatever the load; it is used only when all ratified seats are at cap or unreachable, and then only for read/summarise/write-state tasks; it cannot approve, ratify or leave the sandbox.
+- Its hand-off record carries the checklist fields and the `unverified, generated` label; recovery re-verifies before the label is removed and dispatch resumes.
+- `delphi doctor` and `delphi capabilities` show the emergency line in both states.
 - The same dispatch on `static` and `discovered` with one family returns the static choice when the pool has a single eligible model.
 - A plan-making role gets `deep` and two families when both exist, and one family marked `homogeneous_retry` when not.
 - The ratchet steps down after `K` successes, up after one failure, and stops after two failures in a row; a grade of -1 on top of the ratchet is bounded at the pool's lowest class.
