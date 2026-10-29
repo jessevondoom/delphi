@@ -1,22 +1,22 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
- • atomic claims
- • easy audit
- → read_file(specs/003-collaboration.md) ✔
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   • atomic claims
+   • easy audit
+   ● read_file(specs/003-collaboration.md)
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                                                                 you · 09:03:38
+●                                                                you · 09:03:38
                                                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                   Now write it.
                                                                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-⟦•─•⟧ hephaestus · 09:03:41
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- Starting in a worktree. Tests first.
- Schema and claim loop are in. The suite passes: 14 of 14.
- → write_file(crates/queue.rs) ✔
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+● ⟦•─•⟧ hephaestus · 09:03:41
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   Starting in a worktree. Tests first.
+   Schema and claim loop are in. The suite passes: 14 of 14.
+   ● write_file(crates/queue.rs)
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
 ────────────────────────────────────────────────────────────────────────────────
 ❯

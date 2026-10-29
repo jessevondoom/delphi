@@ -2,25 +2,25 @@
 delphi v0.5 · /proj · chat
 
 
-⟦•_•⟧ daedalus · 09:00:05
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- Retry queue
+● ⟦•_•⟧ daedalus · 09:00:05
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   Retry queue
 
- A table gives indexes and transactions.
+   A table gives indexes and transactions.
 
- • atomic claims
- • easy audit
+   • atomic claims
+   • easy audit
 
-   rust
-   fn claim(id: u64) -> Result<(), Error> {
-       // lock the row
-       Ok(())
-   }
+     rust
+     fn claim(id: u64) -> Result<(), Error> {
+         // lock the row
+         Ok(())
+     }
 
- See specs/003-collaboration-and-council.md#ladder.
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   See specs/003-collaboration-and-council.md#ladder.
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-  → read_file(specs/003.md) ✔
+● read_file(specs/003.md)
  ❯ /build · A Builder task
    /budget · Cost ceiling
 

@@ -284,7 +284,7 @@ Approved by the operator 2026-10-28. One vocabulary of colour, glyph and weight;
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | VL1 | semantic style table in `theme.ts`, migrate call sites, one-page doc, raw-colour test | built (`docs/console-visual-language.md`; one raw-colour site migrated; golden screens unchanged) |
-| VL2 | gutter bullets for transcript, tools and cards | not started |
+| VL2 | gutter bullets for transcript, tools and cards | built (`gutter()` in `ui/src/screen.ts`; golden screens regenerated; real-terminal check of OD-1 still open) |
 | VL3 | composer scope line and library counter | not started |
 | VL4 | claim glyphs and age in search and the reader | not started |
 
