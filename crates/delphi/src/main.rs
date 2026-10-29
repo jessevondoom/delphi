@@ -505,6 +505,11 @@ fn cmd_setup(args: &[String]) -> i32 {
     }
 }
 
+/// Spec 054 FR1: only an interactive init on a terminal continues into setup, and only on a yes.
+fn wants_setup(interactive: bool, stdin_is_terminal: bool, answer: &str) -> bool {
+    interactive && stdin_is_terminal && !matches!(answer.trim().to_lowercase().as_str(), "n" | "no")
+}
+
 fn cmd_init(args: &[String]) -> i32 {
     let home = home::delphi_home(flag(args, "--home").as_deref());
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -532,6 +537,15 @@ fn cmd_init(args: &[String]) -> i32 {
             println!("delphi init: workspace `{}` created at {}", ws.name, ws.dir.display());
             for p in &projects {
                 println!("  project: {} (unchanged; Delphi writes nothing into projects)", p.display());
+            }
+            use std::io::IsTerminal;
+            let tty = interactive && std::io::stdin().is_terminal();
+            if tty && wants_setup(true, true, &prompt("Connect a model now? (y/n)", "y")) {
+                let mut sa = vec!["--home".to_string(), home.display().to_string(), "--workspace".to_string(), ws.name.clone()];
+                if args.iter().any(|a| a == "--yes" || a == "-y") {
+                    sa.push("--yes".into());
+                }
+                return cmd_setup(&sa);
             }
             println!("  next: run `delphi setup` to connect a model, then `delphi`");
             0
@@ -985,4 +999,18 @@ fn cmd_doctor(args: &[String]) -> i32 {
     report.print();
     println!("delphi doctor: workspace `{}`: {}", ws.name, report.worst());
     report.exit_code()
+}
+
+#[cfg(test)]
+mod init_setup_tests {
+    use super::wants_setup;
+
+    #[test]
+    fn only_an_interactive_terminal_yes_continues_into_setup() {
+        assert!(wants_setup(true, true, "y"));
+        assert!(wants_setup(true, true, ""));
+        assert!(!wants_setup(true, true, "No"));
+        assert!(!wants_setup(false, true, "y"));
+        assert!(!wants_setup(true, false, "y"));
+    }
 }
