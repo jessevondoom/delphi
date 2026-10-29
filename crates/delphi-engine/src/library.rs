@@ -20,8 +20,12 @@ pub mod bib;
 pub mod claims;
 #[path = "library_excerpts.rs"]
 pub mod excerpts;
+#[path = "library_history.rs"]
+pub mod history;
 #[path = "library_meta.rs"]
 pub mod meta;
+#[path = "library_review.rs"]
+pub mod review;
 #[path = "library_recheck.rs"]
 mod recheck;
 pub use recheck::Recheck;

@@ -77,6 +77,26 @@ fn a_private_source_never_leaves_and_is_never_indexed() {
 }
 
 #[test]
+fn the_history_lists_every_capture_with_its_change_note_and_the_anchors_pointing_at_it() {
+    let (d, l) = lib();
+    let f = file(d.path(), "h.md", "# One\n\nfirst fact stands here");
+    let s = l.add_file(&f, &open("own"), &Budgets::default()).unwrap();
+    let spec = crate::library::claims::AnchorSpec { source_id: s.id.clone(), quote: "first fact stands here".into(), locator: Some("One".into()), ..Default::default() };
+    l.add_claim("the first fact stands", &crate::library::claims::ClaimOpts::default(), &[spec]).unwrap();
+    file(d.path(), "h.md", "# One\n\nfirst fact stands here\n\n# Two\n\nmore");
+    l.add_file(&f, &open("own"), &Budgets::default()).unwrap();
+    let h = l.history(&s.id).unwrap();
+    assert_eq!(h.iter().map(|e| (e.version, e.current)).collect::<Vec<_>>(), [(1, false), (2, true)]);
+    assert!(h[0].change_note.is_none(), "the first capture has nothing to differ from");
+    assert!(h[1].change_note.as_deref().unwrap().contains("new sections: Two"));
+    assert_eq!((h[0].anchors, h[1].anchors), (0, 1), "the anchor moved to the version that holds it");
+    assert!(h[0].content_hash.is_some() && h[0].content_hash != h[1].content_hash);
+    assert!(l.history("no-such-id").is_none());
+    l.purge(&s.id).unwrap();
+    assert_eq!(l.history(&s.id).unwrap().len(), 1, "a purge deletes the earlier captures");
+}
+
+#[test]
 fn a_changed_capture_is_a_new_version_and_a_purge_keeps_only_the_citation_and_the_hash() {
     let (d, l) = lib();
     let f = file(d.path(), "n.md", "# One\n\nfirst");
