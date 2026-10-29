@@ -9,7 +9,7 @@ import type { Raster } from './image.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 
-export type Hit = { path: string; collection: string; /** Where it lives, as a label (specs/043 §4): research, docs, spec, lesson, mission, skill, memory, other. */ kind: string; /** When the document last changed (ISO), or ''. */ updated: string; trust: string; status?: string; heading: string; preview: string; start_line?: number; end_line?: number };
+export type Hit = { path: string; collection: string; /** Where it lives, as a label (specs/043 §4): research, docs, spec, lesson, mission, skill, memory, other. */ kind: string; /** When the document last changed (ISO), or ''. */ updated: string; trust: string; status?: string; /** The derived knowledge status (specs/052): noted, checking, validated, contested, disproved or retired. */ knowledge?: string; /** The org whose bundle lock entry vouches for it. */ vouched?: string; heading: string; preview: string; start_line?: number; end_line?: number };
 export type Shelf = {
   /** The store counted by kind (`/v1/kinds`). */
   kinds: { kind: string; documents: number; updated: string }[];
@@ -47,7 +47,7 @@ export type Arch = {
   kind: string | null;
   /** The number of results of each kind among the candidates of the last search (the chips), or null. */
   facets: Record<string, number> | null;
-  /** Hide documents whose provenance is untrusted or inactive (ctrl+t). They show, tagged, by default: this is a person reading. */
+  /** Hide documents whose provenance is outside or inactive (ctrl+t). They show, tagged, by default: this is a person reading. */
   trustedOnly: boolean;
   /** The queries searched in this window, oldest first, and which one up and down have recalled (null: none). */
   history: string[];
@@ -110,9 +110,17 @@ export function emphasize(text: string, q: string, base: (s: string) => string =
   return out + (last < text.length ? base(text.slice(last)) : '');
 }
 
-const UNTRUSTED = new Set(['external_untrusted', 'federated_peer']);
-/** What a result says about its provenance when it is not the usual: ` · untrusted`, ` · inactive`. */
-export const caveat = (h: { trust: string; status?: string }): string => [UNTRUSTED.has(h.trust) ? 'untrusted' : '', h.status && h.status !== 'active' ? 'inactive' : ''].filter(Boolean).join(' · ');
+const OUTSIDE = new Set(['external_untrusted', 'federated_peer']);
+export type KStatus = 'noted' | 'checking' | 'validated' | 'contested' | 'disproved' | 'retired';
+const KSTATUSES: KStatus[] = ['noted', 'checking', 'validated', 'contested', 'disproved', 'retired'];
+/** The knowledge status of a result (specs/052 §3.1): the daemon's own word, else what the provenance alone shows (content from outside is noted, a document no longer active is retired), else null. */
+export const statusOf = (h: { trust: string; status?: string; knowledge?: string }): KStatus | null =>
+  KSTATUSES.find((k) => k === h.knowledge) ?? (h.status && h.status !== 'active' ? 'retired' : OUTSIDE.has(h.trust) ? 'noted' : null);
+/** The label to print: `noted`, `validated`, and `validated · vouched by <org>` for a bundle's content (specs/052 §3.1). */
+export const statusLabel = (h: { trust: string; status?: string; knowledge?: string; vouched?: string }): string => {
+  const k = statusOf(h);
+  return k === 'validated' && h.vouched ? `validated · vouched by ${h.vouched}` : k ?? '';
+};
 const slug = (s: string) => s.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-');
 const day = (iso: string) => (iso || '').slice(0, 10);
 const READER_MARGIN = 4;
@@ -138,7 +146,7 @@ function startRow(e: Entry, w: number, target: Target | null): number {
 
 // ── results from the daemon ─────────────────────────────────────────────────
 
-const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), kind: String(r.kind ?? 'other'), updated: String(r.updated ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
+const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), kind: String(r.kind ?? 'other'), updated: String(r.updated ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, knowledge: r.knowledge_status ? String(r.knowledge_status) : undefined, vouched: r.vouched_by ? sanitize(String(r.vouched_by)) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
 
 export function gotHits(a: Arch, q: string, body: any): Arch {
   if (a.q.trim() !== q) return a; // the box has moved on
@@ -374,6 +382,8 @@ const SWITCH = { search: 'shift+tab  expand', expand: 'shift+tab  search' } as c
 
 export const KIND_ORDER = ['research', 'docs', 'spec', 'lesson', 'mission', 'skill', 'memory', 'other'];
 const KIND_LABEL: Record<string, string> = { research: 'research', docs: 'docs', spec: 'specs', lesson: 'lessons', mission: 'missions', skill: 'skills', memory: 'memory', other: 'other' };
+/** The status as the list column shows it: the word alone, so a vouched label keeps to its width. */
+const statusWord = (h: Hit) => statusOf(h) ?? '';
 const kindStyle = (k: string): ((s: string) => string) => (k === 'research' ? T.warn : k === 'docs' ? T.ok : k === 'spec' ? T.accent : k === 'lesson' ? T.lesson : k === 'mission' ? T.mission : T.dim);
 
 /** The kinds that have results, in the spec's order: the chips after `all`. */
@@ -391,8 +401,6 @@ export function ago(iso: string, now: number): string {
   return d < 1 ? 'today' : d < 14 ? `${Math.round(d)} d` : d < 70 ? `${Math.round(d / 7)} w` : `${Math.round(d / 30)} mo`;
 }
 
-/** `trusted`, `listed` (from an allow-listed source), `untrusted` or `inactive` (specs/043 §4.3). */
-export const trustWord = (h: { trust: string; status?: string }): string => caveat(h).split(' · ')[0] || (h.trust === 'trusted_source' ? 'listed' : 'trusted');
 
 /**
  * The best-match summary (specs/043 §3.2): the passage's own words, trimmed by code. Up to three sentences that hold the
@@ -524,8 +532,8 @@ function researchView(a: Arch, w: number, h: number, info: T.Info | undefined, p
 function listRow(a: Arch, x: Hit, i: number, w: number, now: number): string[] {
   const on = i === a.sel && a.focus === 'list';
   const mid = w >= 90, full = w >= 80;
-  const tw = trustWord(x);
-  const tail = kindStyle(x.kind)(x.kind.padEnd(8)) + (full ? '  ' + (tw === 'trusted' || tw === 'listed' ? T.dim : T.warn)(tw.padEnd(9)) : tw === 'trusted' || tw === 'listed' ? '' : T.warn('!')) + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
+  const tw = statusWord(x);
+  const tail = kindStyle(x.kind)(x.kind.padEnd(8)) + (full ? '  ' + T.dim(tw.padEnd(9)) : '') + (mid ? ' ' + T.dim(ago(x.updated, now).padStart(6)) : '');
   const room = Math.max(10, w - 8 - 10 - (full ? 11 : 0) - (mid ? 7 : 0) - 1);
   const title = T.clip(titleOf(x), Math.min(64, room));
   const first = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean)[0] ?? '';
@@ -546,7 +554,7 @@ function bestCard(a: Arch, x: Hit, w: number, h: number, now: number, pal: T.Pal
   const compact = h < 30;
   const sum = wrapText(bestSummary(x.preview, a.searched ?? ''), w - 11).slice(0, compact ? 2 : 4);
   const L = [
-    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind) + T.dim(` · ${trustWord(x)}${edited ? ` · edited ${edited}` : ''}`), w - 7),
+    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind) + T.dim([statusLabel(x), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
     (on ? T.accent('❯ ') : '') + chalk.bold(T.accent(T.clip(titleOf(x), w - 11))),
     ...sum.map((l) => emphasize(l, a.searched ?? '')),
   ];
@@ -578,7 +586,7 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal): string
   out.push('');
   const useCard = !a.browse && a.hits.length > 0;
   if (useCard) out.push(...bestCard(a, a.hits[0]!, w, h, now, pal), '');
-  if (a.hits.length > (useCard ? 1 : 0)) out.push(T.dim(`   #  title${' '.repeat(Math.max(1, w - 46))}kind${w >= 80 ? '      trust' : ''}${w >= 90 ? '    edited' : ''}`));
+  if (a.hits.length > (useCard ? 1 : 0)) out.push(T.dim(`   #  title${' '.repeat(Math.max(1, w - 46))}kind${w >= 80 ? '      status' : ''}${w >= 90 ? '    edited' : ''}`));
   const start = useCard ? 1 : 0, per = 3;
   const room = Math.max(1, Math.floor((h - out.length - 2) / per));
   const top = Math.max(start, Math.min(a.sel - room + 1, a.hits.length - room), a.sel >= start + room ? a.sel - room + 1 : start);
