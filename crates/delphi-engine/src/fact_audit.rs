@@ -5,7 +5,7 @@
 //! classes, never claim text: the claim lives in the mission record (§15.3), and a card fetches it from there.
 //!
 //! * A **card** is made for every would-ratify (advisory) or ratified fact until volume passes 50 a week, then for a
-//!   sample; non-ratified verdicts are sampled at random, at most 5 a week (§15.3 item 2).
+//!   sample stratified by source class and origin; non-ratified verdicts are sampled at random, at most 5 a week (§15.3 item 2).
 //! * The operator answers a card **before** seeing the sources and the verdict: [`answer`] records the answer first,
 //!   and [`reveal`] refuses a card nobody answered. `unsure` counts for nothing.
 //! * A fact the operator calls false lowers the latch to `advisory` and quarantines its batch ([`answer`]); an
@@ -25,6 +25,8 @@ pub const WEEK_SECS: i64 = 7 * 86_400;
 /// Every positive verdict gets a card until the week's volume passes this.
 pub const FULL_AUDIT_PER_WEEK: usize = 50;
 pub const MAX_NEGATIVE_CARDS_PER_WEEK: usize = 5;
+/// Past [`FULL_AUDIT_PER_WEEK`], each source-class-and-origin stratum is audited at least this share of the time.
+pub const SAMPLE_PERCENT: usize = 20;
 pub const PROMOTE_MIN_AUDITS: usize = 60;
 pub const PROMOTE_MIN_MISSIONS: usize = 10;
 pub const PROMOTE_MIN_LABELLED: usize = 40;
@@ -96,7 +98,8 @@ fn positive(v: &Value) -> bool {
     v["would_ratify"].as_bool().unwrap_or(false) || v["ratified"].as_bool().unwrap_or(false)
 }
 
-/// Record a finished check and decide whether it needs a card. `roll` is the daemon's own random draw.
+/// Record a finished check and decide whether it needs a card. `roll` is the daemon's own random draw (it picks the
+/// negative sample; the positive one is stratified and needs none).
 pub fn observe(state: &Path, o: &Observed, roll: u32, now: i64) -> bool {
     let j = Journal::new(state);
     let batch = current_batch(state);
@@ -113,8 +116,7 @@ pub fn observe(state: &Path, o: &Observed, roll: u32, now: i64) -> bool {
     let is_positive = o.would_ratify || o.ratified;
     let wanted = if is_positive {
         let positives = week.iter().filter(|c| positive(c)).count();
-        // Past the weekly volume, sample: a class not yet seen this week is always audited, the rest by a coin.
-        positives < FULL_AUDIT_PER_WEEK || !week.iter().any(|c| positive(c) && c["class"] == o.class.as_str()) || roll % 2 == 0
+        positives < FULL_AUDIT_PER_WEEK || stratum_wants_card(&events, o, now)
     } else {
         matches!(o.verdict.as_str(), "refuted" | "unsupported" | "already_known") && week.iter().filter(|c| !positive(c)).count() < MAX_NEGATIVE_CARDS_PER_WEEK && roll % 4 == 0
     };
@@ -126,6 +128,18 @@ pub fn observe(state: &Path, o: &Observed, roll: u32, now: i64) -> bool {
         );
     }
     wanted
+}
+
+/// Past the weekly volume the sample is stratified by source class and origin (§15.3 item 2), not drawn by a coin: a
+/// stratum with no card this week always gets one, and every stratum is kept at [`SAMPLE_PERCENT`] of its own
+/// positive verdicts, so a flood from one origin cannot thin the audit of another.
+fn stratum_wants_card(events: &[Value], o: &Observed, now: i64) -> bool {
+    let in_week = |e: &Value| e["at"].as_i64().unwrap_or(0) > now - WEEK_SECS;
+    let origin = o.origins.first().map(String::as_str).unwrap_or("");
+    let in_stratum = |e: &Value| e["class"] == o.class.as_str() && e["origins"].get(0).and_then(|x| x.as_str()).unwrap_or("") == origin;
+    let verdicts: BTreeSet<&str> = events.iter().filter(|e| e["kind"] == "verdict" && in_week(e) && positive(e) && in_stratum(e)).filter_map(|e| e["fact_id"].as_str()).collect();
+    let cards = events.iter().filter(|e| e["kind"] == "card" && in_week(e) && positive(e) && in_stratum(e)).count();
+    cards == 0 || cards * 100 < SAMPLE_PERCENT * verdicts.len()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +307,25 @@ pub fn fact_read_events(span: &str, role: &str, rel_paths: &[String]) -> Vec<(St
         .filter_map(|p| p.strip_prefix("context/facts/")?.strip_suffix(".md"))
         .map(|id| ("validator.event".to_string(), json!({"kind": "fact.read", "fact": id, "span": span, "role": role})))
         .collect()
+}
+
+/// Operator act: take one fact out of quarantine (`delphi validation unquarantine <fact-id> --reason`). It needs a
+/// reason and is journaled as the operator's (L5). It cannot be a way round a false audit: a fact the operator called
+/// false stays out for good, and while the latch stands tripped (no raise since the trip) no fact comes back at all.
+pub fn unquarantine(state: &Path, store: &FactStore, fact: &str, reason: &str, now: i64) -> Result<String, String> {
+    if reason.trim().chars().count() < 8 {
+        return Err("a reason of at least a few words is required".into());
+    }
+    let events = Journal::new(state).all();
+    if events.iter().any(|e| e["kind"] == "audit" && e["fact_id"] == fact && e["answer"] == "false" && e["positive"] == true) {
+        return Err("you called this fact false in an audit; it stays quarantined (retract it instead)".into());
+    }
+    if events.iter().rfind(|e| e["kind"] == "latch").is_some_and(|e| e["act"] == "trip") {
+        return Err("the latch is tripped by a false audit; raise it first (`delphi validation latch raise`), which needs a reason".into());
+    }
+    let w = store.unquarantine(fact, reason.trim()).map_err(|e| format!("{e:?}"))?;
+    Journal::new(state).append("check", json!({"why": "unquarantine", "fact_id": fact, "reason": reason.trim(), "by": "operator", "level": "L5"}), now);
+    Ok(w.id)
 }
 
 /// Operator act: raise the latch again. Needs a reason; to `ratify` it needs PROMOTE or an explicit `force`. A new
@@ -517,16 +550,27 @@ mod tests {
     }
 
     #[test]
-    fn past_the_weekly_volume_a_class_not_yet_seen_is_still_audited_and_the_rest_are_sampled() {
+    fn past_the_weekly_volume_the_sample_is_stratified_by_class_and_origin_not_a_coin() {
         let (_d, s) = state();
         for i in 0..FULL_AUDIT_PER_WEEK {
             assert!(observe(&s, &obs(&format!("f{i}"), "m1", "would_ratify", "a.org"), 1, 100 + i as i64));
         }
-        assert!(!observe(&s, &obs("extra-odd", "m1", "would_ratify", "a.org"), 1, 500));
-        assert!(observe(&s, &obs("extra-even", "m1", "would_ratify", "a.org"), 2, 501));
-        let mut other = obs("other-class", "m1", "would_ratify", "b.org");
+        // The stratum a.org was audited in full; whatever the roll says, the answer is the same.
+        let mut carded = 0;
+        for i in 0..100 {
+            if observe(&s, &obs(&format!("x{i}"), "m1", "would_ratify", "a.org"), (i % 2) as u32, 500 + i as i64) {
+                carded += 1;
+            }
+        }
+        assert_eq!(carded, 0, "a stratum already above its sampling share is not audited further");
+        // A stratum with no card this week is audited at once, by origin and by class.
+        assert!(observe(&s, &obs("b1", "m1", "would_ratify", "b.org"), 1, 700));
+        let mut other = obs("c1", "m1", "would_ratify", "a.org");
         other.class = "reputable_secondary".into();
-        assert!(observe(&s, &other, 1, 502));
+        assert!(observe(&s, &other, 1, 701));
+        // Within a new stratum the rate holds at about one in five, and does not depend on the roll.
+        let cards: usize = (0..50).filter(|i| observe(&s, &obs(&format!("b-more{i}"), "m1", "would_ratify", "b.org"), 1, 800 + *i as i64)).count();
+        assert!((8..=12).contains(&cards), "{cards} of 50 in one stratum");
     }
 
     #[test]
@@ -565,6 +609,30 @@ mod tests {
         assert!(e.reason.contains("audited fact was rejected"));
         assert_eq!(effective(ValidatorMode::Ratify, &s).mode, ValidatorMode::Advisory, "a fresh read of the state, as after a restart");
         assert!(Journal::new(&s).all().iter().any(|e| e["kind"] == "latch" && e["act"] == "trip"));
+    }
+
+    #[test]
+    fn unquarantine_needs_a_reason_is_journaled_and_cannot_get_round_a_false_audit_or_the_latch() {
+        let (d, s) = state();
+        let ws = d.path();
+        mission_with_claim(ws, "m1", "Claim one.");
+        let id = fact_id("Claim one.");
+        let store = FactStore::new(ws).with_batch("b1");
+        let r = crate::fact_store::tests::report(crate::fact_run::Verdict::Ratifiable, &["https://www.britannica.com/one", "https://www.allmusic.com/one"], crate::fact_check::ClaimKind::Fact);
+        let w = store.record(&r, "2026-10-28T00:00:00Z", "m1", "q").unwrap();
+        store.quarantine(&w.id, "stale card").unwrap();
+        assert!(unquarantine(&s, &store, &w.id, "ok", 10).is_err(), "a reason is required");
+        unquarantine(&s, &store, &w.id, "checked the sources again by hand", 11).unwrap();
+        let j = Journal::new(&s).all();
+        assert!(j.iter().any(|e| e["why"] == "unquarantine" && e["by"] == "operator"));
+        // A false audit trips the latch and quarantines the batch; neither the latch nor the answer can be walked round.
+        observe(&s, &obs(&w.id, "m1", "would_ratify", "example.org"), 1, 1000);
+        answer(ws, &s, &store, &w.id, Answer::False, 1100).unwrap();
+        let e = unquarantine(&s, &store, &w.id, "I changed my mind about it", 1200).unwrap_err();
+        assert!(e.contains("called this fact false"), "{e}");
+        raise_latch(&s, ValidatorMode::Ratify, "reviewed the rejected fact and the batch", true, 1300).unwrap();
+        assert!(unquarantine(&s, &store, &w.id, "I changed my mind about it", 1400).is_err(), "still false after the raise");
+        let _ = id;
     }
 
     #[test]
