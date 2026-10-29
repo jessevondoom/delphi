@@ -298,3 +298,12 @@ Approved by the operator 2026-10-28. Joins specs 050 (entry fields), 040 §18.2 
 | KS2 | capture on contact: accepted answer, Council verdict, resolved decision, research run | not started (waits for 050 ML1) |
 | KS3 | `learn` kind in the decisions pane (the daily digest) | not started |
 | KS4 | contested pairs and review-due | not started |
+
+## The first minute (spec 054, approved 2026-10-28)
+
+Approved by the operator 2026-10-28. FR1 is small and buildable now; FR2 waits for a human timing of the console's first minute and for 052 KS2.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| FR1 | interactive `init` offers to continue into `setup`; non-interactive unchanged | not started |
+| FR2 | first-question suggestion and first noted item | not started (needs timing and KS2) |
