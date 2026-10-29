@@ -224,6 +224,8 @@ pub struct TaskOutcome {
 }
 
 pub struct Engine {
+    /// The consumer of `validator.request` (`fact_serve`): intake quotas and the token allowance.
+    pub validator: crate::fact_serve::Host,
     pub ws: WorkspacePaths,
     pub cfg: SharedConfig,
     pub hub: Hub,
@@ -1589,7 +1591,10 @@ impl Engine {
             events.push(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": name})));
         }
         if !events.is_empty() {
-            sc.m.append_batch(events).await?;
+            let appended = sc.m.append_batch(events).await?;
+            for e in appended.iter().filter(|e| e.kind == "validator.request") {
+                self.serve_validator_request(sc.m.clone(), e.payload.clone(), sc.family.clone());
+            }
         }
         Ok(result)
     }
