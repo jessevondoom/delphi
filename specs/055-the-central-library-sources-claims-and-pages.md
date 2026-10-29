@@ -33,7 +33,7 @@ Keep only claims, with a URL each. Rejected: URLs rot and change, a claim withou
 ## 2. Three layers
 | Layer | What it is | Who writes it | Trust |
 | :-- | :-- | :-- | :-- |
-| **Source** | the original, kept whole, as excerpts, or as a pointer; with metadata | the daemon, from a fetch or an operator add | untrusted material; labelled *not validated* |
+| **Source** | the original, kept whole, as excerpts, or as a pointer; with metadata | the daemon, from a fetch or an operator add | untrusted material; labelled *not validated*, except a source from an added bundle: *validated, vouched by <org>* (024 §4.1a) |
 | **Claim** | a small statement with status, kind, dates, scope, and one or more **anchors** into sources | capture on contact (052), the validator (040), the operator | by status (052 §3.1); only the validator or operator reaches *validated* |
 | **Page** | a generated, human-readable view over claims, each sentence linking to claim ids | the daemon renders it; a model may draft the wording but a check enforces the links (§6) | never a source of truth; it shows the status of what it cites |
 
@@ -67,7 +67,7 @@ knowledge/sources/<id>/
 `meta.json` is **CSL-JSON** (the citation standard that reference managers and style processors read) with Delphi fields beside it, so any bibliography style can be produced without a conversion step:
 
 - Citation: `type`, `title`, `author[]` (with `family`/`given` or `literal`), `editor[]`, `translator[]`, `container-title`, `publisher`, `publisher-place`, `issued`, `volume`, `issue`, `page`, `edition`, `URL`, `DOI`, `ISBN`, `ISSN`, `language`.
-- Delphi: `licence` (an SPDX id, or `public-domain:<jurisdiction>:<basis>`, or `all-rights-reserved`, or `unknown`), `rights_holder`, `attribution_text`, `share_alike` (bool, carried from the licence), `capture_level`, `retrieved`, `last_checked`, `canonical_url`, `content_hash`, `version`, `fetch_mode` (daemon or operator), `origin` (registrable domain, 040 §6.2), `source_class` (040 Appendix A), `tags`, `cited_by` (claim ids, maintained by the daemon).
+- Delphi: `licence` (an SPDX id, or `public-domain:<jurisdiction>:<basis>`, `own`, `internal`, `all-rights-reserved`, or `unknown`; **information, not a gate**, 023 §2.1), `rights_holder`, `attribution_text`, `share_alike` (bool, carried from the licence), `capture_level`, `retrieved`, `last_checked`, `canonical_url`, `content_hash`, `version`, `fetch_mode` (daemon or operator), `origin` (registrable domain, 040 §6.2), `source_class` (040 Appendix A), `tags`, `cited_by` (claim ids, maintained by the daemon).
 - A `licence` of `unknown` caps the capture level at **pointer** unless the operator raises it for that source.
 
 ### 3.3 Licence classes (engineering policy, configurable)
@@ -76,8 +76,8 @@ knowledge/sources/<id>/
 | open, attribution | CC BY, CC0, public-domain works | full | **yes, full text and images, for retrieval (§7)**, with `attribution_text` |
 | open, share-alike | CC BY-SA (Wikipedia) | full; pages that quote it substantially carry the same licence note | yes, full text, with the share-alike note |
 | public domain, recorded basis | works out of copyright (for example from Project Gutenberg, public archives) | full | yes, full text |
-| own or organisation material | the operator's specs, an org's documentation | full | yes, per the org's rule |
-| restricted, quotation | all-rights-reserved, unknown | excerpts, with a per-excerpt length bound | **no** |
+| own or organisation material | the operator's specs, an org's documentation, proprietary definitions (`internal`) | full | yes; internal by default; publishing outside the org is the operator's confirmed judgement (023 §2.1) |
+| restricted, quotation | all-rights-reserved, unknown | excerpts, with a per-excerpt length bound | **warns** (`source-licence`) when the bundle is `public`; never refused for licence (023 §2.1) |
 | private archival (operator-flagged) | schematics, instructions, unique details where the licence does not permit copying | full, for the operator's own use, flagged `private` | **no**; never in bundles, exports or Xenia, and never used externally (§10.1) |
 
 Public-domain status depends on the jurisdiction and the date. The record stores the jurisdiction and the basis (for example "published before 1930, United States") rather than a bare "public domain", so the claim can be checked later and rules can change.
@@ -134,8 +134,8 @@ When a source gets a new version, each anchor is re-resolved by its quote agains
 ## 7. Sharing, bundles and Xenia (front-loaded changes)
 Two channels, two jobs:
 - **Xenia carries facts, not sources.** A signed `fact` record holds the claim, its status evidence, its scope and **anchors by reference**: canonical URL or identifier, content hash, locator, a quote of at most 1 KiB and a compact citation. It never carries a source body. The receiving install fetches the source itself (or takes it from a bundle), judges the licence itself, and its validator re-checks (040 §17.3, D-4). Phase 1 kinds are unchanged; `fact` is a provisional kind (`specs/012` §11) that needs the `specs/011` §11 re-review before it is built.
-- **Bundles carry full text for retrieval.** A bundle may include a top-level `sources/` section: full-text captures and images of sources whose licence class allows redistribution (open, share-alike, public domain with a recorded basis, own or organisation material), so a team's reading list works as retrieval material on any install. Size limits for `sources/` are separate from the rest of the bundle (`specs/023` §2.1). A source whose class is restricted, unknown or private is **refused at `bundle validate` and again at `add`**, by a daemon check, not by convention.
-- **On adoption** a received source enters the library as *not validated*, at the capture level the bundle shipped, with its licence record intact (attribution and share-alike carried). The receiving operator can raise or purge it.
+- **Bundles carry full text for retrieval.** A bundle may include a top-level `sources/` section: full-text captures and images of sources whose licence class allows redistribution (open, share-alike, public domain with a recorded basis, own or organisation material), so a team's reading list works as retrieval material on any install. Size limits for `sources/` are separate from the rest of the bundle (`specs/023` §2.1). Licence is a **warning state**, not a gate: `bundle validate` reports `source-licence` for a `public` bundle, and packaging or publishing outside the org asks the operator to confirm, recorded in the bundle report (`specs/023` §2.1). The one hard refusal is a source flagged `private`, at `validate`, `package`, `add` and `bundle sources add`, by a daemon check, not by convention.
+- **On adoption** a source from an added bundle enters the library as *validated, vouched by <org>* (`specs/024` §4.1a), at the capture level the bundle shipped, with its licence record intact (attribution and share-alike carried) and its `origin` bundle recorded. The label ends with the bundle (remove, new hash or key, rollback); the operator can purge it at any time. A source received any other way (a fetch, a `fact`, a Xenia record) stays *not validated*.
 - **Never shared, by any channel:** `private` sources, restricted bodies, and the operator's private notes on them.
 
 ## 8. Acquisition: building a library worth browsing
@@ -174,7 +174,17 @@ Definitional work first, so bundles and Xenia can be built to the final shape (t
 | SK4 | the 30-day recheck on open, versions, change notes, anchor re-resolution, retirement | SK1; SK3 for anchors |
 | SK5 | generated pages with the sentence-to-claim check, dispute action, status glyphs, page changes in the digest | SK3; 053 VL4 |
 | SK6 | acquisition job and standing rules, public-domain bases, byte budget, reading lists | SK1, SK4; 052 KS3 |
-| SK7 | licence-gated export to bundles (`delphi bundle` sources) and the Xenia `fact` kind | SK0, SK1; `specs/011` §11 re-review |
+| SK0b | **bundle trust and licence rework (this amendment): code and tests, checklist below**; do before the first test bundle is built | SK0, SK1 |
+| SK7 | export to bundles (`delphi bundle sources add`) with the publication confirmation; the Xenia `fact` kind **deferred by decision, 2026-10-29** | SK0, SK1; `specs/011` §11 re-review |
+
+### 11.1 SK0b checklist (buildable; each item has a test)
+1. **`distribution`** in `delphi-bundle/src/manifest.rs` (`internal` default; unknown value is an error) and `schemas/bundle.schema.json`. Test: absent means `internal`; `private` as a value fails.
+2. **Licence to warnings** in `delphi-bundle/src/sources.rs`: `classify` gains `internal`; `check` stops refusing on licence and pushes warnings `source-licence`, `source-attribution`, `source-sharealike` to the `Report`; `type` and `title` stay required, `licence` becomes optional; `"private": true` fails with `source-private`. Update `schemas/source-meta.schema.json` (description and `required`). Tests: an `all-rights-reserved` source in an `internal` bundle validates clean; in a `public` bundle it validates with one `source-licence` warning and no failure; `private: true` fails everywhere; `add` never fails on licence.
+3. **Publication confirmation** where `sign` confirms (`crates/delphi/src/bundle_connect.rs::tty_confirm` is the precedent): `bundle package` (public), `bundle publish`, the Xenia store upload and any mirror write ask once when warnings exist or the bundle is `internal`; no `--yes`; an agent process is refused; `.delphi-bundle/report.json` gains `licence_acknowledged: [{id, class}]` and a time. Test: no terminal means no output file and exit non-zero; with the confirmation, the file is written and lists the ids.
+4. **Vouched status.** `delphi-core/src/knowledge_status.rs::derive` gains the bundle input: the lock entry of an added bundle gives *validated*, detail `vouched by <org>`; frontmatter and `meta.json` give nothing. The library source record gains `origin { bundle, hash, kid? }`. Tests: a document claiming `validated` in its own frontmatter stays *noted* unless the lock entry exists; a Delphi update never changes a lock entry.
+5. **Import and revocation** in the SK1 `bundle add` import: sources enter as vouched with their licence record; `bundle remove`, a hash or key change and `rollback` apply the §024 4.1a rule (delete the uncited, keep the cited as *noted · no longer vouched*, mark operator claims on them *contested*). Tests for each of the four outcomes.
+6. **Labels in output.** `kb search`, `kb show`, the console and the digest print `validated · vouched by <org>` for bundle claims; the six-tier lattice is not shown. Golden screens updated deliberately.
+7. **Docs.** Regenerate `docs/reference/`; update `schemas/` guide, `skills/org-bundle-authoring/SKILL.md` (distribution, warnings, the confirmation, `private`) and the fixture in `dev/bundles/acme-platform` (add an internal-licence source and a `private: true` negative test).
 
 ## 12. Verification
 - **Capture:** a loopback fixture site (V2a pattern) serving a full page, an unknown-licence page and a page that redirects: levels, metadata and caps as §3.1 to §3.3 say; no model call.

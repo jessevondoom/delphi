@@ -81,16 +81,17 @@ fn the_golden_bundle_satisfies_its_schema() {
 }
 
 #[test]
-fn the_golden_sources_satisfy_the_source_meta_schema_and_the_gate_words_are_refused() {
+fn the_golden_sources_satisfy_the_source_meta_schema_and_only_private_is_refused() {
     let dir = root().join("dev/bundles/acme-platform/sources");
     for id in ["oecd-2024-report", "acme-style-guide"] {
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(id).join("meta.json")).unwrap()).unwrap();
         must_pass("source-meta.schema.json", id, &doc);
     }
-    for l in ["all-rights-reserved", "unknown", "private"] {
-        must_fail("source-meta.schema.json", l, &json!({ "type": "report", "title": "t", "licence": l }));
+    for l in ["all-rights-reserved", "unknown", "internal"] {
+        must_pass("source-meta.schema.json", l, &json!({ "type": "report", "title": "t", "licence": l }));
     }
-    must_fail("source-meta.schema.json", "no licence", &json!({ "type": "report", "title": "t" }));
+    must_pass("source-meta.schema.json", "no licence", &json!({ "type": "report", "title": "t" }));
+    must_fail("source-meta.schema.json", "private: true", &json!({ "type": "report", "title": "t", "private": true }));
 }
 
 #[test]
