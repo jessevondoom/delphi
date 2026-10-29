@@ -933,7 +933,7 @@ impl EngineService {
         .await
         .map_err(|e| err(-32000, e.to_string()))?
         .map_err(|e| err(-32000, e.to_string()))?;
-        Ok(json!(hits.iter().map(|h| json!({"pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "blake3": h.blake3, "note": h.note, "status": h.status, "label": h.label})).collect::<Vec<_>>()))
+        Ok(json!(hits.iter().map(|h| json!({"pointer": h.pointer, "heading": h.heading_path, "preview": h.preview, "blake3": h.blake3, "note": h.note, "status": h.status, "label": h.shown_label(), "vouched_by": h.vouched_by})).collect::<Vec<_>>()))
     }
 
     /// `kb.get`: the read-only knowledge API (`specs/028` §6a) over the daemon's socket, for the narrator's archives

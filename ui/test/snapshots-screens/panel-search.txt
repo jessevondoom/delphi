@@ -7,12 +7,12 @@ delphi v0.5 · /proj · chat
 
   ❯ specs/003-collaboration-and-council.md  Retry ladder
   ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+  validated · vouched by acme
   three attempts, then escalate to the operator
 
   # Collaboration
 
   A council has three rounds.
-
 
 
 

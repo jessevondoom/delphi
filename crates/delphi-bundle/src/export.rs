@@ -12,7 +12,7 @@ use std::path::Path;
 /// Removed by `--strip-delphi`: everything a Claude Code loader does not read and a Delphi reader needs.
 const DELPHI_ONLY: [&str; 6] = ["bundle.toml", "knowledge/", "behavior/", "evals/", "vectors/", ".delphi-bundle/"];
 /// Never copied: a signature and an eval result describe the tree they were made for, and the export changes it.
-const NOT_COPIED: [&str; 3] = [".delphi-bundle/files.json", ".delphi-bundle/sig.json", ".delphi-bundle/eval.json"];
+const NOT_COPIED: [&str; 4] = [".delphi-bundle/files.json", ".delphi-bundle/sig.json", ".delphi-bundle/eval.json", ".delphi-bundle/report.json"];
 
 fn manifest_of(src: &Path, host: &dyn Host) -> Result<Manifest, String> {
     let r = crate::validate(src, &Options::default(), host);

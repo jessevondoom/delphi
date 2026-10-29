@@ -321,6 +321,9 @@ pub struct SourceFile {
     pub default_source: &'static str,
     /// Set for a file of an added bundle (`specs/024` §3.6): where it came from, for the breadcrumb and the ranking.
     pub bundle: Option<BundleTag>,
+    /// The org that vouches for this file, from the lock entry of the added bundle it came in with (`specs/052` §3.1).
+    /// Set only by the daemon's own listing of the lock; a file's frontmatter cannot set it.
+    pub vouched_by: Option<String>,
 }
 
 /// An added bundle as the index sees it. The zone fixes the tier: a bundle's own `source_type` is a display copy and
@@ -350,11 +353,11 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
         let tag = BundleTag { id: e.id(), label: e.label(&today), stale: e.is_stale(&today) };
         let mut files = Vec::new();
         md_files(&root, &format!("bundles/{}/{}/knowledge", e.org, e.name), "bundles", e.tier_name(), &mut files);
-        out.extend(files.into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
+        out.extend(files.into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), vouched_by: Some(e.org.clone()), ..f }));
         // A skill's `references/` (`specs/025` §3): text to retrieve, indexed under zone `skills` at the bundle's tier, and
         // read only through `@bundle/<org>/<name>/skills/<skill>/references/**`; never inlined into a prompt.
         let skills = delphi_core::bundles::cache_dir(home, &e.org, &e.name, &e.hash).join("skills");
-        out.extend(reference_files(&skills, &e.org, &e.name, e.tier_name()).into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), ..f }));
+        out.extend(reference_files(&skills, &e.org, &e.name, e.tier_name()).into_iter().map(|f| SourceFile { bundle: Some(tag.clone()), vouched_by: Some(e.org.clone()), ..f }));
     }
 }
 
@@ -364,9 +367,12 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
 /// A private source is never listed (`library::Library::indexable`), and a text over the indexer's file cap is not either.
 fn library_files(ws: &Path, out: &mut Vec<SourceFile>) {
     let Some(home) = ws.parent().and_then(Path::parent) else { return };
-    for (id, path) in crate::library::Library::in_home(home).indexable() {
+    let lib = crate::library::Library::in_home(home);
+    let entries = delphi_core::bundles::read(ws).map(|l| l.bundle).unwrap_or_default();
+    for (id, path) in lib.indexable() {
         if std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
-            out.push(SourceFile { rel_path: format!("library/sources/{}/source.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None });
+            let vouched_by = lib.read_meta(&id).and_then(|m| lib.vouched_by(&m, &entries));
+            out.push(SourceFile { rel_path: format!("library/sources/{}/source.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None, vouched_by });
         }
     }
 }
@@ -404,7 +410,7 @@ pub(crate) fn md_files(root: &Path, logical_prefix: &str, zone: &'static str, de
         if ft.is_dir() {
             md_files(&e.path(), &rel, zone, default_source, out);
         } else if ft.is_file() && name.ends_with(".md") && e.metadata().map(|m| m.len() <= MAX_FILE_BYTES).unwrap_or(false) {
-            out.push(SourceFile { rel_path: rel, zone, path: e.path(), default_source, bundle: None });
+            out.push(SourceFile { rel_path: rel, zone, path: e.path(), default_source, bundle: None, vouched_by: None });
         }
     }
 }
@@ -420,7 +426,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
                 if e.file_type().map(|t| t.is_file()).unwrap_or(false) && n.ends_with(".md") {
-                    core.push(SourceFile { rel_path: n, zone: "core", path: e.path(), default_source: UNTRUSTED, bundle: None });
+                    core.push(SourceFile { rel_path: n, zone: "core", path: e.path(), default_source: UNTRUSTED, bundle: None, vouched_by: None });
                 }
             }
         }
@@ -656,6 +662,9 @@ impl Kb {
         }
         let stale: std::collections::BTreeSet<&str> = files.iter().filter_map(|f| f.bundle.as_ref().filter(|b| b.stale).map(|b| b.id.as_str())).collect();
         self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('stale_bundles', ?1)", [stale.into_iter().collect::<Vec<_>>().join(",")])?;
+        // Who vouches for what, from the lock's listing above and from nothing in a document: one `prefix<TAB>org` per line.
+        let vouched: std::collections::BTreeSet<String> = files.iter().filter_map(|f| f.vouched_by.as_ref().map(|o| format!("{}\t{}", f.bundle.as_ref().map(|b| format!("bundles/{}/", b.id)).unwrap_or_else(|| f.rel_path.clone()), o))).collect();
+        self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vouched', ?1)", [vouched.into_iter().collect::<Vec<_>>().join("\n")])?;
         Ok(rep)
     }
 
@@ -1182,6 +1191,18 @@ pub struct Hit {
     /// `disproved`. Display only; computed from the tier and zone the index holds, never from the file's own words.
     pub status: &'static str,
     pub label: &'static str,
+    /// The org whose lock entry vouches for a bundle document or an imported source (`specs/052` §3.1), if one does.
+    pub vouched_by: Option<String>,
+}
+
+impl Hit {
+    /// What to print for the status: `validated · vouched by <org>` for vouched bundle content, else the three words.
+    pub fn shown_label(&self) -> String {
+        match &self.vouched_by {
+            Some(org) if self.status == "validated" => format!("validated · vouched by {}", org),
+            _ => self.label.to_string(),
+        }
+    }
 }
 
 /// Words that carry no topic in a question. They are left out of a query unless nothing else is left, so that
@@ -1312,6 +1333,7 @@ impl Kb {
                 }
             }
         }
+        let vouched: Vec<(String, String)> = self.conn.query_row("SELECT value FROM kb_meta WHERE key = 'vouched'", [], |r| r.get::<_, String>(0)).ok().map(|v| v.lines().filter_map(|l| l.split_once('\t')).map(|(p, o)| (p.to_string(), o.to_string())).collect()).unwrap_or_default();
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         for (id, s) in order.into_iter().take(opts.limit.min(10)) {
@@ -1329,8 +1351,10 @@ impl Kb {
                     .clone(),
                 None => None,
             };
-            let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status) };
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: ks.label() });
+            let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
+            let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
+            let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: ks.label(), vouched_by });
         }
         Ok((hits, best_rerank))
     }
@@ -1524,7 +1548,7 @@ fn eval_sources(docs: &Path) -> Vec<SourceFile> {
     if let Ok(rd) = std::fs::read_dir(docs) {
         let mut top: Vec<_> = rd.flatten().filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false) && e.file_name().to_string_lossy().ends_with(".md")).collect();
         top.sort_by_key(|e| e.file_name());
-        files.extend(top.into_iter().map(|e| SourceFile { rel_path: e.file_name().to_string_lossy().to_string(), zone: "core", path: e.path(), default_source: UNTRUSTED, bundle: None }));
+        files.extend(top.into_iter().map(|e| SourceFile { rel_path: e.file_name().to_string_lossy().to_string(), zone: "core", path: e.path(), default_source: UNTRUSTED, bundle: None, vouched_by: None }));
     }
     for (dir, zone) in [("context", "context"), ("specs", "specs"), ("missions", "missions"), ("memory", "memory")] {
         md_files(&docs.join(dir), dir, zone, UNTRUSTED, &mut files);
@@ -1854,7 +1878,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     println!("no results");
                 }
                 for (i, h) in hits.iter().enumerate() {
-                    println!("{}. {}  [{}]  ({}){}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.label, h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
+                    println!("{}. {}  [{}]  ({}){}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.shown_label(), h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
                     for l in h.preview.lines() {
                         println!("     {}", l);
                     }
@@ -2557,7 +2581,7 @@ mod tests {
         let mut kb = Kb::open_in_memory().unwrap();
         let mut files = Vec::new();
         for f in ["REVIEW.md", "GOVERNANCE.md", "SPEC.md"] {
-            files.push(SourceFile { rel_path: f.into(), zone: "core", path: repo.join(f), default_source: UNTRUSTED, bundle: None });
+            files.push(SourceFile { rel_path: f.into(), zone: "core", path: repo.join(f), default_source: UNTRUSTED, bundle: None, vouched_by: None });
         }
         md_files(&repo.join("specs"), "specs", "specs", UNTRUSTED, &mut files);
         kb.sync(&files, "t").unwrap();
@@ -2724,6 +2748,31 @@ mod tests {
         assert_eq!(rep.removed, 1);
         assert!(kb.search("quokka", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().is_empty());
         assert!(delphi_core::bundles::cache_dir(home.path(), "acme", "plat", "blake3:aa").is_dir(), "the cache stays until gc");
+    }
+
+    #[test]
+    fn a_bundle_hit_reads_validated_vouched_by_the_org_from_the_lock_and_never_from_its_own_frontmatter() {
+        let claims_itself = "---\nid: acme/x\ntitle: X\nsource_type: user_ratified\nknowledge_status: validated\nvouched_by: acme\n---\n# Pump\n\nThe wombat pump runs at night.\n";
+        let (_h, ws) = home_with_bundles(&[("acme", "plat", "blake3:aa", "2999-01-01", &[("x.md", claims_itself)])]);
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&sources(&ws), "t").unwrap();
+        let hits = kb.search("wombat pump", &SearchOpts::default()).unwrap();
+        assert_eq!((hits[0].status, hits[0].vouched_by.as_deref()), ("validated", Some("acme")));
+        assert_eq!(hits[0].shown_label(), "validated · vouched by acme");
+        assert!(!hits[0].shown_label().contains("federated") && !hits[0].shown_label().contains("L2"), "the six-tier lattice stays hidden");
+        // the entry gone (removed): the same text, same frontmatter, no vouching; it is not even in the index
+        let mut lock = delphi_core::bundles::read(&ws).unwrap();
+        lock.bundle[0].status = "removed".into();
+        delphi_core::bundles::write(&ws, &lock).unwrap();
+        kb.sync_lexical(&sources(&ws), "t").unwrap();
+        assert!(kb.search("wombat pump", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().is_empty());
+        // a file outside any bundle that says the same things is never vouched
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("n.md"), claims_itself).unwrap();
+        let loose = SourceFile { rel_path: "knowledge/n.md".into(), zone: "knowledge", path: d.path().join("n.md"), default_source: UNTRUSTED, bundle: None, vouched_by: None };
+        kb.sync_lexical(&[loose], "t").unwrap();
+        let hits = kb.search("wombat pump", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        assert_eq!((hits[0].label, hits[0].vouched_by.clone()), ("not validated", None));
     }
 
     /// A workspace dir with one mission log holding `events`.

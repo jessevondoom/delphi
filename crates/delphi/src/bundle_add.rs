@@ -492,7 +492,12 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
         Ok(v) => v,
         Err(e) => return fail(e),
     };
-    import_sources(home, &dest, &m);
+    for id in &removed {
+        revoke_sources(home, id, None);
+    }
+    let origin_kid = bundles::origin_kid(&kid);
+    revoke_sources(home, &format!("{}/{}", m.org, m.name), Some((hash.as_str(), origin_kid.as_deref())));
+    import_sources(home, &dest, &m, &hash, origin_kid);
     match delphi_engine::kb::sync_workspace(ws) {
         Ok(r) => println!("\n{} {}/{}@{}: indexed its knowledge ({} added, {} updated, {} removed)", verb, m.org, m.name, m.version, r.added, r.updated, r.removed),
         Err(e) => return fail(format!("added, but the index could not be updated: {} (run `delphi kb index`)", e)),
@@ -512,16 +517,27 @@ pub(crate) fn apply_via(home: &Path, ws: &Path, opened: Opened, o: &AddOpts, mod
     0
 }
 
-/// Adopt the bundle's `sources/` into the install's central library (`specs/024` §4.1a, `specs/055` §7): *not validated*,
-/// at the capture level shipped, licence record intact. A source that fails the licence gate again here is refused by name.
-fn import_sources(home: &Path, cached: &Path, m: &delphi_bundle::Manifest) {
+/// A bundle left, or came back changed (a new hash or publisher key, a rollback, a removal): the imported sources it
+/// vouched for lose the label, and the ones the operator never used are deleted (`specs/024` §4.1a).
+pub(crate) fn revoke_sources(home: &Path, bundle: &str, keep: Option<(&str, Option<&str>)>) {
+    let r = delphi_engine::library::Library::in_home(home).revoke_bundle(bundle, keep);
+    if r.deleted.is_empty() && r.kept.is_empty() {
+        return;
+    }
+    println!("\nsources of {} no longer vouched: {} deleted (never cited or excerpted), {} kept as `not validated · no longer vouched`{}", bundle, r.deleted.len(), r.kept.len(), if r.kept.is_empty() { String::new() } else { format!(" (claims anchored in them are contested): {}", r.kept.join(", ")) });
+}
+
+/// Adopt the bundle's `sources/` into the install's central library (`specs/024` §4.1a, `specs/055` §7): vouched by the
+/// org through the lock entry, at the capture level shipped, licence record intact. Licence never refuses; `private` does.
+pub(crate) fn import_sources(home: &Path, cached: &Path, m: &delphi_bundle::Manifest, hash: &str, kid: Option<String>) {
     let label = format!("{}/{}@{}", m.org, m.name, m.version);
-    let results = delphi_engine::library::Library::in_home(home).import_bundle(cached, &label, &delphi_engine::library::Budgets::default());
+    let origin = delphi_engine::library::Origin { bundle: format!("{}/{}", m.org, m.name), hash: hash.to_string(), kid };
+    let results = delphi_engine::library::Library::in_home(home).import_bundle(cached, &label, &origin, &delphi_engine::library::Budgets::default());
     if results.is_empty() {
         return;
     }
     let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
-    println!("\nsources: {} of {} adopted into the library (not validated, licence records kept)", ok, results.len());
+    println!("\nsources: {} of {} adopted into the library (validated, vouched by {}; licence records kept)", ok, results.len(), m.org);
     for (id, r) in &results {
         match r {
             Err(e) => println!("  {}: not adopted: {}", id, e),
@@ -629,6 +645,9 @@ pub fn remove(ws: &Path, name: &str) -> i32 {
     };
     for n in notes {
         println!("  note: {}", n);
+    }
+    if let Some(home) = ws.parent().and_then(Path::parent) {
+        revoke_sources(home, &id, None);
     }
     match delphi_engine::kb::sync_workspace(ws) {
         Ok(r) => println!("removed {}: {} documents left the index; the cache entry stays until `delphi bundle gc`", id, r.removed),

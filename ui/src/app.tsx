@@ -395,7 +395,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
   };
   const doSearch = (q: string) => {
     cmd.call('kb.search', { query: q }).then((r: any) => {
-      const hits: P.Hit[] = (Array.isArray(r) ? r : r?.hits ?? []).map((h: any) => ({ pointer: String(h.pointer), heading: String(h.heading ?? ''), preview: String(h.preview ?? '') }));
+      const hits: P.Hit[] = (Array.isArray(r) ? r : r?.hits ?? []).map((h: any) => ({ pointer: String(h.pointer), heading: String(h.heading ?? ''), preview: String(h.preview ?? ''), label: h.label ? String(h.label) : undefined }));
       const cur = panelRef.current;
       if (cur?.kind !== 'search') return;
       openPanel({ ...cur, editing: false, hits, sel: 0, note: hits.length ? '' : 'no matches', lines: hits[0] ? previewOf(info, hits[0].pointer.split('#')[0]!) : [] });

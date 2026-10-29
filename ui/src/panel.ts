@@ -8,7 +8,7 @@ import type { Ev } from './input.ts';
 import * as Org from './org.ts';
 import * as T from './theme.ts';
 
-export type Hit = { pointer: string; heading: string; preview: string };
+export type Hit = { pointer: string; heading: string; preview: string; label?: string };
 export type Panel = (
   | { kind: 'search'; q: string; editing: boolean; hits: Hit[]; sel: number; note: string; lines: string[] }
   | { kind: 'sources'; sel: number; lines: string[] }
@@ -99,7 +99,7 @@ export function view(p: Panel, src: Record<string, Source>, pal: T.Pal, w: numbe
     const rows = p.hits.map((hit, i) => (i === p.sel ? T.accent('  ❯ ') + chalk.bold(T.link(pathOf(hit.pointer))) : '    ' + T.link(pathOf(hit.pointer))) + T.dim(`  ${T.clip(hit.heading, Math.max(10, w - pathOf(hit.pointer).length - 10))}`));
     const sel = p.hits[Math.min(p.sel, p.hits.length - 1)]!;
     const room = Math.max(3, h - head.length - rows.length - 3);
-    return pad([...head, ...rows.slice(0, Math.max(3, h - 8)), rule, ...wrap(sel.preview, w - 4).map((l) => '  ' + T.text(pal)(l)).slice(0, 6), ...(p.lines.length ? ['', ...preview(p.lines, room)] : [])]);
+    return pad([...head, ...rows.slice(0, Math.max(3, h - 8)), rule, ...(sel.label ? ['  ' + T.dim(sel.label)] : []), ...wrap(sel.preview, w - 4).map((l) => '  ' + T.text(pal)(l)).slice(0, 6), ...(p.lines.length ? ['', ...preview(p.lines, room)] : [])]);
   }
   if (p.kind === 'sources') {
     const list = sorted(src);

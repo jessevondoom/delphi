@@ -563,6 +563,43 @@ mod tests {
     }
 
     #[test]
+    fn packaging_a_public_bundle_asks_once_about_its_sources_and_records_the_acknowledgement() {
+        use crate::bundle_licence::Notice;
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let toml = fs::read_to_string(t.path().join("bundle.toml")).unwrap();
+        fs::write(t.path().join("bundle.toml"), toml.replacen("[bundle]\n", "[bundle]\ndistribution = \"public\"\n", 1)).unwrap();
+        delphi_bundle::write_manifest(t.path(), true, &Real).unwrap();
+        let out = t.path().parent().unwrap().join("pub-licence.xbundle");
+        let _ = fs::remove_file(&out);
+        // no terminal (or a no): no archive, no report, a non-zero exit
+        let no_tty = |_: &Notice| -> Result<bool, String> { Err("a human act".into()) };
+        assert_ne!(bundle_pack::package_confirmed(t.path(), Some(&out), &Real, &no_tty), 0);
+        let declined = |_: &Notice| -> Result<bool, String> { Ok(false) };
+        assert_ne!(bundle_pack::package_confirmed(t.path(), Some(&out), &Real, &declined), 0);
+        assert!(!out.exists() && !t.path().join(".delphi-bundle/report.json").exists());
+        // the confirmation shows the ids and classes, then the archive is written and the ids are recorded
+        let seen = std::cell::RefCell::new(String::new());
+        let yes = |n: &Notice| -> Result<bool, String> {
+            *seen.borrow_mut() = n.text.clone();
+            Ok(true)
+        };
+        assert_eq!(bundle_pack::package_confirmed(t.path(), Some(&out), &Real, &yes), 0);
+        assert!(out.is_file() && seen.borrow().contains("acme-runbook-notes  (internal)"), "{}", seen.borrow());
+        let rep: serde_json::Value = serde_json::from_str(&fs::read_to_string(t.path().join(".delphi-bundle/report.json")).unwrap()).unwrap();
+        let ids: Vec<&str> = rep["licence_acknowledged"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"acme-runbook-notes") && rep["licence_acknowledged_at"].is_string(), "{}", rep);
+        assert!(rep["licence_acknowledged"].as_array().unwrap().iter().all(|a| a["class"].is_string()));
+        // the report is not part of the bundle's identity
+        assert!(delphi_bundle::validate(t.path(), &Options { claude: true, packaging: true, ..Options::default() }, &Real).passed());
+        // an internal bundle is not asked on `package`
+        let t2 = tempfile::tempdir().unwrap();
+        copy(&golden(), t2.path());
+        let out2 = t2.path().parent().unwrap().join("int-licence.xbundle");
+        assert_eq!(bundle_pack::package_confirmed(t2.path(), Some(&out2), &Real, &no_tty), 0);
+    }
+
+    #[test]
     fn package_vectors_refuses_without_a_model_and_a_bundle_that_is_not_well_formed() {
         let home = tempfile::tempdir().unwrap();
         let t = tempfile::tempdir().unwrap();

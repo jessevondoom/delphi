@@ -83,7 +83,7 @@ fn the_golden_bundle_satisfies_its_schema() {
 #[test]
 fn the_golden_sources_satisfy_the_source_meta_schema_and_only_private_is_refused() {
     let dir = root().join("dev/bundles/acme-platform/sources");
-    for id in ["oecd-2024-report", "acme-style-guide"] {
+    for id in ["oecd-2024-report", "acme-style-guide", "acme-runbook-notes"] {
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(id).join("meta.json")).unwrap()).unwrap();
         must_pass("source-meta.schema.json", id, &doc);
     }

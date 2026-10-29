@@ -297,7 +297,7 @@ impl Library {
         c["contested_by"] = Value::Array(marks);
     }
 
-    fn citing(&self, source_id: &str) -> Vec<Value> {
+    pub(super) fn citing(&self, source_id: &str) -> Vec<Value> {
         self.claims().into_iter().filter(|c| anchors_of(c).iter().any(|a| a["source_id"] == source_id)).collect()
     }
 
@@ -355,6 +355,26 @@ impl Library {
                 if self.save_claim(&c).is_ok() {
                     self.log("claim_contested", json!({"id": c["id"], "source": source_id, "reason": "source_retired"}));
                 }
+            }
+        }
+    }
+
+    /// A bundle stopped vouching for the source (`specs/024` §4.1a): a claim anchored in it is contested, by the same
+    /// mark a retired source leaves, until the vouching comes back.
+    pub(super) fn source_unvouched(&self, source_id: &str) {
+        for mut c in self.citing(source_id) {
+            self.contest(&mut c, "no_longer_vouched", source_id, json!("the bundle that vouched for this source no longer does"));
+            let _ = self.save_claim(&c);
+        }
+    }
+
+    pub(super) fn source_revouched(&self, source_id: &str) {
+        for mut c in self.citing(source_id) {
+            let marks: Vec<Value> = c["contested_by"].as_array().cloned().unwrap_or_default();
+            let kept: Vec<Value> = marks.iter().filter(|m| !(m["reason"] == "no_longer_vouched" && m["source"] == source_id)).cloned().collect();
+            if kept.len() != marks.len() {
+                c["contested_by"] = Value::Array(kept);
+                let _ = self.save_claim(&c);
             }
         }
     }

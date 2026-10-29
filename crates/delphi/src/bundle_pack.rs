@@ -188,6 +188,12 @@ pub fn record_eval(dir: &Path, home: &Path) -> Option<String> {
 
 /// `delphi bundle package <dir> [-o file]`: refresh `files.json`, validate for distribution, write the archive.
 pub fn package(dir: &Path, out: Option<&Path>, host: &dyn Host) -> i32 {
+    package_confirmed(dir, out, host, &crate::bundle_licence::tty_confirm)
+}
+
+/// `package` with the publication confirmation injected: a `public` bundle whose sources carry a licence note asks once
+/// before the archive is written (`specs/023` §2.1); nothing is written when the answer is no or there is no terminal.
+pub fn package_confirmed(dir: &Path, out: Option<&Path>, host: &dyn Host, confirm: &dyn Fn(&crate::bundle_licence::Notice) -> Result<bool, String>) -> i32 {
     let claude = dir.join(".claude-plugin/plugin.json").is_file();
     if let Err(e) = delphi_bundle::write_manifest(dir, claude, host) {
         return fail(e);
@@ -199,6 +205,11 @@ pub fn package(dir: &Path, out: Option<&Path>, host: &dyn Host) -> i32 {
     }
     print_warnings(&r);
     let (Some(m), Some(hash)) = (r.manifest.clone(), r.bundle_hash.clone()) else { return fail("no readable bundle.toml") };
+    if m.distribution == "public" {
+        if let Err(e) = crate::bundle_licence::gate(dir, &r, &m, confirm) {
+            return fail(e);
+        }
+    }
     let out = out.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(format!("{}-{}.xbundle", m.name, m.version)));
     let Ok(dir_abs) = dir.canonicalize() else { return fail("cannot resolve the bundle directory") };
     let out_abs = match out.parent().filter(|p| !p.as_os_str().is_empty()) {
