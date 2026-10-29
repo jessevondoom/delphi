@@ -56,6 +56,7 @@ mod seed;
 mod selfupdate;
 mod setup;
 mod skills_cmd;
+mod sources_cmd;
 mod start;
 mod status;
 mod theme;
@@ -94,6 +95,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "This is the text form for a shell. In the console, `/decisions` with no argument opens the decisions pane:\nevery approval card, provisional decision and agent-raised decision you owe, one at a time." },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "validation", about: "score the labelled claim set: counts and rates only", synopsis: "  delphi validation score [--set <file>] [--results <file>] [--home <dir>]", detail: "Operator-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run. With --results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation-set.md." },
+    Cmd { group: "Work", name: "sources", about: "the central library's sources: capture, list, show, purge", synopsis: "  delphi sources add <url | file | doi> [--level full|excerpts|pointer] [--licence <id>] [--private]\n    [--title <t>] [--rights-holder <name>] [--attribution <text>] [--max-text-mib <n>] [--max-source-mib <n>] [--home <dir>]\n  delphi sources list [--json] [--home <dir>]\n  delphi sources show <id> [--json] [--home <dir>]\n  delphi sources purge <id> [--home <dir>]", detail: "One library per install, in <home>/library/. A URL is fetched by the validation fetcher (https only, no private addresses, size cap, cloaking check). The licence decides the level: open licences and your own material are kept whole, restricted ones as excerpts, an unknown one as a pointer; --private keeps a restricted source whole for your own use and it never leaves this install. Everything captured reads not validated. Limits: 64 MiB of text and 512 MiB per source, 20 GiB for the library; over a limit the capture falls back and says so. `purge` deletes the capture and keeps the citation and the content hash. `add` and `purge` are refused inside an agent seat." },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--staged]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|timeline|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
@@ -276,6 +278,7 @@ fn main() {
         Some("relay") => cmd_relay(&args),
         Some("decisions") => cmd_decisions(&args),
         Some("skills") => cmd_skills(&args),
+        Some("sources") => sources_cmd::cli(&args[1..], &home::delphi_home(flag(&args, "--home").as_deref())),
         Some("bundle") => cmd_bundle(&args),
         Some("hooks") => cmd_hooks(&args),
         Some("timers") => cmd_timers(&args),

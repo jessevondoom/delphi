@@ -358,6 +358,19 @@ fn bundle_files(ws: &Path, out: &mut Vec<SourceFile>) {
     }
 }
 
+/// The full-text sources of the install's central library (`specs/055` §2), by logical path
+/// `library/sources/<id>/source.md`, zone `library`, at one fixed tier whatever the text's own frontmatter says (as research pages are), which reads *not validated*:
+/// being in the library lifts nothing.
+/// A private source is never listed (`library::Library::indexable`), and a text over the indexer's file cap is not either.
+fn library_files(ws: &Path, out: &mut Vec<SourceFile>) {
+    let Some(home) = ws.parent().and_then(Path::parent) else { return };
+    for (id, path) in crate::library::Library::in_home(home).indexable() {
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
+            out.push(SourceFile { rel_path: format!("library/sources/{}/source.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None });
+        }
+    }
+}
+
 /// The Markdown under `skills/<skill>/references/` of one cached bundle, by logical path
 /// `bundles/<org>/<name>/skills/<skill>/references/…`, zone `skills`.
 fn reference_files(skills: &Path, org: &str, name: &str, tier: &'static str) -> Vec<SourceFile> {
@@ -424,6 +437,7 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     // Staged notes (`learn::project_staged` writes them): each file names its own source_type from its tier.
     md_files(&ws.join("local/staged"), "staged", "staged", UNTRUSTED, &mut all);
     bundle_files(ws, &mut all);
+    library_files(ws, &mut all);
     // Later entries (team) override earlier ones (base) for the same logical path.
     let mut by_path: BTreeMap<String, SourceFile> = BTreeMap::new();
     for s in all {
@@ -521,7 +535,7 @@ impl Kb {
         if bundle.is_none() && existing.as_ref().is_some_and(|(_, h)| *h == hash) {
             return Ok(false);
         }
-        let source_type = if bundle.is_some() || zone == "knowledge" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
+        let source_type = if bundle.is_some() || zone == "knowledge" || zone == "library" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
         let (author, confidence, status) = (frontmatter_field(text, "author"), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), frontmatter_field(text, "status").unwrap_or_else(|| "active".into()));
         let tx = self.conn.transaction()?;

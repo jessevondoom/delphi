@@ -318,7 +318,7 @@ Proposed from the operator's decisions of 2026-10-29: sources in the knowledge b
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | SK0 | bundle `sources/` section: licence gate, size classes, schema, golden fixture (023 §2.1, 024 §4.1a) | built (`crates/delphi-bundle/src/sources.rs`, `schemas/source-meta.schema.json`, golden fixture in `dev/bundles/acme-platform/sources/`); unblocks the first org bundle |
-| SK1 | source record, `delphi sources`, capture via the V2a fetcher, metadata, licence classes | not started |
+| SK1 | source record, `delphi sources`, capture via the V2a fetcher, metadata, licence classes | built (`crates/delphi-engine/src/library.rs`, `crates/delphi/src/sources_cmd.rs`; `bundle add` adopts a bundle's `sources/`); budgets are code defaults with per-source raises, config keys not yet |
 | SK2 | excerpts, anchors, bibliography export | not started |
 | SK3 | claim records, mission-start pull by pointer | not started |
 | SK4 | recheck on open, versions, anchor re-resolution | not started |

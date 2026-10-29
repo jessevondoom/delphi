@@ -182,6 +182,20 @@ Score the labelled claim set: counts and rates only.
 
 Operator-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run. With --results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation-set.md.
 
+### `delphi sources`
+
+The central library's sources: capture, list, show, purge.
+
+```
+  delphi sources add <url | file | doi> [--level full|excerpts|pointer] [--licence <id>] [--private]
+    [--title <t>] [--rights-holder <name>] [--attribution <text>] [--max-text-mib <n>] [--max-source-mib <n>] [--home <dir>]
+  delphi sources list [--json] [--home <dir>]
+  delphi sources show <id> [--json] [--home <dir>]
+  delphi sources purge <id> [--home <dir>]
+```
+
+One library per install, in <home>/library/. A URL is fetched by the validation fetcher (https only, no private addresses, size cap, cloaking check). The licence decides the level: open licences and your own material are kept whole, restricted ones as excerpts, an unknown one as a pointer; --private keeps a restricted source whole for your own use and it never leaves this install. Everything captured reads not validated. Limits: 64 MiB of text and 512 MiB per source, 20 GiB for the library; over a limit the capture falls back and says so. `purge` deletes the capture and keeps the citation and the content hash. `add` and `purge` are refused inside an agent seat.
+
 ### `delphi needs`
 
 What the roadmap is waiting on evidence for.
