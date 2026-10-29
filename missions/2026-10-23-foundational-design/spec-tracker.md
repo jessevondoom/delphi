@@ -288,7 +288,7 @@ Approved by the operator 2026-10-28. One vocabulary of colour, glyph and weight;
 | :-- | :-- | :-- |
 | VL1 | semantic style table in `theme.ts`, migrate call sites, one-page doc, raw-colour test | built (`docs/console-visual-language.md`; one raw-colour site migrated; golden screens unchanged) |
 | VL2 | gutter bullets for transcript, tools and cards | built (`gutter()` in `ui/src/screen.ts`; golden screens regenerated; real-terminal check of OD-1 still open) |
-| VL3 | composer scope line and library counter | not started |
+| VL3 | composer scope line and library counter | built: footer scope, bundle count, `+N noted · M to review` counter (PR for VL3) |
 | VL4 | claim glyphs and age in search and the reader | built (`statusMark` in `theme.ts`; list column, best-match card and reader header in `archives.ts`; golden screens regenerated). Age is the document's last change; the reader takes status from the result it was opened from, not from `/v1/doc`; claims in answer citations (§4) wait for SK5 |
 
 ## Knowledge status, capture on contact and the digest (spec 052, approved 2026-10-28)
