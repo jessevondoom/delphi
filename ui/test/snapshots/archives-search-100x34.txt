@@ -31,4 +31,4 @@
 
 
 
- type to search · ↑ earlier searches · tab pick a kind · ctrl+t trusted only · shift+tab  expand
+ type to search · ↑ earlier · tab kind · ctrl+t trusted only · ctrl+l library · shift+tab  expand

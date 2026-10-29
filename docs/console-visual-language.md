@@ -36,4 +36,6 @@ Every transcript block has a one-column gutter at the left (a glyph and one pad 
 
 Claim glyphs (VL4): a result in the knowledge window and the reader show its 052 status as `theme.statusMark` (`○ noted`, `◐ checking`, `● validated`, `◆ contested`, `✕ disproved`, `· retired`) with its age; under 80 columns the word goes and the glyph stays.
 
+Library views (specs/055 SK2, SK3): `ctrl+l` in the console's knowledge window walks search, Sources and Claims. A claim shows its 052 status as `theme.statusMark` with the word and its age; a source shows `○` (or `·` once retired) with its capture level, licence, check age and how many claims cite it. Enter opens one (a claim's anchors and quotes, a source's excerpts); `r` reloads, esc goes back. The narrator's window only reads, so it does not offer them.
+
 Scope line and library counter (VL3): the footer under the composer carries, after tokens, mode and session, the scope (`workspace/mission`), the number of installed bundles, and the library counter `+N noted · M to review` (notes staged this session, learn decisions awaiting review). The counter is dim, never alert-coloured, and is dropped first, then bundles, then scope, when the line is narrow; tokens and mode stay.
