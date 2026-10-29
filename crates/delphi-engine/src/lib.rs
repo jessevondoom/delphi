@@ -9,6 +9,7 @@ pub mod fact_judge;
 pub mod fact_mode;
 pub mod fact_ratify;
 pub mod fact_run;
+pub mod fact_serve;
 pub mod fact_sources;
 pub mod fact_store;
 pub mod fact_tools;
