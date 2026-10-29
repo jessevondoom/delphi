@@ -107,6 +107,18 @@ pub fn origin_of(s: &Source) -> String {
     format!("{}:{}", s.kind, path)
 }
 
+/// The publisher key a source's `origin` records, `None` for an unsigned bundle.
+pub fn origin_kid(publisher_kid: &str) -> Option<String> {
+    (publisher_kid != "unsigned" && !publisher_kid.is_empty()).then(|| publisher_kid.to_string())
+}
+
+/// Who vouches for a bundle's content (`specs/024` §4.1a, `specs/052` §3.1): the org of an **active lock entry** that
+/// still holds the bundle hash and publisher key the content came in with. The answer comes only from the install-owned
+/// lock, never from a frontmatter field, a `meta.json` or any file a bundle ships. `bundle` is `org/name`.
+pub fn vouched_org<'a>(entries: &'a [Entry], bundle: &str, hash: &str, kid: Option<&str>) -> Option<&'a str> {
+    entries.iter().find(|e| e.is_active() && e.id() == bundle && e.hash == hash && e.publisher_kid == kid.unwrap_or("unsigned")).map(|e| e.org.as_str())
+}
+
 /// The raised level's name, as written in the lock and on the command line.
 pub const RATIFIED: &str = "user_ratified";
 /// The tier every added bundle's knowledge has unless the operator raises it.

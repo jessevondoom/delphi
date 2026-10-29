@@ -541,6 +541,9 @@ pub fn publish_cli(home: &Path, store: &Store, store_name: &str, dir: &Path, get
         ceiling: SourceCeiling::InternalGenerated,
         review_by: get("--review-by"),
     };
+    if let Err(e) = crate::bundle_licence::gate_dir(dir, host, &crate::bundle_licence::tty_confirm) {
+        return fail(e);
+    }
     let fetcher = crate::bundle_fetch::real_fetcher(home);
     let verify: Option<&dyn Fetcher> = if no_verify_tree { None } else { Some(&fetcher) };
     match publish(home, store, &cfg_now(), &who, &a, verify, host, approver) {

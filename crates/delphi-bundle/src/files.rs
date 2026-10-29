@@ -9,7 +9,7 @@ pub const BUNDLE_HASH_PREFIX: &str = "blake3:";
 const FILES_JSON: &str = ".delphi-bundle/files.json";
 const MAX_FILES_JSON: u64 = 4 * 1024 * 1024;
 /// The machine-written files that are not themselves listed in the manifest.
-const UNLISTED: [&str; 3] = [".delphi-bundle/files.json", ".delphi-bundle/sig.json", ".delphi-bundle/eval.json"];
+const UNLISTED: [&str; 4] = [".delphi-bundle/files.json", ".delphi-bundle/sig.json", ".delphi-bundle/eval.json", ".delphi-bundle/report.json"];
 
 fn hex(b: &blake3::Hash) -> String {
     format!("{}{}", BUNDLE_HASH_PREFIX, b.to_hex())

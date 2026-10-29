@@ -68,6 +68,8 @@ Only what the human lists in `sources`, and only from these places: `team/contex
 ## In Claude Code
 The same skill runs there without the `delphi` commands: do steps 2–4 by hand from the listed sources, write the report from the template, and ask the human to run `delphi bundle validate`, `package` and `sign` (or to approve the report and package later). The bundle directory is a valid Claude Code plugin as it stands (`specs/025` §2).
 
+11. **Sources and distribution.** `bundle.toml` `distribution` is `internal` (the default) or `public`. A source under `sources/<id>/` with a restrictive licence only warns (`source-licence`, `source-attribution`, `source-sharealike`); only `private: true` refuses. Never write `status`, `vouched_by` or any claim of validation in a source: the org's vouch is the lock entry made when the org adds the bundle, never the bundle's own words. Packaging a `public` bundle that carries sources asks the human once, in a terminal, to type `publish`; do not try to answer for them. The answer is recorded in `.delphi-bundle/report.json`.
+
 ## Safety rules
 - Never include credentials, tokens, private keys, personal data beyond a work handle, customer data, mission transcripts or local paths. Rotate, do not just delete, any secret you find already published.
 - Never write into a registered project repository; the bundle lives in its own directory.

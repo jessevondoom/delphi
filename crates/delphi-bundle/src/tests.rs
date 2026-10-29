@@ -847,38 +847,118 @@ fn sk0_the_golden_sources_pass_and_are_listed_without_text() {
     let r = check(&t);
     assert!(r.passed(), "{}", r.render("golden"));
     let list = sources::list(&Tree::open(t.path()));
-    assert_eq!(list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["acme-style-guide", "oecd-2024-report"]);
-    assert_eq!((list[1].licence.as_str(), list[1].assets), ("CC-BY-4.0", 1));
+    assert_eq!(list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["acme-runbook-notes", "acme-style-guide", "oecd-2024-report"]);
+    assert_eq!((list[2].licence.as_str(), list[2].assets), ("CC-BY-4.0", 1));
     let md = redaction::render(t.path(), &Fake);
     assert!(md.contains("| oecd-2024-report | CC-BY-4.0 | full |") && !md.contains("Teams that deploy"), "{}", md);
 }
 
-#[test]
-fn sk0_the_licence_gate_refuses_each_unredistributable_class_naming_the_id_and_no_content() {
-    for l in ["all-rights-reserved", "unknown", "private", "CC-BY-NC-4.0", "Proprietary", "public-domain::x", "public-domain:us:"] {
-        let r = check(&with_licence(l, ""));
-        one_fail(&r, 7, "source `oecd-2024-report` refused");
-        assert!(!r.fails[0].msg.contains("Teams that deploy"));
-    }
-    let r = check(&with_licence("", ""));
-    one_fail(&r, 7, "has no `licence`");
-    let t = bundle();
-    edit(&t, META, "\"CC-BY-4.0\"", "7");
-    fails_with(&check(&t), 7, "`licence` must be a string");
+/// The `code:` warnings about the source the tests rewrite (the fixture's other sources say their own things).
+fn warns_with(r: &Report, code: &str) -> usize {
+    r.warns.iter().filter(|w| w.at == META && w.msg.starts_with(&format!("{}:", code))).count()
+}
+
+fn no_source_warns(r: &Report) -> bool {
+    r.warns.iter().all(|w| w.at != META)
+}
+
+fn public(t: &tempfile::TempDir) {
+    edit(t, "bundle.toml", "audience = \"org\"\n", "audience = \"org\"\ndistribution = \"public\"\n");
 }
 
 #[test]
-fn sk0_redistributable_classes_pass_and_attribution_and_share_alike_are_required() {
-    for l in ["CC0-1.0", "own", "public-domain:us:published-before-1930"] {
-        assert!(check(&with_licence(l, "")).passed(), "{}", l);
+fn sk0b_distribution_defaults_to_internal_and_an_unknown_value_is_an_error() {
+    let t = bundle();
+    assert_eq!(check(&t).manifest.unwrap().distribution, "internal");
+    public(&t);
+    assert_eq!(check(&t).manifest.unwrap().distribution, "public");
+    for bad in ["private", "world", ""] {
+        let t = bundle();
+        edit(&t, "bundle.toml", "audience = \"org\"\n", &format!("audience = \"org\"\ndistribution = \"{}\"\n", bad));
+        fails_with(&check(&t), 4, "distribution");
     }
-    assert!(check(&with_licence("MIT", ",\"attribution_text\":\"(c) A\"")).passed());
-    one_fail(&check(&with_licence("CC-BY-4.0", "")), 7, "non-empty `attribution_text`");
-    one_fail(&check(&with_licence("CC-BY-4.0", ",\"attribution_text\":\"  \"")), 7, "non-empty `attribution_text`");
-    let sa = "CC-BY-SA-4.0";
-    one_fail(&check(&with_licence(sa, ",\"attribution_text\":\"By A, CC BY-SA 4.0.\"")), 7, "requires share_alike = true");
-    one_fail(&check(&with_licence(sa, ",\"attribution_text\":\"By A.\",\"share_alike\":true")), 7, "share-alike notice");
-    assert!(check(&with_licence(sa, ",\"attribution_text\":\"By A. Share-alike: same licence.\",\"share_alike\":true")).passed());
+}
+
+#[test]
+fn sk0b_licence_is_a_warning_never_a_refusal_and_only_private_fails() {
+    // an all-rights-reserved source in an internal bundle validates clean
+    for l in ["all-rights-reserved", "unknown", "internal", "Proprietary", "CC-BY-NC-4.0", "public-domain:us:"] {
+        let r = check(&with_licence(l, ""));
+        assert!(r.passed() && no_source_warns(&r), "{}: {}", l, r.render("internal"));
+    }
+    // in a public bundle: one `source-licence` warning and no failure, naming the id and never the content
+    for l in ["all-rights-reserved", "unknown", "internal", "Proprietary"] {
+        let t = with_licence(l, "");
+        public(&t);
+        let r = check(&t);
+        assert!(r.passed(), "{}: {}", l, r.render("public"));
+        assert_eq!(warns_with(&r, "source-licence"), 1, "{}", r.render("public"));
+        let w = r.warns.iter().find(|w| w.at == META && w.msg.starts_with("source-licence")).unwrap();
+        assert!(w.msg.contains("`oecd-2024-report`") && !w.msg.contains("Teams that deploy"));
+    }
+    // no licence reads as internal: a note in an internal bundle, a warning in a public one
+    let t = bundle();
+    put(&t, META, "{\"type\":\"report\",\"title\":\"T\"}");
+    let r = check(&t);
+    assert!(r.passed() && r.notes.iter().any(|n| n.step == 7 && n.msg.contains("reads as `internal`")));
+    public(&t);
+    assert_eq!(warns_with(&check(&t), "source-licence"), 1);
+    // a licence that is not a string is still malformed
+    let t = bundle();
+    edit(&t, META, "\"CC-BY-4.0\"", "7");
+    fails_with(&check(&t), 7, "`licence` must be a string");
+    // an open licence in a public bundle is clean
+    let t = bundle();
+    public(&t);
+    assert!(no_source_warns(&check(&t)));
+}
+
+#[test]
+fn sk0b_private_fails_in_every_bundle_and_nothing_overrides_it() {
+    for dist in [false, true] {
+        for extra in [",\"private\":true", ""] {
+            let licence = if extra.is_empty() { "private" } else { "own" };
+            let t = with_licence(licence, extra);
+            if dist {
+                public(&t);
+            }
+            let r = check(&t);
+            one_fail(&r, 7, "source-private");
+            assert!(r.fails[0].msg.contains("`oecd-2024-report`"));
+        }
+    }
+    let t = with_licence("own", ",\"private\":false");
+    assert!(check(&t).passed());
+    fails_with(&check(&with_licence("own", ",\"private\":\"yes\"")), 7, "`private` must be true or false");
+}
+
+#[test]
+fn sk0b_attribution_and_share_alike_warn_in_either_distribution() {
+    for dist_public in [false, true] {
+        let go = |l: &str, extra: &str| {
+            let t = with_licence(l, extra);
+            if dist_public {
+                public(&t);
+            }
+            check(&t)
+        };
+        for l in ["CC0-1.0", "own", "public-domain:us:published-before-1930"] {
+            let r = go(l, "");
+            assert!(r.passed() && no_source_warns(&r), "{}", l);
+        }
+        assert!(no_source_warns(&go("MIT", ",\"attribution_text\":\"(c) A\"")));
+        for extra in ["", ",\"attribution_text\":\"  \""] {
+            let r = go("CC-BY-4.0", extra);
+            assert!(r.passed() && warns_with(&r, "source-attribution") == 1, "{}", r.render("attr"));
+        }
+        let sa = "CC-BY-SA-4.0";
+        let r = go(sa, ",\"attribution_text\":\"By A, CC BY-SA 4.0.\"");
+        assert!(r.passed() && warns_with(&r, "source-sharealike") == 1);
+        let r = go(sa, ",\"attribution_text\":\"By A.\",\"share_alike\":true");
+        assert!(r.passed() && warns_with(&r, "source-sharealike") == 1);
+        let r = go(sa, ",\"attribution_text\":\"By A. Share-alike: same licence.\",\"share_alike\":true");
+        assert!(r.passed() && no_source_warns(&r));
+    }
 }
 
 #[test]
@@ -954,7 +1034,7 @@ fn sk0_a_section_that_is_not_declared_is_refused_and_the_size_class_is_separate(
 }
 
 #[test]
-fn sk0_knowledge_sources_ids_must_exist_and_licence_must_be_redistributable() {
+fn sk0_knowledge_sources_ids_must_exist_and_a_file_licence_is_only_information() {
     let t = bundle();
     edit(&t, "knowledge/architecture/overview.md", "sources: [oecd-2024-report]", "sources: [oecd-2024-report, nope]");
     one_fail(&check(&t), 7, "`nope`, which does not exist");
@@ -965,7 +1045,7 @@ fn sk0_knowledge_sources_ids_must_exist_and_licence_must_be_redistributable() {
     edit(&t, "knowledge/architecture/overview.md", "sources: [oecd-2024-report]", "sources: [oecd-2024-report]\nlicence: CC-BY-4.0");
     assert!(check(&t).passed());
     edit(&t, "knowledge/architecture/overview.md", "licence: CC-BY-4.0", "licence: all-rights-reserved");
-    one_fail(&check(&t), 7, "licence:");
+    assert!(check(&t).passed());
 }
 
 #[test]

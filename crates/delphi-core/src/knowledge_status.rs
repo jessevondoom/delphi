@@ -47,9 +47,17 @@ const SELF_DECLARED_ZONES: [&str; 5] = ["missions", "memory", "staged", "knowled
 /// The status of a stored document from its zone, the tier name the index holds (`source_type`) and its lifecycle
 /// `status` field. Only the tier a release or the operator gave a file in a trusted zone (L4, L5) reads as validated;
 /// L3 needs a validator record (`web_corroborated`), which nothing writes yet, so it is `noted`.
-pub fn derive(zone: &str, tier_name: &str, doc_status: &str) -> Status {
+///
+/// `vouched_by` is the bundle input (`specs/052` §3.1, `specs/024` §3.7): the org of the **lock entry** of an added
+/// bundle, supplied by the daemon from `local/bundles.lock` and from nothing a file says. A bundle's document with an
+/// entry is `validated`; without one it stays `noted`, whatever its own frontmatter claims. It is a label for
+/// reliability and citability only: the stored tier stays L2 and nothing is raised.
+pub fn derive(zone: &str, tier_name: &str, doc_status: &str, vouched_by: Option<&str>) -> Status {
     if matches!(doc_status, "superseded" | "retired" | "expired") {
         return Status::Retired;
+    }
+    if vouched_by.is_some() && matches!(zone, "bundles" | "skills" | "library") {
+        return Status::Validated;
     }
     if SELF_DECLARED_ZONES.contains(&zone) || zone.starts_with("bundle") {
         return Status::Noted;
@@ -60,6 +68,18 @@ pub fn derive(zone: &str, tier_name: &str, doc_status: &str) -> Status {
         _ => Status::Noted,
     }
 }
+
+/// The label to print: the operator's three words, with `· vouched by <org>` for bundle content that a lock entry
+/// vouches for. The six-tier lattice is never shown (`specs/052` §3.1).
+pub fn shown_label(status: Status, vouched_by: Option<&str>) -> String {
+    match (status, vouched_by) {
+        (Status::Validated, Some(org)) => format!("validated · vouched by {}", org),
+        _ => status.label().to_string(),
+    }
+}
+
+/// The label of imported bundle content whose vouching has ended (`specs/024` §4.1a).
+pub const NO_LONGER_VOUCHED: &str = "not validated · no longer vouched";
 
 /// The status of a record under `context/facts/` (`specs/040` §7.3, §23.1, §24.4). `web_corroborated` is the marker the
 /// daemon's fact store writes into a ratified fact (nothing else may write that directory); an `internal_generated`
@@ -122,13 +142,25 @@ mod tests {
     }
 
     #[test]
+    fn only_a_lock_entry_vouches_for_a_bundle_document() {
+        // a document whose own frontmatter says it is validated and ratified is still noted without an entry
+        assert_eq!(derive("bundles", "user_ratified", "active", None), Status::Noted);
+        assert_eq!(derive("bundles", "federated_verified", "active", None), Status::Noted);
+        assert_eq!(derive("bundles", "federated_verified", "active", Some("acme")), Status::Validated);
+        assert_eq!(shown_label(Status::Validated, Some("acme")), "validated · vouched by acme");
+        assert_eq!(shown_label(Status::Noted, Some("acme")), "not validated");
+        assert_eq!(derive("bundles", "federated_verified", "superseded", Some("acme")), Status::Retired);
+        assert!(!shown_label(Status::Validated, Some("acme")).contains("federated"));
+    }
+
+    #[test]
     fn a_file_cannot_declare_itself_validated() {
-        assert_eq!(derive("memory", "user_ratified", "active"), Status::Noted);
-        assert_eq!(derive("staged", "internal_empirical", "active"), Status::Noted);
-        assert_eq!(derive("knowledge", "federated_verified", "active"), Status::Noted, "research output at L2");
-        assert_eq!(derive("agents", "user_ratified", "active"), Status::Validated, "shipped with a release");
-        assert_eq!(derive("specs", "internal_generated", "active"), Status::Noted);
-        assert_eq!(derive("context", "external_untrusted", "active"), Status::Noted);
-        assert_eq!(derive("agents", "user_ratified", "superseded"), Status::Retired);
+        assert_eq!(derive("memory", "user_ratified", "active", None), Status::Noted);
+        assert_eq!(derive("staged", "internal_empirical", "active", None), Status::Noted);
+        assert_eq!(derive("knowledge", "federated_verified", "active", None), Status::Noted, "research output at L2");
+        assert_eq!(derive("agents", "user_ratified", "active", None), Status::Validated, "shipped with a release");
+        assert_eq!(derive("specs", "internal_generated", "active", None), Status::Noted);
+        assert_eq!(derive("context", "external_untrusted", "active", None), Status::Noted);
+        assert_eq!(derive("agents", "user_ratified", "superseded", None), Status::Retired);
     }
 }

@@ -183,6 +183,9 @@ pub fn rollback(home: &Path, ws: &Path, name: &str, to: Option<&str>, background
         Ok(f) => f,
         Err(err) => return fail(err),
     };
+    let origin_kid = bundles::origin_kid(&kid);
+    bundle_add::revoke_sources(home, &id, Some((wanted.as_str(), origin_kid.as_deref())));
+    bundle_add::import_sources(home, &dest, &m, &wanted, origin_kid);
     match delphi_engine::kb::sync_workspace(ws) {
         Ok(r) => println!("rolled {} back: {} ({}) -> {} ({}); knowledge follows the lock now ({} documents added, {} updated, {} removed), prompt content from the next task", id, from.version, short(&from.hash), m.version, short(&wanted), r.added, r.updated, r.removed),
         Err(err) => return fail(format!("rolled back, but the index could not be updated: {} (run `delphi kb index`)", err)),

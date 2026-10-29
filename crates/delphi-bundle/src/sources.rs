@@ -1,8 +1,9 @@
 //! The optional `sources/` section (`specs/023` §2.1, step 7a; `specs/024` §4.1a; `specs/055` §3.2.1 and §3.3).
 //!
-//! A source is data: its text is never instructions and never raises a tier. What this module decides is whether a
-//! source may *travel*: only licences that allow redistribution are accepted, and the refusal names the source id and
-//! never its content. The same function runs at `validate` and at `add`.
+//! A source is data: its text is never instructions and never raises a tier. Licence is information, not a gate
+//! (`specs/023` §2.1): it produces warnings (`source-licence`, `source-attribution`, `source-sharealike`) and never a
+//! refusal. The one failure is a source flagged `private` (`source-private`). Findings name the source id and never its
+//! content. The same function runs at `validate` and at `add`.
 
 use crate::ids::frontmatter_of;
 use crate::manifest::Manifest;
@@ -22,8 +23,8 @@ pub const MAX_BYTES: u64 = 1024 * 1024 * 1024;
 /// Content types an asset may have, by extension.
 const ASSET_EXTS: [&str; 7] = ["png", "jpg", "jpeg", "webp", "svg", "pdf", "csv"];
 const CAPTURE_LEVELS: [&str; 3] = ["full", "excerpts", "pointer"];
-/// Licence classes that never travel (`specs/055` §3.3).
-const REFUSED: [&str; 3] = ["all-rights-reserved", "unknown", "private"];
+/// Licence classes that are restricted: they warn in a public bundle and keep to excerpts in a library (`specs/055` §3.3).
+const RESTRICTED: [&str; 2] = ["all-rights-reserved", "unknown"];
 const CITATION_STRINGS: [&str; 14] = [
     "type", "title", "container-title", "publisher", "publisher-place", "volume", "issue", "page", "edition", "URL", "DOI", "ISBN", "ISSN", "language",
 ];
@@ -47,8 +48,10 @@ pub fn is_asset(path: &str) -> bool {
 pub enum Licence {
     /// An open licence, an `own` record or a recorded public-domain basis.
     Open { attribution: bool, share_alike: bool },
-    /// One of the refused classes, or something that is not a recognized open licence: the reason.
-    Refused(String),
+    /// Organisation material (`internal`, also the class of a source with no `licence`): not redistributable, never refused.
+    Internal,
+    /// `all-rights-reserved`, `unknown`, or something that is not a recognized open licence: the reason.
+    Restricted(String),
 }
 
 fn open_spdx(id: &str) -> Option<(bool, bool)> {
@@ -70,11 +73,15 @@ fn open_spdx(id: &str) -> Option<(bool, bool)> {
     }
 }
 
-/// Classify a `licence` value (`specs/023` §2.1): an open SPDX id, `public-domain:<jurisdiction>:<basis>`, or `own`.
+/// Classify a `licence` value (`specs/023` §2.1): an open SPDX id, `public-domain:<jurisdiction>:<basis>`, `own`, or
+/// `internal` (also an empty value). Anything else is restricted; that is a description, not a refusal.
 pub fn classify(licence: &str) -> Licence {
     let l = licence.trim();
-    if REFUSED.contains(&l.to_ascii_lowercase().as_str()) {
-        return Licence::Refused(format!("licence class `{}` does not allow redistribution", l.to_ascii_lowercase()));
+    if l.is_empty() || l.eq_ignore_ascii_case("internal") {
+        return Licence::Internal;
+    }
+    if RESTRICTED.contains(&l.to_ascii_lowercase().as_str()) {
+        return Licence::Restricted(format!("licence class `{}` does not allow redistribution", l.to_ascii_lowercase()));
     }
     if l == "own" {
         return Licence::Open { attribution: false, share_alike: false };
@@ -83,14 +90,14 @@ pub fn classify(licence: &str) -> Licence {
         let mut parts = rest.splitn(2, ':');
         let (j, basis) = (parts.next().unwrap_or("").trim(), parts.next().unwrap_or("").trim());
         return if j.is_empty() || basis.is_empty() {
-            Licence::Refused("a public-domain licence records its jurisdiction and basis: `public-domain:<jurisdiction>:<basis>`".into())
+            Licence::Restricted("a public-domain licence records its jurisdiction and basis: `public-domain:<jurisdiction>:<basis>`".into())
         } else {
             Licence::Open { attribution: false, share_alike: false }
         };
     }
     match open_spdx(l) {
         Some((attribution, share_alike)) => Licence::Open { attribution, share_alike },
-        None => Licence::Refused(format!("`{}` is not an open SPDX licence, `public-domain:<jurisdiction>:<basis>` or `own`", l.chars().take(60).collect::<String>())),
+        None => Licence::Restricted(format!("`{}` is not an open SPDX licence, `public-domain:<jurisdiction>:<basis>`, `own` or `internal`", l.chars().take(60).collect::<String>())),
     }
 }
 
@@ -139,18 +146,19 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, r: &mut Report) {
     if !tree.has_dir("sources") {
         return;
     }
-    // An undeclared section is not skipped: a source that is not listed must still pass the licence gate.
+    // An undeclared section is not skipped: a source that is not listed is still checked.
     if m.is_some_and(|m| m.sections.get("sources") != Some(&true)) {
-        r.fail(7, "sources/", "exists but [sections] sources is not true; declare the section so that its licences are checked");
+        r.fail(7, "sources/", "exists but [sections] sources is not true; declare the section so that its sources are checked");
     }
     let mut ids: Vec<String> = tree.under("sources/").filter_map(|e| e.path.split('/').nth(1).map(String::from)).collect();
     ids.dedup();
+    let public = m.is_some_and(|m| m.distribution == "public");
     for id in &ids {
-        check_source(tree, id, r);
+        check_source(tree, id, public, r);
     }
 }
 
-fn check_source(tree: &Tree, id: &str, r: &mut Report) {
+fn check_source(tree: &Tree, id: &str, public: bool, r: &mut Report) {
     let dir = format!("sources/{}", id);
     if !ID.is_match(id) {
         r.fail(7, &dir, "source id must match ^[a-z0-9][a-z0-9-]{0,63}$");
@@ -233,34 +241,52 @@ fn check_source(tree: &Tree, id: &str, r: &mut Report) {
         Some(_) => {}
     }
 
-    // The licence gate. The message carries the id and the class, never content.
+    // `private` is the one hard rule: the operator's own flag, which no confirmation overrides (`specs/023` §2.1).
+    let private_licence = str_field(&meta, "licence").is_some_and(|l| l.trim().eq_ignore_ascii_case("private"));
+    match meta.get("private") {
+        None | Some(Value::Bool(_)) => {}
+        Some(_) => r.fail(7, &at, "`private` must be true or false"),
+    }
+    if meta.get("private").and_then(Value::as_bool) == Some(true) || private_licence {
+        r.fail(7, &at, format!("source-private: source `{}` is flagged private and never travels in a bundle", id));
+    }
     if meta.get("licence").is_some_and(|v| !v.is_string()) {
         return r.fail(7, &at, "`licence` must be a string");
     }
-    let Some(licence) = str_field(&meta, "licence").map(str::trim).filter(|s| !s.is_empty()) else {
-        return r.fail(7, &at, format!("source `{}` has no `licence`; a source without one cannot travel", id));
-    };
-    match classify(licence) {
-        Licence::Refused(why) => r.fail(7, &at, format!("source `{}` refused: {}", id, why)),
+    // Licence is information: warnings only, naming the id and the class, never content.
+    let licence = str_field(&meta, "licence").map(str::trim).filter(|s| !s.is_empty());
+    let text = str_field(&meta, "attribution_text").map(str::trim).unwrap_or("");
+    let class = classify(licence.unwrap_or(""));
+    if licence.is_none() {
+        r.note(7, &at, format!("source `{}` declares no licence; it reads as `internal`", id));
+    }
+    match &class {
         Licence::Open { attribution, share_alike } => {
-            let text = str_field(&meta, "attribution_text").map(str::trim).unwrap_or("");
-            if attribution && text.is_empty() {
-                r.fail(7, &at, format!("source `{}`: licence `{}` requires a non-empty `attribution_text`", id, licence));
+            if *attribution && text.is_empty() {
+                r.warn(7, &at, format!("source-attribution: source `{}`: licence `{}` asks for a non-empty `attribution_text`", id, licence.unwrap_or("")));
             }
-            if share_alike {
-                if meta.get("share_alike").and_then(|v| v.as_bool()) != Some(true) {
-                    r.fail(7, &at, format!("source `{}`: share-alike licence `{}` requires share_alike = true", id, licence));
+            if *share_alike {
+                if meta.get("share_alike").and_then(Value::as_bool) != Some(true) {
+                    r.warn(7, &at, format!("source-sharealike: source `{}`: share-alike licence `{}` expects share_alike = true", id, licence.unwrap_or("")));
                 }
-                if !notes_share_alike(text, licence) {
-                    r.fail(7, &at, format!("source `{}`: share-alike licence `{}` requires the share-alike notice in `attribution_text`", id, licence));
+                if !notes_share_alike(text, licence.unwrap_or("")) {
+                    r.warn(7, &at, format!("source-sharealike: source `{}`: share-alike licence `{}` expects the share-alike notice in `attribution_text`", id, licence.unwrap_or("")));
                 }
             }
         }
+        Licence::Internal | Licence::Restricted(_) if public => {
+            let name = match &class {
+                Licence::Restricted(_) => licence.unwrap_or("unknown").chars().take(60).collect::<String>(),
+                _ => "internal".to_string(),
+            };
+            r.warn(7, &at, format!("source-licence: source `{}` has licence class `{}`, which does not allow redistribution, and this bundle is `public`", id, name));
+        }
+        _ => {}
     }
 }
 
-/// The `sources:` and `licence` frontmatter of the knowledge documents (`specs/023` §4.2): every cited id must exist, and a
-/// file's own licence must be in a redistributable class.
+/// The `sources:` and `licence` frontmatter of the knowledge documents (`specs/023` §4.2): every cited id must exist, and
+/// a file's own `licence` is a string (information, not a gate).
 pub fn check_frontmatter(tree: &Tree, path: &str, text: &str, r: &mut Report) {
     let Some(fm) = frontmatter_of(text) else { return };
     if let Some(v) = fm.get(serde_yaml::Value::String("sources".into())) {
@@ -280,11 +306,7 @@ pub fn check_frontmatter(tree: &Tree, path: &str, text: &str, r: &mut Report) {
     }
     match fm.get(serde_yaml::Value::String("licence".into())) {
         None => {}
-        Some(serde_yaml::Value::String(l)) => {
-            if let Licence::Refused(why) = classify(l) {
-                r.fail(7, path, format!("licence: {}", why));
-            }
-        }
+        Some(serde_yaml::Value::String(_)) => {}
         Some(_) => r.fail(7, path, "licence must be a string"),
     }
 }

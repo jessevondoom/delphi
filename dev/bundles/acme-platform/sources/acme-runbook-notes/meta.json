@@ -1,0 +1,12 @@
+{
+  "type": "report",
+  "title": "Platform on-call runbook notes",
+  "author": [{ "literal": "Acme Platform Engineering" }],
+  "publisher": "Acme",
+  "language": "en",
+  "licence": "internal",
+  "rights_holder": "Acme",
+  "capture_level": "full",
+  "retrieved": "2026-10-28",
+  "version": "1"
+}

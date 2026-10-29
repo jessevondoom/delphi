@@ -99,32 +99,113 @@ fn a_changed_capture_is_a_new_version_and_a_purge_keeps_only_the_citation_and_th
     assert_eq!(l.purge("no-such-id").unwrap(), None);
 }
 
-#[test]
-fn a_bundles_sources_enter_not_validated_with_the_licence_intact_and_are_indexed() {
-    let (_d, l) = lib();
-    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/bundles/acme-platform");
-    let r = l.import_bundle(&golden, "acme/acme-platform@1.4.0", &Budgets::default());
-    assert_eq!(r.len(), 2);
-    assert!(r.iter().all(|(_, s)| s.is_ok()), "{:?}", r.iter().map(|(i, s)| (i, s.as_ref().err())).collect::<Vec<_>>());
-    let m = l.read_meta("oecd-2024-report").unwrap();
-    assert_eq!((m["licence"].as_str(), m["status"].as_str(), m["capture_level"].as_str(), m["imported_from"].as_str()), (Some("CC-BY-4.0"), Some("not validated"), Some("full"), Some("acme/acme-platform@1.4.0")));
-    assert!(m["attribution_text"].as_str().unwrap().contains("CC BY 4.0") && m["share_alike"] == false);
-    assert!(l.source_dir("oecd-2024-report").join("assets/figure-1.png").is_file());
-    assert_eq!(l.read_meta("acme-style-guide").unwrap()["licence"], "own");
-    assert_eq!(l.indexable().into_iter().map(|(i, _)| i).collect::<Vec<_>>(), ["oecd-2024-report"]);
-    // adopting the same bundle again changes nothing
-    assert!(l.import_bundle(&golden, "x", &Budgets::default()).iter().all(|(_, s)| s.as_ref().is_ok_and(|s| s.outcome == Outcome::Unchanged)));
+fn origin(hash: &str) -> Origin {
+    Origin { bundle: "acme/acme-platform".into(), hash: hash.into(), kid: Some("kid1".into()) }
+}
+
+fn entry(hash: &str, kid: &str) -> delphi_core::bundles::Entry {
+    let lock: delphi_core::bundles::Lock = toml::from_str(&format!(
+        "[[bundle]]\norg = \"acme\"\nname = \"acme-platform\"\nversion = \"1.4.0\"\nhash = \"{}\"\npublisher_kid = \"{}\"\nprovenance = \"signed\"\nadded_at = \"2026-01-01T00:00:00Z\"\norder = 10\nstatus = \"active\"\nreview_by = \"\"\ntitle = \"t\"\n[bundle.source]\nkind = \"directory\"\npath = \"/x\"\n",
+        hash, kid
+    ))
+    .unwrap();
+    lock.bundle.into_iter().next().unwrap()
+}
+
+/// A bundle directory holding one source per `(id, text)`.
+fn bundle_with(root: &Path, sources: &[(&str, &str)]) -> PathBuf {
+    let dir = root.join("b");
+    for (id, text) in sources {
+        let src = dir.join("sources").join(id);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("meta.json"), r#"{"type":"book","title":"T","licence":"CC0-1.0","capture_level":"full"}"#).unwrap();
+        std::fs::write(src.join("source.md"), text).unwrap();
+    }
+    dir
 }
 
 #[test]
-fn a_source_that_may_not_travel_is_refused_again_at_adoption() {
+fn a_bundles_sources_enter_with_the_licence_intact_and_are_vouched_only_by_the_lock() {
+    let (_d, l) = lib();
+    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/bundles/acme-platform");
+    let r = l.import_bundle(&golden, "acme/acme-platform@1.4.0", &origin("h1"), &Budgets::default());
+    assert_eq!(r.len(), 3);
+    assert!(r.iter().all(|(_, s)| s.is_ok()), "{:?}", r.iter().map(|(i, s)| (i, s.as_ref().err())).collect::<Vec<_>>());
+    let m = l.read_meta("oecd-2024-report").unwrap();
+    assert_eq!((m["licence"].as_str(), m["capture_level"].as_str(), m["imported_from"].as_str()), (Some("CC-BY-4.0"), Some("full"), Some("acme/acme-platform@1.4.0")));
+    assert_eq!((m["bundle_origin"]["bundle"].as_str(), m["bundle_origin"]["hash"].as_str(), m["bundle_origin"]["kid"].as_str()), (Some("acme/acme-platform"), Some("h1"), Some("kid1")));
+    assert!(m["attribution_text"].as_str().unwrap().contains("CC BY 4.0") && m["share_alike"] == false);
+    assert!(l.source_dir("oecd-2024-report").join("assets/figure-1.png").is_file());
+    assert_eq!(l.read_meta("acme-style-guide").unwrap()["licence"], "own");
+    assert_eq!(l.read_meta("acme-runbook-notes").unwrap()["licence"], "internal");
+    let ids: Vec<String> = l.indexable().into_iter().map(|(i, _)| i).collect();
+    assert!(ids.contains(&"oecd-2024-report".to_string()) && ids.contains(&"acme-runbook-notes".to_string()), "{:?}", ids);
+    // vouched only while the lock holds the entry at the hash and key the content came in with
+    assert_eq!(l.vouched_by(&m, &[entry("h1", "kid1")]).as_deref(), Some("acme"));
+    assert_eq!(l.vouched_by(&m, &[]), None);
+    assert_eq!(l.vouched_by(&m, &[entry("h2", "kid1")]), None, "a new hash");
+    assert_eq!(l.vouched_by(&m, &[entry("h1", "kid2")]), None, "a new publisher key");
+    // a source fetched any other way is never vouched
+    let fetched = json!({"status": "validated", "licence": "CC0-1.0"});
+    assert_eq!(l.vouched_by(&fetched, &[entry("h1", "kid1")]), None);
+    // adopting the same bundle again changes nothing
+    assert!(l.import_bundle(&golden, "x", &origin("h1"), &Budgets::default()).iter().all(|(_, s)| s.as_ref().is_ok_and(|s| s.outcome == Outcome::Unchanged)));
+}
+
+#[test]
+fn a_bundles_own_meta_cannot_vouch_for_itself_and_private_is_refused() {
     let (d, l) = lib();
-    let src = d.path().join("b/sources/bad");
-    std::fs::create_dir_all(&src).unwrap();
-    std::fs::write(src.join("meta.json"), r#"{"type":"book","title":"T","licence":"all-rights-reserved"}"#).unwrap();
-    let r = l.import_bundle(&d.path().join("b"), "x", &Budgets::default());
-    assert!(r[0].1.as_ref().unwrap_err().contains("refused"));
-    assert!(l.list().is_empty());
+    let dir = bundle_with(d.path(), &[("a", "text")]);
+    std::fs::write(dir.join("sources/a/meta.json"), r#"{"type":"book","title":"T","licence":"CC0-1.0","status":"validated","bundle_origin":{"bundle":"evil/x","hash":"h","kid":"k"},"cited_by":["c1"]}"#).unwrap();
+    l.import_bundle(&dir, "x", &origin("h1"), &Budgets::default());
+    let m = l.read_meta("a").unwrap();
+    assert_eq!((m["status"].as_str(), m["bundle_origin"]["bundle"].as_str(), m["cited_by"].clone()), (Some("not validated"), Some("acme/acme-platform"), json!([])));
+    assert_eq!(l.vouched_by(&m, &[]), None);
+    let p = bundle_with(&d.path().join("p"), &[("secret", "text")]);
+    std::fs::write(p.join("sources/secret/meta.json"), r#"{"type":"book","title":"T","private":true}"#).unwrap();
+    let r = l.import_bundle(&p, "x", &origin("h1"), &Budgets::default());
+    assert!(r[0].1.as_ref().unwrap_err().contains("private"));
+    assert!(l.read_meta("secret").is_none());
+}
+
+#[test]
+fn revoking_deletes_the_unused_keeps_the_cited_and_contests_their_claims_and_a_re_add_restores() {
+    use crate::library::claims::{status, AnchorSpec, ClaimOpts};
+    use delphi_core::knowledge_status::Status;
+    let (d, l) = lib();
+    let dir = bundle_with(d.path(), &[("used", "The valve opens at 4 bar."), ("idle", "Nothing cites this."), ("noted", "Marginal notes live here.")]);
+    l.import_bundle(&dir, "x", &origin("h1"), &Budgets::default());
+    let c = l.add_claim("The valve opens at 4 bar", &ClaimOpts::default(), &[AnchorSpec { source_id: "used".into(), locator: Some("§1".into()), quote: "opens at 4 bar".into(), ..Default::default() }]).unwrap();
+    let cid = c["id"].as_str().unwrap().to_string();
+    // the operator excerpted `noted` themselves
+    std::fs::write(l.source_dir("noted").join("excerpts.json"), r#"[{"id":"e1","quote":"Marginal","bytes":8}]"#).unwrap();
+    let before = status(&l.claim(&cid).unwrap());
+    assert_ne!(before, Status::Contested);
+
+    // a changed hash with the same key ends it for the old version
+    let r = l.revoke_bundle("acme/acme-platform", Some(("h2", Some("kid1"))));
+    assert_eq!((r.deleted.as_slice(), r.kept.len()), (&["idle".to_string()][..], 2), "{:?}", r);
+    assert!(l.read_meta("idle").is_none() && l.read_meta("used").is_some());
+    assert!(l.read_meta("used").unwrap()["bundle_origin"]["revoked"].is_string());
+    assert_eq!(l.vouched_by(&l.read_meta("used").unwrap(), &[entry("h1", "kid1")]), None);
+    assert_eq!(status(&l.claim(&cid).unwrap()), Status::Contested);
+
+    // the same content comes back under the old hash: the label and the claim return
+    l.import_bundle(&dir, "x", &origin("h1"), &Budgets::default());
+    let used = l.read_meta("used").unwrap();
+    assert!(used["bundle_origin"]["revoked"].is_null());
+    assert_eq!(l.vouched_by(&used, &[entry("h1", "kid1")]).as_deref(), Some("acme"));
+    assert_ne!(status(&l.claim(&cid).unwrap()), Status::Contested);
+
+    // removal (no entry left) and a changed key end it the same way
+    assert_eq!(l.revoke_bundle("acme/acme-platform", Some(("h1", Some("kid1")))), Revoked::default());
+    let r = l.revoke_bundle("acme/acme-platform", None);
+    assert_eq!((r.deleted.len(), r.kept.len()), (1, 2), "removal: the unused one goes, the cited and the excerpted stay: {:?}", r);
+    assert_eq!(status(&l.claim(&cid).unwrap()), Status::Contested);
+    let (_d2, l2) = lib();
+    l2.import_bundle(&dir, "x", &origin("h1"), &Budgets::default());
+    let r = l2.revoke_bundle("acme/acme-platform", Some(("h1", Some("other-key"))));
+    assert_eq!(r.deleted.len() + r.kept.len(), 3, "a new key ends the vouching: {:?}", r);
 }
 
 #[tokio::test]

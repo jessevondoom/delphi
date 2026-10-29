@@ -18,6 +18,8 @@ pub struct Manifest {
     pub description: String,
     pub license: String,
     pub audience: String,
+    /// `internal` (the default) or `public`: where the author intends the bundle to go (`specs/023` §2.1). A warning state, never a gate.
+    pub distribution: String,
     pub review_by: String,
     pub publisher_name: String,
     pub publisher_contact: Option<String>,
@@ -39,6 +41,7 @@ pub struct Manifest {
 }
 
 const SECTIONS: [&str; 7] = ["knowledge", "skills", "agents", "behavior", "evals", "vectors", "sources"];
+const DISTRIBUTIONS: [&str; 2] = ["internal", "public"];
 const AUDIENCES: [&str; 4] = ["org", "team", "project", "person"];
 /// Keys that state trust (`specs/012` §2.1) or grant authority (`specs/023` §3.1) are refused anywhere in the file.
 const REJECTED: [&str; 16] = [
@@ -167,7 +170,7 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
         r.fail(4, "bundle.toml", "missing [bundle]");
         &empty
     });
-    unknown_keys(b, &["schema", "name", "org", "version", "title", "description", "license", "homepage", "audience", "review_by", "language"], "bundle", r);
+    unknown_keys(b, &["schema", "name", "org", "version", "title", "description", "license", "homepage", "audience", "distribution", "review_by", "language"], "bundle", r);
     match b.get("schema") {
         Some(Value::Integer(s)) if *s == SCHEMA as i64 => m.schema = SCHEMA,
         Some(Value::Integer(s)) => r.fail(4, "bundle.toml", format!("bundle.schema is {} (this build reads {})", s, SCHEMA)),
@@ -206,6 +209,14 @@ pub fn check(tree: &Tree, opts: &Options, r: &mut Report) -> Option<Manifest> {
     if !m.audience.is_empty() && !AUDIENCES.contains(&m.audience.as_str()) {
         r.fail(4, "bundle.toml", format!("audience `{}` is not one of {:?}", m.audience, AUDIENCES));
     }
+    m.distribution = match string(b, "distribution", "bundle", r) {
+        None => "internal".into(),
+        Some(d) if DISTRIBUTIONS.contains(&d.as_str()) => d,
+        Some(d) => {
+            r.fail(4, "bundle.toml", format!("distribution `{}` is not one of {:?}", d.chars().take(40).collect::<String>(), DISTRIBUTIONS));
+            "internal".into()
+        }
+    };
     m.review_by = required(b, "review_by", "bundle", r);
     if !m.review_by.is_empty() {
         if !valid_date(&m.review_by) {

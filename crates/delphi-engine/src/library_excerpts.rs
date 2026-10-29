@@ -227,7 +227,7 @@ impl Library {
             level = Level::Excerpts;
         }
         let existing = self.excerpts(id);
-        if level == Level::Excerpts && matches!(classify(&licence), Licence::Refused(_)) && !is_private(&meta) {
+        if level == Level::Excerpts && matches!(classify(&licence), Licence::Restricted(_)) && !is_private(&meta) {
             let work = meta["work_bytes"].as_u64().or(opts.work_bytes).ok_or("the length of the work is not recorded, and the 10% bound needs it; pass --work-bytes")?;
             let used: usize = existing.iter().map(|e| e["text"].as_str().map_or(0, str::len)).sum();
             let allowed = total_allowed(work);

@@ -151,7 +151,8 @@ pub fn may_leave(meta: &Value, channel: Channel) -> Result<(), String> {
     let licence = meta["licence"].as_str().unwrap_or("unknown");
     match classify(licence) {
         Licence::Open { .. } => Ok(()),
-        Licence::Refused(why) => Err(format!("{} ({:?})", why, channel)),
+        Licence::Internal => Err(format!("an internal source leaves only through a confirmed publication ({:?})", channel)),
+        Licence::Restricted(why) => Err(format!("{} ({:?})", why, channel)),
     }
 }
 
@@ -237,6 +238,8 @@ struct Prepared {
     assets: Option<PathBuf>,
     requested: Option<Level>,
     excerpts: Option<Value>,
+    /// Adopted from an added bundle at `bundle add`: the operator's add is the act of trust, so the licence is not a ceiling.
+    imported: bool,
 }
 
 impl Library {
@@ -293,7 +296,7 @@ impl Library {
     pub fn indexable(&self) -> Vec<(String, PathBuf)> {
         self.list()
             .into_iter()
-            .filter(|(_, m)| !is_private(m) && m["purged"].is_null() && m["capture_level"] == "full" && may_leave(m, Channel::Outbound).is_ok())
+            .filter(|(_, m)| !is_private(m) && m["purged"].is_null() && m["capture_level"] == "full" && (may_leave(m, Channel::Outbound).is_ok() || m["bundle_origin"]["revoked"].is_null() && m["bundle_origin"]["bundle"].is_string()))
             .map(|(id, _)| {
                 let p = self.source_dir(&id).join("source.md");
                 (id, p)
@@ -312,11 +315,11 @@ impl Library {
 
     /// The level a capture ends at, and why it is not the one asked for. Licence first (`specs/055` §3.3), then the
     /// budgets (§3.6).
-    fn decide(&self, meta: &Map<String, Value>, requested: Option<Level>, text: Option<&str>, asset_bytes: u64, b: &Budgets) -> Result<(Level, Vec<String>), String> {
+    fn decide(&self, meta: &Map<String, Value>, requested: Option<Level>, text: Option<&str>, asset_bytes: u64, imported: bool, b: &Budgets) -> Result<(Level, Vec<String>), String> {
         let licence = meta.get("licence").and_then(Value::as_str).unwrap_or("unknown");
         let private = is_private(&Value::Object(meta.clone()));
         let unknown = licence.trim().eq_ignore_ascii_case("unknown");
-        let ceiling = if private || matches!(classify(licence), Licence::Open { .. }) { Level::Full } else { Level::Excerpts };
+        let ceiling = if private || imported || matches!(classify(licence), Licence::Open { .. } | Licence::Internal) { Level::Full } else { Level::Excerpts };
         let default = if unknown { Level::Pointer } else { ceiling };
         let mut level = requested.unwrap_or(default);
         if level > ceiling {
@@ -349,7 +352,7 @@ impl Library {
         }
         let licence = p.meta.get("licence").and_then(Value::as_str).unwrap_or("unknown").to_string();
         let asset_bytes = p.assets.as_deref().map(dir_bytes).unwrap_or(0);
-        let (level, notes) = self.decide(&p.meta, p.requested, p.text.as_deref(), asset_bytes, b)?;
+        let (level, notes) = self.decide(&p.meta, p.requested, p.text.as_deref(), asset_bytes, p.imported, b)?;
         if let Some(t) = &p.text {
             p.meta.insert("work_bytes".into(), json!(t.len()));
         }
@@ -527,7 +530,7 @@ impl Library {
         match fetch_snapshot_checked(&policy, &canonical).await {
             Err(e) if e.refusal == Refusal::TooLarge => {
                 let mut notes = vec![format!("the page is over the {}-byte text limit; kept as a pointer (raise it with --max-text-mib)", b.text)];
-                let mut s = self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None }, &b)?;
+                let mut s = self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false }, &b)?;
                 s.notes.append(&mut notes);
                 Ok(s)
             }
@@ -567,7 +570,7 @@ impl Library {
                     notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", b.text));
                     requested = Some(Level::Pointer);
                 }
-                let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None }, &b)?;
+                let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false }, &b)?;
                 notes.append(&mut s.notes);
                 s.notes = notes;
                 Ok(s)
@@ -596,7 +599,7 @@ impl Library {
         }
         meta.insert("tags".into(), json!([]));
         Self::attribute(&mut meta, opts.attribution_text.as_ref(), "operator");
-        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None }, &b)?;
+        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false }, &b)?;
         notes.append(&mut s.notes);
         s.notes = notes;
         Ok(s)
@@ -623,33 +626,40 @@ impl Library {
         Ok(Some(removed))
     }
 
-    /// Adopt a bundle's `sources/` at `bundle add` (`specs/024` §4.1a): each enters as *not validated*, at the capture level
-    /// the bundle shipped, with its licence record intact. The licence gate runs again here, so a source that is not
-    /// redistributable is refused even if something upstream let it through. Indexing is by `indexable`.
-    pub fn import_bundle(&self, bundle_dir: &Path, label: &str, budgets: &Budgets) -> Vec<(String, Result<Stored, String>)> {
+    /// Adopt a bundle's `sources/` at `bundle add` (`specs/024` §4.1a): each enters at the capture level the bundle
+    /// shipped, with its licence record intact, and `bundle_origin = { bundle, hash, kid? }` recorded. Licence never
+    /// refuses an adoption; a private source does. Whether the content reads as vouched is not stored here: it is derived
+    /// from the lock entry (`vouched_by`), so a field in a bundle's own `meta.json` can give nothing. Indexing is by
+    /// `indexable`. A re-add that finds the same content restores a vouching that had ended.
+    pub fn import_bundle(&self, bundle_dir: &Path, label: &str, origin: &Origin, budgets: &Budgets) -> Vec<(String, Result<Stored, String>)> {
         let root = bundle_dir.join("sources");
         let Ok(rd) = std::fs::read_dir(&root) else { return Vec::new() };
         let mut ids: Vec<String> = rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).filter_map(|e| e.file_name().to_str().map(String::from)).collect();
         ids.sort();
         ids.into_iter()
             .map(|id| {
-                let r = self.import_one(&root.join(&id), &id, label, budgets);
+                let r = self.import_one(&root.join(&id), &id, label, origin, budgets);
+                if let Ok(s) = &r {
+                    if matches!(s.outcome, Outcome::Added | Outcome::NewVersion(_) | Outcome::Unchanged) {
+                        self.record_origin(&id, origin, s.outcome != Outcome::Unchanged);
+                    }
+                }
                 (id, r)
             })
             .collect()
     }
 
-    fn import_one(&self, dir: &Path, id: &str, label: &str, budgets: &Budgets) -> Result<Stored, String> {
+    fn import_one(&self, dir: &Path, id: &str, label: &str, _origin: &Origin, budgets: &Budgets) -> Result<Stored, String> {
         let mut meta = match serde_json::from_slice::<Value>(&std::fs::read(dir.join("meta.json")).map_err(|e| e.to_string())?) {
             Ok(Value::Object(m)) => m,
             _ => return Err("meta.json is not a JSON object".into()),
         };
-        let licence = meta.get("licence").and_then(Value::as_str).unwrap_or("").to_string();
         if is_private(&Value::Object(meta.clone())) {
             return Err("private sources are never adopted from a bundle".into());
         }
-        if let Licence::Refused(why) = classify(&licence) {
-            return Err(format!("refused: {}", why));
+        // what a bundle's own file says about its status or origin is not read
+        for k in ["status", "bundle_origin", "cited_by", "purged"] {
+            meta.remove(k);
         }
         let text = std::fs::read_to_string(dir.join("source.md")).ok();
         let level = meta.get("capture_level").and_then(Value::as_str).and_then(Level::parse).unwrap_or(if text.is_some() { Level::Full } else { Level::Pointer });
@@ -660,8 +670,84 @@ impl Library {
         }
         meta.insert("imported_from".into(), json!(label));
         let assets = dir.join("assets");
-        self.store(Prepared { id: id.to_string(), meta, text, assets: assets.is_dir().then_some(assets), requested: Some(level), excerpts: std::fs::read(dir.join("excerpts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()) }, budgets)
+        self.store(Prepared { id: id.to_string(), meta, text, assets: assets.is_dir().then_some(assets), requested: Some(level), excerpts: std::fs::read(dir.join("excerpts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()), imported: true }, budgets)
     }
+
+    fn excerpts_hash(&self, id: &str) -> String {
+        sha256_hex(&std::fs::read(self.source_dir(id).join("excerpts.json")).unwrap_or_default())
+    }
+
+    /// `fresh`: the files on disk are what the bundle shipped, so their excerpts are the baseline; an unchanged source keeps
+    /// the baseline it had, so an excerpt the operator added since still counts as theirs.
+    fn record_origin(&self, id: &str, origin: &Origin, fresh: bool) {
+        let Some(mut m) = self.read_meta(id) else { return };
+        let was_revoked = m["bundle_origin"]["revoked"].is_string();
+        let baseline = if fresh { json!(self.excerpts_hash(id)) } else { m["bundle_origin"]["excerpts_hash"].clone() };
+        let mut o = json!({"bundle": origin.bundle, "hash": origin.hash, "excerpts_hash": baseline});
+        if let Some(k) = &origin.kid {
+            o["kid"] = json!(k);
+        }
+        m["bundle_origin"] = o;
+        if self.write_json(&self.source_dir(id).join("meta.json"), &m).is_ok() && was_revoked {
+            self.source_revouched(id);
+        }
+    }
+
+    /// The org that vouches for this source now: the lock entry of the bundle it came in with, still at the hash and
+    /// publisher key it came in with, and the vouching not ended. `None` for a source received any other way, and for
+    /// every source whose bundle has left or changed (`specs/024` §4.1a, `specs/052` §3.1).
+    pub fn vouched_by(&self, meta: &Value, entries: &[delphi_core::bundles::Entry]) -> Option<String> {
+        let o = meta.get("bundle_origin").filter(|o| o.is_object() && o["revoked"].is_null())?;
+        delphi_core::bundles::vouched_org(entries, o["bundle"].as_str()?, o["hash"].as_str()?, o["kid"].as_str()).map(String::from)
+    }
+
+    /// The vouching of `bundle` ends for every imported source that does not belong to the version now held
+    /// (`keep` = `Some((hash, kid))` of the entry that stays, `None` when the bundle is gone). Sources the operator has not
+    /// cited or excerpted are deleted; the others are kept and read *not validated · no longer vouched*, and every claim
+    /// anchored in them is marked contested (`specs/024` §4.1a). Returns the ids deleted and the ids kept.
+    pub fn revoke_bundle(&self, bundle: &str, keep: Option<(&str, Option<&str>)>) -> Revoked {
+        let mut out = Revoked::default();
+        for (id, mut m) in self.list() {
+            let o = &m["bundle_origin"];
+            if o["bundle"] != bundle || o["revoked"].is_string() {
+                continue;
+            }
+            if keep.is_some_and(|(h, k)| o["hash"] == h && o["kid"].as_str() == k) {
+                continue;
+            }
+            let cited = m["cited_by"].as_array().is_some_and(|a| !a.is_empty()) || !self.citing(&id).is_empty();
+            let touched = o["excerpts_hash"].as_str().is_some_and(|h| h != self.excerpts_hash(&id));
+            if !cited && !touched {
+                if std::fs::remove_dir_all(self.source_dir(&id)).is_ok() {
+                    self.log("unvouch_delete", json!({"id": id, "bundle": bundle}));
+                    out.deleted.push(id);
+                }
+                continue;
+            }
+            m["bundle_origin"]["revoked"] = json!(delphi_core::time::now_rfc3339());
+            if self.write_json(&self.source_dir(&id).join("meta.json"), &m).is_ok() {
+                self.source_unvouched(&id);
+                self.log("unvouch_keep", json!({"id": id, "bundle": bundle}));
+                out.kept.push(id);
+            }
+        }
+        out
+    }
+}
+
+/// Where an imported source came from: the lock entry's bundle, hash and publisher key (`None` when unsigned).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    pub bundle: String,
+    pub hash: String,
+    pub kid: Option<String>,
+}
+
+/// What a revocation did to the bundle's imported sources.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Revoked {
+    pub deleted: Vec<String>,
+    pub kept: Vec<String>,
 }
 
 #[cfg(test)]

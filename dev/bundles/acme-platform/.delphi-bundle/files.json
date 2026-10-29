@@ -27,6 +27,8 @@
     "skills/incident-review/SKILL.md": { "blake3": "blake3:99ed084bbc14bcd840a37123259cbda61529d8407d85a848a338c011f28c76a8", "bytes": 819 },
     "skills/incident-review/templates/postmortem.md": { "blake3": "blake3:dcd24acc8b9b6deefe7b5f0064ed10dd47e316969450fccabdb530665de6da90", "bytes": 120 },
     "skills/migration-plan/SKILL.md": { "blake3": "blake3:5aeab1738c50882c9d68229df6f92fca123830e02e4f28cda143d1ece53295b0", "bytes": 709 },
+    "sources/acme-runbook-notes/meta.json": { "blake3": "blake3:43afe2488ae0f28e8c4e743a25d216fc1d780cb2aff5bb8dbecceb6d6f08ccb6", "bytes": 295 },
+    "sources/acme-runbook-notes/source.md": { "blake3": "blake3:1463066e4c7d80f9f39908a056a961f6095ce544b58605f58a3865868b524daf", "bytes": 382 },
     "sources/acme-style-guide/meta.json": { "blake3": "blake3:ff7baed0594902aedda6ed093f83b4ebb25cf49580adaed81bda8e7b7146b829", "bytes": 186 },
     "sources/oecd-2024-report/assets/figure-1.png": { "blake3": "blake3:8ec79f5b6aac6a695b2feb7d2901bc224bf53c7f85bff4d938454a6bab8f2c46", "bytes": 67 },
     "sources/oecd-2024-report/meta.json": { "blake3": "blake3:c670db5d941c59bc7fac0af19ddb42d3fa34c25c2c18b2c8f24d8970f909cf77", "bytes": 622 },
