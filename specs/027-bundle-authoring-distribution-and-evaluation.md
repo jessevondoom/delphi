@@ -14,6 +14,8 @@ tags: [spec, xenia, bundles, distribution, vectors, evaluation, authoring, post-
 
 # Spec 027: Bundle Authoring, Distribution Transports, the Vector Pipeline & Evaluation
 
+> **Outside amendments:** §2.3a sources export (2026-10-29, `specs/055` SK7); §4.3 `bundle` Xenia kind (2026-10-25, `specs/011` §11.1, `specs/012` §11).
+
 > **Status: approved by the operator 2026-10-25 (decisions), text approved on merge.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md). Depends on `specs/023` (format), `specs/024` (adding) and, for the store transport, on Xenia Phase 1 (`specs/011`, `specs/012`; X1 built, X2–X11 in build). Nothing here is built; §9 is the build plan.
 
 ## 1. Scope & Objectives

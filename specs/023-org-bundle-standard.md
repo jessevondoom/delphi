@@ -14,6 +14,8 @@ tags: [spec, xenia, bundles, knowledge, skills, agents, schema, post-v1]
 
 # Spec 023: The Org Bundle Standard
 
+> **Outside amendments:** §2.1 `sources/` section (2026-10-29, `specs/055` SK0; lives here and in `specs/022` §5).
+
 > **Status: approved by the operator 2026-10-25 (decisions), text approved on merge** (`specs/022` §4.1). Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md). Nothing in this document is built; §14 is the build plan.
 
 ## 1. Scope & Objectives

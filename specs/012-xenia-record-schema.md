@@ -14,6 +14,8 @@ tags: [spec, xenia, schema, post-v1]
 
 # Spec 012: Xenia Record Schema (v2)
 
+> **Outside amendments:** §11 kind `bundle` and domain `xenia-bundle/1` (2026-10-25, `specs/022` §5, `specs/027` §4.3); provisional `fact` kind, deferred (2026-10-29, `specs/055`); `xenia://` scheme, D-32 (2026-10-29, `specs/007` §2.2 amendment 007-A3).
+
 > **Ratification record (D-29, 2026-10-24; superseded in part 2026-10-25).** Approved by the operator as written on 2026-10-24 together with [`specs/011`](011-xenia-trust-model.md) (see its ratification record). On 2026-10-25 the operator confirmed the direction and directed that implementation start; the wait for the core editor and harness is lifted.
 >
 > **Status: v2.1, approved, Phase 1 in build.** Depends on [`specs/011`](011-xenia-trust-model.md); every field exists to support a rule there. Phase 1 kinds (`memory`, `endorsement`, `tombstone`) are normative; the other kinds are in §11 as provisional and are re-reviewed when their phase starts.

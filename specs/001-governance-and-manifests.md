@@ -14,6 +14,8 @@ tags: [spec]
 
 # Spec 001: Governance Enforcement, Agent/Skill Manifests & Handoff Schemas
 
+> **Outside amendments:** from the bundle set (ratified 2026-10-25, `specs/022` §5): §5.1 gate (bundle add approves behavior files), §2.2 `@bundle/` paths, §2.3 precedence and `execute: ["org-context"]`, §5 `summary`/`domain` fields. Live in `specs/022` §5 and `specs/024`.
+
 ## 1. Scope & Objectives
 This specification defines the machine-validated schemas and runtime contracts that enforce [GOVERNANCE.md](../GOVERNANCE.md):
 1. Declarative **Agent Manifest Schema** (`agents/<role>/AGENT.md`).
