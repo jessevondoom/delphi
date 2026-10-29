@@ -1147,6 +1147,10 @@ pub struct Hit {
     /// `(lexical only: vectors N% ready)` on a result from an added bundle whose chunks are not all embedded yet
     /// (`specs/026` §6): the order of results may improve when they are.
     pub note: Option<String>,
+    /// The derived knowledge status (`specs/052` KS-1) and its operator label: `validated`, `not validated` or
+    /// `disproved`. Display only; computed from the tier and zone the index holds, never from the file's own words.
+    pub status: &'static str,
+    pub label: &'static str,
 }
 
 /// Words that carry no topic in a question. They are left out of a query unless nothing else is left, so that
@@ -1280,8 +1284,8 @@ impl Kb {
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         for (id, s) in order.into_iter().take(opts.limit.min(10)) {
-            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3 FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?)));
-            let Ok((rel_path, a, b, heading_path, raw, blake3)) = row else { continue };
+            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?)));
+            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status)) = row else { continue };
             let preview = raw.lines().filter(|l| !l.trim().is_empty()).take(3).map(|l| l.chars().take(160).collect::<String>()).collect::<Vec<_>>().join("\n");
             let pointer = match rel_path.strip_prefix("bundles/") {
                 Some(rest) => format!("@bundle/{}#L{}-L{}", rest, a, b), // the logical path an agent reads it by
@@ -1294,7 +1298,8 @@ impl Kb {
                     .clone(),
                 None => None,
             };
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note });
+            let ks = delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status);
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label: ks.label() });
         }
         Ok((hits, best_rerank))
     }
@@ -1818,7 +1823,7 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     println!("no results");
                 }
                 for (i, h) in hits.iter().enumerate() {
-                    println!("{}. {}  [{}]{}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
+                    println!("{}. {}  [{}]  ({}){}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.label, h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
                     for l in h.preview.lines() {
                         println!("     {}", l);
                     }
@@ -1967,6 +1972,17 @@ mod tests {
         assert!(kb.search("???", &SearchOpts::default()).unwrap().is_empty());
         // Query syntax cannot be injected.
         assert!(kb.search("\" OR NEAR( ) AND *", &SearchOpts::default()).is_ok());
+    }
+
+    #[test]
+    fn results_carry_a_derived_status_a_file_cannot_declare() {
+        let mk = |src: &str| format!("---\nsource_type: {}\n---\n# L\n\nzebra claim\n", src);
+        let kb = kb_with(&[("memory/agents/builder/lessons.md", "memory", &mk("user_ratified")), ("agents/a/AGENT.md", "agents", &mk("user_ratified")), ("knowledge/web.md", "knowledge", &mk("federated_verified"))]);
+        let got: Vec<(String, &str, &str)> = kb.search("zebra", &SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().into_iter().map(|h| (h.rel_path, h.status, h.label)).collect();
+        let of = |p: &str| got.iter().find(|g| g.0 == p).map(|g| (g.1, g.2)).unwrap();
+        assert_eq!(of("memory/agents/builder/lessons.md"), ("noted", "not validated"), "its frontmatter says user_ratified; that is a claim");
+        assert_eq!(of("knowledge/web.md"), ("noted", "not validated"), "research output at L2");
+        assert_eq!(of("agents/a/AGENT.md"), ("validated", "validated"));
     }
 
     #[test]
