@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://delphi.invalid/schemas/validation-set.schema.json",
+  "title": "Delphi labelled claim set and verdict results",
+  "description": "The operator's private labelled claim set (specs/040 §15.4, §23.7) and the results file `delphi validation score --results` compares against it. Implemented by crates/delphi/src/validation_cmd.rs. Validate a file against #/$defs/set or #/$defs/results.",
+  "oneOf": [{"$ref": "#/$defs/set"}, {"$ref": "#/$defs/results"}],
+  "$defs": {
+    "set": {
+      "type": "object",
+      "required": ["claims"],
+      "properties": {
+        "schema": {"const": 1},
+        "version": {"type": "string"},
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "text", "kind", "expect"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "text": {"type": "string", "minLength": 1},
+              "kind": {"enum": ["true", "false", "unverifiable", "misremembered", "ambiguous", "poisoned"]},
+              "expect": {"enum": ["ratify", "not_ratify", "escalate"]}
+            }
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "object",
+      "required": ["results"],
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "verdict"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "verdict": {"enum": ["would_ratify", "ratified", "already_known", "trivial", "refuted", "unsupported", "conflicting", "ambiguous", "needs_operator"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}
