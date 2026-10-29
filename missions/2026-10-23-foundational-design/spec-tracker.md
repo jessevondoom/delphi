@@ -258,7 +258,7 @@ Approved by the operator 2026-10-28 with the revision in §23 (aligned with 052;
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels, advisory skill, role entry, records) not started, approved; V1b scoring waits for the labelled set |
+| V1 | labels carried everywhere, advisory skill, manual scouting flow, records, labelled-set scoring | V1a (labels, advisory skill, role entry, records) not started, approved; V1b scoring: the operator finished the labelled set 2026-10-28 (040 §23.6); needs an operator-run scoring command and the §19.6 Council pass |
 | V2 | fetcher, `fact` check, `ratify_fact`, dry-run in advisory, blind audit cards, hash chain | not started |
 
 ## Open items that are not specs
