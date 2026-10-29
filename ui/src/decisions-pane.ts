@@ -39,10 +39,10 @@ export type Action =
 /** The keys that answer are ignored for this long after a decision opens (spec 005's guard). */
 export const GUARD_MS = 300;
 
-const KIND_ORDER = ['action', 'spec', 'release', 'build', 'council', 'budget', 'question'];
-const KIND_LABEL: Record<string, string> = { action: 'actions', spec: 'specs', release: 'releases', build: 'builds', council: 'councils', budget: 'budgets', question: 'questions' };
+const KIND_ORDER = ['action', 'spec', 'release', 'build', 'council', 'budget', 'question', 'learn'];
+const KIND_LABEL: Record<string, string> = { action: 'actions', spec: 'specs', release: 'releases', build: 'builds', council: 'councils', budget: 'budgets', question: 'questions', learn: 'to learn' };
 const TIER_WORD = { red: 'RED', amber: 'AMBER', open: 'OPEN' } as const;
-const KIND_WORD: Record<string, string> = { action: 'action', spec: 'spec', release: 'release', build: 'build', council: 'council', budget: 'budget', question: 'question' };
+const KIND_WORD: Record<string, string> = { action: 'action', spec: 'spec', release: 'release', build: 'build', council: 'council', budget: 'budget', question: 'question', learn: 'learn' };
 
 const str = (v: unknown, n = 400): string => T.sanitize(typeof v === 'string' ? v : '').slice(0, n);
 

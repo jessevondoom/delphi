@@ -541,6 +541,9 @@ impl EngineService {
         let mut list = crate::decision_model::list(&cards, &ledger);
         // What agents raised and the operator has not answered (`specs/044` §4.4), in the same order: Red, Amber, then the rest.
         list.extend(crate::decision_raised::open_entries(&events));
+        // The digest (`specs/052` §3.3): at most one captured candidate, `open` tier, never blocking.
+        let now = delphi_core::time::now_rfc3339();
+        list.extend(crate::digest::next(&m.id, &events, &now).map(|(n, left)| crate::digest::to_decision(&n, left, &now)));
         list.sort_by_key(|d| crate::decision_model::rank(d["tier"].as_str().unwrap_or("")));
         // A card whose brief was written (once, for this payload) shows it; the rest keep the plain brief.
         for d in list.iter_mut().filter(|d| d["source"] == "card") {
@@ -581,6 +584,26 @@ impl EngineService {
                 let _ = m2.append(EventEnvelope::new(&m2.id, "decision.brief_ready", json!({"id": id, "tokens": rec.tokens}))).await;
             }
         });
+    }
+
+    /// `digest.act`: the operator acts on the digest's candidate (`specs/052` §3.3): keep, check, promote or dismiss. Promote only writes a proposal
+    /// for `/retro`; no choice resolves a card or satisfies a gate. The payload hash must be the one shown.
+    async fn digest_act(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let m = self.mission(p["mission_id"].as_str()).await?;
+        let events = m.replay().map_err(engine_err)?;
+        let now = delphi_core::time::now_rfc3339();
+        let Some((note, _)) = crate::digest::next(&m.id, &events, &now) else {
+            return Err(err(code::NOT_FOUND, "no digest item is waiting"));
+        };
+        if p["payload_blake3"].as_str() != Some(crate::digest::payload_hash(&note).as_str()) {
+            return Err(err(code::INVALID_PARAMS, "the digest item changed since you looked at it; open it again"));
+        }
+        let action = p["choice_id"].as_str().unwrap_or("");
+        for ev in crate::digest::act(&m.id, &note, action).map_err(|e| err(code::INVALID_PARAMS, e))? {
+            m.append(ev).await.map_err(|e| err(-32000, e.to_string()))?;
+        }
+        Ok(json!({"ok": true, "id": note.id, "choice_id": action}))
     }
 
     /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
@@ -1550,6 +1573,7 @@ impl Extension for ServiceExt {
                 "decision.confirm" => svc.decision_confirm(params, ctx).await,
                 "decision.retry_brief" => svc.decision_retry_brief(params, ctx).await,
                 "decision.resolve" => svc.decision_resolve(params, ctx).await,
+                "digest.act" => svc.digest_act(params, ctx).await,
                 "decisions.review" => svc.decisions_review(params, ctx).await,
                 "council.start" => svc.council_start(params, ctx).await,
                 "bundle.distill" => svc.distill_start(params, ctx).await,
