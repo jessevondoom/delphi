@@ -329,6 +329,10 @@ Proposed from the operator's decisions of 2026-10-29: sources in the knowledge b
 | SK5 | generated pages with the sentence-to-claim check, dispute | built (`library_pages.rs`, `delphi pages show\|check\|dispute`); not built: page changes in the digest, console views and glyphs (`ui/` is another agent's), a way to resolve a contest |
 | SK6 | acquisition and standing rules | not started |
 | SK7 | `delphi bundle sources add <dir> <source-id>...`, amended 2026-10-29 | built (`library_export.rs`, `bundle_sources.rs`; refuses only `private`; confirmation is SK0b's, at package and publish); the Xenia `fact` kind stays deferred |
+| SK8a | spec 057: generated banner, bibliography table, mechanical citation check; replaces the 055 §6 per-sentence rule | approved 2026-10-29, not built |
+| SK8b | spec 057: validator pass (contradiction and fabricated-citation checks), one rewrite, claims-only fallback | approved, not built |
+| SK8c | spec 057: search, gather, write, cache by source hash, `delphi pages search` | approved, not built |
+| SK8d | spec 057: console page view, keys, Pages in the library, digest line | approved, not built |
 
 Amended with 055 (2026-10-29, additive): 012 §11 (`fact` kind, provisional), 022 §5, 023 §2.1 and step 7a, 024 §4.1a, 027 §2.3a, `schemas/bundle.schema.json` (`sections.sources`).
 
