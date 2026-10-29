@@ -24,6 +24,8 @@ pub mod excerpts;
 pub mod history;
 #[path = "library_meta.rs"]
 pub mod meta;
+#[path = "library_review.rs"]
+pub mod review;
 #[path = "library_recheck.rs"]
 mod recheck;
 pub use recheck::Recheck;

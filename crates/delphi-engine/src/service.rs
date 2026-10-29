@@ -543,7 +543,11 @@ impl EngineService {
         list.extend(crate::decision_raised::open_entries(&events));
         // The digest (`specs/052` §3.3): at most one captured candidate, `open` tier, never blocking.
         let now = delphi_core::time::now_rfc3339();
-        list.extend(crate::digest::next(&m.id, &events, &now).map(|(n, left)| crate::digest::to_decision(&n, left, &now)));
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        list.extend(crate::digest_review::pick(&m.id, &lib, &events, &now).map(|(p, left)| match p {
+            crate::digest_review::Pick::Review(i) => crate::digest_review::to_decision(&i, left, &now),
+            crate::digest_review::Pick::Note(n) => crate::digest::to_decision(&n, left, &now),
+        }));
         list.sort_by_key(|d| crate::decision_model::rank(d["tier"].as_str().unwrap_or("")));
         // A card whose brief was written (once, for this payload) shows it; the rest keep the plain brief.
         for d in list.iter_mut().filter(|d| d["source"] == "card") {
@@ -593,17 +597,33 @@ impl EngineService {
         let m = self.mission(p["mission_id"].as_str()).await?;
         let events = m.replay().map_err(engine_err)?;
         let now = delphi_core::time::now_rfc3339();
-        let Some((note, _)) = crate::digest::next(&m.id, &events, &now) else {
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let Some((pick, _)) = crate::digest_review::pick(&m.id, &lib, &events, &now) else {
             return Err(err(code::NOT_FOUND, "no digest item is waiting"));
         };
-        if p["payload_blake3"].as_str() != Some(crate::digest::payload_hash(&note).as_str()) {
+        let (hash, id) = match &pick {
+            crate::digest_review::Pick::Review(i) => (crate::digest_review::payload_hash(i), i.id.clone()),
+            crate::digest_review::Pick::Note(n) => (crate::digest::payload_hash(n), n.id.clone()),
+        };
+        if p["payload_blake3"].as_str() != Some(hash.as_str()) {
             return Err(err(code::INVALID_PARAMS, "the digest item changed since you looked at it; open it again"));
         }
         let action = p["choice_id"].as_str().unwrap_or("");
-        for ev in crate::digest::act(&m.id, &note, action).map_err(|e| err(code::INVALID_PARAMS, e))? {
+        let evs = match &pick {
+            crate::digest_review::Pick::Review(i) => crate::digest_review::act(&m.id, i, action),
+            crate::digest_review::Pick::Note(n) => crate::digest::act(&m.id, n, action),
+        };
+        let evs = evs.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        // The one library write a digest action makes, and only the operator's confirm: it moves a date, never a status.
+        if let (crate::digest_review::Pick::Review(i), "confirm") = (&pick, action) {
+            if let Some(c) = i.claims.first().and_then(|c| c["id"].as_str()) {
+                lib.confirm_claim(c).map_err(|e| err(code::INVALID_PARAMS, e))?;
+            }
+        }
+        for ev in evs {
             m.append(ev).await.map_err(|e| err(-32000, e.to_string()))?;
         }
-        Ok(json!({"ok": true, "id": note.id, "choice_id": action}))
+        Ok(json!({"ok": true, "id": id, "choice_id": action}))
     }
 
     /// `decisions.review`: the operator ratifies or rejects one provisional decision. The review is bound to the
