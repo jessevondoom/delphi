@@ -143,6 +143,14 @@ the wakes the daemon is keeping for roles.
   delphi timers [list | set <role> (\-\-in <5m> | \-\-at <time>) [\-\-every <5m>] <note…> | cancel <id>]
     [\-\-mission <id>] [\-\-workspace <name>] [\-\-home <dir>]
 .fi
+.SS delphi validation
+score the labelled claim set: counts and rates only.
+.PP
+.nf
+  delphi validation score [\-\-set <file>] [\-\-results <file>] [\-\-home <dir>]
+.fi
+.PP
+Operator\-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false\-ratified, poisoned passes, wrongly\-escalated rate, the rule\-of\-three bound and the claims new since the last scored run. With \-\-results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation\-set.md.
 .SS delphi needs
 what the roadmap is waiting on evidence for.
 .PP

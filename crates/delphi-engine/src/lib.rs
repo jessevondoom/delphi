@@ -49,6 +49,7 @@ pub mod harness_opts;
 pub mod harness_run;
 pub mod inventory;
 pub mod learn;
+pub mod memory_audit;
 pub mod embed;
 pub mod kb;
 pub mod kbserve;
