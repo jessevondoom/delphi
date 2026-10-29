@@ -351,6 +351,17 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     else if (act.t === 'copy') { copyToClipboard(act.text); fail('copied'); }
     else if (act.t === 'research') startResearch(act.topic);
     else if (act.t === 'research-cancel') void cmd.call('research.cancel', {}).catch(() => {});
+    else if (act.t === 'library' || act.t === 'excerpts') {
+      // The library's own CLI answers; both calls only read. `--home` keeps it on this console's install.
+      const args = act.t === 'library' ? [act.what === 'sources' ? 'sources' : 'claims', 'list', '--json'] : ['sources', 'excerpt', 'list', act.id, '--json'];
+      if (!info.delphi_exe) { fail('this console was not told where delphi is'); return; }
+      execFile(info.delphi_exe, [...args, '--home', info.home ?? ''], { timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (err, out) => {
+        let body: unknown = null;
+        try { body = JSON.parse(out); } catch { /* reported below */ }
+        if (err || body === null) { setArch((a) => A.libraryFailed(a, 'could not read the library')); return; }
+        setArch((a) => (act.t === 'library' ? A.gotLibrary(a, act.what, body) : A.gotExcerpts(a, act.id, body)));
+      });
+    }
   };
   useEffect(() => { if (deck === 0 && !archRef.current.shelf && archRef.current.mode === 'search') void loadShelf(); }, [deck]);
   // The expand page's research job (spec 028-A1 §10.6): the daemon runs it; the console asks how it is going until it ends, then refreshes

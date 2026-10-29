@@ -552,3 +552,104 @@ mod claims {
         assert_eq!(l.reliability_of_source(&s), crate::library::claims::Reliability { claims: 2, stood: 1, contested: 1, disproved: 0 });
     }
 }
+
+mod pages {
+    use super::*;
+    use crate::library::bib::Format;
+    use crate::library::claims::{status, AnchorSpec, ClaimOpts, Validator};
+    use crate::library::pages::{parse_draft, Finding, NOTED_HEADING};
+    use delphi_core::knowledge_status::Status;
+
+    const BODY: &str = "# Tides\n\nThe tide comes in twice a day, driven mostly by the moon.\n\nSpring tides are the highest.\n";
+
+    fn setup() -> (tempfile::TempDir, Library, String, String) {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "t.md", BODY), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+        let spec = |q: &str| AnchorSpec { source_id: s.clone(), locator: Some("§1".into()), quote: q.into(), ..Default::default() };
+        let a = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec("twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&a, Validator::Operator).unwrap();
+        let b = l.add_claim("Spring tides are the highest tides.", &ClaimOpts::default(), &[]).unwrap()["id"].as_str().unwrap().to_string();
+        (d, l, a, b)
+    }
+
+    #[test]
+    fn every_sentence_carries_its_claim_and_unvalidated_ones_sit_under_the_noted_heading() {
+        let (_d, l, a, b) = setup();
+        let p = l.build_page("tides", None, Format::Plain).unwrap();
+        let (head, tail) = p.markdown.split_once(&format!("## {}", NOTED_HEADING)).expect("noted heading");
+        assert!(head.contains(&format!("[{} ● validated]", a)) && !head.contains(&b));
+        assert!(tail.contains(&format!("[{} ○ not validated]", b)));
+        assert!(p.markdown.contains("## Sources"));
+        assert!(l.check_page(&parse_draft(&p.markdown.lines().filter(|x| x.contains("[c-")).collect::<Vec<_>>().join("\n"))).is_empty(), "a built page passes its own check");
+    }
+
+    #[test]
+    fn the_check_rejects_uncited_unknown_and_content_adding_sentences() {
+        let (_d, l, a, _b) = setup();
+        let draft = format!("Tides come twice a day [{a}]. The moon is made of cheese. Tides come twice a day, usually near harbours [{a}]. Tides come twice a day [c-0000].");
+        let f = l.build_page("tides", Some(&draft), Format::Plain).unwrap_err();
+        assert!(f.iter().any(|x| matches!(x, Finding::Uncited(s) if s.contains("cheese"))));
+        assert!(f.iter().any(|x| matches!(x, Finding::AddsContent { words, .. } if words.contains(&"harbours".to_string()))));
+        assert!(f.iter().any(|x| matches!(x, Finding::UnknownClaim { .. })));
+        assert_eq!(f.len(), 3);
+        let ok = l.build_page("tides", Some(&format!("The tides come twice a day [{a}].")), Format::Plain).unwrap();
+        assert_eq!(ok.validated.len(), 1);
+    }
+
+    #[test]
+    fn a_page_is_rebuilt_when_a_claim_changes_and_cached_when_it_does_not() {
+        let (_d, l, a, _b) = setup();
+        assert!(!l.build_page("tides", None, Format::Plain).unwrap().cached);
+        assert!(l.build_page("tides", None, Format::Plain).unwrap().cached);
+        l.dispute_claim(&a, "the source says otherwise in v3").unwrap();
+        let p = l.build_page("tides", None, Format::Plain).unwrap();
+        assert!(!p.cached && p.validated.is_empty());
+        assert!(p.markdown.contains("◆"), "a contested claim shows its own glyph under the noted heading");
+    }
+
+    #[test]
+    fn dispute_files_a_contested_mark_with_the_note_and_blocks_validation() {
+        let (_d, l, a, _b) = setup();
+        assert!(l.dispute_claim(&a, "  ").is_err());
+        let c = l.dispute_claim(&a, "wrong\nsince 2020").unwrap();
+        assert_eq!(c["contested_by"][0]["note"], "wrong since 2020");
+        assert_eq!(status(&c), Status::Contested);
+        assert!(l.validate_claim(&a, Validator::Operator).is_err());
+        assert!(l.dispute_claim("c-zzzz", "x").is_err());
+    }
+
+    #[test]
+    fn a_claim_resting_on_a_private_source_never_reaches_a_page() {
+        let (d, l, _a, _b) = setup();
+        let p = l.add_file(&file(d.path(), "p.md", "# Secret\n\nThe vault code is long.\n"), &AddOpts { private: true, ..open("own") }, &Budgets::default()).unwrap().id;
+        let spec = AnchorSpec { source_id: p, locator: Some("§1".into()), quote: "vault code".into(), ..Default::default() };
+        let c = l.add_claim("The vault code is long.", &ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
+        let page = l.build_page("vault", None, Format::Plain).unwrap();
+        assert!(!page.markdown.contains("vault code") && page.withheld == 1);
+        assert!(l.build_page("vault", Some(&format!("The vault code is long [{}].", c)), Format::Plain).is_err());
+    }
+}
+
+mod export {
+    use super::*;
+    use crate::library::excerpts::ExcerptOpts;
+
+    #[test]
+    fn a_copy_carries_citation_and_licence_but_no_status_note_or_purge_survivor() {
+        let (d, l) = lib();
+        let s = l.add_file(&file(d.path(), "w.md", "# W\n\nBody text.\n"), &open("CC-BY-4.0"), &Budgets::default()).unwrap().id;
+        l.add_excerpt(&s, "Body text", &ExcerptOpts { locator: "§1".into(), purpose: "my private reason".into(), ..Default::default() }).unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        let r = l.export_to_bundle(bundle.path(), &[s.clone(), "nope".into()], false);
+        assert!(r[0].1.is_ok() && r[1].1.is_err());
+        let dir = bundle.path().join("sources").join(&s);
+        assert!(!std::fs::read_to_string(dir.join("excerpts.json")).unwrap().contains("private reason"));
+        let meta: Value = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).unwrap()).unwrap();
+        assert_eq!(meta["licence"], "CC-BY-4.0");
+        l.purge(&s).unwrap();
+        let again = l.export_to_bundle(bundle.path(), std::slice::from_ref(&s), true);
+        let e = again[0].1.as_ref().unwrap();
+        assert_eq!((e.level, e.text_bytes), (Level::Pointer, 0), "a purged capture leaves no text to copy");
+        assert!(!bundle.path().join("sources").join(&s).join("source.md").exists());
+    }
+}
