@@ -174,6 +174,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The body bytes as fetched, for deterministic readers in the daemon (library metadata). Content, so it stays untrusted.
+    pub fn body_for_daemon(&self) -> &[u8] {
+        &self.body
+    }
+
     pub fn pointer(&self) -> Pointer {
         Pointer {
             id: self.id.clone(),
