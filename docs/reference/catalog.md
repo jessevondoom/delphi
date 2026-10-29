@@ -16,6 +16,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test` |
 | `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit` |
 | `strategist` | Long-Horizon Strategist, Sequencer & Scope Auditor | workhorse | `roadmap-sequencing`, `pr-alignment-review`, `scope-creep-detection`, `risk-roi-analysis` |
+| `validator` | Fact-Checker, Source Assessor & Knowledge Gatekeeper | workhorse | `fact-validation` |
 | `writer` | Documentation Architect, Technical Writer & Clarity Synthesizer | workhorse | `documentation-architecture`, `clarity-synthesis`, `narrative-briefing`, `concision-audit`, `org-bundle-authoring` |
 
 ## Skills
@@ -37,6 +38,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `documentation-architecture` | Design and maintain README, docs and guides so they match the code and specs, with working links and examples. Use when documentation is added or drifts. | `writer` |
 | `dynamic-model-scaling` | Choose the model tier and thinking budget for a handoff from task signals and retry history. Use when writing a routing directive or after a failed attempt. | `orchestrator` |
 | `external-comms-dispatch` | Send plans or notices to external channels (calendar, webhook, notification) only with redaction and explicit approval. Use when something must leave Delphi. | `integrator` |
+| `fact-validation` | Advisory: report whether a claim is true by finding independent, reputable corroboration, and what you would conclude. Writes nothing; never marks a claim validated. | `validator`, `scout`, `orchestrator` |
 | `git-bisect-hunt` | Find the commit that introduced a regression with an automated reproduction and git bisect in a detached checkout. Use when something used to work. | `investigator` |
 | `git-pr-packaging` | Prepare atomic commits and a pull request with spec linkage, a checked diff, and honest verification notes. Use when work is ready for review. | `builder` |
 | `github-ops-sync` | Bridge missions with GitHub through gh: issues, PRs, comments, CI status. Every outbound action is confirmed first. Use to read or update GitHub state. | `integrator` |

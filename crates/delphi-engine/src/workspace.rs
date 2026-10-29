@@ -332,6 +332,7 @@ pub(crate) mod tests {
             ("scout", include_str!("../../../agents/scout/AGENT.md"), "fast"),
             ("integrator", include_str!("../../../agents/integrator/AGENT.md"), "fast"),
             ("investigator", include_str!("../../../agents/investigator/AGENT.md"), "fast"),
+            ("validator", include_str!("../../../agents/validator/AGENT.md"), "workhorse"),
         ];
         for (role, text, want) in shipped {
             let m = AgentManifest::parse(text).unwrap();

@@ -61,9 +61,31 @@ pub fn derive(zone: &str, tier_name: &str, doc_status: &str) -> Status {
     }
 }
 
+/// The operator label for a context slice read from a handoff pointer, from the tier the daemon stamped on it
+/// (`L0`..`L5`; anything else, such as `unavailable`, is not validated). The tier comes from the provenance index,
+/// never from the file's own frontmatter, so a file cannot label itself. Only slices read from a pointer carry a
+/// label; text the daemon composes (`@runtime/...`) does not.
+pub fn slice_label(slice_label: &str, tier: &str) -> Option<&'static str> {
+    if slice_label.starts_with("@runtime/") {
+        return None;
+    }
+    let status = match Tier::parse(tier) {
+        Some(t) if t >= Tier::L4 => Status::Validated,
+        _ => Status::Noted,
+    };
+    Some(status.label())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_slice_read_from_a_pointer_is_labelled_by_its_stamped_tier() {
+        assert_eq!(["L0", "L1", "L2", "L3", "unavailable", ""].map(|t| slice_label("specs/a.md", t)), [Some("not validated"); 6]);
+        assert_eq!(["L4", "L5"].map(|t| slice_label("specs/a.md", t)), [Some("validated"); 2]);
+        assert_eq!(slice_label("@runtime/change-log", "L5"), None, "daemon-composed text carries no label");
+    }
 
     #[test]
     fn labels_are_the_three_operator_words_and_never_untrusted() {
