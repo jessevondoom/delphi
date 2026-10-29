@@ -1,9 +1,9 @@
 ---
 id: spec-052-knowledge-status-capture-on-contact-and-the-digest
-title: "052: Knowledge status, capture on contact and the daily digest: one vocabulary for how much a claim can be relied on, and growth that costs the operator nothing (draft)"
+title: "052: Knowledge status, capture on contact and the daily digest: one vocabulary for how much a claim can be relied on, and growth that costs the operator nothing"
 author: architect
 timestamp: 2026-10-28T21:00:00Z
-status: draft   # a proposal, not permission to build (No Spec, No Build). Needs operator approval; open decisions in §8.
+status: approved   # by the operator, 2026-10-28 ("merge and approve all, follow the rest of your recommendations"); the provisional answers in §8 stand; nothing is built
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, knowledge, memory, validator, trust, capture, digest, ux, draft]
 
 # Spec 052: Knowledge status, capture on contact and the daily digest
 
-> Draft. It adds no store and no authority. It joins four things that already exist or are approved: the memory entry fields of `specs/050` (approved; its PR is open) ML-1..ML-4, the operator-facing labels of [`specs/040`](040-validator-role-and-fact-ratification.md) §18.2, the staged-note capture of [`specs/031`](031-layered-learning-and-training-mode.md) §3, and the decisions pane of [`specs/044`](044-decisions-pane.md). Thesis: `docs/thesis.md` (open PR; trust, compounding, honest uncertainty).
+> Approved 2026-10-28. It adds no store and no authority. It joins four things that already exist or are approved: the memory entry fields of [`specs/050`](050-memory-lifecycle-types-supersession-and-trace-mining.md) ML-1..ML-4, the operator-facing labels of [`specs/040`](040-validator-role-and-fact-ratification.md) §18.2, the staged-note capture of [`specs/031`](031-layered-learning-and-training-mode.md) §3, and the decisions pane of [`specs/044`](044-decisions-pane.md). Thesis: [`docs/thesis.md`](../docs/thesis.md) (trust, compounding, honest uncertainty).
 
 ## 1. Why
 Delphi's knowledge side has two halves that do not meet.
