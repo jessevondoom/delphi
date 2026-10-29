@@ -318,6 +318,7 @@ Proposed from the operator's decisions of 2026-10-29: sources in the knowledge b
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | SK0 | bundle `sources/` section: licence gate, size classes, schema, golden fixture (023 §2.1, 024 §4.1a) | built (`crates/delphi-bundle/src/sources.rs`, `schemas/source-meta.schema.json`, golden fixture in `dev/bundles/acme-platform/sources/`); unblocks the first org bundle |
+| SK0b | bundle trust and licence rework: `distribution`, licence to warnings, publication confirmation, org-vouched label, revocation (055 §11.1; 023 §2.1, 024 §4.1a, 052 §3.1) | not started (do before the first test bundle) |
 | SK1 | source record, `delphi sources`, capture via the V2a fetcher, metadata, licence classes | built (`crates/delphi-engine/src/library.rs`, `crates/delphi/src/sources_cmd.rs`; `bundle add` adopts a bundle's `sources/`); budgets are code defaults with per-source raises, config keys not yet |
 | SK2 | excerpts, anchors, bibliography export | built (`library_excerpts.rs`, `library_bib.rs`, `delphi sources excerpt add\|list`, `delphi sources bib`); also closes SK1's metadata readers (`library_meta.rs`: Wikipedia, DOI landing page, Gutenberg header) and the 30-day recheck on open (`library_recheck.rs`, run by `sources show`). **Not built:** the Sources view in the knowledge window (§11 lists it; UI slice to follow); APA/MLA/Chicago are compact renderings, with CSL-JSON and BibTeX for exact styles; the recheck's change test is a hash comparison, the fetcher takes no request headers |
 | SK3 | claim records, mission-start pull by pointer | built (`library_claims.rs`, `delphi claims add\|anchor\|list\|show\|validate\|pull`, the pull in `Engine::start_task`); status derived by `knowledge_status::derive_fact`, `cited_by` on sources and claims, anchors re-resolved on a new version, retirement contests the claims it alone supports, purge makes anchors pointer-only, reliability counts in `sources show`. **Not built:** the Claims view in the knowledge window; config keys for `private_to_models` (private-sourced claim text is withheld, the stricter reading); no validator role path calls `validate_claim` yet (operator only); no dispute action (SK5) |
@@ -327,3 +328,5 @@ Proposed from the operator's decisions of 2026-10-29: sources in the knowledge b
 | SK7 | licence-gated sharing | not started |
 
 Amended with 055 (2026-10-29, additive): 012 §11 (`fact` kind, provisional), 022 §5, 023 §2.1 and step 7a, 024 §4.1a, 027 §2.3a, `schemas/bundle.schema.json` (`sections.sources`).
+
+Amended 2026-10-29 (operator decision: a bundle is trusted, licence is information): 023 §2.1 and step 7a, 024 §3.7 and §4.1a, 052 §3.1, 055 §3.2, §7, §11.1, 027 §2.3a, schemas. The Xenia `fact` kind is deferred by decision.

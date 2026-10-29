@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://delphi.dev/schemas/source-meta.schema.json",
   "title": "Delphi source meta.json",
-  "description": "The record of one source under `sources/<source-id>/` in a bundle (specs/023 section 2.1, specs/055 section 3.2.1): CSL-JSON citation fields plus Delphi's. The licence gate is stricter than a schema can say and is the program's: `delphi bundle validate` refuses `all-rights-reserved`, `unknown`, `private` and any licence that is not an open SPDX id, `public-domain:<jurisdiction>:<basis>` or `own`, and requires `attribution_text` where the licence needs attribution and the share-alike notice with `share_alike = true` for a share-alike licence. Implemented by `delphi-bundle/src/sources.rs`.",
+  "description": "The record of one source under `sources/<source-id>/` in a bundle (specs/023 section 2.1, specs/055 section 3.2.1): CSL-JSON citation fields plus Delphi's. Licence is information, not a gate (specs/023 section 2.1): `licence` is optional (default `internal`); `delphi bundle validate` reports `source-licence`, `source-attribution` and `source-sharealike` as warnings, and `private: true` fails. Implemented by `delphi-bundle/src/sources.rs`.",
   "type": "object",
-  "required": ["type", "title", "licence"],
+  "required": ["type", "title"],
   "properties": {
     "type": { "type": "string", "minLength": 1 },
     "title": { "type": "string", "minLength": 1 },
@@ -26,10 +26,10 @@
     "language": { "type": "string" },
     "licence": {
       "type": "string",
-      "description": "An open SPDX id, `public-domain:<jurisdiction>:<basis>`, or `own`.",
-      "minLength": 1,
-      "not": { "pattern": "^(?i:all-rights-reserved|unknown|private)$" }
+      "description": "An SPDX id, `public-domain:<jurisdiction>:<basis>`, `own`, `internal` (default when absent), `all-rights-reserved` or `unknown`. Information, not a gate.",
+      "minLength": 1
     },
+    "private": { "const": false, "description": "`true` fails validation: a private source never ships (specs/023 section 2.1)." },
     "rights_holder": { "type": "string" },
     "attribution_text": { "type": "string" },
     "share_alike": { "type": "boolean" },

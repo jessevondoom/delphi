@@ -6,7 +6,7 @@
 | :-- | :-- | :-- |
 | [`config.schema.json`](../../schemas/config.schema.json) | `config.toml` | shape and enumerations; `delphi doctor` is authoritative |
 | [`bundle.schema.json`](../../schemas/bundle.schema.json) | `bundle.toml` (schema 1) | shape and the trust-key refusals; `delphi bundle validate` also checks files, secrets and signatures |
-| [`source-meta.schema.json`](../../schemas/source-meta.schema.json) | the `meta.json` of a bundle's `sources/<id>/` | [`specs/023`](../../specs/023-org-bundle-standard.md) §2.1, [`specs/055`](../../specs/055-the-central-library-sources-claims-and-pages.md) §3.2.1; `delphi bundle validate` owns the licence gate |
+| [`source-meta.schema.json`](../../schemas/source-meta.schema.json) | the `meta.json` of a bundle's `sources/<id>/` | [`specs/023`](../../specs/023-org-bundle-standard.md) §2.1, [`specs/055`](../../specs/055-the-central-library-sources-claims-and-pages.md) §3.2.1; `delphi bundle validate` owns the licence warnings and the `private` check |
 | [`event-envelope.schema.json`](../../schemas/event-envelope.schema.json) | one line of a mission event log, and the lines of `delphi run --jsonl` | [`specs/005`](../../specs/005-console-and-narrator-tui.md) §2.2 |
 | [`handoff-envelope.schema.json`](../../schemas/handoff-envelope.schema.json) | the handoff between agents | [`specs/001`](../../specs/001-governance-and-manifests.md) §4 |
 | [`xenia-record.schema.json`](../../schemas/xenia-record.schema.json) | the YAML frontmatter of a Xenia record (`memory`, `endorsement`, `tombstone`) | [`specs/012`](../../specs/012-xenia-record-schema.md); shape only, the verifier also checks signatures, limits and string hygiene |
