@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://delphi.dev/schemas/source-meta.schema.json",
+  "title": "Delphi source meta.json",
+  "description": "The record of one source under `sources/<source-id>/` in a bundle (specs/023 section 2.1, specs/055 section 3.2.1): CSL-JSON citation fields plus Delphi's. The licence gate is stricter than a schema can say and is the program's: `delphi bundle validate` refuses `all-rights-reserved`, `unknown`, `private` and any licence that is not an open SPDX id, `public-domain:<jurisdiction>:<basis>` or `own`, and requires `attribution_text` where the licence needs attribution and the share-alike notice with `share_alike = true` for a share-alike licence. Implemented by `delphi-bundle/src/sources.rs`.",
+  "type": "object",
+  "required": ["type", "title", "licence"],
+  "properties": {
+    "type": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "author": { "$ref": "#/$defs/names" },
+    "editor": { "$ref": "#/$defs/names" },
+    "translator": { "$ref": "#/$defs/names" },
+    "container-title": { "type": "string" },
+    "publisher": { "type": "string" },
+    "publisher-place": { "type": "string" },
+    "issued": { "type": ["object", "string"] },
+    "volume": { "type": "string" },
+    "issue": { "type": "string" },
+    "page": { "type": "string" },
+    "edition": { "type": "string" },
+    "URL": { "$ref": "#/$defs/https" },
+    "DOI": { "type": "string" },
+    "ISBN": { "type": "string" },
+    "ISSN": { "type": "string" },
+    "language": { "type": "string" },
+    "licence": {
+      "type": "string",
+      "description": "An open SPDX id, `public-domain:<jurisdiction>:<basis>`, or `own`.",
+      "minLength": 1,
+      "not": { "pattern": "^(?i:all-rights-reserved|unknown|private)$" }
+    },
+    "rights_holder": { "type": "string" },
+    "attribution_text": { "type": "string" },
+    "share_alike": { "type": "boolean" },
+    "capture_level": { "enum": ["full", "excerpts", "pointer"] },
+    "retrieved": { "$ref": "#/$defs/date" },
+    "last_checked": { "$ref": "#/$defs/date" },
+    "canonical_url": { "$ref": "#/$defs/https" },
+    "content_hash": { "type": "string" },
+    "version": { "type": "string" },
+    "fetch_mode": { "enum": ["daemon", "operator"] },
+    "origin": { "type": "string" },
+    "source_class": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "cited_by": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "names": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "anyOf": [{ "required": ["literal"] }, { "required": ["family"] }, { "required": ["given"] }],
+        "properties": { "family": { "type": "string" }, "given": { "type": "string" }, "literal": { "type": "string" } }
+      }
+    },
+    "https": { "type": "string", "pattern": "^(?i:https://)[^@/]*(/|$)" },
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}" }
+  }
+}

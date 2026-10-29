@@ -13,10 +13,10 @@
     "behavior/policies.toml": { "blake3": "blake3:ea3ff2f132f363a5da96b91da146bbe7fd2511754d8a8297032f1f85ffb93f60", "bytes": 328 },
     "behavior/roles/architect.md": { "blake3": "blake3:83f1800735ebaa230d832bb7e4d8cf215b282c488d9e4b44ab94d6e3c5c6cb8e", "bytes": 677 },
     "behavior/roles/builder.md": { "blake3": "blake3:8f8cccf69c0ddfd2c25da7cadef6c76a70a855f08171f13797a4b3cedb3224a6", "bytes": 527 },
-    "bundle.toml": { "blake3": "blake3:ef01b7451c3cab26da4b9a4ac0298e94bc7a49d5de45d2938b5db4c7c1bcbc3b", "bytes": 865 },
+    "bundle.toml": { "blake3": "blake3:495496c3f536db58b6d07ca8e33ba8e2e0367e44dd7bb05ca981c97b34bedeb9", "bytes": 880 },
     "evals/delphi/kb-eval.json": { "blake3": "blake3:7236cdac99cf392da9897a07038c062becd0c701dae3b5544735d2c883ff3603", "bytes": 1110 },
     "evals/delphi/tasks/add-retry-to-billing-client.md": { "blake3": "blake3:b13109e9d6f7bf784eb7b245bae633729b2007a6e774340af373f1ca9d6e33d6", "bytes": 284 },
-    "knowledge/architecture/overview.md": { "blake3": "blake3:4cab07e12538523b457bf5bac9e6f6b777f9345a87e7b58d8a047602a6068b8f", "bytes": 737 },
+    "knowledge/architecture/overview.md": { "blake3": "blake3:49a04588d8fcd89ccb5ac2fa35f4d3418c01aec4aeaf8c577030b3ab79a11aeb", "bytes": 765 },
     "knowledge/architecture/service-mesh.md": { "blake3": "blake3:3358d47649a860837a51f33407527d9f2644ed16ed6c65da93322110d2e1223e", "bytes": 514 },
     "knowledge/decisions/0031-latency-budget.md": { "blake3": "blake3:e5b7d850f89f8df0461bf83eb65a54ef2e64c36cc79e59c1a12cf275e90055ba", "bytes": 481 },
     "knowledge/decisions/0042-postgres-over-dynamo.md": { "blake3": "blake3:ffdab17f933322a7b75824696844d97ad734fcd75c18d4c936532e19eb9ea172", "bytes": 545 },
@@ -26,6 +26,10 @@
     "knowledge/runbooks/rolling-deploy.md": { "blake3": "blake3:88099a99a8eeb8581c83e9dccf53272af34514e7ee463fd0875103ce9c154706", "bytes": 436 },
     "skills/incident-review/SKILL.md": { "blake3": "blake3:99ed084bbc14bcd840a37123259cbda61529d8407d85a848a338c011f28c76a8", "bytes": 819 },
     "skills/incident-review/templates/postmortem.md": { "blake3": "blake3:dcd24acc8b9b6deefe7b5f0064ed10dd47e316969450fccabdb530665de6da90", "bytes": 120 },
-    "skills/migration-plan/SKILL.md": { "blake3": "blake3:5aeab1738c50882c9d68229df6f92fca123830e02e4f28cda143d1ece53295b0", "bytes": 709 }
+    "skills/migration-plan/SKILL.md": { "blake3": "blake3:5aeab1738c50882c9d68229df6f92fca123830e02e4f28cda143d1ece53295b0", "bytes": 709 },
+    "sources/acme-style-guide/meta.json": { "blake3": "blake3:ff7baed0594902aedda6ed093f83b4ebb25cf49580adaed81bda8e7b7146b829", "bytes": 186 },
+    "sources/oecd-2024-report/assets/figure-1.png": { "blake3": "blake3:8ec79f5b6aac6a695b2feb7d2901bc224bf53c7f85bff4d938454a6bab8f2c46", "bytes": 67 },
+    "sources/oecd-2024-report/meta.json": { "blake3": "blake3:c670db5d941c59bc7fac0af19ddb42d3fa34c25c2c18b2c8f24d8970f909cf77", "bytes": 622 },
+    "sources/oecd-2024-report/source.md": { "blake3": "blake3:cc45484a15488bb4c428e188092c3717a32e700f5bc4cd1a091a1290417b87be", "bytes": 231 }
   }
 }

@@ -18,6 +18,8 @@ pub struct Summary {
     pub readme_more: usize,
     pub knowledge_files: usize,
     pub knowledge_bytes: u64,
+    /// The `sources/` section: ids with licence and sizes, never text (`specs/023` §2.1).
+    pub sources: Vec<crate::sources::SourceSummary>,
     pub skills: Vec<(String, Vec<String>)>,
     /// (agent, host role) with the tools the host would drop.
     pub agents: Vec<(String, Option<String>, Vec<String>)>,
@@ -75,6 +77,7 @@ fn summarize(tree: &Tree, m: Option<&Manifest>, host: &dyn Host) -> Summary {
         s.knowledge_files += 1;
         s.knowledge_bytes += e.bytes;
     }
+    s.sources = crate::sources::list(tree);
     for name in crate::skills::skill_names(tree) {
         let roles = tree
             .text(&format!("skills/{}/SKILL.md", name))

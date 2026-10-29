@@ -30,6 +30,7 @@ A bundle is a `bundle.toml` plus directories for the sections you turn on:
 ```
 acme-platform/
 ├── bundle.toml          identity, publisher, what it applies to, which sections exist
+├── sources/             optional full texts and images of redistributable sources (licence-gated; retrieved, never always-loaded)
 ├── knowledge/           Markdown the team's agents can search (architecture, decisions, runbooks, glossary)
 ├── skills/              agentskills.io skills
 ├── agents/              bundle agents, each mapped to a host role in bundle.toml
@@ -60,7 +61,7 @@ knowledge = true
 skills = true
 ```
 
-What `validate` enforces, so you know what to expect: unknown keys are errors (an ignored key is a way to smuggle content); keys that state trust or grant authority (`tier`, `trust`, `permissions`, `allowed_tools`, `hooks`, `env`, `secrets`, `mcp_servers`, `credentials` and a few more) are refused anywhere in the file; a section set to `true` needs its directory; and the redaction scan looks for secrets, paths, addresses and names. `--report` writes the masked findings to a file *outside* the bundle. `--against <previous dir>` checks that your version bump matches the changes. Exit codes: 0 pass, 1 failed, 2 usage.
+What `validate` enforces, so you know what to expect: unknown keys are errors (an ignored key is a way to smuggle content); keys that state trust or grant authority (`tier`, `trust`, `permissions`, `allowed_tools`, `hooks`, `env`, `secrets`, `mcp_servers`, `credentials` and a few more) are refused anywhere in the file; a section set to `true` needs its directory; and the redaction scan looks for secrets, paths, addresses and names. `--report` writes the masked findings, and a table of the shipped sources (id, licence, sizes, never text), to a file *outside* the bundle. `--against <previous dir>` checks that your version bump matches the changes. Exit codes: 0 pass, 1 failed, 2 usage.
 
 Have the writer draft knowledge for you with `/distill` in the console (or `delphi bundle distill`). It reads only allow-listed sources (team context and specs, mission decisions, Council verdicts) into a staging directory of the mission and writes nothing into a bundle; you review and move what you keep.
 
@@ -104,3 +105,7 @@ delphi bundle export acme-platform --agents-md [file]   # a knowledge-only AGENT
 ## What is not built yet
 
 Archive tree pointers for store records, `i8` vectors, vectors in `bundle serve`, the evaluation's blind grader and any live paid evaluation run, and the agent registry and role extensions of [`specs/041`](../../specs/041-agent-registry-routing-and-role-extensions.md). Building a bundle with an agent: [Building a bundle with an operator](building-a-bundle.md).
+
+## Shipping sources
+
+`sources/<source-id>/` holds `source.md` (absent for a pointer-only source), `meta.json` ([`schemas/source-meta.schema.json`](../../schemas/source-meta.schema.json)), an optional `excerpts.json` and `assets/` (png, jpeg, webp, svg, pdf, csv). Set `sources = true` under `[sections]`. Only redistributable licences travel: an open SPDX id, `public-domain:<jurisdiction>:<basis>` or `own`. `all-rights-reserved`, `unknown` and `private` refuse the whole `validate` and `add`, naming the source id and never its text. A licence that needs attribution needs `attribution_text`; a share-alike licence also needs `share_alike = true` and the notice. Knowledge files cite sources with `sources: [<id>]` in their frontmatter (each id must exist). `sources/` has its own size class (20,000 files, 16 MiB per text file, 32 MiB per asset, 1 GiB in all) and a source never raises the tier of the knowledge that cites it; instruction-shaped lines in `source.md` are warnings. See [`specs/023`](../../specs/023-org-bundle-standard.md) §2.1.

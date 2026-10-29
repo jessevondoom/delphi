@@ -58,6 +58,7 @@ pub fn check(tree: &Tree, m: Option<&Manifest>, host: &dyn Host, r: &mut Report)
                 r.fail(7, path, format!("review_by `{}` is not a YYYY-MM-DD date", d));
             }
         }
+        crate::sources::check_frontmatter(tree, path, text, r);
         if let Some(p) = fm.get(Value::String("pointers".into())) {
             pointers(p, path, r);
         }

@@ -25,6 +25,7 @@ fn cell(s: &str) -> String {
 /// The report as Markdown.
 pub fn render(dir: &Path, host: &dyn Host) -> String {
     let (m, files, hits) = findings(dir, host);
+    let t = tree::Tree::open(dir);
     let title = m.as_ref().map(|m| format!("{}/{} {}", m.org, m.name, m.version)).unwrap_or_else(|| dir.display().to_string());
     let failing = hits.iter().filter(|h| h.hit.fail).count();
     let mut out = format!("# Redaction report: {}\n\nWritten by `delphi bundle validate --report` and completed by the author. The human approves this report before anything is packaged (`skills/org-bundle-authoring`, step 9).\n\n", title);
@@ -37,6 +38,14 @@ pub fn render(dir: &Path, host: &dyn Host) -> String {
         out.push_str(&format!("| {} | {}:{} | {}{} | {} |  |  |\n", i + 1, cell(&h.path), h.hit.line, h.hit.class, if h.hit.fail { "" } else { " (warning)" }, cell(&h.hit.found)));
     }
     out.push_str("\nClasses: `secret`, `token`, `private-key`, `local-path`, `e-mail`, `person-name`, `identifier` (from `[privacy] identifiers`), `customer-data`, `transcript`. The last two cannot be found by a scan; the author looks for them by hand.\n\n");
+    let sources = crate::sources::list(&t);
+    if !sources.is_empty() {
+        out.push_str("## Sources shipped in `sources/`\nListed by id, licence and size; the text is never printed here. A source is data and travels only under a redistributable licence (`specs/023` §2.1).\n\n| Source id | Licence | Capture level | Text bytes | Assets | Asset bytes |\n| :-- | :-- | :-- | --: | --: | --: |\n");
+        for s in &sources {
+            out.push_str(&format!("| {} | {} | {} | {} | {} | {} |\n", cell(&s.id), cell(&s.licence), cell(&s.capture_level), s.text_bytes, s.assets, s.asset_bytes));
+        }
+        out.push('\n');
+    }
     out.push_str("## Pointers that replace removed detail\n| Removed from | Pointer added | Access hint |\n| :-- | :-- | :-- |\n|  |  |  |\n\n");
     out.push_str("## Author's attestation\n- [ ] Every finding above has an action or a stated reason to keep.\n- [ ] No file under `knowledge/` contains instructions aimed at an agent (validator warnings addressed).\n- [ ] No secret was found in a previous published version; or, the secret has been rotated (date: <date>).\n\n");
     out.push_str("## Human approval\nApproved by: <handle>  ·  Date: <date>  ·  Package may proceed: yes / no\n");

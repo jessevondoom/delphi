@@ -30,6 +30,11 @@ pub struct Limits {
     pub vector_files: usize,
     pub vector_file_bytes: u64,
     pub vector_bytes: u64,
+    /// The separate size class of `sources/` (`specs/023` §2.1): files, text and asset bytes per file, and the section.
+    pub source_files: usize,
+    pub source_text_bytes: u64,
+    pub source_asset_bytes: u64,
+    pub source_bytes: u64,
 }
 
 impl Limits {
@@ -40,6 +45,10 @@ impl Limits {
         vector_files: 64,
         vector_file_bytes: 256 * 1024 * 1024,
         vector_bytes: 1024 * 1024 * 1024,
+        source_files: crate::sources::MAX_FILES,
+        source_text_bytes: crate::sources::MAX_TEXT_BYTES,
+        source_asset_bytes: crate::sources::MAX_ASSET_BYTES,
+        source_bytes: crate::sources::MAX_BYTES,
     };
 }
 
@@ -49,6 +58,7 @@ pub struct Extracted {
     pub paths: Vec<String>,
     pub bytes: u64,
     pub vector_bytes: u64,
+    pub source_bytes: u64,
 }
 
 #[cfg(test)]
@@ -152,7 +162,7 @@ fn read_block<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<(), String> {
 pub fn extract<R: Read>(mut r: R, dest: &Path, limits: &Limits) -> Result<Extracted, String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut out = Extracted::default();
-    let (mut files, mut vector_files) = (0usize, 0usize);
+    let (mut files, mut vector_files, mut source_files) = (0usize, 0usize, 0usize);
     let mut dirs: BTreeSet<String> = BTreeSet::new();
     let mut prev: Option<String> = None;
     let mut block = [0u8; BLOCK];
@@ -182,8 +192,20 @@ pub fn extract<R: Read>(mut r: R, dest: &Path, limits: &Limits) -> Result<Extrac
             return Err(format!("{}: entries are not in strictly increasing bytewise order (or repeated)", path));
         }
         let in_vectors = path.starts_with("vectors/");
+        let in_sources = path.starts_with("sources/");
         // The caps, before any data is read.
-        if in_vectors {
+        if in_sources {
+            let cap = if path.split('/').nth(2) == Some("assets") { limits.source_asset_bytes } else { limits.source_text_bytes };
+            if source_files + 1 > limits.source_files {
+                return Err(format!("{}: more than {} files under sources/", path, limits.source_files));
+            }
+            if size > cap {
+                return Err(format!("{}: {} bytes (cap {} bytes under sources/)", path, size, cap));
+            }
+            if out.source_bytes.saturating_add(size) > limits.source_bytes {
+                return Err(format!("{}: sources/ would pass {} bytes in all", path, limits.source_bytes));
+            }
+        } else if in_vectors {
             if vector_files + 1 > limits.vector_files {
                 return Err(format!("{}: more than {} files under vectors/", path, limits.vector_files));
             }
@@ -239,7 +261,10 @@ pub fn extract<R: Read>(mut r: R, dest: &Path, limits: &Limits) -> Result<Extrac
                 return Err(format!("{}: non-zero padding after the data", path));
             }
         }
-        if in_vectors {
+        if in_sources {
+            source_files += 1;
+            out.source_bytes += size;
+        } else if in_vectors {
             vector_files += 1;
             out.vector_bytes += size;
         } else {
@@ -429,13 +454,13 @@ mod tests {
 
     #[test]
     fn every_cap_aborts_at_its_boundary_before_the_data_is_read() {
-        let l = Limits { files: 2, file_bytes: 10, tree_bytes: 15, vector_files: 1, vector_file_bytes: 20, vector_bytes: 25 };
+        let l = Limits { files: 2, file_bytes: 10, tree_bytes: 15, vector_files: 1, vector_file_bytes: 20, vector_bytes: 25, source_files: 1, source_text_bytes: 6, source_asset_bytes: 9, source_bytes: 12 };
         // exactly at each cap passes
         let mut ok = entry("a.md", &[b'x'; 10]);
         ok.extend(entry("b.md", &[b'x'; 5]));
         ok.extend(entry("vectors/v.dlphvec", &[b'x'; 20]));
         let (_d, r) = extract_to(&end(ok.clone()), &l);
-        assert_eq!(r.unwrap(), Extracted { paths: vec!["a.md".into(), "b.md".into(), "vectors/v.dlphvec".into()], bytes: 15, vector_bytes: 20 });
+        assert_eq!(r.unwrap(), Extracted { paths: vec!["a.md".into(), "b.md".into(), "vectors/v.dlphvec".into()], bytes: 15, vector_bytes: 20, source_bytes: 0 });
         // one over each
         refused(&end(entry("a.md", &[b'x'; 11])), &l, "cap 10 bytes outside vectors/");
         let mut v = entry("a.md", &[b'x'; 10]);
@@ -446,6 +471,20 @@ mod tests {
         v.extend(entry("c.md", b"3"));
         refused(&end(v), &l, "more than 2 files outside");
         refused(&end(entry("vectors/v.dlphvec", &[b'x'; 21])), &l, "cap 20 bytes under vectors/");
+        // `sources/` has its own class: a file over the outside cap passes, an asset has the larger cap
+        let (_d, r) = extract_to(&end(entry("sources/a/source.md", &[b'x'; 6])), &l);
+        assert_eq!(r.unwrap().source_bytes, 6);
+        refused(&end(entry("sources/a/source.md", &[b'x'; 7])), &l, "cap 6 bytes under sources/");
+        let (_d, r) = extract_to(&end(entry("sources/a/assets/i.png", &[b'x'; 9])), &l);
+        assert!(r.is_ok());
+        refused(&end(entry("sources/a/assets/i.png", &[b'x'; 10])), &l, "cap 9 bytes under sources/");
+        let mut v = entry("sources/a/assets/a.png", &[b'x'; 8]);
+        v.extend(entry("sources/a/assets/b.png", &[b'x'; 5]));
+        refused(&end(v), &l, "more than 1 files under sources/");
+        let l3 = Limits { source_files: 5, ..l };
+        let mut v = entry("sources/a/assets/a.png", &[b'x'; 8]);
+        v.extend(entry("sources/a/assets/b.png", &[b'x'; 5]));
+        refused(&end(v), &l3, "sources/ would pass 12");
         let mut v = entry("vectors/a", b"1");
         v.extend(entry("vectors/b", b"2"));
         refused(&end(v), &l, "more than 1 files under vectors/");

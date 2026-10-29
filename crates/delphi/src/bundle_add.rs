@@ -108,6 +108,10 @@ fn print_summary(i: &Inspected, m: &delphi_bundle::Manifest, hash: &str, shown: 
     }
     println!("\n  brings:");
     println!("    knowledge: {} files, {} KiB (searched, never always loaded; tier federated_verified)", s.knowledge_files, s.knowledge_bytes / 1024);
+    if !s.sources.is_empty() {
+        let bytes: u64 = s.sources.iter().map(|x| x.text_bytes + x.asset_bytes).sum();
+        println!("    sources: {} ({} KiB; imported as not validated, licence records kept; never raises a tier)", s.sources.len(), bytes / 1024);
+    }
     if !s.skills.is_empty() {
         let list: Vec<String> = s.skills.iter().map(|(n, r)| format!("{} ({})", n, r.join(", "))).collect();
         println!("    skills: {}", list.join("; "));
