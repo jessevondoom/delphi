@@ -234,3 +234,14 @@ The operator asked for a half-block image renderer (not `ink-picture`: 136 packa
 | I2 | check pictures in the chat reader and the change feed | not started |
 | I3 | pictures saved with web research (licence per picture, attribution, `images:` frontmatter) | built; the two Wikimedia hosts are on the default list (2026-10-28); not run live |
 | Q1 | quadrant pictures as the default (spec 029-A2), half blocks kept: `DELPHI_PICTURE`, `/pictures` | built; font support in the operator's terminal unproven |
+
+## Knowledge status, capture on contact and the digest (spec 052, draft, 2026-10-28)
+
+A draft, not approved. Joins specs 050 (entry fields), 040 §18.2 (labels), 031 (staged capture) and 044 (the pane). Adds no store and no authority. Plan and coordination log: `knowledge-and-delight-plan-2026-10-28.md`.
+
+| Slice | Content | State |
+| :-- | :-- | :-- |
+| KS1 | one status table (noted, checking, validated, contested, disproved, retired) and the labels everywhere | draft |
+| KS2 | capture on contact: accepted answer, Council verdict, resolved decision, research run | draft |
+| KS3 | `learn` kind in the decisions pane (the daily digest) | draft |
+| KS4 | contested pairs and review-due | draft |
