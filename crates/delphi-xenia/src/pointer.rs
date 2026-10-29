@@ -8,8 +8,9 @@
 //! * locators are **ASCII only** (no IDN or look-alike hosts), lowercase hosts, no userinfo of any kind
 //!   (including `git@`), no query, no fragment (except `git`'s one `#path` separator), no `;`, `=`, `&`,
 //!   no `%`-encoded dots, slashes, `@` or controls, no `..` segments;
-//! * `file:`, relative and absolute local paths, and `delphi://` fail simply by not being `https://` or
-//!   `ssh://` URLs (git), `https://` URLs (https), `<kind>/<id>` (xenia) or a bare Drive id (drive);
+//! * `file:`, relative and absolute local paths fail simply by not being `https://` or `ssh://` URLs (git),
+//!   `https://` URLs (https), `xenia://<kind>/<id>[@rev]` (xenia) or a bare Drive id (drive); `delphi://` is
+//!   refused by name (the scheme is `xenia://`), and `xenia://cap/...` is reserved for the unbuilt Plane 2;
 //! * well-known credential shapes (GitHub, GitLab, Slack, AWS, JWT) anywhere in a locator are refused.
 //!
 //! Spec 012 §4 says "URL without userinfo or query tokens". A denylist of token parameter names would
@@ -244,6 +245,13 @@ fn check_locator_common(l: &str) -> Result<(), Bad> {
     if l.contains(['?', ';', '=', '&']) {
         return Err(bad("locator", "query or parameter syntax is not allowed"));
     }
+    let lower = l.to_ascii_lowercase();
+    if lower.starts_with("delphi:") {
+        return Err(bad("locator", "delphi:// is not a pointer scheme; use xenia://"));
+    }
+    if lower == "xenia://cap" || lower.starts_with("xenia://cap/") {
+        return Err(bad("locator", "xenia://cap/ is reserved for capability URIs (spec 007 Plane 2), not built"));
+    }
     if looks_like_credential(l) {
         return Err(bad("locator", "contains something shaped like a credential"));
     }
@@ -349,9 +357,11 @@ fn check_git_locator(l: &str) -> Result<(), Bad> {
     check_path_segments(path, false)
 }
 
-/// `<kind>/<id>[@rev]`, another record in this store.
+/// `xenia://<kind>/<id>[@rev]`, another record in this store. The authority is the record kind; `cap` is
+/// reserved for Plane 2 capability URIs and is never a kind.
 fn check_xenia_locator(l: &str) -> Result<(), Bad> {
-    let (kind, rest) = l.split_once('/').ok_or(bad("locator", "a xenia locator is <kind>/<id>[@rev]"))?;
+    let path = l.strip_prefix("xenia://").ok_or(bad("locator", "a xenia locator is xenia://<kind>/<id>[@rev]"))?;
+    let (kind, rest) = path.split_once('/').ok_or(bad("locator", "a xenia locator is xenia://<kind>/<id>[@rev]"))?;
     if Kind::parse(kind).is_none() {
         return Err(bad("locator", "unknown record kind"));
     }
@@ -418,8 +428,8 @@ mod tests {
         web("https://docs.acme.example/runbooks/payments").unwrap();
         web("https://docs.acme.example:8443/a%20b/").unwrap();
         publishable("https", "https://docs.acme.example/x", "content-hash", Some(&hash::of(b"x"))).unwrap();
-        publishable("xenia", &format!("memory/{ID}"), "none", None).unwrap();
-        publishable("xenia", &format!("memory/{ID}@3"), "none", None).unwrap();
+        publishable("xenia", &format!("xenia://memory/{ID}"), "none", None).unwrap();
+        publishable("xenia", &format!("xenia://memory/{ID}@3"), "none", None).unwrap();
         publishable("git", "https://github.com/acme/p#src/lib.rs", "git-tree", Some(&"a".repeat(64))).unwrap();
     }
 
@@ -428,6 +438,26 @@ mod tests {
         for s in ["file", "ftp", "http", "ssh", "delphi", "javascript", "data", "HTTPS", "Git", ""] {
             assert!(ptr(s, "https://x.example/y", "none", None).is_err(), "{s:?}");
         }
+    }
+
+    #[test]
+    fn delphi_uris_are_refused_with_a_pointer_to_xenia() {
+        for l in ["delphi://memory/01JBX3Q8T2M9Z4K7WYH5N6D0RA", "DELPHI://cap/abc", "delphi://bob.tailnet/p/a.md"] {
+            for scheme in ["xenia", "https", "git"] {
+                let e = publishable(scheme, l, "none", None).unwrap_err();
+                assert_eq!((e.field, e.why), ("locator", "delphi:// is not a pointer scheme; use xenia://"), "{scheme} {l:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn xenia_cap_is_reserved_and_never_a_record_kind() {
+        for l in ["xenia://cap/abc", "xenia://cap", "XENIA://CAP/x"] {
+            let e = publishable("xenia", l, "none", None).unwrap_err();
+            assert_eq!(e.why, "xenia://cap/ is reserved for capability URIs (spec 007 Plane 2), not built", "{l:?}");
+        }
+        assert!(Kind::parse("cap").is_none());
+        assert!(publishable("xenia", &format!("xenia://cap/{ID}"), "none", None).is_err());
     }
 
     #[test]
@@ -443,7 +473,7 @@ mod tests {
     #[test]
     fn local_paths_file_urls_and_delphi_uris_are_refused() {
         for l in [
-            "file:///etc/passwd", "/etc/passwd", "../secrets.md", "./notes.md", "~/notes.md", "D:/data/notes.md", "docs/readme.md", "delphi://cap/abc", "DELPHI://x",
+            "file:///etc/passwd", "/etc/passwd", "../secrets.md", "./notes.md", "~/notes.md", "D:/data/notes.md", "docs/readme.md", "delphi://cap/abc", "DELPHI://x", "memory/01JBX3Q8T2M9Z4K7WYH5N6D0RA", "xenia:memory/01JBX3Q8T2M9Z4K7WYH5N6D0RA",
             "https:///etc/passwd", "https://", "https:/x.example", "http://x.example/y",
         ] {
             assert!(web(l).is_err(), "https {l:?}");
@@ -498,12 +528,12 @@ mod tests {
         assert!(publishable("git", "https://h.example/r#a", "git-commit", Some(&SHA.to_uppercase())).is_err());
         assert!(publishable("https", "https://h.example/r", "git-commit", Some(SHA)).is_err());
         assert!(publishable("https", "https://h.example/r", "content-hash", Some("blake3:xx")).is_err());
-        assert!(publishable("xenia", &format!("memory/{ID}"), "content-hash", Some(&hash::of(b"x"))).is_err());
-        assert!(publishable("xenia", &format!("skill/{ID}"), "none", None).is_err());
-        assert!(publishable("xenia", "memory/not-a-ulid", "none", None).is_err());
-        assert!(publishable("xenia", &format!("memory/{ID}@0"), "none", None).is_err());
-        assert!(publishable("xenia", &format!("memory/{ID}@03"), "none", None).is_err());
-        assert!(publishable("xenia", &format!("memory/{ID}@1@2"), "none", None).is_err());
+        assert!(publishable("xenia", &format!("xenia://memory/{ID}"), "content-hash", Some(&hash::of(b"x"))).is_err());
+        assert!(publishable("xenia", &format!("xenia://skill/{ID}"), "none", None).is_err());
+        assert!(publishable("xenia", "xenia://memory/not-a-ulid", "none", None).is_err());
+        assert!(publishable("xenia", &format!("xenia://memory/{ID}@0"), "none", None).is_err());
+        assert!(publishable("xenia", &format!("xenia://memory/{ID}@03"), "none", None).is_err());
+        assert!(publishable("xenia", &format!("xenia://memory/{ID}@1@2"), "none", None).is_err());
     }
 
     #[test]
