@@ -52,7 +52,7 @@ pub fn render_list(notes: &[LiveNote]) -> String {
 }
 
 pub fn render_one(n: &LiveNote) -> String {
-    let source = if n.tier == "L5" { "typed by the operator" } else if n.tier == "L3" { "composed by the daemon from the log" } else { "from a task that read untrusted content" };
+    let source = if n.tier == "L5" { "typed by the operator" } else if n.tier == "L3" { "composed by the daemon from the log" } else { "from a task that read content that is not validated" };
     format!(
         "{}\n  trigger: {}\n  at:      {}\n  task:    {}\n  role:    {}\n  tier:    {} ({}); promotion needs L4 or above\n  events:  {}\n\n{}\n",
         n.reference(),
@@ -190,7 +190,7 @@ mod tests {
         assert!(listed.contains("m_a/n3") && listed.contains("m_b/n3") && listed.contains("3 note(s)"), "{}", listed);
         let shown = run_in(t.path(), "show", Some("m_a/n3"), &opts()).unwrap();
         assert!(shown.contains("typed by the operator") && shown.contains("use the helper"), "{}", shown);
-        assert!(run_in(t.path(), "show", Some("m_b/n3"), &opts()).unwrap().contains("untrusted"));
+        assert!(run_in(t.path(), "show", Some("m_b/n3"), &opts()).unwrap().contains("not validated"));
         assert!(run_in(t.path(), "show", Some("n3"), &opts()).unwrap_err().contains("names 2 notes"), "a bare id that two missions share is ambiguous");
 
         drop_note(t.path(), "m_a/n3");

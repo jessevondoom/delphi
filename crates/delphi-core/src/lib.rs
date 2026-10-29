@@ -18,6 +18,7 @@ pub mod lock;
 pub mod log;
 pub mod pathguard;
 pub mod peer;
+pub mod knowledge_status;
 pub mod provenance;
 pub mod proto;
 pub mod redact;

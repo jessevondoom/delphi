@@ -326,7 +326,7 @@ fn agy_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut DocumentM
     if has_endpoint(doc, "agy-sub") || d.agy_version.is_none() {
         return None;
     }
-    if !ui.yes_no("Use your Gemini subscription through `agy`? (read-only roles like reviewers and Council seats; its output is treated as untrusted)", true) {
+    if !ui.yes_no("Use your Gemini subscription through `agy`? (read-only roles like reviewers and Council seats; its output is treated as not validated)", true) {
         return None;
     }
     let listing = env.run("agy", &["models"]).map(|(_, o)| o).unwrap_or_default();

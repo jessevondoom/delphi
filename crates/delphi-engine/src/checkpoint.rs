@@ -131,7 +131,7 @@ pub fn note(f: &Facts, history: &[Turn], mission_events: &[EventEnvelope], sessi
     out.push_str("## Where the work stood\n\n");
     match (&parts.work, f.tainted) {
         (Some(w), _) => out.push_str(&format!("{}\n\n*(written by {}; it can be wrong, the log below is exact)*\n\n", w, f.substitute)),
-        (None, true) => out.push_str("*(no model wrote a summary: this task read untrusted content, and a summary of it would carry that text on)*\n\n"),
+        (None, true) => out.push_str("*(no model wrote a summary: this task read content that is not validated, and a summary of it would carry that text on)*\n\n"),
         (None, false) if f.substitute.is_empty() => out.push_str("*(no model summary: no model was usable to write one)*\n\n"),
         (None, false) => out.push_str("*(no model summary: the weaker model did not answer in time, or summaries are off)*\n\n"),
     }
@@ -152,7 +152,7 @@ pub fn note(f: &Facts, history: &[Turn], mission_events: &[EventEnvelope], sessi
     out.push_str("\n## The chat session\n\n");
     match (&parts.chat, f.tainted) {
         (Some(c), _) => out.push_str(&format!("{}\n\n*(written by {})*\n\n", c, f.substitute)),
-        (None, true) => out.push_str("*(no model wrote a summary: this task read untrusted content)*\n\n"),
+        (None, true) => out.push_str("*(no model wrote a summary: this task read content that is not validated)*\n\n"),
         (None, false) => out.push_str("*(no model summary)*\n\n"),
     }
     out.push_str("The first words of each message (no model):\n\n");
@@ -227,7 +227,7 @@ mod tests {
         let n = note(&facts(false), &history(), &[], &[], &parts);
         assert!(n.contains("They drafted two of three sections.") && n.contains("The operator wants a retry ladder.") && n.contains("written by direct/sonnet-x"));
         let t = note(&facts(true), &history(), &[], &[], &ModelParts::default());
-        assert!(t.contains("read untrusted content") && !t.contains("They drafted"));
+        assert!(t.contains("read content that is not validated") && !t.contains("They drafted"));
     }
 
     #[test]
