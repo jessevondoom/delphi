@@ -19,7 +19,7 @@ export function contextReport(r: ContextReport, full: boolean): string {
     ...(r.digested || r.omitted ? [`${whole} whole, ${r.digested} as lines, ${r.omitted} left out`] : []),
     `about ${kilo(r.tokens)} of ${kilo(r.budget_tokens)} tokens`,
     ...(r.earlier ? [`${r.earlier} earlier session${r.earlier === 1 ? '' : 's'} in a line each`] : []),
-    ...(r.ceiling !== 'L5' ? [`starts below full trust (${r.ceiling}): an earlier reply read untrusted content; /new clears it`] : []),
+    ...(r.ceiling !== 'L5' ? [`starts below full trust (${r.ceiling}): an earlier reply read content that is only noted, not validated; /new clears it`] : []),
   ];
   const head = `${sessionName(r.session)} · the next task is told ${parts.join(' · ')}`;
   return full && r.text ? `${head}\n\n${r.text}` : head + (r.text ? '\n(/context full shows the text)' : '');
