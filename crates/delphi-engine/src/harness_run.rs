@@ -58,6 +58,17 @@ pub(crate) fn inside(root: &Path, p: &str) -> Option<PathBuf> {
     Some(real)
 }
 
+/// The `harness.cost` payload. A seat whose vendor counts its own units (Copilot) adds `premium_requests` and `nano_aiu`: the event
+/// log is that seat's ledger (`specs/051` §8), and the vendor's server-side meter only reconciles it.
+fn cost_payload(cost: f64, metered: u64, vendor_meter: Option<(u64, u64)>) -> Value {
+    let mut v = json!({"total_cost_usd_equivalent": cost, "metered_tokens": metered});
+    if let Some((premium_requests, nano_aiu)) = vendor_meter {
+        v["premium_requests"] = json!(premium_requests);
+        v["nano_aiu"] = json!(nano_aiu);
+    }
+    v
+}
+
 fn path_of(input: &Value) -> Option<&str> {
     ["file_path", "path", "notebook_path"].iter().find_map(|k| input[k].as_str())
 }
@@ -598,6 +609,7 @@ impl Engine {
         };
         let (mut text_parts, mut final_text, mut result): (Vec<String>, Option<String>, Option<Event>) = (Vec::new(), None, None);
         let mut metered = 0u64;
+        let mut vendor_meter: Option<(u64, u64)> = None;
         let mut cap_alerted: Vec<u64> = Vec::new();
         let mut failure: Option<(String, bool)> = None;
         let mut exit_code: Option<i32> = None;
@@ -720,6 +732,7 @@ impl Engine {
                         break;
                     }
                 }
+                Event::Meter { premium_requests, nano_aiu } => vendor_meter = Some((premium_requests, nano_aiu)),
                 Event::Usage(t) => {
                     metered += t.metered();
                     // The CLI's usage is logged once, when the span ends; the window's meter moves from this meanwhile.
@@ -820,7 +833,7 @@ impl Engine {
             outcome: if failure.is_some() { "error" } else { "ok" }.into(),
             reservation_id: None,
         };
-        let mut batch = vec![sc.agent_ev("agent.usage", payload.to_value(), ep, &launch.model), sc.agent_ev("harness.cost", json!({"total_cost_usd_equivalent": cost, "metered_tokens": metered}), ep, &launch.model)];
+        let mut batch = vec![sc.agent_ev("agent.usage", payload.to_value(), ep, &launch.model), sc.agent_ev("harness.cost", cost_payload(cost, metered, vendor_meter), ep, &launch.model)];
 
         // Only a run that failed counts: if the CLI printed a rejection but still finished, the pair served, and marking it
         // exhausted only for `record_success` to clear it a moment later would leave a false event in the log.
@@ -1644,7 +1657,7 @@ open(sys.argv[1], "w").write(json.dumps(out))
     /// A stand-in `copilot` that records the token and arguments, reads the prompt, and answers as `reported`.
     fn fake_copilot_body(dump: &std::path::Path, reported: &str) -> String {
         format!(
-            "cat > /dev/null\necho \"$COPILOT_GITHUB_TOKEN|$*\" > {}\necho '{{\"type\":\"session.tools_updated\",\"data\":{{\"model\":\"{r}\"}}}}'\necho '{{\"type\":\"assistant.message\",\"data\":{{\"content\":\"Plan: ship it.\",\"toolRequests\":[],\"model\":\"{r}\"}}}}'\necho '{{\"type\":\"session.usage_checkpoint\",\"data\":{{\"accountingSnapshot\":{{\"tokenDetails\":{{\"input\":{{\"tokenCount\":10}},\"output\":{{\"tokenCount\":4}}}}}}}}}}'\necho '{{\"type\":\"result\",\"sessionId\":\"s\",\"exitCode\":0}}'",
+            "cat > /dev/null\necho \"$COPILOT_GITHUB_TOKEN|$*\" > {}\necho '{{\"type\":\"session.tools_updated\",\"data\":{{\"model\":\"{r}\"}}}}'\necho '{{\"type\":\"assistant.message\",\"data\":{{\"content\":\"Plan: ship it.\",\"toolRequests\":[],\"model\":\"{r}\"}}}}'\necho '{{\"type\":\"session.usage_checkpoint\",\"data\":{{\"totalPremiumRequests\":2,\"totalNanoAiu\":5766050000,\"accountingSnapshot\":{{\"tokenDetails\":{{\"input\":{{\"tokenCount\":10}},\"output\":{{\"tokenCount\":4}}}}}}}}}}'\necho '{{\"type\":\"result\",\"sessionId\":\"s\",\"exitCode\":0}}'",
             dump.display(),
             r = reported
         )
@@ -1666,8 +1679,16 @@ open(sys.argv[1], "w").write(json.dumps(out))
         assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"].as_str().unwrap().contains("copilot")), "its output is untrusted");
         let u = &events_of(&f, "agent.usage")[0].payload;
         assert_eq!(u["provider"], "github-copilot");
+        let c = &events_of(&f, "harness.cost")[0].payload;
+        assert_eq!((c["premium_requests"].as_u64(), c["nano_aiu"].as_u64()), (Some(2), Some(5_766_050_000)), "the seat ledger is the event log");
         assert_eq!((u["input_tokens"].as_u64(), u["output_tokens"].as_u64()), (Some(10), Some(4)));
         assert!(!format!("{:?}", f.m.replay().unwrap()).contains("ghp-cp-1"), "the token never reaches the log");
+    }
+
+    #[test]
+    fn only_a_seat_with_a_vendor_meter_adds_it_to_the_cost_event() {
+        assert!(cost_payload(0.5, 10, None).get("nano_aiu").is_none());
+        assert_eq!(cost_payload(0.0, 10, Some((1, 7)))["nano_aiu"], 7);
     }
 
     #[tokio::test]

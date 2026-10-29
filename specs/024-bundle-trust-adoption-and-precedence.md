@@ -14,6 +14,8 @@ tags: [spec, xenia, bundles, security, provenance, post-v1]
 
 # Spec 024: Bundle Provenance, Adding, Precedence, Scoping & Lifecycle
 
+> **Outside amendments:** §4.1a sources in a bundle (2026-10-29, `specs/055`); validated-bundle-source label (2026-10-29, `specs/052` §3.1); bundle-vouched content as a route to `federated_verified`, 007-A4 (2026-10-29, `specs/007` §3).
+
 > **Status: approved by the operator 2026-10-25 (decisions), text approved on merge.** Part of the sharing-layer set indexed by [`specs/022`](022-xenia-sharing-overview.md). Depends on the bundle format of [`specs/023`](023-org-bundle-standard.md). Nothing here is built; §9 is the build plan.
 
 ## 1. Scope & Objectives

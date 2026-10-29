@@ -14,6 +14,8 @@ tags: [spec, librarian, retrieval, taxonomy, frontmatter, scoping]
 
 # Spec 013: The Librarian Role & Internal Retrieval
 
+> **Outside amendments:** §5 the 160-character `summary` is adopted for bundle files (ratified 2026-10-25). Lives in `specs/022` §5 and `specs/023` §4.2.
+
 ## 1. Scope and Non-Goals
 This spec reserves a tenth role, `librarian`, and fixes its charter, its boundary with `scout`, and the conditions under which it should be built. It deliberately builds nothing.
 

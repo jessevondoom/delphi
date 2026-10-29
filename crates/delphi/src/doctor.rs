@@ -172,6 +172,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
 
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(&cfg, &run_cli, opts.require_providers, &mut r);
+    let codex_meter = || delphi_engine::quota::read_codex("codex", std::time::Duration::from_secs(8));
+    check_seat_quota(&cfg, &run_cli, &codex_meter, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0), &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
@@ -306,6 +308,36 @@ fn check_harnesses(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, requir
             },
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
+        }
+    }
+}
+
+/// What each subscription seat's own meter says (`specs/051` §6.2): plan, share used, reset time, and whether the limit is reached. Read-only
+/// and never a model call. Codex is read over its app-server on stdio; Copilot only when `[harness.copilot] quota_source = "gh"`. A seat that
+/// reports nothing is shown as unknown, never as empty or as out, and no plan name is acted on.
+fn check_seat_quota(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, codex_read: &dyn Fn() -> Option<serde_json::Value>, now: i64, r: &mut Report) {
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let gh_on = v.get("harness").and_then(|h| h.get("copilot")).and_then(|c| c.get("quota_source")).and_then(|q| q.as_str()) == Some("gh");
+    let (mut codex_done, mut copilot_done) = (false, false);
+    for e in list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness")) {
+        let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+        match e.get("harness").and_then(|h| h.as_str()) {
+            Some("codex") if !std::mem::replace(&mut codex_done, true) => match run("codex", &["--version"]).and_then(|_| codex_read()).and_then(|v| delphi_engine::quota::codex_reading(&v)) {
+                Some(q) => r.push(Level::Ok, "10 harness", format!("{} quota", id), format!("codex: {}", delphi_engine::quota::describe(&q, now))),
+                None => r.push(Level::Skipped, "10 harness", format!("{} quota", id), "codex reported no quota (not installed, signed out, or no answer in time): unknown, so the seat stays eligible"),
+            },
+            Some("copilot") if !std::mem::replace(&mut copilot_done, true) => {
+                if !gh_on {
+                    r.push(Level::Skipped, "10 harness", format!("{} quota", id), "copilot has no quota command; Delphi counts its own spans (`harness.cost` events). `[harness.copilot] quota_source = \"gh\"` shows the account's plan and pool here");
+                } else {
+                    match delphi_engine::quota::read_copilot_via_gh(run).and_then(|v| delphi_engine::quota::copilot_reading(&v)) {
+                        Some(q) => r.push(Level::Ok, "10 harness", format!("{} quota", id), format!("copilot: {}; the server's count lags, so Delphi's own ledger stays the live number", delphi_engine::quota::describe(&q, now))),
+                        None => r.push(Level::Skipped, "10 harness", format!("{} quota", id), "`gh api /copilot_internal/user` gave no usable answer: unknown, so the seat stays eligible"),
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1093,6 +1125,37 @@ mod tests {
         // Nothing to say without a Claude harness endpoint, or with the bridge turned off.
         assert!(run(McpPolicy::NotListed, "[[endpoints]]\nid=\"a\"\nfamily=\"claude\"\npath=\"api\"\ncredential=\"env:K\"\n").is_empty());
         assert!(run(McpPolicy::NotListed, &format!("{}\n[harness.claude]\nbridge = false\n", cfg)).is_empty());
+    }
+
+    #[test]
+    fn seat_quota_is_shown_from_the_vendors_own_meter_and_unknown_is_not_empty() {
+        let ep = |id: &str, h: &str| format!("[[endpoints]]\nid=\"{}\"\nfamily=\"openai\"\npath=\"harness\"\nharness=\"{}\"\ncredential=\"harness-login\"\n", id, h);
+        let cfg = format!("{}{}", ep("x", "codex"), ep("k", "copilot"));
+        let codex = || serde_json::from_str::<serde_json::Value>(r#"{"rateLimits":{"primary":{"usedPercent":4,"windowDurationMins":43200,"resetsAt":1795765748},"planType":"free"}}"#).ok();
+        let gh_calls = std::cell::Cell::new(0);
+        let run = |p: &str, a: &[&str]| -> Option<(i32, String)> {
+            match (p, a.first().copied()) {
+                ("codex", Some("--version")) => Some((0, "codex-cli 0.165.0".into())),
+                ("gh", Some("api")) => {
+                    gh_calls.set(gh_calls.get() + 1);
+                    Some((0, r#"{"copilot_plan":"business","quota_snapshots":{"premium_interactions":{"entitlement":100,"remaining":90,"percent_remaining":90.0,"overage_permitted":false,"unlimited":false}}}"#.into()))
+                }
+                _ => None,
+            }
+        };
+        let say = |cfg: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, codex: &dyn Fn() -> Option<serde_json::Value>| {
+            let mut r = Report::default();
+            check_seat_quota(cfg, run, codex, 1_793_000_000, &mut r);
+            r.findings.iter().map(|f| (f.level, f.message.clone())).collect::<Vec<_>>()
+        };
+        let out = say(&cfg, &run, &codex);
+        assert!(out[0].0 == Level::Ok && out[0].1.contains("free plan") && out[0].1.contains("4% of a 30-day window"), "{:?}", out);
+        assert!(out[1].0 == Level::Skipped && out[1].1.contains("quota_source"), "gh is off unless the operator turned it on: {:?}", out);
+        assert_eq!(gh_calls.get(), 0);
+        let on = say(&format!("{}[harness.copilot]\nquota_source = \"gh\"\n", cfg), &run, &codex);
+        assert!(on[1].0 == Level::Ok && on[1].1.contains("business plan") && on[1].1.contains("10% of 100 credits used"), "{:?}", on);
+        let silent = say(&cfg, &|_: &str, _: &[&str]| None, &|| None);
+        assert!(silent[0].0 == Level::Skipped && silent[0].1.contains("unknown"), "{:?}", silent);
     }
 
     #[test]

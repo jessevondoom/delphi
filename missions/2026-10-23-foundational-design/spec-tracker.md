@@ -28,7 +28,7 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 005c Inline console | yes | yes | tests | none; interim step, superseded by 005d |
 | 005d Full-screen console (Ink, D-28) | yes | yes, phases 0 to 6; v0.2.3 released | CI pty tests only | Terminal.app, iTerm2, Ghostty, tmux, ssh by a person; `Shift+Enter`; release workflow end to end; `/models` view and target-versus-actual strip |
 | 006 Installer and updater | yes | yes (init, doctor, update, rollback, self-update) | installer and self-update checked on a real release | `brew install` not run; Ed25519 release signing replaced by SHA-256 plus attestation (deviation); `install.sh` now stops without a signed-in `gh` unless `DELPHI_SKIP_ATTESTATION=1`; diff3 update (Step 6) |
-| 007 Federated mesh and sync | yes | no | no | Plane 3 `sync` (Step 6, gated); Planes 1 and 2 deferred (needs a second operator or machine). 2026-10-29 (D-32): the Plane 2 URI is renamed to the reserved `xenia://cap/`; under federation review, name may be revisited |
+| 007 Federated mesh and sync | yes | no | no | Plane 3 `sync` (Step 6, gated); Planes 1 and 2 deferred (needs a second operator or machine). 2026-10-29 (D-32): the Plane 2 URI is renamed to the reserved `xenia://cap/`; under federation review, name may be revisited. 2026-10-29 (operator, docs only): amendments 007-A1..A5 folded into 007 (A3 `xenia://cap/` scheme, A4 bundle-vouched content as a second route to `federated_verified`, A5 Planes 1-2 are a design reservation; Xenia `fact` stays deferred); §5 tests 10-12 added; amendment banners added to 001, 002, 004, 006, 010, 011, 012, 013, 019, 023, 024, 027 |
 | 008 Ambient watch and rewind | yes | no (HITL tiers only) | n/a | watches and `/rewind` (Step 6, gated) |
 | 009 Model access and auth | yes | yes (keychain, env, command, aws, gcloud-adc, oauth2, probing) | **live Gemini OAuth unverified** | operator's Google OAuth client; `oauth2.rs` device-code and refresh fixes |
 | 010 Connectors and tool access (+010-A1) | yes | slice 1 (catalog, `rmcp`, pins, pipeline, `delphi connectors`) | **never run against Google, Slack or Zoom** | first live Drive read; formatters, promotion card (§5.3), harness bridge; Slack and Zoom (need admin steps) |
@@ -160,13 +160,13 @@ Asked for by the operator on 2026-10-28. `codex` is not installed on this machin
 
 ## GitHub Copilot CLI harness (spec 051, approved 2026-10-28)
 
-Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. Only S0 is built.
+Asked for and approved by the operator on 2026-10-28. `copilot` 1.0.105 is logged in on an organization-granted Business seat (not free; OD-7 asks whether work may go through it); `codex` 0.165.0 on a ChatGPT Free plan. OD-3: no fixed failover position, routing reads each vendor's quota meter. S0, S1 and S1b are built.
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | S0 | manifest from the real `--help`, nine probes (tool narrowing, stdin prompt, tool events, model catalog, multipliers, exhausted quota, `--acp`) | built (#307): `copilot.cov`, snapshot, quota reads of both CLIs, probes a-f, h, i (spec 051 §6.4: stdin prompt, tool narrowing, fail-closed writes, ACP approval bridge, model catalog with multipliers, `COPILOT_HOME` isolation); plus round 3 (§6.5): `allow_once`, MCP tool bridge via `--additional-mcp-config`, Codex `app-server` approvals; open: g (exhausted-quota text), `session/cancel`, ACP `session/new` `mcpServers` ignored |
 | S1 | `Cli::Copilot`, the stdin + `--output-format json` driver for read-only roles, model check, token mode | built (stacked on #304 and #307): spec 051 §7; one live run passed on `claude-haiku-4.5` |
-| S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | not started |
+| S1b | per-seat nano-AIU ledger, `QuotaProbe`, doctor shows the plan, optional `gh api` reconciliation | built: spec 051 §8. `quota.rs` (readers, `describe`, `exhaustion`), `Event::Meter` and `premium_requests`/`nano_aiu` in `harness.cost` (the log is the ledger), `[harness.copilot] quota_source = "gh"`, doctor lines. Routing does not read it yet (next slice); no live run |
 | S2 | read-only introspection; approval bridge; Builder only after it is proven | not started |
 | S3 | `--plan` lane, vision | not started |
 

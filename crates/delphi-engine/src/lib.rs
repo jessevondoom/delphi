@@ -77,6 +77,7 @@ pub mod model;
 pub mod observe;
 pub mod policy;
 pub mod pool;
+pub mod quota;
 pub mod probe;
 pub mod provisional;
 pub mod decision_model;

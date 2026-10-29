@@ -14,6 +14,8 @@ tags: [spec]
 
 # Spec 006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine
 
+> **Outside amendments:** §3.1 `local/bundles.lock` is daemon state with history (ratified 2026-10-25). Lives in `specs/022` §5 and `specs/024` §4.1. See also `specs/036`.
+
 ## 1. Scope & Objectives
 This specification defines how Delphi is packaged, distributed to multiple operators, initialized, and updated without ever corrupting operator-private memory or active worktrees:
 1. **Single-Binary Embedded Seed Packaging (`delphi` / `delphi-core`):** Shipping the compiled runtime with an embedded, hash-verified snapshot of built-in `GOVERNANCE.md`, `SPEC.md`, `REVIEW.md`, `agents/`, `skills/`, `themes/`, `templates/`, seed `context/` and `memory/` templates.
