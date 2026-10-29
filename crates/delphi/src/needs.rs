@@ -136,7 +136,9 @@ pub fn validation_section(ws: &Path, now: i64) -> String {
         None => "PROMOTE: no (no report yet; run `delphi validation report`)".to_string(),
     };
     let cards = if open == 0 { "no audit card is waiting".to_string() } else { format!("{open} audit card(s) waiting, the oldest {} day(s); `delphi validation audit` answers one", oldest / 86_400) };
-    format!("\nFact validation: {cards}\n{line}\n")
+    let queued = delphi_engine::fact_audit::queue(&state);
+    let waiting = if queued.is_empty() { String::new() } else { format!("{} claim(s) kept as not validated (budget reached), most-referenced first: `delphi validation queue`; `delphi validation more <mission>` raises a cap\n", queued.len()) };
+    format!("\nFact validation: {cards}\n{waiting}{line}\n")
 }
 
 pub fn render(items: &[Item]) -> String {
@@ -193,6 +195,8 @@ mod tests {
         assert!(t.contains("1 audit card(s) waiting, the oldest 3 day(s)") && t.contains("PROMOTE: no (only 12 of 50 audits so far)"), "{t}");
         std::fs::write(state.join("promote.json"), r#"{"promote":true,"why":"x","at":1}"#).unwrap();
         assert!(validation_section(d.path(), 2).contains("PROMOTE: yes"));
+        delphi_engine::fact_audit::queue_claim(&state, "m1", "fact-q", 3);
+        assert!(validation_section(d.path(), 4).contains("1 claim(s) kept as not validated (budget reached)"));
     }
 
     #[test]

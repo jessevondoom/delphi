@@ -14,6 +14,8 @@ tags: [spec, connectors, mcp, auth, tools]
 
 # Spec 010: Native Connectors (MCP) & the Tool Access Layer
 
+> **Outside amendments:** §1, §3 bundle-mapped connectors and the read-only `delphi bundle serve` MCP server (ratified 2026-10-25). Live in `specs/022` §5 and `specs/025` §4.
+
 ## 1. Scope and Non-Goals
 Delphi gives agents access to outside services (v1: **Slack, Google Drive, Google Calendar, Gmail, Zoom**) by running the connectors itself, as an MCP client inside the daemon. This replaces the rejected harness-delegated design (Council 005, D-22; `specs/009` §7A).
 

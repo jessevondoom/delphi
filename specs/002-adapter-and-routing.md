@@ -14,6 +14,8 @@ tags: [spec]
 
 # Spec 002: Adapter: Dialect Compiler, Multi-Provider Drivers & Dynamic Model Scaling
 
+> **Outside amendments:** §2 prompt-assembly slots for the org guidance block, bundle rules block and org-context slice (ratified 2026-10-25). Live in `specs/022` §5, `specs/023` §6, `specs/026` §3.2.
+
 ## 1. Scope & Objectives
 This specification defines the **Adapter Runtime Layer**:
 1. The **Intermediate Prompt Representation (IPR)** and **Provider-Dialect Compiler** (solving why naive "universal prompts" fail across Claude, Gemini, OpenAI, and local models).

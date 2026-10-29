@@ -507,6 +507,91 @@ pub fn retract_all(ws: &Path, state: &Path, store: &FactStore, now: i64) -> Retr
     Retraction { retracted, readers }
 }
 
+/// The mission name the journal uses for background validation, which belongs to no mission (§20.2).
+pub const BACKGROUND: &str = "background";
+/// §20.2: background validation is at most a tenth of the install's tokens over the trailing week.
+pub const BACKGROUND_SHARE: f64 = 0.10;
+/// What one operator raise adds to a mission's cap (§25 V2d-2): the floor, once.
+pub const RAISE_TOKENS: u64 = FLOOR_TOKENS;
+
+/// Why a claim could not be checked now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cap {
+    Mission { spent: u64, cap: u64 },
+    Background { spent: u64, cap: u64 },
+}
+
+impl Cap {
+    /// The one line the operator sees (§20.1): what happened and what raises it. Never carries claim text.
+    pub fn notice(&self, mission: &str) -> String {
+        match self {
+            Cap::Mission { spent, cap } => format!("validation budget reached for {mission} ({spent} of {cap} tokens): claims stay not validated and are queued; `delphi validation more {mission} --reason <why>` raises it once"),
+            Cap::Background { spent, cap } => format!("background validation paused ({spent} of {cap} tokens this week); it resumes as the week rolls on"),
+        }
+    }
+}
+
+fn spent_in(events: &[Value], mission: &str, since: i64) -> u64 {
+    events.iter().filter(|e| (e["kind"] == "verdict" || e["kind"] == "span") && e["mission"] == mission && e["at"].as_i64().unwrap_or(0) >= since).map(|e| e["tokens"].as_u64().unwrap_or(0)).sum()
+}
+
+/// §20.1, live: may this mission spend `reserve` more validator tokens? `other` is every other role's tokens in the
+/// mission (the ledger). The cap is `max(floor, 0.176 * O)` plus one floor per operator raise.
+pub fn mission_allows(state: &Path, mission: &str, other: u64, reserve: u64) -> Result<(), Cap> {
+    let events = Journal::new(state).all();
+    let spent = spent_in(&events, mission, 0);
+    let raises = events.iter().filter(|e| e["kind"] == "share_raise" && e["mission"] == mission).count() as u64;
+    let cap = FLOOR_TOKENS.max((SHARE_FACTOR * other as f64) as u64) + raises * RAISE_TOKENS;
+    if spent + reserve <= cap {
+        Ok(())
+    } else {
+        Err(Cap::Mission { spent, cap })
+    }
+}
+
+/// §20.2, live: may background validation spend `reserve` more? `install_week` is the install's tokens over the
+/// trailing seven days, the validator's own included.
+pub fn background_allows(state: &Path, install_week: u64, now: i64, reserve: u64) -> Result<(), Cap> {
+    let spent = spent_in(&Journal::new(state).all(), BACKGROUND, now - WEEK_SECS);
+    let cap = (BACKGROUND_SHARE * install_week as f64) as u64;
+    if spent + reserve <= cap {
+        Ok(())
+    } else {
+        Err(Cap::Background { spent, cap })
+    }
+}
+
+/// D-8: the claim stays brought in, labelled not validated (budget reached), and waits for review.
+pub fn queue_claim(state: &Path, mission: &str, fact: &str, now: i64) {
+    Journal::new(state).append("queued", json!({"fact_id": fact, "mission": mission, "label": "not validated (budget reached)"}), now);
+}
+
+/// The review queue, most-referenced first (§18.3): every request for the same claim is one reference.
+pub fn queue(state: &Path) -> Vec<(String, usize)> {
+    let mut refs: BTreeMap<String, usize> = BTreeMap::new();
+    for e in Journal::new(state).all().iter().filter(|e| e["kind"] == "queued") {
+        if let Some(f) = e["fact_id"].as_str() {
+            *refs.entry(f.to_string()).or_default() += 1;
+        }
+    }
+    let mut v: Vec<(String, usize)> = refs.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// Operator act (`delphi validation more <mission> --reason`): raise one mission's cap once, journaled as the
+/// operator's. Only this path writes `share_raise`; nothing in a span, a source or the daemon's own loop calls it.
+pub fn raise_share(state: &Path, mission: &str, reason: &str, now: i64) -> Result<String, String> {
+    if reason.trim().chars().count() < 8 {
+        return Err("a raise needs a reason of at least 8 characters".into());
+    }
+    if mission.is_empty() || mission == BACKGROUND {
+        return Err("name a mission; background validation has its own weekly cap".into());
+    }
+    Journal::new(state).append("share_raise", json!({"mission": mission, "reason": reason, "by": "operator", "tokens": RAISE_TOKENS}), now);
+    Ok(format!("raised the validation cap of {mission} by {RAISE_TOKENS} tokens"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,5 +852,42 @@ mod tests {
         assert!(a.contains("status: superseded") && a.contains("superseded_by: retraction:b1") && a.contains("body"));
         assert!(std::fs::read_to_string(facts.join("disp-c.md")).unwrap().contains("status: disproved"), "a refutation record stays");
         assert!(Journal::new(&s).all().iter().any(|e| e["kind"] == "retract" && e["count"] == 2));
+    }
+
+    #[test]
+    fn the_mission_share_the_queue_order_and_the_raise_are_live_and_operator_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().to_path_buf();
+        // Floor: a small mission may spend up to the floor whatever O is.
+        assert!(mission_allows(&s, "m1", 0, 12_000).is_ok());
+        Journal::new(&s).append("verdict", json!({"fact_id": "a", "mission": "m1", "tokens": 45_000}), 1);
+        Journal::new(&s).append("span", json!({"mission": "m1", "tokens": 10_000}), 1);
+        assert_eq!(mission_allows(&s, "m1", 0, 12_000), Err(Cap::Mission { spent: 55_000, cap: FLOOR_TOKENS }));
+        // 0.176 * O lifts the cap once O is large; another mission is unaffected.
+        assert!(mission_allows(&s, "m1", 1_000_000, 12_000).is_ok());
+        assert!(mission_allows(&s, "m2", 0, 12_000).is_ok());
+        // Only an operator raise with a reason, once, adds the floor.
+        assert!(raise_share(&s, "m1", "short", 2).is_err() && raise_share(&s, BACKGROUND, "a good enough reason", 2).is_err());
+        raise_share(&s, "m1", "the rest matters to me", 2).unwrap();
+        assert!(mission_allows(&s, "m1", 0, 12_000).is_ok());
+        assert!(Journal::new(&s).all().iter().any(|e| e["kind"] == "share_raise" && e["by"] == "operator"), "logged");
+        // Queue order: the most referenced claim first.
+        for (f, n) in [("fact-aaa", 1), ("fact-bbb", 3), ("fact-ccc", 2)] {
+            for _ in 0..n {
+                queue_claim(&s, "m1", f, 3);
+            }
+        }
+        assert_eq!(queue(&s).iter().map(|(f, n)| (f.as_str(), *n)).collect::<Vec<_>>(), vec![("fact-bbb", 3), ("fact-ccc", 2), ("fact-aaa", 1)]);
+    }
+
+    #[test]
+    fn the_background_share_is_a_tenth_of_the_trailing_week() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = dir.path().to_path_buf();
+        let now = 10_000_000;
+        Journal::new(&s).append("verdict", json!({"fact_id": "old", "mission": BACKGROUND, "tokens": 90_000}), now - 8 * 86_400);
+        Journal::new(&s).append("verdict", json!({"fact_id": "new", "mission": BACKGROUND, "tokens": 90_000}), now - 86_400);
+        assert!(background_allows(&s, 1_000_000, now, 10_000).is_ok(), "90k of a 100k cap, the old spend rolled out");
+        assert_eq!(background_allows(&s, 1_000_000, now, 12_000), Err(Cap::Background { spent: 90_000, cap: 100_000 }));
     }
 }

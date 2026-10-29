@@ -14,7 +14,11 @@ tags: [spec]
 
 # Spec 007: Federated Multi-Instance Mesh, Capability Pointers & Team Context Sync
 
+> **Amendments (all ratified by the operator; folded into the text below, so this spec alone is complete):** 007-A1 (2026-10-25, from `specs/011` §5.1, §3), 007-A2 (2026-10-25, §3 and §4 item 4), 007-A3 (2026-10-29, §2.2, D-32 in `missions/2026-10-23-foundational-design/decisions.md`), 007-A4 (2026-10-29, bundle-vouched content, §3, `specs/024`, `specs/052`, `specs/055`), 007-A5 (2026-10-29, scope, below).
+
 > **Status (D-06, ratified 2026-10-23):** Planes 1 and 2 are **deferred past v1**. They are the largest attack surface and serve the fewest users, and Plane 3 (plain Git plus ratified rule proposals) covers team sharing in the meantime. The security amendments below are binding whenever these planes ship.
+
+> **Scope (amendment 007-A5, ratified by the operator 2026-10-29): Planes 1 and 2 are a design reservation.** They are kept so the security rules are written down, and are revived only if a team needs **live cross-install delegation** that Xenia's asynchronous model cannot serve. Plane 3's aspiration, sharing knowledge between installs, is served by **Xenia** (`specs/011`, `specs/012`) and **bundles** (`specs/023`–`027`). The Xenia `fact` kind stays **deferred** until `specs/040` V2 has real audit data (`specs/055` SK7, `specs/012` §11). Nothing here authorizes building Plane 1 or 2.
 
 ## 1. Scope & Objectives
 This specification emerged from our research into multi-operator collaboration and defines how multiple independent Delphi installations interact with each other—allowing agent teams to collaborate with other agent teams and share context directly or via cryptographic pointers to private files:
@@ -70,6 +74,8 @@ Each `delphi-core` daemon exposes a signed **Agent Card** (`/.well-known/delphi-
 - **Inbound tasks are not free.** Every inbound A2A task lands in Bob's console approval queue unless the sending peer has a standing grant (`.delphi/config.toml` `[peers.<did>] auto_accept = ["query-domain-kb"]`). Each peer also has a budget (`max_usd_per_day`, `max_concurrent_tasks`) that `delphi-core` enforces. Inbound task spans start at taint $L_1$, so the tool table in `specs/001` §5.2 applies: read-only, no outbound calls.
 
 ### 2.2 Plane 2: Scoped `xenia://cap/` URI Pointers & Capability Tokens (`DelphiCap`)
+> **Amendment 007-A3 (ratified 2026-10-29, D-32; text changed by #354).** The scheme is `xenia://` (named for the protocol), replacing `delphi://`, which is accepted nowhere. Plane 2 uses only the reserved authority `cap`. It is **visibly distinct from record references** (`xenia://<kind>/<id>[@rev]`, `specs/012` §4): `cap` is never a record kind, Phase 1 parsers reject `xenia://cap/...` as a locator ("reserved, not built"), and sharing a scheme shares no resolver, trust tier or authority. The name may be revisited while Plane 2 is unbuilt.
+
 To share context via pointer without copying huge files or granting full repo access, Delphi defines the **reserved `xenia://cap/` URI authority** (named for the protocol, decided 2026-10-29; `cap` is never a record kind and Phase 1 parsers reject it, `specs/012` §4):
 ```text
 xenia://cap/<peer-host>/<workspace>/<zone>/<rel-path>[?rev=<git-sha>][#L<start>-L<end>]
@@ -112,9 +118,11 @@ To prevent a compromised or hallucinating peer instance from poisoning another o
 | **$L_5$** | `user_ratified` | Explicitly ratified by the **local** operator (the **operator**). | **Yes** |
 | **$L_4$** | `internal_empirical` | Verified locally by **Builder** deterministic tests/scripts in this workspace. | **Yes** |
 | **$L_3$** | `internal_generated` | Written locally by an agent with no test evidence (D-08). | **No** (requires local test → $L_4$, or the **operator** ratification → $L_5$). |
-| **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. **Or** (amendment 007-A1, ratified 2026-10-25 with `specs/011`): a xenia `memory` record validly endorsed by a steward other than its author's person, under a current freshness statement (`specs/011` §4 and §5.1). | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
+| **$L_2$** | `federated_verified` | Signed by a pinned teammate DID + includes verifiable git commit & CI test attestation. **Or** (amendment 007-A1, ratified 2026-10-25 with `specs/011`; its text is here and in `specs/011` §5.1): a xenia `memory` record validly endorsed by a steward other than its author's person, under a current freshness statement (`specs/011` §4 and §5.1). **Or** (amendment 007-A4, 2026-10-29): content vouched by an added bundle, a second route that is separate from steward endorsement (see below). | **No** (Allowed in `context/domains/`; requires local test replay or local the **operator** ratification to promote to $L_4/L_5$). |
 | **$L_1$** | `federated_peer` | Unattested A2A response or `xenia://cap/` slice from a federated peer, or a file that `delphi sync` merged from a shared repository without a verified signature (amendment 007-A2). | **Strictly Forbidden (`[H-004]`)** |
 | **$L_0$** | `external_untrusted` | Scraped web pages, third-party repos, or transitive `external_untrusted` data forwarded by a peer. | **Strictly Forbidden (`[H-004]`)** |
+
+**Three routes to $L_2$, none implying another (007-A1, 007-A4).** (1) A signed teammate DID with a git commit and CI attestation. (2) A steward-endorsed Xenia `memory` record. (3) **Bundle-vouched content:** knowledge files of a bundle the operator added are indexed as `federated_verified` by the `bundles` zone, whatever their frontmatter says, and shown as `validated · vouched by <org>` (`specs/024` §3.2 and the validated-sources default, `specs/052` §3.1, `specs/055` §11.1). It needs no steward endorsement, and endorsing a record gives a bundle nothing. A bundle's own `source_type` or `trust` claim never raises it; only the operator's per-file promotion ($L_4$/$L_5$) or the typed-name raise of `specs/024` does. At $L_2$ it stays data: never in `heuristics.md`, `REVIEW.md`, `lessons.md` or `skills/`, and it grants no permission.
 
 ### 3.1 Transitive Taint Preservation (Anti-Laundering Rule)
 Whenever Peer $B$ sends a payload to Local Instance $A$, the **Gateway** computes:
@@ -154,3 +162,6 @@ For teams sharing a team registry, a separate git repository cloned into the wor
 7. **Inbound Budget Test:** A peer without a standing grant sends an A2A task; it waits in the console queue and spends zero tokens until approved.
 8. **Suppression Injection Test:** A synced `REVIEW.md` adding a `[SUPPRESS-*]` rule is staged as a highlighted proposal and is not active until ratified.
 9. **Plane 3 Tier Test (007-A2):** a file merged by `delphi sync` into `context/domains/` is stamped `federated_peer`, is not returned by an agent's search, and cannot reach `federated_verified` except as a Xenia record.
+10. **Bundle-Vouched Content Test (007-A4):** a knowledge chunk of an added bundle is indexed `federated_verified` and labelled `validated · vouched by <org>` with no steward endorsement; a bundle file claiming `user_ratified` in frontmatter, `bundle.toml` or a lock stays `federated_verified`; it never enters `heuristics.md`, `REVIEW.md`, `lessons.md` or `skills/`; a steward endorsement of a Xenia record does not change a bundle's tier.
+11. **`xenia://` Scheme Test (007-A3):** `xenia://cap/...` is refused by the record-locator parser as "reserved, not built"; `delphi://` is refused with "use xenia://"; `cap` is not accepted as a record kind; a record reference `xenia://memory/<id>` never reaches the Plane 2 resolver.
+12. **`fact` Deferral Test (007-A5):** `fact` is not an accepted Xenia record kind in Phase 1, and nothing in Plane 3 or a bundle sync carries it, until `specs/040` V2 audit data exists and the `specs/011` §11 re-review is done.

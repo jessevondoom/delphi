@@ -14,6 +14,10 @@ use delphi_adapter::claude::ToolDef;
 
 use serde_json::{json, Value};
 
+/// The names of the validator's tools. Registered always; the engine offers and runs them only while the effective mode
+/// (read at each use, so a mode change needs no restart) is not `off`.
+pub const NAMES: [&str; 2] = ["ratify_fact", "validate_claims"];
+
 /// Roles that may ask for a check. The role comes from the daemon's tool context, never from an argument.
 const CALLERS: [&str; 3] = ["validator", "scout", "orchestrator"];
 

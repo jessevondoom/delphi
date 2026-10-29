@@ -194,8 +194,9 @@ default_peer_trust_ceiling = "federated_peer"
 # vendors' models, so name the model in `models` and set the endpoint's `family` to that model's vendor (`claude`, `gemini` or
 # `openai`); an answer from a different model is refused, and `auto` is never used. A seat is read-only and untrusted (L0): no
 # Delphi tools, no write or shell (the CLI denies them without an approver), a home inside the task's own scratch directory (so its saved
-# session never lands in your ~/.copilot), and never a Builder. Keys: `effort`, `env_allow`. A key source as the credential (`keychain:`, `env:`) runs it on COPILOT_GITHUB_TOKEN (a
+# session never lands in your ~/.copilot), and never a Builder. Keys: `effort`, `env_allow`, `quota_source`. A key source as the credential (`keychain:`, `env:`) runs it on COPILOT_GITHUB_TOKEN (a
 # fine-grained token with "Copilot Requests"); `harness-login` uses the login `copilot login` stored in your keychain.
+# `quota_source = "gh"` lets `delphi doctor` show the account's plan and pool through your `gh` login (an undocumented endpoint); off by default.
 # [harness.claude]
 # bridge = true                        # false: roles without a worktree run text-only (no timer, dispatch or file tools)
 # approvals = "delegate"               # "delphi": Delphi's own tiers and cards answer every request instead
