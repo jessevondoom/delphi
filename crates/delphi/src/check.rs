@@ -18,7 +18,7 @@ use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 /// Every kind `delphi check` accepts. `lint` verifies that a `SKILL.md` names only these.
-pub const KINDS: [&str; 9] = ["dag", "handoff", "provenance", "rules", "review-md", "spec", "kb", "tui", "skill"];
+pub const KINDS: [&str; 10] = ["dag", "handoff", "provenance", "rules", "review-md", "spec", "kb", "tui", "skill", "fact"];
 
 /// Run one check. `target` is a file (a directory for `kb`, `skill` and `tui`); `repo` is the root against which
 /// `dag` resolves its `spec:` links.
@@ -40,6 +40,47 @@ pub fn run(kind: &str, target: &Path, repo: Option<&Path>) -> Result<Report, Str
     }
     if r.findings.iter().all(|f| f.level != Level::Fail) {
         r.push(Level::Ok, kind, target.display().to_string(), "passes");
+    }
+    Ok(r)
+}
+
+// ── fact: a claim over stored snapshots (specs/040 §7.2) ───────────────────
+
+/// `delphi check fact <claim.json> --home <dir>`: the pure part of the fact path. The input names the claim and the
+/// ids of snapshots the daemon already stored; there is no network and no model here, and nothing is written. The
+/// entailment judge and the contradiction search are the daemon's (`fact_run`), so a pass here is "may go on".
+pub fn fact(input: &Path, home: &Path) -> Result<Report, String> {
+    use delphi_engine::fact_check::{check_fact, Submission};
+    use delphi_engine::fact_fetch::SnapshotStore;
+    use delphi_engine::fact_sources::SourceList;
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        claim: String,
+        needed_for: String,
+        #[serde(default)]
+        kind: Option<delphi_engine::fact_check::ClaimKind>,
+        snapshots: Vec<String>,
+    }
+    let text = fs::read_to_string(input).map_err(|e| format!("cannot read {}: {}", input.display(), e))?;
+    let i: Input = serde_json::from_str(&text).map_err(|e| format!("{}: {}", input.display(), e))?;
+    let sources = match fs::read_to_string(home.join("config.toml")) {
+        Ok(t) => delphi_adapter::config::Config::parse(&t).map(|c| c.validator.sources).unwrap_or_default(),
+        Err(_) => Default::default(),
+    };
+    let store = SnapshotStore::in_home(home);
+    let mut snaps = Vec::new();
+    for id in &i.snapshots {
+        snaps.push(store.get(id).ok_or_else(|| format!("snapshot {} is not stored here, or its bytes do not match its hash", id.chars().take(16).collect::<String>()))?);
+    }
+    let sub = Submission::over_snapshots(i.claim, i.needed_for, i.kind.unwrap_or_default(), &snaps);
+    let o = check_fact(&sub, &snaps, &SourceList::new(sources)).to_outcome();
+    let mut r = Report::default();
+    o.fails.iter().for_each(|m| r.fail("fact", "", m));
+    o.warns.iter().for_each(|m| r.warn("fact", "", m));
+    o.notes.iter().for_each(|m| r.push(Level::Ok, "fact", "", m));
+    if r.findings.iter().all(|f| f.level != Level::Fail) {
+        r.push(Level::Ok, "fact", input.display().to_string(), "passes");
     }
     Ok(r)
 }
@@ -133,6 +174,15 @@ fn skill(dir: &Path, r: &mut Report) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_fact_refuses_unstored_snapshots_and_submitted_quotes() {
+        let home = tempfile::tempdir().unwrap();
+        let (_d, p) = tmp("c.json", &format!(r#"{{"claim":"X is Y.","needed_for":"q","snapshots":["{}"]}}"#, "0".repeat(64)));
+        assert!(fact(&p, home.path()).err().unwrap().contains("not stored"));
+        let (_d2, p2) = tmp("c.json", r#"{"claim":"X is Y.","needed_for":"q","snapshots":[],"quote":"X is Y."}"#);
+        assert!(fact(&p2, home.path()).is_err(), "a submitted quote is refused by the parser");
+    }
 
     fn tmp(name: &str, body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let d = tempfile::tempdir().unwrap();

@@ -375,7 +375,13 @@ The deterministic checks behind the built-in skills.
 
 ```
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
+  delphi check fact <claim.json> [--home <dir>]
 ```
+
+`fact` reads {claim, needed_for, kind, snapshots: [ids]} and checks the claim
+against snapshots the daemon already stored: origins, independence, source classes.
+It makes no network call and runs no model; the entailment judge and the
+contradiction search are the daemon's.
 
 ## Maintain
 

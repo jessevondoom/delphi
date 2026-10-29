@@ -112,7 +112,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
-    Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]", detail: "" },
+    Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]\n  delphi check fact <claim.json> [--home <dir>]", detail: "`fact` reads {claim, needed_for, kind, snapshots: [ids]} and checks the claim\nagainst snapshots the daemon already stored: origins, independence, source classes.\nIt makes no network call and runs no model; the entailment judge and the\ncontradiction search are the daemon's." },
     Cmd { group: "Maintain", name: "update", about: "the program, the built-in files, then the daemons", synopsis: "  delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]\n    [--workspace <name>] [--home <dir>]", detail: "--dev installs the latest build of main. --rollback undoes all three steps. --review leaves the release's\nchanges pending for /ratify instead of ratifying them." },
     Cmd { group: "Maintain", name: "train", about: "training mode: check, price and run cases that test Delphi itself", synopsis: "  delphi train validate [--suite <name>] [--repo <path>]\n  delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n  delphi train run --budget-usd <n> --template-home <dir> --work-dir <new dir> [--overlay <dir> | --arms-file <f>] [--case <id>] [--seeds <n>] [--resume] [--pace-window <0-1>] [--allow-sleep] [--dry-run]", detail: "For a source checkout (it needs dev/train/suites). validate reads every case and names what is wrong; plan lists the cases a run\nwould use and the most it could cost, and refuses a budget below that. Neither runs anything or calls a model.\nrun SPENDS MONEY: each case runs `delphi run` in a copy of the template home, baseline and (with --overlay) candidate, and prints pass rates.\nExit codes: 0 ok · 1 problems · 2 usage · 3 over budget." },
     Cmd { group: "Maintain", name: "xenia", about: "the org's shared, signed memory store: join, sync, status, publish, endorse", synopsis: "  delphi xenia whoami | help [topic] | explain <slug or message>   [--json]\n  delphi xenia join <url> --org <o> --store <s> --admin <fingerprint> --head <epoch>:<hash> [--allow-local]\n  delphi xenia sync [--auto-update-bundles] | status [--store <org>/<store>] [--json]\n  delphi xenia publish <file> --title <t> --summary <s> --promoted [--tags a,b] [--review-by <date>]\n  delphi xenia publish --bundle <dir> --url <https url> --pin <git-tree|git-commit>:<sha> [--id <record>]\n  delphi xenia endorse|dispute|retract|withdraw|restore <id> [--scope a,b] [--note <n>] [--reason <r>]\n  delphi xenia republish --old <did> | admin add|remove|rotate|show|sign|publish|refresh|genesis ...", detail: "Commands that sign show the exact bytes and want the card's code typed at a terminal. Start: `delphi xenia help`." },
@@ -351,13 +351,14 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 /// `delphi check <kind> <path>`: the deterministic helpers behind the built-in skills (see `check.rs`). Reads files only.
 fn cmd_check(args: &[String]) -> i32 {
-    let positional: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[*i - 1] != "--repo")).map(|(_, a)| a).collect();
+    let positional: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !matches!(args[*i - 1].as_str(), "--repo" | "--home"))).map(|(_, a)| a).collect();
     let [kind, target] = positional[..] else {
         eprintln!("{}", usage());
         return 2;
     };
     let repo = flag(args, "--repo").map(PathBuf::from);
-    match check::run(kind, std::path::Path::new(target), repo.as_deref()) {
+    let result = if kind.as_str() == "fact" { check::fact(std::path::Path::new(target), &home::delphi_home(flag(args, "--home").as_deref())) } else { check::run(kind, std::path::Path::new(target), repo.as_deref()) };
+    match result {
         Ok(report) => {
             report.print();
             report.exit_code()

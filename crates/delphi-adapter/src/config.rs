@@ -458,6 +458,58 @@ pub struct Config {
     pub harness: BTreeMap<String, HarnessProfile>,
     /// `[search]`: the engines the archives pane's research job asks, in order (`specs/028` §10).
     pub search: crate::research::SearchConfig,
+    /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
+    pub validator: ValidatorConfig,
+}
+
+/// `[validator] mode` (`specs/040` §15.1). Ordered so that `min` is the stricter of two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum ValidatorMode {
+    Off,
+    #[default]
+    Advisory,
+    Ratify,
+}
+
+impl ValidatorMode {
+    pub fn parse(s: &str) -> Option<ValidatorMode> {
+        Some(match s {
+            "off" => ValidatorMode::Off,
+            "advisory" => ValidatorMode::Advisory,
+            "ratify" => ValidatorMode::Ratify,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ValidatorMode::Off => "off",
+            ValidatorMode::Advisory => "advisory",
+            ValidatorMode::Ratify => "ratify",
+        }
+    }
+}
+
+/// `[validator]`. The domain lists extend Appendix A and are the operator's alone (a ratified setting, GOVERNANCE §5.7).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidatorConfig {
+    #[serde(deserialize_with = "de_mode")]
+    pub mode: ValidatorMode,
+    pub sources: ValidatorSources,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidatorSources {
+    pub primary: Vec<String>,
+    pub reputable: Vec<String>,
+    pub weak: Vec<String>,
+}
+
+fn de_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ValidatorMode, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    ValidatorMode::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("mode `{}` is not one of off, advisory, ratify", s)))
 }
 
 const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
@@ -504,6 +556,12 @@ impl Config {
             match crate::research::SearchConfig::parse(s, cfg.endpoints.iter().any(|e| e.family == "gemini")) {
                 Ok(v) => cfg.search = v,
                 Err(es) => errs.extend(es),
+            }
+        }
+        if let Some(v) = root.get("validator") {
+            match v.clone().try_into::<ValidatorConfig>() {
+                Ok(v) => cfg.validator = v,
+                Err(e) => errs.push(format!("[validator]: {}", e)),
             }
         }
         // `[harness]` also carries scalar settings of its own (`subscription_budget_tokens`); only its sub-tables are profiles.
@@ -1033,6 +1091,14 @@ headers = { "X-Cost-Center" = "eng-123" }
 order = { claude = ["corp-gateway", "bedrock-us"] }
 allowed_endpoints = ["corp-gateway", "bedrock-us"]
 "#;
+
+    #[test]
+    fn validator_defaults_to_advisory_and_modes_order_by_strictness() {
+        assert_eq!(Config::parse("").map(|c| c.validator.mode).unwrap_or(ValidatorMode::Off), ValidatorMode::Advisory);
+        let c = Config::parse("[validator]\nmode = \"ratify\"\n[validator.sources]\nprimary = [\"example.org\"]\n").unwrap();
+        assert_eq!(c.validator.mode.min(ValidatorMode::Advisory), ValidatorMode::Advisory);
+        assert!(Config::parse("[validator]\nmode = \"yes\"\n").is_err());
+    }
 
     #[test]
     fn parses_and_resolves_models_with_endpoint_overrides() {

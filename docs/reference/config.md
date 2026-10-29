@@ -75,6 +75,13 @@ Defaults are those of the template; "—" means no default.
 
 Which sites the job may read is not here: it is `context/sources/trusted.toml` (ratified in a release) plus your own `$DELPHI_HOME/operator/trusted-sources.toml`.
 
+## Fact validator ◆
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `[validator] mode` ◆ | `advisory` | `off`: the validator fetches nothing, anywhere. `advisory`: the full fact path runs as a dry run (**it does use the network**: it fetches, snapshots, judges and records what it would ratify) and writes nothing validated. `ratify`: real writes to `context/facts/**`, honoured only while the daemon's latch allows it and the PROMOTE conditions hold. The effective mode is the lower of this value and the latch |
+| `[validator.sources] primary`, `reputable`, `weak` ◆ | — | registrable domains the operator adds to the default source list (`specs/040` appendix A); they win over the defaults. Only the operator can edit them |
+
 ## Away mode and hooks ◆
 
 | Section | Meaning |

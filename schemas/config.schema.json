@@ -103,6 +103,24 @@
         "google": { "$ref": "#/$defs/searchEngine" }
       }
     },
+    "validator": {
+      "type": "object",
+      "description": "The fact validator (specs/040 section 15.1). The effective mode is the lower of this value and the daemon's latch.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["off", "advisory", "ratify"], "default": "advisory", "description": "off: no fetch of any kind. advisory: the full fact path as a dry run that writes nothing validated. ratify: real writes, only after PROMOTE." },
+        "sources": {
+          "type": "object",
+          "description": "The operator's additions to the default source list (specs/040 appendix A). Registrable domains.",
+          "additionalProperties": false,
+          "properties": {
+            "primary": { "type": "array", "items": { "type": "string" } },
+            "reputable": { "type": "array", "items": { "type": "string" } },
+            "weak": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
     "rag": {
       "type": "object",
       "properties": {
