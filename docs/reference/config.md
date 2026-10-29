@@ -48,10 +48,10 @@ Defaults are those of the template; "—" means no default.
 
 | Section | Meaning |
 | :-- | :-- |
-| `[[endpoints]]` | one per way of reaching a model: `id`, `family`, `path` (`api`, `cloud`, `gateway-native`, `gateway-compat`, `harness`), `credential`, and as the path needs `platform`, `region`, `project`, `base_url`, `models`, `headers`, `cost_model` (`subscription` or `local`), `harness` (`claude`, `agy` or `codex`), `betas`. `credential = "none"` is accepted only for a loopback `base_url` |
+| `[[endpoints]]` | one per way of reaching a model: `id`, `family`, `path` (`api`, `cloud`, `gateway-native`, `gateway-compat`, `harness`), `credential`, and as the path needs `platform`, `region`, `project`, `base_url`, `models`, `headers`, `cost_model` (`subscription` or `local`), `harness` (`claude`, `agy`, `codex` or `copilot`), `betas`. `credential = "none"` is accepted only for a loopback `base_url` |
 | `[access]` | `order` (family to endpoint IDs, in preference order) and `allowed_endpoints` |
 | `[auth.<name>]` | an OAuth flow: `flow` (`device_code`, `client_credentials`, `loopback_pkce`), `client_id`, `issuer` or explicit URLs, `scopes`, `audience`, `client_secret` (a reference such as `keychain:…`), `redirect_port`, `authorization_params` |
-| `[harness.claude]`, `[harness.agy]`, `[harness.codex]` | narrow a subscription CLI: `bridge`, `approvals` (`delegate` or `delphi`), `native_tools`, `claudeai_connectors`, `connector_reads`, `env_allow`, and CLI features such as `effort`, `max_turns`, `max_budget_usd`, `fallback_models` (see [`specs/021`](../../specs/021-harness-cli-features.md)). Unknown keys are refused |
+| `[harness.claude]`, `[harness.agy]`, `[harness.codex]`, `[harness.copilot]` | narrow a subscription CLI: `bridge`, `approvals` (`delegate` or `delphi`), `native_tools`, `claudeai_connectors`, `connector_reads`, `env_allow`, and CLI features such as `effort`, `max_turns`, `max_budget_usd`, `fallback_models` (see [`specs/021`](../../specs/021-harness-cli-features.md)). Unknown keys are refused |
 | `[harness] connector_settle_secs` | seconds a span waits for the account's connectors to load before its first turn |
 | `[connectors.<name>]` | an MCP connector: `url`, `hosts`, `login`, `account`, `roles`, `tools` (each `read`, `draft` or `write`), `max_arg_chars`, `first_use` (`ask` or `allow`), `calls_per_minute`, `max_result_chars`, `identity` |
 

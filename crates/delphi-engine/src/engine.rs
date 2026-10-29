@@ -77,6 +77,8 @@ pub struct Settings {
     pub agy_program: String,
     /// The Codex CLI to launch for a `codex` harness endpoint (`specs/047`).
     pub codex_program: String,
+    /// The GitHub Copilot CLI to launch for a `copilot` harness endpoint (`specs/051`).
+    pub copilot_program: String,
     /// Where the `agy` conformance record is read from, when not beside the inventory (tests).
     pub agy_gate_file: Option<std::path::PathBuf>,
     /// Tokens (input, cache writes and output; not cache reads) one harness span may use before it is stopped.
@@ -87,6 +89,7 @@ pub struct Settings {
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
     pub harness_codex: crate::harness::Opts,
+    pub harness_copilot: crate::harness::Opts,
     /// `[learning]`: what the daemon stages for the operator to review (`specs/031` §3.6).
     pub learning: crate::learn::LearningSettings,
     /// How long a Claude span waits, before its first turn, for the account's connectors to finish loading (`specs/020` §6).
@@ -152,6 +155,8 @@ impl Default for Settings {
             harness_agy: Default::default(),
             harness_codex: Default::default(),
             codex_program: "codex".into(),
+            harness_copilot: Default::default(),
+            copilot_program: "copilot".into(),
             learning: Default::default(),
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
@@ -543,6 +548,7 @@ impl Engine {
                 let program = match ep.harness.as_deref() {
                     Some("agy") => &self.settings.agy_program,
                     Some("codex") => &self.settings.codex_program,
+                    Some("copilot") => &self.settings.copilot_program,
                     _ => &self.settings.harness_program,
                 };
                 crate::capabilities::probe_harness(&cfg, ep, program, now).await.auth == "ok"

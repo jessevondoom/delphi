@@ -31,6 +31,9 @@ pub enum Cli {
     /// `codex` (the Codex CLI, `specs/047`): `exec --json` events, one prompt on stdin, no permission bridge yet, so
     /// read-only roles only.
     Codex,
+    /// `copilot` (the GitHub Copilot CLI, `specs/051`): `--output-format json` events, one prompt on stdin, no approval bridge
+    /// yet, so read-only roles only. One login serves several vendors' models, so the model is always named and checked.
+    Copilot,
 }
 
 impl Cli {
@@ -39,6 +42,7 @@ impl Cli {
             "claude" => Some(Cli::Claude),
             "agy" => Some(Cli::Agy),
             "codex" => Some(Cli::Codex),
+            "copilot" => Some(Cli::Copilot),
             _ => None,
         }
     }
@@ -49,6 +53,7 @@ impl Cli {
             Cli::Claude => "claude",
             Cli::Agy => "agy",
             Cli::Codex => "codex",
+            Cli::Copilot => "copilot",
         }
     }
 }
@@ -396,6 +401,90 @@ impl CodexParser {
     }
 }
 
+/// A tool name that matches nothing: `--available-tools` with it offers the model zero tools. An empty value would mean "no
+/// narrowing" (`specs/051` §6.4), so a span with no tools is never launched with an empty list.
+pub const COPILOT_NO_TOOLS: &str = "delphi-no-tools";
+/// Inside the span's own scratch directory: the CLI's home (session state, so prompts and tool output stay out of the
+/// operator's `~/.copilot`; the login is in the OS keychain, `specs/051` §6.4) and its log files.
+pub const COPILOT_HOME_DIR: &str = ".copilot-home";
+const COPILOT_LOG_DIR: &str = ".copilot-logs";
+/// The read tools a span with `Tools::Standard` is offered. Writes and shell are denied by the CLI without an approver.
+const COPILOT_READ_TOOLS: [&str; 3] = ["view", "grep", "glob"];
+
+/// `copilot --output-format json` output (`specs/051` §2.1, §6.4): one JSON object per line. It keeps the last non-empty
+/// assistant message (the answer), the model the stream reports, and the usage of the last `session.usage_checkpoint`, and
+/// ends the span at the `result` line.
+#[derive(Debug, Default)]
+pub struct CopilotParser {
+    /// The model the span asked for; the stream must report the same one (one login serves several vendors).
+    expected: String,
+    reported: Option<String>,
+    last: String,
+    failure: Option<String>,
+    tokens: Tokens,
+    tools_seen: bool,
+}
+
+impl CopilotParser {
+    pub fn new(expected_model: &str) -> CopilotParser {
+        CopilotParser { expected: expected_model.into(), ..Default::default() }
+    }
+
+    pub fn line(&mut self, line: &str) -> Vec<Event> {
+        let Ok(m) = serde_json::from_str::<Value>(line) else { return vec![] };
+        let d = &m["data"];
+        let mut out = Vec::new();
+        match m["type"].as_str() {
+            Some("session.tools_updated") => {
+                if let Some(model) = d["model"].as_str() {
+                    self.reported = Some(model.into());
+                }
+            }
+            Some("assistant.message") => {
+                if let Some(model) = d["model"].as_str() {
+                    self.reported = Some(model.into());
+                }
+                if let Some(t) = d["content"].as_str().filter(|t| !t.trim().is_empty()) {
+                    self.last = t.into();
+                    out.push(Event::Text(t.into()));
+                }
+            }
+            Some("tool.execution_start") => out.push(Event::ToolUse { id: d["toolCallId"].as_str().unwrap_or("").into(), name: d["toolName"].as_str().unwrap_or("").into(), input: d["arguments"].clone() }),
+            Some("tool.execution_complete") => out.push(Event::ToolResult { id: d["toolCallId"].as_str().unwrap_or("").into(), is_error: d["success"] == false }),
+            Some("model.call_final_result") if d["result"].as_str().is_some_and(|r| r != "success") => self.failure = Some(format!("the model call ended with `{}`", d["result"].as_str().unwrap_or(""))),
+            Some("session.usage_checkpoint") => {
+                // The tool list is what the CLI really offered; the seat record shows it, and a span asked for none can be checked.
+                if !self.tools_seen {
+                    self.tools_seen = true;
+                    let tools = d["promptCacheBreakState"].as_array().into_iter().flatten().flat_map(|s| s["models"].as_object().into_iter().flat_map(|ms| ms.values())).next().map(|mm| mm["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+                    out.push(Event::Init { session_id: String::new(), tools, mcp_servers: None });
+                }
+                let t = &d["accountingSnapshot"]["tokenDetails"];
+                let n = |k: &str| t[k]["tokenCount"].as_u64().unwrap_or(0);
+                self.tokens = Tokens { input: n("input"), cache_read: n("cache_read"), cache_write: n("cache_write"), output: n("output") };
+            }
+            Some(t) if t == "error" || t.ends_with(".error") => self.failure = Some(d["message"].as_str().or_else(|| m["message"].as_str()).unwrap_or("the CLI reported an error").into()),
+            Some("result") => {
+                let code = m["exitCode"].as_i64().unwrap_or(0);
+                let wrong_model = self.reported.as_ref().filter(|r| !self.expected.is_empty() && **r != self.expected).cloned();
+                let (text, is_error, subtype) = if let Some(r) = wrong_model {
+                    // The family of an answer is the model's, not the CLI's: a seat asked for one and served by another is refused.
+                    (format!("asked for `{}`, served by `{}`", self.expected, r), true, "model_mismatch")
+                } else if let Some(f) = self.failure.take() {
+                    (f, true, "error")
+                } else if code != 0 {
+                    (format!("copilot exited with code {}", code), true, "error")
+                } else {
+                    (self.last.clone(), false, "success")
+                };
+                out.push(Event::Result { text, is_error, stop_reason: None, total_cost_usd: 0.0, usage: self.tokens, subtype: subtype.into(), structured: None });
+            }
+            _ => {}
+        }
+        out
+    }
+}
+
 /// The `control_response` line for a decision. Never carries `updatedPermissions`.
 pub fn response_line(p: &Permission, d: &Decision) -> String {
     let body = match d {
@@ -418,6 +507,12 @@ fn first_turn(l: &Launch) -> String {
         // `codex exec` reads a plain-text prompt from stdin. It has no system-prompt flag either, and its tools cannot be
         // switched off, so the role is told to answer in text (a request: the sandbox is read-only and the span untrusted).
         Cli::Codex => return format!("{}\n\nDo not run commands or call tools. Answer in text only.\n\n{}\n", l.system_prompt, l.user_prompt),
+        // `copilot` reads a plain-text prompt from stdin (no `-p`: it would be visible in `ps`). It has no system-prompt flag, and
+        // its tools are narrowed by `--available-tools`, so a span with none is told that, truthfully.
+        Cli::Copilot => {
+            let no_tools = if l.tools == Tools::None { "Do not call tools. Answer in text only.\n\n" } else { "" };
+            return format!("{}\n\n{}{}\n", l.system_prompt, no_tools, l.user_prompt);
+        }
         Cli::Agy => {
             // With the Delphi bridge there is something to call (a gate denies the rest), so the sentence would be false.
             let no_tools = if l.tools == Tools::None && l.profile.mcp_config.is_none() { "Do not call any tools. Answer in text only.\n\n" } else { "" };
@@ -505,6 +600,20 @@ fn args(l: &Launch) -> Vec<String> {
             push_flag(&mut a, "--output-schema", Some(l.cwd.join(CODEX_SCHEMA_FILE).display().to_string()));
         }
         a.push("-".into());
+        return a;
+    }
+    if l.cli == Cli::Copilot {
+        // Headless and fail-closed (`specs/051` §6.4): no allow flag is ever passed, so a run reads inside its working
+        // directory and denies everything else. The allowlist is never empty. Nothing of the checkout's own instructions, the
+        // built-in GitHub MCP server, telemetry, updates, shell startup files or history sync is let in. The prompt is on stdin.
+        let mut a = strings(&["--output-format", "json", "--model", l.model.as_str(), "--no-custom-instructions", "--disable-builtin-mcps", "--no-auto-update", "--disable-client-telemetry", "--no-ask-user", "--no-experimental", "--no-bash-env", "--sync-session=off", "--log-dir"]);
+        a.push(l.cwd.join(COPILOT_LOG_DIR).display().to_string());
+        a.push("--available-tools".into());
+        match l.tools {
+            Tools::None => a.push(COPILOT_NO_TOOLS.into()),
+            Tools::Standard => a.extend(COPILOT_READ_TOOLS.iter().map(|t| t.to_string())),
+        }
+        push_flag(&mut a, "--reasoning-effort", o.effort.clone());
         return a;
     }
     let p = &l.profile;
@@ -608,7 +717,19 @@ impl Session {
             (Cli::Codex, Some(k)) => {
                 env.insert("CODEX_API_KEY".into(), k.expose().to_string());
             }
+            (Cli::Copilot, Some(k)) => {
+                env.insert("COPILOT_GITHUB_TOKEN".into(), k.expose().to_string());
+            }
             _ => {}
+        }
+        if l.cli == Cli::Copilot {
+            // `auto` lets the service pick the model, so the family that answered would be unknown (`specs/051` §1.1).
+            if l.model.trim().is_empty() || l.model == "auto" {
+                return Err("a copilot seat needs an explicit model id, not `auto` (specs/051 §1.1)".into());
+            }
+            let home = l.cwd.join(COPILOT_HOME_DIR);
+            std::fs::create_dir_all(&home).and_then(|_| std::fs::create_dir_all(l.cwd.join(COPILOT_LOG_DIR))).map_err(|e| format!("cannot make the copilot home: {}", e))?;
+            env.insert("COPILOT_HOME".into(), home.display().to_string());
         }
         if let (Cli::Codex, Some(schema)) = (l.cli, &l.opts.json_schema) {
             // `--output-schema` takes a file: it goes in the span's own scratch directory.
@@ -646,6 +767,7 @@ impl Session {
         let first = first_turn(l);
         let cli = l.cli;
         let mut codex = CodexParser::new(l.opts.json_schema.is_some());
+        let mut copilot = CopilotParser::new(&l.model);
         let (tx, mut rx) = mpsc::channel(256);
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -660,6 +782,7 @@ impl Session {
                 let events = match cli {
                     Cli::Agy => parse_agy_line(&line),
                     Cli::Codex => codex.line(&line),
+                    Cli::Copilot => copilot.line(&line),
                     Cli::Claude => parse_line(&line),
                 };
                 for ev in events {
@@ -675,8 +798,8 @@ impl Session {
         }
         stdin.write_all(first.as_bytes()).await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
-        // `codex exec` reads its prompt to the end of stdin, so the input closes with the one turn.
-        let stdin = if cli == Cli::Codex { None } else { Some(stdin) };
+        // `codex exec` and `copilot` read their prompt to the end of stdin, so the input closes with the one turn.
+        let stdin = if matches!(cli, Cli::Codex | Cli::Copilot) { None } else { Some(stdin) };
         Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task })
     }
 
@@ -1235,6 +1358,138 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
         assert!(!read("args.txt").contains("sk-codex"), "the key is never an argument");
     }
 
+    /// The lines of one real `copilot --output-format json` run (`specs/051` §2.1, §6.4), trimmed to the fields the parser reads.
+    fn copilot_run(model_reported: &str) -> Vec<String> {
+        vec![
+            r#"{"type":"session.mcp_servers_loaded","ephemeral":true,"data":{"servers":[]}}"#.into(),
+            format!(r#"{{"type":"session.tools_updated","data":{{"model":"{}"}},"ephemeral":true}}"#, model_reported),
+            r#"{"type":"assistant.message_delta","data":{"deltaContent":"o"},"ephemeral":true}"#.into(),
+            r#"{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"view"}],"model":"m-1"}}"#.replace("m-1", model_reported),
+            r#"{"type":"tool.execution_start","data":{"toolCallId":"c1","toolName":"view","arguments":{"path":"/a"}}}"#.into(),
+            r#"{"type":"tool.execution_complete","data":{"toolCallId":"c1","success":false,"error":{"message":"Permission denied because no interactive user response was available."}}}"#.into(),
+            r#"{"type":"assistant.message","data":{"content":"the answer","toolRequests":[],"model":"m-1"}}"#.replace("m-1", model_reported),
+            r#"{"type":"session.usage_checkpoint","data":{"totalPremiumRequests":1,"totalNanoAiu":1000,"promptCacheBreakState":[{"models":{"m":{"tool_count":2,"tools":[{"name":"view"},{"name":"grep"}]}}}],"accountingSnapshot":{"tokenDetails":{"input":{"tokenCount":4},"cache_read":{"tokenCount":7},"cache_write":{"tokenCount":23045},"output":{"tokenCount":9}}}}}"#.into(),
+            r#"{"type":"result","sessionId":"s1","exitCode":0,"usage":{"premiumRequests":1}}"#.into(),
+        ]
+    }
+
+    #[test]
+    fn copilot_lines_become_events_and_the_last_non_empty_message_is_the_result() {
+        let mut p = CopilotParser::new("m-1");
+        let ev: Vec<Event> = copilot_run("m-1").iter().flat_map(|l| p.line(l)).collect();
+        assert!(matches!(&ev[0], Event::ToolUse { id, name, input } if id == "c1" && name == "view" && input["path"] == "/a"), "{:?}", ev);
+        assert_eq!(ev[1], Event::ToolResult { id: "c1".into(), is_error: true });
+        assert_eq!(ev[2], Event::Text("the answer".into()), "an empty tool-turn message is not text");
+        assert!(matches!(&ev[3], Event::Init { tools, .. } if tools == &["view", "grep"]), "the seat record shows the tools really offered");
+        match &ev[4] {
+            Event::Result { text, is_error: false, usage, subtype, .. } => {
+                assert_eq!((text.as_str(), subtype.as_str()), ("the answer", "success"));
+                assert_eq!((usage.input, usage.cache_read, usage.cache_write, usage.output), (4, 7, 23045, 9));
+            }
+            other => panic!("{:?}", other),
+        }
+        assert_eq!(ev.len(), 5);
+        assert!(CopilotParser::new("m-1").line("not json").is_empty());
+    }
+
+    #[test]
+    fn a_copilot_answer_from_another_model_or_a_failed_call_is_an_error_result() {
+        // One login serves several vendors: a span asked for one model and served by another is refused (specs/051 §1.1).
+        let mut p = CopilotParser::new("gpt-6-luna");
+        let last = copilot_run("claude-sonnet-5.5").iter().flat_map(|l| p.line(l)).last().unwrap();
+        match last {
+            Event::Result { is_error: true, text, subtype, .. } => assert!(text.contains("gpt-6-luna") && text.contains("claude-sonnet-5.5") && subtype == "model_mismatch", "{}", text),
+            other => panic!("{:?}", other),
+        }
+        let mut q = CopilotParser::new("m-1");
+        assert!(q.line(r#"{"type":"model.call_final_result","data":{"result":"rate_limited"}}"#).is_empty());
+        match &q.line(r#"{"type":"result","exitCode":0}"#)[0] {
+            Event::Result { is_error: true, text, .. } => assert!(text.contains("rate_limited"), "{}", text),
+            other => panic!("{:?}", other),
+        }
+        match &CopilotParser::new("m-1").line(r#"{"type":"result","exitCode":2}"#)[0] {
+            Event::Result { is_error: true, text, .. } => assert!(text.contains("code 2")),
+            other => panic!("{:?}", other),
+        }
+    }
+
+    fn copilot_launch(tools: Tools, opts: Opts, program: &str, cwd: &std::path::Path) -> Launch {
+        Launch { cli: Cli::Copilot, program: program.into(), model: "m-1".into(), system_prompt: "SYS".into(), user_prompt: "question".into(), cwd: cwd.to_path_buf(), tools, env: BTreeMap::new(), profile: Default::default(), opts }
+    }
+
+    #[test]
+    fn copilot_is_launched_fail_closed_with_a_never_empty_allowlist_and_no_allow_flag() {
+        let a = args(&copilot_launch(Tools::None, Opts { effort: Some("high".into()), ..Default::default() }, "copilot", std::path::Path::new("/scratch")));
+        let s = a.join(" ");
+        assert!(s.starts_with("--output-format json --model m-1 --no-custom-instructions --disable-builtin-mcps --no-auto-update"), "{}", s);
+        assert!(s.contains("--available-tools delphi-no-tools") && s.contains("--reasoning-effort high") && s.contains("--log-dir /scratch/.copilot-logs"), "{}", s);
+        assert!(!a.iter().any(|x| x == "-p" || x == "--prompt"), "the prompt is on stdin, never in ps");
+        for banned in ["--allow-all", "--yolo", "--allow-tool", "--allow-url", "--autopilot", "--fleet", "--acp", "--share", "--enable-memory", "--auto-tier"] {
+            assert!(!a.iter().any(|x| x.starts_with(banned)), "{} must never be passed: {}", banned, s);
+        }
+        assert!(a.iter().any(|x| x == "--sync-session=off") && a.iter().any(|x| x == "--no-bash-env") && a.iter().any(|x| x == "--no-ask-user"), "{}", s);
+        let i = a.iter().position(|x| x == "--available-tools").unwrap();
+        assert!(!a[i + 1].is_empty() && !a[i + 1].starts_with("--"), "an empty allowlist would mean no narrowing");
+        let std = args(&copilot_launch(Tools::Standard, Opts::default(), "copilot", std::path::Path::new("/scratch"))).join(" ");
+        assert!(std.contains("--available-tools view grep glob"), "{}", std);
+        let t = first_turn(&copilot_launch(Tools::None, Opts::default(), "copilot", std::path::Path::new(".")));
+        assert!(t.starts_with("SYS") && t.contains("Answer in text only") && t.trim_end().ends_with("question"));
+    }
+
+    #[tokio::test]
+    async fn a_copilot_session_reads_stdin_runs_in_a_scratch_home_and_the_token_stays_in_the_environment() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let prog = d.path().join("fake-copilot");
+        let mut body = String::from("#!/bin/sh\nprintf '%s\\n' \"$@\" > args.txt\nprintf '%s' \"$COPILOT_HOME\" > home.txt\nprintf '%s' \"$COPILOT_GITHUB_TOKEN\" > token.txt\nprintf '%s' \"$GH_TOKEN\" > gh.txt\ncat > prompt.txt\n");
+        for l in copilot_run("m-1") {
+            body.push_str(&format!("echo '{}'\n", l));
+        }
+        std::fs::write(&prog, body).unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opts = Opts { api_key: Some(delphi_adapter::credential::Secret::new("ghp-token-1".into(), None)), ..Default::default() };
+        let mut env = BTreeMap::new();
+        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        let mut l = copilot_launch(Tools::None, opts, &prog.display().to_string(), d.path());
+        l.env = env;
+        let mut s = Session::start(&l).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(ev) = s.next(Duration::from_secs(10)).await {
+            seen.push(ev);
+        }
+        assert!(seen.iter().any(|e| matches!(e, Event::Result { text, is_error: false, .. } if text == "the answer")), "{:?}", seen);
+        assert!(matches!(seen.last(), Some(Event::Exit { code: Some(0) })));
+        let read = |f: &str| std::fs::read_to_string(d.path().join(f)).unwrap();
+        assert!(read("prompt.txt").contains("question"), "the prompt arrived on stdin");
+        assert_eq!(read("home.txt"), d.path().join(COPILOT_HOME_DIR).display().to_string());
+        assert!(d.path().join(COPILOT_HOME_DIR).is_dir());
+        assert_eq!(read("token.txt"), "ghp-token-1");
+        assert_eq!(read("gh.txt"), "", "the child gets exactly Launch.env and the keys Delphi sets, nothing inherited");
+        assert!(!read("args.txt").contains("ghp-token-1"), "the token is never an argument");
+    }
+
+    #[test]
+    fn the_cli_environment_allowlist_carries_no_github_or_copilot_variable() {
+        // `GH_TOKEN`, `GITHUB_TOKEN` and `COPILOT_GITHUB_TOKEN` take precedence over a stored login (`copilot help
+        // environment`), `COPILOT_ALLOW_ALL=true` also trusts the directory, and `COPILOT_HOME` moves the state: none may be
+        // inherited from the operator's shell. Delphi sets the ones it means to, itself.
+        let env = cli_env_with(&[]);
+        for k in ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", "COPILOT_ALLOW_ALL", "COPILOT_HOME", "COPILOT_MODEL", "COPILOT_PROVIDER_BASE_URL", "CODEX_API_KEY"] {
+            assert!(!env.contains_key(k), "{} must not be inherited", k);
+        }
+        assert!(env.contains_key("PATH") && env.contains_key("HOME"), "the login is found through HOME");
+    }
+
+    #[tokio::test]
+    async fn a_copilot_span_asked_for_auto_is_refused_before_anything_starts() {
+        let d = tempfile::tempdir().unwrap();
+        let mut l = copilot_launch(Tools::None, Opts::default(), "/nonexistent/copilot", d.path());
+        l.model = "auto".into();
+        let e = Session::start(&l).await.err().expect("refused");
+        assert!(e.contains("explicit model"), "{}", e);
+        assert!(!d.path().join(COPILOT_HOME_DIR).exists(), "nothing was made");
+    }
+
     #[tokio::test]
     async fn an_idle_cli_is_killed_with_everything_it_started() {
         let d = tempfile::tempdir().unwrap();
@@ -1311,5 +1566,42 @@ echo '{"type":"result","subtype":"success","result":"fin","total_cost_usd":0.01,
             }
         }
         assert!(result && text.to_lowercase().contains("pong") && metered > 0, "text={:?} metered={}", text, metered);
+    }
+
+    /// Against the real `copilot` (a fraction of a premium request on the cheapest model; run with `--ignored`). It runs with the
+    /// allowlisted environment, so it proves the keychain login is found without the operator's shell variables, that no tool is
+    /// offered, and that the saved session stays out of `~/.copilot`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_copilot_round_trip() {
+        let sessions = |p: std::path::PathBuf| std::fs::read_dir(p).map(|r| r.count()).unwrap_or(0);
+        let real = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(".copilot/session-state");
+        let before = sessions(real.clone());
+        let d = tempfile::tempdir().unwrap();
+        let cwd = std::fs::canonicalize(d.path()).unwrap();
+        let mut l = copilot_launch(Tools::None, Opts::default(), "copilot", &cwd);
+        l.model = "claude-haiku-4.5".into();
+        l.system_prompt = "You are a test fixture. Be brief.".into();
+        l.user_prompt = "Reply with the single word pong.".into();
+        l.env = cli_env();
+        let mut s = Session::start(&l).await.unwrap();
+        let (mut result, mut tools, mut usage) = (None, None, Tokens::default());
+        while let Some(ev) = s.next(Duration::from_secs(120)).await {
+            match ev {
+                Event::Init { tools: t, .. } => tools = Some(t),
+                Event::Result { text, is_error, usage: u, .. } => {
+                    result = Some((text, is_error));
+                    usage = u;
+                }
+                Event::Exit { .. } => break,
+                _ => {}
+            }
+        }
+        let (text, is_error) = result.expect("a result");
+        assert!(!is_error && text.to_lowercase().contains("pong"), "{:?}", text);
+        assert_eq!(tools, Some(vec![]), "no tool was offered");
+        assert!(usage.cache_write + usage.input + usage.output > 0, "{:?}", usage);
+        assert!(cwd.join(COPILOT_HOME_DIR).join("session-state").is_dir(), "the session was kept in the scratch home");
+        assert_eq!(sessions(real), before, "nothing was added to the operator's ~/.copilot/session-state");
     }
 }
