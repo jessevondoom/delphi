@@ -619,3 +619,6 @@ A validated fact carries `last_confirmed` and, where the claim is time-sensitive
 
 ### 23.5 Open items carried
 Council pass on §19.6; labelled set (extended per §22 open work 1); audit-by-risk and "validated · you checked it" recommendations (§22 item 3) are adopted as the **default plan** unless the operator objects; Xenia `fact` kind coordinated with spec 012 before V6.
+
+### 23.6 Labelled set reviewed (operator, 2026-10-28)
+The operator reported on 2026-10-28 that the review of the claim set at `$DELPHI_HOME/operator/validation/claims-draft.json` is finished. That closes §15.7 item 1 on the operator's word. The file stays unreadable to agents. Scoring (V1b) therefore must be a command the **operator runs** (or a daemon path that reads the set without exposing claims or expectations to any model), and it reports only counts and rates, never claim text. Which claims were added for §6.3 and §21 is not recorded here; the operator's file is the record. V1b is unblocked in principle; it still needs a spec slice for the scoring command and the §19.6 Council pass before any automatic promotion to **validated**.
