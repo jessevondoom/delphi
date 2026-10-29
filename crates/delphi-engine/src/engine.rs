@@ -2736,7 +2736,7 @@ mod tests {
         assert_eq!(f.model.requests().len(), 2, "no summary was asked of any model");
         let rel = events_of(&f, "checkpoint.saved")[0].payload["path"].as_str().unwrap().to_string();
         let note = checkpoint_text(&f, &rel);
-        assert!(note.contains("read untrusted content") && !note.contains("MUST NOT BE ASKED"), "{}", note);
+        assert!(note.contains("read content that is not validated") && !note.contains("MUST NOT BE ASKED"), "{}", note);
         f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
         task.await.unwrap().unwrap();
     }

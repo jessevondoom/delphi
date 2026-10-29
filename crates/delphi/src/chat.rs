@@ -394,7 +394,7 @@ impl Renderer {
             "decisions.review_requested" => Some(format!("\n  ! {} provisional decision(s) await your review before anything can merge: /decisions\n", p["count"].as_u64().unwrap_or(0))),
             "build.merge_finished" => Some(format!("\n  merge check for {}: {} — {}\n", e["task_id"].as_str().unwrap_or("?"), p["outcome"].as_str().unwrap_or("?"), p["detail"].as_str().unwrap_or(""))),
             "approval.resolved" => Some(format!("\n  approval {}: {}{}\n", p["approval_id"].as_str().unwrap_or("?"), p["resolution"].as_str().unwrap_or("?"), p["by"].as_str().map(|b| format!(" (by {})", b)).unwrap_or_default())),
-            "span.taint" => Some(format!("\n  ! {} read untrusted content (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
+            "span.taint" => Some(format!("\n  ! {} read content that is not validated (tier {}); its actions are restricted\n", self.span_name(span), p["ceiling"].as_str().unwrap_or("?"))),
             "endpoint.throttled" => Some(format!("\n  ! {} is throttled; trying the next endpoint\n", p["endpoint_id"].as_str().unwrap_or("?"))),
             "model.homogeneous" => Some(format!("\n  ! no model outside {} was usable; this review is by the same family as the author\n", p["avoided"])),
             "task.blocked" => Some(format!("\n  ! waiting for a model: {}{}\n", p["why"].as_str().unwrap_or("?"), p["back_at"].as_i64().map(|t| format!(" (back at {})", delphi_core::time::format_unix_millis(t, 0))).unwrap_or_default())),
@@ -1339,7 +1339,8 @@ mod tests {
         assert!(r.event(&json!({"type": "agent.block.complete", "payload": {"block": {"type": "text", "text": "x"}}})).is_none());
         assert!(r.event(&json!({"type": "tool.result", "payload": {"is_error": true, "content": "denied: outside your role's access scope\nmore"}})).unwrap().contains("✗ denied: outside your role"));
         assert!(r.event(&json!({"type": "tool.result", "payload": {"is_error": false, "content": "fine"}})).is_none());
-        assert!(r.event(&json!({"type": "span.taint", "span_id": "x", "payload": {"ceiling": "L0"}})).unwrap().contains("untrusted content (tier L0)"));
+        assert!(r.event(&json!({"type": "span.taint", "span_id": "x", "payload": {"ceiling": "L0"}})).unwrap().contains("not validated (tier L0)"));
+        assert!(!r.event(&json!({"type": "span.taint", "span_id": "x", "payload": {"ceiling": "L0"}})).unwrap().contains("untrusted"), "operator text says not validated (specs/040 §18.2)");
         assert!(r.event(&json!({"type": "endpoint.reauth_required", "payload": {"endpoint_id": "bedrock-us"}})).unwrap().contains("re-authenticate bedrock-us"));
         assert!(r.event(&json!({"type": "approval.resolved", "payload": {"approval_id": "ap_1", "resolution": "approved", "by": "console-3"}})).unwrap().contains("approved (by console-3)"));
         assert!(r.event(&json!({"type": "budget.reserve", "payload": {}})).is_none());

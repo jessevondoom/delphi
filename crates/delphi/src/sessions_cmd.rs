@@ -24,7 +24,7 @@ pub fn render(all: &[Digest], o: &Options) -> String {
         return "no finished sessions yet: a session is written here when you start a new one (/new) or the daemon restarts\n".into();
     }
     for d in shown {
-        out.push_str(&format!("{}  {}  {}  {} ask{} · ended by {}{}{}\n", d.session_id, day(&d.started), d.mission_id, d.turns, if d.turns == 1 { "" } else { "s" }, d.ended_by, if d.tainted { " · read untrusted content" } else { "" }, if d.escalated > 0 { format!(" · {} stopped", d.escalated) } else { String::new() }));
+        out.push_str(&format!("{}  {}  {}  {} ask{} · ended by {}{}{}\n", d.session_id, day(&d.started), d.mission_id, d.turns, if d.turns == 1 { "" } else { "s" }, d.ended_by, if d.tainted { " · read content that is not validated" } else { "" }, if d.escalated > 0 { format!(" · {} stopped", d.escalated) } else { String::new() }));
         if let Some(s) = &d.summary {
             out.push_str(&format!("  summary: {}\n", s));
         }

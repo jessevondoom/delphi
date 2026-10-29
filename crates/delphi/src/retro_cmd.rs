@@ -60,7 +60,7 @@ pub fn render_one(p: &LiveProposal) -> String {
         p.op,
         p.scope,
         p.tier,
-        if p.tier == "L3" { " (composed by the daemon's Orchestrator)" } else { " (from a task that read untrusted content)" },
+        if p.tier == "L3" { " (composed by the daemon's Orchestrator)" } else { " (from a task that read content that is not validated)" },
         p.timestamp,
         p.task_id.as_deref().unwrap_or("—"),
         target,
