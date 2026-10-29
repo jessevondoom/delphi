@@ -51,6 +51,16 @@ impl Host {
     }
 }
 
+/// The ledger's view for the caps: other roles' tokens in this mission, and the install's tokens in the last 7 days.
+fn shares_of(ws_dir: &std::path::Path, mission: &str) -> Shares {
+    use delphi_core::ledger::{GroupBy, Ledger};
+    let Ok(l) = Ledger::open(&ws_dir.join("local/state.db")) else { return Shares::default() };
+    let sum = |t: &delphi_core::ledger::Totals| t.input_tokens + t.output_tokens + t.thinking_tokens;
+    let other_mission = l.totals(GroupBy::Role, Some(mission)).map(|v| v.iter().filter(|t| t.key != "validator").map(sum).sum()).unwrap_or(0);
+    let install_week = l.tokens_since(&delphi_core::time::format_unix_millis(delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0) - 7 * 86_400, 0)).unwrap_or(0);
+    Shares { other_mission, install_week }
+}
+
 fn event(m: &MissionState, kind: &str, payload: Value) -> EventEnvelope {
     let mut e = EventEnvelope::new(&m.id, kind, payload);
     e.agent = Some("validator".into());
@@ -92,14 +102,64 @@ impl Engine {
             HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self) }) as Arc<dyn Searcher>)
         };
         let deps = Deps { policy: &policy, store: &store, list: &list, judge: &judge, searcher: searcher.as_deref(), ledger: &ledger, author_family: judge.author_family.as_deref() };
-        serve(&self.validator, m, &self.ws.dir, &self.now(), &eff, &deps, searcher.clone(), req).await
+        serve(&self.validator, m, &self.ws.dir, &self.now(), &eff, &deps, searcher.clone(), &shares_of(&self.ws.dir, &m.id), Some(&crate::fact_span::EngineSpan { engine: self.clone(), mission: m.clone(), author_family: judge.author_family.clone() }), req).await
+    }
+}
+
+/// What the ledger says about tokens, read at the time of the request (§20): every other role's tokens in this mission,
+/// and the install's tokens over the trailing week.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Shares {
+    pub other_mission: u64,
+    pub install_week: u64,
+}
+
+fn at_cap(ws_dir: &std::path::Path, mission: &str, background: bool, sh: &Shares, secs: i64) -> Option<crate::fact_audit::Cap> {
+    let state = state_dir(ws_dir);
+    let r = if background { crate::fact_audit::background_allows(&state, sh.install_week, secs, crate::fact_intake::RESERVE_PER_CLAIM) } else { crate::fact_audit::mission_allows(&state, mission, sh.other_mission, crate::fact_intake::RESERVE_PER_CLAIM) };
+    r.err()
+}
+
+/// D-8 (§20.1): the claim is kept, labelled not validated, queued, and the operator gets one line (once per request).
+async fn park(m: &Arc<MissionState>, ws_dir: &std::path::Path, fact: &str, claim: &str, cap: &crate::fact_audit::Cap, noticed: &mut bool, secs: i64) -> Result<(), String> {
+    crate::fact_audit::queue_claim(&state_dir(ws_dir), &m.id, fact, secs);
+    let mut events = vec![event(m, "validator.event", json!({"kind": "queued", "fact_id": fact, "claim": claim, "label": "not validated (budget reached)"}))];
+    if !*noticed {
+        *noticed = true;
+        events.push(event(m, "validator.event", json!({"kind": "budget_notice", "notice": cap.notice(&m.id)})));
+    }
+    m.append_batch(events).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// One validator span for one claim, on its own reserve. A span that cannot start, fails or finds nothing returns no
+/// addresses and the daemon's own search takes over; the reason is logged. The reserve is settled to what it used.
+async fn run_span(r: &dyn crate::fact_span::SpanRunner, deps: &Deps<'_>, ws_dir: &std::path::Path, m: &Arc<MissionState>, claim: &str, secs: i64) -> Vec<String> {
+    let note = |status: &str, tokens: u64| event(m, "validator.event", json!({"kind": "span", "status": status, "tokens": tokens}));
+    let Ok(res) = deps.ledger.reserve(crate::fact_span::SPAN_RESERVE) else {
+        let _ = m.append(note("budget_reached", 0)).await;
+        return vec![];
+    };
+    match r.find(claim).await {
+        Ok(f) => {
+            deps.ledger.settle(&res, f.tokens);
+            crate::fact_audit::Journal::new(&state_dir(ws_dir)).append("span", json!({"mission": m.id, "tokens": f.tokens}), secs);
+            let _ = m.append(note(if f.urls.is_empty() { "no_sources" } else { "ran" }, f.tokens)).await;
+            f.urls
+        }
+        Err(_) => {
+            deps.ledger.release(&res);
+            let _ = m.append(note("unavailable", 0)).await;
+            vec![]
+        }
     }
 }
 
 /// The request against a built set of dependencies. Separate from the engine so the fixtures of the tests can stand in
 /// for the network, the search engine and the judge.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path::Path, now: &str, eff: &Effective, deps: &Deps<'_>, searcher: Option<Arc<dyn Searcher>>, req: &Value) -> Result<(), String> {
+pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path::Path, now: &str, eff: &Effective, deps: &Deps<'_>, searcher: Option<Arc<dyn Searcher>>, shares: &Shares, spans: Option<&dyn crate::fact_span::SpanRunner>, req: &Value) -> Result<(), String> {
+    let background = req["background"].as_bool().unwrap_or(false);
+    let mut noticed = false;
     let caller = req["caller"].as_str().unwrap_or("").to_string();
     let tool = req["tool"].as_str().unwrap_or("");
     let secs = delphi_core::time::parse_rfc3339(now).unwrap_or(0);
@@ -110,7 +170,17 @@ pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path
             let sub: Submission = serde_json::from_value(json!({"claim": req["claim"], "needed_for": req["needed_for"], "urls": req["urls"], "kind": req["kind"]}).tap_kind()).map_err(|e| e.to_string())?;
             let (receipt, accepted) = host.intake().submit(&caller, &sub.claim);
             match accepted {
-                Some(a) => work.push((a, sub)),
+                Some(a) => match at_cap(ws_dir, &m.id, background, shares, secs) {
+                    Some(cap) => {
+                        host.intake().finish(&a, 0);
+                        park(m, ws_dir, &a.fact_id, &a.claim, &cap, &mut noticed, secs).await?;
+                    }
+                    None => work.push((a, sub)),
+                },
+                None if receipt.status == crate::fact_intake::Status::BudgetReached => {
+                    let cap = crate::fact_audit::Cap::Mission { spent: deps.ledger.spent(), cap: TOKEN_ALLOWANCE };
+                    park(m, ws_dir, receipt.fact_id.as_deref().unwrap_or(""), &sub.claim, &cap, &mut noticed, secs).await?;
+                }
                 None => {
                     m.append(refusal(m, &caller, &receipt)).await.map_err(|e| e.to_string())?;
                 }
@@ -120,13 +190,29 @@ pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path
             let claims: Vec<String> = req["claims"].as_array().map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect()).unwrap_or_default();
             for (receipt, accepted) in host.intake().submit_batch(&caller, &claims) {
                 let Some(a) = accepted else {
-                    m.append(refusal(m, &caller, &receipt)).await.map_err(|e| e.to_string())?;
+                    if receipt.status == crate::fact_intake::Status::BudgetReached {
+                        let cap = crate::fact_audit::Cap::Mission { spent: deps.ledger.spent(), cap: TOKEN_ALLOWANCE };
+                        park(m, ws_dir, receipt.fact_id.as_deref().unwrap_or(""), "", &cap, &mut noticed, secs).await?;
+                    } else {
+                        m.append(refusal(m, &caller, &receipt)).await.map_err(|e| e.to_string())?;
+                    }
                     continue;
                 };
-                let urls = match &searcher {
-                    Some(s) => find_urls(s.clone(), &a.claim).await,
+                if let Some(cap) = at_cap(ws_dir, &m.id, background, shares, secs) {
+                    host.intake().finish(&a, 0);
+                    park(m, ws_dir, &a.fact_id, &a.claim, &cap, &mut noticed, secs).await?;
+                    continue;
+                }
+                let mut urls = match spans {
+                    Some(r) => run_span(r, deps, ws_dir, m, &a.claim, secs).await,
                     None => vec![],
                 };
+                if urls.is_empty() {
+                    urls = match &searcher {
+                        Some(s) => find_urls(s.clone(), &a.claim).await,
+                        None => vec![],
+                    };
+                }
                 if urls.is_empty() {
                     host.intake().finish(&a, 0);
                     m.append(event(m, "validator.event", json!({"kind": "no_sources", "caller": caller, "fact_id": a.fact_id}))).await.map_err(|e| e.to_string())?;
@@ -143,7 +229,7 @@ pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path
         match ratify_fact(deps, eff, ws_dir, &sub, now, &m.id).await {
             Ok(done) => {
                 host.intake().finish(&a, done.report.tokens);
-                observe_for_audit(ws_dir, &m.id, &done, secs);
+                observe_for_audit(ws_dir, if background { crate::fact_audit::BACKGROUND } else { &m.id }, &done, secs);
                 let mut events: Vec<EventEnvelope> = done.events.into_iter().map(|(k, p)| event(m, &k, p)).collect();
                 if let Some(why) = done.store_error {
                     events.push(event(m, "validator.event", json!({"kind": "store", "fact_id": a.fact_id, "why": why})));
@@ -255,6 +341,10 @@ mod tests {
     }
 
     async fn run_request_on(f: &crate::testkit::Fx, req: Value, search: Option<Arc<dyn Searcher>>, mode: ValidatorMode, page: &'static str) {
+        run_full(f, req, search, mode, page, &Shares::default(), None).await
+    }
+
+    async fn run_full(f: &crate::testkit::Fx, req: Value, search: Option<Arc<dyn Searcher>>, mode: ValidatorMode, page: &'static str, shares: &Shares, spans: Option<&dyn crate::fact_span::SpanRunner>) {
         let addr = page_server(page);
         let ws = &f.engine.ws;
         let eff = effective(mode, &state_dir(&ws.dir));
@@ -268,7 +358,7 @@ mod tests {
         }
         let search = search.map(|_| Arc::new(Fixed(format!("http://{}/rfc/2324", addr), Default::default())) as Arc<dyn Searcher>);
         let deps = Deps { policy: &policy, store: &store, list: &list, judge: &Yes, searcher: search.as_deref(), ledger: &ledger, author_family: None };
-        serve(&f.engine.validator, &f.m, &ws.dir, "2026-10-28T00:00:00Z", &eff, &deps, search.clone(), &req).await.unwrap();
+        serve(&f.engine.validator, &f.m, &ws.dir, "2026-10-28T00:00:00Z", &eff, &deps, search.clone(), shares, spans, &req).await.unwrap();
     }
 
     fn kinds(f: &crate::testkit::Fx) -> Vec<(String, Value)> {
@@ -353,6 +443,78 @@ mod tests {
         assert!(no_facts(&f) && !f.engine.ws.home.join("validation").exists());
     }
 
+    struct FakeSpan(Result<crate::fact_span::Found, String>, std::sync::Mutex<Vec<String>>);
+    impl crate::fact_span::SpanRunner for FakeSpan {
+        fn find<'a>(&'a self, claim: &'a str) -> crate::fact_span::SpanFuture<'a> {
+            self.1.lock().unwrap().push(claim.to_string());
+            let r = self.0.clone();
+            Box::pin(async move { r })
+        }
+    }
+
+    fn scout_req() -> Value {
+        json!({"tool": "validate_claims", "caller": "scout", "claims": [CLAIM]})
+    }
+
+    #[tokio::test]
+    async fn validate_claims_runs_a_validator_span_on_the_bare_claim_with_its_own_reserve() {
+        let f = setup(vec![], 1.0, |_| {});
+        let before = f.engine.validator.ledger().spent();
+        let span = FakeSpan(Ok(crate::fact_span::Found { urls: vec![], tokens: 1234 }), Default::default());
+        run_full(&f, scout_req(), None, ValidatorMode::Advisory, PAGE, &Shares::default(), Some(&span)).await;
+        assert_eq!(*span.1.lock().unwrap(), vec![CLAIM.to_string()], "the span gets the bare claim and nothing else");
+        let ev = kinds(&f);
+        let note = ev.iter().find(|(_, p)| p["kind"] == "span").expect("the span is logged");
+        assert_eq!((note.1["status"].clone(), note.1["tokens"].clone()), (json!("no_sources"), json!(1234)));
+        assert_eq!(f.engine.validator.ledger().spent() - before, 1234, "the reserve settles to what the span used");
+        let journal = std::fs::read_to_string(state_dir(&f.engine.ws.dir).join("journal.jsonl")).unwrap();
+        assert!(journal.contains("\"kind\":\"span\"") && !journal.contains("teapot"));
+    }
+
+    #[tokio::test]
+    async fn a_span_that_is_unavailable_falls_back_to_the_daemons_own_search() {
+        let f = setup(vec![], 1.0, |_| {});
+        let span = FakeSpan(Err("no model".into()), Default::default());
+        let before = f.engine.validator.ledger().spent();
+        run_full(&f, scout_req(), Some(Arc::new(Fixed(String::new(), Default::default()))), ValidatorMode::Advisory, PAGE, &Shares::default(), Some(&span)).await;
+        let ev = kinds(&f);
+        assert!(ev.iter().any(|(_, p)| p["kind"] == "span" && p["status"] == "unavailable"), "{:?}", ev);
+        assert!(ev.iter().any(|(k, p)| k == "validator.verdict" && p["would_ratify"] == true), "the daemon's search still checked it");
+        assert!(f.engine.validator.ledger().spent() - before < crate::fact_span::SPAN_RESERVE, "the unused span reserve is released");
+    }
+
+    #[tokio::test]
+    async fn at_the_mission_cap_a_claim_is_queued_labelled_and_the_operator_gets_one_line() {
+        let f = setup(vec![], 1.0, |_| {});
+        let state = state_dir(&f.engine.ws.dir);
+        crate::fact_audit::Journal::new(&state).append("verdict", json!({"fact_id": "x", "mission": f.m.id, "tokens": 60_000}), 1);
+        let req = json!({"tool": "validate_claims", "caller": "scout", "claims": [CLAIM, "The Moon orbits the Earth about every 27 days."]});
+        run_full(&f, req, Some(Arc::new(Fixed(String::new(), Default::default()))), ValidatorMode::Advisory, PAGE, &Shares::default(), None).await;
+        let ev = kinds(&f);
+        let queued: Vec<_> = ev.iter().filter(|(_, p)| p["kind"] == "queued").collect();
+        assert_eq!(queued.len(), 2);
+        assert!(queued.iter().all(|(_, p)| p["label"] == "not validated (budget reached)"));
+        assert_eq!(ev.iter().filter(|(_, p)| p["kind"] == "budget_notice").count(), 1, "one line per request");
+        assert!(ev.iter().all(|(k, _)| k != "validator.verdict"), "nothing was checked, nothing is marked validated");
+        assert_eq!(crate::fact_audit::queue(&state).len(), 2);
+        // the operator's raise lets the next request through
+        crate::fact_audit::raise_share(&state, &f.m.id, "need the rest checked", 5).unwrap();
+        let g = f.engine.ws.dir.clone();
+        assert!(crate::fact_audit::mission_allows(&state, &f.m.id, 0, crate::fact_intake::RESERVE_PER_CLAIM).is_ok(), "{}", g.display());
+    }
+
+    #[tokio::test]
+    async fn the_validator_tools_follow_a_mode_change_without_a_restart() {
+        use crate::model::Step;
+        let f = setup(vec![Step::tool("v1", "validate_claims", json!({"claims": [CLAIM]})), Step::text("done")], 5.0, |_| {});
+        crate::fact_mode::lower_latch(&state_dir(&f.engine.ws.dir), ValidatorMode::Off, "operator").unwrap();
+        f.engine.run_task(&f.m, "orchestrator", "Check a claim").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let events = f.m.replay().unwrap();
+        assert!(events.iter().all(|e| e.kind != "validator.request"), "an off validator takes no request from a span built before the latch fell");
+        assert!(events.iter().any(|e| e.kind.starts_with("tool.") && e.payload.to_string().contains("the validator is off")), "the span is told why");
+    }
+
     #[tokio::test]
     async fn a_span_that_calls_validate_claims_is_told_submitted_and_the_daemon_answers_in_the_log() {
         use crate::model::Step;
@@ -367,7 +529,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(seen[0].0, "validator.request");
-        assert_eq!(seen[1].1["kind"], "no_sources", "{:?}", seen);
-        assert_eq!(seen[1].1["fact_id"], json!(crate::fact_store::fact_id(CLAIM)));
+        let none = seen.iter().find(|(_, p)| p["kind"] == "no_sources").unwrap_or_else(|| panic!("{:?}", seen));
+        assert_eq!(none.1["fact_id"], json!(crate::fact_store::fact_id(CLAIM)));
     }
 }
