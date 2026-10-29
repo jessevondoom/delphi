@@ -3,7 +3,7 @@ id: spec-056-discovered-model-assignment
 title: "056: Discovered Model Assignment: Capability Classes, Plan and Execute Split, Promote and Nerf"
 author: architect
 timestamp: 2026-10-28T20:00:00Z
-status: draft   # a proposal, not permission to build (AGENTS.md: No Spec, No Build). The operator approves or amends the decisions in §7.
+status: approved   # by the operator, 2026-10-29: "ratify and build it", accepting every recommendation in §7 (OD-1 to OD-8)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,9 +14,9 @@ tags: [spec, routing, models, discovery, effort, promote, nerf]
 
 # Spec 056: Discovered Model Assignment
 
-Extends [`specs/002`](002-adapter-and-routing.md) §4 (the scaler and the pool), and builds on [`045`](045-harness-loop-techniques.md), [`046`](046-harness-and-openai-coverage.md), [`047`](047-codex-harness-and-coverage.md) and the Copilot seat in 051. It **amends** the operator decision of 2026-10-26 ([`specs/035`](035-failover-without-a-driver.md) D-14, D-15) in one place, §3.2, and only if §7 OD-1 is approved.
+Extends [`specs/002`](002-adapter-and-routing.md) §4 (the scaler and the pool), and builds on [`045`](045-harness-loop-techniques.md), [`046`](046-harness-and-openai-coverage.md), [`047`](047-codex-harness-and-coverage.md) and the Copilot seat in 051. It **amends** the operator decision of 2026-10-26 ([`specs/035`](035-failover-without-a-driver.md) D-14, D-15) in one place, §3.2, and OD-1 is ratified (2026-10-29).
 
-**Revision 2026-10-29 (operator direction, recorded here; still a draft).** Model assignment was too strict and too firm. Tying a role to a capability level is fine, but Delphi must not be Claude-first and must not lean on operator input. This revision replaces the role *default* with a role **floor** and a **preferred** class (§3.1), makes quota a live input to ranking (§3.3), prefers provider diversity in councils (§3.4), puts every provider behind one capability record (§3.5), and trials unclassified models instead of refusing them (OD-4). The operator ratifies the pool once; after that assignment is automatic.
+**Revision 2026-10-29 (operator direction).** Model assignment was too strict and too firm. Tying a role to a capability level is fine, but Delphi must not be Claude-first and must not lean on operator input. This revision replaces the role *default* with a role **floor** and a **preferred** class (§3.1), makes quota a live input to ranking (§3.3), prefers provider diversity in councils (§3.4), puts every provider behind one capability record (§3.5), and trials unclassified models instead of refusing them (OD-4). The operator ratifies the pool once; after that assignment is automatic.
 
 The operator's direction, 2026-10-28: Delphi must not hard-code favorites. It discovers what is available and assigns the best model for each agent and task. Planning and specs get higher effort and quality; following a build plan gets the lowest acceptable quality; an agent can be promoted or nerfed. The knowledge of which model suits what is widely published and belongs in the core knowledge base ([`context/model-selection-evidence.md`](../context/model-selection-evidence.md)).
 
@@ -127,18 +127,18 @@ Each is one pull request with the usual trailer and tracker row.
 | **M5** | `delphi models calibrate` | 048 |
 | **M6** | the `emergency` class, the save-state task and record, recovery re-verification, the doctor and capabilities line | M2, 051 meter |
 
-## 7. Decisions for the operator
+## 7. Decisions (ratified by the operator, 2026-10-29: "ratify and build it", all recommendations accepted)
 
-| # | Question | Recommendation |
+| # | Question | Ratified as |
 | :-- | :-- | :-- |
-| OD-1 | Amend D-15 (035): replace the role default with a role **floor** and a **preferred** class, any ratified pool model meeting the floor eligible, no provider default, ranked by measured accepted results per cost then availability; and let plan-following work start below preferred by the ratchet? | **Yes.** The floor is never crossed; ratchet lowering is limited to tasks that carry a plan and a deterministic gate. |
-| OD-2 | Planning effort: the highest available, or the highest the evidence supports, with a per-kind ceiling? | The evidence-supported level with a ceiling; vendors report regressions from overthinking. Start at `high`. |
-| OD-3 | The ratchet's `K` and the count that makes evidence "enough" | `K = 5`, evidence = 8 results per `(role, kind, model)`; both ratified settings. |
-| OD-4 | A model with no evidence and no class: refuse, or trial? | **Trial** on low-risk tasks (changed 2026-10-29 from "refuse"); results then classify it. |
-| OD-6 | Operator input: ratify the pool once, then automatic, with a card only when no member meets a floor; per-role reserve slices (§3.3)? | **Yes**; slice sizes are ratified settings. |
-| OD-7 | Single-model council when one provider is available or exhaustion leaves one: run and label low-diversity, never refuse (§3.4)? | **Yes.** |
-| OD-8 | The `emergency` local class (§3.5): below every floor, save-state tasks only, unverified until re-read; configured at setup and shown by doctor and capabilities? | **Yes**; optional, off if no local model. |
-| OD-5 | Should `assignment = "discovered"` become the default after M2 is measured? | Not until a benchmark (048) shows it no worse than `static` on the same suite. |
+| OD-1 | Amend D-15 (035): replace the role default with a role **floor** and a **preferred** class, any ratified pool model meeting the floor eligible, no provider default, ranked by measured accepted results per cost then availability; and let plan-following work start below preferred by the ratchet? | **Yes (ratified).** The floor is never crossed; ratchet lowering is limited to tasks that carry a plan and a deterministic gate. |
+| OD-2 | Planning effort: the highest available, or the highest the evidence supports, with a per-kind ceiling? | Ratified: the evidence-supported level with a ceiling; vendors report regressions from overthinking. Start at `high`. |
+| OD-3 | The ratchet's `K` and the count that makes evidence "enough" | Ratified: `K = 5`, evidence = 8 results per `(role, kind, model)`; both ratified settings. |
+| OD-4 | A model with no evidence and no class: refuse, or trial? | **Trial (ratified)** on low-risk tasks (changed 2026-10-29 from "refuse"); results then classify it. |
+| OD-6 | Operator input: ratify the pool once, then automatic, with a card only when no member meets a floor; per-role reserve slices (§3.3)? | **Yes (ratified)**; slice sizes are ratified settings. |
+| OD-7 | Single-model council when one provider is available or exhaustion leaves one: run and label low-diversity, never refuse (§3.4)? | **Yes (ratified).** |
+| OD-8 | The `emergency` local class (§3.5): below every floor, save-state tasks only, unverified until re-read; configured at setup and shown by doctor and capabilities? | **Yes (ratified)**; optional, off if no local model. |
+| OD-5 | Should `assignment = "discovered"` become the default after M2 is measured? | Ratified: not until a benchmark (048) shows it no worse than `static` on the same suite. |
 
 ## 8. Tests
 
@@ -161,3 +161,7 @@ Each is one pull request with the usual trailer and tracker row.
 - That the class rules are right. They are starting points for the first run; the evidence note says which parts rest on third-party roundups that disagree with each other.
 - That a cheaper model passes a plan's gates. That is what the ratchet measures; the first runs pay for it.
 - That any benchmark number in the knowledge base predicts Delphi's tasks. Only Delphi's own results do.
+
+## 10. Amendments
+
+- **2026-10-29, ratification.** The operator approved this spec and every §7 decision as recommended. OD-5: `assignment = "discovered"` becomes the default only after a 048 benchmark shows it no worse than `static` on the same suite; until then the default is `static`. The route function is `resolve_route` in `crates/delphi-engine/src/route.rs` (the text above calls it `resolve_model_route`).
