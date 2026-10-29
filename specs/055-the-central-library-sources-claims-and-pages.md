@@ -125,7 +125,7 @@ When a source gets a new version, each anchor is re-resolved by its quote agains
 
 ## 6. Pages: the readable view
 - A page is generated from claims for a **topic**. Each sentence carries the ids of the claims behind it and shows their status glyph (052). Unvalidated claims appear only under a visible *noted, not validated* heading.
-- **A page may state only what its claims state.** A daemon check maps every sentence to claim ids and rejects a page with uncited prose. A model may draft the wording; it cannot add content.
+- **Superseded by [`specs/057`](057-search-pages-generated-and-checked.md) (amendment 055-A6, 2026-10-29):** a page is labelled generated and not authoritative, carries a bibliography and citations table, and may be written freely; citations are checked mechanically and by the validator, and nothing on a page may contradict a known, citable truth. The earlier rule (every sentence cited, only its claims' words) is replaced; the claims-only page stays as the fallback when a page fails its checks.
 - **Pages are views, not sources.** They are rebuilt when a cited claim changes status or is superseded, and cannot be edited. To change a page, change the claim (or dispute it).
 - **Dispute from the page.** On any sentence, "this is wrong" files a *contested* mark on the cited claim with the operator's note. This is the fastest audit surface Delphi will have: reviewing becomes reading.
 - **Bibliography from the metadata.** Every page and claim can list its sources in a chosen style (CSL styles; at least APA, MLA, Chicago and a plain list in the first slice), generated from `meta.json`.
@@ -172,7 +172,7 @@ Definitional work first, so bundles and Xenia can be built to the final shape (t
 | SK2 | excerpts and anchors (with prefix and suffix), bibliography export (APA, MLA, Chicago, plain), the Sources view in the knowledge window | SK1 |
 | SK3 | claim records with anchors, mission-start pull by pointer, `cited_by`, reliability counts | SK2; 050 ML2; 052 KS1, KS2 |
 | SK4 | the 30-day recheck on open, versions, change notes, anchor re-resolution, retirement | SK1; SK3 for anchors |
-| SK5 | generated pages with the sentence-to-claim check, dispute action, status glyphs, page changes in the digest | SK3; 053 VL4 |
+| SK5 | generated pages with the sentence-to-claim check (superseded in part by spec 057 SK8a to SK8d), dispute action, status glyphs, page changes in the digest | SK3; 053 VL4 |
 | SK6 | acquisition job and standing rules, public-domain bases, byte budget, reading lists | SK1, SK4; 052 KS3 |
 | SK0b | **bundle trust and licence rework (this amendment): code and tests, checklist below**; do before the first test bundle is built | SK0, SK1 |
 | SK7 | export to bundles (`delphi bundle sources add`) with the publication confirmation; the Xenia `fact` kind **deferred by decision, 2026-10-29** | SK0, SK1; `specs/011` §11 re-review |
