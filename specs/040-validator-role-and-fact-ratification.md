@@ -1,9 +1,9 @@
 ---
 id: spec-040-validator-role-and-fact-ratification
-title: "040: The Validator Role (Horkos) & Fact Ratification (draft, awaiting Council)"
+title: "040: The Validator Role (Horkos) & Fact Ratification"
 author: architect
 timestamp: 2026-10-26T12:00:00Z
-status: draft   # merged as a draft on 2026-10-28 so it is on main: a proposal, not permission to build. Decisions D-1 to D-10 recorded 2026-10-27 (§22); build waits for the labelled set, the §19.6 Council pass and the operator's approval
+status: approved   # approved 2026-10-28 by the operator ("merge and approve all, follow the rest of your recommendations. approve and improve the validator"); V1 may be built as scoped in §23; V2 and any scoring claim wait for the operator-labelled set (§23.4)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -589,3 +589,33 @@ New compiled check kinds (D-02, `delphi check <kind>`): `record` (the event exis
 4. Measure the token floor in V1; revisit the 15% and 10%.
 5. Coordinate the Xenia `fact` kind with `specs/012` before V6; choose whether to enable a proof checker (§21.2).
 6. Go-ahead for V1 once items 1 to 3 of the preconditions are closed.
+
+## 23. Revision 3: Approval and Alignment (operator, 2026-10-28)
+The operator approved this spec and asked for it to be improved. This section amends §7, §15.7 and §22 and wins on conflict. Nothing here widens authority: the validator still cannot approve its own action, raise the trust of material it read from outside, or act outside the sandbox.
+
+### 23.1 One vocabulary with spec 052
+The operator labels stay **validated / not validated / disproved** (§18.2, D-5). Spec 052's status ladder is the finer view over the same facts, derived by the daemon and never declared by a model:
+
+| Operator label | 052 status | Meaning here |
+| :-- | :-- | :-- |
+| not validated | noted ○ / checking ◐ | captured, or a check is running or queued |
+| validated | validated ● | passed §7.2 (or §21), stamped L3 `web_corroborated` (D-1) |
+| not validated | contested ◆ | a later validated claim or source disagrees; both shown, neither silently wins |
+| disproved | disproved ✕ | the check found the claim false; kept as a record so it is not re-learned |
+| (hidden by default) | retired · | superseded (spec 050 ML-2) or past `valid_until` |
+
+The validator is the only writer that moves a claim to **validated** or **disproved**. Capture on contact (052 §3.2) can only create **noted**.
+
+### 23.2 One tier story
+Research-writer material and staged captures are shown **not validated** whatever tier the store holds (052 OD-1). L3 `web_corroborated` is reached only through this spec. Bundle knowledge received from an org stays `already_known` only after the receiving operator's audit (D-4). The six-tier lattice stays internal.
+
+### 23.3 Decay and re-validation
+A validated fact carries `last_confirmed` and, where the claim is time-sensitive, `valid_until` (spec 050 ML-3). Past `valid_until`, or when a contradicting claim arrives, the fact becomes **contested** or **retired** and is queued for re-validation under the §20 background budget. Re-validation never silently overwrites: a changed answer supersedes the old entry (ML-2) and the old one stays as history. Decay changes display and queue order only; it never deletes.
+
+### 23.4 What V1 may and may not do
+- **May build now (V1a):** labels carried through search results and handoff pointers (display and a result field), the prompt rule that agents treat *not validated* as a lead and not a fact, the `fact-validation` skill in advisory mode, the manual scouting flow, the record of deeds (§8), and the `validator` entry in the role list so its manifest passes lint. `authorized_agents` is `[scout, orchestrator]` and direct reads of `context/facts/**` are denied by agents (§15.7 items 3 and 5 accepted).
+- **Must wait (V1b/V2):** any accuracy number, any promotion to **validated** by an automatic path, the fetcher, `ratify_fact` and background validation. These wait for the operator-labelled 41-claim set and the §19.6 Council pass. I cannot supply the labels: they are the operator's and the claims draft is unreadable to agents.
+- Until the labelled set exists the validator runs **advisory only**: it reports what it would conclude and never writes **validated**.
+
+### 23.5 Open items carried
+Council pass on §19.6; labelled set (extended per §22 open work 1); audit-by-risk and "validated · you checked it" recommendations (§22 item 3) are adopted as the **default plan** unless the operator objects; Xenia `fact` kind coordinated with spec 012 before V6.
