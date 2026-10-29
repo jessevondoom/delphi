@@ -2,7 +2,7 @@
 
 For a coding agent that has been pointed at these docs and asked to build an [org bundle](org-bundles.md) *with* a person. It says what to read, what to ask, where each answer goes, and where you must stop. The format is [`specs/023`](../../specs/023-org-bundle-standard.md); the commands are in the [command reference](../reference/cli.md); the roles and skills a bundle can attach to are in the [catalog](../reference/catalog.md).
 
-A bundle is **content going out**: people and agents outside this workspace will read every file. You draft; the operator decides. A bundle carries no trust and grants no permission, so nothing you write can widen what an agent may do.
+A bundle is **content going out**: people and agents outside this workspace will read every file. You draft; the operator decides. A bundle cannot claim trust for itself and grants no permission (the operator's `add` is what makes its contents trusted, shown `validated · vouched by <org>`), so nothing you write can widen what an agent may do.
 
 ## Read first (in this order)
 
@@ -35,6 +35,7 @@ Ask these in order, one group at a time. Write the answers into the file named o
 | What does the org want achieved this year? What does it believe about how to build? | `behavior/goals.md`, `behavior/perspectives.md` (quoted from sources) |
 | Is there anything an agent must never do here? (commands, paths, connector tools) | `behavior/policies.toml` (it can only refuse) |
 | How often is it reviewed, and what is the licence? | `review_by`, `license` |
+| Is this for inside the org only, or will it be published? | `distribution` (`internal` default, `public`); licence on each source is information and only produces warnings; never ship a source the operator flagged `private` |
 | What questions should it answer? Write ten in the operator's own words, and two it should *not* be able to answer. | `evals/delphi/kb-eval.json` |
 
 ### Where does this content go?
