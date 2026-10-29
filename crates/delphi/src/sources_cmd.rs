@@ -217,6 +217,16 @@ fn show(lib: &Library, args: &[String]) -> i32 {
         let contested = kept.iter().filter(|e| e["contested"] == true).count();
         println!("  excerpts       {} ({} bytes){}", kept.len(), bytes, if contested > 0 { format!(", {} contested", contested) } else { String::new() });
     }
+    let r = lib.reliability_of_source(id);
+    if r.claims > 0 {
+        println!("  claims         {} ({} stood, {} contested, {} disproved)", r.claims, r.stood, r.contested, r.disproved);
+    }
+    if let Some(origin) = m["origin"].as_str() {
+        let o = lib.reliability_of_origin(origin);
+        if o.claims > 0 {
+            println!("  origin {}  {} claims ({} stood, {} contested, {} disproved)", clean(origin, 40), o.claims, o.stood, o.contested, o.disproved);
+        }
+    }
     let versions = std::fs::read_dir(dir.join("versions")).map(|d| d.flatten().count()).unwrap_or(0);
     if versions > 0 {
         println!("  earlier versions: {}", versions);

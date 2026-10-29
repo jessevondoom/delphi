@@ -67,6 +67,7 @@ impl Library {
                 if !m["retired"].is_null() {
                     m.as_object_mut().map(|o| o.remove("retired"));
                     self.write_json(&self.source_dir(id).join("meta.json"), &m)?;
+                    self.source_revived(id);
                 }
                 Ok(match s.outcome {
                     Outcome::NewVersion(n) => Recheck::Changed(n),
@@ -78,6 +79,7 @@ impl Library {
                 let mut m = meta;
                 m["retired"] = json!(delphi_core::time::now_rfc3339());
                 self.write_json(&self.source_dir(id).join("meta.json"), &m)?;
+                self.source_retired(id);
                 self.log("retired", json!({"id": id}));
                 Ok(Recheck::Retired)
             }

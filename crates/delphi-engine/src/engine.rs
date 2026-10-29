@@ -499,6 +499,16 @@ impl Engine {
         let target = target.as_str();
         let mut handoff = HandoffEnvelope::root(&m.id, &task_id, target, prompt, pointers_from_prompt(prompt));
         handoff.bundle_agent = bundle_agent.clone();
+        // Mission start pulls from the one central library by pointer (`specs/055` §5): claims, never copies, never text.
+        if operator_task && announce && target != "builder" {
+            let project = handoff.context_pointers.iter().find_map(|p| p.uri.trim_start_matches("./").strip_prefix("@project/").and_then(|r| r.split('/').next()).map(String::from));
+            let before = handoff.context_pointers.len();
+            let pulled = crate::library::Library::in_home(&self.ws.home).pull_for_mission(prompt, project.as_deref(), &m.id);
+            handoff.context_pointers.extend(pulled);
+            if handoff.validate().is_err() {
+                handoff.context_pointers.truncate(before);
+            }
+        }
         // What the operator and the team have said in this session, so a follow-up has something to follow (`specs/030`).
         // A task a timer woke, and a builder, get none; and if an earlier reply read untrusted content, this task starts
         // below full trust as well.
@@ -657,6 +667,13 @@ impl Engine {
             let before = sc.span.ceiling();
             let mut stamps_unused = Vec::new();
             for p in &handoff.context_pointers {
+                // A library claim opens in a tainted, read-only span: its text is someone's statement, never trusted.
+                if p.uri.starts_with(crate::library::claims::POINTER_PREFIX) {
+                    sc.span.observe_input(delphi_core::provenance::Tier::L0);
+                    let text = crate::library::Library::in_home(&self.ws.home).claim_slice(&p.uri).unwrap_or_else(|| "(could not be read: no such claim)".into());
+                    slices.push(ContextSlice { label: p.uri.clone(), tier: delphi_core::provenance::Tier::L0.as_str().into(), text });
+                    continue;
+                }
                 let resolved = {
                     let mut idx = m.index.lock().unwrap();
                     let now = self.now();
