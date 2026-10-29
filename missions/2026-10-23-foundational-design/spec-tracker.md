@@ -298,7 +298,7 @@ Approved by the operator 2026-10-28. Joins specs 050 (entry fields), 040 §18.2 
 | Slice | Content | State |
 | :-- | :-- | :-- |
 | KS1 | one status table (noted, checking, validated, contested, disproved, retired) and the labels everywhere | built (display only): `delphi-core/src/knowledge_status.rs` derives the status; `kb` results carry `status` and `label`; operator text says "not validated", not "untrusted". `checking`, `contested`, `disproved` are in the table but not yet derived (no records exist) |
-| KS2 | capture on contact: accepted answer, Council verdict, resolved decision, research run | not started (waits for 050 ML1) |
+| KS2 | capture on contact: accepted answer, Council verdict, resolved decision, research run | partly built: Council verdict, its Minority Report and a resolved decision's typed reason stage `noted` candidates silently (`learn.rs` triggers `council_verdict`, `council_minority`, `decision_resolved`; capped at 30 per mission, deduplicated, tainted spans below L4). Accepted answer and research run wait: neither writes an event in a mission log to read (see the plan §5) |
 | KS3 | `learn` kind in the decisions pane (the daily digest) | not started |
 | KS4 | contested pairs and review-due | not started |
 

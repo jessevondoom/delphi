@@ -27,6 +27,7 @@ pub const SITES: &[Site] = &[
         events: &["learn.staged"],
         proofs: &[
             ("crates/delphi-engine/src/learn.rs", "a_note_from_a_task_that_read_untrusted_content_stays_below_empirical"),
+            ("crates/delphi-engine/src/learn.rs", "a_verdict_from_a_tainted_span_is_staged_below_empirical"),
             ("crates/delphi-engine/src/kb.rs", "staged_notes_are_a_zone_that_only_an_explicit_search_sees_and_taint_still_applies"),
         ],
     },

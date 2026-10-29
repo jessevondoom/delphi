@@ -211,9 +211,24 @@ pub fn live_proposals(mission: &str, events: &[EventEnvelope]) -> Vec<LivePropos
 /// Unresolved proposals listed per mission; older ones fall off the list (their events stay in the log).
 pub const MAX_LIVE_PROPOSALS: usize = 20;
 
-/// The five capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5), by the name a note and
-/// `[learning] triggers` use.
-pub const TRIGGERS: [&str; 6] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision", "agent_note"];
+/// The capture triggers the daemon can see without a model (`specs/031` §3.2 items 1-5, then the three capture-on-contact
+/// triggers of `specs/052` §3.2), by the name a note and `[learning] triggers` use.
+pub const TRIGGERS: [&str; 9] = ["denied_card", "correction", "recovery", "escalation", "rejected_decision", "agent_note", "council_verdict", "council_minority", "decision_resolved"];
+
+/// Capture-on-contact candidates kept per mission (`specs/052` KS-2); the rest are not staged.
+pub const CONTACT_CAP: usize = 30;
+
+/// Unresolved findings of one verdict that join its minority-report candidate.
+const MINORITY_ITEMS: usize = 3;
+
+fn is_contact(trigger: &str) -> bool {
+    matches!(trigger, "council_verdict" | "council_minority" | "decision_resolved")
+}
+
+/// The subject key a candidate is deduplicated by: its trigger and its words, case and spacing aside.
+fn subject_key(trigger: &str, summary: &str) -> String {
+    format!("{}:{}", trigger, summary.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase())
+}
 
 /// Agent notes kept per task; the rest are ignored so one chatty task cannot push the operator's own notes out.
 const AGENT_NOTES_PER_TASK: u32 = 3;
@@ -301,12 +316,14 @@ pub struct StagedNote {
     /// The lowest tier among the sources: operator-typed text is `L5`; anything the daemon composed is `L3`; a task whose
     /// span read untrusted content (`span.taint`) caps it at that span's ceiling. Promotion refuses a note below `L4`.
     pub tier: Tier,
+    /// Tells apart two notes made from one event (a verdict and its minority report).
+    pub id_suffix: &'static str,
 }
 
 impl StagedNote {
     /// The note's id: the `seq` of the event that triggered it, so a replay names it the same way.
     pub fn id(&self) -> String {
-        format!("n{}", self.event_seqs.last().copied().unwrap_or(0))
+        format!("n{}{}", self.event_seqs.last().copied().unwrap_or(0), self.id_suffix)
     }
 
     pub fn to_event(&self, mission_id: &str) -> EventEnvelope {
@@ -323,6 +340,11 @@ pub enum Capture {
     Note(StagedNote),
     /// A live note pushed out by the cap: write `learn.dropped` with reason `evicted`.
     Evict(String),
+}
+
+/// Control characters out, so typed text cannot forge a line of the staged note's frontmatter.
+fn scrub(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 fn clip(s: &str) -> String {
@@ -469,6 +491,8 @@ pub struct Stager {
     agent_notes: BTreeMap<String, u32>,
     /// Ids of live notes, oldest first.
     live: std::collections::VecDeque<String>,
+    /// Subject keys of the capture-on-contact candidates already staged, so the same claim is not staged twice.
+    contact_seen: std::collections::BTreeSet<String>,
 }
 
 impl Stager {
@@ -500,10 +524,21 @@ impl Stager {
         task.and_then(|t| self.ceiling.get(t)).map_or(base, |c| base.min(*c))
     }
 
+    /// One capture-on-contact candidate, unless the trigger is off, the mission's cap is reached, or the claim is already staged.
+    fn contact(&mut self, e: &EventEnvelope, trigger: &'static str, summary: String, base: Tier, id_suffix: &'static str) -> Option<Capture> {
+        let task = e.task_id.as_deref();
+        let summary = clip(&scrub(&summary));
+        let key = subject_key(trigger, &summary);
+        if !self.on(trigger) || self.contact_seen.len() >= CONTACT_CAP || !self.contact_seen.insert(key) {
+            return None;
+        }
+        Some(Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: vec![e.seq], summary, tier: self.tier(task, base), id_suffix }))
+    }
+
     pub fn observe(&mut self, e: &EventEnvelope) -> Vec<Capture> {
         let task = e.task_id.as_deref();
         let mk = |s: &Stager, trigger: &'static str, summary: String, seqs: Vec<u64>, base: Tier| {
-            Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: seqs, summary: clip(&summary), tier: s.tier(task, base) })
+            Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: seqs, summary: clip(&summary), tier: s.tier(task, base), id_suffix: "" })
         };
         let mut out = Vec::new();
         match e.kind.as_str() {
@@ -511,6 +546,9 @@ impl Stager {
                 // A live capture is counted when it is decided; its own event arrives here a moment later.
                 if let Some(id) = e.payload["id"].as_str().filter(|id| !self.live.iter().any(|l| l == id)) {
                     self.live.push_back(id.to_string());
+                    if let Some(t) = e.payload["trigger"].as_str().filter(|t| is_contact(t)) {
+                        self.contact_seen.insert(subject_key(t, e.payload["summary"].as_str().unwrap_or("")));
+                    }
                 }
                 return out;
             }
@@ -535,6 +573,32 @@ impl Stager {
                 }
             }
             k if k.starts_with("learn.") => return out,
+            // Capture on contact (`specs/052` KS-2): the claim is a sentence the daemon already holds or one the operator typed.
+            // Nothing here asks the operator anything, calls a model, or promotes: it stages a `noted` candidate.
+            "council.verdict" => {
+                let decision = e.payload["decision"].as_str().unwrap_or("").trim();
+                if !decision.is_empty() {
+                    out.extend(self.contact(e, "council_verdict", format!("The Council's verdict: {}", decision), Tier::L3, ""));
+                }
+                let minority: Vec<String> = e.payload["unresolved"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|u| u["title"].as_str().map(|t| format!("{} ({})", t.trim(), u["severity"].as_str().unwrap_or("?"))))
+                    .take(MINORITY_ITEMS)
+                    .collect();
+                if !minority.is_empty() {
+                    out.extend(self.contact(e, "council_minority", format!("The Council's Minority Report left unresolved: {}", minority.join("; ")), Tier::L3, "m"));
+                }
+            }
+            "decision.resolved" => {
+                // Only a decision the operator wrote a reason for says anything; a bare click is not a claim.
+                let note = e.payload["note"].as_str().unwrap_or("").trim();
+                if !note.is_empty() {
+                    let choice = e.payload["choice_id"].as_str().unwrap_or("a choice");
+                    out.extend(self.contact(e, "decision_resolved", format!("The operator resolved a decision ({}): {}", choice, note), Tier::L5, ""));
+                }
+            }
             "span.taint" => {
                 if let (Some(t), Some(c)) = (task, e.payload["ceiling"].as_str().and_then(Tier::parse)) {
                     let slot = self.ceiling.entry(t.to_string()).or_insert(c);
@@ -743,6 +807,41 @@ mod tests {
         assert!(!n[0].summary.contains(canary) && !serde_json::to_string(&n[0].to_event("m")).unwrap().contains(canary), "tool output never reaches a note");
         let other = stage(&[at(1, Some("a"), "span.taint", json!({"ceiling": "L0"})), at(2, Some("b"), "approval.resolved", json!({"resolution": "denied", "reason": "no"}))]);
         assert_eq!(other[0].tier, Tier::L5, "another task's taint does not leak");
+    }
+
+    #[test]
+    fn contact_capture_stages_a_verdict_its_minority_report_and_a_typed_reason_once_and_silently() {
+        let verdict = json!({"decision": "build the table", "unresolved": [{"severity": "P1", "seat": "red_team", "title": "no index"}]});
+        let evs = [
+            at(1, None, "council.verdict", verdict.clone()),
+            at(2, None, "council.verdict", verdict),
+            at(3, None, "decision.resolved", json!({"id": "rd_1", "choice_id": "approve", "note": "ship it\u{7}\nstatus: active"})),
+            at(4, None, "decision.resolved", json!({"id": "rd_2", "choice_id": "approve", "note": ""})),
+        ];
+        let n = stage(&evs);
+        let kinds: Vec<_> = n.iter().map(|n| (n.trigger, n.id())).collect();
+        assert_eq!(kinds, vec![("council_verdict", "n1".to_string()), ("council_minority", "n1m".to_string()), ("decision_resolved", "n3".to_string())], "a repeat and a bare click stage nothing");
+        assert!(n[1].summary.contains("no index (P1)") && n[2].tier == Tier::L5 && n[0].tier == Tier::L3);
+        assert!(!n[2].summary.contains('\n') && !n[2].summary.contains('\u{7}'), "typed text cannot forge a line");
+    }
+
+    #[test]
+    fn contact_capture_is_capped_deduplicated_across_a_restart_and_can_be_turned_off() {
+        let many: Vec<_> = (0..CONTACT_CAP as u64 + 5).map(|i| at(i + 1, None, "decision.resolved", json!({"choice_id": "a", "note": format!("reason {}", i)}))).collect();
+        assert_eq!(stage(&many).len(), CONTACT_CAP);
+        let first = stage(&many[..1]);
+        let mut log = vec![at(1, None, "learn.staged", first[0].to_event("m").payload)];
+        log.push(many[0].clone());
+        let mut again = Stager::replay(LearningSettings::default(), &log);
+        assert!(again.observe(&at(9, None, "decision.resolved", json!({"choice_id": "a", "note": "reason 0"}))).is_empty(), "already staged before the restart");
+        let off = LearningSettings { triggers: ["agent_note".to_string()].into(), ..Default::default() };
+        assert!(Stager::new(off).observe(&many[0]).is_empty());
+    }
+
+    #[test]
+    fn a_verdict_from_a_tainted_span_is_staged_below_empirical() {
+        let n = stage(&[at(1, Some("t"), "span.taint", json!({"ceiling": "L0"})), at(2, Some("t"), "council.verdict", json!({"decision": "x"}))]);
+        assert!(n[0].tier < Tier::L4);
     }
 
     #[test]
