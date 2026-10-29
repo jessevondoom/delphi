@@ -622,3 +622,20 @@ Council pass on §19.6; labelled set (extended per §22 open work 1); audit-by-r
 
 ### 23.6 Labelled set reviewed (operator, 2026-10-28)
 The operator reported on 2026-10-28 that the review of the claim set at `$DELPHI_HOME/operator/validation/claims-draft.json` is finished. That closes §15.7 item 1 on the operator's word. The file stays unreadable to agents. Scoring (V1b) therefore must be a command the **operator runs** (or a daemon path that reads the set without exposing claims or expectations to any model), and it reports only counts and rates, never claim text. Which claims were added for §6.3 and §21 is not recorded here; the operator's file is the record. V1b is unblocked in principle; it still needs a spec slice for the scoring command and the §19.6 Council pass before any automatic promotion to **validated**.
+
+### 23.7 D-11: the labelled set is private; scores are published; per-org scoring is optional (operator, 2026-10-28, "sounds good. follow your recommendation")
+1. **The operator's set stays private** under `$DELPHI_HOME/operator/validation/`. It is never shipped, never in the repo, never readable by agents or placed in any bundle or the knowledge base. A public answer key would end up in model context and turn the score into a memory test.
+2. **Each release publishes scores only:** claims scored, false-ratified count, poisoned passes, wrongly escalated rate and the rule-of-three bound of §15.4. No claim text.
+3. **Optional per-org scoring.** `delphi validation score [--set <path>]` is an operator-run command. It reads the set in the daemon and prints counts and rates only; claim text and expectations never enter a model's context or a log. An org that never runs it loses nothing; the validator's `advisory` default and the §15.4 promotion rules still apply. The command refuses to run inside an agent span.
+4. **Held-out growth.** The operator may add a few claims each release; the report says how many claims are new since the last published score so drift is visible.
+5. The limit is stated in the report: a small set measures regressions on failures someone thought of.
+
+### 23.8 Finishing order (slices, each one PR)
+| Slice | Content | Needs |
+| :-- | :-- | :-- |
+| V1a | labels in search and pointers, `fact-validation` skill (advisory), role entry, records | 052 KS1 |
+| V1b | `delphi validation score` (D-11), release-score report fields | V1a |
+| V2a | daemon fetcher (SSRF limits, size cap, redirect rule, snapshots), `context/facts/**` pathguard zone and read-deny | V1a |
+| V2b | `delphi check fact` (origin derivation, independence, entailment judge, daemon contradiction search), `ratify_fact`, `provenance.stamp`, stamped L3 `web_corroborated` | V2a, V1b |
+| V2c | mode switch with sticky latch, blind-audit cards, `delphi validation report`, `retract --all`, hash chain (§21.6) | V2b |
+| Gate | §19.6 Council pass before V2b can write **validated** by any automatic path | the operator's decision on stand-ins vs Delphi's own Council |
