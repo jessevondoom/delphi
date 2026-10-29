@@ -305,5 +305,5 @@ Approved by the operator 2026-10-28. FR1 is small and buildable now; FR2 waits f
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| FR1 | interactive `init` offers to continue into `setup`; non-interactive unchanged | not started |
+| FR1 | interactive `init` offers to continue into `setup`; non-interactive unchanged | built |
 | FR2 | first-question suggestion and first noted item | not started (needs timing and KS2) |
