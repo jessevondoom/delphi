@@ -15,6 +15,34 @@ use crate::pool::{describe, system_clock, Entry, Pool, State};
 use delphi_adapter::config::{AccessPath, Config, SharedConfig};
 use std::path::Path;
 
+/// `delphi capabilities --models [--json]` (`specs/056` M0): every discovered model with its attributes and class.
+pub fn inventory(ws_dir: &Path, home: &Path, json: bool) -> i32 {
+    let live = match std::fs::read_to_string(ws_dir.join("config.toml")) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("delphi capabilities: cannot read config.toml: {}", e);
+            return 1;
+        }
+    };
+    let cfg = match effective_config(ws_dir, &live).and_then(|(text, _)| Config::parse(&text).map_err(|e| e.join("; "))) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("delphi capabilities: {}", e);
+            return 1;
+        }
+    };
+    match crate::models::run_inventory(&cfg, ws_dir, crate::hostmap::load(home).as_ref(), (system_clock())(), json) {
+        Ok(text) => {
+            print!("{text}");
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi capabilities: cannot save the inventory: {e}");
+            1
+        }
+    }
+}
+
 pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
     if let Some(bad) = args.iter().find(|a| *a != "--probe") {
         eprintln!("delphi models: unknown argument `{}`\nusage: delphi models [--probe]", bad);
