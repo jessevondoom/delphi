@@ -50,6 +50,11 @@ pub fn latch_raise(ws: &Path, to: &str, reason: &str, force: bool) -> Result<Str
     Ok(format!("latch raised to {}; a new audit batch ({batch}) starts, so older facts stay with the old one\n", to.as_str()))
 }
 
+pub fn unquarantine(ws: &Path, fact: &str, reason: &str) -> Result<String, String> {
+    fact_audit::unquarantine(&state_dir(ws), &FactStore::new(ws), fact, reason, now())?;
+    Ok(format!("{fact} is out of quarantine; the reason is journaled as yours\n"))
+}
+
 pub fn retract(ws: &Path) -> String {
     let r = fact_audit::retract_all(ws, &state_dir(ws), &FactStore::new(ws), now());
     let mut out = format!("retracted {} fact(s); none was deleted, each is marked superseded by its retraction\n", r.retracted.len());

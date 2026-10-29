@@ -121,6 +121,24 @@ pub fn report_at(ws: &Path, home: Option<&Path>, now: i64) -> Vec<Item> {
         .collect()
 }
 
+/// The fact validator's open work (`specs/040` §15.3): how many audit cards wait and for how long, and the last
+/// PROMOTE answer `delphi validation report` left. Nothing here runs the validator; empty when it has never run.
+pub fn validation_section(ws: &Path, now: i64) -> String {
+    let state = delphi_engine::fact_mode::state_dir(ws);
+    if !state.is_dir() {
+        return String::new();
+    }
+    let (open, oldest) = delphi_engine::fact_audit::backlog(&state, now);
+    let promote = std::fs::read_to_string(state.join("promote.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let line = match &promote {
+        Some(p) if p["promote"] == true => "PROMOTE: yes (the last report met every condition; `delphi validation latch raise --to ratify` is yours to run)".to_string(),
+        Some(p) => format!("PROMOTE: no ({})", p["why"].as_str().unwrap_or("conditions not met")),
+        None => "PROMOTE: no (no report yet; run `delphi validation report`)".to_string(),
+    };
+    let cards = if open == 0 { "no audit card is waiting".to_string() } else { format!("{open} audit card(s) waiting, the oldest {} day(s); `delphi validation audit` answers one", oldest / 86_400) };
+    format!("\nFact validation: {cards}\n{line}\n")
+}
+
 pub fn render(items: &[Item]) -> String {
     let mut out = String::from("Roadmap items waiting on evidence. A rule being met means it is worth discussing, not that it is scheduled.\n\n");
     for i in items {
@@ -159,6 +177,22 @@ mod tests {
 
     fn by<'a>(items: &'a [Item], id: &str) -> &'a Item {
         items.iter().find(|i| i.id == id).unwrap()
+    }
+
+    #[test]
+    fn the_validation_section_is_silent_until_it_has_run_then_shows_the_backlog_and_the_promote_line() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(validation_section(d.path(), 1_000_000), "");
+        let state = delphi_engine::fact_mode::state_dir(d.path());
+        std::fs::create_dir_all(&state).unwrap();
+        let t = validation_section(d.path(), 1_000_000);
+        assert!(t.contains("no audit card is waiting") && t.contains("PROMOTE: no (no report yet"), "{t}");
+        std::fs::write(state.join("journal.jsonl"), "{\"kind\":\"card\",\"card\":\"fact-a\",\"fact_id\":\"fact-a\",\"mission\":\"m1\",\"positive\":true,\"at\":1}\n").unwrap();
+        std::fs::write(state.join("promote.json"), r#"{"promote":false,"why":"only 12 of 50 audits so far","at":1}"#).unwrap();
+        let t = validation_section(d.path(), 1 + 3 * 86_400);
+        assert!(t.contains("1 audit card(s) waiting, the oldest 3 day(s)") && t.contains("PROMOTE: no (only 12 of 50 audits so far)"), "{t}");
+        std::fs::write(state.join("promote.json"), r#"{"promote":true,"why":"x","at":1}"#).unwrap();
+        assert!(validation_section(d.path(), 2).contains("PROMOTE: yes"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 /// Every kind `delphi check` accepts. `lint` verifies that a `SKILL.md` names only these.
-pub const KINDS: [&str; 10] = ["dag", "handoff", "provenance", "rules", "review-md", "spec", "kb", "tui", "skill", "fact"];
+pub const KINDS: [&str; 11] = ["dag", "handoff", "provenance", "rules", "review-md", "spec", "kb", "tui", "skill", "fact", "record"];
 
 /// Run one check. `target` is a file (a directory for `kb`, `skill` and `tui`); `repo` is the root against which
 /// `dag` resolves its `spec:` links.
@@ -81,6 +81,49 @@ pub fn fact(input: &Path, home: &Path) -> Result<Report, String> {
     o.notes.iter().for_each(|m| r.push(Level::Ok, "fact", "", m));
     if r.findings.iter().all(|f| f.level != Level::Fail) {
         r.push(Level::Ok, "fact", input.display().to_string(), "passes");
+    }
+    Ok(r)
+}
+
+// ── record: an event exists in a mission's log, as the daemon wrote it (specs/040 §21.4, §21.6) ──────────────────
+
+/// Event kinds that carry an agent's own words: a record of one proves that the agent wrote it, not that it is true.
+const AGENT_WORDS: [&str; 4] = ["task.output", "task.result", "learn.note", "learn.proposed"];
+
+/// `delphi check record <mission-dir> --event <seq> [--hash <h>]`: the event is in the log, the log's hash chain
+/// verifies (against the head the daemon keeps in `state.db`, so a cut tail shows), and, if given, the event's hash
+/// matches. Pure code: no model, no network, nothing written.
+pub fn record(mission_dir: &Path, seq: u64, hash: Option<&str>) -> Result<Report, String> {
+    let mut r = Report::default();
+    let id = mission_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let events = delphi_core::log::replay(mission_dir).map_err(|e| format!("cannot read the log in {}: {}", mission_dir.display(), e))?;
+    let at = format!("{}#{}", id, seq);
+    let Some(e) = events.iter().find(|e| e.seq == seq) else {
+        r.fail("record", &at, "no such event in this mission's log");
+        return Ok(r);
+    };
+    let stored = mission_dir.parent().and_then(Path::parent).and_then(|local| delphi_core::ledger::Ledger::stored_chain_head(&local.join("state.db"), &id));
+    let chain = delphi_core::log::verify_chain(mission_dir).map_err(|e| format!("cannot read the log in {}: {}", mission_dir.display(), e))?.against_stored_head(stored);
+    if let Some(b) = &chain.broken {
+        r.fail("record", &at, format!("the log's chain is broken: {b}"));
+        return Ok(r);
+    }
+    if let Some(want) = hash {
+        match e.h.as_deref() {
+            Some(h) if h == want => {}
+            Some(_) => r.fail("record", &at, "the event's hash is not the one given"),
+            None => r.fail("record", &at, "the event has no hash to compare (it is from before the chain)"),
+        }
+    }
+    let chained = e.h.is_some() && chain.broken.is_none();
+    let how = if chained { "recorded by the daemon, chain verified" } else { "recorded by the daemon (not chained)" };
+    if AGENT_WORDS.contains(&e.kind.as_str()) {
+        r.warn("record", &at, format!("{} `{}` event: an agent wrote this; the record shows that it was said, not that it is true", how, e.kind));
+    } else {
+        r.push(Level::Ok, "record", &at, format!("{how}: `{}`", e.kind));
+    }
+    if r.findings.iter().all(|f| f.level != Level::Fail) {
+        r.push(Level::Ok, "record", &at, "passes");
     }
     Ok(r)
 }
@@ -194,6 +237,30 @@ mod tests {
     fn fails(kind: &str, body: &str) -> Vec<String> {
         let (_d, p) = tmp("f", body);
         run(kind, &p, None).unwrap().findings.into_iter().filter(|f| f.level == Level::Fail).map(|f| f.message).collect()
+    }
+
+    #[test]
+    fn record_finds_a_daemon_event_verifies_the_chain_and_the_hash_and_says_when_an_agent_wrote_it() {
+        let d = tempfile::tempdir().unwrap();
+        let mdir = d.path().join("local/missions/m1");
+        let mut log = delphi_core::log::EventLog::open(&mdir, Default::default()).unwrap();
+        log.append(delphi_core::event::EventEnvelope::new("m1", "validator.verdict", serde_json::json!({"verdict": "would_ratify"}))).unwrap();
+        log.append(delphi_core::event::EventEnvelope::new("m1", "task.output", serde_json::json!({"text": "I say so"}))).unwrap();
+        drop(log);
+        let ev = delphi_core::log::replay(&mdir).unwrap();
+        let h = ev[0].h.clone().unwrap();
+        let msgs = |r: Report| r.findings.into_iter().map(|f| (f.level, f.message)).collect::<Vec<_>>();
+        let ok = msgs(record(&mdir, ev[0].seq, Some(&h)).unwrap());
+        assert!(ok.iter().any(|(l, m)| *l == Level::Ok && m.contains("chain verified")), "{ok:?}");
+        assert!(msgs(record(&mdir, ev[0].seq, Some("0000")).unwrap()).iter().any(|(l, m)| *l == Level::Fail && m.contains("hash")));
+        assert!(msgs(record(&mdir, 99, None).unwrap()).iter().any(|(l, m)| *l == Level::Fail && m.contains("no such event")));
+        let agent = msgs(record(&mdir, ev[1].seq, None).unwrap());
+        assert!(agent.iter().any(|(l, m)| *l == Level::Warn && m.contains("an agent wrote this")), "{agent:?}");
+        // Editing an event breaks the chain, and the check fails.
+        let seg = mdir.join("events/000001.jsonl");
+        let text = std::fs::read_to_string(&seg).unwrap().replace("would_ratify", "ratified_ok");
+        std::fs::write(&seg, text).unwrap();
+        assert!(msgs(record(&mdir, ev[0].seq, None).unwrap()).iter().any(|(l, m)| *l == Level::Fail && m.contains("chain is broken")));
     }
 
     #[test]

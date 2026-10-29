@@ -182,9 +182,10 @@ Score the labelled set; audit, report on and retract validated facts.
   delphi validation report [--workspace <name>]
   delphi validation latch raise --to advisory|ratify --reason "<text>" [--force] [--workspace <name>]
   delphi validation retract --all [--workspace <name>]
+  delphi validation unquarantine <fact-id> --reason "<text>" [--workspace <name>]
 ```
 
-Operator-run; every subcommand refuses inside an agent seat, and `audit` needs a terminal. `score` reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run; it also keeps those counts for `report`. `audit` is the blind audit: it shows one claim from the validator's checks and nothing else, asks true, false or unsure, records your answer, and only then shows the sources and the verdict. A fact you call false trips the latch to advisory, withdraws PROMOTE and quarantines the facts of that batch; a would-ratify card left unanswered for seven days quarantines its fact. `report` prints the audit counts, the rule-of-three bound, the origin shares and the token use, then PROMOTE: yes or no with the conditions it missed, and writes promote.json; it never runs the validator. `latch raise` is the only way up from a tripped latch: it needs a reason, starts a new audit batch, and for ratify needs PROMOTE: yes or --force, which is logged as forced. `retract --all` marks every validated fact superseded by its retraction (nothing is deleted; disproved facts are left as they are) and lists the missions recorded as having read one; it does not mark them stale. Format: docs/reference/validation-set.md.
+Operator-run; every subcommand refuses inside an agent seat, and `audit` needs a terminal. `score` reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run; it also keeps those counts for `report`. `audit` is the blind audit: it shows one claim from the validator's checks and nothing else, asks true, false or unsure, records your answer, and only then shows the sources and the verdict. A fact you call false trips the latch to advisory, withdraws PROMOTE and quarantines the facts of that batch; a would-ratify card left unanswered for seven days quarantines its fact. `report` prints the audit counts, the rule-of-three bound, the origin shares and the token use, then PROMOTE: yes or no with the conditions it missed, and writes promote.json; it never runs the validator. `latch raise` is the only way up from a tripped latch: it needs a reason, starts a new audit batch, and for ratify needs PROMOTE: yes or --force, which is logged as forced. `retract --all` marks every validated fact superseded by its retraction (nothing is deleted; disproved facts are left as they are) and lists the missions recorded as having read one; it does not mark them stale. `unquarantine` returns one quarantined fact to the status it had (or contested), needs a reason and is journaled as yours; it cannot undo a fact you called false in an audit, and while a false audit holds the latch tripped it refuses until `latch raise`. Format: docs/reference/validation-set.md.
 
 ### `delphi claims`
 
@@ -227,6 +228,10 @@ What the roadmap is waiting on evidence for.
 ```
   delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]
 ```
+
+After the roadmap items it prints the fact validator's open work, once it has run here: the blind-audit
+cards waiting (and the oldest's age) and the PROMOTE line from the last `delphi validation report`.
+It reads files only and never runs the validator.
 
 ### `delphi kb`
 
@@ -414,12 +419,13 @@ The deterministic checks behind the built-in skills.
 ```
   delphi check <dag|handoff|provenance|rules|review-md|spec|kb|tui|skill> <path> [--repo <path>]
   delphi check fact <claim.json> [--home <dir>]
+  delphi check record <mission-dir> --event <seq> [--hash <h>]
 ```
 
-`fact` reads {claim, needed_for, kind, snapshots: [ids]} and checks the claim
-against snapshots the daemon already stored: origins, independence, source classes.
-It makes no network call and runs no model; the entailment judge and the
-contradiction search are the daemon's.
+`record` verifies one event in a mission log: its hash chain against the daemon's stored head (no model,
+no network). An agent-authored event only warns "an agent wrote this". `fact` reads {claim, needed_for, kind,
+snapshots: [ids]} and checks the claim against snapshots the daemon stored: origins, independence, classes.
+It makes no network call and runs no model; the judge and the contradiction search are the daemon's.
 
 ## Maintain
 
