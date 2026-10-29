@@ -30,7 +30,7 @@ A bundle is a `bundle.toml` plus directories for the sections you turn on:
 ```
 acme-platform/
 ├── bundle.toml          identity, publisher, what it applies to, which sections exist
-├── sources/             optional full texts and images of redistributable sources (licence-gated; retrieved, never always-loaded)
+├── sources/             optional full texts and images of the sources your knowledge rests on (retrieved, never always-loaded; licence is a warning, not a gate)
 ├── knowledge/           Markdown the team's agents can search (architecture, decisions, runbooks, glossary)
 ├── skills/              agentskills.io skills
 ├── agents/              bundle agents, each mapped to a host role in bundle.toml
@@ -51,6 +51,7 @@ title = "Acme Platform Engineering"
 description = "How Acme builds and runs its platform."   # plain text, 200 characters at most
 license = "Proprietary"
 audience = "org"              # org | team | project | person
+distribution = "internal"     # internal (default) | public: where you intend it to go; a warning state, never a gate
 review_by = "2027-01-31"      # past this date every surface shows the bundle as stale
 
 [publisher]
@@ -108,4 +109,4 @@ Archive tree pointers for store records, `i8` vectors, vectors in `bundle serve`
 
 ## Shipping sources
 
-`sources/<source-id>/` holds `source.md` (absent for a pointer-only source), `meta.json` ([`schemas/source-meta.schema.json`](../../schemas/source-meta.schema.json)), an optional `excerpts.json` and `assets/` (png, jpeg, webp, svg, pdf, csv). Set `sources = true` under `[sections]`. A licence is information, not a gate: a licence that does not allow redistribution, a missing attribution or a share-alike notice is a warning (`source-licence`, `source-attribution`, `source-sharealike`), naming the source id and never its text. Only `private: true` refuses `validate` and `add`. `distribution` in `bundle.toml` is `internal` (default) or `public`; packaging or publishing a `public` bundle that carries sources asks you once, in a terminal, to type `publish`, and records the answer in `.delphi-bundle/report.json`. A source an org's bundle brings is shown `validated · vouched by <org>` for as long as the bundle's lock entry stands: removing the bundle, changing its hash or key, or rolling back ends it. It stays data and never instructs. Knowledge files cite sources with `sources: [<id>]` in their frontmatter (each id must exist). `sources/` has its own size class (20,000 files, 16 MiB per text file, 32 MiB per asset, 1 GiB in all) and a source never raises the tier of the knowledge that cites it; instruction-shaped lines in `source.md` are warnings. See [`specs/023`](../../specs/023-org-bundle-standard.md) §2.1.
+`sources/<source-id>/` holds `source.md` (absent for a pointer-only source), `meta.json` ([`schemas/source-meta.schema.json`](../../schemas/source-meta.schema.json)), an optional `excerpts.json` and `assets/` (png, jpeg, webp, svg, pdf, csv). Set `sources = true` under `[sections]`. `meta.json` needs only `type` and `title`; `licence` is optional (an SPDX id, `public-domain:<jurisdiction>:<basis>`, `own`, `internal`, `all-rights-reserved` or `unknown`; default `internal`) and is information, not a gate. An org bundle is your organisation's own trusted material: when an operator adds it, its knowledge and sources read `validated · vouched by <org>` (data only; they never instruct and never raise another file). `validate` **warns** (`source-licence`, `source-attribution`, `source-sharealike`) and never refuses for licence; packaging a `public` bundle, or publishing any bundle outside the org, asks the operator to confirm and records it in `.delphi-bundle/report.json` (`licence_acknowledged`); `distribution` in `bundle.toml` is `internal` (default) or `public`. The vouch lasts only while the bundle's lock entry stands: removing the bundle, changing its hash or key, or rolling back ends it. The one hard rule is `"private": true` (or a library source flagged private), which is never shipped and fails `validate`, `package` and `add`, naming the source id and never its text. Knowledge files cite sources with `sources: [<id>]` in their frontmatter (each id must exist). `sources/` has its own size class (20,000 files, 16 MiB per text file, 32 MiB per asset, 1 GiB in all) and a source never raises the tier of the knowledge that cites it; instruction-shaped lines in `source.md` are warnings. See [`specs/023`](../../specs/023-org-bundle-standard.md) §2.1.

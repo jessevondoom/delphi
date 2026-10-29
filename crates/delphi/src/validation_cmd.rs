@@ -189,9 +189,9 @@ fn state_hashes(path: &Path) -> Option<BTreeSet<String>> {
     Some(v.get("seen")?.as_array()?.iter().filter_map(|h| h.as_str().map(String::from)).collect())
 }
 
-fn write_state(path: &Path, claims: &[Claim]) -> Result<()> {
+fn write_state(path: &Path, claims: &[Claim], s: &Score) -> Result<()> {
     let seen: Vec<&str> = claims.iter().map(|c| c.hash.as_str()).collect();
-    fs::write(path, serde_json::to_string(&serde_json::json!({"schema": 1, "seen": seen}))?)?;
+    fs::write(path, serde_json::to_string(&serde_json::json!({"schema": 1, "seen": seen, "claims": s.scored, "false_ratified": s.false_ratified, "poisoned_passes": s.poisoned_passes, "at": delphi_core::time::now_rfc3339()}))?)?;
     Ok(())
 }
 
@@ -205,7 +205,7 @@ pub fn run(set: Option<PathBuf>, results: Option<PathBuf>, home: &Path) -> Resul
     let state = set.with_file_name(STATE_FILE);
     let new = state_hashes(&state).map(|seen| claims.iter().filter(|c| !seen.contains(&c.hash)).count());
     let out = render(&claims, &s, new, true);
-    if s.scored > 0 && write_state(&state, &claims).is_err() {
+    if s.scored > 0 && write_state(&state, &claims, &s).is_err() {
         bail!("scored, but could not record the run beside the set");
     }
     Ok(out)

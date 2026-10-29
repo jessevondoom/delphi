@@ -102,6 +102,8 @@ impl Engine {
 pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path::Path, now: &str, eff: &Effective, deps: &Deps<'_>, searcher: Option<Arc<dyn Searcher>>, req: &Value) -> Result<(), String> {
     let caller = req["caller"].as_str().unwrap_or("").to_string();
     let tool = req["tool"].as_str().unwrap_or("");
+    let secs = delphi_core::time::parse_rfc3339(now).unwrap_or(0);
+    crate::fact_audit::sweep_stale(&state_dir(ws_dir), &crate::fact_store::FactStore::new(ws_dir), secs);
     let mut work: Vec<(Accepted, Submission)> = Vec::new();
     match tool {
         "ratify_fact" => {
@@ -141,6 +143,7 @@ pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path
         match ratify_fact(deps, eff, ws_dir, &sub, now, &m.id).await {
             Ok(done) => {
                 host.intake().finish(&a, done.report.tokens);
+                observe_for_audit(ws_dir, &m.id, &done, secs);
                 let mut events: Vec<EventEnvelope> = done.events.into_iter().map(|(k, p)| event(m, &k, p)).collect();
                 if let Some(why) = done.store_error {
                     events.push(event(m, "validator.event", json!({"kind": "store", "fact_id": a.fact_id, "why": why})));
@@ -154,6 +157,25 @@ pub(crate) async fn serve(host: &Host, m: &Arc<MissionState>, ws_dir: &std::path
         }
     }
     Ok(())
+}
+
+/// Hand the finished check to the audit journal (ids and classes only; the claim stays in the mission record).
+fn observe_for_audit(ws_dir: &std::path::Path, mission: &str, done: &crate::fact_ratify::Done, secs: i64) {
+    let r = &done.report;
+    let counted: Vec<&crate::fact_check::SourceRecord> = r.findings.sources.iter().filter(|s| s.counted).collect();
+    let id = crate::fact_store::fact_id(&r.findings.claim);
+    let o = crate::fact_audit::Observed {
+        fact_id: id.clone(),
+        mission: mission.to_string(),
+        verdict: if r.would_ratify { "would_ratify".into() } else { r.verdict.as_str().into() },
+        would_ratify: r.would_ratify,
+        ratified: done.written.as_ref().is_some_and(|w| w.id == id),
+        origins: counted.iter().map(|s| s.origin.clone()).collect(),
+        class: counted.first().map(|s| s.class.as_str().to_string()).unwrap_or_default(),
+        tokens: r.tokens,
+    };
+    let roll = u32::from_le_bytes(blake3::hash(format!("{}{}", id, secs).as_bytes()).as_bytes()[..4].try_into().unwrap_or([0; 4]));
+    crate::fact_audit::observe(&state_dir(ws_dir), &o, roll, secs);
 }
 
 /// The sources for a claim the caller sent as text only: the daemon's own search over a bounded extraction.
@@ -298,6 +320,9 @@ mod tests {
         assert!(ev[0].1["sources"][0]["url"].as_str().unwrap().contains("/rfc/2324"));
         assert!(!ev[0].1.to_string().contains("evil.example"));
         assert_eq!(ev[0].1["would_ratify"], true);
+        let journal = std::fs::read_to_string(state_dir(&f.engine.ws.dir).join("journal.jsonl")).unwrap();
+        assert!(journal.contains("\"kind\":\"card\""), "a would-ratify verdict makes an audit card: {journal}");
+        assert!(!journal.contains("teapot"), "the journal holds ids and counts, never the claim");
     }
 
     #[tokio::test]

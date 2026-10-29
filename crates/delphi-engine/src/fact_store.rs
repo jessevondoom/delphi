@@ -90,6 +90,8 @@ pub fn fact_id(claim: &str) -> String {
 pub struct FactStore {
     /// The workspace root: records live at `<root>/context/facts/<id>.md`.
     root: PathBuf,
+    /// The mode period new records belong to (`batch` in the frontmatter, §15.2), so a batch can be quarantined or retracted whole.
+    batch: Option<String>,
 }
 
 pub struct Written {
@@ -115,7 +117,12 @@ fn source_json(f: &FactFindings, counted_only: bool) -> Vec<Value> {
 
 impl FactStore {
     pub fn new(root: &Path) -> FactStore {
-        FactStore { root: root.to_path_buf() }
+        FactStore { root: root.to_path_buf(), batch: None }
+    }
+
+    pub fn with_batch(mut self, batch: &str) -> FactStore {
+        self.batch = Some(batch.to_string());
+        self
     }
 
     fn dir(&self) -> PathBuf {
@@ -149,15 +156,15 @@ impl FactStore {
         match r.verdict {
             Verdict::Ratifiable if matches!(f.standing, Standing::Fact(_)) => {
                 let id = record_id(Kind::Fact, &f.claim);
-                self.create(&id, &render(Kind::Fact, &id, r, now_rfc3339, mission, needed_for))
+                self.create(&id, &render(Kind::Fact, &id, r, now_rfc3339, mission, needed_for, self.batch.as_deref()))
             }
             Verdict::Attributed => {
                 let id = record_id(Kind::Attributed, &f.claim);
-                self.create(&id, &render(Kind::Attributed, &id, r, now_rfc3339, mission, needed_for))
+                self.create(&id, &render(Kind::Attributed, &id, r, now_rfc3339, mission, needed_for, self.batch.as_deref()))
             }
             Verdict::Refuted => {
                 let id = record_id(Kind::Disproved, &f.claim);
-                self.create(&id, &render(Kind::Disproved, &id, r, now_rfc3339, mission, needed_for))
+                self.create(&id, &render(Kind::Disproved, &id, r, now_rfc3339, mission, needed_for, self.batch.as_deref()))
             }
             _ => Err(StoreError::NothingToWrite("only a ratifiable, attributed or refuted verdict is recorded")),
         }
@@ -188,6 +195,61 @@ impl FactStore {
         Ok(Written { id: id.into(), path: rel.clone(), stamp: Stamp { zone: Zone::Local, path: rel, blake3, tier: FACT_TIER } })
     }
 
+    fn ids(&self) -> Vec<String> {
+        let Ok(rd) = std::fs::read_dir(self.dir()) else { return vec![] };
+        let mut ids: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str()?.strip_suffix(".md").map(String::from)).collect();
+        ids.sort();
+        ids
+    }
+
+    /// Rewrite the frontmatter of a record the daemon holds, and nothing else. Only for the lowering moves below.
+    fn set_status(&self, id: &str, from: &[&str], to: &str, extra: (&str, Value)) -> Result<Written, StoreError> {
+        let text = self.read(id).ok_or(StoreError::NothingToWrite("no such record"))?;
+        let (fm, body) = crate::workspace::split_frontmatter(&text);
+        let mut fm = fm.and_then(|v| serde_json::to_value(v).ok()).ok_or(StoreError::Laundering("the record has no readable frontmatter"))?;
+        let status = fm["status"].as_str().unwrap_or("").to_string();
+        if !from.contains(&status.as_str()) {
+            return Err(StoreError::NothingToWrite("the record is not in a state this move applies to"));
+        }
+        fm["status"] = to.into();
+        fm[extra.0] = extra.1;
+        let out = format!("---\n{}---\n{}", serde_yaml::to_string(&fm).map_err(|e| StoreError::Io(e.to_string()))?, body);
+        let rel = format!("{}/{}.md", FACTS_DIR, id);
+        std::fs::write(self.dir().join(format!("{}.md", id)), &out).map_err(|e| StoreError::Io(e.to_string()))?;
+        let blake3 = blake3::hash(out.as_bytes()).to_hex().to_string();
+        Ok(Written { id: id.into(), path: rel.clone(), stamp: Stamp { zone: Zone::Local, path: rel, blake3, tier: FACT_TIER } })
+    }
+
+    fn batch_of(&self, id: &str) -> Option<String> {
+        let t = self.read(id)?;
+        serde_json::to_value(crate::workspace::split_frontmatter(&t).0?).ok()?["batch"].as_str().map(String::from)
+    }
+
+    /// Take a record out of search without deleting it (§15.2 item 2). Search hides `quarantined` whatever else is asked
+    /// for. This never raises anything: the way back is the operator's retraction or an edit, not a function here.
+    pub fn quarantine(&self, id: &str, reason: &str) -> Result<Written, StoreError> {
+        self.set_status(id, &["active", "contested", "attributed"], "quarantined", ("quarantine", json!({"reason": reason.chars().take(200).collect::<String>()})))
+    }
+
+    /// Quarantine every record of one batch. Returns the ids.
+    pub fn quarantine_batch(&self, batch: &str, reason: &str) -> Vec<String> {
+        self.ids().into_iter().filter(|id| self.batch_of(id).as_deref() == Some(batch)).filter(|id| self.quarantine(id, reason).is_ok()).collect()
+    }
+
+    /// `delphi validation retract --all` (§15.2 item 3): every record that is still in play becomes `superseded` with
+    /// `superseded_by: retraction:<batch>`. Files and snapshots stay. A `disproved` record is left alone: it is the
+    /// record that a claim was refuted, and it is not searchable as a fact. Returns the ids retracted.
+    pub fn retract_all(&self) -> Vec<(String, String)> {
+        let mut out = vec![];
+        for id in self.ids() {
+            let batch = self.batch_of(&id).unwrap_or_else(|| "unbatched".into());
+            if self.set_status(&id, &["active", "contested", "attributed", "quarantined"], "superseded", ("superseded_by", format!("retraction:{}", batch).into())).is_ok() {
+                out.push((id, batch));
+            }
+        }
+        out
+    }
+
     /// A known source's content hash changed, or the snapshot it was judged from no longer matches: every record
     /// that cites it is demoted at once. Returns the records lowered.
     pub fn demote_citing(&self, snapshot_sha256: &str, reason: &str) -> Vec<Written> {
@@ -198,7 +260,7 @@ impl FactStore {
     }
 }
 
-fn render(kind: Kind, id: &str, r: &Report, now: &str, mission: &str, needed_for: &str) -> String {
+fn render(kind: Kind, id: &str, r: &Report, now: &str, mission: &str, needed_for: &str, batch: Option<&str>) -> String {
     let f = &r.findings;
     let title: String = f.claim.chars().take(120).collect();
     let mut fm = json!({
@@ -214,6 +276,9 @@ fn render(kind: Kind, id: &str, r: &Report, now: &str, mission: &str, needed_for
         "kind": match kind { Kind::Fact => "fact", Kind::Attributed => "attributed", Kind::Disproved => "disproved" },
         "ratified_by": "validator",
     });
+    if let Some(b) = batch {
+        fm["batch"] = b.into();
+    }
     let judge = r.judged.first().map(|j| json!({"model": j.model, "same_family_as_author": j.same_family_as_author, "verdict": j.verdict.as_str()}));
     let mut v = json!({
         "check": "fact@1",

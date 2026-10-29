@@ -782,7 +782,8 @@ fn embed_text(rel_path: &str, heading_path: &str, piece: &str) -> String {
 /// The SQL condition (over `kb_documents d`) for the documents `opts` may see: nothing untrusted or inactive unless
 /// asked, and a role sees only its own private memory. Search, listing and reading all use this one filter.
 fn allowed_sql(opts: &SearchOpts) -> String {
-    let mut allowed = String::from("1=1");
+    // A quarantined fact (`specs/040` §15.2) is out of search for everyone, the operator's view included.
+    let mut allowed = String::from("d.status != 'quarantined'");
     if !opts.include_untrusted {
         allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
     }

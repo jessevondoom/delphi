@@ -16,6 +16,9 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
+/// The fixed value the first chained event of a mission starts from (`specs/040` §21.6).
+pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 pub const DEFAULT_MAX_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -72,6 +75,8 @@ pub struct EventLog {
     segment: u32,
     segment_bytes: u64,
     next_seq: u64,
+    /// `h` of the last event written, or the genesis value when none is chained yet.
+    head: String,
     poisoned: bool,
     _lock: File,
 }
@@ -137,12 +142,12 @@ fn truncate_torn_tail(path: &Path) -> Result<u64, LogError> {
     Ok(len - keep)
 }
 
-fn last_seq_in(path: &Path) -> Result<Option<u64>, LogError> {
+fn last_seq_in(path: &Path) -> Result<Option<(u64, Option<String>)>, LogError> {
     let mut last = None;
     for (i, line) in BufReader::new(File::open(path)?).lines().enumerate() {
         let line = line?;
         let e = parse_line(&line).map_err(|e| LogError::Corrupt { segment: path.to_path_buf(), line: i + 1, reason: e.to_string() })?;
-        last = Some(e.seq);
+        last = Some((e.seq, e.h));
     }
     Ok(last)
 }
@@ -175,16 +180,18 @@ impl EventLog {
 
         // Last seq: the newest non-empty segment's final event.
         let mut last_seq = 0;
+        let mut head = GENESIS.to_string();
         for index in segments.iter().rev() {
-            if let Some(s) = last_seq_in(&dir.join(segment_name(*index)))? {
+            if let Some((s, h)) = last_seq_in(&dir.join(segment_name(*index)))? {
                 last_seq = s;
+                head = h.unwrap_or(head);
                 break;
             }
         }
         let path = dir.join(segment_name(current));
         let file = OpenOptions::new().append(true).open(&path)?;
         let segment_bytes = file.metadata()?.len();
-        Ok(EventLog { dir, opts, redactor: Redactor::new(), file, segment: current, segment_bytes, next_seq: last_seq + 1, poisoned: false, _lock: lock })
+        Ok(EventLog { dir, opts, redactor: Redactor::new(), file, segment: current, segment_bytes, next_seq: last_seq + 1, head, poisoned: false, _lock: lock })
     }
 
     /// The redactor applied to every event before it is written.
@@ -219,6 +226,7 @@ impl EventLog {
         let mut lines = Vec::with_capacity(events.len());
         let mut stored = Vec::with_capacity(events.len());
         let mut seq = self.next_seq;
+        let mut head = self.head.clone();
         for mut e in events {
             e.v = crate::event::SCHEMA_MAJOR;
             e.seq = seq;
@@ -227,6 +235,9 @@ impl EventLog {
             }
             e.validate().map_err(LogError::Invalid)?;
             self.redactor.redact_event(&mut e);
+            e.prev = Some(head.clone());
+            e.h = Some(e.chain_hash(&head));
+            head = e.h.clone().unwrap_or_default();
             let mut line = serde_json::to_string(&e).map_err(|err| LogError::Invalid(err.to_string()))?;
             line.push('\n');
             lines.push((seq, line));
@@ -237,6 +248,7 @@ impl EventLog {
         match result {
             Ok(()) => {
                 self.next_seq = seq;
+                self.head = head;
                 Ok(stored)
             }
             Err(e) => {
@@ -308,6 +320,61 @@ pub fn replay(mission_dir: &Path) -> Result<Vec<EventEnvelope>, LogError> {
         }
     }
     Ok(out)
+}
+
+/// What walking a mission's chain found (`specs/040` §21.6).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChainReport {
+    /// Events from before the chain existed; not covered, and said so.
+    pub unchained: u64,
+    pub chained: u64,
+    /// `(seq, h)` of the last chained event.
+    pub head: Option<(u64, String)>,
+    /// The first break: an edited, deleted, reordered or inserted event.
+    pub broken: Option<String>,
+}
+
+/// Verify the chain of a mission's log. An unchained prefix is reported, not passed; once chained, every later event must be.
+pub fn verify_chain(mission_dir: &Path) -> Result<ChainReport, LogError> {
+    let mut r = ChainReport::default();
+    let mut prev = GENESIS.to_string();
+    for e in replay(mission_dir)? {
+        let (Some(h), Some(p)) = (e.h.as_deref(), e.prev.as_deref()) else {
+            if r.chained > 0 {
+                r.broken = Some(format!("event {} has no chain fields after the chain began", e.seq));
+                return Ok(r);
+            }
+            r.unchained += 1;
+            continue;
+        };
+        if p != prev || e.chain_hash(p) != h {
+            r.broken = Some(format!("event {} does not follow from the one before it (edited, deleted or reordered)", e.seq));
+            return Ok(r);
+        }
+        prev = h.to_string();
+        r.chained += 1;
+        r.head = Some((e.seq, prev.clone()));
+    }
+    Ok(r)
+}
+
+impl ChainReport {
+    /// Compare with the head `state.db` stored at the last checkpoint: a log that ends before it was cut, and one that
+    /// ends at the same event must carry the same hash.
+    pub fn against_stored_head(mut self, stored: Option<(u64, String)>) -> ChainReport {
+        if self.broken.is_some() {
+            return self;
+        }
+        if let Some((seq, h)) = stored {
+            match &self.head {
+                Some((s, _)) if *s < seq => self.broken = Some(format!("the log ends at event {s} but the stored head is event {seq}: the tail was cut")),
+                Some((s, hh)) if *s == seq && *hh != h => self.broken = Some(format!("event {seq} differs from the stored head")),
+                None => self.broken = Some("the log has no chained events but a head is stored: it was cut".into()),
+                _ => {}
+            }
+        }
+        self
+    }
 }
 
 #[cfg(test)]
@@ -464,6 +531,73 @@ mod tests {
             i += 1;
             log.append(ev(i)).unwrap();
         }
+    }
+
+    fn chain_dir(max: u64, n: u64) -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        let mut log = open(t.path(), max);
+        for i in 0..n {
+            log.append(ev(i)).unwrap();
+        }
+        t
+    }
+
+    fn segment_lines(t: &Path) -> (PathBuf, Vec<String>) {
+        let p = t.join("events").join(segment_name(1));
+        let lines = fs::read_to_string(&p).unwrap().lines().map(String::from).collect();
+        (p, lines)
+    }
+
+    #[test]
+    fn the_chain_runs_across_segments_and_a_reopen_and_an_edit_a_deletion_or_a_reorder_breaks_it() {
+        let t = chain_dir(300, 12);
+        assert!(fs::read_dir(t.path().join("events")).unwrap().count() > 3, "the log rotated");
+        drop(open(t.path(), 300));
+        let mut log = open(t.path(), 300);
+        log.append(ev(99)).unwrap();
+        drop(log);
+        let r = verify_chain(t.path()).unwrap();
+        assert_eq!((r.chained, r.unchained, r.broken.clone()), (13, 0, None));
+        assert_eq!(r.head.as_ref().map(|h| h.0), Some(13));
+
+    }
+
+    #[test]
+    fn an_edit_a_deletion_or_a_reorder_breaks_the_chain() {
+        let t = chain_dir(DEFAULT_MAX_SEGMENT_BYTES, 6);
+        let (p, lines) = segment_lines(t.path());
+        let original = lines.join("\n") + "\n";
+        let write = |ls: &[&String]| fs::write(&p, ls.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        fs::write(&p, original.replace("\"i\":0", "\"i\":7")).unwrap();
+        assert!(verify_chain(t.path()).unwrap().broken.is_some(), "an edit");
+        write(&[&lines[0], &lines[2], &lines[3]]);
+        assert!(verify_chain(t.path()).is_err() || verify_chain(t.path()).unwrap().broken.is_some(), "a deletion");
+        write(&[&lines[1], &lines[0], &lines[2]]);
+        assert!(verify_chain(t.path()).is_err() || verify_chain(t.path()).unwrap().broken.is_some(), "a reorder");
+        fs::write(&p, original).unwrap();
+        assert_eq!(verify_chain(t.path()).unwrap().broken, None);
+    }
+
+    #[test]
+    fn a_log_from_before_the_chain_is_reported_unchained_and_the_chain_starts_after_it() {
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir_all(t.path().join("events")).unwrap();
+        let old = r#"{"v":1,"seq":1,"timestamp":"t","mission_id":"m","type":"x","payload":{}}"#;
+        fs::write(t.path().join("events").join(segment_name(1)), format!("{old}\n")).unwrap();
+        let mut log = open(t.path(), DEFAULT_MAX_SEGMENT_BYTES);
+        log.append(ev(2)).unwrap();
+        drop(log);
+        let r = verify_chain(t.path()).unwrap();
+        assert_eq!((r.unchained, r.chained, r.broken), (1, 1, None));
+    }
+
+    #[test]
+    fn a_chained_event_replaced_by_an_unchained_one_is_a_break() {
+        let t = chain_dir(DEFAULT_MAX_SEGMENT_BYTES, 3);
+        let (p, lines) = segment_lines(t.path());
+        let bare = r#"{"v":1,"seq":3,"timestamp":"t","mission_id":"m1","type":"x","payload":{}}"#;
+        fs::write(&p, format!("{}\n{}\n{bare}\n", lines[0], lines[1])).unwrap();
+        assert!(verify_chain(t.path()).unwrap().broken.is_some());
     }
 
     // specs/005 §6 test 6: SIGKILL the writer mid-append repeatedly; every restart yields a valid log.
