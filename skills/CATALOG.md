@@ -43,7 +43,7 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 
 ---
 
-## 2. Core Skills Matrix by Role (9 Roles / 43 Skills)
+## 2. Core Skills Matrix by Role (10 Roles / 44 Skills)
 
 "Backing" is what supports the skill beyond its instructions: a `delphi check`, a template, or `instructions` alone.
 
@@ -126,6 +126,11 @@ The six kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`, 
 | `mcp-server-integration` | Discovers, configures, health-checks, and sandboxes external Model Context Protocol tool servers. | instructions |
 | `external-comms-dispatch` | Connects Delphi plans to external APIs, calendars, webhooks, or notification channels. | instructions |
 | `protocol-schema-translation` | Validates and translates boundary payloads (webhooks, third-party APIs, provider tool schemas). | instructions |
+
+### 10. **Validator** (Fact-Checker, Source Assessor & Knowledge Gatekeeper; advisory in V1, `specs/040`)
+| Skill | Purpose | Backing |
+| :--- | :--- | :--- |
+| `fact-validation` | Reports whether a claim has independent, reputable corroboration, and what it would conclude; never writes *validated*. Also usable by the scout and orchestrator. | instructions |
 
 ---
 

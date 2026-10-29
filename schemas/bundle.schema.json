@@ -95,6 +95,6 @@
   },
   "additionalProperties": false,
   "$defs": {
-    "role": { "enum": ["orchestrator", "builder", "architect", "investigator", "scout", "strategist", "red-team", "writer", "integrator", "librarian"] }
+    "role": { "enum": ["orchestrator", "builder", "architect", "investigator", "scout", "strategist", "red-team", "writer", "integrator", "librarian", "validator"] }
   }
 }

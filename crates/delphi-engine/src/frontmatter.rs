@@ -2,7 +2,7 @@
 
 use serde_yaml::{Mapping, Value};
 
-pub const ROLES: [&str; 9] = [
+pub const ROLES: [&str; 10] = [
     "orchestrator",
     "builder",
     "architect",
@@ -12,6 +12,7 @@ pub const ROLES: [&str; 9] = [
     "red-team",
     "writer",
     "integrator",
+    "validator",
 ];
 pub const AUTHORS_EXTRA: [&str; 2] = ["operator", "delphi-core"];
 pub const SOURCE_TYPES: [&str; 6] = [
