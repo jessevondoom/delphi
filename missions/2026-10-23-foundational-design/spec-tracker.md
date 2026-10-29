@@ -338,13 +338,13 @@ Amended with 055 (2026-10-29, additive): 012 §11 (`fact` kind, provisional), 02
 
 Amended 2026-10-29 (operator decision: a bundle is trusted, licence is information): 023 §2.1 and step 7a, 024 §3.7 and §4.1a, 052 §3.1, 055 §3.2, §7, §11.1, 027 §2.3a, schemas. The Xenia `fact` kind is deferred by decision.
 
-## Discovered model assignment (spec 056, draft 2026-10-28)
+## Discovered model assignment (spec 056, approved 2026-10-29)
 
-Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what is available and assign the best model per agent and task; more effort for planning and specs, the lowest acceptable model for following a build plan; promote and nerf an agent; the knowledge in the core knowledge base. Draft: it needs approval, and OD-1 amends D-15 (spec 035). Revised 2026-10-29 on operator direction (still draft, docs only): role floor plus preferred class instead of a role default (OD-1), no provider default, ratify the pool once, quota as a live input with per-role reserve, council diversity, a provider array, and trial of unclassified models (OD-4, OD-6); single-provider operators not penalized, single-model low-diversity councils (OD-7); local `emergency` stop-gap that saves state (OD-8, M6).
+Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what is available and assign the best model per agent and task; more effort for planning and specs, the lowest acceptable model for following a build plan; promote and nerf an agent; the knowledge in the core knowledge base. Approved 2026-10-29 ("ratify and build it", all §7 recommendations accepted; OD-1 amends D-15 in spec 035, recorded as D-15a; OD-5: the default stays `static` until a 048 benchmark). Revised 2026-10-29 on operator direction : role floor plus preferred class instead of a role default (OD-1), no provider default, ratify the pool once, quota as a live input with per-role reserve, council diversity, a provider array, and trial of unclassified models (OD-4, OD-6); single-provider operators not penalized, single-model low-diversity councils (OD-7); local `emergency` stop-gap that saves state (OD-8, M6).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
-| KB | `context/model-selection-evidence.md`: dated external evidence by family, capability classes, planner and executor results | written (this PR), status `draft` |
+| KB | `context/model-selection-evidence.md`: dated external evidence by family, capability classes, planner and executor results | written, status `draft` |
 | M0 | candidate inventory in `delphi capabilities` | not started |
 | M1 | class rules as a ratified data file, classifier | not started |
 | M2 | assignment in `resolve_model_route` behind `[routing] assignment` | not started |
