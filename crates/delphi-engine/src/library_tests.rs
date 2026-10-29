@@ -320,3 +320,134 @@ fn metadata_is_read_by_code_for_wikipedia_dois_and_gutenberg() {
     assert!(!g.fields.contains_key("licence"));
     assert!(meta::read("https://example.com/x", &[], "<meta name=\"citation_title\" content=\"x\">", "", None).fields.is_empty());
 }
+
+mod claims {
+    use super::*;
+    use crate::library::claims::{status, AnchorSpec, ClaimOpts, Validator};
+    use delphi_core::knowledge_status::Status;
+
+    fn spec(id: &str, quote: &str) -> AnchorSpec {
+        AnchorSpec { source_id: id.into(), locator: Some("§1".into()), quote: quote.into(), ..Default::default() }
+    }
+
+    fn source(d: &Path, l: &Library, name: &str, text: &str) -> String {
+        l.add_file(&file(d, name, text), &open("CC0-1.0"), &Budgets::default()).unwrap().id
+    }
+
+    const BODY: &str = "# Tides\n\nThe tide comes in twice a day, driven mostly by the moon.\n\nSpring tides are the highest.\n";
+
+    #[test]
+    fn status_is_derived_never_declared_and_cited_by_is_kept() {
+        let (d, l) = lib();
+        let s = source(d.path(), &l, "t.md", BODY);
+        let forged = ClaimOpts { kind: Some("fact".into()), ..Default::default() };
+        let c = l.add_claim("Tides come twice a day.", &forged, &[spec(&s, "twice a day")]).unwrap();
+        let id = c["id"].as_str().unwrap().to_string();
+        assert_eq!(status(&c), Status::Noted, "a new claim reads not validated");
+        assert_eq!(l.read_meta(&s).unwrap()["cited_by"], json!([id]), "the source records who cites it");
+        // a hand-edited record cannot declare itself validated
+        let mut edited = c.clone();
+        edited["status"] = json!("validated");
+        edited["lifecycle"] = json!("active");
+        assert_eq!(status(&edited), Status::Noted);
+        assert!(l.add_claim("x", &ClaimOpts::default(), &[spec(&s, "not in the text")]).is_err(), "a quote that is not in the source is refused");
+        let v = l.validate_claim(&id, Validator::Operator).unwrap();
+        assert_eq!(status(&v), Status::Validated);
+        let op = ClaimOpts { kind: Some("attributed".into()), ..Default::default() };
+        let a = l.add_claim("Tides are caused by the moon, says the author.", &op, &[spec(&s, "the moon")]).unwrap();
+        assert!(l.validate_claim(a["id"].as_str().unwrap(), Validator::Operator).is_err());
+        let bare = l.add_claim("An operator observation.", &ClaimOpts::default(), &[]).unwrap();
+        assert!(l.validate_claim(bare["id"].as_str().unwrap(), Validator::Operator).is_err(), "no anchor, no validation");
+    }
+
+    #[test]
+    fn a_new_version_moves_found_anchors_and_contests_a_claim_whose_anchor_is_gone() {
+        let (d, l) = lib();
+        let s = source(d.path(), &l, "t.md", BODY);
+        let kept = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec(&s, "twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        let gone = l.add_claim("Spring tides are highest.", &ClaimOpts::default(), &[spec(&s, "Spring tides are the highest.")]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&gone, Validator::Operator).unwrap();
+        let next = BODY.replace("Spring tides are the highest.", "Neap tides are the lowest.").replace("# Tides", "# Tides, revised");
+        let st = l.add_file(&file(d.path(), "t.md", &next), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        assert_eq!(st.outcome, Outcome::NewVersion(2));
+        let k = l.claim(&kept).unwrap();
+        assert_eq!(k["anchors"][0]["version"], "2");
+        assert_eq!(status(&k), Status::Noted);
+        let g = l.claim(&gone).unwrap();
+        assert_eq!(status(&g), Status::Contested, "a validated claim whose anchor cannot be found is lowered");
+        assert_eq!(g["anchors"][0]["state"], "lost");
+        assert_eq!(g["anchors"][0]["version"], "1", "the old anchor stays pointed at the old version");
+        assert!(l.source_dir(&s).join("versions/1/source.md").is_file());
+    }
+
+    #[test]
+    fn retiring_a_source_contests_only_the_claims_it_alone_supports_and_reviving_clears_it() {
+        let (d, l) = lib();
+        let a = source(d.path(), &l, "a.md", BODY);
+        let b = source(d.path(), &l, "b.md", &BODY.replace("Tides", "Ocean tides"));
+        let sole = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec(&a, "twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        let both = l.add_claim("The moon drives tides.", &ClaimOpts::default(), &[spec(&a, "the moon"), spec(&b, "the moon")]).unwrap()["id"].as_str().unwrap().to_string();
+        let mut m = l.read_meta(&a).unwrap();
+        m["retired"] = json!("now");
+        std::fs::write(l.source_dir(&a).join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        l.source_retired(&a);
+        assert_eq!(status(&l.claim(&sole).unwrap()), Status::Contested);
+        assert_eq!(status(&l.claim(&both).unwrap()), Status::Noted);
+        l.source_revived(&a);
+        assert_eq!(status(&l.claim(&sole).unwrap()), Status::Noted);
+    }
+
+    #[test]
+    fn a_purge_makes_anchors_pointer_only_and_a_claim_another_source_supports_keeps_its_status() {
+        let (d, l) = lib();
+        let a = source(d.path(), &l, "a.md", BODY);
+        let b = source(d.path(), &l, "b.md", &BODY.replace("Tides", "Ocean tides"));
+        let sole = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec(&a, "twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        let both = l.add_claim("The moon drives tides.", &ClaimOpts::default(), &[spec(&a, "the moon"), spec(&b, "the moon")]).unwrap()["id"].as_str().unwrap().to_string();
+        for id in [&sole, &both] {
+            l.validate_claim(id, Validator::Operator).unwrap();
+        }
+        l.purge(&a).unwrap();
+        let s = l.claim(&sole).unwrap();
+        assert_eq!(status(&s), Status::Noted, "pointer-only reads not validated");
+        assert_eq!(s["anchors"][0]["state"], "pointer_only");
+        assert_eq!(s["anchors"][0]["quote"], "", "no text of the purged capture is kept");
+        assert!(s["anchors"][0]["quote_hash"].as_str().unwrap().starts_with("sha256:"));
+        assert_eq!(status(&l.claim(&both).unwrap()), Status::Validated);
+    }
+
+    #[test]
+    fn mission_start_pulls_pointers_without_text_ranked_and_records_reliance() {
+        let (d, l) = lib();
+        let s = source(d.path(), &l, "t.md", BODY);
+        let v = l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec(&s, "twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&v, Validator::Operator).unwrap();
+        let n = l.add_claim("Tides are strong near the harbour.", &ClaimOpts::default(), &[]).unwrap()["id"].as_str().unwrap().to_string();
+        let proj = ClaimOpts { scope: Some("project".into()), project: Some("harbour".into()), ..Default::default() };
+        let p = l.add_claim("Tides close the harbour gate.", &proj, &[]).unwrap()["id"].as_str().unwrap().to_string();
+        l.add_claim("Unrelated gardening note.", &ClaimOpts::default(), &[]).unwrap();
+        let ptrs = l.pull_for_mission("what do we know about tides", None, "m1");
+        let ids: Vec<&str> = ptrs.iter().map(|p| p.uri.trim_start_matches("@library/claim/")).collect();
+        assert_eq!(ids, [v.as_str(), n.as_str()], "validated first; the project claim and the unrelated one are not offered");
+        assert!(ptrs.iter().all(|p| !p.reason.contains("twice a day") && !p.reason.contains("harbour")), "pointers carry no claim text");
+        assert!(ptrs[0].reason.contains("validated") && ptrs[1].reason.contains("not validated"));
+        assert_eq!(l.claim(&v).unwrap()["cited_by"], json!(["m1"]));
+        l.pull_for_mission("tides again", None, "m1");
+        assert_eq!(l.claim(&v).unwrap()["cited_by"], json!(["m1"]), "once per mission");
+        let ids: Vec<String> = l.pull("tides", Some("harbour"), 5).into_iter().map(|p| p.id).collect();
+        assert!(ids.contains(&p), "a project claim is offered to its project");
+        let slice = l.claim_slice(&ptrs[0].uri).unwrap();
+        assert!(slice.contains("validated") && slice.contains("untrusted data") && slice.contains("Tides come twice a day."));
+        assert!(!slice.contains("twice a day\n"), "no quote of the source");
+    }
+
+    #[test]
+    fn reliability_counts_what_stood_and_what_was_contested() {
+        let (d, l) = lib();
+        let s = source(d.path(), &l, "t.md", BODY);
+        l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[spec(&s, "twice a day")]).unwrap();
+        l.add_claim("Spring tides are highest.", &ClaimOpts::default(), &[spec(&s, "Spring tides are the highest.")]).unwrap();
+        l.add_file(&file(d.path(), "t.md", &BODY.replace("Spring tides are the highest.", "x")), &open("CC0-1.0"), &Budgets::default()).unwrap();
+        assert_eq!(l.reliability_of_source(&s), crate::library::claims::Reliability { claims: 2, stood: 1, contested: 1, disproved: 0 });
+    }
+}

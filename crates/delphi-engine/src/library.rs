@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 #[path = "library_bib.rs"]
 pub mod bib;
+#[path = "library_claims.rs"]
+pub mod claims;
 #[path = "library_excerpts.rs"]
 pub mod excerpts;
 #[path = "library_meta.rs"]
@@ -458,6 +460,9 @@ impl Library {
             std::fs::rename(&stage, &dest).map_err(|e| e.to_string())?;
             Outcome::Added
         };
+        if old.is_some() {
+            self.reanchor_claims(&p.id, p.text.as_deref(), version);
+        }
         self.log("capture", json!({"id": p.id, "level": level.as_str(), "version": version, "content_hash": p.meta.get("content_hash")}));
         Ok(Stored { id: p.id, level, outcome, notes })
     }
@@ -613,6 +618,7 @@ impl Library {
         meta["purged"] = json!(delphi_core::time::now_rfc3339());
         self.write_json(&dir.join("meta.json"), &meta)?;
         let removed = before.saturating_sub(dir_bytes(&dir));
+        self.source_purged(id);
         self.log("purge", json!({"id": id, "content_hash": meta["content_hash"], "bytes_removed": removed}));
         Ok(Some(removed))
     }

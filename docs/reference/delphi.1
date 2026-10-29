@@ -151,6 +151,20 @@ score the labelled claim set: counts and rates only.
 .fi
 .PP
 Operator\-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false\-ratified, poisoned passes, wrongly\-escalated rate, the rule\-of\-three bound and the claims new since the last scored run. With \-\-results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation\-set.md.
+.SS delphi claims
+the library's claims: statements anchored in sources, pulled by pointer.
+.PP
+.nf
+  delphi claims add <text> [\-\-kind fact|episode|procedure|attributed] [\-\-scope personal|project|team|org] [\-\-project <name>]
+    [\-\-valid\-until YYYY\-MM\-DD] [\-\-supersedes <claim>] [\-\-source <id> \-\-locator <where> \-\-quote <passage>] [\-\-home <dir>]
+  delphi claims anchor <claim> \-\-source <id> \-\-quote <passage> [\-\-locator <where>] [\-\-prefix <t>] [\-\-suffix <t>] [\-\-home <dir>]
+  delphi claims list [\-\-json] [\-\-home <dir>]
+  delphi claims show <claim> [\-\-json] [\-\-home <dir>]
+  delphi claims validate <claim> [\-\-home <dir>]
+  delphi claims pull <words...> [\-\-project <name>] [\-\-json] [\-\-home <dir>]
+.fi
+.PP
+A claim is a short statement kept once per install in <home>/library/claims/, with anchors into the library's sources: the source, version, locator, the exact quote and a little text on each side. Its status is derived by the daemon and never typed: a new claim reads not validated, and only `validate` (you, in a terminal; refused inside an agent seat) records a validation, which counts only while an anchor still holds. An attributed claim (an opinion) is never validated as a fact. A source held whole is anchored by quote in its text; one that is not (excerpts, pointer) only inside an excerpt you kept, so a claim cannot quote more of a restricted work than the excerpt bounds allow. When a source gets a new version each anchor is looked up again by its quote, then by its surroundings: found moves to the new version, not found marks the claim contested and leaves the old anchor readable under versions/; nothing is re\-pointed to different text. A source marked retired contests the claims it alone supports; `sources purge` turns every anchor into it pointer\-only (the quote goes with the capture, the citation and quote hash stay) and a claim no other source supports then reads not validated. `sources show` lists how many of a source's claims stood, were contested or disproved. Every mission start pulls claims from this one library by pointer, chosen by the words of the prompt and the project, ranked by status, recency and how often they were relied on; disproved and retired claims are not offered, and a project\-scoped claim goes only to its project. The agent gets the id, status label, origin and score, never the text; opening it is a tainted, read\-only read, and a claim that rests on a private source is withheld. `pull` shows what a mission start would be handed and records nothing. The library records which missions were handed a claim (`cited_by`). `add`, `anchor` and `validate` are refused inside an agent seat.
 .SS delphi sources
 the library's sources: capture, excerpts, bibliography.
 .PP
