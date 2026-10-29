@@ -447,3 +447,12 @@ test('a raised decision is answered with decision.resolve, singly and in the bat
   const batch = inboxKey(newInbox(0, items, { ...tickedPane(items), confirm: true, confirmedAt: 0 }), [], k('enter'), 5000);
   assert.equal(batch.action.t, 'accept', 'the batch carries the raised ones too; the console calls decision.resolve for each');
 });
+
+test('a digest candidate is a learn entry: labelled "learn", never "untrusted", and keep is its recommendation', () => {
+  const items = parse({ decisions: [raw('digest:2026-10-29', 'learn', 'open', 'build the table', 'Captured from the Council’s verdict, not validated.', 'keep', true, { source: 'digest', source_id: 'n2' })] });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'learn');
+  const text = view(items, newPane(), { pal: { dark: true }, now: NOW, w: 100, h: 20, at: (d) => Date.parse(d.raised_at ?? '') || null }).map(plain).join('\n');
+  assert.ok(text.includes('OPEN · learn'), text);
+  assert.ok(!/untrusted/i.test(text));
+});
