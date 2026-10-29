@@ -47,12 +47,12 @@ The operator-facing status of a stored claim, derived from existing state. The l
 | :-- | :-- | :-- |
 | **noted** | `○` dim | captured by the daemon or written by an agent; no check has run (any tier below L4) |
 | **checking** | `◐` | queued or in progress with the validator (040 §18.3), or awaiting the digest |
-| **validated** | `●` | validator-ratified (L3 `web_corroborated` or audited), L4, or L5 (040 §18.2) |
+| **validated** | `●` | validator-ratified (L3 `web_corroborated` or audited), L4, or L5 (040 §18.2); **or vouched by an added bundle** (024 §3.7: the lock entry of a bundle the operator added, detail `vouched by <org>`) |
 | **contested** | `◆` warm | a newer claim, a Council dissent or a contradiction search disagrees (KS-4) |
 | **disproved** | `✕` | a `refuted` verdict (040 §18.4 D-5) |
 | **retired** | `·` struck | superseded or expired (050 ML-2, ML-3); kept in history, never loaded |
 
-Federated and bundle claims show the same ladder plus "endorsed by <steward>" or "from <bundle>" in the detail (040 §18.2). The mapping from tier and record to status is one table in code (`delphi-core`), so UI, CLI, search and checkpoints cannot disagree. The research writer's L2 tier (`research.rs`) is left as it is for security decisions; its status is **noted** until a validation record exists (OD-1).
+Federated claims show the same ladder plus "endorsed by <steward>" in the detail (040 §18.2). **Bundle claims read `validated · vouched by <org>`** (the org's own trusted material, 024 §3.7; no validator step, no licence test) and lose that label when the bundle is removed or changes hash or key (024 §4.1a). A test edits a bundle document's frontmatter or a source's `meta.json` to claim `validated` and checks that only a lock entry produces the label. The mapping from tier and record to status is one table in code (`delphi-core`), so UI, CLI, search and checkpoints cannot disagree. The research writer's L2 tier (`research.rs`) is left as it is for security decisions; its status is **noted** until a validation record exists (OD-1).
 
 ### 3.2 Capture on contact (KS-2)
 The daemon, from events it already sees, stages a candidate claim when the operator:
