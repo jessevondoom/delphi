@@ -14,6 +14,8 @@ tags: [tracker, specs, roadmap]
 
 One row per spec. Three separate questions, because they diverge: **Approved** (the operator ratified the text), **Built** (code exists), **Proven** (a person or a live service has exercised it, not only tests and mocks). Sources: [`roadmap.md`](roadmap.md), [`roadmap-review-2026-10-24.md`](roadmap-review-2026-10-24.md), [`console-ink-handoff.md`](console-ink-handoff.md), [`decisions.md`](decisions.md). Update this file in the same PR that changes a spec's state.
 
+**Number collisions.** Two numbers are used twice and stay as they are, because code comments and docs cite them by number: **014** is both [Documents and data visualization](../../specs/014-documents-and-dataviz.md) (the `delphi-docs` crate cites it) and [Relay and away mode](../../specs/014-relay-and-away-mode.md) (`hub.rs`, `totp.rs`, GOVERNANCE §5.10 and REVIEW REV-SEC-09 cite it); **037** is both [Console deck change log](../../specs/037-console-deck-change-log.md) and [Training experiments](../../specs/037-training-experiments-quality-and-efficiency.md) (the tracker's "spec 037" sections mean the training one). Cite them by file name. New specs take the next free number.
+
 | Spec | Approved | Built | Proven | What is left |
 | :-- | :-- | :-- | :-- | :-- |
 | 001 Governance and manifests | yes | yes (Step 1) | tests | open sweep findings in `finalize.rs`/`build.rs` (stale merge gates) |
@@ -33,14 +35,14 @@ One row per spec. Three separate questions, because they diverge: **Approved** (
 | 011 Xenia trust model | yes (text, by "ratify all") | yes (X0-X10) | tests, fuzz, scratch-store drill | Phase 1 build: X0-X10 merged (plan: xenia-phase-1-plan.md; gates in xenia-x10-verification.md). Gates 1-7 of 011 §1.4 met by automated tests; gate 8 (3-human, 2-week dogfood, X11), the independent red-team sweep and a live store with real admin identities are the operator's |
 | 012 Xenia record schema | yes (text, by "ratify all") | yes (kinds `memory`, `endorsement`, `tombstone`, and `bundle` from B8) | tests, fuzz | same; not exercised on a live store |
 | 013 Librarian and internal retrieval | yes | no ("scoped, not yet built") | n/a | after 011/012 |
-| 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | no | n/a | B0: apply the 022 §5 amendments; then the slices below |
-| 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B1 |
-| 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B2, B4, B6 |
-| 025 Plugin, skill, agent and tool compatibility (incl. `delphi bundle serve`) | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B7, B12 |
-| 026 Team alignment and strategist integration | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B5, B9 |
-| 027 Authoring, transports, vector pipeline, evaluation | yes (2026-10-25; ratified in full 2026-10-28) | no | n/a | B3, B8 (needs xenia X7/X8), B10, B11 |
+| 022 The sharing layer (overview, plan, decisions) | yes (decisions OD-1..OD-9, 2026-10-25; text on merge of PR #155; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B0: apply the 022 §5 amendments; then the slices below |
+| 023 Org bundle standard (manifest, layout, knowledge, skills, agents, behavior, vectors) | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B1 |
+| 024 Bundle provenance, adding, precedence, lifecycle | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B2, B4, B6 |
+| 025 Plugin, skill, agent and tool compatibility (incl. `delphi bundle serve`) | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B7, B12 |
+| 026 Team alignment and strategist integration | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B5, B9 |
+| 027 Authoring, transports, vector pipeline, evaluation | yes (2026-10-25; ratified in full 2026-10-28) | yes (code in `delphi-bundle`, `bundle_*.rs`, `org_context.rs`; per-slice state below) | n/a | B3, B8 (needs xenia X7/X8), B10, B11 |
 
-### Sharing-layer slices (specs 022–027; estimates ±30%, nothing started)
+### Sharing-layer slices (specs 022–027; estimates ±30%; see each row for state)
 
 | Slice | Delivers | Spec / build plan | Depends on | Effort | State |
 | :-- | :-- | :-- | :-- | --: | :-- |
