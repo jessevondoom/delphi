@@ -68,9 +68,12 @@ fn a_private_source_never_leaves_and_is_never_indexed() {
         assert!(may_leave(&meta, c).is_err(), "{:?}", c);
     }
     assert!(l.indexable().is_empty(), "a private source is not in the index");
-    // a restricted body does not travel either, and an open one may
-    assert!(may_leave(&json!({"licence": "all-rights-reserved"}), Channel::Xenia).is_err());
-    assert!(may_leave(&json!({"licence": "CC-BY-4.0"}), Channel::Bundle).is_ok());
+    // licence is information, not a gate: only private is refused (specs/055 §11.1)
+    for lic in ["all-rights-reserved", "internal", "unknown", "CC-BY-4.0"] {
+        for c in Channel::ALL {
+            assert!(may_leave(&json!({"licence": lic}), c).is_ok(), "{} {:?}", lic, c);
+        }
+    }
     // without the flag, a restricted licence cannot be kept whole
     let err = l.add_file(&f, &AddOpts { level: Some(Level::Full), ..open("unknown") }, &Budgets::default()).unwrap_err();
     assert!(err.contains("--private"), "{}", err);

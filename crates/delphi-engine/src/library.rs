@@ -151,18 +151,15 @@ pub fn is_private(meta: &Value) -> bool {
     meta["private"].as_bool() == Some(true) || meta["licence"].as_str().is_some_and(|l| l.trim().eq_ignore_ascii_case("private"))
 }
 
-/// May the body of this source go out through `channel`? A private source never does, and neither does a restricted
-/// body, whatever the channel (`specs/055` §10.1). The citation is a separate question and is not decided here.
+/// May the body of this source go out through `channel`? Only a private source is refused, on every channel. A licence
+/// is information, not a gate (`specs/055` §7, §11.1): it yields warnings, and publishing outside the org needs the
+/// operator's confirmation where the bundle is validated, packaged and published (`specs/023` §2.1). The citation is a
+/// separate question and is not decided here.
 pub fn may_leave(meta: &Value, channel: Channel) -> Result<(), String> {
     if is_private(meta) {
         return Err(format!("a private source never leaves the install ({:?})", channel));
     }
-    let licence = meta["licence"].as_str().unwrap_or("unknown");
-    match classify(licence) {
-        Licence::Open { .. } => Ok(()),
-        Licence::Internal => Err(format!("an internal source leaves only through a confirmed publication ({:?})", channel)),
-        Licence::Restricted(why) => Err(format!("{} ({:?})", why, channel)),
-    }
+    Ok(())
 }
 
 pub struct Library {
@@ -305,7 +302,7 @@ impl Library {
     pub fn indexable(&self) -> Vec<(String, PathBuf)> {
         self.list()
             .into_iter()
-            .filter(|(_, m)| !is_private(m) && m["purged"].is_null() && m["capture_level"] == "full" && (may_leave(m, Channel::Outbound).is_ok() || m["bundle_origin"]["revoked"].is_null() && m["bundle_origin"]["bundle"].is_string()))
+            .filter(|(_, m)| !is_private(m) && m["purged"].is_null() && m["capture_level"] == "full")
             .map(|(id, _)| {
                 let p = self.source_dir(&id).join("source.md");
                 (id, p)
