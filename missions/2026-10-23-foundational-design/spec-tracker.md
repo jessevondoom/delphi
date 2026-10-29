@@ -340,7 +340,7 @@ Amended 2026-10-29 (operator decision: a bundle is trusted, licence is informati
 
 ## Discovered model assignment (spec 056, draft 2026-10-28)
 
-Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what is available and assign the best model per agent and task; more effort for planning and specs, the lowest acceptable model for following a build plan; promote and nerf an agent; the knowledge in the core knowledge base. Draft: it needs approval, and OD-1 amends D-15 (spec 035).
+Asked for by the operator on 2026-10-28: no hard-coded favorites; discover what is available and assign the best model per agent and task; more effort for planning and specs, the lowest acceptable model for following a build plan; promote and nerf an agent; the knowledge in the core knowledge base. Draft: it needs approval, and OD-1 amends D-15 (spec 035). Revised 2026-10-29 on operator direction (still draft, docs only): role floor plus preferred class instead of a role default (OD-1), no provider default, ratify the pool once, quota as a live input with per-role reserve, council diversity, a provider array, and trial of unclassified models (OD-4, OD-6).
 
 | Slice | Content | State |
 | :-- | :-- | :-- |
