@@ -3,13 +3,13 @@ delphi v0.5 · /proj · chat
 
                                                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-── approval needed [amber] · hephaestus
+▲ approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
     + fn enqueue()
     + fn dequeue()
   /y approve once · /a allow similar this task · /n reject · /d view all
 
-── approval needed [RED — never auto-approved] · daedalus
+▲ approval needed [RED — never auto-approved] · daedalus
   Ratify spec 011 into the canonical repository
     ratify specs/011
   /y approve once · /n reject · /d view all

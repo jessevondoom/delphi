@@ -1,18 +1,18 @@
 ⟦•─•⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧
 delphi v0.5 · /proj · chat
 
-   Error> {
-       // lock the row
-       Ok(())
-   }
+    Error> {
+        // lock the row
+        Ok(())
+    }
 
- See specs/003-collaboration-and-counci
- l.md#ladder.
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  See specs/003-collaboration-and-counc
+  il.md#ladder.
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-  → read_file(specs/003.md) ✔
+●read_file(specs/003.md)
 
-    ■ stopped
+ ■ stopped
 
 ──────────────────────────────────────────────────
 ❯

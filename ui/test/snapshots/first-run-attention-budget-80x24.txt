@@ -1,20 +1,20 @@
 ⟦x_x⟧ ⟦•_•⟧ ⟦•─•⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
-                                                                  you · 00:00:01
+●                                                                 you · 00:00:01
                                                                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                    hello there
                                                                   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-⟦x_x⟧ athena · needs you
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▲ ⟦x_x⟧ athena · needs you
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
- Stopped: this mission's ceiling is reached.
+   Stopped: this mission's ceiling is reached.
 
-   /budget <dollars>   raises it
-   /usage              shows where it went
+     /budget <dollars>   raises it
+     /usage              shows where it went
 
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
 
 

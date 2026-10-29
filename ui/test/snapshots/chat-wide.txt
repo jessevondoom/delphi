@@ -1,27 +1,27 @@
 ⟦•─•⟧ ⟦x?x⟧ ⟦x?x⟧ ⟦-_-⟧ ⟦•_•⟧ ⟦•••⟧
 delphi v0.5 · /proj · chat
 
- • one place to query
+   • one place to query
 
-   rust
-   fn enqueue(job: Job) -> Result<()> { Ok(()) }
+     rust
+     fn enqueue(job: Job) -> Result<()> { Ok(()) }
 
- See specs/002-adapter-and-routing.md#4 for the ladder.
- → read_file(specs/002-adapter-and-routing.md) ✔
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   See specs/002-adapter-and-routing.md#4 for the ladder.
+   ● read_file(specs/002-adapter-and-routing.md)
+  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                                                                                      you · 00:00:03
+●                                                                                     you · 00:00:03
                                                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                                        Now write it
                                                                                       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-── approval needed [amber] · hephaestus
+▲ approval needed [amber] · hephaestus
   Write crates/queue.rs (+84)
     + fn enqueue()
     + fn dequeue()
   /y approve once · /a allow similar this task · /n reject · /d view all
 
-── approval needed [RED — never auto-approved] · daedalus
+▲ approval needed [RED — never auto-approved] · daedalus
   Ratify spec 011 into the canonical repository
     ratify specs/011
   /y approve once · /n reject · /d view all
