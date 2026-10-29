@@ -62,6 +62,7 @@ mod theme;
 mod timers_cmd;
 mod train;
 mod update;
+mod validation_cmd;
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -92,6 +93,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Set up", name: "hooks", about: "run your observe hooks on events", synopsis: "  delphi hooks [--workspace <name>] [--home <dir>]", detail: "Run it in a terminal or a tmux pane. The hooks are in the ratified [hooks] config." },
     Cmd { group: "Work", name: "decisions", about: "review an optimistic build's provisional decisions", synopsis: "  delphi decisions [list|show <id>|ratify <id…|all-routine>|reject <id> [why]] [--mission <id>]\n    [--workspace <name>] [--home <dir>]", detail: "This is the text form for a shell. In the console, `/decisions` with no argument opens the decisions pane:\nevery approval card, provisional decision and agent-raised decision you owe, one at a time." },
     Cmd { group: "Work", name: "timers", about: "the wakes the daemon is keeping for roles", synopsis: "  delphi timers [list | set <role> (--in <5m> | --at <time>) [--every <5m>] <note…> | cancel <id>]\n    [--mission <id>] [--workspace <name>] [--home <dir>]", detail: "" },
+    Cmd { group: "Work", name: "validation", about: "score the labelled claim set: counts and rates only", synopsis: "  delphi validation score [--set <file>] [--results <file>] [--home <dir>]", detail: "Operator-run; refuses inside an agent seat. Reads the private set (default <home>/operator/validation/claims.json) and prints counts and rates only: claims scored, false-ratified, poisoned passes, wrongly-escalated rate, the rule-of-three bound and the claims new since the last scored run. With --results (a file of verdicts) it scores; without, it prints the set's composition. Format: docs/reference/validation-set.md." },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb index | reindex | stats | search <query> [--role <role>] [--untrusted] [--staged]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|timeline|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
@@ -280,6 +282,7 @@ fn main() {
         Some("daemon") => cmd_daemon(&args),
         Some("kb") => cmd_kb(&args),
         Some("needs") => cmd_needs(&args),
+        Some("validation") => cmd_validation(&args),
         Some("train") => train::run(&args),
         Some("xenia") => xenia_cmd::run(&args),
         Some("docs") => docs_cmd::docs(&args),
@@ -840,6 +843,29 @@ fn cmd_narrator(args: &[String]) -> i32 {
         return 1;
     }
     code
+}
+
+fn cmd_validation(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) != Some("score") {
+        eprintln!("usage: delphi validation score [--set <file>] [--results <file>] [--home <dir>]");
+        return 2;
+    }
+    if xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi validation score: refused; the labelled set is the operator's and this process was started by an agent seat");
+        return 2;
+    }
+    let home = home::delphi_home(flag(args, "--home").as_deref());
+    match validation_cmd::run(flag(args, "--set").map(PathBuf::from), flag(args, "--results").map(PathBuf::from), &home) {
+        Ok(text) => {
+            print!("{text}");
+            0
+        }
+        Err(e) => {
+            log_cli_error("validation", "the labelled-set score failed");
+            eprintln!("delphi validation score: {e}");
+            2
+        }
+    }
 }
 
 fn cmd_needs(args: &[String]) -> i32 {
