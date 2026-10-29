@@ -65,10 +65,12 @@ export type State = {
   started: boolean;
   /** The number of the session on the screen (`session.started`); 0 before any (`specs/030`). */
   session: number;
+  /** The ids of the notes the daemon staged in this session (`learn.staged`, `specs/052`): the library counter's `+N noted`. */
+  noted: string[];
 };
 
 export const initial = (now: number): State => ({
-  blocks: [], live: '', spans: {}, ended: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: emptyActivity(), prompts: {}, sources: {}, started: false, session: 0,
+  blocks: [], live: '', spans: {}, ended: {}, agents: {}, tokens: 0, approvals: {}, alert: null, lastActivity: now, nextId: 1, council: false, running: {}, activity: emptyActivity(), prompts: {}, sources: {}, started: false, session: 0, noted: [],
 });
 
 const ROLES = ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout', 'investigator'];
@@ -130,7 +132,7 @@ const stamp = (e: any, now: number) => { const t = Date.parse(e.timestamp ?? '')
 
 /** Past events into blocks, for reopening a mission: what was said and done, not what was pending. */
 export function replay(s: State, events: any[]): State {
-  const KEEP = new Set(['session.started', 'change.recorded', 'task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'council.started', 'council.barrier.released']);
+  const KEEP = new Set(['session.started', 'change.recorded', 'task.created', 'task.output', 'task.failed', 'task.cancelled', 'dag.node.added', 'learn.staged', 'council.started', 'council.barrier.released']);
   const done = events.filter((e) => KEEP.has(e.type)).reduce((a, e) => fold(a, { method: 'event', params: e }, stamp(e, Date.now())), s);
   // Every span of a task that has finished is over. A streaming frame can still be in flight when a resync reloads the
   // history (the daemon sends one to a client that fell behind), and without this it would bring the finished reply back as a
@@ -211,7 +213,12 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       // "reconnected" note that was added in between, before it could be drawn.
       if (n && n === s.session) return s;
       // The change log is by session, like the chat: it starts over too. Finished spans stay.
-      return { ...s, blocks: [], live: '', sources: {}, started: true, session: n || s.session + 1, activity: { ...s.activity, history: s.activity.history.filter((h) => !h.change) } };
+      return { ...s, blocks: [], live: '', sources: {}, started: true, noted: [], session: n || s.session + 1, activity: { ...s.activity, history: s.activity.history.filter((h) => !h.change) } };
+    }
+    // A note staged on contact: counted once, by id, however many times the history and the stream both announce it.
+    case 'learn.staged': {
+      const id = String(pl.id ?? '');
+      return id && !s.noted.includes(id) ? { ...s, noted: [...s.noted, id].slice(-500) } : s;
     }
     // A change an agent recorded (`record_change`, `specs/032`): one line in the deck's history, in the agent's own words.
     case 'change.recorded': {

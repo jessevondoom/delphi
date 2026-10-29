@@ -34,6 +34,8 @@ export type Model = {
   still?: boolean;
   /** Ctrl+C was pressed once and the two seconds to confirm have not passed: the title-bar badges show crossed eyes. */
   quitArmed?: boolean;
+  /** Candidates waiting in the decisions pane's `learn` kind, and the org bundles added: the quiet scope line (`specs/053` §5). */
+  review?: number; bundles?: number;
   /** The knowledge window on the left deck (`archives.ts`); the app owns it and makes the `kb.get` calls. */
   arch?: A.Arch;
   /** Link mode in the chat (`specs/029`, `ctrl+o`): the pointers and addresses in the transcript can be focused and followed. */
@@ -77,11 +79,22 @@ export function header(m: Model, w: number): string[] {
 
 const modeLabel = (mode: string): string => (mode === 'mission-auto' ? T.auto('auto') : mode === 'optimistic' ? T.auto('auto · optimistic') : mode === 'accept-edits' ? T.body('accept edits') : T.dim(mode === 'default' ? 'default' : mode));
 
+/** What this session added to the library, in the quiet words of `specs/053` §5: `+3 noted · 1 to review`; empty when nothing was. Never alert-coloured. */
+export const libraryCounter = (noted: number, review: number): string => [noted ? `+${noted} noted` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ');
+
 export function footer(m: Model, w: number): string {
   const k = m.state.tokens >= 1000 ? (m.state.tokens / 1000).toFixed(1) + 'k' : String(m.state.tokens);
   const pending = Object.keys(m.state.approvals).length;
   const asks = m.state.blocks.filter((b) => b.kind === 'user').length;
-  const left = [T.dim(`${k} tokens`), modeLabel(m.mode), m.state.session ? T.dim(`session ${m.state.session} · ${asks} ask${asks === 1 ? '' : 's'}`) : '', m.noModel ? T.dim('no model') : '', pending ? T.dim(`${pending} waiting`) : ''].filter(Boolean).join(T.dim(SEP));
+  const scope = [m.info.workspace_name, m.info.mission].filter(Boolean).join('/');
+  const counter = libraryCounter(m.state.noted.length, m.review ?? 0);
+  const base = [T.dim(`${k} tokens`), modeLabel(m.mode), m.state.session ? T.dim(`session ${m.state.session} · ${asks} ask${asks === 1 ? '' : 's'}`) : '', m.noModel ? T.dim('no model') : '', pending ? T.dim(`${pending} waiting`) : ''];
+  const extras = [scope ? T.dim(scope) : '', m.bundles ? T.dim(`${m.bundles} bundle${m.bundles === 1 ? '' : 's'}`) : '', counter ? T.dim(counter) : ''];
+  const room = w - T.width(nav(m.deck, w)) - 2;
+  const join = (xs: string[]) => xs.filter(Boolean).join(T.dim(SEP));
+  // The scope and the counter give way, the bundles first, when the window is narrow; the tokens and the mode never do.
+  const tries = [[0, 1, 2], [0, 2], [2], []].map((keep) => join([...base, ...keep.map((i) => extras[i]!)]));
+  const left = tries.find((t) => T.width(t) <= room) ?? tries[tries.length - 1]!;
   return T.spread(left, nav(m.deck, w), w);
 }
 

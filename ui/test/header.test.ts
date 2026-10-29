@@ -192,3 +192,25 @@ test('golden: the help overlay (005e 10.1) and the strip with a thinking agent',
   const t = snapshot('strip-thinking-80x24', frame(model({ state: { ...stateWorld(), agents: { builder: running({ thinkingAt: 6650 }) } }, now: 6700, still: false }), 80, 24));
   assert.ok(t.ok, t.message);
 });
+
+test('the scope and library counter sit on the footer, quiet, and give way to the tokens and mode when narrow', () => {
+  const noted = (ids: string[]) => ({ ...initial(0), noted: ids });
+  const scoped = { ...info, workspace_name: 'acme', mission: 'm-7' };
+  const f = plain(footer(model({ info: scoped, state: noted(['a', 'b', 'c']), review: 1, bundles: 2 }), 120));
+  assert.match(f, /^0 tokens {2}· {2}default {2}· {2}acme\/m-7 {2}· {2}2 bundles {2}· {2}\+3 noted · 1 to review {2,}← \/ \? →/);
+  assert.doesNotMatch(plain(footer(model({ info: scoped }), 120)), /noted|to review/, 'nothing added: nothing said');
+  assert.match(plain(footer(model({ info: scoped, state: noted(['a']), bundles: 2 }), 80)), /\+1 noted/);
+  const narrow = plain(footer(model({ info: scoped, state: noted(['a']), bundles: 2 }), 64));
+  assert.match(narrow, /^0 tokens {2}· {2}default/);
+  assert.equal(stringWidth(narrow), 64);
+});
+
+test('a staged note is counted once, however often it is announced, and a new session starts the count over', async () => {
+  const { fold } = await import('../src/fold.ts');
+  const ev = (type: string, payload: object) => ({ method: 'event', params: { type, payload } });
+  let s = initial(0);
+  for (const id of ['n1', 'n1', 'n2']) s = fold(s, ev('learn.staged', { id }), 1);
+  assert.equal(s.noted.length, 2);
+  s = fold(s, ev('session.started', { session_id: 's_0002' }), 2);
+  assert.equal(s.noted.length, 0);
+});
