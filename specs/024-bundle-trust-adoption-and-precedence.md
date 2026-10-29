@@ -3,7 +3,7 @@ id: spec-024-bundle-trust-adoption-and-precedence
 title: "024: Bundle Provenance, Adding, Precedence, Scoping & Lifecycle"
 author: architect
 timestamp: 2026-10-25T23:00:00Z
-status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges
+status: approved   # by the operator, 2026-10-25: decisions OD-1..OD-9 and the recommendations of the set (relayed by the parent session); the text as written is approved when this pull request merges. Ratified in full by the operator 2026-10-28: every proposed decision and open question of the set (B-1..B-17, D-P1..D-P14) follows its recommendation
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -336,4 +336,4 @@ Merge sequencing: B2 first (it is what everything else loads from); B4 and B6 ma
 - **Not built.** A trusted source for `directory` origins is per canonical path (a copy elsewhere is another origin, by design). `delphi bundle trust` has no per-file raise (that is the existing promotion card, §3.3).
 
 ## 11. Open Questions
-B-6 (person scope) in `specs/022` §7. Everything else in this spec is decided (OD-1, OD-3) or proposed and recommended.
+B-6 (person scope) in `specs/022` §7. B-6 is decided 2026-10-28: later. Everything else in this spec is decided (OD-1, OD-3) or ratified as recommended (2026-10-28).

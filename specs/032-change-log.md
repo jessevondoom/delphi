@@ -45,3 +45,8 @@ Tool, event, fold, preamble, digest (also for sessions with changes but no quest
 ## 7. Open
 - The console's left deck no longer streams reasoning: it shows who is working and the recorded changes (`specs/037`).
 - Whether models call `record_change` as reliably as asked is not measured. If not, add the final-reply fallback (store the last summary message verbatim, never anything else).
+
+**Decided 2026-10-28 (operator: "follow your recommendations").** D-1..D-5 stand. Open items:
+- *Final-reply fallback:* not built now. First measure with `delphi tools --all` after real missions; build the fallback (verbatim last summary message, nothing else, never reasoning) only if `record_change` is called on fewer than about half of the tasks that change files. Reasoning is never captured or shown in any pane.
+- *Thresholds* (quiet 120 s, 600 s inside a tool; loop at 6 identical calls or 3 failures) stay as guesses until the operator has watched real work; they are settings, not contracts.
+- *Pane trimming* (`specs/034`) is the operator's call after trying them; nothing is cut until then.
