@@ -231,6 +231,17 @@ impl Registry {
         r
     }
 
+    /// The fact validator's tools (`specs/040` §15.6): absent while the validator is `off`, present otherwise. They
+    /// only request; the daemon checks and writes.
+    pub fn with_validator(mut self, mode: delphi_adapter::config::ValidatorMode) -> Registry {
+        if mode != delphi_adapter::config::ValidatorMode::Off {
+            for spec in crate::fact_tools::specs() {
+                self.register(spec);
+            }
+        }
+        self
+    }
+
     /// Add a tool. A later registration under the same name replaces the earlier one. Built-in
     /// registration only: external tools go through [`Registry::register_external`].
     fn register(&mut self, spec: ToolSpec) {

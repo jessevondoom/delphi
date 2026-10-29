@@ -125,6 +125,11 @@ impl Report {
         Report { verdict: Verdict::Failed, mode, would_ratify: false, findings, judged: vec![], contradictions: vec![], contradiction_search_ran: false, refused_fetches: vec![], reasons: vec![], tokens: 0 }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(verdict: Verdict, mode: ValidatorMode, findings: FactFindings) -> Report {
+        Report::new(mode, findings).end(verdict, "test")
+    }
+
     fn end(mut self, v: Verdict, why: impl Into<String>) -> Report {
         self.verdict = v;
         self.reasons.push(why.into());
