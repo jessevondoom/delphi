@@ -599,12 +599,12 @@ The operator labels stay **validated / not validated / disproved** (§18.2, D-5)
 | Operator label | 052 status | Meaning here |
 | :-- | :-- | :-- |
 | not validated | noted ○ / checking ◐ | captured, or a check is running or queued |
-| validated | validated ● | passed §7.2 (or §21), stamped L3 `web_corroborated` (D-1) |
+| validated | validated ● | passed §7.2 (stamped L3 `web_corroborated`, D-1) **or** a §21 deterministic check, **or** carries an L5 operator or signed-release record; tier and validation kind are preserved |
 | not validated | contested ◆ | a later validated claim or source disagrees; both shown, neither silently wins |
 | disproved | disproved ✕ | the check found the claim false; kept as a record so it is not re-learned |
 | (hidden by default) | retired · | superseded (spec 050 ML-2) or past `valid_until` |
 
-The validator is the only writer that moves a claim to **validated** or **disproved**. Capture on contact (052 §3.2) can only create **noted**.
+The validator is the only **model-role** writer that moves a claim to **validated** or **disproved** through §7; the daemon may record §21 deterministic-check results on its own (code, no model). Until a validator record exists, L3 material reads **not validated** (as built in KS1). Capture on contact (052 §3.2) can only create **noted**.
 
 ### 23.2 One tier story
 Research-writer material and staged captures are shown **not validated** whatever tier the store holds (052 OD-1). L3 `web_corroborated` is reached only through this spec. Bundle knowledge received from an org stays `already_known` only after the receiving operator's audit (D-4). The six-tier lattice stays internal.
@@ -639,3 +639,13 @@ The operator reported on 2026-10-28 that the review of the claim set at `$DELPHI
 | V2b | `delphi check fact` (origin derivation, independence, entailment judge, daemon contradiction search), `ratify_fact`, `provenance.stamp`, stamped L3 `web_corroborated` | V2a, V1b |
 | V2c | mode switch with sticky latch, blind-audit cards, `delphi validation report`, `retract --all`, hash chain (§21.6) | V2b |
 | Gate | §19.6 Council pass before V2b can write **validated** by any automatic path | the operator's decision on stand-ins vs Delphi's own Council |
+
+## 24. Council Pass on §19.6 (stand-in reviewer, 2026-10-28) and Amendments
+An adversarial review by a separate reviewer (a Claude-family stand-in, not Delphi's own Council; to be repeated by Delphi's Council once its endpoints are ratified) returned **REVISE** on all four §19.6 questions. V1a (display, advisory) may proceed; **V2 may not write validated by any automatic path until these amendments are built and tested.** They bind V1a's display work where noted.
+
+1. **Pointer-only search (blocking).** Agent-visible results for unvalidated items expose only an opaque id or path, the label, the source origin, the score and deterministic non-prose metadata. A title, URL path or query, snippet and body are tainted content, opened only in a tainted read-only span. No raw or model-summarised snippet before the taint. (Titles are not safe: an indexed title can be an instruction.)
+2. **`validate_claims` abuse (blocking).** It accepts daemon-normalised claim data only, never caller-supplied queries or URLs; search templates use a bounded subject/predicate extraction. Enforce an authenticated caller, per-caller and per-install rolling quotas, semantic duplicate collapse, concurrency limits and budget reserved before dispatch. It returns a status and fact id only, no queries, timings, candidate URLs or evidence, unless the caller may open the tainted material. The "validation is the task" exemption of §20 does not apply to Scout-originated requests.
+3. **Attribution laundering (blocking).** `kind: attributed` is a distinct, immutable provenance type, excluded by default from factual search, citations, `already_known`, corroboration and entailment inputs, and summaries. It is returned only on an explicit `include_attributed` request, and every render keeps `SOURCE states '…'` and `kind: attributed`. Schema validation rejects turning it into a fact without a new §7 record.
+4. **Known-source shortcut (blocking).** A known source alone validates only the attribution "this scoped source stated X". It may establish a plain fact alone only for immutable, version-pinned primary artifacts or source-of-record statements within scope. Mutable, operational, security-relevant or action-guiding claims need independent corroboration or operator approval. An unexpected content or hash change, a compromise indicator or a contradiction demotes prior claims to **contested** at once.
+
+**Build consequence.** Slice V2a/V2b acceptance tests must include: a poisoned title in search results (never reaches an untainted span), a claim-steering batch (quota and no leakage), an attributed record cited as fact (rejected), and a compromised known source (demoted to contested).
